@@ -373,9 +373,9 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 			want:        codes.NotFound,
 		},
 		{
-			name:        "paused actor being suspended on this node",
+			name:        "paused actor with its upload pending on this node",
 			ctx:         authed,
-			status:      pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1"),
+			status:      uploadPendingStatus("node-1"),
 			assignments: released,
 			want:        codes.NotFound,
 		},

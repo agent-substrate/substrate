@@ -83,14 +83,17 @@ for etcd.
 
 ## Lifecycle
 
-- **Suspend**: hibernate a running or paused Actor into a durable snapshot in
-  external storage. A running Actor is checkpointed on its Worker (which is
-  then freed); a paused Actor's node-local snapshot is uploaded — narrowed to
-  the commit scope when the pause captured more — ending its node pinning.
+- **Suspend**: hibernate a running Actor into a snapshot. The Actor is
+  checkpointed on its Worker, which is then freed. A synchronous suspend
+  uploads the snapshot to external storage before it returns; an asynchronous
+  one is a Pause. Suspending an Actor that is already suspended or paused
+  returns it as it is.
 
-- **Pause**: a short-term checkpoint of a running Actor. Snapshot files remain
-  on the node VM, and the following Resume is prioritized onto the node VM
-  where the snapshots are persisted.
+- **Pause**: a short-term checkpoint of a running Actor, taken by an
+  asynchronous suspend. Snapshot files remain on the node VM, and the following
+  Resume is prioritized onto the node VM where the snapshots are persisted.
+  atelet uploads the snapshot to external storage in the background, and ends
+  the node pinning once it deletes the local files.
 
 - **Resume**: activate a suspended/paused Actor by restoring it onto a Worker. The
   common path restores from a snapshot rather than cold-booting.
@@ -104,11 +107,7 @@ for etcd.
   containers, potentially at different paths. This is the per-Actor
   application-data surface.
 
-  How many an `ActorTemplate` may declare depends on its `sandboxClass`:
-  a `microvm` template may declare several (they are subdirectories of one
-  virtio-fs share, so they cost nothing extra per volume), while a `gvisor`
-  template is limited to one until gVisor can accept more than a single
-  durable mount.
+  An `ActorTemplate` may declare several, on either sandbox class.
 
 ## Snapshots
 
@@ -121,9 +120,7 @@ for etcd.
     afresh from the OCI image with the `DurableDir` contents restored.
   - **`ROOTFS`**: volumes plus the root filesystem changes made since boot.
     Process memory is discarded; on Resume the containers cold-boot from the
-    OCI image with their rootfs writes back in place. Served by the micro-VM
-    sandbox class only: gVisor keeps rootfs changes inside its memory
-    checkpoint, so a gVisor template that requests it is rejected.
+    OCI image with their rootfs writes back in place.
   - **`MEMORY`**: volumes, rootfs changes, and process memory. Used to
     capture everything needed to resume hot.
 

@@ -104,6 +104,7 @@ type fakeControlClient struct {
 	resumeErr      error
 	suspendErr     error
 	deleteErr      error
+	suspendReqs    []*ateapipb.SuspendActorRequest
 	// Make ResumeActor take time and report a smaller server-side elapsed.
 	resumeDelay     time.Duration
 	resumeElapsedUs string
@@ -160,6 +161,7 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "SuspendActor")
+	f.suspendReqs = append(f.suspendReqs, in)
 	if f.suspendErr != nil {
 		return nil, f.suspendErr
 	}
@@ -200,7 +202,7 @@ func newTestConfig(t *testing.T, handler http.Handler) (*userclass.Config, *http
 		HTTPClient: ts.Client(),
 		RouterURL:  ts.URL,
 		Atespace:   "benchmark-test",
-		Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+		Dyn:        dynconfig.Static(knobs{}),
 		Tracer:     otel.Tracer("test-sweperf"),
 	}
 	return cfg, ts, fakeCtrl
@@ -293,7 +295,7 @@ func TestResolveConfig(t *testing.T) {
 	t.Run("default fallback values", func(t *testing.T) {
 		rt := &sweperfRuntime{
 			cfg: &userclass.Config{
-				Dyn: dynconfig.NewHolder(dynconfig.Config{}),
+				Dyn: dynconfig.Static(knobs{}),
 			},
 		}
 		tmpl, steps, cycles := rt.resolveConfig()
@@ -311,10 +313,10 @@ func TestResolveConfig(t *testing.T) {
 	t.Run("dynamic config overrides", func(t *testing.T) {
 		rt := &sweperfRuntime{
 			cfg: &userclass.Config{
-				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					SweperfTemplate:   "custom-template",
-					SweperfTotalSteps: 50,
-					SweperfNumCycles:  5,
+				Dyn: dynconfig.Static(knobs{
+					Template:   "custom-template",
+					TotalSteps: 50,
+					NumCycles:  5,
 				}),
 			},
 		}
@@ -339,7 +341,7 @@ func TestPollInterval(t *testing.T) {
 		{0, defaultSweperfPollInterval},
 		{250, 250 * time.Millisecond},
 	} {
-		cfg := &userclass.Config{Dyn: dynconfig.NewHolder(dynconfig.Config{SweperfPollIntervalMs: tt.ms})}
+		cfg := &userclass.Config{Dyn: dynconfig.Static(knobs{PollIntervalMs: tt.ms})}
 		if got := pollInterval(cfg); got != tt.want {
 			t.Errorf("pollInterval(%d) = %v, want %v", tt.ms, got, tt.want)
 		}
@@ -403,6 +405,14 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 	wantGRPCCalls := []string{"ResumeActor", "SuspendActor"}
 	if !reflect.DeepEqual(grpcCalls, wantGRPCCalls) {
 		t.Errorf("gRPC calls: got %v, want %v", grpcCalls, wantGRPCCalls)
+	}
+	fakeCtrl.mu.Lock()
+	suspendReqs := fakeCtrl.suspendReqs
+	fakeCtrl.mu.Unlock()
+	for _, req := range suspendReqs {
+		if got := req.GetOptions().GetMode(); got != ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
+			t.Errorf("suspend mode = %v, want %v", got, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+		}
 	}
 
 	mu.Lock()
@@ -478,7 +488,7 @@ func TestControlClientErrors(t *testing.T) {
 		fakeCtrl.resumeErr = errors.New("resume RPC failed")
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
-		if ok := u.resume(context.Background()); ok {
+		if _, ok := u.resume(context.Background()); ok {
 			t.Errorf("resume = true on RPC failure, want false")
 		}
 	})
@@ -580,7 +590,7 @@ func TestSweperfPollLiveness(t *testing.T) {
 			json.NewEncoder(w).Encode(statusResponse{Status: "up"})
 		})
 		cfg, _, _ := newTestConfig(t, handler)
-		cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{SweperfPollIntervalMs: 10})
+		cfg.Dyn = dynconfig.Static(knobs{PollIntervalMs: 10})
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 		start := time.Now()
@@ -594,35 +604,25 @@ func TestSweperfPollLiveness(t *testing.T) {
 	})
 }
 
-func TestStartupFailureLogsActorAndTemplate(t *testing.T) {
+func TestStartupFailureLogsUserActorAndTemplate(t *testing.T) {
+	logs := captureLogs(t)
 	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
 	fakeCtrl.createActorErr = errors.New("quota exceeded")
 	r := newSweperfRuntime(cfg)
-
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	if _, err := r.startUser(context.Background()); err == nil {
 		t.Fatalf("startUser succeeded despite CreateActor failing")
 	}
 
-	var failure map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
-		var rec map[string]any
-		if json.Unmarshal([]byte(line), &rec) == nil && strings.Contains(fmt.Sprint(rec["msg"]), "on_start failed") {
-			failure = rec
-		}
-	}
-	if failure == nil {
-		t.Fatalf("no startup failure logged; got:\n%s", buf.String())
-	}
+	failure := onlyLine(t, logs(), startupFailedMsg)
 	if actor, _ := failure["actor"].(string); !strings.HasPrefix(actor, "sb-") {
 		t.Errorf("failure log actor = %q, want the new actor's name", actor)
 	}
 	if got := failure["template"]; got != defaultSweperfTemplate {
 		t.Errorf("failure log template = %v, want %q", got, defaultSweperfTemplate)
+	}
+	if got := failure["user"]; got != float64(boomerutil.GoroutineID()) {
+		t.Errorf("failure log user = %v, want this goroutine's ID", got)
 	}
 }
 
@@ -683,9 +683,8 @@ func TestDynamicWait(t *testing.T) {
 	t.Run("returns MinWait when MaxWait <= MinWait", func(t *testing.T) {
 		rt := &sweperfRuntime{
 			cfg: &userclass.Config{
-				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					MinWait: 100 * time.Millisecond,
-					MaxWait: 50 * time.Millisecond,
+				Dyn: dynconfig.Static(knobs{
+					WaitTime: dynconfig.WaitTime{MinWait: dynconfig.Seconds(100 * time.Millisecond), MaxWait: dynconfig.Seconds(50 * time.Millisecond)},
 				}),
 			},
 		}
@@ -699,9 +698,8 @@ func TestDynamicWait(t *testing.T) {
 		maxW := 50 * time.Millisecond
 		rt := &sweperfRuntime{
 			cfg: &userclass.Config{
-				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					MinWait: minW,
-					MaxWait: maxW,
+				Dyn: dynconfig.Static(knobs{
+					WaitTime: dynconfig.WaitTime{MinWait: dynconfig.Seconds(minW), MaxWait: dynconfig.Seconds(maxW)},
 				}),
 			},
 		}
@@ -722,9 +720,8 @@ func TestInitSweperfAndTaskFn(t *testing.T) {
 		}
 	})
 	cfg, _, _ := newTestConfig(t, handler)
-	cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{
-		MinWait: 1 * time.Millisecond,
-		MaxWait: 2 * time.Millisecond,
+	cfg.Dyn = dynconfig.Static(knobs{
+		WaitTime: dynconfig.WaitTime{MinWait: dynconfig.Seconds(time.Millisecond), MaxWait: dynconfig.Seconds(2 * time.Millisecond)},
 	})
 
 	taskFn, shutdownFn := initSweperf(cfg)
@@ -864,7 +861,7 @@ func TestTracedCallRecordsBothLatencies(t *testing.T) {
 	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass}
 
 	before := readStats(t)
-	if ok := u.resume(context.Background()); !ok {
+	if _, ok := u.resume(context.Background()); !ok {
 		t.Fatalf("resume failed")
 	}
 
@@ -887,7 +884,7 @@ func TestTracedCallSkipsRTTRowWithoutTrailer(t *testing.T) {
 	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass}
 
 	before := readStats(t)
-	if ok := u.resume(context.Background()); !ok {
+	if _, ok := u.resume(context.Background()); !ok {
 		t.Fatalf("resume failed")
 	}
 
@@ -1175,6 +1172,9 @@ func TestStepSuspendFailureFailsTask(t *testing.T) {
 	if !u.loopFailed {
 		t.Errorf("loopFailed = false after SuspendActor failed; the task would be recorded as a success")
 	}
+	if u.failStep != "suspend" || u.failCycle != 1 {
+		t.Errorf("first failure = %q in cycle %d, want suspend in cycle 1", u.failStep, u.failCycle)
+	}
 }
 
 func TestStepSyncExitSkipsResumeToFirstExec(t *testing.T) {
@@ -1301,7 +1301,7 @@ func TestTracedCallSkipsFailureWhenCanceled(t *testing.T) {
 	cancel()
 
 	before := readStats(t)
-	if ok := u.resume(ctx); ok {
+	if _, ok := u.resume(ctx); ok {
 		t.Fatalf("resume = true on RPC failure, want false")
 	}
 	for _, name := range []string{"ResumeActor", "ResumeActor_rtt"} {
@@ -1326,7 +1326,7 @@ func TestShutdownMidCycleRecordsNoFailures(t *testing.T) {
 		}
 	})
 	cfg, _, fakeCtrl := newTestConfig(t, handler)
-	cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{SweperfPollIntervalMs: 10})
+	cfg.Dyn = dynconfig.Static(knobs{PollIntervalMs: 10})
 	r := newSweperfRuntime(cfg)
 	// The last cycle, so an interrupted task would also emit task rows.
 	u := &sweperfUser{cfg: cfg, actorName: "act-1", userClass: sweperfUserClass, chunks: []chunk{{0, 5}}}
@@ -1476,5 +1476,258 @@ func TestShutdownSweepsAfterInflightWaitCap(t *testing.T) {
 	}
 	if got, want := fakeCtrl.recordedCalls(), []string{"DeleteActor"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("recordedCalls = %v, want the bound actor swept despite the stuck iteration", got)
+	}
+}
+
+const (
+	taskRecordMsg     = "sweperf task record"
+	completedCycleMsg = "Completed sweperf cycle"
+	shutdownMsg       = "sweperf shutdown started"
+	startupFailedMsg  = "sweperf on_start failed; goroutine will retry next iter"
+)
+
+// syncWriter serializes writes from goroutines logging while a test reads.
+type syncWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+// captureLogs routes slog to JSON in memory for the rest of the test and
+// returns a reader of every line logged so far, in order.
+func captureLogs(t *testing.T) func() []map[string]any {
+	t.Helper()
+	w := &syncWriter{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(w, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return func() []map[string]any {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		var out []map[string]any
+		for _, line := range strings.Split(w.buf.String(), "\n") {
+			var rec map[string]any
+			if json.Unmarshal([]byte(line), &rec) == nil {
+				out = append(out, rec)
+			}
+		}
+		return out
+	}
+}
+
+// linesWith returns the lines whose msg is msg.
+func linesWith(lines []map[string]any, msg string) []map[string]any {
+	var out []map[string]any
+	for _, l := range lines {
+		if l["msg"] == msg {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// onlyLine returns the single line whose msg is msg.
+func onlyLine(t *testing.T, lines []map[string]any, msg string) map[string]any {
+	t.Helper()
+	got := linesWith(lines, msg)
+	if len(got) != 1 {
+		t.Fatalf("%d %q lines, want 1: %v", len(got), msg, got)
+	}
+	return got[0]
+}
+
+func TestTaskRecordForCleanTask(t *testing.T) {
+	logs := captureLogs(t)
+	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+	fakeCtrl.resumeElapsedUs = "5000"
+	cfg.Dyn = dynconfig.Static(knobs{
+		WaitTime:   dynconfig.WaitTime{MinWait: dynconfig.Seconds(3 * time.Millisecond), MaxWait: dynconfig.Seconds(3 * time.Millisecond)},
+		TotalSteps: 10, NumCycles: 2,
+	})
+	r := newSweperfRuntime(cfg)
+	t.Cleanup(func() { r.shutdown(context.Background()) })
+
+	r.iterate() // starts the actor and runs cycle 1 (no-op resume)
+	r.iterate() // cycle 2, the last, ends the task
+	lines := logs()
+
+	cycles := linesWith(lines, completedCycleMsg)
+	if len(cycles) != 2 {
+		t.Fatalf("%d completed cycles, want 2", len(cycles))
+	}
+	first, last := cycles[0], cycles[1]
+	if first["resume_ms"] != nil || first["ttfe_ms"] != nil {
+		t.Errorf("cycle 1 resume_ms = %v, ttfe_ms = %v; want neither for a no-op resume",
+			first["resume_ms"], first["ttfe_ms"])
+	}
+	if first["cel_ms"] != 1200.0 || first["ok"] != true {
+		t.Errorf("cycle 1 cel_ms = %v, ok = %v; want 1200, true", first["cel_ms"], first["ok"])
+	}
+	// The last cycle is not suspended, and is still ok.
+	if last["ok"] != true || last["resume_ms"] != 5.0 || last["ttfe_ms"] == nil {
+		t.Errorf("cycle 2 ok = %v, resume_ms = %v, ttfe_ms = %v; want true, the server's 5ms, set",
+			last["ok"], last["resume_ms"], last["ttfe_ms"])
+	}
+
+	rec := onlyLine(t, lines, taskRecordMsg)
+	// One think time between the two cycles; none after the last.
+	want := map[string]any{"v": 1.0, "user": float64(boomerutil.GoroutineID()), "template": defaultSweperfTemplate,
+		"cycles": 2.0, "steps": 10.0,
+		"cel_ms": 2400.0, "think_ms": 3.0, "resume_max_ms": 5.0, "retries": 0.0,
+		"failed": false, "fail_step": "", "fail_cycle": 0.0}
+	for k, v := range want {
+		if rec[k] != v {
+			t.Errorf("record %s = %v, want %v", k, rec[k], v)
+		}
+	}
+	if actor, _ := rec["actor"].(string); !strings.HasPrefix(actor, "sb-") {
+		t.Errorf("record actor = %q, want the session's sb- actor", actor)
+	}
+	if rec["startup_ms"].(float64) <= 0 || rec["ttfe_max_ms"] == nil {
+		t.Errorf("record startup_ms = %v, ttfe_max_ms = %v; want > 0 and set", rec["startup_ms"], rec["ttfe_max_ms"])
+	}
+	if sum := first["wall_ms"].(float64) + last["wall_ms"].(float64); rec["wall_ms"].(float64) < sum {
+		t.Errorf("record wall_ms = %v, want at least the cycles' %v", rec["wall_ms"], sum)
+	}
+	start, _ := time.Parse(time.RFC3339Nano, rec["task_start"].(string))
+	end, _ := time.Parse(time.RFC3339Nano, rec["end"].(string))
+	if start.IsZero() || !end.After(start) {
+		t.Errorf("record task_start = %v, end = %v; want start set and before end", rec["task_start"], rec["end"])
+	}
+}
+
+func TestTaskRecordResumeFailureAndRetry(t *testing.T) {
+	logs := captureLogs(t)
+	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+	cfg.Dyn = dynconfig.Static(knobs{
+		WaitTime: dynconfig.WaitTime{MinWait: dynconfig.Seconds(4 * time.Millisecond), MaxWait: dynconfig.Seconds(4 * time.Millisecond)},
+	})
+	r := newSweperfRuntime(cfg)
+	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass, chunks: []chunk{{0, 5}, {5, 10}}}
+	r.users.Store(boomerutil.GoroutineID(), u)
+
+	fakeCtrl.resumeErr = errors.New("resume failed")
+	r.iterate() // cycle 1 fails at resume
+	fakeCtrl.mu.Lock()
+	fakeCtrl.resumeErr = nil
+	fakeCtrl.mu.Unlock()
+	r.iterate() // cycle 1 retried
+	r.iterate() // cycle 2 ends the task
+	lines := logs()
+
+	rec := onlyLine(t, lines, taskRecordMsg)
+	// The wait after the failed resume is a retry, not think time.
+	want := map[string]any{"retries": 1.0, "failed": true, "fail_step": "resume", "fail_cycle": 1.0, "think_ms": 4.0,
+		"cycles": 2.0, "steps": 10.0}
+	for k, v := range want {
+		if rec[k] != v {
+			t.Errorf("record %s = %v, want %v", k, rec[k], v)
+		}
+	}
+	// The failed attempt has no cycle line, but its wall time is part of the task's.
+	sum := onlyLine(t, lines, "ResumeActor failed in step")["wall_ms"].(float64)
+	for _, c := range linesWith(lines, completedCycleMsg) {
+		sum += c["wall_ms"].(float64)
+	}
+	if rec["wall_ms"].(float64) < sum {
+		t.Errorf("record wall_ms = %v, want at least %v including the failed resume", rec["wall_ms"], sum)
+	}
+}
+
+func TestTaskRecordCountsFollowConfigChange(t *testing.T) {
+	logs := captureLogs(t)
+	cfg, _, _ := newTestConfig(t, asyncJobHandler())
+	cfg.Dyn = dynconfig.Static(knobs{TotalSteps: 4, NumCycles: 2})
+	r := newSweperfRuntime(cfg)
+	t.Cleanup(func() { r.shutdown(context.Background()) })
+
+	r.iterate() // task 1, cycle 1
+	// A change mid-task applies from the next task on.
+	if _, _, err := cfg.Dyn.Apply([]byte(`{"sweperf_total_steps": 3, "sweperf_num_cycles": 5}`)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	r.iterate() // task 1, cycle 2, the last
+	for range 3 {
+		r.iterate() // task 2: five cycles over three steps run as three
+	}
+
+	recs := linesWith(logs(), taskRecordMsg)
+	if len(recs) != 2 {
+		t.Fatalf("%d task records, want 2", len(recs))
+	}
+	for i, want := range []struct{ cycles, steps float64 }{{2, 4}, {3, 3}} {
+		if recs[i]["cycles"] != want.cycles || recs[i]["steps"] != want.steps {
+			t.Errorf("record %d cycles = %v, steps = %v; want %v, %v",
+				i+1, recs[i]["cycles"], recs[i]["steps"], want.cycles, want.steps)
+		}
+	}
+}
+
+func TestTaskRecordExecuteFailureOnLastCycle(t *testing.T) {
+	logs := captureLogs(t)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+	cfg, _, _ := newTestConfig(t, handler)
+	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass, chunks: []chunk{{0, 5}}}
+
+	u.step(context.Background())
+	u.recordTaskMetrics()
+	lines := logs()
+
+	if cyc := onlyLine(t, lines, completedCycleMsg); cyc["ok"] != false || cyc["cel_ms"] != 0.0 || cyc["ttfe_ms"] != nil {
+		t.Errorf("cycle ok = %v, cel_ms = %v, ttfe_ms = %v; want false, 0, unset", cyc["ok"], cyc["cel_ms"], cyc["ttfe_ms"])
+	}
+	rec := onlyLine(t, lines, taskRecordMsg)
+	if rec["failed"] != true || rec["fail_step"] != "execute" || rec["fail_cycle"] != 1.0 || rec["ttfe_max_ms"] != nil {
+		t.Errorf("record failed = %v, fail_step = %v, fail_cycle = %v, ttfe_max_ms = %v; want true, execute, 1, unset",
+			rec["failed"], rec["fail_step"], rec["fail_cycle"], rec["ttfe_max_ms"])
+	}
+}
+
+func TestShutdownCutsOffInFlightCycle(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		chunks []chunk
+	}{
+		{name: "last cycle", chunks: []chunk{{0, 5}}},
+		{name: "earlier cycle", chunks: []chunk{{0, 5}, {5, 10}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			entered := make(chan struct{})
+			var once sync.Once
+			handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				// Read the body so the server notices when the client cancels.
+				json.NewDecoder(req.Body).Decode(&executeRequest{})
+				once.Do(func() { close(entered) })
+				<-req.Context().Done() // the chunk is still running when shutdown begins
+			})
+			cfg, _, _ := newTestConfig(t, handler)
+			r := newSweperfRuntime(cfg)
+			u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass, chunks: tc.chunks}
+
+			// Sessions are keyed by goroutine, so bind u on the goroutine that iterates.
+			go func() {
+				r.users.Store(boomerutil.GoroutineID(), u)
+				r.iterate()
+			}()
+			<-entered
+			r.shutdown(context.Background())
+			lines := logs()
+
+			onlyLine(t, lines, shutdownMsg)
+			if cycs := linesWith(lines, completedCycleMsg); len(cycs) != 0 {
+				t.Errorf("completed cycle logged for a canceled cycle: %v", cycs)
+			}
+			if recs := linesWith(lines, taskRecordMsg); len(recs) != 0 {
+				t.Errorf("task record logged for a canceled task: %v", recs)
+			}
+		})
 	}
 }

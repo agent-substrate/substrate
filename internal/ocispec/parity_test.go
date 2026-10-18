@@ -16,7 +16,6 @@ package ocispec
 
 import (
 	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 
@@ -32,7 +31,7 @@ var parityActorDirs = &ateworkerpb.ActorDirs{
 	OciBundleDir:              "/node/actors/a/bundles",
 	DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
 	SystemInfoVolumeRootsDir:  "/node/actors/a/system-info",
-	VolumesDir:                "/node/actors/a/volumes",
+	ExternalVolumeMountsDir:   "/node/actors/a/volumes",
 }
 
 // parityOptions mounts one volume of every kind.
@@ -42,10 +41,10 @@ var parityOptions = Options{
 	Container: &ateworkerpb.Container{
 		Name:                   "app",
 		ContainerSpec:          &ateworkerpb.ContainerSpec{Args: []string{"/app"}},
-		DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/var/data"}},
-		SystemInfoVolumeMounts: []*ateworkerpb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/run/ate"}},
-		CsiVolumeMounts:        []*ateworkerpb.VolumeMount{{VolumeName: "csi", MountPath: "/mnt/csi"}},
-		ImageVolumeMounts:      []*ateworkerpb.ImageVolumeMount{{VolumeName: "agent", MountPath: "/ate"}},
+		DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "data", MountPath: "/var/data"}},
+		SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "sysinfo", MountPath: "/run/ate"}},
+		ExternalVolumeMounts:   []*ateworkerpb.VolumeMount{{Name: "csi", MountPath: "/mnt/csi"}},
+		ImageVolumeMounts:      []*ateworkerpb.VolumeMount{{Name: "agent", MountPath: "/ate"}},
 	},
 }
 
@@ -135,18 +134,6 @@ func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
 	spec.Mounts = append(spec.Mounts, specs.Mount{Destination: "/mnt/new", Type: "bind", Source: "/var/lib/ate/new-kind/x"})
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err == nil {
 		t.Fatal("ShapeMicroVM() = nil, want an error for a bind that is not staged into the share")
-	}
-}
-
-// ShapeGVisor inserts resolv.conf ahead of the volume bind mounts.
-func TestShapeGVisor_ResolvConfPrecedesVolumes(t *testing.T) {
-	spec := Build(parityOptions)
-	ShapeGVisor(spec, GVisorOptions{ActorUID: testActorUID, ContainerName: "app", Size: paritySize})
-	at := func(dest string) int {
-		return slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == dest })
-	}
-	if got, want := at(resolvConf), at("/var/data"); got > want {
-		t.Errorf("%s is at index %d, after the first volume bind at %d", resolvConf, got, want)
 	}
 }
 

@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 )
 
 // testWorkerUID derives a stable pod UID from a pod name, for Workers seeded
@@ -53,14 +54,10 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://snapshots",
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor",
-		},
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("create test ActorTemplate: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()))
+	return NewActorWorkflow(st, nil, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()))
 }
 
 // newFinalizeWorkflow builds an ActorWorkflow over persistence with an
@@ -161,27 +158,57 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 }
 
 // withPausedShape seeds the shape a pause leaves behind: a node-local
-// snapshot at the latest generation, pinned to node. Pair it with
-// ACTOR_STATE_SUSPENDED to seed a paused actor.
-func withPausedShape(node string) func(*ateapipb.Actor) {
+// snapshot at the latest generation with a PENDING durable copy, pinned to
+// node. Pair it with ACTOR_STATE_SUSPENDED to seed a paused actor.
+func withPausedShape(t *testing.T, node string) func(*ateapipb.Actor) {
+	t.Helper()
+	snap := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node)
 	return func(a *ateapipb.Actor) {
 		a.Status.AssignedNode = node
 		a.Status.LastAssignedGeneration = 1
-		a.Status.Snapshots = []*ateapipb.Snapshot{
-			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node),
-		}
+		a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(snap)}
 	}
 }
 
-// withPauseInProgress seeds the shape a pause has between marking the actor
-// SUSPENDING and finalizing it: a node-local snapshot at the latest generation
-// that has no locality yet. Pair it with ACTOR_STATE_SUSPENDING.
-func withPauseInProgress() func(*ateapipb.Actor) {
+// withUploadedPausedShape seeds a paused actor whose snapshot atelet has since
+// uploaded: the paused shape, with its durable copy COMPLETED.
+func withUploadedPausedShape(t *testing.T, node string) func(*ateapipb.Actor) {
+	t.Helper()
+	paused := withPausedShape(t, node)
+	return func(a *ateapipb.Actor) {
+		paused(a)
+		a.Status.Snapshots[0].DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	}
+}
+
+// newInProgressSnapshot builds the snapshot a suspend of either mode marks at
+// generation gen: a PENDING durable copy at a URI named uuid, and no locality
+// yet.
+func newInProgressSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, uuid string) *ateapipb.Snapshot {
+	t.Helper()
+	return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", uuid, someActorSnapshotURI(t, testStorageLocation, "team-a", uuid), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+}
+
+// newPausedSnapshot builds the snapshot a pause leaves on node locality at
+// generation gen: a node-local checkpoint whose PENDING durable copy atelet
+// uploads in the background. With no locality it is the in-progress mark.
+func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
+	t.Helper()
+	snap := newInProgressSnapshot(t, gen, fidelity, uuid)
+	snap.ActorTemplateUid = templateUID
+	snap.Locality = locality
+	return snap
+}
+
+// withPauseInProgress seeds the shape a suspend of either mode has between
+// marking the actor SUSPENDING and finalizing it: a snapshot at the latest
+// generation with a PENDING durable copy and no locality yet. Pair it with
+// ACTOR_STATE_SUSPENDING.
+func withPauseInProgress(t *testing.T) func(*ateapipb.Actor) {
+	snap := newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "pause-snap")
 	return func(a *ateapipb.Actor) {
 		a.Status.LastAssignedGeneration = 1
-		a.Status.Snapshots = []*ateapipb.Snapshot{
-			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", ""),
-		}
+		a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(snap)}
 	}
 }
 
@@ -232,13 +259,17 @@ func seedSuspendTemplate(t *testing.T, ctx context.Context, st store.Interface, 
 	t.Helper()
 	ref := suspendTestTemplateRef()
 	storetest.MustCreateAtespace(t, ctx, st, ref.GetAtespace())
+	if snapshotConfig.GetStorageLocation() == "" {
+		if snapshotConfig == nil {
+			snapshotConfig = &ateapipb.SnapshotConfig{}
+		} else {
+			snapshotConfig = proto.CloneOf(snapshotConfig)
+		}
+		snapshotConfig.StorageLocation = testStorageLocation
+	}
 	created, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 		Metadata:       &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
 		SnapshotConfig: snapshotConfig,
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor",
-		},
 	})
 	if err != nil {
 		t.Fatalf("CreateActorTemplate: %v", err)

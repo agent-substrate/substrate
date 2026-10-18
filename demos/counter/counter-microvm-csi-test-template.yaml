@@ -43,9 +43,6 @@ resources:
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_VOLUMES
   storageLocation: gs://ate-snapshots/ate-demo-counter-microvm-csi/
-sandboxConfig:
-  sandboxClass: microvm
-  configName: microvm
 volumes:
 - name: data
   externalVolumeTemplate:

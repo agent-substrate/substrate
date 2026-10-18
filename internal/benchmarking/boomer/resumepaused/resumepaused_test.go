@@ -49,7 +49,7 @@ type fakeControlClient struct {
 	// resumeFailures is how many ResumeActor calls fail with Unavailable,
 	// without changing state, before resumes succeed.
 	resumeFailures int
-	// pauseErr, when set, fails every PauseActor without changing state.
+	// pauseErr, when set, fails every async SuspendActor without changing state.
 	pauseErr error
 	// atespaceErr, when set, fails CreateAtespace.
 	atespaceErr error
@@ -149,11 +149,15 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	return nil, status.Error(codes.Aborted, "actor crashed")
 }
 
-func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseActorRequest, opts ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
+// SuspendActor fakes only an async suspend, which is how the user pauses.
+func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := in.GetActor().GetName()
-	f.record("PauseActor", name)
+	f.record("SuspendActor(async)", name)
+	if in.GetOptions().GetMode() != ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		return nil, status.Error(codes.Unimplemented, "only async suspend is faked")
+	}
 	if f.pauseErr != nil {
 		return nil, f.pauseErr
 	}
@@ -163,7 +167,7 @@ func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseAc
 	// A paused actor is SUSPENDED holding a node-local snapshot; the fake
 	// tracks only the state.
 	f.states[name] = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-	return &ateapipb.PauseActorResponse{}, nil
+	return &ateapipb.SuspendActorResponse{}, nil
 }
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
@@ -202,7 +206,7 @@ func newTestRuntime(fake *fakeControlClient) *runtime {
 	r := newRuntime(&userclass.Config{
 		APIStub:  fake,
 		Atespace: "bench",
-		Dyn:      dynconfig.NewHolder(dynconfig.Config{}),
+		Dyn:      dynconfig.Static(knobs{}),
 		Tracer:   otel.Tracer("test"),
 	})
 	r.retryBackoff = time.Millisecond
@@ -288,7 +292,7 @@ func TestFirstIterationMakesTheUsersActorCold(t *testing.T) {
 		t.Fatalf("got user actors %v, want 1", actors)
 	}
 	name := actors[0]
-	want := []string{"CreateActor " + name, "ResumeActor " + name, "PauseActor " + name}
+	want := []string{"CreateActor " + name, "ResumeActor " + name, "SuspendActor(async) " + name}
 	if !slices.Equal(fake.calls, want) {
 		t.Errorf("calls: got %v, want %v", fake.calls, want)
 	}
@@ -314,7 +318,7 @@ func TestIterateResumesThenPausesTheUsersActor(t *testing.T) {
 	for range 3 {
 		r.iterate()
 	}
-	want := []string{"ResumeActor " + name, "PauseActor " + name}
+	want := []string{"ResumeActor " + name, "SuspendActor(async) " + name}
 	want = slices.Concat(want, want, want)
 	if !slices.Equal(fake.calls, want) {
 		t.Errorf("calls: got %v, want %v", fake.calls, want)
@@ -359,7 +363,7 @@ func TestEachUserCyclesItsOwnActor(t *testing.T) {
 func TestSetupIsNotPaced(t *testing.T) {
 	fake := newFake()
 	r := newTestRuntime(fake)
-	r.cfg.Dyn.Store(dynconfig.Config{TargetRPS: 1})
+	r.cfg.Dyn = dynconfig.Static(knobs{TargetRPS: 1})
 	start := time.Now()
 	setUpUsers(t, r, 5)
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
@@ -435,17 +439,17 @@ func TestIterateFailsAResumeOfARunningActor(t *testing.T) {
 	fake.setState(name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	fake.resetCalls()
 	before := requestCount(t, "ResumeActorCold", "failure")
-	recoveries := requestCount(t, "PauseActorRecovery", "success")
+	recoveries := requestCount(t, "SuspendActorAsyncRecovery", "success")
 
 	r.iterate()
 	if got := requestCount(t, "ResumeActorCold", "failure") - before; got != 1 {
 		t.Errorf("ResumeActorCold failures grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "success") - recoveries; got != 1 {
-		t.Errorf("PauseActorRecovery successes grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "success") - recoveries; got != 1 {
+		t.Errorf("SuspendActorAsyncRecovery successes grew by %v, want 1", got)
 	}
 	// Recovery pauses the running actor.
-	want := []string{"ResumeActor " + name, "PauseActor " + name}
+	want := []string{"ResumeActor " + name, "SuspendActor(async) " + name}
 	if !slices.Equal(fake.calls, want) {
 		t.Errorf("calls: got %v, want %v", fake.calls, want)
 	}
@@ -475,7 +479,7 @@ func TestIteratePacesResumes(t *testing.T) {
 	r := newTestRuntime(fake)
 	r.iterate()
 
-	r.cfg.Dyn.Store(dynconfig.Config{TargetRPS: 200})
+	r.cfg.Dyn = dynconfig.Static(knobs{TargetRPS: 200})
 	start := time.Now()
 	for range 21 {
 		r.iterate()
@@ -494,27 +498,27 @@ func TestIterateRecordsTheRecoveryPauseOfAPausedActorAsASuccess(t *testing.T) {
 	fake.resetCalls()
 	fake.resumeErr = status.Error(codes.Aborted, "lease held")
 	resumeFailures := requestCount(t, "ResumeActorCold", "failure")
-	pauseFailures := requestCount(t, "PauseActor", "failure")
-	recoverySuccesses := requestCount(t, "PauseActorRecovery", "success")
-	recoveryFailures := requestCount(t, "PauseActorRecovery", "failure")
+	pauseFailures := requestCount(t, "SuspendActorAsync", "failure")
+	recoverySuccesses := requestCount(t, "SuspendActorAsyncRecovery", "success")
+	recoveryFailures := requestCount(t, "SuspendActorAsyncRecovery", "failure")
 
 	// The resume fails with the actor still paused, so the recovery pause
 	// finds it paused: a success, as the actor is cold.
 	r.iterate()
-	if got := fake.callsTo("PauseActor"); !slices.Equal(got, []string{name}) {
-		t.Errorf("PauseActor calls = %v, want the recovery pause of %s", got, name)
+	if got := fake.callsTo("SuspendActor(async)"); !slices.Equal(got, []string{name}) {
+		t.Errorf("async SuspendActor calls = %v, want the recovery pause of %s", got, name)
 	}
 	if got := requestCount(t, "ResumeActorCold", "failure") - resumeFailures; got != 1 {
 		t.Errorf("ResumeActorCold failures grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActor", "failure") - pauseFailures; got != 0 {
-		t.Errorf("PauseActor failures grew by %v, want 0", got)
+	if got := requestCount(t, "SuspendActorAsync", "failure") - pauseFailures; got != 0 {
+		t.Errorf("SuspendActorAsync failures grew by %v, want 0", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "success") - recoverySuccesses; got != 1 {
-		t.Errorf("PauseActorRecovery successes grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "success") - recoverySuccesses; got != 1 {
+		t.Errorf("SuspendActorAsyncRecovery successes grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "failure") - recoveryFailures; got != 0 {
-		t.Errorf("PauseActorRecovery failures grew by %v, want 0", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "failure") - recoveryFailures; got != 0 {
+		t.Errorf("SuspendActorAsyncRecovery failures grew by %v, want 0", got)
 	}
 }
 
@@ -523,17 +527,17 @@ func TestIterateRecordsAFailedRecoveryPause(t *testing.T) {
 	r := newTestRuntime(fake)
 	r.iterate()
 	fake.pauseErr = status.Error(codes.Unavailable, "down")
-	pauseFailures := requestCount(t, "PauseActor", "failure")
-	recoveryFailures := requestCount(t, "PauseActorRecovery", "failure")
+	pauseFailures := requestCount(t, "SuspendActorAsync", "failure")
+	recoveryFailures := requestCount(t, "SuspendActorAsyncRecovery", "failure")
 
 	// The resume succeeds, the measured pause fails, and so does the
 	// recovery pause of the running actor.
 	r.iterate()
-	if got := requestCount(t, "PauseActor", "failure") - pauseFailures; got != 1 {
-		t.Errorf("PauseActor failures grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsync", "failure") - pauseFailures; got != 1 {
+		t.Errorf("SuspendActorAsync failures grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "failure") - recoveryFailures; got != 1 {
-		t.Errorf("PauseActorRecovery failures grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "failure") - recoveryFailures; got != 1 {
+		t.Errorf("SuspendActorAsyncRecovery failures grew by %v, want 1", got)
 	}
 }
 

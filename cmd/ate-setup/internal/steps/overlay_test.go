@@ -421,19 +421,19 @@ func TestRenderCordonControlPlane(t *testing.T) {
 			name: "base bundle",
 			cfg:  config.Config{Router: config.RouterEnvoy},
 			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
-			want: []string{"ate-api-server", "ate-controller", "atenet-router"},
+			want: []string{"ate-api-server", "ate-idp-server", "ate-controller", "atenet-router"},
 		},
 		{
 			name: "kind bundle",
 			cfg:  config.Config{Router: config.RouterEnvoy, Kind: true},
 			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
-			want: []string{"ate-api-server", "ate-controller", "atenet-router"},
+			want: []string{"ate-api-server", "ate-idp-server", "ate-controller", "atenet-router"},
 		},
 		{
 			name: "agentgateway bundle",
 			cfg:  config.Config{Router: config.RouterAgentgateway},
 			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
-			want: []string{"ate-api-server", "ate-controller", "atenet-router"},
+			want: []string{"ate-api-server", "ate-idp-server", "ate-controller", "atenet-router"},
 		},
 		{
 			name: "api server file",

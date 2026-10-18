@@ -40,6 +40,7 @@ const ModulePath = "go.ate.dev/substrate"
 // under the same repository and tag as the rest before a pre-built install can
 // use it.
 var Components = []string{
+	"cmd/ate-idp-server",
 	"cmd/ateapi",
 	"cmd/atecontroller",
 	"cmd/atelet",

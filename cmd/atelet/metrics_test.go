@@ -28,7 +28,6 @@ import (
 
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -153,19 +152,83 @@ func TestCheckpointDurationShape(t *testing.T) {
 		kind:              ateattr.SnapshotKindLocal,
 		fidelity:          ateattr.SnapshotFidelityMemory,
 		sandboxClass:      "microvm",
-	}, phase{ateattr.SnapshotPhasePersist, time.Second})
+	},
+		phase{ateattr.SnapshotPhasePersist, time.Second},
+		phase{ateattr.SnapshotPhaseCleanup, 20 * time.Millisecond},
+	)
 
 	m := collectHistogram(t, reader, checkpointDurationMetric)
 	if m.Unit != "s" {
 		t.Errorf("unit = %q, want %q", m.Unit, "s")
 	}
-	set := phaseValues(t, m)[ateattr.SnapshotPhasePersist]
-	if v := attrString(t, set, ateattr.SnapshotKindKey); v != ateattr.SnapshotKindLocal {
-		t.Errorf("snapshot kind = %q, want %q", v, ateattr.SnapshotKindLocal)
+	byPhase := phaseValues(t, m)
+	for _, wantPhase := range []string{ateattr.SnapshotPhasePersist, ateattr.SnapshotPhaseCleanup} {
+		set, ok := byPhase[wantPhase]
+		if !ok {
+			t.Fatalf("missing phase %q", wantPhase)
+		}
+		if v := attrString(t, set, ateattr.SnapshotKindKey); v != ateattr.SnapshotKindLocal {
+			t.Errorf("%s snapshot kind = %q, want %q", wantPhase, v, ateattr.SnapshotKindLocal)
+		}
+		if v := attrString(t, set, ateattr.SandboxClassKey); v != "microvm" {
+			t.Errorf("%s sandbox class = %q, want microvm", wantPhase, v)
+		}
 	}
-	if v := attrString(t, set, ateattr.SandboxClassKey); v != "microvm" {
-		t.Errorf("sandbox class = %q, want microvm", v)
+}
+
+// TestCheckpointRecordsCleanup drives a Checkpoint: the node cleanup it does
+// once the snapshot commits lands in the cleanup phase, a failed upload returns
+// before it, and the phases fit in the total.
+func TestCheckpointRecordsCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		putErr      error
+		wantCleanup bool
+	}{
+		{name: "succeeded", wantCleanup: true},
+		{name: "upload failed", putErr: errors.New("object store unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			var reader *sdkmetric.ManualReader
+			a.s.instruments, reader = newTestInstruments(t)
+			a.store.putErr = tc.putErr
+			_, err := a.checkpoint(t, a.snapshot("suspend-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+			if (err != nil) != (tc.putErr != nil) {
+				t.Fatalf("Checkpoint = %v, want an error only from the upload", err)
+			}
+
+			sums := phaseSums(t, collectHistogram(t, reader, checkpointDurationMetric))
+			if timed := sums[ateattr.SnapshotPhaseCleanup] > 0; timed != tc.wantCleanup {
+				t.Errorf("cleanup = %vs, want it timed: %v", sums[ateattr.SnapshotPhaseCleanup], tc.wantCleanup)
+			}
+			var parts float64
+			for name, v := range sums {
+				if name != ateattr.SnapshotPhaseTotal {
+					parts += v
+				}
+			}
+			if total := sums[ateattr.SnapshotPhaseTotal]; parts > total {
+				t.Errorf("phases sum to %vs, more than the %vs total", parts, total)
+			}
+		})
 	}
+}
+
+// phaseSums maps each recorded phase to the sum of its observations.
+func phaseSums(t *testing.T, m metricdata.Metrics) map[string]float64 {
+	t.Helper()
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("%s is %T, want a float64 histogram", m.Name, m.Data)
+	}
+	sums := make(map[string]float64, len(hist.DataPoints))
+	for _, dp := range hist.DataPoints {
+		if v, ok := dp.Attributes.Value(ateattr.SnapshotPhaseKey); ok {
+			sums[v.AsString()] += dp.Sum
+		}
+	}
+	return sums
 }
 
 // TestRecordPhasesSkipsZeroPhases pins the absence rule: a phase that never
@@ -293,15 +356,15 @@ func TestRestoreSnapshotKind(t *testing.T) {
 			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name:        "a golden actor's snapshot served locally is still local",
+			name:        "a snapshot from another atespace served locally is still local",
 			directLocal: true,
-			rec:         &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
+			rec:         &sandboxAssetsRecord{Atespace: "team-b"},
 			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "external snapshot written by a golden actor",
-			rec:  &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
-			want: ateattr.SnapshotKindGolden,
+			name: "external snapshot written in another atespace",
+			rec:  &sandboxAssetsRecord{Atespace: "team-b"},
+			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "external snapshot written by a tenant actor",
@@ -347,13 +410,13 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
-			name: "a golden actor's commit writes the template's golden",
-			req:  &ateletpb.CheckpointRequest{UploadConfig: immediate, Atespace: resources.GoldenActorAtespace},
-			want: ateattr.SnapshotKindGolden,
+			name: "a durable checkpoint in another atespace is latest",
+			req:  &ateletpb.CheckpointRequest{UploadConfig: immediate, Atespace: "team-b"},
+			want: ateattr.SnapshotKindLatest,
 		},
 		{
-			name: "a local checkpoint in the golden atespace is still local",
-			req:  &ateletpb.CheckpointRequest{UploadConfig: deferred, Atespace: resources.GoldenActorAtespace},
+			name: "a local checkpoint in another atespace is still local",
+			req:  &ateletpb.CheckpointRequest{UploadConfig: deferred, Atespace: "team-b"},
 			want: ateattr.SnapshotKindLocal,
 		},
 	}

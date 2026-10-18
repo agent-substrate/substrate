@@ -24,8 +24,8 @@ import (
 	"github.com/spf13/pflag"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/installdefaults"
-	"go.ate.dev/substrate/internal/oidcdiscovery"
 	"go.ate.dev/substrate/internal/preview"
 )
 
@@ -429,7 +429,7 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		alg, _ := r.Value("actorJWT.algorithm")
 		return &InvalidError{Value: alg, Want: "ES256 or RS256"}
 	}
-	if err := oidcdiscovery.ValidateIssuer(cfg.ActorJWTIssuer); err != nil {
+	if err := actoridjwt.ValidateIssuer(cfg.ActorJWTIssuer); err != nil {
 		issuer, _ := r.Value("actorJWT.issuer")
 		return fmt.Errorf("%s: %w (from %s)", issuer.Setting.Key, err, issuer.From.Describe(issuer.Setting))
 	}

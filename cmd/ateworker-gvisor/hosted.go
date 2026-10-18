@@ -37,8 +37,6 @@ type hostedActor struct {
 	// Attribution is available during boot.
 	attribution resources.ActorAttribution
 	network     *actornet.SandboxSession
-	// resolvConf is the actor's resolver bind source, removed with its network.
-	resolvConf string
 	// Set once the containers exist.
 	session *workloadSession
 	// usage is this activation's epoch, CPU baseline, and latest sample.
@@ -73,9 +71,6 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*
 // hostActor sets up the actor's network, replacing any stale one.
 func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateworkerpb.ActorDirs) (*hostedActor, error) {
 	uid := attribution.UID
-	if uid == "" {
-		return nil, fmt.Errorf("actor UID is required")
-	}
 
 	hosted, stale, err := s.admitActor(attribution)
 	if err != nil {
@@ -106,17 +101,8 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 		return nil, fmt.Errorf("while setting up the sandbox network: %w", err)
 	}
 
-	// Use the actor's gateway as its DNS resolver.
-	resolvConf, err := actorResolvConf(actorDirs)
-	if err != nil {
-		_ = session.Close(ctx)
-		evict()
-		return nil, err
-	}
-
 	s.actorsMu.Lock()
 	hosted.network = session
-	hosted.resolvConf = resolvConf
 	s.actorsMu.Unlock()
 	return hosted, nil
 }
@@ -141,7 +127,6 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 		s.actorsMu.Unlock()
 	}()
 
-	removeActorResolvConf(ctx, hosted.resolvConf)
 	if hosted.network == nil {
 		return nil
 	}

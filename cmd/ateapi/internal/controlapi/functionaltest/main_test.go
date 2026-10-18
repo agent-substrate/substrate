@@ -20,11 +20,13 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/atelet"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/serverboot"
@@ -85,12 +87,13 @@ func TestMain(m *testing.M) {
 		log.Fatalf("%v", err)
 	}
 
-	// Start Fake Atelet Server on port 8085
+	// Start Fake Atelet Server on the port ateapi dials.
 	ateletGrpcServer := grpc.NewServer()
 	ateletpb.RegisterAteletServer(ateletGrpcServer, fakeAtelet)
-	ateletLis, err := net.Listen("tcp", "127.0.0.1:8085")
+	ateletAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(atelet.DefaultPort))
+	ateletLis, err := net.Listen("tcp", ateletAddr)
 	if err != nil {
-		log.Fatalf("listen on 127.0.0.1:8085: %v", err)
+		log.Fatalf("listen on %s: %v", ateletAddr, err)
 	}
 	go func() {
 		if err := ateletGrpcServer.Serve(ateletLis); err != nil {
@@ -274,4 +277,13 @@ func (f *FakeAteletServer) lastRestoreRequest() *ateletpb.RestoreRequest {
 		return nil
 	}
 	return proto.Clone(f.RestoreRequest).(*ateletpb.RestoreRequest)
+}
+
+func (f *FakeAteletServer) lastRestoreVolumePublishContext(volumeName string) map[string]string {
+	for _, v := range f.lastRestoreRequest().GetSpec().GetVolumes() {
+		if v.GetName() == volumeName {
+			return v.GetExternal().GetPublishContext()
+		}
+	}
+	return nil
 }

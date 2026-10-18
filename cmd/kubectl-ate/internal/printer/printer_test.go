@@ -434,13 +434,9 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				Version:    1,
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: "gvisor",
-				ConfigName:   "gvisor-default",
-			},
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-demo-counter-substrate", Name: "golden-tag"},
 				},
 			},
 		},
@@ -450,10 +446,6 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				Name:       "counter-microvm",
 				Version:    1,
 				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
-			},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: "microvm",
-				ConfigName:   "microvm",
 			},
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
@@ -468,10 +460,6 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				Version:    1,
 				CreateTime: timestamppb.New(now.Add(-72 * time.Hour)),
 			},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: "gvisor",
-				ConfigName:   "gvisor-default",
-			},
 		},
 		{
 			Metadata: &ateapipb.ResourceMetadata{
@@ -479,7 +467,6 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				Name:       "counter-3",
 				CreateTime: timestamppb.New(now.Add(-15 * time.Minute)),
 			},
-			SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 			SnapshotConfig: &ateapipb.SnapshotConfig{
 				GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
 			},
@@ -492,11 +479,11 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 
 	// Sorted by atespace, then name. The ERROR column only flags that an
 	// error message exists; the full text is available via json/yaml.
-	expected := `ATESPACE                             NAME              SANDBOX CLASS   GOLDEN TAG   ERROR   AGE
-ate-demo-counter-substrate           counter           gvisor          golden-tag           5m
-ate-demo-counter-substrate           counter-2         gvisor                               3d
-ate-demo-counter-substrate           counter-3         gvisor          DISABLED             15m
-ate-demo-counter-substrate-microvm   counter-microvm   microvm                      ERROR   5h
+	expected := `ATESPACE                             NAME              GOLDEN TAG   ERROR   AGE
+ate-demo-counter-substrate           counter           golden-tag           5m
+ate-demo-counter-substrate           counter-2                              3d
+ate-demo-counter-substrate           counter-3         DISABLED             15m
+ate-demo-counter-substrate-microvm   counter-microvm                ERROR   5h
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

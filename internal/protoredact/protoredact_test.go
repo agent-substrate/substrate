@@ -55,7 +55,7 @@ func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
 		},
 		Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
 			Name: "main",
-			Env:  []*ateletpb.EnvEntry{{Name: "API_KEY", Value: "sk-secret"}},
+			Env:  []*ateletpb.EnvVar{{Name: "API_KEY", Value: "sk-secret"}},
 		}}},
 	}
 	redacted, _ := protoredact.Redacted(run)
@@ -304,7 +304,7 @@ func TestRedactedReturnsMessagesWithNothingToMaskWithoutCopying(t *testing.T) {
 		&ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "c", Image: "img"}}},
 		&ateapipb.ListActorTemplatesResponse{ActorTemplates: []*ateapipb.ActorTemplate{{Containers: []*ateapipb.Container{{Name: "c"}}}}},
 		&ateapipb.MintActorJwtResponse{},
-		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvEntry{{Name: "K"}}}}}},
+		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvVar{{Name: "K"}}}}}},
 	} {
 		if protoredact.NeedsRedaction(m) {
 			t.Errorf("%T: NeedsRedaction should be false", m)
@@ -318,7 +318,7 @@ func TestRedactedReturnsMessagesWithNothingToMaskWithoutCopying(t *testing.T) {
 		&ateapipb.MintActorJwtResponse{ActorJwt: "t"},
 		&ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Env: []*ateapipb.EnvVar{{Name: "K", Value: "v"}}}}},
 		&ateapipb.ListActorTemplatesResponse{ActorTemplates: []*ateapipb.ActorTemplate{{}, {Containers: []*ateapipb.Container{{}, {Env: []*ateapipb.EnvVar{{Name: "K", Value: "v"}}}}}}},
-		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvEntry{{Name: "K", Value: "v"}}}}}},
+		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvVar{{Name: "K", Value: "v"}}}}}},
 	} {
 		if !protoredact.NeedsRedaction(m) {
 			t.Errorf("%T: NeedsRedaction should be true", m)
@@ -356,7 +356,7 @@ func TestNeedsRedactionIsSafeUnderConcurrentFirstUse(t *testing.T) {
 		&ateapipb.ListActorsResponse{},
 		&ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Env: []*ateapipb.EnvVar{{Name: "K", Value: "v"}}}}},
 		&ateapipb.Worker{},
-		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvEntry{{Name: "K", Value: "v"}}}}}},
+		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvVar{{Name: "K", Value: "v"}}}}}},
 	}
 	want := []bool{true, false, true, false, true}
 	var wg sync.WaitGroup
@@ -421,7 +421,7 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 		"ateapi.MintActorJwtResponse.actor_jwt":          true,
 		"ateapi.MintWorkerActorJwtResponse.actor_jwt":    true,
 		"atelet.AssetFile.url":                           true,
-		"atelet.EnvEntry.value":                          true,
+		"atelet.EnvVar.value":                            true,
 		"ateworker.ContainerSpec.env":                    true,
 		"credprovider.FetchSecretResponse.opaque_bytes":  true,
 		"objectstore.v1.FetchAssetRequest.asset_uri":     true,

@@ -1238,37 +1238,6 @@ func Validate_ActorTemplate(
 		errs = append(errs, fn(fldPath.Child("snapshot_config"), obj.SnapshotConfig, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.ActorTemplate.SandboxConfig
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateapipb.SandboxConfig,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// call the type's validation function
-			errs = append(errs, Validate_SandboxConfig(ctx, op, fldPath, obj, oldObj)...)
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.ActorTemplate) *ateapipb.SandboxConfig {
-				return oldObj.SandboxConfig
-			})
-		errs = append(errs, fn(fldPath.Child("sandbox_config"), obj.SandboxConfig, oldVal, oldObj != nil)...)
-	}
-
 	{ // field ateapipb.ActorTemplate.Resources
 		fn := func(
 			fldPath *field.Path,
@@ -6348,61 +6317,6 @@ func Validate_ObjectSnapshot(
 	return errs
 }
 
-// Validate_PauseActorRequest validates an instance of PauseActorRequest according
-// to declarative validation rules in the API schema.
-func Validate_PauseActorRequest(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.PauseActorRequest) (errs field.ErrorList) {
-
-	{ // field ateapipb.PauseActorRequest.Actor
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateapipb.ObjectRef,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			func() { // cohort = "atespace"
-				earlyReturn := false
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
-					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if earlyReturn {
-					return // do not proceed
-				}
-			}()
-			// call the type's validation function
-			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.PauseActorRequest) *ateapipb.ObjectRef {
-				return oldObj.Actor
-			})
-		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
 var unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_Ports_ = validate.NewUnionMembership(validate.NewUnionMember("all"), validate.NewUnionMember("numbers"))
 
 // Validate_Ports validates an instance of Ports according
@@ -7310,83 +7224,6 @@ func Validate_RevertActorRequest(
 	return errs
 }
 
-// Validate_SandboxConfig validates an instance of SandboxConfig according
-// to declarative validation rules in the API schema.
-func Validate_SandboxConfig(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.SandboxConfig) (errs field.ErrorList) {
-
-	{ // field ateapipb.SandboxConfig.SandboxClass
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_SandboxConfig_SandboxClass(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 63); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.SandboxConfig) *string {
-				return &oldObj.SandboxClass
-			})
-		errs = append(errs, fn(fldPath.Child("sandbox_class"), &obj.SandboxClass, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateapipb.SandboxConfig.ConfigName
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.LongName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.SandboxConfig) *string {
-				return &oldObj.ConfigName
-			})
-		errs = append(errs, fn(fldPath.Child("config_name"), &obj.ConfigName, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
 // Validate_SandboxRuntime validates an instance of SandboxRuntime according
 // to declarative validation rules in the API schema.
 func Validate_SandboxRuntime(
@@ -8259,6 +8096,79 @@ func Validate_SuspendActorRequest(
 				return oldObj.Actor
 			})
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.SuspendActorRequest.Options
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.SuspendOptions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_SuspendOptions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.SuspendActorRequest) *ateapipb.SuspendOptions {
+				return oldObj.Options
+			})
+		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_SuspendOptions validates an instance of SuspendOptions according
+// to declarative validation rules in the API schema.
+func Validate_SuspendOptions(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.SuspendOptions) (errs field.ErrorList) {
+
+	{ // field ateapipb.SuspendOptions.Mode
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.DurabilityMode,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.SuspendOptions) *ateapipb.DurabilityMode {
+				return &oldObj.Mode
+			})
+		errs = append(errs, fn(fldPath.Child("mode"), &obj.Mode, oldVal, oldObj != nil)...)
 	}
 
 	return errs

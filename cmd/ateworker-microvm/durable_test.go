@@ -41,8 +41,8 @@ func TestHasDurableVolumes(t *testing.T) {
 			name: "one of several containers has a durable volume",
 			containers: []*ateworkerpb.Container{
 				{Name: "sidecar"},
-				{Name: "app", DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-					{VolumeName: "data", MountPath: "/home/counter"},
+				{Name: "app", DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "data", MountPath: "/home/counter"},
 				}},
 			},
 			want: true,
@@ -59,12 +59,12 @@ func TestHasDurableVolumes(t *testing.T) {
 
 func TestDurableVolumeNames(t *testing.T) {
 	containers := []*ateworkerpb.Container{
-		{Name: "app", DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-			{VolumeName: "data", MountPath: "/data"},
-			{VolumeName: "cache", MountPath: "/cache"},
+		{Name: "app", DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+			{Name: "data", MountPath: "/data"},
+			{Name: "cache", MountPath: "/cache"},
 		}},
-		{Name: "sidecar", DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-			{VolumeName: "data", MountPath: "/shared"},
+		{Name: "sidecar", DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+			{Name: "data", MountPath: "/shared"},
 		}},
 	}
 	got := durableVolumeNames(containers)

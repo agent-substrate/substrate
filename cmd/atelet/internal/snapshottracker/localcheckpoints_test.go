@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package snapshottracker
 
 import (
 	"context"
@@ -45,6 +45,39 @@ func TestPruneRemovesEverySnapshot(t *testing.T) {
 
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("dir still exists (err=%v), want removed entirely", err)
+	}
+}
+
+func TestPruneKeepsSpecifiedSnapshots(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		keep    []string
+		removed []string
+	}{
+		{name: "one", keep: []string{"pause-2"}, removed: []string{"pause-1", "pause-3"}},
+		{name: "the latest and one still uploading", keep: []string{"pause-3", "pause-1"}, removed: []string{"pause-2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSnapshotDir(t, dir, "pause-1")
+			writeSnapshotDir(t, dir, "pause-2")
+			writeSnapshotDir(t, dir, "pause-3")
+
+			if err := pruneLocalCheckpointDir(context.Background(), dir, tc.keep...); err != nil {
+				t.Fatalf("pruneLocalCheckpointDir() = %v, want nil", err)
+			}
+
+			for _, removed := range tc.removed {
+				if _, err := os.Stat(filepath.Join(dir, removed)); !os.IsNotExist(err) {
+					t.Errorf("%s still exists (err=%v), want removed", removed, err)
+				}
+			}
+			for _, kept := range tc.keep {
+				if _, err := os.Stat(filepath.Join(dir, kept, "memory.img")); err != nil {
+					t.Errorf("kept snapshot %s missing: %v", kept, err)
+				}
+			}
+		})
 	}
 }
 

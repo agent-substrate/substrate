@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"go.ate.dev/substrate/internal/resources"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -59,18 +58,9 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 
 // ValidateCustom_CreateActorTemplateRequest_ActorTemplate holds the rules
 // that span more than one field of a template: container volume mounts must
-// reference volumes the template declares, and a ROOTFS preferred fidelity
-// needs a sandbox class that can capture rootfs changes without memory, which
-// today is the micro-VM class alone.
+// reference volumes the template declares.
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
 	var errs field.ErrorList
-	if value.GetSnapshotConfig().GetPreferredFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS &&
-		value.GetSandboxConfig().GetSandboxClass() != string(atev1alpha1.SandboxClassMicroVM) {
-		errs = append(errs, field.Invalid(
-			fldPath.Child("snapshot_config", "preferred_fidelity"),
-			value.GetSnapshotConfig().GetPreferredFidelity().String(),
-			"ROOTFS fidelity requires sandbox_config.sandbox_class microvm"))
-	}
 	declared := make(map[string]bool, len(value.GetVolumes()))
 	for _, vol := range value.GetVolumes() {
 		declared[vol.GetName()] = true
@@ -181,10 +171,6 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
 	}
 	return nil
-}
-
-func ValidateCustom_SandboxConfig_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
 // ValidateCustom_SnapshotConfig_StorageLocation ensures an

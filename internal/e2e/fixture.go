@@ -39,10 +39,6 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundles []string) 
 		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{
-		// gvisor-default is the cluster-wide SandboxConfig
-		// manifests/ate-install ships; config_name is required, so the
-		// fixtures name it explicitly.
-		"${TEMPLATE_SANDBOX_CONFIG}": "sandboxConfig:\n  sandboxClass: gvisor\n  configName: gvisor-default",
 		// Off unless the caller opts in; see WithTrustBundle.
 		"${TEMPLATE_TRUST_BUNDLE}": "",
 	}
@@ -60,9 +56,6 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundles []string) 
 	}
 
 	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
-	// The cluster-wide SandboxConfig hack/install-microvm-deps.sh installs;
-	// a missing or stale one fails loudly at template creation.
-	blocks["${TEMPLATE_SANDBOX_CONFIG}"] = "sandboxConfig:\n  sandboxClass: microvm\n  configName: microvm"
 	return inline, blocks
 }
 

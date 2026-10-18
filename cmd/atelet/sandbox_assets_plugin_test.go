@@ -30,10 +30,8 @@ import (
 	"testing"
 	"time"
 
-	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateinterceptors"
-	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/objectstoreplugin"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"go.ate.dev/substrate/internal/pluginsocket"
@@ -97,35 +95,42 @@ func (c *countingAssetClient) FetchAsset(ctx context.Context, in *objectstorev1.
 // plugin on an in-memory bucket, with an anonymous client that cannot read
 // that bucket.
 type assetHerderFixture struct {
+	t       *testing.T
 	herder  *Atelet
 	bucket  *bucketStorage
 	anon    *bucketStorage
 	plugin  *countingAssetClient
 	staging string
+	// root holds the asset cache (root/cache) and the destinations fetch
+	// stages into (root/consumer), on one filesystem.
+	root string
+}
+
+// fetch stages entry into a fresh destination and returns the staged path.
+func (f *assetHerderFixture) fetch(ctx context.Context, entry assetEntry) (string, error) {
+	return stageTestAsset(f.t, f.herder, f.root, entry)
 }
 
 // newAssetHerderFixture's plugin serves assets of scheme ("gs" or "s3"), as
 // the in-tree plugin on that backend does.
 func newAssetHerderFixture(t *testing.T, scheme string) *assetHerderFixture {
 	t.Helper()
-	origDir, origCap := nodepath.StaticFilesDir, maxAssetBytes
-	t.Cleanup(func() { nodepath.StaticFilesDir, maxAssetBytes = origDir, origCap })
+	origCap := maxAssetBytes
+	t.Cleanup(func() { maxAssetBytes = origCap })
 	root := t.TempDir()
-	nodepath.StaticFilesDir = filepath.Join(root, "static-files")
-	if err := os.MkdirAll(nodepath.StaticFilesDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	f := &assetHerderFixture{
+		t:       t,
 		bucket:  &bucketStorage{objects: map[string][]byte{}},
 		anon:    &bucketStorage{objects: map[string][]byte{}},
 		staging: t.TempDir(),
+		root:    root,
 	}
 	plugin, err := objectstoreplugin.NewAssetPlugin(f.bucket, scheme, root, f.staging, maxAssetBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.plugin = &countingAssetClient{AssetProviderClient: objectstoreplugintest.AssetClient(plugin)}
-	f.herder = &Atelet{anonGCSClient: f.anon, assetPlugin: f.plugin, pluginSocket: testPluginSock}
+	f.herder = &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: f.anon, assetPlugin: f.plugin, pluginSocket: testPluginSock}
 	return f
 }
 
@@ -138,16 +143,11 @@ func (f *assetHerderFixture) put(t *testing.T, object string, content []byte) st
 	return fmt.Sprintf("%x", sha256.Sum256(content))
 }
 
-// assertNotCached fails if fetching left anything in the static-files cache:
-// neither the cache file nor a temp file.
-func assertNotCached(t *testing.T) {
-	t.Helper()
-	entries, err := os.ReadDir(nodepath.StaticFilesDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		t.Errorf("failed fetch left %s in the static-files cache", e.Name())
+// assertNotCached fails if fetching published anything in the asset cache.
+func (f *assetHerderFixture) assertNotCached() {
+	f.t.Helper()
+	if n := cachedAssets(f.t, f.root); n != 0 {
+		f.t.Errorf("failed fetch left %d assets in the cache", n)
 	}
 }
 
@@ -160,7 +160,7 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 	t.Run("non-gs scheme goes straight to the plugin", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		sum := f.put(t, "kata-assets/vmlinux", content)
-		path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum})
+		path, err := f.fetch(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum})
 		if err != nil {
 			t.Fatalf("fetchAsset: %v", err)
 		}
@@ -176,7 +176,7 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 		f := newAssetHerderFixture(t, "gs")
 		sum := f.put(t, "kata-assets/vmlinux", content)
 		f.anon.objects[testAssetBucket+"/kata-assets/vmlinux"] = content
-		path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "gs://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum})
+		path, err := f.fetch(t.Context(), assetEntry{URL: "gs://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum})
 		if err != nil {
 			t.Fatalf("fetchAsset: %v", err)
 		}
@@ -196,7 +196,7 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 		}
 		f.anon.objects["gvisor/release.tar"] = content
 		sum := fmt.Sprintf("%x", sha256.Sum256(content))
-		path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "gs://gvisor/release.tar", SHA256: sum})
+		path, err := f.fetch(t.Context(), assetEntry{URL: "gs://gvisor/release.tar", SHA256: sum})
 		if err != nil {
 			t.Fatalf("fetchAsset: %v", err)
 		}
@@ -212,7 +212,7 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		f.anon.objects["gvisor/release.tar"] = content
 		sum := fmt.Sprintf("%x", sha256.Sum256(content))
-		path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "gs://gvisor/release.tar", SHA256: sum})
+		path, err := f.fetch(t.Context(), assetEntry{URL: "gs://gvisor/release.tar", SHA256: sum})
 		if err != nil {
 			t.Fatalf("fetchAsset: %v", err)
 		}
@@ -227,56 +227,62 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 	t.Run("cache hit", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		sum := f.put(t, "kata-assets/vmlinux", content)
-		cached := ateletpath.AssetPath(sum)
-		if err := os.WriteFile(cached, content, 0o755); err != nil {
-			t.Fatal(err)
+		entry := assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum}
+		first, err := f.fetch(t.Context(), entry)
+		if err != nil {
+			t.Fatalf("fetchAsset: %v", err)
 		}
-		path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum})
-		if err != nil || path != cached {
-			t.Fatalf("fetchAsset = %q, %v; want %q", path, err, cached)
+		second, err := f.fetch(t.Context(), entry)
+		if err != nil {
+			t.Fatalf("fetchAsset (hit): %v", err)
 		}
-		if n := f.plugin.calls.Load(); n != 0 {
-			t.Errorf("plugin called %d times on a cache hit", n)
+		if n := f.plugin.calls.Load(); n != 1 {
+			t.Errorf("plugin called %d times for two fetches of one asset, want 1", n)
+		}
+		fi1, err1 := os.Stat(first)
+		fi2, err2 := os.Stat(second)
+		if err1 != nil || err2 != nil || !os.SameFile(fi1, fi2) {
+			t.Errorf("the two staged paths are not one inode (%v, %v)", err1, err2)
 		}
 	})
 
 	t.Run("sha256 mismatch", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		f.put(t, "kata-assets/vmlinux", content)
-		_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: strings.Repeat("a", 64)})
+		_, err := f.fetch(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: strings.Repeat("a", 64)})
 		if apierror.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("fetchAsset with a wrong sha256 = %v (code %s), want %s", err, apierror.Code(err), codes.FailedPrecondition)
 		}
-		assertNotCached(t)
+		f.assertNotCached()
 	})
 
 	t.Run("size cap", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		sum := f.put(t, "kata-assets/vmlinux", content)
 		maxAssetBytes = int64(len(content)) - 1
-		_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum})
+		_, err := f.fetch(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum})
 		if apierror.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("fetchAsset over the cap = %v (code %s), want %s", err, apierror.Code(err), codes.FailedPrecondition)
 		}
-		assertNotCached(t)
+		f.assertNotCached()
 	})
 
 	t.Run("not found", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
-		_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/missing", SHA256: strings.Repeat("a", 64)})
+		_, err := f.fetch(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/missing", SHA256: strings.Repeat("a", 64)})
 		// Not NotFound: ate-api-server reads NotFound from Terminate as
 		// "already terminated".
 		if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "s3://"+testAssetBucket+"/kata-assets/missing") {
 			t.Fatalf("fetchAsset of a missing object = %v (code %s), want %s naming the URL", err, apierror.Code(err), codes.FailedPrecondition)
 		}
-		assertNotCached(t)
+		f.assertNotCached()
 	})
 
 	t.Run("snapshot in the same bucket is refused", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "gs")
 		sum := f.put(t, "root/atespaces/team-a/actors/uid1/snapshots/snap1/checkpoint.img.zstd", []byte("another actor's memory"))
 		f.anon.objects[testAssetBucket+"/root/atespaces/team-a/actors/uid1/snapshots/snap1/checkpoint.img.zstd"] = []byte("another actor's memory")
-		_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "gs://" + testAssetBucket + "/root/atespaces/team-a/actors/uid1/snapshots/snap1/checkpoint.img.zstd", SHA256: sum})
+		_, err := f.fetch(t.Context(), assetEntry{URL: "gs://" + testAssetBucket + "/root/atespaces/team-a/actors/uid1/snapshots/snap1/checkpoint.img.zstd", SHA256: sum})
 		if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "snapshot location") {
 			t.Fatalf("fetchAsset of a snapshot file = %v (code %s), want %s about the snapshot location", err, apierror.Code(err), codes.FailedPrecondition)
 		}
@@ -286,7 +292,7 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 		if n := f.anon.gets.Load(); n != 0 {
 			t.Errorf("a refused snapshot file was tried anonymously %d times", n)
 		}
-		assertNotCached(t)
+		f.assertNotCached()
 	})
 
 	t.Run("connection error is Unavailable", func(t *testing.T) {
@@ -297,11 +303,11 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 		}
 		t.Cleanup(func() { conn.Close() })
 		f.herder.assetPlugin = objectstorev1.NewAssetProviderClient(conn)
-		_, err = f.herder.fetchAsset(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: strings.Repeat("a", 64)})
+		_, err = f.fetch(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: strings.Repeat("a", 64)})
 		if apierror.Code(err) != codes.Unavailable {
 			t.Fatalf("fetchAsset with the plugin down = %v (code %s), want %s", err, apierror.Code(err), codes.Unavailable)
 		}
-		assertNotCached(t)
+		f.assertNotCached()
 	})
 
 	t.Run("plugin without AssetProvider", func(t *testing.T) {
@@ -327,7 +333,7 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 		t.Cleanup(func() { conn.Close() })
 		f.herder.assetPlugin = objectstorev1.NewAssetProviderClient(conn)
 		f.herder.pluginSocket = sock
-		_, err = f.herder.fetchAsset(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: strings.Repeat("a", 64)})
+		_, err = f.fetch(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: strings.Repeat("a", 64)})
 		if apierror.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("fetchAsset with an old plugin = %v (code %s), want %s", err, apierror.Code(err), codes.FailedPrecondition)
 		}
@@ -380,7 +386,7 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 			f.anon.objects[object] = content
 			// A partial write the plugin leaves behind is replaced.
 			f.herder.assetPlugin = fakeAssetClient{data: []byte("partial plugin write, longer than the asset"), err: pluginErr(code)}
-			path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
+			path, err := f.fetch(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
 			if err != nil {
 				t.Fatalf("fetchAsset: %v", err)
 			}
@@ -414,7 +420,7 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 			logs := captureLogs(t)
 			f := newAssetHerderFixture(t, "s3")
 			f.herder.assetPlugin = fakeAssetClient{err: pluginErr(code)}
-			_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
+			_, err := f.fetch(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
 			if err == nil {
 				t.Fatal("fetchAsset succeeded")
 			}
@@ -443,7 +449,7 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 					t.Errorf("%s carries the plugin's status text:\n%s", name, text)
 				}
 			}
-			assertNotCached(t)
+			f.assertNotCached()
 		})
 
 		for _, u := range []string{"s3://" + object, "https://storage.example/" + object} {
@@ -451,13 +457,13 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 				f := newAssetHerderFixture(t, "s3")
 				f.anon.objects[object] = content
 				f.herder.assetPlugin = fakeAssetClient{err: pluginErr(code)}
-				if _, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: u, SHA256: sum}); err == nil {
+				if _, err := f.fetch(t.Context(), assetEntry{URL: u, SHA256: sum}); err == nil {
 					t.Fatal("fetchAsset succeeded")
 				}
 				if n := f.anon.gets.Load(); n != 0 {
 					t.Errorf("anonymous reads = %d, want 0", n)
 				}
-				assertNotCached(t)
+				f.assertNotCached()
 			})
 		}
 	}
@@ -467,7 +473,7 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 			f := newAssetHerderFixture(t, "s3")
 			f.anon.objects[object] = content
 			f.herder.assetPlugin = fakeAssetClient{err: pluginErr(code)}
-			_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
+			_, err := f.fetch(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
 			if err == nil {
 				t.Fatal("fetchAsset succeeded")
 			}
@@ -477,30 +483,38 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 			if strings.Contains(err.Error(), "anonymous") || strings.Contains(err.Error(), "SECRET") {
 				t.Errorf("error %q mentions an anonymous read or the plugin's text", err)
 			}
-			assertNotCached(t)
+			f.assertNotCached()
 		})
 	}
 
-	t.Run("canceled request does not fall back", func(t *testing.T) {
+	t.Run("canceled caller does not abort the download", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		f.anon.objects[object] = content
 		ctx, cancel := context.WithCancel(t.Context())
+		// The caller's context is canceled while the plugin is being asked.
+		// The download runs detached from it in the asset cache, so the
+		// plugin's refusal still falls back to the anonymous read, and the
+		// caller either sees its cancellation or the finished fetch.
 		f.herder.assetPlugin = cancelingAssetClient{cancel: cancel, err: pluginErr(codes.Unavailable)}
-		_, err := f.herder.fetchAsset(ctx, assetEntry{URL: gsURL, SHA256: sum})
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("fetchAsset = %v, want context.Canceled", err)
+		_, err := f.fetch(ctx, assetEntry{URL: gsURL, SHA256: sum})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("fetchAsset = %v, want context.Canceled or success", err)
 		}
-		if n := f.anon.gets.Load(); n != 0 {
-			t.Errorf("anonymous reads = %d, want 0", n)
+		// A second caller joins or hits what the first one started: one
+		// anonymous read serves both.
+		if _, err := f.fetch(t.Context(), assetEntry{URL: gsURL, SHA256: sum}); err != nil {
+			t.Fatalf("fetchAsset after a canceled caller: %v", err)
 		}
-		assertNotCached(t)
+		if n := f.anon.gets.Load(); n != 1 {
+			t.Errorf("anonymous reads = %d, want 1", n)
+		}
 	})
 
 	t.Run("no plugin reads gs anonymously", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		f.anon.objects[object] = content
 		f.herder.assetPlugin = nil
-		path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
+		path, err := f.fetch(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
 		if err != nil {
 			t.Fatalf("fetchAsset: %v", err)
 		}
@@ -515,25 +529,25 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 	t.Run("no plugin, gs anonymous failure", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		f.herder.assetPlugin = nil
-		_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
+		_, err := f.fetch(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
 		if err == nil || !strings.Contains(err.Error(), "object not found") || strings.Contains(err.Error(), "object-store plugin") {
 			t.Fatalf("fetchAsset = %v, want the anonymous read's error alone", err)
 		}
-		assertNotCached(t)
+		f.assertNotCached()
 	})
 
 	t.Run("no plugin, non-gs is refused", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		f.anon.objects[object] = content
 		f.herder.assetPlugin = nil
-		_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "s3://" + object, SHA256: sum})
+		_, err := f.fetch(t.Context(), assetEntry{URL: "s3://" + object, SHA256: sum})
 		if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "no object-store plugin") {
 			t.Fatalf("fetchAsset = %v (code %s), want %s naming the missing plugin", err, apierror.Code(err), codes.FailedPrecondition)
 		}
 		if n := f.anon.gets.Load(); n != 0 {
 			t.Errorf("anonymous reads = %d, want 0", n)
 		}
-		assertNotCached(t)
+		f.assertNotCached()
 	})
 }
 
@@ -565,10 +579,10 @@ func TestFetchAssetVerifiesPluginOutput(t *testing.T) {
 			f := newAssetHerderFixture(t, "s3")
 			maxAssetBytes = tc.cap
 			f.herder.assetPlugin = fakeAssetClient{data: tc.data}
-			if _, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum}); err == nil {
+			if _, err := f.fetch(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum}); err == nil {
 				t.Fatal("fetchAsset accepted bytes the plugin wrote without checking them")
 			}
-			assertNotCached(t)
+			f.assertNotCached()
 		})
 	}
 }
@@ -615,7 +629,7 @@ func TestFetchAssetKeepsCredentialsOutOfErrors(t *testing.T) {
 			// what ate-api-server receives.
 			_, err := ateinterceptors.InternalServerUnaryInterceptor(t.Context(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
 				func(ctx context.Context, _ any) (any, error) {
-					return f.herder.fetchAsset(ctx, assetEntry{URL: signed, SHA256: sum})
+					return f.fetch(ctx, assetEntry{URL: signed, SHA256: sum})
 				})
 			if err == nil {
 				t.Fatal("fetchAsset succeeded")
@@ -645,7 +659,7 @@ func TestFetchAssetLogsPluginCodeAndRedactedURL(t *testing.T) {
 	logs := captureLogs(t)
 	f := newAssetHerderFixture(t, "s3")
 	f.herder.assetPlugin = fakeAssetClient{err: status.Error(codes.PermissionDenied, "denied SECRET")}
-	_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "https://acct.blob.example/assets/vmlinux?sig=SECRET", SHA256: strings.Repeat("a", 64)})
+	_, err := f.fetch(t.Context(), assetEntry{URL: "https://acct.blob.example/assets/vmlinux?sig=SECRET", SHA256: strings.Repeat("a", 64)})
 	if err == nil {
 		t.Fatal("fetchAsset succeeded")
 	}

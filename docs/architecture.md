@@ -331,11 +331,11 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
 ### Sandbox Classes
 
-A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from a cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `ActorTemplate` names in its sandbox config (naming one is currently required; per-class cluster defaults are planned) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from the cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
 
-  * **gVisor** (`ateworker-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree.
+  * **gVisor** (`ateworker-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree. `DurableDir` volumes and each container's rootfs overlay are saved as separate filesystem checkpoint bundles (`fs/` and `rootfs/`). A `MEMORY` snapshot splits them out of the process checkpoint; `VOLUMES` and `ROOTFS` snapshots save only the bundles they need with `runsc fscheckpoint`, without memory, and restore them on a cold boot.
 
-  * **micro-VM** (`ateworker-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging. Container rootfs writes are host-backed: the overlay is assembled on the host (read-only OCI image lower plus a per-actor writable upper) and served to the guest over the single virtio-fs share, so they cost reclaimable host page cache rather than guest RAM, and `ROOTFS` and `MEMORY` snapshots ship the upper as its own tar (a `ROOTFS` restore puts it back and cold-boots on it). `DurableDir` volumes travel over that same share and are likewise shipped as a tar, so a `VOLUMES` snapshot can capture them without any guest memory. Each volume is a subdirectory of the share, so an actor can have several at no extra cost in devices, which is why the micro-VM class lifts the single-`DurableDir` limit that still applies to gVisor.
+  * **micro-VM** (`ateworker-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging. Container rootfs writes are host-backed: the overlay is assembled on the host (read-only OCI image lower plus a per-actor writable upper) and served to the guest over the single virtio-fs share, so they cost reclaimable host page cache rather than guest RAM, and `ROOTFS` and `MEMORY` snapshots ship the upper as its own tar (a `ROOTFS` restore puts it back and cold-boots on it). `DurableDir` volumes travel over that same share and are likewise shipped as a tar, so a `VOLUMES` snapshot can capture them without any guest memory. Each volume is a subdirectory of the share, so an actor can have several at no extra cost in devices.
 
 ### Networking Stack (`atenet` + `atunnel`)
 
@@ -409,7 +409,7 @@ sequenceDiagram
     A-->>Tunnel: response
     Tunnel-->>Gateway: response
     Gateway-->>Client: response
-    Note over API,Store: later: an explicit SuspendActor checkpoints back to storage and frees the worker
+    Note over API,Store: later: an explicit SuspendActor checkpoints the actor and frees the worker
 ```
 
 An Actor's `state` moves through these states (UML state machine diagram):
@@ -419,20 +419,29 @@ stateDiagram-v2
     [*] --> SUSPENDED : CreateActor
     SUSPENDED --> RESUMING : ResumeActor
     RESUMING --> RUNNING : restore / boot complete
-    RUNNING --> SUSPENDING : SuspendActor
+    RUNNING --> SUSPENDING : SuspendActor (sync)
     SUSPENDING --> SUSPENDED : checkpoint complete
-    RUNNING --> SUSPENDING : PauseActor
-    SUSPENDED --> SUSPENDING : SuspendActor (paused: uploads the node-local snapshot)
+    RUNNING --> SUSPENDING : SuspendActor (async, the default: keeps the snapshot on the node)
     SUSPENDED --> [*] : DeleteActor
 ```
 
 A pause and a suspend both pass through `SUSPENDING`, and a paused actor and
 a suspended actor are both `SUSPENDED`. They differ only in the shape of
-`status.snapshots`: after a pause the latest snapshot has a
-`locality` (the node holding its files) and no `durableSnapshot`, and
-`status.assignedNode` pins the actor to that node, so `ResumeActor` restores
-it there from the local files. After a suspend the latest snapshot has a
-`COMPLETED` `durableSnapshot` and the actor is pinned to no node.
+`status.snapshots`:
+
+  * After a pause (an asynchronous suspend), the latest snapshot has a
+    `locality` (the node holding its files) and a `PENDING`
+    `durableSnapshot`. `status.assignedNode` pins the actor to that node, so
+    `ResumeActor` restores it there from the local files.
+  * atelet uploads a paused actor's snapshot in the background
+    (`--snapshot-upload-delay`) and reports it, which marks the
+    `durableSnapshot` `COMPLETED`. `--snapshot-detach-delay` after the pause,
+    atelet deletes the local files and reports that too, which clears the
+    `locality` and `status.assignedNode`.
+  * After a synchronous suspend, the latest snapshot has a `COMPLETED`
+    `durableSnapshot` and the actor is pinned to no node.
+
+`SuspendActor` on a `SUSPENDED` actor returns it as it is, in either mode.
 
 ### Phase 1: Creation (`CreateActor`)
 
@@ -472,13 +481,18 @@ Triggered by an explicit `SuspendActor` call.
 
   1. **Checkpoint**: The `atelet` instructs `ateworker` to freeze the process and capture a memory+disk snapshot.
 
-  2. **Persistence**: The `atelet` streams the snapshot from the pod to durable storage (e.g., GCS).
+  2. **Persistence**: The `atelet` uploads the snapshot to durable storage
+     (e.g., GCS). With `DURABILITY_MODE_SYNCHRONOUS` the upload finishes before
+     `SuspendActor` returns. With the asynchronous default the snapshot stays
+     on the node and `atelet` uploads it in the background.
 
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
-  4. **Release**: The external snapshot the Actor held before this suspend is
-     deleted from object storage. An Actor owns one snapshot at a time; one it
-     borrowed from a tag is left alone, since the tag owns it.
+  4. **Release**: A synchronous suspend deletes the external snapshot the
+     Actor held before it from object storage. An asynchronous suspend keeps
+     that snapshot, since its own is not yet durable. It is deleted by the
+     first suspend after a newer snapshot is durable, or by `DeleteActor`. A
+     snapshot borrowed from a tag is left alone, since the tag owns it.
 
   5. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, and the Actor's
      `status.snapshots` records the external snapshot it resumes from.

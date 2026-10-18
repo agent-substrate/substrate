@@ -37,6 +37,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -53,8 +54,27 @@ func init() {
 		Name:       "resumepaused",
 		LocustFile: "resumepaused.py",
 		UserClass:  userClass,
+		Config:     knobsCodec,
 		Init:       initResumePaused,
 	})
+}
+
+// knobs is the ResumePausedUser slice of the runtime config. The master
+// populates target_rps from the --target-rps locust flag
+// (common/rate_config.py) or the ladder step's @rps suffix.
+type knobs struct {
+	// TargetRPS is the cold resumes per second this worker paces to; zero
+	// means unpaced.
+	TargetRPS float64 `json:"target_rps"`
+}
+
+var knobsCodec = dynconfig.Typed[knobs]{
+	Validate: func(k knobs) error {
+		if k.TargetRPS < 0 {
+			return fmt.Errorf("target_rps cannot be negative: %v", k.TargetRPS)
+		}
+		return nil
+	},
 }
 
 // initResumePaused ensures the atespace and returns the task. Each user
@@ -236,15 +256,16 @@ func (r *runtime) cycle(name string) {
 	}
 }
 
-// recover pauses an actor after a failed cycle, so it is cold for the next
-// one. It is load on the server like any other call, so it is recorded, as
-// PauseActorRecovery to keep it apart from the measured pauses. An actor
-// already paused fails it with FailedPrecondition; the actor is cold, which
-// is all recovery wants, so that counts as a success.
+// recover suspends an actor asynchronously after a failed cycle, so it is cold
+// for the next one. It is load on the server like any other call, so it is
+// recorded, as SuspendActorAsyncRecovery to keep it apart from the measured
+// suspends. An actor already suspended fails it with FailedPrecondition; the
+// actor is cold, which is all recovery wants, so that counts as a success.
 func (r *runtime) recover(ctx context.Context, name string) {
-	_ = r.call(ctx, "PauseActorRecovery", func(ctx context.Context) error {
-		_, err := r.cfg.APIStub.PauseActor(ctx, &ateapipb.PauseActorRequest{
-			Actor: r.ref(name),
+	_ = r.call(ctx, "SuspendActorAsyncRecovery", func(ctx context.Context) error {
+		_, err := r.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+			Actor:   r.ref(name),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		})
 		if status.Code(err) == codes.FailedPrecondition {
 			return nil
@@ -269,7 +290,7 @@ func (r *runtime) startCycle() bool {
 // current TargetRPS first. Zero means unpaced.
 func (r *runtime) pace(ctx context.Context) {
 	want := rate.Inf
-	if target := r.cfg.Dyn.Load().TargetRPS; target > 0 {
+	if target := dynconfig.Get[knobs](r.cfg.Dyn).TargetRPS; target > 0 {
 		want = rate.Limit(target)
 	}
 	if r.limiter.Limit() != want {
@@ -296,12 +317,13 @@ func (r *runtime) resume(ctx context.Context, metricName, name string) error {
 	})
 }
 
-// pause calls PauseActor. suffix keeps warm-up calls apart from the measured
-// ones.
+// pause suspends an actor asynchronously, keeping its snapshot on the node.
+// suffix keeps warm-up calls apart from the measured ones.
 func (r *runtime) pause(ctx context.Context, suffix, name string) error {
-	return r.call(ctx, "PauseActor"+suffix, func(ctx context.Context) error {
-		_, err := r.cfg.APIStub.PauseActor(ctx, &ateapipb.PauseActorRequest{
-			Actor: r.ref(name),
+	return r.call(ctx, "SuspendActorAsync"+suffix, func(ctx context.Context) error {
+		_, err := r.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+			Actor:   r.ref(name),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		})
 		return err
 	})

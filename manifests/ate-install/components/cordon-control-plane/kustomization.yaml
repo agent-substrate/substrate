@@ -42,7 +42,7 @@ kind: Component
 patches:
   - target:
       kind: Deployment
-      name: ate-api-server|ate-controller|atenet-router|atenet-egress|podcertificate-controller|k8s-credential-provider|fake-workersync
+      name: ate-api-server|ate-idp-server|ate-controller|atenet-router|atenet-egress|podcertificate-controller|k8s-credential-provider|fake-workersync
     patch: |-
       apiVersion: apps/v1
       kind: Deployment

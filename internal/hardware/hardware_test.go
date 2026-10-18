@@ -65,7 +65,7 @@ func TestMatches(t *testing.T) {
 	amd64GVisorExtraAttr := runtimeWith("gvisor", "v1",
 		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
 		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
-		&ateapipb.AttributeEntry{Key: AttrSandboxRuntimeHash, Value: "sha256:abc"},
+		&ateapipb.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:abc"},
 	)
 
 	tests := []struct {
@@ -100,7 +100,7 @@ func TestMatchesCompat(t *testing.T) {
 	}
 	amd64 := &ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"}
 	arm64 := &ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "arm64"}
-	hash := &ateapipb.AttributeEntry{Key: AttrSandboxRuntimeHash, Value: "sha256:abc"}
+	hash := &ateapipb.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:abc"}
 	cpuBits := func(val string) *ateapipb.AttributeEntry {
 		return &ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: val}
 	}
@@ -214,7 +214,7 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 	rt := func(class, arch, hash string) *ateapipb.SandboxRuntime {
 		attrs := []*ateapipb.AttributeEntry{{Key: AttrArchitecture, Value: arch}}
 		if hash != "" {
-			attrs = append(attrs, &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: hash})
+			attrs = append(attrs, &ateapipb.AttributeEntry{Key: AttrSandboxBundleHash, Value: hash})
 		}
 		return &ateapipb.SandboxRuntime{
 			SandboxClass: class,

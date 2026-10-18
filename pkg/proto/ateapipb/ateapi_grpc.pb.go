@@ -37,7 +37,6 @@ const (
 	Control_CreateActor_FullMethodName                = "/ateapi.Control/CreateActor"
 	Control_UpdateActor_FullMethodName                = "/ateapi.Control/UpdateActor"
 	Control_SuspendActor_FullMethodName               = "/ateapi.Control/SuspendActor"
-	Control_PauseActor_FullMethodName                 = "/ateapi.Control/PauseActor"
 	Control_ResumeActor_FullMethodName                = "/ateapi.Control/ResumeActor"
 	Control_RevertActor_FullMethodName                = "/ateapi.Control/RevertActor"
 	Control_DeleteActor_FullMethodName                = "/ateapi.Control/DeleteActor"
@@ -92,17 +91,14 @@ type ControlClient interface {
 	// Update mutable fields on an existing Actor.
 	UpdateActor(ctx context.Context, in *UpdateActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Suspend a given actor to a new snapshot. A running actor is checkpointed
-	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
-	// to the template's commit scope where required (Full capture, Data commit).
+	// on its worker. A SUSPENDED actor is returned as it is.
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
-	// Pause a given actor: checkpoint it to its worker's node and leave it
-	// SUSPENDED with that node-local snapshot, pinned to the node. A paused
-	// actor is told from a suspended one by its snapshots, not its state.
-	PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
 	// Revert an actor to SUSPENDED state at its durable snapshot.
-	// Only crashed, running or paused actors can be reverted.
+	// Only crashed or running actors, or suspended actors with a node-local
+	// snapshot, can be reverted. A suspended actor without a node-local snapshot
+	// is already at its durable snapshot, so there is nothing to revert.
 	RevertActor(ctx context.Context, in *RevertActorRequest, opts ...grpc.CallOption) (*RevertActorResponse, error)
 	// Delete an actor. Only suspended or crashed actors can be deleted unless
 	// any_state is set.
@@ -185,7 +181,7 @@ type ControlClient interface {
 	GetActorTemplate(ctx context.Context, in *GetActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
-	// tag in the reserved ate-golden atespace.
+	// tag in the template's atespace.
 	DeleteActorTemplate(ctx context.Context, in *DeleteActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	// Get the deployment-wide global access policy singleton. Returns NotFound
 	// until the policy has been created.
@@ -250,16 +246,6 @@ func (c *controlClient) SuspendActor(ctx context.Context, in *SuspendActorReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SuspendActorResponse)
 	err := c.cc.Invoke(ctx, Control_SuspendActor_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *controlClient) PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PauseActorResponse)
-	err := c.cc.Invoke(ctx, Control_PauseActor_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -669,17 +655,14 @@ type ControlServer interface {
 	// Update mutable fields on an existing Actor.
 	UpdateActor(context.Context, *UpdateActorRequest) (*Actor, error)
 	// Suspend a given actor to a new snapshot. A running actor is checkpointed
-	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
-	// to the template's commit scope where required (Full capture, Data commit).
+	// on its worker. A SUSPENDED actor is returned as it is.
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
-	// Pause a given actor: checkpoint it to its worker's node and leave it
-	// SUSPENDED with that node-local snapshot, pinned to the node. A paused
-	// actor is told from a suspended one by its snapshots, not its state.
-	PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
 	// Revert an actor to SUSPENDED state at its durable snapshot.
-	// Only crashed, running or paused actors can be reverted.
+	// Only crashed or running actors, or suspended actors with a node-local
+	// snapshot, can be reverted. A suspended actor without a node-local snapshot
+	// is already at its durable snapshot, so there is nothing to revert.
 	RevertActor(context.Context, *RevertActorRequest) (*RevertActorResponse, error)
 	// Delete an actor. Only suspended or crashed actors can be deleted unless
 	// any_state is set.
@@ -762,7 +745,7 @@ type ControlServer interface {
 	GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error)
 	ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
-	// tag in the reserved ate-golden atespace.
+	// tag in the template's atespace.
 	DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error)
 	// Get the deployment-wide global access policy singleton. Returns NotFound
 	// until the policy has been created.
@@ -804,9 +787,6 @@ func (UnimplementedControlServer) UpdateActor(context.Context, *UpdateActorReque
 }
 func (UnimplementedControlServer) SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SuspendActor not implemented")
-}
-func (UnimplementedControlServer) PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method PauseActor not implemented")
 }
 func (UnimplementedControlServer) ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResumeActor not implemented")
@@ -1014,24 +994,6 @@ func _Control_SuspendActor_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).SuspendActor(ctx, req.(*SuspendActorRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Control_PauseActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PauseActorRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).PauseActor(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_PauseActor_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).PauseActor(ctx, req.(*PauseActorRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1760,10 +1722,6 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SuspendActor",
 			Handler:    _Control_SuspendActor_Handler,
-		},
-		{
-			MethodName: "PauseActor",
-			Handler:    _Control_PauseActor_Handler,
 		},
 		{
 			MethodName: "ResumeActor",

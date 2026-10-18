@@ -118,13 +118,14 @@ Four flags control the optional post-run measurements described in
 [Benchmark output files](#benchmark-output-files):
 
 * `--cluster-facts` / `--no-cluster-facts`: read node capacity and worker pod
-  count from the Kubernetes API once the run ends, to derive density frontiers.
+  count from the Kubernetes API once the run ends, to derive density frontiers,
+  and worker pod restarts and evictions around the run, for `oom_events`.
   On by default. Pass `--no-cluster-facts` to skip Kubernetes API discovery.
 * `--prometheus-url`: the Prometheus to harvest server-side telemetry from.
   Defaults to the in-cluster service installed by
   [Optional: Prometheus + Grafana](#optional-prometheus--grafana).
 * `--atelet-lag-s`: how long to wait after the run before reading the
-  atelet's snapshot and active actor metrics. Defaults to 70.
+  atelet's metrics. Defaults to 70.
 * `--phase-breakdown` / `--no-phase-breakdown`: read the atelet and worker pod
   logs once the run ends and add the suspend/resume phase percentiles to
   `stats.jsonl`. On by default; needs `pods/log` access in `ate-system` and
@@ -240,6 +241,35 @@ When the run ends, shutdown cancels cycles still in flight. Calls cut short this
 nothing, and the interrupted task records no `TaskCEL` or `TaskWallClock` row, so the end of
 a run does not show up as a burst of failures.
 
+#### Sweperf Log Lines
+
+The boomer log also carries per-task facts for post-processing such as the goodput script in
+`tools/goodput`, which decides from them whether a task was good. The benchmark judges
+nothing. Durations are in milliseconds.
+
+* `Completed sweperf cycle`: `actor`, `cycle`, `cel_ms` (0 when the execute failed),
+  `wall_ms` (resume start to cycle end), `ok` (the execute succeeded, and so did the suspend
+  if there was one), `resume_ms` (as on the `ResumeActor` row; omitted for a no-op resume)
+  and `ttfe_ms` (resume start to the asynchronous ack; omitted without one, and for a no-op
+  resume even when its execute got one).
+* `ResumeActor failed in step`: also carries `wall_ms`. The cycle is retried on the next
+  iteration, and the failed attempt's time counts toward the task's `wall_ms`.
+* `sweperf task record`, one per finished task: `v` (1), `user` (boomer goroutine ID, unique
+  per boomer process), `actor`, `template`, `cycles` and `steps` (the cycle and trace step
+  counts the task ran, resolved when it started, so a mid-run change to
+  `--sweperf-num-cycles` or `--sweperf-total-steps` applies from the next task; `cycles` is
+  capped at `steps`), `task_start` (when the session started) and `end`, `startup_ms`
+  (`CreateActor` until the sandbox answers `/status`), `cel_ms` and `wall_ms` (as in `TaskCEL`
+  and `TaskWallClock`), `think_ms` (think time between the task's cycles), `resume_max_ms`
+  (slowest non-no-op resume), `ttfe_max_ms` (slowest `ttfe_ms`; omitted when no cycle after
+  the no-op resume got an asynchronous ack, so always for a one-cycle task), `retries`
+  (failed resumes), `failed`, and the first failure's `fail_step` (`resume`, `execute` or
+  `suspend`) and `fail_cycle`.
+* `sweperf on_start failed`: also carries `user`, to tie a failed start to its user.
+* `sweperf shutdown started`: the worker began tearing down. Startups and cycles in flight
+  are canceled: interrupted tasks log no task record, and startup failures logged after it
+  belong to the teardown, not the run.
+
 ### Agent-Session Benchmark
 
 The agent-session benchmark (`--user-class agentsession`) emulates a fleet of
@@ -312,8 +342,12 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
   gap gets ±20% jitter so sessions don't move in lockstep.
 * `--resume-mode implicit|explicit` — implicit (default) lets the parked
   first request wake the actor; explicit issues ResumeActor before traffic.
-* `--lifecycle-mode suspend|pause` — durable suspend (default) or node-local
-  pause between steps.
+* `--lifecycle-mode suspend|pause|none` — durable suspend (default),
+  node-local pause between steps, or `none` to keep actors resident in memory
+  between steps without hibernating.
+* `--agentsession-snapshot-steps` — comma-separated 1-based step numbers after
+  which the actor is hibernated (for example, `3,10,20,30,40,50,61`); between
+  all other steps the actor stays resident.
 
 #### Writing an agent-session script
 
@@ -493,13 +527,14 @@ warm-up until they have all joined at the spawn rate.
 
 * `ResumeActorCold`: Latency of each measured resume. A resume that finds its
   actor already running fails, as no cold resume happened.
-* `PauseActor`: Latency of the pause that makes the actor cold again.
-* `PauseActorRecovery`: After a failed cycle, the pause that makes the actor
-  cold for the next one. It is load on the server, so it is recorded, but
-  apart from `PauseActor`. A recovery pause that finds the actor already
-  paused counts as a success.
-* `CreateActor`, `ResumeActorWarmup`, `PauseActorWarmup`: A user's warm-up of
-  its actor, in the step that added the user.
+* `SuspendActorAsync`: Latency of the async SuspendActor that makes the actor
+  cold again.
+* `SuspendActorAsyncRecovery`: After a failed cycle, the async SuspendActor that
+  makes the actor cold for the next one. It is load on the server, so it is
+  recorded, but apart from `SuspendActorAsync`. A recovery suspend that finds
+  the actor already suspended counts as a success.
+* `CreateActor`, `ResumeActorWarmup`, `SuspendActorAsyncWarmup`: A user's
+  warm-up of its actor, in the step that added the user.
 
 ### Isolate Mode
 
@@ -696,6 +731,49 @@ actually did, independent of what the load generator reported.
   nodes: the collector keeps an exited atelet's last value for about 5
   minutes, so a restart can briefly count twice, and an atelet scraped both
   directly and through a collector counts twice.
+* `working_set.node`, `worker`, `atelet`: memory working set in GiB from
+  cAdvisor on the nodes hosting a worker pod, per worker pod (every actor on it
+  included), and per atelet on those nodes. Each has a percentile `summary`
+  (plus `max`) over the steady-state window, `count` of series seen in it, and
+  a `timeseries` every 10s over the whole run with the sum (`total_gb`) and
+  largest (`max_gb`). A spike shorter than 10s can be missed.
+* `working_set.actor`, `per_actor`: the same shape for the actors' own working
+  set as the atelet reports it (`ate_actor_stats_memory_working_set_bytes`),
+  per atelet with every template summed, and the average per measured actor
+  (`ate_actor_stats_sampled_actors`) on each atelet; `count` is atelet
+  processes, keyed like `active_actors`. As `per_actor` is an average per
+  atelet, its `max` is the highest atelet average, not the largest actor, and
+  its `total_gb` has no meaning. A gVisor actor is read from its sandbox cgroup
+  on the host, a microVM actor from inside the guest. As with `active_actors`,
+  suspended actors fall out, but through the telemetry-meter a series that
+  stops being exported keeps its last value for up to 5m. Missing samples are
+  skipped, not counted as 0. The atelet samples every
+  `--actor-stats-poll-interval` (default 1m), so these move in steps of a
+  minute or more. `actor` matches one worker pod's actors only when the node
+  runs one worker pod.
+* `oom_events.node`, `pod`: OOM kills over the run, from cAdvisor's
+  `container_oom_events_total`. `node` counts only global OOMs. `pod` counts
+  kills inside a worker pod (actor sandboxes and the worker container) and is
+  best effort: a non-zero value is real, but a kill whose cgroup is gone before
+  the scrape is missed. A node-allocatable OOM (`oom_memcg=/kubepods.slice`)
+  isn't global, so it isn't in `node`, and `pod` usually misses it; the kubelet
+  evictions that often come with it show in `evicted`. OOMs inside a microVM
+  guest are invisible and show up as task failures. Memory PSI (`node_psi` /
+  `pod_psi`) is the early warning.
+* `oom_events.worker_restarts`, `worker_oomkilled_pods`, `evicted`,
+  `worker_pods_lost`: from the Kubernetes API, read before and after the run.
+  Restarts on a pod deleted during the run are lost. `worker_oomkilled_pods`
+  counts pods whose last restart was `OOMKilled`, not kills; a group kill of
+  the whole worker (`memory.oom.group=1`) shows here. `evicted` is kubelet
+  eviction under node pressure (usually memory), not a kernel OOM kill. It also
+  counts replacement pods the kubelet refused to start while the node was under
+  pressure, as they get the same `Evicted` reason. It comes from `Evicted`
+  events, which last about 1h, so a run longer than that can undercount.
+  `worker_pods_lost` is pods gone by the end for any reason (eviction,
+  scale-down, recycling), not an OOM count; a pod created and deleted within
+  the run isn't counted. A node OOM can also show as a worker `OOMKilled`
+  restart, so never add the fields. A field is `null` when its Kubernetes read
+  fails, and all are with `--no-cluster-facts`.
 
 Every distribution reports p50, p90, p95 and p99 over the steady-state window.
 The steady-state window runs from the first to the last Locust sample at 90% or
@@ -708,14 +786,15 @@ every 10s.
 
 The atelet exports before Prometheus scrapes it, so the harvest waits
 `--atelet-lag-s` seconds (default 70, enough for the OTel SDK's 60s default
-export and a 10s scrape) and reads the snapshot and `active_actors` windows
-half that late, stamping `active_actors` points back by the same amount. The
-window ends at the last full-load sample, so teardown suspends are left out.
+export and a 10s scrape) and reads the snapshot, `active_actors` and actor
+working set windows half that late, stamping `active_actors` and actor
+working set points back by the same amount. The window ends at the last
+full-load sample, so teardown suspends are left out.
 
-`metadata.start_ts` and `end_ts` bound the whole run, which the packing and
-`active_actors` timeseries cover. `steady_start_ts` and `steady_end_ts` bound
-the steady-state window. A flat subset of the numbers also goes into a
-`server_summary` row in `stats.jsonl`.
+`metadata.start_ts` and `end_ts` bound the whole run, which the packing,
+`active_actors` and `working_set` timeseries cover. `steady_start_ts` and
+`steady_end_ts` bound the steady-state window. A flat subset of the numbers
+also goes into a `server_summary` row in `stats.jsonl`.
 
 Neither the Kubernetes API nor Prometheus is required. If either is unreachable,
 or discovery was skipped, the affected fields are written as `null` and the run

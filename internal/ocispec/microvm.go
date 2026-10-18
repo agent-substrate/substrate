@@ -115,7 +115,7 @@ func mergeKataResources(from *specs.LinuxResources) *specs.LinuxResources {
 func guestVolumeSource(hostPath string, actorDirs *ateworkerpb.ActorDirs, containerID string) (string, error) {
 	for _, staged := range []struct{ host, guest string }{
 		{actorDirs.GetDurableDirVolumeMountsDir(), path.Join(GuestSharedDir, ShareDurable)},
-		{actorDirs.GetVolumesDir(), path.Join(GuestSharedDir, ShareCSI)},
+		{actorDirs.GetExternalVolumeMountsDir(), path.Join(GuestSharedDir, ShareCSI)},
 		{actorDirs.GetSystemInfoVolumeRootsDir(), path.Join(GuestSharedDir, ShareSystemInfo)},
 		{imagecache.ImageVolumeMountPath(filepath.Join(actorDirs.GetOciBundleDir(), containerID), ""), path.Join(GuestSharedDir, containerID, ShareVolumes)},
 	} {

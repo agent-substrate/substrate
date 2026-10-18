@@ -195,8 +195,8 @@ func TestTCPHandlerSynthesizedReplyAndHalfClose(t *testing.T) {
 		binary.BigEndian.Uint16(r1[0:2]): dnsmessage.RCode(r1[3] & 0x0f),
 		binary.BigEndian.Uint16(r2[0:2]): dnsmessage.RCode(r2[3] & 0x0f),
 	}
-	if got[0xbad0] != dnsmessage.RCodeRefused {
-		t.Errorf("0xbad0 rcode = %v, want %v", got[0xbad0], dnsmessage.RCodeRefused)
+	if got[0xbad0] != dnsmessage.RCodeNameError {
+		t.Errorf("0xbad0 rcode = %v, want %v", got[0xbad0], dnsmessage.RCodeNameError)
 	}
 	if got[0x1234] != dnsmessage.RCodeSuccess {
 		t.Errorf("0x1234 rcode = %v, want %v", got[0x1234], dnsmessage.RCodeSuccess)

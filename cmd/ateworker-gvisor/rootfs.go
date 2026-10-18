@@ -17,17 +17,20 @@
 package main
 
 import (
-	"fmt"
-	"os"
+	"path/filepath"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
-// writeActorResolvConf points the guest resolver at its fixed gateway address.
-func writeActorResolvConf(rootfs string) error {
-	pod, err := os.ReadFile("/etc/resolv.conf")
-	if err != nil {
-		return fmt.Errorf("reading the worker pod resolv.conf: %w", err)
+// setupAppRootfs composes an application container's bundle rootfs, the base
+// layer under the sandbox's restored rootfs writes, and writes its /etc files.
+func setupAppRootfs(actorDirs *ateworkerpb.ActorDirs, containerName string) error {
+	bundle := ociBundlePath(actorDirs, containerName)
+	if err := imagecache.SetupBundleRootfs(bundle); err != nil {
+		return err
 	}
-	return actornet.WriteRootfsResolvConf(rootfs, actornet.SandboxResolvConf(actornet.ActorVethGateway, pod))
+	return actornet.WriteRootfsEtcFiles(filepath.Join(bundle, "rootfs"), ocispec.Hostname)
 }

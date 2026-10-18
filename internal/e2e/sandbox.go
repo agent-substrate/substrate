@@ -21,7 +21,7 @@ import (
 )
 
 // SandboxClassMicroVM is the kata + cloud-hypervisor runtime, spelled as the
-// WorkerPool spec.sandboxClasses[].name and ActorTemplate sandboxClass spell it.
+// WorkerPool spec.sandboxClasses[].name spells it.
 const SandboxClassMicroVM = "microvm"
 
 // sandboxClassEnv selects which runtime's fixtures the suites build actors
@@ -52,8 +52,8 @@ type Fixture struct {
 // SubstrateFixture identifies an installed substrate ActorTemplate (the proto
 // resource created through the ate API, not the CRD) plus the CRD WorkerPool
 // backing it. Suites copy the resolved runtime — container images, sandbox
-// config, sandbox size — out of the template, and the worker image and sandbox
-// class out of the pool.
+// size — out of the template, and the worker image and sandbox class out of
+// the pool.
 type SubstrateFixture struct {
 	// Atespace and Name locate the ActorTemplate for GetActorTemplate.
 	Atespace string
@@ -184,8 +184,7 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{
-		"${WORKERPOOL_RUNTIME}":     "  sandboxClasses:\n  - name: gvisor",
-		"${TEMPLATE_SANDBOX_CLASS}": "",
+		"${WORKERPOOL_RUNTIME}": "  sandboxClasses:\n  - name: gvisor",
 		// Off unless the caller opts in; see WithTrustBundle.
 		"${TEMPLATE_TRUST_BUNDLE}": "",
 	}
@@ -195,12 +194,6 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 
 	inline["${WORKER_IMAGE}"] = "ko://go.ate.dev/substrate/cmd/ateworker-microvm"
 	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
-	// The micro-VM ActorTemplates name the cluster-wide SandboxConfig
-	// hack/install-microvm-deps.sh installs (configName: microvm), so a
-	// missing or stale one fails loudly. The pool only selects the class.
 	blocks["${WORKERPOOL_RUNTIME}"] = "  sandboxClasses:\n  - name: microvm"
-	// Must match the WorkerPool's: a snapshot is not portable across sandbox
-	// classes, so only same-class pools are eligible to run these actors.
-	blocks["${TEMPLATE_SANDBOX_CLASS}"] = "  sandboxClass: microvm"
 	return inline, blocks
 }

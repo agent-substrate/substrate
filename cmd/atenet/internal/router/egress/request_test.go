@@ -344,6 +344,27 @@ func TestRequestLegDeniesHTTP1WebSocketUpgrade(t *testing.T) {
 	}
 }
 
+func TestRequestLegDeniesConnect(t *testing.T) {
+	for name, policy := range map[string]*ateapipb.EgressPolicy{
+		"allow-all policy": allowAllPolicy(),
+		"no policy":        nil,
+	} {
+		for _, leg := range []string{extproc.EgressCleartextFilterChainName, extproc.EgressTLSMITMFilterChainName} {
+			for _, method := range []string{"CONNECT", "connect"} {
+				t.Run(name+"/"+leg+"/"+method, func(t *testing.T) {
+					h := policyHandler(policy)
+					md := innerMetadata(leg, method, "api.example.com:443", nil)
+					_, err := h.HandleRequestHeaders(context.Background(), md)
+					wantStatus(t, err, envoy_type.StatusCode_Forbidden)
+					if err.Error() != connectDeniedBody {
+						t.Errorf("denial body = %q, want %q", err, connectDeniedBody)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestRequestLegAllowsOrdinaryHTTPSRequest(t *testing.T) {
 	h := policyHandler(allowAllPolicy())
 	for _, tc := range []struct {

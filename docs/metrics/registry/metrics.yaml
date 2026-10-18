@@ -245,9 +245,8 @@ groups:
   - id: registry.ate.sandbox
     type: attribute_group
     brief: >
-      The sandbox that hosts an actor. The class comes from the template. Thus
-      it adds no series to the template labels. It lets a dashboard group the
-      data by class without a list of the template names.
+      The sandbox that hosts an actor. The class comes from the worker pool or
+      the snapshot runtime. It lets a dashboard group the data by class.
     attributes:
       - id: ate.sandbox.class
         stability: development
@@ -269,8 +268,8 @@ groups:
                 The source has no class, or a class that is not in this list.
                 The default is not gvisor. Thus a bad record stays visible.
                 ateapi reports it for a Worker that CreateWorker accepted with
-                no class, and for an ActorTemplate with no sandbox config.
-                atelet reports it for a snapshot manifest with no class.
+                no class. atelet reports it for a snapshot manifest with no
+                class.
       - id: ate.sandbox.oom_kills
         stability: development
         type: int
@@ -303,11 +302,7 @@ groups:
             - id: latest
               stability: development
               value: latest
-              brief: The durable snapshot of the actor in object storage.
-            - id: golden
-              stability: development
-              value: golden
-              brief: The golden image of the ActorTemplate.
+              brief: A durable snapshot in object storage, including a template's golden snapshot.
             - id: boot
               stability: development
               value: boot
@@ -378,10 +373,39 @@ groups:
                 Checkpoint. atelet writes the snapshot to its destination. It
                 uploads an external snapshot. It renames a local snapshot. The
                 ate.snapshot.kind key tells you which.
+            - id: cleanup
+              stability: development
+              value: cleanup
+              brief: >
+                Checkpoint. atelet removes superseded local snapshots, unmounts
+                external volumes, and resets the actor directories on the node.
             - id: total
               stability: development
               value: total
               brief: The full operation. Use this value as the denominator. Do not add the phases together.
+      - id: ate.snapshot.upload_overdue_band
+        stability: development
+        brief: >
+          How long past the upload delay (--snapshot-upload-delay) an undurable
+          local snapshot has waited for a durable upload.
+        type:
+          members:
+            - id: under_1m
+              stability: development
+              value: under_1m
+              brief: Overdue by up to 1 minute.
+            - id: 1m_to_5m
+              stability: development
+              value: 1m_to_5m
+              brief: Overdue by more than 1 minute and up to 5 minutes.
+            - id: 5m_to_15m
+              stability: development
+              value: 5m_to_15m
+              brief: Overdue by more than 5 minutes and up to 15 minutes.
+            - id: over_15m
+              stability: development
+              value: over_15m
+              brief: Overdue by more than 15 minutes.
 
   - id: registry.ate.scheduler
     type: attribute_group
@@ -704,7 +728,7 @@ groups:
         stability: stable
         type: int
         brief: The TCP port of the server that a gRPC client called.
-        examples: [8085]
+        examples: [21998]
 
   # ---------------------------------------------------------------------------
   # Metrics. ateapi
@@ -831,9 +855,8 @@ groups:
       - ref: ate.sandbox.class
         requirement_level:
           conditionally_required: >
-            The operation is resume, suspend or revert, and ateapi found
-            the ActorTemplate. A revert continues when the ActorTemplate no
-            longer exists, and then omits this key.
+            The operation is resume, suspend or revert, and the actor has a
+            worker assignment or a snapshot with a sandbox runtime.
       - ref: ate.snapshot.kind
         requirement_level:
           conditionally_required: The operation is a resume and the snapshot source is known. Other operations do not restore, thus this key is absent.
@@ -982,6 +1005,166 @@ groups:
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
+
+  - id: metric.atelet.snapshot.upload.duration
+    type: metric
+    metric_name: atelet.snapshot.upload.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of one background upload of a local snapshot to object storage on atelet.
+    note: >
+      atelet uploads deferred snapshots in the background once the upload delay
+      or the detach delay elapses. A probe that finds the manifest committed
+      already without uploading is not recorded. An upload that Terminate or an
+      atelet shutdown cancels records error.type Canceled. Synchronous uploads
+      from UPLOAD_MODE_IMMEDIATE checkpoints and PromoteSnapshot are recorded
+      on ate.actor.checkpoint.duration instead.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        cuj: Are background snapshot uploads slow or failing on a node?
+    attributes:
+      - ref: ate.snapshot.fidelity
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The upload failed. If this key is absent, the upload was correct.
+
+  - id: metric.atelet.snapshot.detach.duration
+    type: metric
+    metric_name: atelet.snapshot.detach.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of deleting the local snapshots of an actor during a background detach on atelet, excluding any snapshot upload.
+    note: >
+      atelet detaches an actor once it stays suspended on the node for the
+      detach delay. If object storage does not hold the latest local snapshot
+      yet, the detach uploads it first and records that upload on
+      atelet.snapshot.upload.duration; a detach whose upload fails stops there
+      and is not recorded here. Once the snapshot is durable, the detach deletes
+      the local snapshots of the actor, which is what this histogram times. A
+      detach that Terminate or an atelet shutdown cancels records error.type
+      Canceled. A failed detach keeps the local snapshots, and atelet tries it
+      again later. A detach that a DetachActor call asks for is not recorded.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        cuj: Local snapshots stay on a node after the detach delay. Do the detaches fail?
+    attributes:
+      - ref: ate.snapshot.fidelity
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The detach failed. If this key is absent, the detach was correct.
+
+  - id: metric.atelet.snapshot.upload.overdue.duration
+    type: metric
+    metric_name: atelet.snapshot.upload.overdue.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time from when a background snapshot upload on atelet is due to when a worker starts it.
+    note: >
+      This instrument has no labels. An upload is due the upload delay
+      (--snapshot-upload-delay) after the state of the actor on the node
+      stopped being durable, or when the retry delay ends after a failure. A
+      fixed number of upload workers (--snapshot-upload-workers) runs uploads
+      on each node, separate from the detach workers. The value stays near zero
+      while an upload worker is free. It grows when every upload worker is
+      busy, while a detach or a PromoteSnapshot of the actor runs, and after an
+      atelet restart for the uploads that came due while atelet was down.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.1, 1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600]
+        cuj: Background uploads fall behind on a node. Are the upload workers saturated?
+    attributes: []
+
+  - id: metric.atelet.snapshot.detach.overdue.duration
+    type: metric
+    metric_name: atelet.snapshot.detach.overdue.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time from when a background detach on atelet is due to when a worker starts it.
+    note: >
+      This instrument has no labels. A detach is due the detach delay
+      (--snapshot-detach-delay) after the latest checkpoint of the actor, or
+      when the retry delay ends after a failed detach. A fixed number of detach
+      workers (--snapshot-detach-workers) runs detaches on each node, separate
+      from the upload workers. The value stays near zero while a detach worker
+      is free. It grows when every detach worker is busy, while an upload, Run,
+      Restore, Checkpoint, or PromoteSnapshot of the actor runs, and after an
+      atelet restart for the detaches that came due while atelet was down.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.1, 1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600]
+        cuj: Local snapshots stay on a node after the detach delay. Are the detach workers saturated?
+    attributes: []
+
+  - id: metric.atelet.snapshot.upload.overdue.actors
+    type: metric
+    metric_name: atelet.snapshot.upload.overdue.actors
+    instrument: updowncounter
+    unit: "{actor}"
+    stability: development
+    brief: The number of actors on the node whose local snapshot is past the upload delay and not durable yet, by overdue band.
+    note: >
+      atelet reads this value with a callback. It counts each actor with a
+      snapshot state file on the node, and not only the actors in memory.
+      Overdue time counts from when the state of the actor stopped being
+      durable plus the upload delay (--snapshot-upload-delay). An actor leaves
+      the count only when its upload completes or the tracker drops it, so a
+      stuck or retrying upload keeps moving into higher bands. An undurable
+      snapshot with no object storage location to upload to does not enter this
+      count. The sum across bands is the number of actors on the node with an
+      overdue upload. atelet sets all four band values, also when they are 0.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        cuj: How many actors on a node have overdue snapshot uploads, and how far behind are they?
+    attributes:
+      - ref: ate.snapshot.upload_overdue_band
+        requirement_level: required
+
+  - id: metric.atelet.snapshot.undurable.age.max
+    type: metric
+    metric_name: atelet.snapshot.undurable.age.max
+    instrument: gauge
+    unit: s
+    stability: development
+    brief: The age of the oldest local snapshot on the node that object storage does not hold yet.
+    note: >
+      atelet reads this value with a callback. This instrument has no labels.
+      The age counts from when the state of the actor on the node stopped being
+      durable. The upload delay (--snapshot-upload-delay) counts from the same
+      time. The value is 0 if object storage holds each local snapshot. On a
+      correct node the value stays below the upload delay plus the time of one
+      upload. A larger value means that the uploads fail, wait for a worker, or
+      hang, or that a local snapshot has no object storage location to upload
+      it to.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        cuj: Do background uploads keep up on a node, or would a loss of the node lose old actor state?
+    attributes: []
 
   - id: metric.ate.actor.stats.cpu.time
     type: metric

@@ -166,7 +166,7 @@ func (r *systemInfoVolumeRefresher) DeregisterOwned(owner *registeredActor) {
 }
 
 // collectData builds the volume's contents keyed by volume-relative path.
-func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) (payload map[string][]byte, err error) {
+func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolumeSource) (payload map[string][]byte, err error) {
 	payload = map[string][]byte{}
 	for _, dataSource := range si.GetDataSources() {
 		switch {
@@ -213,7 +213,7 @@ func (r *systemInfoVolumeRefresher) write(ref resources.ActorRef, actorUID strin
 type systemInfoVolume struct {
 	Name string
 	Root string
-	Spec *ateletpb.SystemInfoVolume
+	Spec *ateletpb.SystemInfoVolumeSource
 }
 
 // apply writes payload into the volume and reports whether any file changed.
@@ -382,7 +382,7 @@ func (r *systemInfoVolumeRefresher) refreshBundle(ctx context.Context, bundleNam
 }
 
 // projectsBundle reports whether the volume spec projects the named bundle.
-func projectsBundle(si *ateletpb.SystemInfoVolume, bundleName string) bool {
+func projectsBundle(si *ateletpb.SystemInfoVolumeSource, bundleName string) bool {
 	for _, ds := range si.GetDataSources() {
 		if tb := ds.GetTrustBundle(); tb != nil && slices.Contains(tb.GetNames(), bundleName) {
 			return true

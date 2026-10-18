@@ -76,6 +76,7 @@ func init() {
 		Name:       "glutton",
 		LocustFile: "glutton.py",
 		UserClass:  userClass,
+		Config:     gluttonCodec,
 		Init:       initPing,
 	})
 }
@@ -141,7 +142,7 @@ func (r *taskRuntime) iterate() {
 
 	// Going straight back to resume on a stranded actor would turn every
 	// retryable hibernate failure into a FailedPrecondition and cost the
-	// actor anyway. SuspendActor and PauseActor are re-entrant, so finish
+	// actor anyway. SuspendActor is re-entrant in either mode, so finish
 	// the hibernate and pick the cycle up next iteration.
 	if actor.hibernatePending {
 		if err := actor.hibernate(ctx); err != nil && actor.noteFailure(err) {
@@ -150,11 +151,13 @@ func (r *taskRuntime) iterate() {
 		return
 	}
 
-	if err := actor.resume(ctx); err != nil {
-		if actor.noteFailure(err) {
-			user.replaceActor(ctx, actor)
+	if !actor.actorRunning || dynconfig.Get[gluttonKnobs](r.cfg.Dyn).LifecycleMode != dynconfig.LifecycleModeNone {
+		if err := actor.resume(ctx); err != nil {
+			if actor.noteFailure(err) {
+				user.replaceActor(ctx, actor)
+			}
+			return
 		}
-		return
 	}
 	// Fill before the first suspend so every snapshot from cycle one on
 	// carries the full working set; glutton keeps the allocations across
@@ -181,7 +184,7 @@ func (r *taskRuntime) iterate() {
 	// actor stays live for the full window. With the default zero window
 	// the actor is hibernated right after the first ping.
 	deadline := time.Now().Add(r.liveWait())
-	maxPings := max(r.cfg.Dyn.Load().MaxPingsPerWake, 1)
+	maxPings := max(dynconfig.Get[gluttonKnobs](r.cfg.Dyn).MaxPingsPerWake, 1)
 	actor.ping(ctx)
 	for sent := 1; sent < maxPings; sent++ {
 		gap := minPingGap + time.Duration(rand.Float64()*float64(maxPingGap-minPingGap))
@@ -249,7 +252,11 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 		u := val.(*gluttonUser)
 		for _, a := range u.actors {
 			if a.actorRunning {
-				_ = a.hibernate(ctx)
+				if dynconfig.Get[gluttonKnobs](r.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
+					_ = a.pause(ctx)
+				} else {
+					_ = a.suspend(ctx)
+				}
 			}
 			a.delete(ctx)
 		}
@@ -261,24 +268,15 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 // dynamicWait is the gap between suspending one actor and resuming the
 // VU's next one, drawn uniformly from [MinWait, MaxWait].
 func (r *taskRuntime) dynamicWait() time.Duration {
-	cfg := r.cfg.Dyn.Load()
-	return uniformWait(cfg.MinWait, cfg.MaxWait)
+	return dynconfig.Get[gluttonKnobs](r.cfg.Dyn).WaitTime.Draw()
 }
 
 // liveWait is how long an actor stays resumed between its first ping and
 // its suspend, drawn uniformly from [MinLive, MaxLive]. The default zero
 // window suspends right after the ping.
 func (r *taskRuntime) liveWait() time.Duration {
-	cfg := r.cfg.Dyn.Load()
-	return uniformWait(cfg.MinLive, cfg.MaxLive)
-}
-
-// uniformWait draws from [lo, hi]; an inverted or empty range yields lo.
-func uniformWait(lo, hi time.Duration) time.Duration {
-	if hi <= lo {
-		return lo
-	}
-	return lo + time.Duration(rand.Float64()*float64(hi-lo))
+	knobs := dynconfig.Get[gluttonKnobs](r.cfg.Dyn)
+	return dynconfig.Uniform(knobs.MinLive.Duration(), knobs.MaxLive.Duration())
 }
 
 // gluttonUser is one VU (boomer goroutine). It owns --actors-per-user actors
@@ -456,19 +454,25 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 }
 
 // hibernate takes the actor off its worker by whichever operation the
-// lifecycle mode selects: PauseActor keeps the snapshot on the node, while
-// SuspendActor writes it to durable storage.
+// lifecycle mode selects: an async SuspendActor keeps the snapshot on the
+// node, a sync one writes it to durable storage, and LifecycleModeNone
+// leaves the actor running on its worker.
 func (u *gluttonActor) hibernate(ctx context.Context) error {
-	if u.cfg.Dyn.Load().LifecycleMode == dynconfig.LifecycleModePause {
+	switch dynconfig.Get[gluttonKnobs](u.cfg.Dyn).LifecycleMode {
+	case dynconfig.LifecycleModeNone:
+		return nil
+	case dynconfig.LifecycleModePause:
 		return u.pause(ctx)
+	default:
+		return u.suspend(ctx)
 	}
-	return u.suspend(ctx)
 }
 
 func (u *gluttonActor) pause(ctx context.Context) error {
-	err := u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.PauseActor(callCtx, &ateapipb.PauseActorRequest{
-			Actor: u.ref(),
+	err := u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
+		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
+			Actor:   u.ref(),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -483,7 +487,8 @@ func (u *gluttonActor) pause(ctx context.Context) error {
 func (u *gluttonActor) suspend(ctx context.Context) error {
 	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
-			Actor: u.ref(),
+			Actor:   u.ref(),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -600,7 +605,7 @@ func (u *gluttonActor) ensureRAMFilled(ctx context.Context) {
 	if u.ramFilled {
 		return
 	}
-	target := u.cfg.Dyn.Load().MemTarget
+	target := dynconfig.Get[gluttonKnobs](u.cfg.Dyn).MemTarget
 	if target == "" {
 		u.ramFilled = true
 		return
@@ -631,8 +636,8 @@ func (u *gluttonActor) ensureCPULoad(ctx context.Context) {
 	if u.cpuLoaded {
 		return
 	}
-	dyn := u.cfg.Dyn.Load()
-	if dyn.CPUCores == 0 {
+	knobs := dynconfig.Get[gluttonKnobs](u.cfg.Dyn)
+	if knobs.CPUCores == 0 {
 		u.cpuLoaded = true
 		return
 	}
@@ -642,8 +647,8 @@ func (u *gluttonActor) ensureCPULoad(ctx context.Context) {
 	start := time.Now()
 
 	err := u.postProto(ctx, useCPUPath, &gluttonpb.UseCPURequest{
-		NumCores:  int32(dyn.CPUCores),
-		DutyCycle: dyn.CPUDutyCycle,
+		NumCores:  int32(knobs.CPUCores),
+		DutyCycle: knobs.CPUDutyCycle,
 	}, &gluttonpb.UseCPUResponse{})
 	clientLatency := time.Since(start)
 	boomerutil.LogSampledTrace(span, "GluttonUseCPU", clientLatency, boomerutil.SourceClient, err)
@@ -665,7 +670,7 @@ func (u *gluttonActor) ensureCPULoad(ctx context.Context) {
 // iteration, only after the fill has succeeded, and reports as its own
 // GluttonChurnRAM stats row.
 func (u *gluttonActor) churnRAM(ctx context.Context) {
-	churn := u.cfg.Dyn.Load().MemChurn
+	churn := dynconfig.Get[gluttonKnobs](u.cfg.Dyn).MemChurn
 	if churn == "" || !u.ramFilled {
 		return
 	}
@@ -691,7 +696,7 @@ func (u *gluttonActor) churnRAM(ctx context.Context) {
 // memory; on an eagerly-restored actor it degenerates to a fast in-memory
 // scan, so the two restore modes are directly comparable.
 func (u *gluttonActor) readRAM(ctx context.Context) {
-	read := u.cfg.Dyn.Load().MemRead
+	read := dynconfig.Get[gluttonKnobs](u.cfg.Dyn).MemRead
 	if read == "" || !u.ramFilled {
 		return
 	}

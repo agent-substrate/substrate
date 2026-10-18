@@ -137,8 +137,9 @@ one **atespace**.
 
 Substrate's components hold roles that access policies cannot grant, and only
 through their pod certificates. `ate-api-server`'s `--controller-spiffe-id`,
-`--egress-gateway-spiffe-id` and `--ingress-router-spiffe-id` flags bind them,
-defaulting to the install's; `atelet`'s comes from `--atelet-service-account`.
+`--egress-gateway-spiffe-id`, `--ingress-router-spiffe-id` and
+`--api-server-sidecar-spiffe-id` flags bind them, defaulting to the install's;
+`atelet`'s comes from `--atelet-service-account`.
 
 | Role | Held by | Allows |
 |---|---|---|
@@ -146,6 +147,7 @@ defaulting to the install's; `atelet`'s comes from `--atelet-service-account`.
 | `egress_gateway` | `atenet-egress` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs and certificates |
 | `ingress_router` | `atenet-router` | Resume actors; list actors across all atespaces |
 | `atelet` | `atelet` | Get actors' egress policies, for the worker that enforces them |
+| `api_server_sidecar` | the `ate-api-server` pod identity, which its sidecars share, today the objectstore control plugin | Get actors, to derive the snapshot prefixes a per-actor storage credential may cover |
 
 Only `egress_gateway` can mint actor credentials: not even a global owner can,
 since a credential lets its holder act as the actor.
@@ -186,10 +188,10 @@ The access policy RPCs are checked even with authorization off.
 | `ListActorTemplates` | `can_list_actor_templates`, the atespace, or global if none is given | Atespace viewer; global viewer for all atespaces |
 | `CreateActor` | 1. `can_create_actor`, the actor's atespace<br>2. `can_use_template`, the actor template<br>3. `can_use_tag`, the `sourceTag`, if one is given | 1. Atespace editor<br>2. Viewer of the template's atespace, which may be another one<br>3. Editor of the tag's atespace. Golden tags skip this check: the handler only accepts one built from the actor's own template. |
 | `UpdateActor` | 1. `can_update`, the actor<br>2. `can_use_template`, the template in the request | 1. Editor of its atespace<br>2. Viewer of the template's atespace, so an actor can't be switched to a template its editor can't use |
-| `GetActor` | `can_get`, the actor | Viewer of its atespace; `atenet-egress` |
+| `GetActor` | `can_get`, the actor | Viewer of its atespace; `atenet-egress`; the objectstore control plugin |
 | `DeleteActor` | `can_delete`, the actor | Editor of its atespace |
 | `ListActors` | `can_list_actors`, the atespace, or global if none is given | Atespace viewer; for all atespaces, global viewer, `atenet-router` or `atenet-egress` |
-| `PauseActor`, `SuspendActor`, `RevertActor` | `can_pause` / `can_suspend` / `can_revert`, the actor | Editor of its atespace |
+| `SuspendActor`, `RevertActor` | `can_suspend` / `can_revert`, the actor | Editor of its atespace |
 | `ResumeActor` | `can_resume`, the actor | Editor of its atespace; `atenet-router` |
 | `GetActorEgressPolicy` | `can_get_egress_policy`, the actor | Viewer of its atespace; `atenet-egress`; `atelet` |
 | `CreateActorEgressPolicy`, `UpdateActorEgressPolicy`, `DeleteActorEgressPolicy` | `can_create_egress_policy` / `can_update_egress_policy` / `can_delete_egress_policy`, the actor | Editor of its atespace |

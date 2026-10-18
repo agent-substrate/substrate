@@ -391,7 +391,6 @@ func TestMetricLabelValues(t *testing.T) {
 		{SchedulerOutcomeNoCapacity, "no_capacity"},
 		{SchedulerOutcomeError, "error"},
 
-		{SnapshotKindGolden, "golden"},
 		{SnapshotKindLatest, "latest"},
 		{SnapshotKindLocal, "local"},
 		{SnapshotKindBoot, "boot"},
@@ -409,6 +408,7 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotPhaseWorkerRestore, "worker_restore"},
 		{SnapshotPhaseWorkerCheckpoint, "worker_checkpoint"},
 		{SnapshotPhasePersist, "persist"},
+		{SnapshotPhaseCleanup, "cleanup"},
 		{SnapshotPhaseTotal, "total"},
 
 		{SandboxClassUnknown, "unknown"},

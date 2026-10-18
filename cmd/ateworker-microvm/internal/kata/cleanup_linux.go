@@ -128,14 +128,16 @@ func CleanupSandboxState(ctx context.Context, id string) {
 
 // isSandboxProcess reports whether a process is a VMM or virtiofsd serving the
 // sandbox id. Both carry id in their socket paths. atelet stages their binaries
-// under content-addressed names, so the executable's location identifies them
-// rather than its name.
+// under the actor's own directory, and the sandbox id is the actor UID, so an
+// executable under an actor's directory settles it: this sandbox's if it is
+// id's directory, another sandbox's otherwise, whatever the command line
+// says. Only a binary from elsewhere is judged by its name.
 func isSandboxProcess(id, cmdline, exe string) bool {
 	if !strings.Contains(cmdline, id) {
 		return false
 	}
-	if strings.HasPrefix(exe, nodepath.StaticFilesDir+"/") {
-		return true
+	if strings.HasPrefix(exe, nodepath.ActorsDir+"/") {
+		return strings.HasPrefix(exe, nodepath.ActorSandboxAssetsDir(id)+"/")
 	}
 	argv0 := strings.SplitN(cmdline, "\x00", 2)[0]
 	return strings.Contains(argv0, "cloud-hypervisor") || strings.Contains(argv0, "virtiofsd")

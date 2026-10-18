@@ -125,6 +125,18 @@ func pausedStatus(state ateapipb.ActorState, node string) *ateapipb.ActorStatus 
 	}
 }
 
+// uploadPendingStatus is how a paused actor looks until atelet's background
+// upload of its local snapshot is recorded: SUSPENDED, no worker, and the
+// latest generation's durable copy PENDING.
+func uploadPendingStatus(node string) *ateapipb.ActorStatus {
+	status := pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, node)
+	status.Snapshots[0].DurableSnapshot = &ateapipb.SnapshotStorage{
+		Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+		Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://snaps/root/atespaces/team-a/actors/uid/snap-1"},
+	}
+	return status
+}
+
 func TestMintWorkerActorJwt_Errors(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, testActorJWTIssuer, newTestJWTPool(t))
@@ -328,20 +340,41 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			want:   codes.NotFound,
 		},
 		{
-			// assigned_node without a local-only snapshot is not a paused actor,
-			// whatever left it set.
-			name:   "suspended actor with a stale assigned_node",
+			// atelet uploads the paused actor's checkpoint in the background
+			// from the node that holds it, with no worker assigned.
+			name:   "paused actor with its upload pending on this node",
 			ctx:    authed,
-			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, AssignedNode: "node-1"},
+			status: uploadPendingStatus("node-1"),
+			want:   codes.OK,
+		},
+		{
+			name:   "paused actor with its upload pending on another node",
+			ctx:    authed,
+			status: uploadPendingStatus("node-2"),
 			want:   codes.NotFound,
 		},
 		{
-			// Suspending a paused actor uploads its checkpoint from the node that
-			// holds it, with no worker assigned.
-			name:   "paused actor being suspended on this node",
-			ctx:    authed,
-			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1"),
-			want:   codes.OK,
+			// The node still holds the snapshot's files until its detach report
+			// clears the locality, so it still acts for the actor.
+			name: "paused actor whose snapshot is uploaded, local copy kept",
+			ctx:  authed,
+			status: func() *ateapipb.ActorStatus {
+				status := uploadPendingStatus("node-1")
+				status.Snapshots[0].DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				return status
+			}(),
+			want: codes.OK,
+		},
+		{
+			// Only a SUSPENDED actor is hosted by a node with no worker.
+			name: "suspending actor with no worker",
+			ctx:  authed,
+			status: func() *ateapipb.ActorStatus {
+				status := uploadPendingStatus("node-1")
+				status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
+				return status
+			}(),
+			want: codes.NotFound,
 		},
 		{
 			// A crash clears the worker but leaves assigned_node on the last

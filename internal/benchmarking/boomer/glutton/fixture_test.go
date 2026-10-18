@@ -32,6 +32,7 @@ type fakeControlClient struct {
 	mu             sync.Mutex
 	calls          []string
 	deleteRequests []*ateapipb.DeleteActorRequest
+	suspendReqs    []*ateapipb.SuspendActorRequest
 	// resumeErrs is returned by successive ResumeActor calls, in order, until
 	// it is drained; every call after that succeeds.
 	resumeErrs []error
@@ -91,18 +92,21 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, "SuspendActor")
+	f.calls = append(f.calls, suspendCallName(in))
+	f.suspendReqs = append(f.suspendReqs, in)
 	if err := nextErr(&f.suspendErrs); err != nil {
 		return nil, err
 	}
 	return &ateapipb.SuspendActorResponse{}, nil
 }
 
-func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseActorRequest, opts ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "PauseActor")
-	return &ateapipb.PauseActorResponse{}, nil
+// suspendCallName is the name a SuspendActor call is recorded under: an
+// async suspend is told apart from a sync one.
+func suspendCallName(in *ateapipb.SuspendActorRequest) string {
+	if in.GetOptions().GetMode() == ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		return "SuspendActor(async)"
+	}
+	return "SuspendActor"
 }
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
@@ -117,6 +121,12 @@ func (f *fakeControlClient) recordedCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.calls...)
+}
+
+func (f *fakeControlClient) recordedSuspendRequests() []*ateapipb.SuspendActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapipb.SuspendActorRequest(nil), f.suspendReqs...)
 }
 
 func (f *fakeControlClient) recordedDeleteRequests() []*ateapipb.DeleteActorRequest {
@@ -140,7 +150,7 @@ func newTestConfig(t *testing.T, srv *fake.Server, cfg *userclass.Config) *userc
 		cfg.Tracer = otel.Tracer("test")
 	}
 	if cfg.Dyn == nil {
-		cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{})
+		cfg.Dyn = dynconfig.Static(gluttonKnobs{})
 	}
 	cfg.HTTPClient = ts.Client()
 	cfg.RouterURL = ts.URL

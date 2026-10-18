@@ -123,16 +123,17 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			},
 		},
 		{
-			name:       "CreateActor from a golden tag does not check the tag",
+			name:       "CreateActor from a template tag checks the tag",
 			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
 			req: &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 				Metadata:      actorMeta,
 				ActorTemplate: sharedTemplate,
-				SourceTag:     &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "0b5c7d4e-golden"},
+				SourceTag:     &ateapipb.ObjectRef{Atespace: "shared", Name: "0b5c7d4e-golden"},
 			}},
 			want: []check{
 				{RelationCanCreateActor, "atespace:team-a"},
 				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
+				{RelationCanUseTag, "tag:shared/0b5c7d4e-golden"},
 			},
 		},
 		{
@@ -170,12 +171,6 @@ func TestDefaultRPCPermissions(t *testing.T) {
 		},
 
 		// Actor lifecycle.
-		{
-			name:       "PauseActor",
-			fullMethod: ateapipb.Control_PauseActor_FullMethodName,
-			req:        &ateapipb.PauseActorRequest{Actor: actorRef},
-			want:       []check{{RelationCanPause, "actor:team-a/runner"}},
-		},
 		{
 			name:       "ResumeActor",
 			fullMethod: ateapipb.Control_ResumeActor_FullMethodName,
@@ -513,9 +508,9 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			wantField:  "actor.atespace",
 		},
 		{
-			name:       "PauseActor without an actor",
-			fullMethod: ateapipb.Control_PauseActor_FullMethodName,
-			req:        &ateapipb.PauseActorRequest{},
+			name:       "SuspendActor without an actor",
+			fullMethod: ateapipb.Control_SuspendActor_FullMethodName,
+			req:        &ateapipb.SuspendActorRequest{},
 			wantField:  "actor.atespace",
 		},
 		{

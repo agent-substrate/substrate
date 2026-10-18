@@ -59,7 +59,7 @@ func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fl
 	return resources.ValidatePinnedImage(fldPath, *value)
 }
 
-func ValidateCustom_EnvEntry_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_EnvVar_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateEnvVarName(fldPath, *value)
 }
 
@@ -117,11 +117,11 @@ func ValidateCustom_TrustBundleDataSource_Path(_ context.Context, _ operation.Op
 	return resources.ValidateProjectedPath(fldPath, *value)
 }
 
-// ValidateCustom_SystemInfoVolume_DataSources allows at most one
+// ValidateCustom_SystemInfoVolumeSource_DataSources allows at most one
 // actor_metadata entry and requires every projected file path to be unique
 // across all data sources: atelet writes them in order into one tree, so a
 // repeated path silently clobbers the earlier file.
-func ValidateCustom_SystemInfoVolume_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateletpb.SystemInfoDataSource) field.ErrorList {
+func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateletpb.SystemInfoDataSource) field.ErrorList {
 	var errs field.ErrorList
 	seen := sets.New[string]()
 	sawMetadata := false

@@ -124,10 +124,9 @@ func onTag(relation string, ref resourceRef, fldPath *field.Path) ([]check, fiel
 }
 
 // onSourceTag checks can_use_tag on the tag an actor is created from, if the
-// request names one. Golden tags are exempt: the handler only accepts one
-// built from the actor's own template, which can_use_template already covers.
+// request names one.
 func onSourceTag(ref *ateapipb.ObjectRef, fldPath *field.Path) ([]check, field.ErrorList) {
-	if ref == nil || ref.GetAtespace() == resources.GoldenActorAtespace {
+	if ref == nil {
 		return nil, nil
 	}
 	return onTag(RelationCanUseTag, ref, fldPath)
@@ -250,9 +249,6 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 
 	// Actor lifecycle.
-	ateapipb.Control_PauseActor_FullMethodName: rule(checksOf(func(r *ateapipb.PauseActorRequest) ([]check, field.ErrorList) {
-		return onActor(RelationCanPause, r.GetActor(), field.NewPath("actor"))
-	})),
 	ateapipb.Control_ResumeActor_FullMethodName: rule(checksOf(func(r *ateapipb.ResumeActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanResume, r.GetActor(), field.NewPath("actor"))
 	})),
