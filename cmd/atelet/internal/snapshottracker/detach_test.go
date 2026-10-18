@@ -541,13 +541,13 @@ func TestTrackerDetachWaitChecksGeneration(t *testing.T) {
 
 	stale := testRef("s0", 1, time.Time{})
 	returnsPromptly(t, "BeginCheckpoint of stale generation during detach", func() {
-		if _, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, stale.Snapshot); apierror.Code(err) != codes.FailedPrecondition {
-			t.Errorf("BeginCheckpoint = %v, want FailedPrecondition", err)
+		if _, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, stale.Snapshot); apierror.Code(err) != codes.Aborted {
+			t.Errorf("BeginCheckpoint = %v, want Aborted", err)
 		}
 	})
 	returnsPromptly(t, "BeginPromote of stale generation during detach", func() {
-		if _, _, err := tr.BeginPromote(t.Context(), trackedActorUID, stale); apierror.Code(err) != codes.FailedPrecondition {
-			t.Errorf("BeginPromote = %v, want FailedPrecondition", err)
+		if _, _, err := tr.BeginPromote(t.Context(), trackedActorUID, stale); apierror.Code(err) != codes.Aborted {
+			t.Errorf("BeginPromote = %v, want Aborted", err)
 		}
 	})
 
@@ -588,8 +588,8 @@ func TestTrackerDetachWaitChecksGeneration(t *testing.T) {
 	for name, result := range results {
 		select {
 		case err := <-result:
-			if apierror.Code(err) != codes.FailedPrecondition {
-				t.Errorf("%s = %v, want FailedPrecondition", name, err)
+			if apierror.Code(err) != codes.Aborted {
+				t.Errorf("%s = %v, want Aborted", name, err)
 			}
 		case <-time.After(10 * time.Second):
 			t.Fatalf("%s did not return after the detach", name)

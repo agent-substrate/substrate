@@ -412,7 +412,7 @@ func (a *actorSnapshots) newest() *SnapshotRef {
 	return newest
 }
 
-// checkGeneration returns a FailedPrecondition error if snap has a stale
+// checkGeneration returns an Aborted error if snap has a stale
 // generation for the actor: below the actor's newest snapshot, or equal to
 // it under another snapshot_uuid.
 func (a *actorSnapshots) checkGeneration(snap *ateletpb.Snapshot) error {
@@ -422,9 +422,9 @@ func (a *actorSnapshots) checkGeneration(snap *ateletpb.Snapshot) error {
 	}
 	switch {
 	case snap.GetGeneration() < newest.generation():
-		return apierror.FailedPrecondition("snapshot %q has generation %d, below the actor's newest snapshot %q at generation %d", snap.GetSnapshotUuid(), snap.GetGeneration(), newest.uuid(), newest.generation())
+		return apierror.Aborted("snapshot %q has generation %d, below the actor's newest snapshot %q at generation %d", snap.GetSnapshotUuid(), snap.GetGeneration(), newest.uuid(), newest.generation())
 	case snap.GetGeneration() == newest.generation() && snap.GetSnapshotUuid() != newest.uuid():
-		return apierror.FailedPrecondition("snapshot %q has generation %d, which the actor's newest snapshot %q already holds", snap.GetSnapshotUuid(), snap.GetGeneration(), newest.uuid())
+		return apierror.Aborted("snapshot %q has generation %d, which the actor's newest snapshot %q already holds", snap.GetSnapshotUuid(), snap.GetGeneration(), newest.uuid())
 	default:
 		return nil
 	}
