@@ -44,15 +44,15 @@ func TestCertificateTransportRejectsIntermediateIssuedLeaf(t *testing.T) {
 
 	client := &egressMockClient{actor: runningActor(), policy: allowAllPolicy()}
 	h := New(client, root.roots(), 0, nil, "")
-	_, err = h.HandleRequestHeaders(context.Background(), egressMetadata(encodedCertificateChain(leaf)))
+	_, err = h.HandleRequestHeaders(context.Background(), egressMetadata(encodedCertificate(leaf)))
 	wantStatus(t, err, envoy_type.StatusCode_Forbidden)
 	if calls := client.actorCalls.Load(); calls != 0 {
 		t.Fatalf("intermediate-issued leaf reached actor validation %d times", calls)
 	}
 }
 
-// The x-forwarded-client-cert header is a channel the actor can write to, so
-// it neither authenticates nor overrides the certificate in filter state.
+// The gateway no longer forwards x-forwarded-client-cert, so a value an actor
+// sends must not authenticate or override the certificate in filter state.
 func TestCertificateTransportIgnoresXFCC(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, testActorSPIFFEID, actorCertOptions{})
@@ -80,7 +80,7 @@ func TestCertificateTransportIgnoresXFCC(t *testing.T) {
 			h := New(client, ca.roots(), 0, nil, "")
 			md := egressMetadata("")
 			if tc.allow {
-				md = egressMetadata(encodedCertificateChain(leaf))
+				md = egressMetadata(encodedCertificate(leaf))
 			}
 			if tc.xfcc != "" {
 				md.Headers["x-forwarded-client-cert"] = tc.xfcc

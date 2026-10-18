@@ -1462,7 +1462,7 @@ spec:
         - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
         - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         # Same roots Envoy uses for the handshake. The handler re-verifies the
-        # chain in Go and reads the worker-for-actor URI SAN; without this flag
+        # certificate in Go and reads the worker-for-actor URI SAN; without this flag
         # it has no actor-identity roots and denies every egress CONNECT with 503.
         - --actor-identity-ca-file=/run/actor-id-ca-certs/ca.crt
         # Disables Envoy-side tracing only (a span per CONNECT tunnel is

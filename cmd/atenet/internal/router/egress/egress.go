@@ -24,6 +24,7 @@
 package egress
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/pem"
@@ -267,8 +268,9 @@ func (h *Handler) validateActor(ctx context.Context, ref resources.ActorRef) err
 }
 
 // authenticateActorCertificate turns the peer certificate Envoy recorded in
-// filter state into a verified ActorRef. Only Envoy writes that filter state,
-// from the handshake it verified; no request header can supply it.
+// filter state into a verified ActorRef. Envoy fills that filter state from the
+// TLS handshake it verified, not from request data. The manifest test
+// TestEgressManifestPassesPeerCertificateThroughFilterState checks that wiring.
 func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (resources.ActorRef, error) {
 	encoded := md.Attribute(extproc.PeerCertificateFilterStateAttribute)
 	if encoded == "" {
@@ -281,30 +283,26 @@ func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (res
 	if err != nil {
 		return resources.ActorRef{}, fmt.Errorf("decoding the peer certificate: %w", err)
 	}
-	chain, err := parseCertificateChainPEM([]byte(certificate))
+	leaf, err := parsePeerCertificatePEM([]byte(certificate))
 	if err != nil {
 		return resources.ActorRef{}, err
 	}
-	return h.verifyActorCertificate(chain)
+	return h.verifyActorCertificate(leaf)
 }
 
-// verifyActorCertificate checks that chain[0] is a live, non-CA, client-auth
-// actor certificate issued by the actor-identity CA, and returns its actor ref.
+// verifyActorCertificate checks that leaf is a live, non-CA, client-auth actor
+// certificate issued directly by the actor-identity CA, and returns its actor
+// ref. The CA signs actor certificates with its root, so no intermediates are
+// accepted; the handshake and the Verify below both fail for one that needs them.
 //
-// The chain is verified here even though Envoy already did it at the handshake
+// The certificate is verified here even though Envoy already did it at the handshake
 // (require_client_certificate with the actor-identity CA as trusted_ca). We have
 // to parse the certificate anyway to inspect its URI SAN and usages, and
 // trusting a parsed-but-unverified certificate is a well-worn source of CVEs.
 // It also keeps the handler safe if the Envoy config is ever loosened, and costs
 // one signature check per CONNECT rather than per request. The IsCA, ClientAuth-EKU,
 // and URI SAN checks below have no Envoy-side equivalent at all.
-func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.ActorRef, error) {
-	leaf := chain[0]
-	intermediates := x509.NewCertPool()
-	for _, cert := range chain[1:] {
-		intermediates.AddCert(cert)
-	}
-
+func (h *Handler) verifyActorCertificate(leaf *x509.Certificate) (resources.ActorRef, error) {
 	now := time.Now()
 	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
 		return resources.ActorRef{}, fmt.Errorf("actor certificate is outside its validity period (%s..%s)",
@@ -321,10 +319,9 @@ func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.A
 	}
 
 	if _, err := leaf.Verify(x509.VerifyOptions{
-		Roots:         h.actorIdentityRoots,
-		Intermediates: intermediates,
-		CurrentTime:   now,
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		Roots:       h.actorIdentityRoots,
+		CurrentTime: now,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}); err != nil {
 		return resources.ActorRef{}, fmt.Errorf("actor certificate is not signed by the actor-identity CA: %w", err)
 	}
@@ -334,28 +331,17 @@ func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.A
 	return resources.ActorRefFromWorkerForActorSPIFFEURL(leaf.URIs[0])
 }
 
-func parseCertificateChainPEM(chainPEM []byte) ([]*x509.Certificate, error) {
-	var chain []*x509.Certificate
-	rest := chainPEM
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		if block.Type != "CERTIFICATE" {
-			continue
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("parsing the client certificate chain: %w", err)
-		}
-		chain = append(chain, cert)
+// parsePeerCertificatePEM parses the single leaf certificate Envoy recorded.
+func parsePeerCertificatePEM(certPEM []byte) (*x509.Certificate, error) {
+	block, rest := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("peer certificate value must be exactly one PEM certificate")
 	}
-	if len(chain) == 0 {
-		return nil, fmt.Errorf("client certificate value carries no certificate")
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing the peer certificate: %w", err)
 	}
-	return chain, nil
+	return cert, nil
 }
 
 // mapEgressIdentityError converts a GetActor failure into a client-facing
