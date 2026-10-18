@@ -98,6 +98,7 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 	}
 	want := &ateapipb.SnapshotConfig{
 		PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		MinimumFidelity:      ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 	}
 	if diff := cmp.Diff(want, got.GetSnapshotConfig(), protocmp.Transform()); diff != "" {

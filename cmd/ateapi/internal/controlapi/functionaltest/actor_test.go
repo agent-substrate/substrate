@@ -6089,6 +6089,9 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	if got := resumed2.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(); !proto.Equal(got, rtA) {
 		t.Fatalf("second WorkerAssignment.SandboxRuntime = %v, want %v", got, rtA)
 	}
+	if got := resumed2.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		t.Fatalf("second ResumeActorResponse.Fidelity = %v, want MEMORY", got)
+	}
 	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		t.Fatalf("second RestoreRequest.Fidelity = %v, want MEMORY", got)
 	}
@@ -6142,6 +6145,9 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	}
 	if got := resumed3.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(); !proto.Equal(got, rtB) {
 		t.Fatalf("fallback WorkerAssignment.SandboxRuntime = %v, want %v", got, rtB)
+	}
+	if got := resumed3.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		t.Fatalf("fallback ResumeActorResponse.Fidelity = %v, want VOLUMES", got)
 	}
 	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 		t.Fatalf("fallback RestoreRequest.Fidelity = %v, want VOLUMES", got)
@@ -6256,6 +6262,9 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	if got := restorableResumed.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(); !proto.Equal(got, rtA) {
 		t.Fatalf("restorable-actor WorkerAssignment.SandboxRuntime = %v, want matched restorable %v", got, rtA)
 	}
+	if got := restorableResumed.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		t.Fatalf("restorable-actor ResumeActorResponse.Fidelity = %v, want MEMORY", got)
+	}
 	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		t.Fatalf("restorable-actor RestoreRequest.Fidelity = %v, want MEMORY", got)
 	}
@@ -6277,5 +6286,157 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	}
 	if got := localSnapshot(suspendedFromPaused.GetActor().GetStatus()).GetSandboxRuntime(); !proto.Equal(got, rtA) {
 		t.Fatalf("local Snapshot.SandboxRuntime after SuspendActor from PAUSED = %v, want %v", got, rtA)
+	}
+}
+
+func TestResumeActor_MinimumFidelityAndResponseFidelity(t *testing.T) {
+	ns := namespaceForTest("ns-minimum-fidelity")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	makeTemplate := func(name string, minFidelity ateapipb.SnapshotFidelity) {
+		t.Helper()
+		_, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+			ActorTemplate: &ateapipb.ActorTemplate{
+				Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+				Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}},
+				Resources:      resources.CPUMemory(1000, 512<<20),
+				SnapshotConfig: &ateapipb.SnapshotConfig{
+					StorageLocation:   testStorageLocation,
+					PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					MinimumFidelity:   minFidelity,
+					GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{
+						Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED,
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("CreateActorTemplate(%s) failed: %v", name, err)
+		}
+	}
+
+	makeTemplate("tmpl-base", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
+	makeTemplate("tmpl-volumes-min", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
+	makeTemplate("tmpl-memory-min", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-min-fid"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: actorRef.Name},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-base"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// 1. Cold boot returns SNAPSHOT_FIDELITY_VOLUMES.
+	coldBootResp, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("cold boot ResumeActor failed: %v", err)
+	}
+	if got := coldBootResp.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		t.Errorf("cold boot ResumeActorResponse.Fidelity = %v, want VOLUMES", got)
+	}
+
+	// 2. Already-running ResumeActor is a no-op and returns SNAPSHOT_FIDELITY_UNSPECIFIED.
+	noopResp, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("already-running ResumeActor failed: %v", err)
+	}
+	if got := noopResp.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+		t.Errorf("already-running ResumeActorResponse.Fidelity = %v, want UNSPECIFIED", got)
+	}
+
+	// 3. Suspend and resume on the same template restores at SNAPSHOT_FIDELITY_MEMORY.
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}); err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+
+	memRestoreResp, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("memory restore ResumeActor failed: %v", err)
+	}
+	if got := memRestoreResp.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		t.Errorf("memory restore ResumeActorResponse.Fidelity = %v, want MEMORY", got)
+	}
+
+	// 4. Suspend, repoint to tmpl-volumes-min (minimum_fidelity=VOLUMES), and resume:
+	// template change downgrades to VOLUMES, which satisfies minimum_fidelity=VOLUMES.
+	suspended2, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("second SuspendActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+
+	if _, err := tc.client.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      suspended2.GetActor().GetMetadata(),
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-volumes-min"},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateActor(tmpl-volumes-min) failed: %v", err)
+	}
+
+	downgradedResp, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("downgraded ResumeActor failed: %v", err)
+	}
+	if got := downgradedResp.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		t.Errorf("downgraded ResumeActorResponse.Fidelity = %v, want VOLUMES", got)
+	}
+
+	// 5. Suspend on tmpl-volumes-min, repoint to tmpl-memory-min (minimum_fidelity=MEMORY),
+	// and resume: template change downgrades to VOLUMES < MEMORY, so ResumeActor fails
+	// with FailedPrecondition and leaves the actor SUSPENDED.
+	suspended3, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("third SuspendActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+
+	if _, err := tc.client.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      suspended3.GetActor().GetMetadata(),
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-memory-min"},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateActor(tmpl-memory-min) failed: %v", err)
+	}
+
+	_, err = tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("ResumeActor below minimum_fidelity status = %v, want FailedPrecondition (err: %v)", got, err)
+	}
+
+	if !strings.Contains(err.Error(), "minimum_fidelity") {
+		t.Errorf("ResumeActor below minimum_fidelity error = %q, want it to mention minimum_fidelity", err)
+	}
+
+	rejectedActor, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := rejectedActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("Actor state = %v, want SUSPENDED", got)
+	}
+	if got := rejectedActor.GetStatus().GetWorkerAssignment(); got != nil {
+		t.Errorf("WorkerAssignment = %v, want nil", got)
 	}
 }

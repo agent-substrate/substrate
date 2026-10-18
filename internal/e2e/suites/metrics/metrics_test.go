@@ -186,12 +186,15 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 
 			// Verify ate_actor_crashes metric carries valid, non-empty low-cardinality labels for all attributes.
 			foundCrashLine := false
+			foundAssignedCrashLine := false
 			for _, line := range strings.Split(scrape, "\n") {
 				if strings.HasPrefix(line, "ate_actor_crashes") {
 					foundCrashLine = true
 					opVal := extractLabelValue(line, "ate_actor_operation_name")
 					tmplAtespaceVal := extractLabelValue(line, "ate_template_atespace")
 					tmplNameVal := extractLabelValue(line, "ate_template_name")
+					hasWorkerPoolNS := strings.Contains(line, `ate_workerpool_namespace="`)
+					hasWorkerPool := strings.Contains(line, `ate_workerpool_name="`)
 					workerPoolNSVal := extractLabelValue(line, "ate_workerpool_namespace")
 					workerPoolVal := extractLabelValue(line, "ate_workerpool_name")
 					sandboxVal := extractLabelValue(line, "ate_sandbox_class")
@@ -211,12 +214,17 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					}
 					// The pool keys identify one WorkerPool together: the name on
 					// its own merges same-named pools from different namespaces.
-					// The suite crashes an assigned actor, so both are expected.
-					if workerPoolNSVal == "" {
-						crashErrs = append(crashErrs, "ate_workerpool_namespace label is missing or empty")
-					}
-					if workerPoolVal == "" {
-						crashErrs = append(crashErrs, "ate_workerpool_name label is missing or empty")
+					// Unassigned crashes omit both keys; assigned crashes carry both non-empty.
+					if hasWorkerPoolNS || hasWorkerPool {
+						if workerPoolNSVal == "" {
+							crashErrs = append(crashErrs, "ate_workerpool_namespace label is missing or empty")
+						}
+						if workerPoolVal == "" {
+							crashErrs = append(crashErrs, "ate_workerpool_name label is missing or empty")
+						}
+						if workerPoolNSVal != "" && workerPoolVal != "" {
+							foundAssignedCrashLine = true
+						}
 					}
 					if sandboxVal == "" {
 						crashErrs = append(crashErrs, "ate_sandbox_class label is missing or empty")
@@ -230,6 +238,8 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 			}
 			if !foundCrashLine {
 				errs = append(errs, "ate_actor_crashes metric line not found in collector scrape output")
+			} else if !foundAssignedCrashLine {
+				errs = append(errs, "no ate_actor_crashes metric line carried ate_workerpool_namespace and ate_workerpool_name")
 			}
 
 			if err := validateSnapshotPhaseLabels(scrape); err != nil {

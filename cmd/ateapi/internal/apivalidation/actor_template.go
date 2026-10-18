@@ -173,6 +173,26 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 	return nil
 }
 
+// ValidateCustom_SnapshotConfig ensures an ActorTemplate's
+// snapshot_config.minimum_fidelity does not exceed its preferred_fidelity.
+func ValidateCustom_SnapshotConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, obj, _ *ateapipb.SnapshotConfig) field.ErrorList {
+	pref := obj.GetPreferredFidelity()
+	min := obj.GetMinimumFidelity()
+	if validSnapshotFidelity(pref) && validSnapshotFidelity(min) && min > pref {
+		return field.ErrorList{field.Invalid(
+			fldPath.Child("minimum_fidelity"),
+			min,
+			fmt.Sprintf("must not exceed preferred_fidelity (%s)", pref),
+		)}
+	}
+	return nil
+}
+
+func validSnapshotFidelity(f ateapipb.SnapshotFidelity) bool {
+	return f >= ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES &&
+		f <= ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+}
+
 // ValidateCustom_SnapshotConfig_StorageLocation ensures an
 // ActorTemplate's snapshotConfig.location is a well-formed
 // URI with a bucket, so a bad location fails fast.

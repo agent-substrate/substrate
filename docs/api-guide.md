@@ -100,7 +100,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). The pool decides the sandbox class, so this is also how a template pins one: if your cluster has pools of more than one sandbox class and the workload needs a particular class, make sure the selector points only at pools of that class. An actor booting with no snapshot and no selector may land on any class, and keeps it from its first checkpoint on. |
-| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures, the lowest fidelity a Resume may restore at (`minimumFidelity`, default `SNAPSHOT_FIDELITY_VOLUMES`, at most `preferredFidelity`; a resume that cannot reach it fails), and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpu` and `memory` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
@@ -400,7 +400,10 @@ a `Snapshot` with the following fields:
     template's golden snapshot a new actor starts from — falls back to any eligible
     worker and downgrades the restore to `SNAPSHOT_FIDELITY_VOLUMES`, preserving
     the snapshot's volume data while booting the guest fresh under the new
-    worker's `defaultRuntime`.
+    worker's `defaultRuntime`. It falls back only when the template's
+    `snapshotConfig.minimumFidelity` is `SNAPSHOT_FIDELITY_VOLUMES`. With a
+    higher `minimumFidelity`, the resume returns `RESOURCE_EXHAUSTED` until a
+    compatible worker has room.
   - A local pause checkpoint (with `locality`) is not relaxed; the resume
     returns `RESOURCE_EXHAUSTED` and the actor stays paused on its node until a
     compatible worker there has room, or until atelet detaches it. A detach
@@ -599,7 +602,11 @@ Because the guards are required and only a read supplies them, an update is alwa
 Activates a suspended or paused actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
-*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
+*   **Response:** `ResumeActorResponse` containing:
+    *   `actor`: the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
+    *   `resumed`: whether a resume ran. False if the actor was already running.
+    *   `fidelity`: the snapshot fidelity the actor was restored at. `SNAPSHOT_FIDELITY_VOLUMES` for a cold boot or a volumes-only restore, and `SNAPSHOT_FIDELITY_UNSPECIFIED` when `resumed` is false.
+*   If the actor can only be restored below its template's `snapshotConfig.minimumFidelity`, the call fails with `FAILED_PRECONDITION` and the actor stays in its current state.
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.

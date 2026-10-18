@@ -153,6 +153,23 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			field.Required(field.NewPath("actor_template", "snapshot_config", "preferred_fidelity"), ""),
 		},
 	}, {
+		"minimum_fidelity unset",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.MinimumFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		})},
+		field.ErrorList{
+			field.Required(field.NewPath("actor_template", "snapshot_config", "minimum_fidelity"), ""),
+		},
+	}, {
+		"minimum_fidelity exceeds preferred_fidelity",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+			tmpl.SnapshotConfig.MinimumFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+		})},
+		field.ErrorList{
+			field.Invalid(field.NewPath("actor_template", "snapshot_config", "minimum_fidelity"), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ""),
+		},
+	}, {
 		"missing resources",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Resources = nil
@@ -392,6 +409,46 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity(-1)
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "preferred_fidelity"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "unspecified minimum_fidelity",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.MinimumFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		},
+		want: field.ErrorList{
+			field.Required(field.NewPath("snapshot_config", "minimum_fidelity"), ""),
+		},
+	}, {
+		name: "minimum_fidelity outside the enum",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.MinimumFidelity = ateapipb.SnapshotFidelity(99)
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "minimum_fidelity"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "negative minimum_fidelity",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.MinimumFidelity = ateapipb.SnapshotFidelity(-1)
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "minimum_fidelity"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "minimum_fidelity equal to preferred_fidelity",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+			tmpl.SnapshotConfig.MinimumFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		},
+	}, {
+		name: "minimum_fidelity ROOTFS exceeds preferred_fidelity VOLUMES",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+			tmpl.SnapshotConfig.MinimumFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "minimum_fidelity"), nil, "")},
+	}, {
+		name: "minimum_fidelity MEMORY exceeds preferred_fidelity ROOTFS",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+			tmpl.SnapshotConfig.MinimumFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "minimum_fidelity"), nil, "")},
 	}, {
 		name:   "no containers",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers = nil },
@@ -903,6 +960,7 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation:   "gs://my-bucket/snapshots",
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			MinimumFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		},
 		Resources: resources.CPUMemory(1000, 512<<20),
 	}

@@ -26,8 +26,9 @@ import (
 
 func TestApply(t *testing.T) {
 	const (
-		scopeFull = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-		scopeData = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		scopeFull   = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+		scopeRootfs = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		scopeData   = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	)
 	tests := []struct {
 		name string
@@ -46,15 +47,18 @@ func TestApply(t *testing.T) {
 		in:   &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			PreferredFidelity:    scopeFull,
+			MinimumFidelity:      scopeData,
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		}},
 	}, {
 		name: "set scopes are kept",
 		in: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			PreferredFidelity: scopeData,
+			PreferredFidelity: scopeRootfs,
+			MinimumFidelity:   scopeRootfs,
 		}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			PreferredFidelity:    scopeData,
+			PreferredFidelity:    scopeRootfs,
+			MinimumFidelity:      scopeRootfs,
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		}},
 	}, {

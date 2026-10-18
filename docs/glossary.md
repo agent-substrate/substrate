@@ -124,13 +124,19 @@ for etcd.
   - **`MEMORY`**: volumes, rootfs changes, and process memory. Used to
     capture everything needed to resume hot.
 
-  Fidelity describes only what a snapshot *holds*. A template sets one
-  level, `preferredFidelity`, the ceiling for every snapshot of its actors:
-  the node-local checkpoint a [Pause](#lifecycle) keeps on the node and the
-  snapshot a [Suspend](#lifecycle) uploads to snapshot storage. It is best
-  effort: the system never packages more than that level, and may package
-  less when a layer cannot be captured or is too expensive to capture at
-  the time. A process resumed in place keeps its memory regardless.
+  Fidelity describes only what a snapshot *holds*. A template sets two
+  levels:
+  - `preferredFidelity` is the ceiling for every snapshot of its actors:
+    the node-local checkpoint a [Pause](#lifecycle) keeps on the node and the
+    snapshot a [Suspend](#lifecycle) uploads to snapshot storage. It is best
+    effort: the system never packages more than that level, and may package
+    less when a layer cannot be captured or is too expensive to capture at
+    the time. A process resumed in place keeps its memory regardless.
+  - `minimumFidelity` is the floor a [Resume](#lifecycle) must restore at.
+    When a snapshot can only be restored below it, for example after a
+    template update leaves only its volumes usable, the Resume fails and
+    the actor stays as it was instead of booting with lost state. It defaults to `VOLUMES`
+    and cannot exceed `preferredFidelity`.
 
 - **Golden Snapshot**: the initial checkpoint normally captured once, when an
   `ActorTemplate` is created, from a temporary "golden" boot of the workload.

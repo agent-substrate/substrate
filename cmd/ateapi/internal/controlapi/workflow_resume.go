@@ -60,16 +60,18 @@ type resumeSnapshotSource struct {
 // restoreTelemetry labels the restore operation for the resume lifecycle
 // metric. WireFidelity describes the restore requested, not the stored
 // snapshot's scope: a MEMORY snapshot restored under a replaced template goes
-// out as data.
+// out as data. Fidelity is the public SnapshotFidelity reported on
+// ResumeActorResponse.
 type restoreTelemetry struct {
 	SnapshotKind string
 	WireFidelity string
+	Fidelity     ateapipb.SnapshotFidelity
 }
 
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent:
 // a re-entered workflow fast-forwards past the steps a previous attempt
 // completed, deriving progress from the persisted actor alone.
-func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, resumed bool, err error) {
+func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, resumed bool, fidelity ateapipb.SnapshotFidelity, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
 	var actor *ateapipb.Actor
@@ -95,50 +97,79 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	// again under the lease below.
 	actor, err = w.store.GetActor(ctx, actorRef)
 	if err != nil {
-		return nil, false, err
+		return nil, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, err
 	}
 	if wasRunning = actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING; wasRunning {
-		return actor, false, nil
+		return actor, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, nil
 	}
 
 	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
-		return nil, false, err
+		return nil, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, err
 	}
 	defer lease.Close()
 
 	var src resumeSnapshotSource
 	actor, actorTemplate, src, err = w.loadActorForResume(leaseCtx, actorRef)
 	if err != nil {
-		return nil, false, err
+		return nil, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, err
 	}
 	if wasRunning = actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING; wasRunning {
-		return actor, false, nil
+		return actor, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, nil
+	}
+	if err = checkSnapshotMeetsMinimumFidelity(actor, actorTemplate, src); err != nil {
+		return nil, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, err
 	}
 	var created *ateapipb.Actor
 	if created, err = w.ensureVolumesCreated(leaseCtx, actorRef, actor, actorTemplate); err != nil {
-		return nil, false, err
+		return nil, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, err
 	}
 	actor = created
 	var worker *ateapipb.Worker
 	var assigned *ateapipb.Actor
 	if assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate); err != nil {
-		return nil, false, err
+		return nil, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, err
 	}
 	actor = assigned
 	volumePublishContexts, err := w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate)
 	if err != nil {
-		return nil, false, err
+		return nil, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, err
 	}
 	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts, src); err != nil {
-		return nil, false, err
+		return nil, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, err
 	}
 	var running *ateapipb.Actor
 	if running, err = w.finalizeRunning(leaseCtx, actorRef); err != nil {
-		return nil, false, err
+		return nil, false, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, err
 	}
 	actor = running
-	return actor, true, nil
+	return actor, true, tele.Fidelity, nil
+}
+
+// checkSnapshotMeetsMinimumFidelity rejects the resume before provisioning
+// volumes or claiming a worker when its snapshot's restore fidelity (even
+// before worker runtime compatibility is checked) is already below the
+// template's minimum_fidelity. The actor is left in its current state. A
+// snapshot with no recorded fidelity counts as below it.
+func checkSnapshotMeetsMinimumFidelity(actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) error {
+	var fidelity ateapipb.SnapshotFidelity
+	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
+		fidelity = localSnap.GetFidelity()
+	} else if !src.SnapshotURI.IsZero() {
+		fidelity = durableRestoreFidelity(src, false)
+	} else {
+		return nil // cold boot, no snapshot to restore
+	}
+	return checkMinimumFidelity(fidelity, actorTemplate)
+}
+
+// checkMinimumFidelity returns FailedPrecondition when fidelity is below the
+// template's minimum_fidelity.
+func checkMinimumFidelity(fidelity ateapipb.SnapshotFidelity, actorTemplate *ateapipb.ActorTemplate) error {
+	if minFidelity := actorTemplate.GetSnapshotConfig().GetMinimumFidelity(); fidelity < minFidelity {
+		return apierror.FailedPrecondition("restore fidelity %s is below template minimum_fidelity %s", fidelity, minFidelity)
+	}
+	return nil
 }
 
 // validateGoldenSnapshotFidelity rejects a golden snapshot that does not carry
@@ -408,7 +439,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if err != nil {
 		return nil, err
 	}
-	if !w.appliesWithFallback(worker, constraints, canRelaxRuntime(actor, constraints)) {
+	if !w.appliesWithFallback(worker, constraints, canRelaxRuntime(actor, actorTemplate, constraints)) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		// If that worker's pool is no longer eligible (e.g. the actor's
 		// worker_selector was updated after the failed attempt), release it back
@@ -493,7 +524,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 	snapRuntime := constraints.RequiredRuntime
 	class = constraints.SandboxClass
-	relaxable := canRelaxRuntime(actor, constraints)
+	relaxable := canRelaxRuntime(actor, actorTemplate, constraints)
 
 	assignedWorker, err := w.workerHoldingStaleClaim(ctx, actor, constraints, relaxable)
 	if err != nil {
@@ -731,17 +762,41 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 }
 
 // canRelaxRuntime reports whether a resume may drop its RequiredRuntime
-// constraint and fall back to a volumes-only restore when no
+// constraint and fall back to a lower-fidelity restore when no
 // runtime-compatible worker has capacity. A local pause checkpoint is not
 // relaxed: the resume stays pinned to its node, the local restore has no
 // fidelity downgrade, and nothing invalidates the checkpoint files if the actor
 // boots elsewhere. The pin lifts once atelet uploads the checkpoint and
-// detaches it from the node.
-func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
+// detaches it from the node. A durable snapshot is only relaxed when the
+// fallback fidelity satisfies the template's minimum_fidelity floor.
+func canRelaxRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate, constraints scheduling.Constraints) bool {
 	if constraints.RequiredRuntime.Runtime() == nil {
 		return false
 	}
-	return findLatestLocalSnapshot(actor.GetStatus()) == nil
+	if findLatestLocalSnapshot(actor.GetStatus()) != nil {
+		return false
+	}
+	// A runtime fallback restores at VOLUMES, see durableRestoreFidelity.
+	return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES >= tmpl.GetSnapshotConfig().GetMinimumFidelity()
+}
+
+// durableRestoreFidelity returns the fidelity a durable snapshot is restored
+// with, given whether the template was replaced and whether the assigned
+// worker's runtime is incompatible with the snapshot's.
+func durableRestoreFidelity(src resumeSnapshotSource, runtimeIncompatible bool) ateapipb.SnapshotFidelity {
+	if src.TemplateReplaced {
+		// A replaced template invalidates both guest memory and rootfs upper,
+		// as the rootfs upper is only valid over the image it was written on.
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	}
+	if runtimeIncompatible {
+		// The assigned worker's SandboxRuntime cannot restore guest memory.
+		// TODO: Once gVisor can restore ROOTFS snapshots, drop to
+		// min(src.Fidelity, SNAPSHOT_FIDELITY_ROOTFS) instead: only the memory
+		// layer is invalid.
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	}
+	return src.Fidelity
 }
 
 // appliesWithFallback reports whether worker satisfies constraints, or — when
@@ -838,7 +893,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
-		fidelity := fidelityToAtelet(localSnap.GetFidelity())
+		snapshotFidelity := localSnap.GetFidelity()
+		if err := checkMinimumFidelity(snapshotFidelity, actorTemplate); err != nil {
+			return tele, err
+		}
+		tele.Fidelity = snapshotFidelity
+		fidelity := fidelityToAtelet(snapshotFidelity)
 		req := &ateletpb.RestoreRequest{
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
@@ -872,17 +932,15 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	} else if !src.SnapshotURI.IsZero() {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLatest
-		scope := fidelityToAtelet(src.Fidelity)
-		if src.TemplateReplaced || runtimeIncompatible {
-			if runtimeIncompatible {
-				logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime)
-			}
-			// TODO: Once gVisor can restore ROOTFS snapshots, drop an incompatible
-			// runtime to ROOTFS, not VOLUMES: only the memory layer is invalid. A
-			// replaced template still drops to VOLUMES, as the rootfs upper is
-			// only valid over the image it was written on.
-			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		if runtimeIncompatible {
+			logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime)
 		}
+		snapshotFidelity := durableRestoreFidelity(src, runtimeIncompatible)
+		if err := checkMinimumFidelity(snapshotFidelity, actorTemplate); err != nil {
+			return tele, err
+		}
+		tele.Fidelity = snapshotFidelity
+		scope := fidelityToAtelet(snapshotFidelity)
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)
 		req := &ateletpb.RestoreRequest{
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
@@ -913,6 +971,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; Booting from ActorTemplate spec")
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
+		tele.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 
 		req := &ateletpb.RunRequest{
 			WorkerPodUid:          assignment.GetWorkerPodUid(),

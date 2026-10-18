@@ -7672,6 +7672,11 @@ func Validate_SnapshotConfig(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.SnapshotConfig) (errs field.ErrorList) {
 
+	// custom validation
+	if e := ValidateCustom_SnapshotConfig(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
 	{ // field ateapipb.SnapshotConfig.StorageLocation
 		fn := func(
 			fldPath *field.Path,
@@ -7741,6 +7746,41 @@ func Validate_SnapshotConfig(
 				return &oldObj.PreferredFidelity
 			})
 		errs = append(errs, fn(fldPath.Child("preferred_fidelity"), &obj.PreferredFidelity, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.SnapshotConfig.MinimumFidelity
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.SnapshotFidelity,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.SnapshotConfig) *ateapipb.SnapshotFidelity {
+				return &oldObj.MinimumFidelity
+			})
+		errs = append(errs, fn(fldPath.Child("minimum_fidelity"), &obj.MinimumFidelity, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.SnapshotConfig.GoldenSnapshotConfig

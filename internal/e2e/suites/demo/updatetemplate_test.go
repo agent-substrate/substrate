@@ -23,6 +23,8 @@ import (
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // TestUpdateTemplateLifecycle covers repointing a suspended actor at a
@@ -178,10 +180,14 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// and B's --validate-existing-file-path reads A's file back).
 	//
 	t.Logf("Resuming Actor %q under template B...", actorID)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+	resumedAfterUpdate, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to resume Actor after template update: %v", err)
+	}
+	if got := resumedAfterUpdate.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		t.Errorf("resume after template update Fidelity = %v, want VOLUMES", got)
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
@@ -222,10 +228,14 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	}
 
 	t.Logf("Resuming Actor %q from pause under template B...", actorID)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+	resumedFromPause, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to resume Actor from pause under template B: %v", err)
+	}
+	if got := resumedFromPause.GetFidelity(); got != fidelity {
+		t.Errorf("resume from pause under template B Fidelity = %v, want %v", got, fidelity)
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
@@ -278,10 +288,14 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	}
 
 	t.Logf("Resuming Actor %q after the revert...", actorID)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+	resumedAfterRevert, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to resume Actor after the revert: %v", err)
+	}
+	if got := resumedAfterRevert.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		t.Errorf("resume after revert under template B Fidelity = %v, want VOLUMES", got)
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
@@ -339,4 +353,107 @@ func createUpdateTestTemplate(ctx context.Context, t *testing.T, clients *e2e.Cl
 		},
 		Modify: modify,
 	})
+}
+
+// TestUpdateActorTemplate_MinimumFidelityRejected verifies that repointing a
+// suspended actor to a template whose minimum_fidelity is higher than the
+// downgraded VOLUMES fidelity causes ResumeActor to fail with
+// FailedPrecondition and leaves the actor SUSPENDED.
+func TestUpdateActorTemplate_MinimumFidelityRejected(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name            string
+		minimumFidelity ateapipb.SnapshotFidelity
+	}{
+		{
+			name:            "minimumFidelity:ROOTFS",
+			minimumFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		},
+		{
+			name:            "minimumFidelity:MEMORY",
+			minimumFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			nsObj := e2e.CreateNamespace(t)
+			ctx := context.Background()
+			clients := e2e.GetClients()
+
+			env, err := e2e.CheckEnv("BUCKET_NAME")
+			if err != nil {
+				t.Fatalf("CheckEnv failed: %v", err)
+			}
+
+			nameA, nameB := "minfid-a-"+nsObj.Name, "minfid-b-"+nsObj.Name
+			createUpdateTestTemplate(ctx, t, clients, nsObj, nameA, "minfid-a", env["BUCKET_NAME"], ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, nil)
+			createUpdateTestTemplate(ctx, t, clients, nsObj, nameB, "minfid-b", env["BUCKET_NAME"], ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, func(tmpl *ateapipb.ActorTemplate) {
+				tmpl.SnapshotConfig.MinimumFidelity = tc.minimumFidelity
+			})
+
+			actorID := "minfid-" + nsObj.Name
+			actorRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID}
+			refA := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: nameA}
+			refB := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: nameB}
+
+			if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
+				ActorTemplate: refA,
+			}}); err != nil {
+				t.Fatalf("failed to create Actor: %v", err)
+			}
+			defer func() {
+				_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+					Actor:    actorRef,
+					AnyState: true,
+				})
+			}()
+
+			if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+				t.Fatalf("failed to resume Actor under template A: %v", err)
+			}
+			waitForActorStateWithTimeout(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING, 120*time.Second)
+
+			if _, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID}); err != nil {
+				t.Fatalf("failed to call actor under template A: %v", err)
+			}
+
+			if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+				Actor:   actorRef,
+				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			}); err != nil {
+				t.Fatalf("failed to suspend Actor: %v", err)
+			}
+			waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+			suspended, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+			if err != nil {
+				t.Fatalf("failed to get suspended Actor: %v", err)
+			}
+
+			if _, err := clients.SubstrateAPI.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      suspended.GetMetadata(),
+				ActorTemplate: refB,
+			}}); err != nil {
+				t.Fatalf("failed to update Actor to template B: %v", err)
+			}
+
+			_, err = e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef})
+			if got := status.Code(err); got != codes.FailedPrecondition {
+				t.Fatalf("ResumeActor status = %v, want FailedPrecondition (err: %v)", got, err)
+			}
+			if !strings.Contains(err.Error(), "minimum_fidelity") {
+				t.Errorf("ResumeActor error = %q, want it to mention minimum_fidelity", err)
+			}
+
+			rejected, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+			if err != nil {
+				t.Fatalf("failed to get rejected Actor: %v", err)
+			}
+			if got := rejected.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+				t.Errorf("Actor state = %v, want SUSPENDED", got)
+			}
+		})
+	}
 }

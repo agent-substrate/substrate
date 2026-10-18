@@ -1213,6 +1213,8 @@ message ActorTemplateStatus {
 
 // SnapshotConfig selects what actor snapshots capture and where they are
 // stored.
+//
+// +k8s:customValidation # minimum_fidelity <= preferred_fidelity
 message SnapshotConfig {
   // storage_location is the base object-storage URI snapshots of actors on
   // this version are stored under. Required.
@@ -1234,6 +1236,19 @@ message SnapshotConfig {
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
   SnapshotFidelity preferred_fidelity = 2;
+
+  // minimum_fidelity is the lowest fidelity the actor can safely resume at.
+  // When the highest fidelity a snapshot can be restored at is below
+  // minimum_fidelity (for example after an ActorTemplate update drops restore
+  // fidelity to VOLUMES), ResumeActor fails with FAILED_PRECONDITION and leaves
+  // the actor in its current state rather than booting it with lost state.
+  // Must not exceed preferred_fidelity.
+  // Defaults to VOLUMES when unset.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  SnapshotFidelity minimum_fidelity = 3;
 
   // golden_snapshot_config configures automated golden snapshot creation.
   // Golden snapshots are enabled when this config is omitted.
@@ -1782,6 +1797,11 @@ message ResumeActorResponse {
   // True if a resume workflow was executed to activate the actor.
   // False if the actor was already RUNNING.
   bool resumed = 2;
+
+  // fidelity is the snapshot fidelity the actor actually resumed at.
+  // SNAPSHOT_FIDELITY_UNSPECIFIED when resumed is false; SNAPSHOT_FIDELITY_VOLUMES
+  // on a cold boot without a snapshot or a volumes-only restore.
+  SnapshotFidelity fidelity = 3;
 }
 
 // RevertActorRequest identifies the Actor to revert.

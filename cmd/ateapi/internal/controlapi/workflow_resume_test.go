@@ -99,12 +99,15 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 	st := &leaseCountingStore{Interface: persistence}
 	w := &ActorWorkflow{store: st}
 
-	got, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+	got, resumed, fidelity, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}
 	if resumed {
 		t.Error("ResumeActor resumed = true, want false")
+	}
+	if fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+		t.Errorf("ResumeActor fidelity = %v, want %v", fidelity, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED)
 	}
 	if !proto.Equal(got, created) {
 		t.Errorf("ResumeActor actor = %v, want %v", got, created)
@@ -587,7 +590,7 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				}
 			})
 
-			actor, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+			actor, resumed, fidelity, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
 				if got := apierror.Code(err); got != codes.FailedPrecondition {
 					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
@@ -603,9 +606,15 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 					if resumed {
 						t.Errorf("expected resumed = false for already running actor, got true")
 					}
+					if fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+						t.Errorf("fidelity = %v, want UNSPECIFIED for already running actor", fidelity)
+					}
 				} else {
 					if !resumed {
 						t.Errorf("expected resumed = true for cold activation, got false")
+					}
+					if fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+						t.Errorf("fidelity = %v, want VOLUMES for cold activation", fidelity)
 					}
 				}
 			}
@@ -672,7 +681,7 @@ func TestResumeActor_MetricSkipsAlreadyRunningNoop(t *testing.T) {
 				}
 			})
 
-			_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+			_, _, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tt.wantRecord && err == nil {
 				t.Fatal("expected resume to fail, got nil error")
 			}
@@ -703,7 +712,7 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 		a.Status.WorkerAssignment = nil // RESUMING without a worker: corrupt record
 	})
 
-	_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+	_, _, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if got := apierror.Code(err); got != codes.Aborted {
 		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
 	}
@@ -717,6 +726,53 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 	}
 	if msg, want := got.GetStatus().GetCrash().GetMessage(), "resume failed: "+crashMessageWorkerAssignmentMissing; msg != want {
 		t.Errorf("crash message = %q, want %q", msg, want)
+	}
+}
+
+func TestResumeActor_FailsBeforeWorkerAssignmentWhenBelowMinimumFidelity(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+
+	tmplRef := resources.ActorTemplateRef{Atespace: "ns", Name: "tmpl1"}
+	curTmpl, err := st.GetActorTemplate(ctx, tmplRef)
+	if err != nil {
+		t.Fatalf("GetActorTemplate: %v", err)
+	}
+	if _, err := st.UpdateActorTemplate(ctx, tmplRef, store.PreconditionFrom(curTmpl), func(tmpl *ateapipb.ActorTemplate) error {
+		tmpl.SnapshotConfig = &ateapipb.SnapshotConfig{
+			StorageLocation:   testStorageLocation,
+			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			MinimumFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateActorTemplate: %v", err)
+	}
+
+	snap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "old-tmpl-uid", "snap-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+		a.Status.WorkerAssignment = nil
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{snap}
+	})
+
+	_, _, _, err = w.ResumeActor(ctx, actorRef)
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+	}
+
+	got, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	}
+	if got.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("WorkerAssignment = %v, want nil (checkSnapshotMeetsMinimumFidelity must fail before assigning a worker)", got.GetStatus().GetWorkerAssignment())
 	}
 }
 
@@ -1283,6 +1339,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	type templateSeed struct {
 		// golden seeds the template's golden tag snapshot.
 		golden *ateapipb.Snapshot
+		// minimumFidelity seeds SnapshotConfig.MinimumFidelity.
+		minimumFidelity ateapipb.SnapshotFidelity
 	}
 	// restoreWant pins the request atelet receives. On a non-OK code neither
 	// Restore nor Run may reach atelet; with run set the Run RPC (cold boot)
@@ -1290,7 +1348,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	// these wire values.
 	type restoreWant struct {
 		code codes.Code
-		run  bool
+		// state, when set, is the actor state persisted after a non-OK code.
+		state ateapipb.ActorState
+		run   bool
 		// snapshotName is Snapshot.SnapshotUuid and snapshotURI is
 		// Snapshot.Object.SnapshotUri. Both are asserted on every Restore, so
 		// a local row also pins which durable copy, if any, is sent.
@@ -1442,9 +1502,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// A stored snapshot always records its fidelity; one without is a
-			// drifted record, and ateapi forwards it unchanged for atelet's
-			// validation to reject rather than guessing MEMORY.
+			// A stored snapshot always records its fidelity. One without is a
+			// drifted record. A defaulted template's minimum_fidelity crashes
+			// the actor first (row 30). With no floor, ateapi forwards it
+			// unchanged for atelet's validation to reject rather than guessing
+			// MEMORY.
 			name:  "11 unspecified durable fidelity goes out unspecified",
 			actor: actorSeed{externalSnapshot: extSnap(actorURI, unspecScope)},
 			want: restoreWant{
@@ -1616,6 +1678,75 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
+		{
+			name: "26 repointed Full durable snapshot below minimum_fidelity fails without crashing",
+			actor: actorSeed{
+				externalSnapshot: extSnap(actorURI, fullScope),
+				tmplUID:          "mismatch",
+			},
+			tmpl: templateSeed{
+				minimumFidelity: rootfsScope,
+			},
+			want: restoreWant{
+				code:  codes.FailedPrecondition,
+				state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			},
+		},
+		{
+			name: "27 runtime-incompatible Full durable snapshot below minimum_fidelity fails without crashing",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, amd64RT),
+				tmplUID:          "current",
+				assignedRuntime:  arm64RT,
+			},
+			tmpl: templateSeed{
+				minimumFidelity: fullScope,
+			},
+			want: restoreWant{
+				code:  codes.FailedPrecondition,
+				state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			},
+		},
+		{
+			name: "28 local Volumes snapshot below minimum_fidelity fails without crashing",
+			actor: actorSeed{
+				localSnapshot: localSnap(localSnapshotName, dataScope),
+			},
+			tmpl: templateSeed{
+				minimumFidelity: rootfsScope,
+			},
+			want: restoreWant{
+				code:  codes.FailedPrecondition,
+				state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			},
+		},
+		{
+			name: "29 local snapshot without fidelity fails without crashing",
+			actor: actorSeed{
+				localSnapshot: localSnap(localSnapshotName, unspecScope),
+			},
+			tmpl: templateSeed{
+				minimumFidelity: dataScope,
+			},
+			want: restoreWant{
+				code:  codes.FailedPrecondition,
+				state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			},
+		},
+		{
+			name: "30 durable snapshot without fidelity fails without crashing",
+			actor: actorSeed{
+				externalSnapshot: extSnap(actorURI, unspecScope),
+				tmplUID:          "current",
+			},
+			tmpl: templateSeed{
+				minimumFidelity: dataScope,
+			},
+			want: restoreWant{
+				code:  codes.FailedPrecondition,
+				state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			},
+		},
 	}
 
 	// Every request atelet receives, Run or Restore, carries the sandbox the
@@ -1639,6 +1770,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
 				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
+					MinimumFidelity: tt.tmpl.minimumFidelity,
 				},
 			}
 			if tt.tmpl.golden != nil {
@@ -1702,8 +1834,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			})
 
 			actor, loadedTmpl, src, err := w.loadActorForResume(ctx, actorRef)
+			var tele restoreTelemetry
 			if err == nil {
-				_, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil, src)
+				tele, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil, src)
 			}
 			if got := apierror.Code(err); got != tt.want.code {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
@@ -1714,7 +1847,24 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				if restore != nil || run != nil {
 					t.Fatalf("atelet received a request after a resolution error: restore=%v run=%v", restore, run)
 				}
+				if tt.want.state != ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED {
+					stored, getErr := persistence.GetActor(ctx, actorRef)
+					if getErr != nil {
+						t.Fatalf("GetActor: %v", getErr)
+					}
+					if got := stored.GetStatus().GetState(); got != tt.want.state {
+						t.Errorf("stored state = %v, want %v", got, tt.want.state)
+					}
+				}
 				return
+			}
+
+			wantFidelity := ateapipb.SnapshotFidelity(tt.want.scope)
+			if tt.want.run {
+				wantFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+			}
+			if tele.Fidelity != wantFidelity {
+				t.Errorf("tele.Fidelity = %v, want %v", tele.Fidelity, wantFidelity)
 			}
 
 			wantSandboxRuntime := wantAteletRuntime[tt.actor.assignedRuntime]
@@ -2750,9 +2900,12 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 }
 
 // TestCanRelaxRuntime pins when a resume may drop its runtime constraint: only
-// when it has one, and never while a local pause checkpoint pins the actor.
+// when it has one, never while a local pause checkpoint pins the actor, and
+// only when the fallback fidelity meets the template's minimum_fidelity.
 func TestCanRelaxRuntime(t *testing.T) {
 	rt := testSandboxRuntime()
+	volumes := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	rootfs := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	durable := func(gen int32) *ateapipb.Snapshot {
 		return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "snap", "gs://bucket/snap", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
@@ -2762,10 +2915,11 @@ func TestCanRelaxRuntime(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		snapshots []*ateapipb.Snapshot
-		required  *ateapipb.SandboxRuntime
-		want      bool
+		name            string
+		snapshots       []*ateapipb.Snapshot
+		required        *ateapipb.SandboxRuntime
+		minimumFidelity ateapipb.SnapshotFidelity
+		want            bool
 	}{
 		{
 			name:      "nothing to relax without a runtime constraint",
@@ -2776,6 +2930,27 @@ func TestCanRelaxRuntime(t *testing.T) {
 			snapshots: []*ateapipb.Snapshot{durable(1)},
 			required:  rt,
 			want:      true,
+		},
+		{
+			name:            "durable snapshot may fall back when minimum_fidelity is VOLUMES",
+			snapshots:       []*ateapipb.Snapshot{durable(1)},
+			required:        rt,
+			minimumFidelity: volumes,
+			want:            true,
+		},
+		{
+			name:            "durable snapshot cannot fall back when minimum_fidelity is ROOTFS",
+			snapshots:       []*ateapipb.Snapshot{durable(1)},
+			required:        rt,
+			minimumFidelity: rootfs,
+			want:            false,
+		},
+		{
+			name:            "durable snapshot cannot fall back when minimum_fidelity is MEMORY",
+			snapshots:       []*ateapipb.Snapshot{durable(1)},
+			required:        rt,
+			minimumFidelity: memory,
+			want:            false,
 		},
 		{
 			name:      "local checkpoint stays pinned",
@@ -2791,7 +2966,10 @@ func TestCanRelaxRuntime(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{Snapshots: tc.snapshots}}
-			if got := canRelaxRuntime(actor, scheduling.Constraints{RequiredRuntime: hardware.NewRequirement(tc.required)}); got != tc.want {
+			tmpl := &ateapipb.ActorTemplate{
+				SnapshotConfig: &ateapipb.SnapshotConfig{MinimumFidelity: tc.minimumFidelity},
+			}
+			if got := canRelaxRuntime(actor, tmpl, scheduling.Constraints{RequiredRuntime: hardware.NewRequirement(tc.required)}); got != tc.want {
 				t.Errorf("canRelaxRuntime = %v, want %v", got, tc.want)
 			}
 		})
