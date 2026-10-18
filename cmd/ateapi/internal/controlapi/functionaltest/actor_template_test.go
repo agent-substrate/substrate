@@ -48,7 +48,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 			// Server-owned status on the request is ignored.
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+					GoldenTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "golden-tag"},
 				},
 			},
 		},
@@ -163,7 +163,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !parsed.OwnedBy(resources.TagSnapshotOwner(resources.GoldenActorAtespace, golden.GetMetadata().GetUid())) {
+	if !parsed.OwnedBy(resources.TagSnapshotOwner(testAtespace, golden.GetMetadata().GetUid())) {
 		t.Fatalf("golden snapshot %q is not under the golden tag's own prefix", uri)
 	}
 	assertSnapshotPresent(t, tc, uri)
@@ -200,7 +200,10 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if !tc.fakeAtelet.RestoreCalled {
 		t.Fatal("actor did not restore golden tag")
 	}
-	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: resources.ActorRefFromActor(late).ToObjectRef()}); err != nil {
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   resources.ActorRefFromActor(late).ToObjectRef(),
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	assertSnapshotPresent(t, tc, uri)
@@ -244,7 +247,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	}
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 	controlTemplate := createTemplateWithSelector(t, tc, "golden-control", &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}})
-	goldenRef := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
+	goldenRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()}
 	assertNoGolden := func(ctx context.Context) error {
 		if _, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef}); status.Code(err) != codes.NotFound {
 			return fmt.Errorf("disabled template's golden actor: got %v, want NotFound", err)
@@ -292,7 +295,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if !ran || restored {
 		t.Fatal("first resume did not cold boot")
 	}
-	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
+	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
 	if err != nil {
 		t.Fatal(err)
 	}

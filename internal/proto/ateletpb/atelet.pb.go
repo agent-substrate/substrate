@@ -100,8 +100,7 @@ const (
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES SnapshotFidelity = 1
-	// Volumes plus the root filesystem changes made since boot. Served by the
-	// micro-VM runtime only; other runtimes reject requests carrying it.
+	// Volumes plus the root filesystem changes made since boot.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS SnapshotFidelity = 2
 	// Capture process memory plus the full filesystem delta on top of the OCI
 	// image (including any attached DurableDir volumes).
@@ -156,19 +155,21 @@ type UploadMode int32
 
 const (
 	UploadMode_UPLOAD_MODE_UNSPECIFIED UploadMode = 0
-	// Keep the snapshot locally and upload it on atelet's schedule: at most
-	// for atelet's upload-delay after the oldest snapshot of the actor
-	// that is not yet durable was taken. Snapshots superseded before then
-	// are never uploaded.
+	// Keep the snapshot locally and upload it on atelet's schedule: about
+	// atelet's upload-delay after the oldest snapshot of the actor that is not
+	// yet durable was taken, or later while an upload is in progress or
+	// failing. Snapshots superseded before then are never uploaded.
 	//
 	// Once the actor has stayed suspended on this node for atelet's
 	// detach-delay, atelet detaches it: it uploads the latest local snapshot
-	// unless that is durable already, then deletes all the local snapshots. It
-	// never detaches a snapshot it cannot make durable, such as one without
-	// `snapshot.object`.
+	// unless that is durable already, then deletes all the local snapshots.
 	//
-	// TODO: Temporarily the deferred upload is unimplemented: until the
-	// detach, only PromoteSnapshot uploads the snapshot.
+	// atelet reports the actor's state with
+	// WorkerService.ReportActorSnapshotState once such an upload makes a newer
+	// snapshot durable, and once such a detach has deleted the local snapshots.
+	//
+	// atelet never uploads or detaches a snapshot it cannot make durable, such
+	// as one without `snapshot.object`.
 	UploadMode_UPLOAD_MODE_DEFERRED UploadMode = 1
 	// Upload the snapshot synchronously before Checkpoint returns, and keep a
 	// local copy if atelet can: failing to store it does not fail the
@@ -1806,7 +1807,7 @@ func (x *ArchAssets) GetFiles() map[string]*AssetFile {
 // an actor runs in: a sandbox class, the pause image holding its namespaces,
 // and binaries keyed first by architecture (GOARCH) and then by asset name.
 // atelet's backend code interprets the asset names (gVisor expects "gvisor",
-// the release tarball; legacy "runsc", a bare binary, is still accepted).
+// the release tarball).
 type SandboxAssets struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
@@ -3156,8 +3157,6 @@ type Snapshot struct {
 	// for the actor, or for its newest under another snapshot_uuid: the
 	// caller's view is stale.
 	//
-	// TODO: Temporarily, atelet does not compare it with the snapshots it holds.
-	//
 	// +k8s:required
 	// +k8s:minimum=1
 	Generation int32 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
@@ -3320,21 +3319,22 @@ type ActorSnapshotState struct {
 	// detach has made the snapshot durable and begun deleting it. Either way,
 	// latest_durable is then the actor's latest snapshot.
 	LatestLocal *SnapshotReport `protobuf:"bytes,1,opt,name=latest_local,json=latestLocal,proto3" json:"latest_local,omitempty"`
-	// The snapshot an in-flight upload is reading, if any. If it is
-	// latest_local, its local copy stays after the upload. If it is an older
-	// snapshot, whose upload began before latest_local was taken, atelet
-	// deletes its local copy once the upload ends.
+	// The snapshot a background upload has begun making durable, if any. Once
+	// begun, atelet keeps uploading it across checkpoints and restarts until
+	// it succeeds, fails and a newer local snapshot replaces it, or a newer
+	// snapshot becomes durable. If it is latest_local, its local copy stays
+	// after the upload. If it is an older snapshot, atelet deletes its local
+	// copy once the upload ends or is replaced.
 	Uploading *SnapshotReport `protobuf:"bytes,2,opt,name=uploading,proto3" json:"uploading,omitempty"`
 	// The newest snapshot atelet knows is durable, whether or not the control
 	// plane has recorded it: one atelet uploaded since it started, or one a
 	// PromoteSnapshot found already uploaded. Unset if there is none, which says
 	// nothing about older durable snapshots.
 	LatestDurable *SnapshotReport `protobuf:"bytes,3,opt,name=latest_durable,json=latestDurable,proto3" json:"latest_durable,omitempty"`
-	// When atelet next plans to trigger a background upload, which will upload
-	// whichever snapshot is latest_local at the time of triggering. Unset when
-	// there is no latest_local, or it is already durable or being uploaded.
-	// Advisory: a promote or detach can upload it sooner, and an older
-	// snapshot's upload can delay it.
+	// When atelet next plans to trigger a background upload, of `uploading` if
+	// it is waiting to resume or retry, or of `latest_local` otherwise. Unset
+	// when neither needs an upload. Advisory: a promote or detach can upload
+	// it sooner, and an upload or promote in progress can delay it.
 	UploadDueTime *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=upload_due_time,json=uploadDueTime,proto3" json:"upload_due_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3593,9 +3593,14 @@ func (x *CheckpointRequest) GetUploadConfig() *UploadConfig {
 type CheckpointResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor's state once the checkpoint is taken: latest_local is the new
-	// snapshot, unless UPLOAD_MODE_IMMEDIATE could not keep a local copy. The
-	// control plane can drop its entries for any local-only generation not
-	// named here: atelet has deleted it, and will never upload it.
+	// snapshot, unless UPLOAD_MODE_IMMEDIATE could not keep a local copy.
+	// atelet has deleted any local snapshot not named here, or deletes it once
+	// uploading ends.
+	//
+	// TODO: Add a snapshot garbage collection system for orphaned objects in
+	// object storage. atelet reports a background upload only when it records
+	// a newer durable snapshot, so an upload that a newer durable snapshot
+	// superseded while it ran leaves objects ateapi never learned were durable.
 	State         *ActorSnapshotState `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3869,11 +3874,8 @@ func (*RestoreResponse) Descriptor() ([]byte, []int) {
 
 type PromoteSnapshotRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Golden actors are never paused, so the golden atespace is rejected.
-	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # not the golden atespace
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name

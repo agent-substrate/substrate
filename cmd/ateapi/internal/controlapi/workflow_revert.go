@@ -206,37 +206,55 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	return w.releaseAssignmentWithoutBacklink(ctx, actor)
 }
 
-// ensureInProgressSnapshotDiscarded deletes the objects a suspend was partway
-// through writing when the actor was reverted.
+// ensureInProgressSnapshotDiscarded deletes the objects of every PENDING
+// durable snapshot on the actor: the one a suspend was partway through writing
+// when the actor was reverted, and any earlier pause's whose upload was never
+// recorded. The revert keeps none of them. atelet's upload of them has already
+// been canceled when ensureWorkerDiscarded terminated the actor.
 func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, actor *ateapipb.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "DiscardInProgressSnapshot")
 	defer func() { err = done(err) }()
 
-	inProgressSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
-	inProgress := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
+	var inProgress []string
+	for _, snap := range actor.GetStatus().GetSnapshots() {
+		storage := snap.GetDurableSnapshot()
+		if storage.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING && storage.GetObject().GetSnapshotUri() != "" {
+			inProgress = append(inProgress, storage.GetObject().GetSnapshotUri())
+		}
+	}
 	switch {
 	case w.objectStorePlugin == nil:
 		markSkipped(ctx, "no object store configured")
 		return nil
-	case inProgress == "":
+	case len(inProgress) == 0:
 		markSkipped(ctx, "no in-progress snapshot recorded")
 		return nil
 	}
 
-	uri, err := resources.ParseSnapshotURI(inProgress)
-	if err != nil {
-		return fmt.Errorf("while parsing the in-progress snapshot %q: %w", inProgress, err)
-	}
-	// A suspend records the in-progress URI under the actor's own prefix
-	// before atelet writes the first object, so a URI owned by anything else
-	// is a corrupted record.
+	// Check every URI before deleting any, so a corrupted record deletes nothing.
 	owner := actorSnapshotOwner(actor)
-	if !uri.OwnedBy(owner) {
-		return fmt.Errorf("the in-progress snapshot %q is not owned by actor %s", inProgress, owner)
+	prefixes := make([]resources.StoragePrefix, 0, len(inProgress))
+	for _, raw := range inProgress {
+		uri, err := resources.ParseSnapshotURI(raw)
+		if err != nil {
+			return fmt.Errorf("while parsing the in-progress snapshot %q: %w", raw, err)
+		}
+		// A suspend records the in-progress URI under the actor's own prefix
+		// before atelet writes the first object, so a URI owned by anything
+		// else is a corrupted record.
+		if !uri.OwnedBy(owner) {
+			return fmt.Errorf("the in-progress snapshot %q is not owned by actor %s", raw, owner)
+		}
+		prefixes = append(prefixes, uri.Prefix())
 	}
-	// Only the abandoned snapshot goes, not the actor's whole prefix: the
+	// Only the abandoned snapshots go, not the actor's whole prefix: the
 	// external snapshot the revert returns the actor to lives under it too.
-	return w.cleanupSnapshot(ctx, uri.Prefix())
+	for _, prefix := range prefixes {
+		if err := w.cleanupSnapshot(ctx, prefix); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureRevertedFinalized commits SUSPENDED and drops every pointer to the

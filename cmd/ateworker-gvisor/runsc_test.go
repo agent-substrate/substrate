@@ -215,14 +215,15 @@ func TestCheckpointArgs(t *testing.T) {
 	}
 	checkpointDir := "/node/actors/test-actor-123/checkpoints/snap-1"
 
-	got := r.checkpointArgs(ocispec.PauseContainer, checkpointDir, []string{"app:/var/data", "app:/var/cache"})
+	got := r.checkpointArgs(ocispec.PauseContainer, checkpointDir, []string{"rootfs/=app:/", "fs/=app:/var/data"})
 	want := []string{
 		"-global1",
 		"-global2",
 		"-root", "/node/actors/test-actor-123/runsc-state",
 		"checkpoint",
 		"-image-path", checkpointDir,
-		"-fs-checkpoint-paths", "app:/var/data,app:/var/cache",
+		"-fs-checkpoint-paths", "rootfs/=app:/",
+		"-fs-checkpoint-paths", "fs/=app:/var/data",
 		ocispec.PauseContainer,
 	}
 
@@ -240,15 +241,15 @@ func TestFsCheckpointArgs(t *testing.T) {
 	}
 	checkpointDir := "/node/actors/test-actor-123/checkpoints/snap-1"
 
-	got := r.fsCheckpointArgs(ocispec.PauseContainer, checkpointDir, []string{"app:/var/data", "app:/var/cache"})
+	got := r.fsCheckpointArgs(ocispec.PauseContainer, checkpointDir, []string{"rootfs/=app:/", "fs/=app:/var/data"})
 	want := []string{
 		"-global1",
 		"-global2",
 		"-root", "/node/actors/test-actor-123/runsc-state",
 		"fscheckpoint",
-		"-image-path", filepath.Join(checkpointDir, "fs"),
-		"-path", "app:/var/data",
-		"-path", "app:/var/cache",
+		"-image-path", checkpointDir,
+		"-path", "rootfs/=app:/",
+		"-path", "fs/=app:/var/data",
 		ocispec.PauseContainer,
 	}
 

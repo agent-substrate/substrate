@@ -141,20 +141,6 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	return actor, true, nil
 }
 
-// validateGoldenSnapshotFidelity rejects a golden snapshot that does not carry
-// the guest state (memory + fs delta) a restore needs. Golden actors always
-// commit MEMORY (preferredFidelity), so this only trips on a golden snapshot
-// whose record drifted — surface a clear error instead of shipping a restore
-// request atelet would reject (or that would boot an empty guest).
-func validateGoldenSnapshotFidelity(snapshot *ateapipb.Snapshot) error {
-	if fidelity := snapshot.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
-		return apierror.FailedPrecondition(
-			"ActorTemplate golden snapshot %q was taken with fidelity %s, not MEMORY; regenerate the golden snapshot",
-			snapshot.GetDurableSnapshot().GetObject().GetSnapshotUri(), fidelity)
-	}
-	return nil
-}
-
 // loadActorForResume fetches the current actor record and its template, and
 // resolves the boot source for the pending restore.
 func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
@@ -667,6 +653,10 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		return scheduling.Constraints{}, fmt.Errorf("invalid template resource limits: %w", err)
 	}
 	var requiredNodes []string
+	// A paused Actor stays pinned to its node until atelet detaches the local
+	// snapshot, so it cannot resume while that node is full.
+	// TODO: when the node has no room, detach the Actor there and resume it on
+	// another node from the durable snapshot.
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}
@@ -731,7 +721,8 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 // runtime-compatible worker has capacity. A local pause checkpoint is not
 // relaxed: the resume stays pinned to its node, the local restore has no
 // fidelity downgrade, and nothing invalidates the checkpoint files if the actor
-// boots elsewhere. Suspending the actor uploads it and lifts the pin.
+// boots elsewhere. The pin lifts once atelet uploads the checkpoint and
+// detaches it from the node.
 func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
 	if constraints.RequiredRuntime.Runtime() == nil {
 		return false

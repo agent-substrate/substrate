@@ -29,6 +29,7 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
 	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func TestDurDirLoopSequence(t *testing.T) {
@@ -38,18 +39,21 @@ func TestDurDirLoopSequence(t *testing.T) {
 		lifecycleMode string
 		wantGRPCCall  []string
 		wantHTTPCall  []string
+		wantMode      ateapipb.DurabilityMode
 	}{
 		{
 			name:         "explicit resume mode",
 			resumeMode:   dynconfig.ResumeModeExplicit,
 			wantGRPCCall: []string{"SuspendActor", "ResumeActor"},
 			wantHTTPCall: []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
+			wantMode:     ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
 		},
 		{
 			name:         "implicit resume mode",
 			resumeMode:   dynconfig.ResumeModeImplicit,
 			wantGRPCCall: []string{"SuspendActor"}, // No ResumeActor RPC!
 			wantHTTPCall: []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
+			wantMode:     ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
 		},
 		{
 			name:          "pause lifecycle mode",
@@ -57,6 +61,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 			resumeMode:    dynconfig.ResumeModeExplicit,
 			wantGRPCCall:  []string{"SuspendActor(async)", "ResumeActor"},
 			wantHTTPCall:  []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
+			wantMode:      ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
 		},
 	}
 
@@ -80,6 +85,11 @@ func TestDurDirLoopSequence(t *testing.T) {
 			}
 			if got := srv.RecordedPaths(); !reflect.DeepEqual(got, tc.wantHTTPCall) {
 				t.Errorf("HTTP calls: got %v, want %v", got, tc.wantHTTPCall)
+			}
+			for _, req := range fakeCtrl.recordedSuspendRequests() {
+				if got := req.GetOptions().GetMode(); got != tc.wantMode {
+					t.Errorf("suspend mode = %v, want %v", got, tc.wantMode)
+				}
 			}
 		})
 	}
@@ -235,50 +245,63 @@ func TestDurDirBootstrapFailureSuspendsBeforeDelete(t *testing.T) {
 	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor" || calls[len(calls)-1] != "DeleteActor" {
 		t.Errorf("recordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
 	}
-}
-
-func TestDurDirShutdownSuspendsBeforeDelete(t *testing.T) {
-	fakeCtrl := &fakeControlClient{}
-	cfg := &userclass.Config{
-		APIStub: fakeCtrl,
-		Dyn:     dynconfig.Static(durDirKnobs{}),
+	suspends := fakeCtrl.recordedSuspendRequests()
+	if len(suspends) == 0 {
+		t.Fatalf("got no SuspendActor requests")
 	}
-	du := newTestDurDirUser(t, &fake.Server{}, cfg)
-
-	rt := &durDirRuntime{cfg: du.cfg}
-	rt.users.Store(boomerutil.GoroutineID(), du)
-	rt.shutdown(context.Background())
-
-	calls := fakeCtrl.recordedCalls()
-	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor" || calls[len(calls)-1] != "DeleteActor" {
-		t.Errorf("recordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
-	}
-	reqs := fakeCtrl.recordedDeleteRequests()
-	if len(reqs) == 0 || !reqs[0].GetAnyState() {
-		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
+	if got, want := suspends[len(suspends)-1].GetOptions().GetMode(), ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS; got != want {
+		t.Errorf("suspend mode = %v, want %v", got, want)
 	}
 }
 
-func TestDurDirShutdownPausesBeforeDelete(t *testing.T) {
-	fakeCtrl := &fakeControlClient{}
-	cfg := &userclass.Config{
-		APIStub: fakeCtrl,
-		Dyn: dynconfig.Static(durDirKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
-		}),
+func TestDurDirShutdownHibernatesBeforeDelete(t *testing.T) {
+	tests := []struct {
+		name          string
+		lifecycleMode string
+		wantCalls     []string
+		wantMode      ateapipb.DurabilityMode
+	}{
+		{
+			name:      "suspend lifecycle mode",
+			wantCalls: []string{"SuspendActor", "DeleteActor"},
+			wantMode:  ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
+		},
+		{
+			name:          "pause lifecycle mode",
+			lifecycleMode: dynconfig.LifecycleModePause,
+			wantCalls:     []string{"SuspendActor(async)", "DeleteActor"},
+			wantMode:      ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
+		},
 	}
-	du := newTestDurDirUser(t, &fake.Server{}, cfg)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeCtrl := &fakeControlClient{}
+			cfg := &userclass.Config{
+				APIStub: fakeCtrl,
+				Dyn: dynconfig.Static(durDirKnobs{
+					Lifecycle: dynconfig.Lifecycle{LifecycleMode: tc.lifecycleMode},
+				}),
+			}
+			du := newTestDurDirUser(t, &fake.Server{}, cfg)
 
-	rt := &durDirRuntime{cfg: du.cfg}
-	rt.users.Store(boomerutil.GoroutineID(), du)
-	rt.shutdown(context.Background())
+			rt := &durDirRuntime{cfg: du.cfg}
+			rt.users.Store(boomerutil.GoroutineID(), du)
+			rt.shutdown(context.Background())
 
-	calls := fakeCtrl.recordedCalls()
-	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor(async)" || calls[len(calls)-1] != "DeleteActor" {
-		t.Errorf("recordedCalls must end with [SuspendActor(async), DeleteActor], got %v", calls)
-	}
-	reqs := fakeCtrl.recordedDeleteRequests()
-	if len(reqs) == 0 || !reqs[0].GetAnyState() {
-		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
+			if got := fakeCtrl.recordedCalls(); !reflect.DeepEqual(got, tc.wantCalls) {
+				t.Errorf("recordedCalls = %v, want %v", got, tc.wantCalls)
+			}
+			suspends := fakeCtrl.recordedSuspendRequests()
+			if len(suspends) != 1 {
+				t.Fatalf("got %d SuspendActor requests, want 1", len(suspends))
+			}
+			if got := suspends[0].GetOptions().GetMode(); got != tc.wantMode {
+				t.Errorf("suspend mode = %v, want %v", got, tc.wantMode)
+			}
+			reqs := fakeCtrl.recordedDeleteRequests()
+			if len(reqs) == 0 || !reqs[0].GetAnyState() {
+				t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
+			}
+		})
 	}
 }

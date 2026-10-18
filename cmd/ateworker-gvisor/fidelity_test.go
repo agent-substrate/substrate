@@ -27,9 +27,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
-// TestValidateFidelity pins what this runtime serves. gVisor keeps rootfs
-// changes inside its memory checkpoint, so ROOTFS is refused until it can
-// capture them on their own; the error names the levels it does serve.
+// TestValidateFidelity pins what this runtime serves.
 func TestValidateFidelity(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -37,8 +35,8 @@ func TestValidateFidelity(t *testing.T) {
 		wantErr  bool
 	}{
 		{"volumes", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false},
+		{"rootfs", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, false},
 		{"memory", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, false},
-		{"rootfs is not served", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, true},
 		{"unspecified", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, true},
 		{"outside the enum", ateworkerpb.SnapshotFidelity(99), true},
 	} {
@@ -52,31 +50,32 @@ func TestValidateFidelity(t *testing.T) {
 			}
 		})
 	}
-	err := validateFidelity(ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS)
-	for _, want := range []string{"SNAPSHOT_FIDELITY_VOLUMES", "SNAPSHOT_FIDELITY_MEMORY"} {
+	err := validateFidelity(ateworkerpb.SnapshotFidelity(99))
+	for _, want := range []string{"SNAPSHOT_FIDELITY_VOLUMES", "SNAPSHOT_FIDELITY_ROOTFS", "SNAPSHOT_FIDELITY_MEMORY"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("rootfs rejection %q does not list %s as supported", err, want)
+			t.Errorf("invalid fidelity rejection %q does not list %s as supported", err, want)
 		}
 	}
 }
 
-// TestRPCsRejectRootfsBeforeTouchingTheSandbox pins that a ROOTFS checkpoint
-// or restore fails validation up front, before the actor lock or any file
-// system work, so a misrouted request cannot leave the actor half-handled.
-func TestRPCsRejectRootfsBeforeTouchingTheSandbox(t *testing.T) {
+// TestRPCsRejectInvalidFidelityBeforeTouchingTheSandbox pins that an invalid
+// fidelity checkpoint or restore fails validation up front, before the actor
+// lock or any file system work, so a misrouted request cannot leave the actor
+// half-handled.
+func TestRPCsRejectInvalidFidelityBeforeTouchingTheSandbox(t *testing.T) {
 	s := &AteWorkerService{}
-	rootfs := ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	unspecified := ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 
 	ckpt := validCheckpointRequest()
-	ckpt.Fidelity = rootfs
+	ckpt.Fidelity = unspecified
 	_, err := s.CheckpointWorkload(context.Background(), ckpt)
 	if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "fidelity") {
-		t.Errorf("CheckpointWorkload(ROOTFS) = %v, want InvalidArgument naming the fidelity", err)
+		t.Errorf("CheckpointWorkload(UNSPECIFIED) = %v, want InvalidArgument naming the fidelity", err)
 	}
 	restore := validRestoreRequest()
-	restore.Fidelity = rootfs
+	restore.Fidelity = unspecified
 	_, err = s.RestoreWorkload(context.Background(), restore)
 	if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "fidelity") {
-		t.Errorf("RestoreWorkload(ROOTFS) = %v, want InvalidArgument naming the fidelity", err)
+		t.Errorf("RestoreWorkload(UNSPECIFIED) = %v, want InvalidArgument naming the fidelity", err)
 	}
 }

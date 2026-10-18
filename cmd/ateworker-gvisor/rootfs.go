@@ -17,26 +17,20 @@
 package main
 
 import (
-	"fmt"
-	"os"
+	"path/filepath"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
-// writeActorEtcFiles points the guest resolver at its fixed gateway address
-// and writes the guest's /etc/hosts.
-//
-// rootfs is the read-only lower under the actor's restored overlay upper, so
-// rewriting both on every activation keeps the actor's own edits. Writing them
-// after restore instead would clobber them.
-func writeActorEtcFiles(rootfs string) error {
-	pod, err := os.ReadFile("/etc/resolv.conf")
-	if err != nil {
-		return fmt.Errorf("reading the worker pod resolv.conf: %w", err)
-	}
-	if err := actornet.WriteRootfsResolvConf(rootfs, actornet.SandboxResolvConf(actornet.ActorVethGateway, pod)); err != nil {
+// setupAppRootfs composes an application container's bundle rootfs, the base
+// layer under the sandbox's restored rootfs writes, and writes its /etc files.
+func setupAppRootfs(actorDirs *ateworkerpb.ActorDirs, containerName string) error {
+	bundle := ociBundlePath(actorDirs, containerName)
+	if err := imagecache.SetupBundleRootfs(bundle); err != nil {
 		return err
 	}
-	return actornet.WriteRootfsHosts(rootfs, actornet.SandboxHosts(ocispec.Hostname, actornet.ActorVethIP))
+	return actornet.WriteRootfsEtcFiles(filepath.Join(bundle, "rootfs"), ocispec.Hostname)
 }

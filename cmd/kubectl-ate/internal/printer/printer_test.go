@@ -436,7 +436,7 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 			},
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-demo-counter-substrate", Name: "golden-tag"},
 				},
 			},
 		},

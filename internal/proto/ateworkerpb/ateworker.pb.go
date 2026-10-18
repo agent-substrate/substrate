@@ -46,8 +46,7 @@ const (
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES SnapshotFidelity = 1
-	// Volumes plus the root filesystem changes made since boot. Served by the
-	// micro-VM runtime only; other runtimes reject requests carrying it.
+	// Volumes plus the root filesystem changes made since boot.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS SnapshotFidelity = 2
 	// Capture process memory plus the full filesystem delta on top of the OCI
 	// image (including any attached DurableDir volumes).
@@ -480,7 +479,7 @@ type RunWorkloadRequest struct {
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (content-addressed, like runsc_path). The names are
-	// the runtime's own: "gvisor" and "runsc" for gVisor, "cloud-hypervisor",
+	// the runtime's own: "gvisor" for gVisor, "cloud-hypervisor",
 	// "virtiofsd", "kata-kernel", and "kata-image" for the micro-VM. Empty for
 	// the gVisor runtime, which uses runsc_path.
 	//

@@ -58,12 +58,6 @@ func ValidateDeleteActorRequest(ctx context.Context, req *ateapipb.DeleteActorRe
 	return Validate_DeleteActorRequest(ctx, op, nil, req, nil)
 }
 
-func ValidatePauseActorRequest(ctx context.Context, req *ateapipb.PauseActorRequest) field.ErrorList {
-	// Call the generated validation.
-	op := MakeCreateOp(ctx)
-	return Validate_PauseActorRequest(ctx, op, nil, req, nil)
-}
-
 func ValidateResumeActorRequest(ctx context.Context, req *ateapipb.ResumeActorRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)

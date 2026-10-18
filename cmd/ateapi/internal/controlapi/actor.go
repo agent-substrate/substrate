@@ -108,11 +108,6 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		if err != nil {
 			return nil, err
 		}
-		if inActor.GetSourceTag() == nil {
-			if err := validateGoldenSnapshotFidelity(sourceTag.GetStatus().GetSnapshot()); err != nil {
-				return nil, err
-			}
-		}
 	}
 
 	atespace := inActor.GetMetadata().GetAtespace()
@@ -311,11 +306,11 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
 			}
 			// A paused actor resumes from its node-local snapshot, uploaded or
-			// not, which was captured from the old template's sandbox; suspend
-			// or revert it first.
+			// not, which was captured from the old template's sandbox. The
+			// snapshot stays local until atelet detaches it from the node.
 			if latestSnapshotIsLocal(oldVal.GetStatus()) {
 				return apierror.FailedPrecondition(
-					"actor must hold no node-local snapshot to change its actor template: suspend or revert it first")
+					"actor must hold no node-local snapshot to change its actor template: wait for its snapshot to be uploaded and detached from the node, or revert it")
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
@@ -463,28 +458,6 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 
 func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
 	return s.store.DeleteActor(ctx, actorRef, precondition)
-}
-
-func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
-	if errs := apivalidation.ValidatePauseActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToAPIError(errs)
-	}
-	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	setSpanActorRefAttributes(ctx, actorRef)
-
-	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendAsync)
-	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, err
-	}
-
-	setSpanActorAttributes(ctx, actor)
-	return &ateapipb.PauseActorResponse{Actor: actor}, nil
 }
 
 func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {

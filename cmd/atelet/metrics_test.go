@@ -28,7 +28,6 @@ import (
 
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -178,14 +177,15 @@ func TestCheckpointDurationShape(t *testing.T) {
 }
 
 // TestCheckpointRecordsCleanup drives a Checkpoint: the node cleanup it does
-// lands in the cleanup phase, even when the upload then fails, and the phases
-// fit in the total.
+// once the snapshot commits lands in the cleanup phase, a failed upload returns
+// before it, and the phases fit in the total.
 func TestCheckpointRecordsCleanup(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		putErr error
+		name        string
+		putErr      error
+		wantCleanup bool
 	}{
-		{name: "succeeded"},
+		{name: "succeeded", wantCleanup: true},
 		{name: "upload failed", putErr: errors.New("object store unavailable")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -199,8 +199,8 @@ func TestCheckpointRecordsCleanup(t *testing.T) {
 			}
 
 			sums := phaseSums(t, collectHistogram(t, reader, checkpointDurationMetric))
-			if sums[ateattr.SnapshotPhaseCleanup] <= 0 {
-				t.Errorf("cleanup = %vs, want the node cleanup timed", sums[ateattr.SnapshotPhaseCleanup])
+			if timed := sums[ateattr.SnapshotPhaseCleanup] > 0; timed != tc.wantCleanup {
+				t.Errorf("cleanup = %vs, want it timed: %v", sums[ateattr.SnapshotPhaseCleanup], tc.wantCleanup)
 			}
 			var parts float64
 			for name, v := range sums {
@@ -356,15 +356,15 @@ func TestRestoreSnapshotKind(t *testing.T) {
 			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name:        "a golden actor's snapshot served locally is still local",
+			name:        "a snapshot from another atespace served locally is still local",
 			directLocal: true,
-			rec:         &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
+			rec:         &sandboxAssetsRecord{Atespace: "team-b"},
 			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "external snapshot written by a golden actor",
-			rec:  &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
-			want: ateattr.SnapshotKindGolden,
+			name: "external snapshot written in another atespace",
+			rec:  &sandboxAssetsRecord{Atespace: "team-b"},
+			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "external snapshot written by a tenant actor",
@@ -410,13 +410,13 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
-			name: "a golden actor's commit writes the template's golden",
-			req:  &ateletpb.CheckpointRequest{UploadConfig: immediate, Atespace: resources.GoldenActorAtespace},
-			want: ateattr.SnapshotKindGolden,
+			name: "a durable checkpoint in another atespace is latest",
+			req:  &ateletpb.CheckpointRequest{UploadConfig: immediate, Atespace: "team-b"},
+			want: ateattr.SnapshotKindLatest,
 		},
 		{
-			name: "a local checkpoint in the golden atespace is still local",
-			req:  &ateletpb.CheckpointRequest{UploadConfig: deferred, Atespace: resources.GoldenActorAtespace},
+			name: "a local checkpoint in another atespace is still local",
+			req:  &ateletpb.CheckpointRequest{UploadConfig: deferred, Atespace: "team-b"},
 			want: ateattr.SnapshotKindLocal,
 		},
 	}

@@ -23,6 +23,7 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -47,6 +48,11 @@ func TestGluttonIterate_SuspendMode(t *testing.T) {
 	}
 	if slices.Contains(calls, "SuspendActor(async)") {
 		t.Errorf("did not expect SuspendActor(async) in suspend mode calls, got: %v", calls)
+	}
+	for _, req := range fakeCtrl.recordedSuspendRequests() {
+		if got := req.GetOptions().GetMode(); got != ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
+			t.Errorf("suspend mode = %v, want %v", got, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+		}
 	}
 }
 
@@ -89,8 +95,8 @@ func TestGluttonIterate_NoneMode(t *testing.T) {
 	rt.iterate()
 
 	calls := fakeCtrl.recordedCalls()
-	if slices.Contains(calls, "SuspendActor") || slices.Contains(calls, "PauseActor") {
-		t.Errorf("did not expect SuspendActor or PauseActor during iterate in none mode, got: %v", calls)
+	if slices.Contains(calls, "SuspendActor") || slices.Contains(calls, "SuspendActor(async)") {
+		t.Errorf("did not expect a sync or async SuspendActor during iterate in none mode, got: %v", calls)
 	}
 	if got := countCalls(calls, "ResumeActor"); got != 1 {
 		t.Errorf("ResumeActor count across 2 iterations = %d, want 1 (first activation only); calls = %v", got, calls)

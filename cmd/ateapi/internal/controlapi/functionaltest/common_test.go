@@ -383,7 +383,7 @@ const goldenSnapshotName = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
 // goldenSnapshotURI is the snapshot owned by the test template's golden tag.
 func goldenSnapshotURI(t *testing.T) string {
 	t.Helper()
-	uri, err := resources.NewTagSnapshotURI(testStorageLocation, resources.GoldenActorAtespace, goldenSnapshotName)
+	uri, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, goldenSnapshotName)
 	if err != nil {
 		t.Fatalf("NewTagSnapshotURI: %v", err)
 	}
@@ -499,10 +499,9 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		t.Fatalf("failed to create actor template: %v", err)
 	}
 
-	createAtespace(t, tc, resources.GoldenActorAtespace)
 	tag, err := tc.persistence.CreateTag(context.Background(), &ateapipb.Tag{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
-		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
+		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapipb.TagStatus{
 			Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, created.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
@@ -546,7 +545,14 @@ func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapi
 	}
 }
 
-func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
+// newPausedSnapshot is the snapshot a pause leaves on node locality: its
+// durable copy, under the actor's own prefix, is PENDING until atelet uploads it.
+func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, actorUID, uuid, locality string) *ateapipb.Snapshot {
+	t.Helper()
+	uri, err := resources.NewActorSnapshotURI(testStorageLocation, testAtespace, actorUID, uuid)
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI: %v", err)
+	}
 	return &ateapipb.Snapshot{
 		Uuid:             uuid,
 		Generation:       gen,
@@ -554,6 +560,10 @@ func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID
 		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
 		Locality:         locality,
+		DurableSnapshot: &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri.String()},
+		},
 	}
 }
 
@@ -619,13 +629,13 @@ func ensureGvisorSandboxConfig(t *testing.T, tc *testContext, name string) {
 				Name:       "v1",
 				PauseImage: testPauseImage,
 				Assets: map[string]map[string]atev1alpha1.AssetFile{
-					"amd64": {"runsc": {
-						URL:    "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc",
-						SHA256: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63",
+					"amd64": {"gvisor": {
+						URL:    "gs://gvisor/releases/nightly/2026-10-10/x86_64/gvisor.tar.zstd",
+						SHA256: "4ae7fab988c3647d2a835d6c3c70c6a99021c562db97827592562b6c51c3e88c",
 					}},
-					"arm64": {"runsc": {
-						URL:    "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc",
-						SHA256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9",
+					"arm64": {"gvisor": {
+						URL:    "gs://gvisor/releases/nightly/2026-10-10/aarch64/gvisor.tar.zstd",
+						SHA256: "aaf414f06eea7960238e43165c691f0a36cefc0593fb141e011e96211c7b6f57",
 					}},
 				},
 			}},

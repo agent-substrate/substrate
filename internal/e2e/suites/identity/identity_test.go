@@ -181,10 +181,13 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	rotatedTrust := e2e.AddEgressCA(t, ctx, clients, "ate-e2e-probe-trust-rotated")
 	id := ids[0]
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
-	// The actor may edit its /etc/hosts, as under Docker or kubelet, and the
-	// edit outlives the suspend like any other rootfs write.
-	if out, err := probeFile(ctx, rc, id, "/writefile", "/etc/hosts"); err != nil || out["error"] != "" {
-		t.Fatalf("actor %q: editing /etc/hosts: %v %v", id, err, out["error"])
+	// The actor may edit its /etc files, as under Docker or kubelet, and the
+	// edits outlive the suspend like any other rootfs write.
+	etcFiles := []string{"/etc/hosts", "/etc/resolv.conf"}
+	for _, path := range etcFiles {
+		if out, err := probeFile(ctx, rc, id, "/writefile", path); err != nil || out["error"] != "" {
+			t.Fatalf("actor %q: editing %s: %v %v", id, path, err, out["error"])
+		}
 	}
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("SuspendActor %q: %v", id, err)
@@ -208,8 +211,10 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	if wantUID := seenUIDFor(t, seenUIDs, id); got.UID != wantUID {
 		t.Errorf("after suspend/resume: /run/ate/actor-uid = %q, want %q (probe read error: %q)", got.UID, wantUID, got.Error)
 	}
-	if out, err := probeFile(ctx, rc, id, "/readfile", "/etc/hosts"); err != nil || out["content"] != "written by probe" {
-		t.Errorf("after suspend/resume: /etc/hosts = %q, %v %v; want the actor's edit", out["content"], err, out["error"])
+	for _, path := range etcFiles {
+		if out, err := probeFile(ctx, rc, id, "/readfile", path); err != nil || out["content"] != "written by probe" {
+			t.Errorf("after suspend/resume: %s = %q, %v %v; want the actor's edit", path, out["content"], err, out["error"])
+		}
 	}
 	waitForTrust(t, ctx, rc, id, rotatedTrust, 10*time.Second)
 

@@ -121,8 +121,13 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
-	snapshotDetachDelay     = pflag.Duration("snapshot-detach-delay", snapshottracker.DefaultDetachDelay, "How long an actor stays suspended on this node, its latest snapshot kept locally, before atelet detaches it in the background.")
+	objectStorePluginSocket   = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
+	snapshotUploadDelay       = pflag.Duration("snapshot-upload-delay", snapshottracker.DefaultUploadDelay, "How long after an actor's oldest snapshot not yet in object storage was taken atelet uploads the actor's latest local snapshot in the background; later while an upload is in progress or failing.")
+	snapshotDetachDelay       = pflag.Duration("snapshot-detach-delay", snapshottracker.DefaultDetachDelay, "How long an actor stays suspended on this node, its latest snapshot kept locally, before atelet detaches it in the background.")
+	snapshotUploadWorkers     = pflag.Int("snapshot-upload-workers", snapshottracker.DefaultUploadWorkers, "How many background snapshot uploads atelet runs at once.")
+	snapshotDetachWorkers     = pflag.Int("snapshot-detach-workers", snapshottracker.DefaultDetachWorkers, "How many background detaches atelet runs at once.")
+	snapshotReportWorkers     = pflag.Int("snapshot-report-workers", snapshottracker.DefaultReportWorkers, "How many background snapshot state reports atelet runs at once. 0 disables background reporting.")
+	snapshotReportGiveUpAfter = pflag.Duration("snapshot-report-give-up-after", snapshottracker.DefaultReportGiveUpAfter, "How long after a background upload or detach atelet keeps retrying a failed snapshot state report before giving up on it.")
 )
 
 var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
@@ -145,8 +150,11 @@ func main() {
 	if err := rejectStorageEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid environment", err)
 	}
-	if *snapshotDetachDelay <= 0 {
-		serverboot.Fatal(ctx, "Invalid --snapshot-detach-delay", fmt.Errorf("--snapshot-detach-delay %v must be > 0", *snapshotDetachDelay))
+	if err := validateSnapshotDelayFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid snapshot delay flags", err)
+	}
+	if err := validateSnapshotWorkerFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid snapshot worker flags", err)
 	}
 
 	// Kept separate from ctx so in-flight work (e.g. a Checkpoint/Restore
@@ -177,6 +185,10 @@ func main() {
 	instruments, err := NewInstruments(otel.Meter("atelet"))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create atelet metrics", err)
+	}
+	trackerInstruments, err := snapshottracker.NewInstruments(otel.Meter("atelet"))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create snapshot tracker metrics", err)
 	}
 
 	// readiness flips to not-ready on SIGTERM so /readyz reports 503 while the
@@ -322,12 +334,39 @@ func main() {
 		serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 	}
 
+	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		K8sClient:        k8sClient,
+		CAFile:           *ateapiCAFile,
+		ServerName:       *ateapiServerName,
+		ClientCredBundle: *grpcServerCredBundle,
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
+	}
+	// atelet acts for the system, not a user, so it always opts in to the
+	// preview features the server enables.
+	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
+	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
+	}
+	defer ateapiConn.Close()
+	workerService := ateapipb.NewWorkerServiceClient(ateapiConn)
+
 	// The snapshot tracker's workers get a context of their own, cancelled only
 	// once the gRPC server has drained, so background snapshot work keeps
 	// running while in-flight RPCs finish.
 	trackerCtx, stopTracker := context.WithCancel(ctx)
 	store := &trackerStore{}
-	snapshots := snapshottracker.New(trackerCtx, store, clock.RealClock{}, snapshottracker.WithDetachDelay(*snapshotDetachDelay))
+	snapshots := snapshottracker.New(trackerCtx, store, clock.RealClock{},
+		snapshottracker.WithUploadDelay(*snapshotUploadDelay),
+		snapshottracker.WithDetachDelay(*snapshotDetachDelay),
+		snapshottracker.WithUploadWorkers(*snapshotUploadWorkers),
+		snapshottracker.WithDetachWorkers(*snapshotDetachWorkers),
+		snapshottracker.WithInstruments(trackerInstruments),
+		snapshottracker.WithReporter(&trackerReporter{workers: workerService}),
+		snapshottracker.WithReportWorkers(*snapshotReportWorkers),
+		snapshottracker.WithReportGiveUpAfter(*snapshotReportGiveUpAfter))
 	// The runtimes this node's workers advertise, read by Run and Restore.
 	// Loaded from disk before anything serves, so a runtime a worker
 	// registered before a restart resolves at once; the worker sandbox
@@ -355,24 +394,6 @@ func main() {
 	store.s = wmService
 	snapshots.Start()
 	go systemInfoVolumes.run(ctx)
-
-	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        k8sClient,
-		CAFile:           *ateapiCAFile,
-		ServerName:       *ateapiServerName,
-		ClientCredBundle: *grpcServerCredBundle,
-	})
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
-	}
-	// atelet acts for the system, not a user, so it always opts in to the
-	// preview features the server enables.
-	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
-	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
-	}
-	defer ateapiConn.Close()
 
 	tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts)
 	if err != nil {
@@ -450,7 +471,7 @@ func main() {
 	workerFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(workerFacingTLS)))
 
 	ateletpb.RegisterWorkerSupportServer(workerFacingSrv, &workerSupportServer{
-		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
+		workers: workerService,
 		control: ateapipb.NewControlClient(ateapiConn),
 	})
 	go func() {
@@ -520,6 +541,42 @@ func ateletServerOptions(creds credentials.TransportCredentials) []grpc.ServerOp
 func rejectStorageEnv() error {
 	if v, ok := os.LookupEnv("ATE_STORAGE_BACKEND"); ok {
 		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on atelet, which no longer reads it; set the storage backend on its objectstore-plugin sidecar", v)
+	}
+	return nil
+}
+
+// validateSnapshotDelayFlags checks --snapshot-upload-delay,
+// --snapshot-detach-delay, and --snapshot-report-give-up-after: all three must
+// be positive, and the upload delay must not exceed the detach delay, since a
+// detach uploads the latest local snapshot anyway.
+func validateSnapshotDelayFlags() error {
+	if *snapshotUploadDelay <= 0 {
+		return fmt.Errorf("--snapshot-upload-delay %v must be > 0", *snapshotUploadDelay)
+	}
+	if *snapshotDetachDelay <= 0 {
+		return fmt.Errorf("--snapshot-detach-delay %v must be > 0", *snapshotDetachDelay)
+	}
+	if *snapshotUploadDelay > *snapshotDetachDelay {
+		return fmt.Errorf("--snapshot-upload-delay %v must not exceed --snapshot-detach-delay %v", *snapshotUploadDelay, *snapshotDetachDelay)
+	}
+	if *snapshotReportGiveUpAfter <= 0 {
+		return fmt.Errorf("--snapshot-report-give-up-after %v must be > 0", *snapshotReportGiveUpAfter)
+	}
+	return nil
+}
+
+// validateSnapshotWorkerFlags checks --snapshot-upload-workers,
+// --snapshot-detach-workers, and --snapshot-report-workers: upload and detach
+// must be at least 1, and report must be at least 0.
+func validateSnapshotWorkerFlags() error {
+	if *snapshotUploadWorkers < 1 {
+		return fmt.Errorf("--snapshot-upload-workers %d must be >= 1", *snapshotUploadWorkers)
+	}
+	if *snapshotDetachWorkers < 1 {
+		return fmt.Errorf("--snapshot-detach-workers %d must be >= 1", *snapshotDetachWorkers)
+	}
+	if *snapshotReportWorkers < 0 {
+		return fmt.Errorf("--snapshot-report-workers %d must be >= 0", *snapshotReportWorkers)
 	}
 	return nil
 }
@@ -835,7 +892,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 
 	// A detach in progress finishes first, and none starts until the
 	// checkpoint returns, so it cannot delete the snapshot being written.
-	endCheckpoint, err := s.snapshots.BeginCheckpoint(ctx, actorUID)
+	endCheckpoint, err := s.snapshots.BeginCheckpoint(ctx, actorUID, req.GetSnapshot())
 	if err != nil {
 		return nil, err
 	}
@@ -908,34 +965,6 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
 	sandboxRec.Fidelity = ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity())
 
-	// Forget the local snapshot before the prune below deletes it, so the
-	// tracker never names a deleted snapshot, even if this checkpoint fails.
-	// The snapshot this checkpoint just took is safe: it stays in
-	// CheckpointStateDir until after the prune, and only moveLocalCheckpoint
-	// moves it into LocalCheckpointsDir, the directory the prune empties.
-	tCleanup := time.Now()
-	s.snapshots.ForgetLocal(actorUID)
-
-	// No earlier local snapshot can ever be restored again, so remove them
-	// all: the actor's current state was just captured by CheckpointWorkload,
-	// and atelet keeps only the latest local snapshot, which this checkpoint
-	// replaces.
-	//
-	// Do not move this above CheckpointWorkload to keep MergeDeltaIntoBase on its
-	// in-place path: that leaves the whole checkpoint window with no local snapshot
-	// while LocalSnapshotInfo still names the pruned one, and a crash there strands
-	// the actor for good (a paused actor has no uploaded copy for resume to fall
-	// back to, RequiredNodes pins it to this node, nothing clears the field).
-	//
-	// Best-effort: if this fail, the actor's terminate prunes again.
-	if err := snapshottracker.PruneLocalCheckpoints(ctx, actorUID); err != nil {
-		slog.WarnContext(ctx, "failed to prune superseded local checkpoints", slog.Any("actor", actorRef), slog.Any("err", err))
-	}
-	dCleanup += time.Since(tCleanup)
-
-	// Pruning stays outside the persist window: it collects superseded
-	// snapshots on both paths, so timing it as part of an external upload would
-	// mix local disk deletion into the object-storage measurement.
 	tPersist := time.Now()
 	var state *ateletpb.ActorSnapshotState
 	switch mode := req.GetUploadConfig().GetMode(); mode {
@@ -959,12 +988,10 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		durable.UploadTime = time.Now()
 		state = s.snapshots.CommitDurable(actorUID, durable)
 		// The snapshot is durable now, so the local copy only saves a
-		// download: failing to keep it must not fail the checkpoint.
+		// download: failing to keep it must not fail the checkpoint. The prune
+		// below deletes a partial copy.
 		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
 			slog.WarnContext(ctx, "Failed to keep a local copy of the uploaded snapshot", slog.Any("actor", actorRef), slog.Any("err", err))
-			if err := snapshottracker.PruneLocalCheckpoints(ctx, actorUID); err != nil {
-				slog.WarnContext(ctx, "Failed to prune the partial local copy", slog.Any("actor", actorRef), slog.Any("err", err))
-			}
 		} else {
 			state = s.snapshots.CommitLocal(actorUID, snap)
 		}
@@ -973,7 +1000,28 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	}
 	dPersist = time.Since(tPersist)
 
-	tCleanup = time.Now()
+	// Delete the actor's earlier local snapshots only now that this checkpoint
+	// has committed its own. A checkpoint that fails before then leaves the
+	// previous local snapshot in place and recorded as the actor's latest, so
+	// the actor can still be restored from it on this node.
+	//
+	// The prune keeps what LocalSnapshotsToKeep names: the snapshot this
+	// checkpoint kept, and an older one a background upload is still reading or
+	// will retry, which is deleted once the upload no longer needs it.
+	//
+	// Do not move this above CheckpointWorkload to keep MergeDeltaIntoBase on its
+	// in-place path: that leaves the whole checkpoint window with no local snapshot
+	// while LocalSnapshotInfo still names the pruned one, and a crash there strands
+	// the actor for good (a paused actor has no uploaded copy for resume to fall
+	// back to, RequiredNodes pins it to this node, nothing clears the field).
+	//
+	// Best-effort: if this fails, the actor's next checkpoint or terminate
+	// prunes again.
+	tCleanup := time.Now()
+	if err := snapshottracker.PruneLocalCheckpoints(ctx, actorUID, s.snapshots.LocalSnapshotsToKeep(actorUID)...); err != nil {
+		slog.WarnContext(ctx, "failed to prune superseded local checkpoints", slog.Any("actor", actorRef), slog.Any("err", err))
+	}
+
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 		dCleanup += time.Since(tCleanup)
 		return nil, fmt.Errorf("while unmounting external volumes: %w", err)
@@ -1137,8 +1185,7 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
-		// Always the actor's durable latest: golden actors are never paused
-		// (validation above rejects the golden atespace).
+		// Uploading a paused checkpoint creates a durable latest snapshot.
 		kind:     ateattr.SnapshotKindLatest,
 		fidelity: ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
 	}
@@ -1154,19 +1201,15 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	}
 	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetSnapshot().GetSnapshotUuid())
 
-	// A detach in progress finishes first, and none starts until the
-	// promote returns, so it cannot delete the local snapshot being uploaded.
-	endCheckpoint, err := s.snapshots.BeginCheckpoint(ctx, req.GetActorUid())
-	if err != nil {
-		return nil, err
-	}
-	defer endCheckpoint()
-
+	// A detach or a background upload of this snapshot in progress finishes
+	// first, and no detach starts until the promote returns.
 	snap := snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot(), Actor: resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}}
-	alreadyDurable, err := s.snapshots.IsDurable(req.GetActorUid(), snap)
+	alreadyDurable, endPromote, err := s.snapshots.BeginPromote(ctx, req.GetActorUid(), snap)
 	if err != nil {
 		return nil, err
 	}
+	defer endPromote()
+
 	if !alreadyDurable {
 		tPersist := time.Now()
 		sandboxClass, uploaded, err := s.uploadLocalCheckpointDir(ctx, req, localDir, uri)
@@ -1428,8 +1471,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	dManifest = time.Since(tManifest)
 	manifestDone = true
 
-	// The manifest is what tells a golden restore from a latest one, so the
-	// snapshot kind only becomes knowable here.
+	// The snapshot kind is recorded once the manifest has been read.
 	op.kind = restoreSnapshotKind(directLocal, sandboxRec)
 
 	var registration *registeredActor
@@ -1608,9 +1650,9 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	}
 
 	// The actor is gone, so no pause snapshot of it can ever be restored again.
-	// Forget cancels the actor's detach in progress without waiting for it.
-	// The cancelled detach leaves the actor's files alone, unless it was
-	// already deleting them, as this does too.
+	// Forget cancels the actor's background upload or detach in progress
+	// without waiting for it. The cancelled operation leaves the actor's files
+	// alone, unless it was already deleting them, as this does too.
 	// TODO(#664): this only removes local snapshots in one node. We should clean
 	// up the copies on any other NodeVmsWithLocalSnapshots. This is fine *as of
 	// the day this was written* because today NodeVmsWithLocalSnapshots has at

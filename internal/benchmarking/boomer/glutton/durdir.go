@@ -209,7 +209,7 @@ func (u *durDirUser) resume(ctx context.Context, mode string) bool {
 }
 
 func (u *durDirUser) pause(ctx context.Context) {
-	_ = u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
+	_ = u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor:   u.ref(),
 			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
@@ -221,7 +221,8 @@ func (u *durDirUser) pause(ctx context.Context) {
 func (u *durDirUser) suspend(ctx context.Context) {
 	_ = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
-			Actor: u.ref(),
+			Actor:   u.ref(),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -246,7 +247,8 @@ func (u *durDirUser) hibernateAndDelete(ctx context.Context, dynCfg durDirKnobs)
 		})
 	} else {
 		_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor: u.ref(),
+			Actor:   u.ref(),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 		})
 	}
 	u.delete(ctx)

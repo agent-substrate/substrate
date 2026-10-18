@@ -69,7 +69,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 			name:      "finalize pause marks the actor suspended",
 			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 			seedOpts: []func(*ateapipb.Actor){
-				withPauseInProgress(),
+				withPauseInProgress(t),
 				func(a *ateapipb.Actor) {
 					a.Status.AssignedNode = "node-1"
 					a.Status.WorkerAssignment = wireTestAssignment()

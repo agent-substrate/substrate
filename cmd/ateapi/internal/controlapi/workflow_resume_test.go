@@ -129,7 +129,7 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 			AssignedNode:           "node-1",
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapipb.Snapshot{
-				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
+				newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
 			},
 		},
 	})
@@ -1234,7 +1234,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	const malformedURI = "not-a-valid-snapshot-uri"
 
 	actorURI := someActorSnapshotURI(t, testStorageLocation, "team-a", durableSnapshotName)
-	goldenURI := someActorSnapshotURI(t, "gs://bucket/golden-root", "ate-golden", "golden-1")
+	goldenURI := someActorSnapshotURI(t, "gs://bucket/golden-root", "team-a", "golden-1")
 
 	fullScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	rootfsScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
@@ -1245,7 +1245,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		return newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", durableSnapshotName, uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	}
 	localSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
-		return newLocalSnapshot(1, fidelity, "", name, "node-1")
+		return newPausedSnapshot(t, 1, fidelity, "", name, "node-1")
 	}
 	// pauseUploadURI is where atelet uploads the pause snapshot.
 	pauseUploadURI := someActorSnapshotURI(t, testStorageLocation, "team-a", localSnapshotName)
@@ -2546,7 +2546,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		st := newTestPersistence(t)
 		seedRuntimeWorker(t, ctx, st, "node1-incompatible", "node-1", arm64RT)
 		// A paused actor: SUSPENDED, pinned to its node by a local snapshot.
-		local := newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1")
+		local := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1")
 		local.SandboxRuntime = amd64RT
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "node-1", local)
 
@@ -2673,7 +2673,7 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 		return snap
 	}
 	local := func(gen int32, fidelity ateapipb.SnapshotFidelity, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
-		snap := newLocalSnapshot(gen, fidelity, tmplUID, "local", "node-1")
+		snap := newPausedSnapshot(t, gen, fidelity, tmplUID, "local", "node-1")
 		snap.SandboxRuntime = rt
 		return snap
 	}
@@ -2758,7 +2758,7 @@ func TestCanRelaxRuntime(t *testing.T) {
 		return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "snap", "gs://bucket/snap", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	}
 	local := func(gen int32) *ateapipb.Snapshot {
-		return newLocalSnapshot(gen, memory, "", "local", "node-1")
+		return newPausedSnapshot(t, gen, memory, "", "local", "node-1")
 	}
 
 	tests := []struct {

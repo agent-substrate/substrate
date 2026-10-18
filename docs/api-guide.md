@@ -100,8 +100,8 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). The pool decides the sandbox class, so this is also how a template pins one: if your cluster has pools of more than one sandbox class and the workload needs a particular class, make sure the selector points only at pools of that class. An actor booting with no snapshot and no selector may land on any class, and keeps it from its first checkpoint on. |
-| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures (`SNAPSHOT_FIDELITY_ROOTFS` is supported on `microvm` pools), and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
-| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` worker supports several `durableDir` volumes; a `gvisor` worker is limited to one. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
+| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpu` and `memory` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
 The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary and `pauseImage`, or a micro-VM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-compute-foundation) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the worker's active `SandboxRuntime` is stamped onto the actor's assignment and snapshots so subsequent resumes prefer runtime-compatible workers.
@@ -342,7 +342,7 @@ snapshotConfig:
 <location>/atespaces/<atespace>/tags/<tag uid>
 ```
 
-The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden tag lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/tags/<tag uid>`.
+The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot under `gs://my-bucket/secret-agent/atespaces/team-a/tags/<tag uid>`.
 
 An actor takes a series of snapshots over its life, so it gets a prefix of its
 own and each snapshot sits below it. A tag holds exactly one, so the tag's
@@ -374,16 +374,17 @@ a `Snapshot` with the following fields:
   sandbox image cannot be resumed under another.
 - `locality`: The node that holds the snapshot's local files. It is set when a
   pause completes and cleared once those files are deleted from the node (when
-  the actor is next paused or suspended, or is reverted). A resume restores from
-  the files without deleting them, so an actor resumed from pause still reports
-  where they are. A paused actor is an `ACTOR_STATE_SUSPENDED` actor whose
-  latest snapshot has `locality` and no `durableSnapshot`; it is pinned to that
-  node (`status.assignedNode`) until it is suspended or reverted.
+  atelet detaches the actor in the background, the actor is next paused or
+  suspended, or it is reverted). A resume restores from the files without
+  deleting them, so an actor resumed from pause still reports where they are. A
+  paused actor is an `ACTOR_STATE_SUSPENDED` actor whose latest snapshot has
+  `locality`; it is pinned to that node (`status.assignedNode`) until atelet
+  detaches it or it is reverted.
 - `durableSnapshot`: The copy in object storage, with its URI in
   `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
-  written and `COMPLETED` once it can be restored from. A snapshot that exists
-  only on a node has no `durableSnapshot`. A tag's snapshot always has one, and
-  the tag can seed actors only once it is `COMPLETED`.
+  written and `COMPLETED` once it can be restored from. A pause records the copy
+  as `PENDING`, and atelet uploads it in the background. A tag's snapshot always
+  has one, and the tag can seed actors only once it is `COMPLETED`.
 - `sandboxRuntime`: The sandbox runtime and hardware compatibility attributes the
   guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
   when the checkpoint is taken. A resume that restores memory or rootfs state
@@ -400,11 +401,11 @@ a `Snapshot` with the following fields:
     worker and downgrades the restore to `SNAPSHOT_FIDELITY_VOLUMES`, preserving
     the snapshot's volume data while booting the guest fresh under the new
     worker's `defaultRuntime`.
-  - A local pause checkpoint (with `locality` and no `durableSnapshot`) is not
-    relaxed; the resume returns `RESOURCE_EXHAUSTED` and the actor remains
-    `PAUSED` on its node until a compatible worker there has room. Suspending
-    the actor uploads the checkpoint and lifts the node pin, after which its
-    next resume may fall back like a durable snapshot.
+  - A local pause checkpoint (with `locality`) is not relaxed; the resume
+    returns `RESOURCE_EXHAUSTED` and the actor stays paused on its node until a
+    compatible worker there has room, or until atelet detaches it. A detach
+    uploads the checkpoint, deletes the local files, and lifts the node pin,
+    after which the next resume may fall back like a durable snapshot.
 
   A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_VOLUMES` imposes
   no runtime placement constraint.
@@ -413,7 +414,7 @@ An `ActorTemplate` references its golden tag with the `ObjectRef` in
 `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned
 and ignored on input. Parse a URI only against the scheme above.
 
-An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
+An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor and tag live in the template's atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 
 ```yaml
 # Read-only on team-a's snapshots for this template, and nothing else.
@@ -488,20 +489,20 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  defaultVersion: v3
+  defaultVersion: v4
   versions:
-  - name: v3
+  - name: v4
     state: Enabled
     pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
     assets:
       amd64:
         gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-10/x86_64/gvisor.tar.zstd"
-          sha256: "4ae7fab988c3647d2a835d6c3c70c6a99021c562db97827592562b6c51c3e88c"
+          url: "gs://gvisor/releases/nightly/2026-10-17/x86_64/gvisor.tar.zstd"
+          sha256: "fa72f0d45756c69a30beec21222c78241b0d330c36f4f2185648617cc23415c8"
       arm64:
         gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-10/aarch64/gvisor.tar.zstd"
-          sha256: "aaf414f06eea7960238e43165c691f0a36cefc0593fb141e011e96211c7b6f57"
+          url: "gs://gvisor/releases/nightly/2026-10-17/aarch64/gvisor.tar.zstd"
+          sha256: "238634978d99f0dd3e631c4f88eae7b19fb36937065428467f0b6d6b10697689"
 ```
 
 ### Micro-VM SandboxConfig
@@ -527,22 +528,42 @@ pause, suspend, and resume using their own snapshots.
 for these templates.
 
 When an `ActorTemplate` is created with golden snapshots enabled:
-1. Substrate creates and resumes a temporary golden actor in `ate-golden`.
-2. It waits for readiness (or the warm-up interval), then suspends the actor.
-3. It creates a published tag named after the template UID, copying the snapshot into tag-owned storage.
+1. Substrate creates and resumes a temporary golden actor in the template's atespace, using the same atespace-scoped policies and storage grants as ordinary actors.
+2. It waits for readiness plus a 20-second warmup, then suspends the actor at the template's `preferredFidelity`. The extra interval is zero when every container has a wakeup probe, since Resume already waits for readiness.
+3. It creates a published tag named after the template UID, copying the snapshot into tag-owned storage in the same atespace. The golden actor uses that name too.
 4. It deletes the golden actor and records the tag reference in the template status.
 
-`CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field. Deleting the template collects its golden tag and any unfinished golden actor.
+Golden actors follow ordinary lifecycle and ingress policies and appear in
+Actor lists. Leave these resources to the controller: modifying or deleting
+them can interrupt Golden creation, and deleting a published Golden tag
+invalidates the template's recorded reference. `DeleteActorTemplate` collects
+its Golden tag and any unfinished Golden actor.
+
+Golden capture follows `preferredFidelity`. MEMORY preserves processes and memory;
+VOLUMES preserves startup data in mounted volumes and starts new processes on
+restore. ROOTFS preserves a micro-VM's filesystem and also starts new processes.
+
+`CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field.
 
 ### Resumption Lifecycle
-Once a template is `Ready`, creating an actor logically (via `kubectl ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.
+CreateActor fixes the Actor's initial snapshot source at creation. Resume places
+it on an eligible worker. A MEMORY snapshot restores saved processes; VOLUMES and
+ROOTFS snapshots restore their persisted data and start new processes. An Actor
+created without a snapshot boots from its template's images.
 
 ### Eviction
 A worker pod can go away while it hosts running actors: when its `WorkerPool` rolls to a new worker image or pod template, as in an [upgrade](upgrade.md), or scales down, when its node is drained, or when its Spot VM is reclaimed.
 
-When the pod gets `SIGTERM`, its worker stops accepting actors and sends `SIGTERM` to the main process of each container of every actor it hosts. Each actor then has 30 minutes, counted from the pod's `SIGTERM`, to be suspended. An actor suspended in that window keeps its state and resumes on another worker like any suspended actor.
+When the pod gets `SIGTERM`, its worker stops accepting actors and sends `SIGTERM` to the main process of each container of every actor it hosts. Each actor then has 30 minutes, counted from the pod's `SIGTERM`, to be suspended. The 30 minutes is the worker's shutdown budget, fixed in ateworker and kept shorter than the pod's one-hour termination grace period so that the worker, not the kubelet, kills what is left. An actor suspended in that window keeps its state and resumes on another worker like any suspended actor.
 
-Substrate does not suspend the actor for you. Whatever drives the actor, usually its harness, has to call `SuspendActor` (`kubectl ate suspend`) within the 30 minutes. Only the actor gets the `SIGTERM`, so it has to pass that on, for example on an endpoint the harness polls.
+Substrate does not suspend the actor for you. Whatever drives the actor, usually its harness, has to call `SuspendActor` with `DURABILITY_MODE_SYNCHRONOUS` (`kubectl ate suspend actor --mode=sync`) before those 30 minutes are up. An asynchronous suspend can lose the snapshot if the node goes away:
+
+- It returns once the snapshot is on the node.
+- atelet schedules the upload to object storage about `--snapshot-upload-delay` (5 minutes by default) after the snapshot is taken. Neither when the upload starts nor when it finishes is promised.
+- Until atelet detaches the actor, `--snapshot-detach-delay` (30 minutes by default, unrelated to the worker's 30 minutes), the actor stays pinned to the node and resumes there.
+- If the node goes away before the upload completes, the snapshot goes with it.
+
+Only the actor gets the `SIGTERM`, so it has to pass that on, for example on an endpoint the harness polls.
 
 Every actor that must keep its state through an eviction needs a `SIGTERM` handler that:
 
@@ -597,8 +618,10 @@ Activates a suspended or paused actor by restoring it onto a physical worker.
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
+    *   `options.mode`: (Optional) `DURABILITY_MODE_SYNCHRONOUS` returns once the snapshot is `COMPLETED` in object storage. `DURABILITY_MODE_ASYNCHRONOUS` (a pause) returns once the snapshot is captured on the worker's node, and atelet uploads it in the background. Unset runs an asynchronous suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.snapshots`.
-*   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended.
+*   Called on an actor that is already `ACTOR_STATE_SUSPENDED`, it returns the actor as it is, in either mode. atelet uploads a paused actor's node-local snapshot in the background, so `status.snapshots` may still show it with `locality` and a `PENDING` `durableSnapshot`.
+*   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended. After an asynchronous suspend, `CreateTag` fails with `FAILED_PRECONDITION` until atelet has uploaded the snapshot. Suspend with `DURABILITY_MODE_SYNCHRONOUS` to tag right away.
 
 #### Snapshot lifetime
 

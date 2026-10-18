@@ -16,8 +16,6 @@ package controlapi
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -31,7 +29,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-// TestPauseActor_Finalized_WorkerGone reproduces the scenario where the
+// TestSuspendActorAsync_Finalized_WorkerGone reproduces the scenario where the
 // worker pod disappears from the DB during pause finalization, so the node it
 // ran on is unknown.
 //
@@ -39,7 +37,7 @@ import (
 // instead of left paused, since a local snapshot with an unknown node can
 // never be safely resumed. The pause fails with FailedPrecondition rather than
 // reporting the pause as done.
-func TestPauseActor_Finalized_WorkerGone(t *testing.T) {
+func TestSuspendActorAsync_Finalized_WorkerGone(t *testing.T) {
 	ctx := context.Background()
 	st := newTestPersistence(t)
 	seedSuspendTemplate(t, ctx, st, nil)
@@ -55,7 +53,7 @@ func TestPauseActor_Finalized_WorkerGone(t *testing.T) {
 			WorkerAssignment:       wireTestAssignment(),
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapipb.Snapshot{
-				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", ""),
+				newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "local-snap-1"),
 			},
 		},
 	})
@@ -98,11 +96,11 @@ func TestPauseActor_Finalized_WorkerGone(t *testing.T) {
 	}
 }
 
-// TestPauseActor_Finalized_AlreadyCrashed verifies that if the actor was
+// TestSuspendActorAsync_Finalized_AlreadyCrashed verifies that if the actor was
 // crashed out-of-band while it checkpointed, and has no AssignedNode, the
 // pause's finalize preserves the existing Crash status and snapshots, emits no
 // duplicate crash log record, and still fails.
-func TestPauseActor_Finalized_AlreadyCrashed(t *testing.T) {
+func TestSuspendActorAsync_Finalized_AlreadyCrashed(t *testing.T) {
 	ctx := context.Background()
 	st := newTestPersistence(t)
 	seedSuspendTemplate(t, ctx, st, nil)
@@ -118,7 +116,7 @@ func TestPauseActor_Finalized_AlreadyCrashed(t *testing.T) {
 			WorkerAssignment:       wireTestAssignment(),
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapipb.Snapshot{
-				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", ""),
+				newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "local-snap-1"),
 			},
 		},
 	})
@@ -150,11 +148,11 @@ func TestPauseActor_Finalized_AlreadyCrashed(t *testing.T) {
 	}
 }
 
-// TestPauseActor_Finalized_KeepsCrashFromWorkerDelete verifies that a crash the
+// TestSuspendActorAsync_Finalized_KeepsCrashFromWorkerDelete verifies that a crash the
 // DeleteWorker workflow commits while the pause's finalize is freeing the
 // worker is kept: the finalize update is pinned to the actor version it
 // checked, so it fails Aborted instead of committing SUSPENDED over the crash.
-func TestPauseActor_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
+func TestSuspendActorAsync_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 	ctx := context.Background()
 	st := newTestPersistence(t)
 	seedSuspendTemplate(t, ctx, st, nil)
@@ -176,10 +174,10 @@ func TestPauseActor_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 	assertConcurrentCrashKept(t, ctx, st, actorRef, err, "suspend failed: "+crashMessageWorkerPodGone)
 }
 
-// TestPauseActor_Finalized_RecordsFidelity verifies pause records the template's
-// preferred_fidelity on the local Snapshot alongside Locality and leaves
-// DurableSnapshot unset until the actor is suspended.
-func TestPauseActor_Finalized_RecordsFidelity(t *testing.T) {
+// TestSuspendActorAsync_Finalized_RecordsFidelity verifies pause records the template's
+// preferred_fidelity on the local Snapshot alongside Locality, and keeps its
+// durable copy PENDING for atelet to upload in the background.
+func TestSuspendActorAsync_Finalized_RecordsFidelity(t *testing.T) {
 	tests := []struct {
 		name      string
 		preferred ateapipb.SnapshotFidelity
@@ -237,8 +235,11 @@ func TestPauseActor_Finalized_RecordsFidelity(t *testing.T) {
 			if localSnap.GetFidelity() != tc.want {
 				t.Errorf("local Snapshot.Fidelity = %v, want %v", localSnap.GetFidelity(), tc.want)
 			}
-			if localSnap.GetDurableSnapshot() != nil {
-				t.Errorf("local DurableSnapshot = %v, want nil", localSnap.GetDurableSnapshot())
+			if got := localSnap.GetDurableSnapshot().GetStatus(); got != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
+				t.Errorf("local DurableSnapshot.Status = %v, want PENDING", got)
+			}
+			if got := localSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got == "" {
+				t.Error("local DurableSnapshot records no upload URI")
 			}
 			if localSnap.GetLocality() != "node-1" {
 				t.Errorf("local Snapshot.Locality = %q, want %q", localSnap.GetLocality(), "node-1")
@@ -259,225 +260,82 @@ func TestPauseActor_Finalized_RecordsFidelity(t *testing.T) {
 	}
 }
 
-// TestPauseActor_Finalized_MissingLocalSnapshotClearsAssignment verifies that if the
-// latest generation snapshot entry is missing when the pause finalizes, the
-// actor transitions to CRASHED and clears WorkerAssignment after releasing
-// the worker rather than getting stuck SUSPENDING, and the pause fails.
-func TestPauseActor_Finalized_MissingLocalSnapshotClearsAssignment(t *testing.T) {
-	ctx := context.Background()
-	st := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, st, nil)
-	w, atelet := newWireCaptureWorkflow(t, st)
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	records := crashRecords(t)
-
-	created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: suspendTestTemplateRef(),
-		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			AssignedNode:           "node-1",
-			WorkerAssignment:       wireTestAssignment(),
-			LastAssignedGeneration: 1,
-			Snapshots: []*ateapipb.Snapshot{
-				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", ""),
-			},
-		},
-	})
-	seedWireWorker(t, ctx, st, assignmentOf(created))
-	updateDuringCheckpoint(t, atelet, st, actorRef, func(s *ateapipb.ActorStatus) {
-		s.Snapshots = nil
-	})
-
-	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
-	}
-	got := mustReadActor(t, ctx, st, actorRef)
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
-	}
-	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageLocalSnapshotMissing; msg != want {
-		t.Errorf("crash message = %q, want %q", msg, want)
-	}
-	if got.GetStatus().GetWorkerAssignment() != nil {
-		t.Errorf("WorkerAssignment = %v, want nil", got.GetStatus().GetWorkerAssignment())
-	}
-	if len(*records) != 1 {
-		t.Fatalf("got %d crash records, want 1", len(*records))
-	}
-	if got := (*records)[0].attrs[string(ateattr.ActorOperationNameKey)]; got != ateattr.OperationSuspend {
-		t.Errorf("crash record %s = %q, want %q", ateattr.ActorOperationNameKey, got, ateattr.OperationSuspend)
-	}
-}
-
-// TestPauseActorWorkflow_RejectedAndIdempotentPaths covers the two
-// short-circuit paths of the pause workflow: rejection of the pause edge for
-// a non-RUNNING actor and the idempotent fast-forward for a paused one. Both
-// are SUSPENDED: a node-local latest snapshot is what tells them apart.
-func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
+// TestSuspendActorAsync_Finalized_MissingSnapshotClearsAssignment verifies that if the
+// latest generation snapshot entry, or its PENDING durable copy, is missing
+// when the pause finalizes, the actor transitions to CRASHED and clears
+// WorkerAssignment after releasing the worker rather than getting stuck
+// SUSPENDING, and the pause fails.
+func TestSuspendActorAsync_Finalized_MissingSnapshotClearsAssignment(t *testing.T) {
 	tests := []struct {
-		name      string
-		seedState ateapipb.ActorState
-		seedOpts  []func(*ateapipb.Actor)
-		// wantErr true means an async SuspendActor must fail with FailedPrecondition.
-		wantErr bool
-		// wantState is the stored state after the call.
-		wantState ateapipb.ActorState
+		name string
+		// clobber rewrites the record while atelet checkpoints.
+		clobber          func(s *ateapipb.ActorStatus)
+		wantCrashMessage string
 	}{
 		{
-			// Pausing a SUSPENDED actor is rejected by the pause's state gate
-			// and the actor's state is left untouched.
-			name:      "not running rejected",
-			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			wantErr:   true,
-			wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			name:             "no snapshot at the latest generation",
+			clobber:          func(s *ateapipb.ActorStatus) { s.Snapshots = nil },
+			wantCrashMessage: "suspend failed: " + crashMessageLocalSnapshotMissing,
 		},
 		{
-			// Pausing a paused actor succeeds idempotently via IsComplete
-			// fast-forward without calling atelet.
-			name:      "already paused succeeds",
-			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			seedOpts:  []func(*ateapipb.Actor){withPausedShape("node-1")},
-			wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		},
-		{
-			// atelet's upload of the snapshot leaves the actor paused.
-			name:      "already paused with its snapshot uploaded succeeds",
-			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			seedOpts:  []func(*ateapipb.Actor){withUploadedPausedShape("node-1", someActorSnapshotURI(t, "gs://snapshots", "team-a", "pause-snap"))},
-			wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			name: "no durable copy of the latest snapshot",
+			clobber: func(s *ateapipb.ActorStatus) {
+				for _, snap := range s.Snapshots {
+					snap.DurableSnapshot = nil
+				}
+			},
+			wantCrashMessage: "suspend failed: " + crashMessageDurableSnapshotMissing,
 		},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			st, cleanup := storetest.SetupTestStore(t)
-			defer cleanup()
-			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+			st := newTestPersistence(t)
+			seedSuspendTemplate(t, ctx, st, nil)
+			w, atelet := newWireCaptureWorkflow(t, st)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			records := crashRecords(t)
 
-			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedState, tc.seedOpts...)
+			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: suspendTestTemplateRef(),
+				Status: &ateapipb.ActorStatus{
+					State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+					AssignedNode:           "node-1",
+					WorkerAssignment:       wireTestAssignment(),
+					LastAssignedGeneration: 1,
+					Snapshots: []*ateapipb.Snapshot{
+						newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "local-snap-1"),
+					},
+				},
+			})
+			seedWireWorker(t, ctx, st, assignmentOf(created))
+			updateDuringCheckpoint(t, atelet, st, actorRef, tt.clobber)
 
-			actor, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendAsync)
-			if tc.wantErr {
-				if got := apierror.Code(err); got != codes.FailedPrecondition {
-					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("Async SuspendActor failed: %v", err)
-				}
-				if actor.GetStatus().GetState() != tc.wantState {
-					t.Errorf("returned state = %v, want %v", actor.GetStatus().GetState(), tc.wantState)
-				}
+			if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
 			}
-
-			got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
-			if err != nil {
-				t.Fatalf("GetActor failed: %v", err)
+			got := mustReadActor(t, ctx, st, actorRef)
+			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
 			}
-			if got.GetStatus().GetState() != tc.wantState {
-				t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), tc.wantState)
+			if msg := got.GetStatus().GetCrash().GetMessage(); msg != tt.wantCrashMessage {
+				t.Errorf("crash message = %q, want %q", msg, tt.wantCrashMessage)
+			}
+			if got.GetStatus().GetWorkerAssignment() != nil {
+				t.Errorf("WorkerAssignment = %v, want nil", got.GetStatus().GetWorkerAssignment())
+			}
+			if len(*records) != 1 {
+				t.Fatalf("got %d crash records, want 1", len(*records))
+			}
+			if got := (*records)[0].attrs[string(ateattr.ActorOperationNameKey)]; got != ateattr.OperationSuspend {
+				t.Errorf("crash record %s = %q, want %q", ateattr.ActorOperationNameKey, got, ateattr.OperationSuspend)
 			}
 		})
 	}
 }
 
-// TestPauseActor_MarkedPausing_StateMatrix verifies the pause edge's state gating against
-// every actor state: RUNNING takes the edge, everything else is rejected with
-// FailedPrecondition and left untouched. SUSPENDED is rejected whatever its
-// snapshots short of the paused shape, which fast-forwards (see
-// TestPauseActorWorkflow_RejectedAndIdempotentPaths). SUSPENDING without a
-// pending node-local snapshot is a suspend in progress, which owns the actor;
-// a pause in progress is covered by TestPauseActor_MarkedPausing_ReentrySkipsPauseInProgress.
-func TestPauseActor_MarkedPausing_StateMatrix(t *testing.T) {
-	ctx := context.Background()
-	st := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, st, nil)
-	w := newMarkOnlyWorkflow(st)
-
-	for _, seedState := range allActorStates {
-		actorRef := resources.ActorRef{Atespace: "team-a", Name: fmt.Sprintf("id%d", seedState)}
-		seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", seedState, func(a *ateapipb.Actor) {
-			a.Status.WorkerAssignment = wireTestAssignment()
-		})
-
-		_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
-		stored := mustReadActor(t, ctx, st, actorRef)
-		if seedState == ateapipb.ActorState_ACTOR_STATE_RUNNING {
-			assertStoppedAtDial(t, err)
-			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
-				t.Errorf("state %v: stored state = %v, want SUSPENDING", seedState, got)
-			}
-			if !latestSnapshotIsPendingLocal(stored.GetStatus()) {
-				t.Errorf("state %v: snapshots = %v, want a pending local snapshot at the latest generation", seedState, stored.GetStatus().GetSnapshots())
-			}
-			continue
-		}
-		if got := apierror.Code(err); got != codes.FailedPrecondition {
-			t.Errorf("state %v: code = %v, want FailedPrecondition (err: %v)", seedState, got, err)
-		}
-		// Only a sync suspend accepts a paused actor, so a pause must not offer it.
-		if strings.Contains(err.Error(), "node-local snapshot") {
-			t.Errorf("state %v: err = %v, want no mention of a node-local snapshot", seedState, err)
-		}
-		if got := stored.GetStatus().GetState(); got != seedState {
-			t.Errorf("state %v: stored state = %v, want it untouched", seedState, got)
-		}
-	}
-}
-
-// TestPauseActor_MarkedPausing_ReentrySkipsPauseInProgress verifies a re-entered pause
-// recognizes its own mark, a SUSPENDING actor whose latest generation is a
-// pending node-local snapshot, and checkpoints under that snapshot without
-// minting another, while a running-origin suspend in progress (pending
-// durable snapshot) is rejected before atelet is called.
-func TestPauseActor_MarkedPausing_ReentrySkipsPauseInProgress(t *testing.T) {
-	ctx := context.Background()
-	st := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, st, nil)
-	w, atelet := newWireCaptureWorkflow(t, st)
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-
-	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDING, withPauseInProgress(), func(a *ateapipb.Actor) {
-		a.Status.AssignedNode = "node-1"
-		a.Status.WorkerAssignment = wireTestAssignment()
-	})
-	paused, err := w.SuspendActor(ctx, actorRef, suspendAsync)
-	if err != nil {
-		t.Fatalf("Async SuspendActor on a pause in progress: %v", err)
-	}
-	if got := atelet.checkpointRequest().GetSnapshot().GetSnapshotUuid(); got != "pause-snap" {
-		t.Errorf("CheckpointRequest.Snapshot.SnapshotUuid = %q, want the persisted %q", got, "pause-snap")
-	}
-	if got := paused.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Errorf("state = %v, want SUSPENDED", got)
-	}
-	if got := paused.GetStatus().GetLastAssignedGeneration(); got != 1 {
-		t.Errorf("last_assigned_generation = %d, want 1 (no new snapshot minted on re-entry)", got)
-	}
-	if got := len(paused.GetStatus().GetSnapshots()); got != 1 {
-		t.Errorf("len(snapshots) = %d, want 1", got)
-	}
-
-	suspendingRef := resources.ActorRef{Atespace: actorRef.Atespace, Name: "id2"}
-	seedWorkflowActor(t, ctx, st, suspendingRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDING, func(a *ateapipb.Actor) {
-		a.Status.AssignedNode = "node-1"
-		a.Status.WorkerAssignment = wireTestAssignment()
-		a.Status.LastAssignedGeneration = 1
-		a.Status.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap", "gs://snapshots/s", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
-		}
-	})
-	_, err = w.SuspendActor(ctx, suspendingRef, suspendAsync)
-	if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Errorf("Async SuspendActor on a suspend in progress: code = %v, want FailedPrecondition (err: %v)", got, err)
-	}
-	if checkpoints, _ := atelet.calls(); checkpoints != 1 {
-		t.Errorf("Checkpoint calls = %d, want 1 (none for the suspend in progress)", checkpoints)
-	}
-}
-
-func TestPauseActor_AteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
+func TestSuspendActorAsync_AteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 	tests := []struct {
 		name         string
 		prevSnapshot string
@@ -502,7 +360,7 @@ func TestPauseActor_AteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 			if tt.prevSnapshot != "" {
 				snapshots = append(snapshots, newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "prev-snapshot", tt.prevSnapshot, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
 			}
-			snapshots = append(snapshots, newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "actor-1-never-written", ""))
+			snapshots = append(snapshots, newInProgressSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "actor-1-never-written"))
 
 			actor := &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
@@ -540,17 +398,17 @@ func TestPauseActor_AteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 	}
 }
 
-// TestPauseActor_CrashesWhenPausingActorMissingWorkerPod verifies that a
+// TestSuspendActorAsync_CrashesWhenPausingActorMissingWorkerPod verifies that a
 // pausing actor with no worker pod recorded is moved to CRASHED by the
 // corrupted-assignment check before atelet is called, and the pause fails
 // with FailedPrecondition.
-func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
+func TestSuspendActorAsync_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	ctx := context.Background()
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDING, withPauseInProgress())
+	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDING, withPauseInProgress(t))
 
 	_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendAsync)
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
@@ -569,32 +427,10 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	}
 }
 
-// TestPauseActor_MarkedPausing_GoldenAtespaceRejected verifies golden actors cannot be
-// paused: by design they can only be suspended (committed).
-func TestPauseActor_MarkedPausing_GoldenAtespaceRejected(t *testing.T) {
-	ctx := context.Background()
-	st := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, st, nil)
-	w := newMarkOnlyWorkflow(st)
-
-	actorRef := resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: "golden-1"}
-	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
-		a.Status.AssignedNode = "node-1"
-		a.Status.WorkerAssignment = wireTestAssignment()
-	})
-	_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
-	if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("apierror.Code = %v (err %v), want FailedPrecondition", got, err)
-	}
-	if got := mustReadActor(t, ctx, st, actorRef).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("stored state = %v, want RUNNING untouched", got)
-	}
-}
-
-// TestPauseActor_AteletPaused_ForwardsPreferredFidelity verifies that local pause
+// TestSuspendActorAsync_AteletPaused_ForwardsPreferredFidelity verifies that local pause
 // checkpoints forward the template's PreferredFidelity to atelet, and label the
 // pause's lifecycle-op metric with it.
-func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
+func TestSuspendActorAsync_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 	tests := []struct {
 		preferred ateapipb.SnapshotFidelity
 		want      ateletpb.SnapshotFidelity
@@ -608,13 +444,13 @@ func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 		t.Run(tc.preferred.String(), func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			tmpl := seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{PreferredFidelity: tc.preferred})
+			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{PreferredFidelity: tc.preferred})
 			w, atelet := newWireCaptureWorkflow(t, persistence)
 			inst, reader := newTestInstruments(t)
 			w.instruments = inst
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: suspendTestTemplateRef(),
 				Status: &ateapipb.ActorStatus{
@@ -623,7 +459,7 @@ func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 					WorkerAssignment:       wireTestAssignment(),
 					LastAssignedGeneration: 1,
 					Snapshots: []*ateapipb.Snapshot{
-						newLocalSnapshot(1, tc.preferred, "", "local-snap-1", ""),
+						newInProgressSnapshot(t, 1, tc.preferred, "local-snap-1"),
 					},
 				},
 			})
@@ -644,7 +480,8 @@ func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 			if got := req.GetSnapshot().GetGeneration(); got != 1 {
 				t.Errorf("CheckpointRequest.Snapshot.Generation = %d, want 1, the in-progress snapshot's", got)
 			}
-			wantURI := mustActorSnapshotURI(t, tmpl, created, "local-snap-1").String()
+			// The mark recorded the upload URI; the checkpoint goes there.
+			wantURI := someActorSnapshotURI(t, testStorageLocation, "team-a", "local-snap-1")
 			if got := req.GetSnapshot().GetObject().GetSnapshotUri(); got != wantURI {
 				t.Errorf("CheckpointRequest.Snapshot.Object.SnapshotUri = %q, want %q", got, wantURI)
 			}

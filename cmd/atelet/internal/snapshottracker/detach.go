@@ -16,7 +16,6 @@ package snapshottracker
 
 import (
 	"context"
-	"log/slog"
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
@@ -31,7 +30,7 @@ func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, back
 	if err != nil {
 		return nil, err
 	}
-	opCtx, op := t.beginOpLocked(ctx, a, target)
+	opCtx, op := t.beginOpLocked(ctx, a, opDetach, target)
 	return func() (*ateletpb.ActorSnapshotState, error) {
 		return t.finishDetach(opCtx, a.actorUID, op, alreadyDurable, background)
 	}, nil
@@ -39,19 +38,20 @@ func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, back
 
 // Detach makes the actor's latest local snapshot durable, then deletes the
 // actor's local snapshots. It is a no-op when atelet holds no local snapshot
-// for the actor. It fails with Aborted while a Run, Restore, or Checkpoint of
-// the actor is in progress on this node, or once a Run or Restore of the actor
-// has begun since its latest local snapshot, and with FailedPrecondition when
-// no detach can make the snapshot durable. It runs in the calling goroutine
-// rather than through the background queue, once any operation in progress on
-// the actor has ended.
+// for the actor. It fails with Aborted while a Run, Restore, Checkpoint, or
+// PromoteSnapshot of the actor is in progress on this node, or once a Run or
+// Restore of the actor has begun since its latest local snapshot, and with
+// FailedPrecondition when no detach can make the snapshot durable. It runs in
+// the calling goroutine rather than through the background queue, once any
+// operation in progress on the actor has ended.
 func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorSnapshotState, error) {
 	if t.store == nil {
 		return nil, apierror.Unimplemented("atelet has no snapshot store to detach actors with")
 	}
 	t.lock(actorUID)
 	// Wait for any operation in progress (from a background worker or
-	// another RPC call) to end first; a detach may leave nothing to detach.
+	// another RPC call) to end first: a detach may leave nothing to detach,
+	// and an upload of the latest local snapshot nothing to upload.
 	a, err := t.waitIdleLocked(ctx, actorUID, checkNotHeld)
 	if err != nil {
 		t.unlock(actorUID)
@@ -62,6 +62,9 @@ func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorS
 		// done.
 		st := &ateletpb.ActorSnapshotState{}
 		if a != nil {
+			if a.reportDue() {
+				t.clearReportDueLocked(a)
+			}
 			st = t.stateLocked(a)
 		}
 		t.unlock(actorUID)
@@ -81,8 +84,8 @@ func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorS
 	return finish()
 }
 
-// checkNotHeld fails with Aborted while a Run, Restore, or Checkpoint of the
-// actor is in progress on this node.
+// checkNotHeld fails with Aborted while a Run, Restore, Checkpoint, or
+// PromoteSnapshot of the actor is in progress on this node.
 func checkNotHeld(a *actorSnapshots) error {
 	if a.holds > 0 {
 		return apierror.Aborted("actor %s is in use on this node", a.actorUID)
@@ -90,31 +93,29 @@ func checkNotHeld(a *actorSnapshots) error {
 	return nil
 }
 
-// backgroundDetach runs a background detach of the actor on a worker.
-func (t *Tracker) backgroundDetach(actorUID string, finish func() (*ateletpb.ActorSnapshotState, error)) {
-	if _, err := finish(); err != nil {
-		slog.WarnContext(t.ctx, "Background detach failed", slog.String("actorUID", actorUID), slog.Any("err", err))
-	}
-}
-
 // finishDetach runs op, a detach of the actor's latest local snapshot: it
 // uploads the snapshot unless already durable, then deletes the actor's local
 // snapshots. background reports whether a worker runs it, rather than a Detach
-// call. A detach Forget abandons leaves the actor alone, and fails.
+// call; a worker's detach makes a report of what it changed due, while a
+// Detach call returns the new state and cancels any pending report. A detach
+// Forget abandons leaves the actor alone, and fails.
 func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp, alreadyDurable, background bool) (*ateletpb.ActorSnapshotState, error) {
 	defer close(op.done)
 	uploaded := false
 	target := op.target
-	start := t.clock.Now()
-	err := ctx.Err()
-	if err == nil && !alreadyDurable {
-		uploaded, err = t.store.UploadLocalSnapshot(ctx, actorUID, target)
+	detachStart := t.clock.Now()
+	var err error
+	if !alreadyDurable {
+		err = ctx.Err()
 		if err == nil {
-			if abErr := t.updateOp(actorUID, op, nil, func(a *actorSnapshots) {
-				t.recordUploadLocked(a, target, uploaded)
-			}); abErr != nil {
-				return nil, abErr
-			}
+			uploaded, _, err = t.uploadSnapshot(ctx, actorUID, target, background)
+		}
+		if err == nil {
+			err = t.updateOp(actorUID, op, nil, func(a *actorSnapshots) {
+				if t.recordUploadLocked(a, target, uploaded) && background {
+					t.markReportDueLocked(a)
+				}
+			})
 		}
 	}
 
@@ -127,7 +128,9 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	// (before op.done is closed), so Run, Restore, and Checkpoint wait for it.
 	// TODO: Notify ateapi of the upcoming detach before deleting the actor's
 	// local snapshots, so it stops sending Restores that rely on them.
-	if err == nil {
+	recordDetach := err == nil
+	if recordDetach {
+		detachStart = t.clock.Now()
 		// Forget or the caller may have ended ctx as the upload finished.
 		err = ctx.Err()
 	}
@@ -138,25 +141,25 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 		switch {
 		case err == nil:
 			t.clearLatestLocalLocked(a)
+			if background {
+				t.markReportDueLocked(a)
+			} else {
+				t.cancelReportLocked(a)
+			}
 		case ctx.Err() == nil:
 			// Detach again once the retry delay has passed, and no sooner
 			// than the detach was due.
 			a.DetachAt = later(a.DetachAt, t.backOffLocked(a))
 		}
 	}); abErr != nil {
-		return nil, abErr
+		err = abErr
 	}
 
-	st, err := t.endOp(actorUID, op, err)
-	if err != nil {
-		return nil, err
+	// Log and record before endOp, which ends ctx.
+	elapsed := t.clock.Since(detachStart)
+	logOp(ctx, actorUID, op.kind, target, uploaded, background, elapsed, err)
+	if background && recordDetach {
+		t.instruments.recordDetach(ctx, target, elapsed, err)
 	}
-	slog.InfoContext(ctx, "Detached actor",
-		slog.String("actorUID", actorUID),
-		slog.String("snapshot", target.uuid()),
-		slog.Int("generation", int(target.generation())),
-		slog.Bool("uploaded", uploaded),
-		slog.Bool("requested", !background),
-		slog.Duration("elapsed", t.clock.Since(start)))
-	return st, nil
+	return t.endOp(actorUID, op, err)
 }

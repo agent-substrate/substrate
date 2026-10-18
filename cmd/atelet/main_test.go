@@ -37,6 +37,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/pflag"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/atelet"
@@ -76,6 +77,87 @@ func TestPortFlagDefault(t *testing.T) {
 	}
 	if want := strconv.Itoa(atelet.DefaultPort); f.DefValue != want {
 		t.Errorf("--port default = %q, want %q", f.DefValue, want)
+	}
+}
+
+// The snapshot delay flags must be positive, and the upload delay must not
+// exceed the detach delay, which the defaults satisfy too.
+func TestValidateSnapshotDelayFlags(t *testing.T) {
+	setFlags := func(upload, detach, giveUp time.Duration) {
+		*snapshotUploadDelay, *snapshotDetachDelay, *snapshotReportGiveUpAfter = upload, detach, giveUp
+	}
+	t.Cleanup(func() {
+		setFlags(snapshottracker.DefaultUploadDelay, snapshottracker.DefaultDetachDelay, snapshottracker.DefaultReportGiveUpAfter)
+	})
+
+	for _, tc := range []struct {
+		name                   string
+		upload, detach, giveUp time.Duration
+		wantErr                bool
+	}{
+		{"defaults", snapshottracker.DefaultUploadDelay, snapshottracker.DefaultDetachDelay, snapshottracker.DefaultReportGiveUpAfter, false},
+		{"upload sooner than detach", time.Minute, time.Hour, time.Minute, false},
+		{"upload as late as detach", time.Hour, time.Hour, time.Minute, false},
+		{"upload later than detach", time.Hour, time.Minute, time.Minute, true},
+		{"zero upload delay", 0, time.Hour, time.Minute, true},
+		{"negative detach delay", time.Minute, -time.Minute, time.Minute, true},
+		{"zero report give-up delay", time.Minute, time.Hour, 0, true},
+		{"negative report give-up delay", time.Minute, time.Hour, -time.Minute, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setFlags(tc.upload, tc.detach, tc.giveUp)
+			if err := validateSnapshotDelayFlags(); (err != nil) != tc.wantErr {
+				t.Errorf("upload=%v detach=%v giveUp=%v: err = %v, wantErr %v", tc.upload, tc.detach, tc.giveUp, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// Upload and detach worker flags must be at least 1, report workers must be at
+// least 0, and each flag defaults to the tracker's default count.
+func TestValidateSnapshotWorkerFlags(t *testing.T) {
+	setFlags := func(upload, detach, report int) {
+		*snapshotUploadWorkers, *snapshotDetachWorkers, *snapshotReportWorkers = upload, detach, report
+	}
+	t.Cleanup(func() {
+		setFlags(snapshottracker.DefaultUploadWorkers, snapshottracker.DefaultDetachWorkers, snapshottracker.DefaultReportWorkers)
+	})
+
+	for _, tc := range []struct {
+		name                   string
+		upload, detach, report int
+		wantErr                bool
+	}{
+		{"defaults", snapshottracker.DefaultUploadWorkers, snapshottracker.DefaultDetachWorkers, snapshottracker.DefaultReportWorkers, false},
+		{"single worker each", 1, 1, 1, false},
+		{"zero report workers", 2, 2, 0, false},
+		{"zero upload workers", 0, 2, 1, true},
+		{"negative upload workers", -1, 2, 1, true},
+		{"zero detach workers", 2, 0, 1, true},
+		{"negative detach workers", 2, -1, 1, true},
+		{"negative report workers", 2, 2, -1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setFlags(tc.upload, tc.detach, tc.report)
+			if err := validateSnapshotWorkerFlags(); (err != nil) != tc.wantErr {
+				t.Errorf("upload=%d detach=%d report=%d: err = %v, wantErr %v", tc.upload, tc.detach, tc.report, err, tc.wantErr)
+			}
+		})
+	}
+
+	for name, want := range map[string]int{
+		"snapshot-upload-workers": snapshottracker.DefaultUploadWorkers,
+		"snapshot-detach-workers": snapshottracker.DefaultDetachWorkers,
+		"snapshot-report-workers": snapshottracker.DefaultReportWorkers,
+	} {
+		f := pflag.Lookup(name)
+		if f == nil {
+			t.Errorf("no --%s flag registered", name)
+			continue
+		}
+		if f.DefValue != strconv.Itoa(want) {
+			t.Errorf("--%s default = %q, want %d", name, f.DefValue, want)
+		}
 	}
 }
 
