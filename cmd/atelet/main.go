@@ -1446,10 +1446,6 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		checkpointDir = localDir
 		sandboxRec = localRec
 	} else {
-		if durable == nil {
-			return nil, apierror.NotFound("snapshot %q has no usable local copy and no snapshot.object to fall back to: %w",
-				req.GetSnapshot().GetSnapshotUuid(), localErr)
-		}
 		if errors.Is(localErr, errUnusableLocalSnapshot) {
 			// The next checkpoint or terminate prunes the unusable copy.
 			slog.WarnContext(ctx, "Local snapshot is unusable; restoring from object storage",

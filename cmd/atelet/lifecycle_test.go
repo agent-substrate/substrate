@@ -288,7 +288,8 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		t.Errorf("state = %v, want nothing durable", st)
 	}
 
-	// Resume: no Snapshot.Object; atelet must find that local snapshot.
+	// Resume: atelet must restore from that local snapshot, not from
+	// Snapshot.Object.
 	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -297,12 +298,8 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
 		SandboxAssets:         sandboxAssets, SandboxRuntime: runtimeFor(t, sandboxAssets),
-		Spec: spec,
-		Snapshot: &ateletpb.Snapshot{
-			SnapshotUuid: snapshotName,
-			Generation:   1,
-			Fidelity:     fidelity,
-		},
+		Spec:     spec,
+		Snapshot: lifecycleSnapshot(actorUID, snapshotName, 1, fidelity),
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -492,12 +489,8 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
 		SandboxAssets:         assetsWithPause(restorePause), SandboxRuntime: runtimeFor(t, assetsWithPause(restorePause)),
-		Spec: spec,
-		Snapshot: &ateletpb.Snapshot{
-			SnapshotUuid: snapshotName,
-			Generation:   1,
-			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		},
+		Spec:     spec,
+		Snapshot: lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -526,7 +519,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 		{name: "Run partial reset removes registration", failure: "reset", wantErr: "while removing volume dir"},
 		{name: "Run record failure removes registration", failure: "record", wantErr: "while recording sandbox assets"},
 		{name: "Restore partial reset removes registration", restore: true, failure: "reset", wantErr: "while removing volume dir"},
-		{name: "Restore manifest failure removes registration", restore: true, failure: "manifest", wantErr: "no snapshot.object to fall back to"},
+		{name: "Restore manifest failure removes registration", restore: true, failure: "manifest", wantErr: "no uploaded copy"},
 		{name: "Restore asset failure removes registration", restore: true, failure: "asset", wantErr: "asset unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -587,7 +580,11 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			if tc.failure == "asset" {
 				storage.err = fmt.Errorf("asset unavailable")
 			}
-			s := &Atelet{anonGCSClient: storage, systemInfoVolumes: refresher, snapshots: snapshottracker.New(t.Context(), nil, clock.RealClock{}), sandboxAssetCache: newTestAssetCache(t)}
+			// The object store is empty: a restore with no local copy finds
+			// no uploaded copy either.
+			s := newPluginHerder(t, &recordingObjectStorage{})
+			s.anonGCSClient = storage
+			s.systemInfoVolumes = refresher
 			assets := &ateletpb.SandboxAssets{
 				SandboxClass: "gvisor", PauseImage: testPauseImage,
 				Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
@@ -599,11 +596,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 				_, err = s.Restore(ctx, &ateletpb.RestoreRequest{
 					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 					SandboxAssets: assets, SandboxRuntime: runtimeFor(t, assets), Spec: spec,
-					Snapshot: &ateletpb.Snapshot{
-						SnapshotUuid: snapshotName,
-						Generation:   1,
-						Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-					},
+					Snapshot: lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 				})
 			} else {
 				_, err = s.Run(ctx, &ateletpb.RunRequest{
@@ -768,12 +761,8 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		ActorUid:      actorUID,
 		WorkerPodUid:  "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 		SandboxAssets: assets, SandboxRuntime: runtimeFor(t, assets),
-		Spec: spec,
-		Snapshot: &ateletpb.Snapshot{
-			SnapshotUuid: snapshotName,
-			Generation:   1,
-			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		},
+		Spec:     spec,
+		Snapshot: lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 	})
 	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
 		t.Fatalf("Restore error = %v, want the post-registration OCI preparation failure", err)
@@ -940,9 +929,8 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 }
 
 // TestRestoreWithoutUsableLocalCopy checks that a Restore with no usable local
-// copy and nothing to fall back to fails as NotFound and wraps the local
-// copy's problem, whether the request has no snapshot.object or names one that
-// was never uploaded.
+// copy, naming a snapshot.object that was never uploaded, fails as NotFound
+// and wraps the local copy's problem.
 func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 	const (
 		actorUID     = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a65"
@@ -959,23 +947,13 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 		name string
 		// unusableLocal writes a manifest that lists a file that is not there.
 		unusableLocal bool
-		object        *ateletpb.ObjectStorage
-		wantErr       string
 		wantCause     error
 	}{{
-		name:      "no local copy and no object",
-		wantErr:   "no snapshot.object to fall back to",
+		name:      "no local copy",
 		wantCause: os.ErrNotExist,
 	}, {
-		name:          "unusable local copy and no object",
+		name:          "unusable local copy",
 		unusableLocal: true,
-		wantErr:       "no snapshot.object to fall back to",
-		wantCause:     errUnusableLocalSnapshot,
-	}, {
-		name:          "unusable local copy and an object never uploaded",
-		unusableLocal: true,
-		object:        &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI},
-		wantErr:       "no uploaded copy",
 		wantCause:     errUnusableLocalSnapshot,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -993,19 +971,14 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID,
 				WorkerPodUid:  "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 				SandboxAssets: assets, SandboxRuntime: runtimeFor(t, assets),
-				Spec: &ateletpb.WorkloadSpec{},
-				Snapshot: &ateletpb.Snapshot{
-					SnapshotUuid: snapshotName,
-					Generation:   1,
-					Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-					Object:       tc.object,
-				},
+				Spec:     &ateletpb.WorkloadSpec{},
+				Snapshot: lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 			})
 			if code := apierror.Code(err); code != codes.NotFound {
 				t.Fatalf("Restore error = %v (code %v), want NotFound", err, code)
 			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("Restore error = %v, want it to say %q", err, tc.wantErr)
+			if !strings.Contains(err.Error(), "no uploaded copy") {
+				t.Errorf("Restore error = %v, want it to say %q", err, "no uploaded copy")
 			}
 			if !errors.Is(err, tc.wantCause) {
 				t.Errorf("Restore error = %v, want it to wrap %v", err, tc.wantCause)
@@ -1165,7 +1138,8 @@ func (a *pluginActor) checkpoint(t *testing.T, snap *ateletpb.Snapshot, mode ate
 }
 
 // restoreLocal resumes the actor from its local snapshot named name, taken at
-// generation.
+// generation. The request names the snapshot's upload location too, as the
+// control plane's does.
 func (a *pluginActor) restoreLocal(t *testing.T, name string, generation int32) {
 	t.Helper()
 	if _, err := a.s.Restore(t.Context(), &ateletpb.RestoreRequest{
@@ -1177,9 +1151,12 @@ func (a *pluginActor) restoreLocal(t *testing.T, name string, generation int32) 
 		WorkerPodUid:          pluginWorkerPodUID,
 		SandboxAssets:         a.assets, SandboxRuntime: runtimeFor(t, a.assets),
 		Spec:     a.spec,
-		Snapshot: &ateletpb.Snapshot{SnapshotUuid: name, Generation: generation, Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		Snapshot: a.snapshot(name, generation),
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
+	}
+	if !a.worker.preserveRestoreDir {
+		t.Fatalf("Restore of %s read object storage, want its local copy restored in place", name)
 	}
 }
 
@@ -1553,8 +1530,8 @@ func TestFailedRestoreUnschedulesDetach(t *testing.T) {
 	if _, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
 		t.Fatalf("Checkpoint (pause): %v", err)
 	}
-	// A snapshot with neither a local copy nor an object storage location
-	// fails the restore once it has begun.
+	// A snapshot with neither a local copy nor an uploaded copy fails the
+	// restore once it has begun.
 	_, err := a.s.Restore(t.Context(), &ateletpb.RestoreRequest{
 		Atespace:              "ate-demo",
 		ActorName:             "counter",
@@ -1564,7 +1541,7 @@ func TestFailedRestoreUnschedulesDetach(t *testing.T) {
 		WorkerPodUid:          pluginWorkerPodUID,
 		SandboxAssets:         a.assets, SandboxRuntime: runtimeFor(t, a.assets),
 		Spec:     a.spec,
-		Snapshot: &ateletpb.Snapshot{SnapshotUuid: "missing-snap", Generation: 2, Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		Snapshot: a.snapshot("missing-snap", 2),
 	})
 	if apierror.Code(err) != codes.NotFound {
 		t.Fatalf("Restore of a missing snapshot = %v, want NotFound", err)
@@ -1574,6 +1551,47 @@ func TestFailedRestoreUnschedulesDetach(t *testing.T) {
 	}
 	if _, err := a.s.snapshots.Detach(t.Context(), pluginActorUID); apierror.Code(err) != codes.Aborted {
 		t.Errorf("Detach after the failed restore = %v, want Aborted", err)
+	}
+}
+
+// TestRestoreAfterDetachReadsUpload resumes a paused actor that atelet
+// detached before the control plane recorded the upload, so the control plane
+// still sends the Restore here: atelet restores the actor from the upload the
+// request names.
+func TestRestoreAfterDetachReadsUpload(t *testing.T) {
+	a := runPluginActor(t)
+	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+	snap := a.snapshot("pause-snap-1", 1)
+	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint (pause): %v", err)
+	}
+	// A Detach call uploads and prunes as a background detach does.
+	st, err := a.s.snapshots.Detach(t.Context(), pluginActorUID)
+	if err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	if st.GetLatestLocal() != nil || st.GetLatestDurable().GetSnapshot().GetSnapshotUuid() != "pause-snap-1" {
+		t.Fatalf("state after detach = %v, want pause-snap-1 durable and nothing local", st)
+	}
+
+	if _, err := a.s.Restore(t.Context(), &ateletpb.RestoreRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              pluginActorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          pluginWorkerPodUID,
+		SandboxAssets:         a.assets, SandboxRuntime: runtimeFor(t, a.assets),
+		Spec:     a.spec,
+		Snapshot: snap,
+	}); err != nil {
+		t.Fatalf("Restore of the detached snapshot: %v", err)
+	}
+	if a.worker.preserveRestoreDir {
+		t.Error("Restore restored a local copy in place, want the upload staged")
+	}
+	if got := a.worker.restored["checkpoint.img"]; got != "guest-memory" {
+		t.Errorf("restored checkpoint.img = %q, want the paused snapshot's %q", got, "guest-memory")
 	}
 }
 

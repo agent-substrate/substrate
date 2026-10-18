@@ -704,23 +704,18 @@ func TestValidateRestoreRequest(t *testing.T) {
 		}
 		return r
 	}
-	local := func(name string) func(*ateletpb.RestoreRequest) {
-		return func(r *ateletpb.RestoreRequest) {
-			r.Snapshot.SnapshotUuid = name
-			r.Snapshot.Object = nil
-		}
-	}
 
 	tests := []struct {
 		name string
 		obj  *ateletpb.RestoreRequest
 		want field.ErrorList
 	}{{
-		name: "valid with object storage",
+		name: "valid",
 		obj:  valid(),
 	}, {
-		name: "valid local only",
-		obj:  valid(local("pause-snap-1")),
+		name: "missing object storage",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Object = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object"), "")},
 	}, {
 		name: "valid volumes fidelity",
 		obj: valid(func(r *ateletpb.RestoreRequest) {
@@ -783,11 +778,11 @@ func TestValidateRestoreRequest(t *testing.T) {
 		want: field.ErrorList{field.Required(field.NewPath("snapshot"), "")},
 	}, {
 		name: "missing snapshot_uuid",
-		obj:  valid(local("")),
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.SnapshotUuid = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("snapshot", "snapshot_uuid"), "")},
 	}, {
 		name: "invalid snapshot_uuid: path escape",
-		obj:  valid(local("../escape")),
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.SnapshotUuid = "../escape" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "snapshot_uuid"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "missing generation",

@@ -126,8 +126,6 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	// safe because the snapshot is durable: Restore reads snapshot.object
 	// when the local copy is unusable. The prune runs with op in progress
 	// (before op.done is closed), so Run, Restore, and Checkpoint wait for it.
-	// TODO: Notify ateapi of the upcoming detach before deleting the actor's
-	// local snapshots, so it stops sending Restores that rely on them.
 	recordDetach := err == nil
 	if recordDetach {
 		detachStart = t.clock.Now()

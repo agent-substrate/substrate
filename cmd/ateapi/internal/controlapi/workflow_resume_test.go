@@ -1257,6 +1257,13 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		}
 		return snap
 	}
+	// localSnapWithUpload is a local snapshot whose record names upload as
+	// its durable copy, or none when upload is nil.
+	localSnapWithUpload := func(name string, fidelity ateapipb.SnapshotFidelity, upload *ateapipb.SnapshotStorage) *ateapipb.Snapshot {
+		snap := localSnap(name, fidelity)
+		snap.DurableSnapshot = upload
+		return snap
+	}
 
 	// actorSeed is the actor status a row persists before resuming.
 	type actorSeed struct {
@@ -1459,6 +1466,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
+			// A pause snapshot's upload is PENDING until atelet reports it,
+			// but a local restore names it anyway, so atelet can download the
+			// snapshot if it detached the actor before the report landed.
 			name: "13 Full pause snapshot restores locally as Full",
 			actor: actorSeed{
 				localSnapshot:   localSnap(localSnapshotName, fullScope),
@@ -1466,6 +1476,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
@@ -1480,6 +1491,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
@@ -1490,6 +1502,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
@@ -1503,12 +1516,13 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
 			// The local snapshot takes precedence at restore, carrying its own
-			// scope rather than the durable snapshot's.
+			// scope and upload rather than the durable snapshot's.
 			name: "17 local snapshot wins over a Full durable snapshot",
 			actor: actorSeed{
 				localSnapshot:    localSnap(localSnapshotName, dataScope),
@@ -1516,6 +1530,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
@@ -1532,6 +1547,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
@@ -1603,9 +1619,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// atelet uploads a pause's snapshot in the background. Once that
-			// upload is recorded, a local restore sends it too, so atelet can
-			// download the snapshot if its local copy is gone.
+			// A recorded upload changes nothing: a local restore names the
+			// pause snapshot's upload whether or not it is COMPLETED.
 			name: "25 uploaded pause snapshot restores locally and sends its upload",
 			actor: actorSeed{
 				localSnapshot: uploadedLocalSnap(localSnapshotName, fullScope),
@@ -1615,6 +1630,22 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
+		},
+		{
+			// A local restore names the pause snapshot's upload, so a record
+			// that cannot name it fails before a worker is claimed, as a
+			// malformed durable snapshot URI does.
+			name:  "26 local snapshot with no upload recorded fails with DataLoss",
+			actor: actorSeed{localSnapshot: localSnapWithUpload(localSnapshotName, fullScope, nil)},
+			want:  restoreWant{code: codes.DataLoss},
+		},
+		{
+			name: "27 local snapshot with a malformed upload URI fails with DataLoss",
+			actor: actorSeed{localSnapshot: localSnapWithUpload(localSnapshotName, fullScope, &ateapipb.SnapshotStorage{
+				Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+				Object: &ateapipb.ObjectSnapshot{SnapshotUri: malformedURI},
+			})},
+			want: restoreWant{code: codes.DataLoss},
 		},
 	}
 
