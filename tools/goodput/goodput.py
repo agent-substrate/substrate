@@ -401,9 +401,9 @@ def cmd_summary(a: argparse.Namespace) -> int:
         return 1
     results = [summarize.load(p) for p in files]
     out = Path(a.out)
-    csv_path, md_path = summarize.write(results, out, a.max_startup_failures_per_task)
+    paths = summarize.write(results, out, a.max_startup_failures_per_task)
     groups = len({(r["run"]["test_name"] or "?") for r in results})
-    print(f"{len(results)} runs in {groups} tests; wrote {csv_path} and {md_path}")
+    print(f"{len(results)} runs in {groups} tests; wrote {', '.join(map(str, paths))}")
     return 0
 
 
@@ -427,7 +427,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                    help="default: the task records' template, else the runs' trial_summary template, if any; "
                         "with task records, only that template's tasks are used")
     s.add_argument("--name", default="", help="the entry's name, for config.json's reference_baseline")
-    m = sub.add_parser("summary", help="summarize many runs' goodput.json: one row per test (CSV and Markdown)")
+    m = sub.add_parser("summary", help="summarize many runs' goodput.json: one row per test (CSV and Markdown) "
+                                       "and one row per run (CSV)")
     m.add_argument("results", nargs="+", help="goodput.json files, or directories to search for them")
     m.add_argument("--out", default=".", help="output directory (default: %(default)s)")
     m.add_argument("--max-startup-failures-per-task", type=float,

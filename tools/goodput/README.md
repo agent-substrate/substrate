@@ -150,7 +150,9 @@ carry a `whole_` prefix.
   `<mode>_<metric>_<median|min|max>` of the steady-window metrics over the
   test's valid runs (counts, ratio, rates, bad reasons, latency and slowdown
   percentiles, `eta_infra`), `abs_speed_ratio_*`, and valid/invalid run counts;
-- `goodput_summary.md`: the same as tables, plus the invalid runs and why.
+- `goodput_summary.md`: the same as tables, plus the invalid runs and why;
+- `goodput_runs.csv`: one row per run, valid or not, with the same metrics
+  unaggregated (`<mode>_<metric>`).
 
 ## Config (`config.json`)
 

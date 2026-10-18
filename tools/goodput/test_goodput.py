@@ -790,6 +790,8 @@ class SummaryTest(unittest.TestCase):
             self.assertIn("4 runs in 2 tests", stdout)
             with open(out / summarize.CSV_NAME, encoding="utf-8") as f:
                 rows = {r["test_name"]: r for r in csv.DictReader(f)}
+            with open(out / summarize.RUNS_CSV_NAME, encoding="utf-8") as f:
+                per_run = list(csv.DictReader(f))
             md = (out / summarize.MD_NAME).read_text(encoding="utf-8")
         a, b = rows["sweperf_a"], rows["sweperf_b"]
         self.assertEqual((a["runs"], a["runs_valid"], a["runs_invalid"]), ("3", "2", "1"))
@@ -811,6 +813,15 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("| sweperf_a | 2 / 1 |", md)
         self.assertIn("## Invalid runs", md)
         self.assertIn("| sweperf_a | 2026-10-12 |", md)
+        # one row per run, valid or not, with the same metrics unaggregated
+        self.assertEqual([(r["test_name"], r["run_date"], r["valid"]) for r in per_run],
+                         [("sweperf_a", "2026-10-10", "1"), ("sweperf_a", "2026-10-11", "1"),
+                          ("sweperf_a", "2026-10-12", "0"), ("sweperf_b", "2026-10-10", "1")])
+        self.assertEqual((per_run[1]["strict_tasks_good"], per_run[1]["strict_bad_slow_resume"],
+                          per_run[1]["relaxed_good_tasks_per_hr"], per_run[2]["invalid_reason"]),
+                         ("3", "1", "400.0", "no finished tasks"))
+        self.assertEqual({k[:-len("_median")] for k in a if k.endswith("_median")},
+                         {k for k in per_run[0] if k.startswith(("strict_", "relaxed_", "abs_speed_ratio"))})
 
     def test_goodput_json_without_a_valid_flag(self):
         old = {"run": {"test_name": "t", "run_date": "2026-10-01"}, "modes": {},
