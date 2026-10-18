@@ -99,7 +99,10 @@ part of a user's task. The first available of:
     without (`off` in modes that turn it off).
 - **G3, slowness.** A task's slowdown ÷ its baseline ≤ `s_max`, else `slow`.
   - With a task record, the slowdown is `cel_ms` ÷ `task_cel_ref_ms`
-    (`g3_basis: cel`). The wall ratio is reported but doesn't gate.
+    (`g3_basis: cel`). The wall ratio is reported but doesn't gate, unless the
+    mode sets `g3_wall`: then a task with a record whose `wall_ms` ÷ `wall_ref_ms`
+    is above `s_max` is also `slow_wall` (`g3_wall: on`). That catches tasks whose
+    lifecycle calls (such as a slow suspend) stretch them while CEL stays fine.
   - Without records it's the cycle-line wall time ÷ `wall_ref_ms` (`g3_basis: wall`).
   - It only applies when `config.json` has a baseline for the task (see Config);
     otherwise it's `skipped`.
@@ -160,6 +163,9 @@ carry a `whole_` prefix.
   - strict: G2 on, `ttfe_max_s` 1.0, `resume_max_s` 1.5 (`resume_max_lssd_s` 0.5
     on local SSD), `s_max` 1.5;
   - relaxed: G2 off, `s_max` 2.0.
+  - Any mode can add `"g3_wall": true` to also gate on the wall ratio (see G3).
+    Each mode gets its own outputs, so a mode such as strict plus `g3_wall` can be
+    reported next to strict.
 - `max_startup_failures_per_task`: the broken-run rule.
 - `baselines`: `{name, runtime, machine_type, template, format, task_cel_ref_ms, wall_ref_ms, ...}`
   entries, printed by `goodput.py baseline`.

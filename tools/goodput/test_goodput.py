@@ -607,6 +607,23 @@ class RecordGateTest(unittest.TestCase):
         self.assertEqual(classify.classify(record_task(cel=20000.0, resume=3000.0, fail_step="suspend"), STRICT,
                                            self.BASE), (self.BAD, [classify.REASON_SUSPEND]))
 
+    def test_optional_wall_check(self):
+        wall_mode = dict(STRICT, g3_wall=True)
+        slow_wall = record_task(cel=8000.0, wall=50000.0)  # the reference CEL, 5x the reference wall
+        self.assertEqual(classify.classify(slow_wall, STRICT, self.BASE), (self.GOOD, []))
+        self.assertEqual(classify.classify(slow_wall, wall_mode, self.BASE), (self.BAD, [classify.REASON_SLOW_WALL]))
+        self.assertEqual(classify.classify(record_task(cel=12800.0, wall=50000.0), wall_mode, self.BASE),
+                         (self.BAD, [classify.REASON_SLOW, classify.REASON_SLOW_WALL]))
+        self.assertEqual(classify.classify(record_task(wall=15000.0), wall_mode, self.BASE), (self.GOOD, []))  # 1.5x
+        self.assertEqual(classify.classify(record_task(wall=50000.0, fail_step="execute"), wall_mode, self.BASE),
+                         (self.BAD, [classify.REASON_EXECUTE]))
+        # without task records G3 compares wall time already, so there is no second wall reason
+        t = classify.Task(actor=ACTOR, index=0, start=T0, end=T0 + 30, cycle_ms={1: 50000.0})
+        self.assertEqual(classify.classify(t, wall_mode, self.BASE), (self.BAD, [classify.REASON_SLOW]))
+        self.assertEqual([classify.g3_wall_basis(m, rec, b) for m, rec, b in (
+            (STRICT, True, self.BASE), (wall_mode, True, self.BASE), (wall_mode, True, {"task_cel_ref_ms": 1}),
+            (wall_mode, False, self.BASE))], ["off", "on", "skipped", "n/a"])
+
 
 class RecordMetricsTest(unittest.TestCase):
     def test_eta_infra_uses_every_finished_task(self):
@@ -685,6 +702,25 @@ class RecordComputeTest(unittest.TestCase):
         meas = goodput.jsonl_rows(r)[1]["measurements"]
         self.assertEqual((meas["g2"], meas["valid"], meas["abs_speed_ratio"], meas["g2_resume_max_s"]),
                          ("on", "true", "2.0", "1.5"))
+
+    def test_mode_with_the_optional_wall_gate(self):
+        logs = [record(10, sb(1), cel=8000.0, wall=12000.0), record(12, sb(2), cel=8000.0, wall=150000.0),
+                line(20, parse.MSG_SHUTDOWN, actor="")]
+        modes = dict(CONFIG["modes"], strict_wall=dict(STRICT, g3_wall=True))
+        with tempfile.TemporaryDirectory() as tmp:
+            r = goodput.compute(write_run(Path(tmp), logs, self.META), dict(CONFIG, baselines=[self.BASE_A],
+                                                                            modes=modes))
+        strict, wall = r["modes"]["strict"], r["modes"]["strict_wall"]
+        self.assertEqual((strict["g3_wall"], wall["g3_wall"], wall["g3_basis"]), ("off", "on", "cel"))
+        self.assertEqual((strict["steady"]["tasks_good"], wall["steady"]["tasks_good"], wall["steady"]["bad_reasons"]),
+                         (2, 1, {"slow_wall": 1}))  # 150000 / 10000 > 1.5
+        self.assertEqual([(x["metric"], x["measurements"]["g3_wall"]) for x in goodput.jsonl_rows(r)],
+                         [("goodput_relaxed", "off"), ("goodput_strict", "off"), ("goodput_strict_wall", "on")])
+        rows, _ = summarize.summarize([r])
+        per_run = summarize.run_rows([r])
+        self.assertEqual((rows[0]["strict_wall_tasks_good_median"], rows[0]["strict_wall_bad_slow_wall_max"],
+                          per_run[0]["strict_wall_goodput_ratio_pct"], per_run[0]["strict_bad_slow_wall"]),
+                         (1.0, 1.0, 50.0, 0))
 
     def test_local_ssd_machine_type_tightens_the_resume_bound(self):
         trial = {"machine_type": "c4-highmem-32-lssd", "allocatable_cores": "32"}

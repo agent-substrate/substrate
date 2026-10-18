@@ -114,6 +114,8 @@ def compute(run_dir: Path, config: dict[str, Any], identity: Optional[dict[str, 
                    for tmpl in {template, *templates}}
     baseline = by_template[template]
     task_baselines = [by_template[t.record.template if t.record is not None else template] for t in tasks]
+    # (has a record, baseline) of each finished task, for the gate fields
+    gated = [(t.record is not None, b) for t, b in zip(tasks, task_baselines) if t.finished]
 
     task_rows = [task_row(t) for t in tasks]
     startup_ts = [s.t for s in startup]
@@ -127,11 +129,12 @@ def compute(run_dir: Path, config: dict[str, Any], identity: Optional[dict[str, 
             row["reasons_by_mode"][mode_name] = reasons
             rows.append({**row, "status": status, "reasons": reasons, "wall_ref_ms": (b or {}).get("wall_ref_ms"),
                          "task_cel_ref_ms": (b or {}).get("task_cel_ref_ms")})
-        bases = sorted({classify.g3_basis(t.record is not None, b) for t, b in zip(tasks, task_baselines)
-                        if t.finished})
+        bases = sorted({classify.g3_basis(rec, b) for rec, b in gated})
+        wall_bases = sorted({classify.g3_wall_basis(rules, rec, b) for rec, b in gated})
         modes[mode_name] = {
             "g2": ("on" if has_records else "n/a") if rules.get("g2") else "off",  # n/a: needs task records
             "g3_basis": "+".join(bases) or classify.g3_basis(has_records, baseline),
+            "g3_wall": "+".join(wall_bases) or classify.g3_wall_basis(rules, has_records, baseline),
             "startup_basis": "none",  # attempts stay out of the ratio
             "steady": metrics.window_metrics(rows, startup_ts, steady, capacity, baseline),
             "whole": metrics.window_metrics(rows, startup_ts, whole, capacity, baseline),
@@ -203,7 +206,8 @@ def jsonl_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     run = result["run"]
     rows = []
     for mode_name, m in sorted(result["modes"].items()):
-        meas = {"g2": m["g2"], "g3_basis": m["g3_basis"], "startup_basis": m["startup_basis"],
+        meas = {"g2": m["g2"], "g3_basis": m["g3_basis"], "g3_wall": m.get("g3_wall", "off"),
+                "startup_basis": m["startup_basis"],
                 "log_format": run["log_format"], "runtime": run["runtime"], "machine_type": run["machine_type"],
                 "template": run["template"], "valid": str(result.get("valid", True)).lower()}
         for key in ("invalid_reason", "abs_speed_ratio"):

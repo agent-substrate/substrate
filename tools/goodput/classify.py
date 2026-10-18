@@ -40,6 +40,7 @@ REASON_FAILED = "failed"  # a task record that failed without naming the step
 REASON_SLOW_RESUME = "slow_resume"
 REASON_SLOW_TTFE = "slow_ttfe"
 REASON_SLOW = "slow"
+REASON_SLOW_WALL = "slow_wall"  # the optional wall check (g3_wall) on a task with a record
 
 FAIL_KIND = {parse.MSG_RESUME_FAIL: REASON_RESUME, parse.MSG_EXEC_FAIL: REASON_EXECUTE,
              parse.MSG_SUSPEND_FAIL: REASON_SUSPEND}
@@ -272,6 +273,16 @@ def slowdown(task: Task, baseline: Optional[dict[str, Any]]) -> Optional[float]:
     return None
 
 
+def g3_wall_basis(mode: dict[str, Any], has_record: bool, baseline: Optional[dict[str, Any]]) -> str:
+    """Whether the mode's optional wall check (g3_wall) applies: "off", "on", "skipped"
+    (no wall_ref_ms), or "n/a" in a run without task records, whose G3 compares wall time already."""
+    if not mode.get("g3_wall"):
+        return "off"
+    if not has_record:
+        return "n/a"
+    return "on" if baseline and baseline.get("wall_ref_ms") else "skipped"
+
+
 def classify(task: Task, mode: dict[str, Any], baseline: Optional[dict[str, Any]]) -> tuple[str, list[str]]:
     """good / bad / unfinished, with the reasons a task is bad.
 
@@ -280,7 +291,9 @@ def classify(task: Task, mode: dict[str, Any], baseline: Optional[dict[str, Any]
     With a record that is its failed flag, with fail_step as the reason; without
     one, every kind of failure line the task logged.
     G2 (resume / TTFE latency) needs a record; see g2_reasons.
-    G3, only with a baseline: a slowdown (see slowdown) above s_max is slow.
+    G3, only with a baseline: a slowdown (see slowdown) above s_max is slow. With
+    g3_wall, a task with a record is also slow_wall when wall_ms / wall_ref_ms is
+    above s_max.
     G2 and G3 apply only to a finished task that passed G1, and a task can fail
     both. An unfinished task is bad only if it failed before the cut-off.
     """
@@ -292,6 +305,9 @@ def classify(task: Task, mode: dict[str, Any], baseline: Optional[dict[str, Any]
         s = slowdown(task, baseline)
         if s is not None and s > float(mode["s_max"]):
             reasons.append(REASON_SLOW)
+        if g3_wall_basis(mode, task.record is not None, baseline) == "on":
+            if task.wall_ms / float(baseline["wall_ref_ms"]) > float(mode["s_max"]):
+                reasons.append(REASON_SLOW_WALL)
     return (BAD, reasons) if reasons else (GOOD, [])
 
 
