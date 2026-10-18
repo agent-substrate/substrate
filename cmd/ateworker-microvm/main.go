@@ -47,6 +47,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
 	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/otlprelay"
 	"go.ate.dev/substrate/internal/preview"
@@ -117,6 +118,9 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("invalid --preview: %w", err)
 	}
 	slog.InfoContext(ctx, "ateworker-microvm booting", slog.String("version", version.Version))
+	// Settle the overlayfs mount mode now rather than at the first actor's
+	// mount: the probe logs the chosen mode, naming the kernel >= 6.5 fallback.
+	imagecache.ProbeMountAPI()
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
 	}

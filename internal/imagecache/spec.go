@@ -161,6 +161,35 @@ func overlayLowerDirs(layers []string) []string {
 	return lowers
 }
 
+// legacyOverlayMountOptions builds the overlayfs option string for the
+// legacy mount(2) fallback path: lowerdir is top-most layer first (the order
+// overlayLowerDirs returns). An empty upperDir omits upperdir/workdir,
+// mounting lowerdir-only — the shape the read-only image-volume mounts need.
+//
+// ':' separates lowerdirs and ',' separates mount options; cache paths are
+// digest-derived so this never fires, but refuse rather than assemble a
+// corrupt option string. mount(2) copies the option string through a single
+// kernel page (~34 digest-derived layers), so preflight the length and fail
+// naming the kernel >= 6.5 requirement instead of mount(2)'s bare E2BIG.
+func legacyOverlayMountOptions(lowerDirs []string, upperDir, workDir string) (string, error) {
+	for _, p := range lowerDirs {
+		if strings.ContainsAny(p, ":,") {
+			return "", fmt.Errorf("layer path %q contains overlay option separators", p)
+		}
+	}
+	if strings.ContainsAny(upperDir, ":,") || strings.ContainsAny(workDir, ":,") {
+		return "", fmt.Errorf("bundle path %q contains overlay option separators", upperDir)
+	}
+	opts := "lowerdir=" + strings.Join(lowerDirs, ":")
+	if upperDir != "" {
+		opts += ",upperdir=" + upperDir + ",workdir=" + workDir
+	}
+	if len(opts) >= os.Getpagesize() {
+		return "", fmt.Errorf("overlay of %d lowerdirs needs a %d-byte option string, beyond mount(2)'s single-page cap; kernel >= 6.5 needed for lowerdir+", len(lowerDirs), len(opts))
+	}
+	return opts, nil
+}
+
 // createExtraDirs creates the spec's ExtraDirs inside the (mounted) rootfs.
 // It uses os.Root so the operation is confined to rootfsPath: a symlink
 // planted by the image cannot redirect the write outside the rootfs.

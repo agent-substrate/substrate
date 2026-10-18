@@ -93,6 +93,79 @@ func TestOverlayLowerDirs(t *testing.T) {
 	})
 }
 
+func TestLegacyOverlayMountOptions(t *testing.T) {
+	t.Run("assembles top-first lowerdir with upper and work", func(t *testing.T) {
+		got, err := legacyOverlayMountOptions([]string{"/c/top/fs", "/c/base/fs"}, "/b/upper", "/b/work")
+		if err != nil {
+			t.Fatalf("legacyOverlayMountOptions: %v", err)
+		}
+		want := "lowerdir=/c/top/fs:/c/base/fs,upperdir=/b/upper,workdir=/b/work"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	// Image volumes mount without a writable layer: an empty upper must
+	// assemble lowerdir-only options, which overlayfs makes read-only.
+	t.Run("empty upper assembles lowerdir-only options", func(t *testing.T) {
+		got, err := legacyOverlayMountOptions([]string{"/c/top/fs", "/c/base/fs"}, "", "")
+		if err != nil {
+			t.Fatalf("legacyOverlayMountOptions: %v", err)
+		}
+		want := "lowerdir=/c/top/fs:/c/base/fs"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("refuses option separators in layer paths", func(t *testing.T) {
+		if _, err := legacyOverlayMountOptions([]string{"/c/evil:layer/fs"}, "/b/upper", "/b/work"); err == nil {
+			t.Errorf("expected error for ':' in a layer path")
+		}
+	})
+
+	t.Run("refuses option separators in upper or work", func(t *testing.T) {
+		if _, err := legacyOverlayMountOptions([]string{"/c/top/fs"}, "/b/evil:upper", "/b/work"); err == nil {
+			t.Errorf("expected error for ':' in the upper path")
+		}
+		if _, err := legacyOverlayMountOptions([]string{"/c/top/fs"}, "/b/upper", "/b/evil,work"); err == nil {
+			t.Errorf("expected error for ',' in the work path")
+		}
+	})
+
+	// mount(2) copies its option string through a single kernel page; with
+	// digest-derived layer paths (~114 bytes each) that is roughly 34 layers.
+	// The preflight must refuse an over-long chain naming the kernel
+	// requirement instead of letting mount(2) fail with a bare E2BIG.
+	t.Run("refuses chains beyond the single-page option string", func(t *testing.T) {
+		var lowers []string
+		opts := "lowerdir="
+		for len(opts) < os.Getpagesize() {
+			lowers = append(lowers, "/pool/layers/sha256/"+strings.Repeat("ab", 32)+"/fs")
+			opts = "lowerdir=" + strings.Join(lowers, ":")
+		}
+		_, err := legacyOverlayMountOptions(lowers, "/b/upper", "/b/work")
+		if err == nil {
+			t.Fatalf("expected error for a %d-byte option string on a %d-byte page", len(opts), os.Getpagesize())
+		}
+		if !strings.Contains(err.Error(), "kernel >= 6.5 needed for lowerdir+") {
+			t.Errorf("error must name the kernel requirement, got %q", err)
+		}
+	})
+
+	t.Run("chains within the page assemble", func(t *testing.T) {
+		// Production-length paths at the reported cap: roughly 34
+		// digest-derived layers must still assemble on the legacy path.
+		var lowers []string
+		for range 34 {
+			lowers = append(lowers, "/var/lib/ate/imagecache/layers/sha256/"+strings.Repeat("ab", 32)+"/fs")
+		}
+		if _, err := legacyOverlayMountOptions(lowers, "/b/upper", "/b/work"); err != nil {
+			t.Errorf("34 digest-derived layers should fit one page, got %v", err)
+		}
+	})
+}
+
 func TestCreateExtraDirs(t *testing.T) {
 	t.Run("creates target inside rootfs", func(t *testing.T) {
 		root := t.TempDir()

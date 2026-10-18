@@ -22,10 +22,12 @@ package imagecache
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -145,20 +147,83 @@ func mountImageVolume(mountpoint string, layers []string) error {
 	return mountOverlay(mountpoint, overlayLowerDirs(layers), "", "")
 }
 
+// The mount-mode decision runs once per process: it picks the path every
+// overlay mount of this worker takes.
+var (
+	mountModeOnce sync.Once
+	lowerdirPlus  bool
+)
+
+// ProbeMountAPI is the one-time startup entry for the mount-mode decision: it
+// runs the lowerdir+ probe and logs the chosen mode, so workers settle and
+// announce it at boot rather than at the first actor's mount.
+func ProbeMountAPI() {
+	mountModeOnce.Do(func() { lowerdirPlus = probeLowerdirPlus() })
+}
+
+// lowerdirPlusSupported reports whether the kernel's new mount API accepts
+// overlayfs's incremental "lowerdir+" fsconfig key (Linux >= 6.5), which the
+// fsconfig mount path requires. First use probes, so a worker that never
+// calls ProbeMountAPI still picks its mode at the first mount.
+func lowerdirPlusSupported() bool {
+	ProbeMountAPI()
+	return lowerdirPlus
+}
+
+// probeLowerdirPlus dry-runs the new mount API: fsopen(2) an overlay context
+// and append one scratch directory as a lower. Any failure means the legacy
+// mount(2) path — fsopen itself exists only from 5.2, and overlayfs rejects
+// the "lowerdir+" key before 6.5. Nothing is mounted: the context is closed
+// without fsconfig(2) CREATE.
+func probeLowerdirPlus() bool {
+	scratch, err := os.MkdirTemp("", "imagecache-probe-*")
+	if err == nil {
+		defer os.RemoveAll(scratch)
+		var fsfd int
+		if fsfd, err = unix.Fsopen("overlay", unix.FSOPEN_CLOEXEC); err == nil {
+			defer unix.Close(fsfd)
+			err = unix.FsconfigSetString(fsfd, "lowerdir+", scratch)
+		}
+	}
+	if err != nil {
+		slog.Warn("Overlay mounts: legacy mount(2) fallback; fsconfig lowerdir+ unsupported (kernel >= 6.5 needed for lowerdir+)", "err", err)
+		return false
+	}
+	slog.Info("Overlay mounts: new mount API (fsconfig lowerdir+; requires kernel >= 6.5)")
+	return true
+}
+
+// mountOverlayLegacy is the pre-6.5 fallback: one mount(2) call carrying the
+// whole option string from legacyOverlayMountOptions. It predates the
+// fs-context error log, so the option string is included in failures to make
+// the bare errno diagnosable. No volatile flag exists on this path, so
+// overlayfs syncs the upper, including at umount — the graceful degradation
+// of kernels without fsconfig lowerdir+.
+func mountOverlayLegacy(mountpoint string, lowers []string, upper, work string) error {
+	opts, err := legacyOverlayMountOptions(lowers, upper, work)
+	if err != nil {
+		return err
+	}
+	if err := unix.Mount("overlay", mountpoint, "overlay", 0, opts); err != nil {
+		return fmt.Errorf("while mounting overlay at %q (%s): %w", mountpoint, opts, err)
+	}
+	return nil
+}
+
 // mountOverlay attaches an overlay of lowers (top-most first) with the given
-// upper/work dirs at mountpoint, using the new mount API rather than
-// mount(2): appending lowerdirs one fsconfig(2) call at a time sidesteps
-// mount(2)'s single-page option-string cap, which digest-derived layer paths
-// (~114 bytes each) would hit at roughly 34 layers.
+// upper/work dirs at mountpoint. On kernels with the new mount API's
+// incremental overlayfs "lowerdir+" option (Linux >= 6.5) it appends the
+// lowerdirs one fsconfig(2) call at a time, sidestepping mount(2)'s
+// single-page option-string cap, which digest-derived layer paths (~114 bytes
+// each) would hit at roughly 34 layers. Older kernels fall back to legacy
+// mount(2) assembly (see mountOverlayLegacy).
 //
 // An empty upper mounts the overlay without a writable layer, which overlayfs
 // makes read-only.
-//
-// Minimum supported kernel: Linux 6.5, where overlayfs gained the
-// incremental "lowerdir+" option. Every current GKE channel is at or above
-// it (Stable runs COS 121 LTS on kernel 6.6; Regular and Rapid run COS
-// 125/129 on 6.12).
 func mountOverlay(mountpoint string, lowers []string, upper, work string) error {
+	if !lowerdirPlusSupported() {
+		return mountOverlayLegacy(mountpoint, lowers, upper, work)
+	}
 	fsfd, err := unix.Fsopen("overlay", unix.FSOPEN_CLOEXEC)
 	if err != nil {
 		return fmt.Errorf("while opening overlay fs context: %w", err)
