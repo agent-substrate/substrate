@@ -237,16 +237,22 @@ func TestHostingNodeWithoutWorker(t *testing.T) {
 			Snapshots:              []*ateapipb.Snapshot{{Uuid: "snap-1", Generation: 1, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, Locality: locality, DurableSnapshot: d}},
 		}
 	}
+	olderOnNode := status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
+	olderOnNode.LastAssignedGeneration = 2
+	olderOnNode.Snapshots = append(olderOnNode.Snapshots, &ateapipb.Snapshot{Uuid: "snap-2", Generation: 2, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, DurableSnapshot: durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)})
+	noAssignedNode := status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", nil)
+	noAssignedNode.AssignedNode = ""
 	for _, tc := range []struct {
 		name   string
 		status *ateapipb.ActorStatus
 		want   string
 	}{
 		{"paused", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", nil), "node-1"},
-		{"paused, suspend uploading its snapshot", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)), "node-1"},
-		{"suspended, snapshot durable, local copy kept", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)), ""},
-		{"suspended, no local copy", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)), ""},
-		{"pause in progress, not yet captured", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "", nil), ""},
+		{"paused, upload pending", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)), "node-1"},
+		{"paused, uploaded, local copy kept", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)), "node-1"},
+		{"older snapshot on the node, latest not", olderOnNode, "node-1"},
+		{"local copy but no assigned node", noAssignedNode, ""},
+		{"suspending without a worker", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)), ""},
 		{"crashed with a local copy", status(ateapipb.ActorState_ACTOR_STATE_CRASHED, "node-1", nil), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

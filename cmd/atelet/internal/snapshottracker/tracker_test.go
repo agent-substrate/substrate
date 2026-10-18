@@ -17,6 +17,7 @@ package snapshottracker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,9 +27,11 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/client-go/util/workqueue"
@@ -435,6 +438,16 @@ func TestTrackerCommitPromoted(t *testing.T) {
 	if got := st.GetLatestDurable(); uuidOf(got) != "s3" || got.GetLocalCommitTime() != nil || uuidOf(st.GetLatestLocal()) != "s2" {
 		t.Errorf("state = %v, want s3 durable without a commit time, and s2 still local", st)
 	}
+
+	// An older promote finishing after a newer checkpoint keeps the newer
+	// durable and local snapshots.
+	tr.CommitLocal(trackedActorUID, testRef("s4", 4, t0.Add(4*time.Hour)))
+	older := testRef("s2", 2, time.Time{})
+	older.UploadTime = t0.Add(5 * time.Hour)
+	st = tr.CommitPromoted(trackedActorUID, older)
+	if uuidOf(st.GetLatestDurable()) != "s3" || uuidOf(st.GetLatestLocal()) != "s4" {
+		t.Errorf("state after older promote = %v, want s3 durable and s4 local", st)
+	}
 }
 
 // A promote of a paused actor's local snapshot leaves its detach schedule as
@@ -444,9 +457,7 @@ func TestTrackerCommitPromotedKeepsDetachSchedule(t *testing.T) {
 	for _, started := range []bool{false, true} {
 		t.Run(fmt.Sprintf("started=%v", started), func(t *testing.T) {
 			tr := newIdleTestTracker(t, newFakeSnapshotStore())
-			// A pause snapshot names no object storage location.
 			paused := testRef("s1", 1, tr.clock.Now())
-			paused.Snapshot.Object = nil
 			tr.CommitLocal(trackedActorUID, paused)
 			want := tr.clock.Now().Add(testDetachDelay)
 			if started {
@@ -468,9 +479,11 @@ func TestTrackerCommitPromotedKeepsDetachSchedule(t *testing.T) {
 
 // Promoting the latest local snapshot makes it durable and clears its upload
 // due time, whereas promoting an older snapshot while newer local snapshots
-// still need an upload keeps the upload due when the oldest of them was.
+// still need an upload keeps the upload due when the oldest of them was,
+// including any retry backoff.
 func TestTrackerCommitPromotedClearsUploadDue(t *testing.T) {
-	tr := newIdleTestTracker(t, newFakeSnapshotStore())
+	store := newFakeSnapshotStore()
+	tr := newIdleTestTracker(t, store)
 	t0 := tr.clock.Now()
 	st := tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
 	if st.GetUploadDueTime() == nil {
@@ -486,11 +499,46 @@ func TestTrackerCommitPromotedClearsUploadDue(t *testing.T) {
 	t2 := t0.Add(2 * time.Minute)
 	tr.CommitLocal(trackedActorUID, testRef("s2", 2, t2))
 	tr.CommitLocal(trackedActorUID, testRef("s3", 3, t2.Add(time.Minute)))
+	tr.CommitLocal(trackedActorUID, testRef("s4", 4, t2.Add(2*time.Minute)))
+
 	older := testRef("s0", 0, time.Time{})
-	older.UploadTime = t2.Add(2 * time.Minute)
+	older.UploadTime = t2.Add(3 * time.Minute)
 	st = tr.CommitPromoted(trackedActorUID, older)
+	if got := uuidOf(st.GetLatestDurable()); got != "s1" {
+		t.Errorf("latest_durable after promoting below durable = %q, want s1", got)
+	}
 	if got, want := timeOf(st.GetUploadDueTime()), t2.Add(testUploadDelay); !got.Equal(want) {
-		t.Errorf("upload_due_time after promoting older snapshot = %v, want %v: an upload delay after s2", got, want)
+		t.Errorf("upload_due_time after promoting below durable = %v, want %v: an upload delay after s2", got, want)
+	}
+
+	between := testRef("s2", 2, time.Time{})
+	between.UploadTime = t2.Add(3 * time.Minute)
+	st = tr.CommitPromoted(trackedActorUID, between)
+	if got := uuidOf(st.GetLatestDurable()); got != "s2" {
+		t.Errorf("latest_durable after promoting s2 = %q, want s2", got)
+	}
+	if got, want := timeOf(st.GetUploadDueTime()), t2.Add(testUploadDelay); !got.Equal(want) {
+		t.Errorf("upload_due_time after promoting between durable and local = %v, want %v: an upload delay after s2", got, want)
+	}
+
+	stepTo(tr, t2.Add(testUploadDelay))
+	store.setErr(errors.New("boom"))
+	if _, err := tr.Detach(t.Context(), trackedActorUID); err == nil {
+		t.Fatal("detach succeeded, want the store's error")
+	}
+	wantRetry := tr.clock.Now().Add(testRetryDelay)
+	st = tr.CommitPromoted(trackedActorUID, older)
+	if got := timeOf(st.GetUploadDueTime()); !got.Equal(wantRetry) {
+		t.Errorf("upload_due_time after promoting below durable during backoff = %v, want %v", got, wantRetry)
+	}
+	betweenBackoff := testRef("s3", 3, time.Time{})
+	betweenBackoff.UploadTime = tr.clock.Now()
+	st = tr.CommitPromoted(trackedActorUID, betweenBackoff)
+	if got := uuidOf(st.GetLatestDurable()); got != "s3" {
+		t.Errorf("latest_durable after promoting s3 during backoff = %q, want s3", got)
+	}
+	if got := timeOf(st.GetUploadDueTime()); !got.Equal(wantRetry) {
+		t.Errorf("upload_due_time after promoting between durable and local during backoff = %v, want %v", got, wantRetry)
 	}
 }
 
@@ -542,11 +590,8 @@ func TestTrackerDropsActorWithoutDirectory(t *testing.T) {
 	}
 }
 
-// Commits for one actor take turns, so a racing deferred checkpoint never
-// loses an immediate checkpoint's durable snapshot. The control plane never
-// sends one actor's checkpoints concurrently: the race only exercises the
-// lock, so either commit may land last, even leaving a local snapshot older
-// than the durable one.
+// Commits for one actor take turns, and an older local commit never replaces
+// a newer durable snapshot.
 func TestTrackerSerializesEachActor(t *testing.T) {
 	useTempNodeDirs(t)
 	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
@@ -561,8 +606,12 @@ func TestTrackerSerializesEachActor(t *testing.T) {
 		wg.Go(func() { tr.CommitLocal(trackedActorUID, local) })
 		wg.Go(func() { tr.CommitDurable(trackedActorUID, durable) })
 		wg.Wait()
-		if got, want := uuidOf(tr.State(trackedActorUID).GetLatestDurable()), durable.Snapshot.GetSnapshotUuid(); got != want {
+		st := tr.State(trackedActorUID)
+		if got, want := uuidOf(st.GetLatestDurable()), durable.Snapshot.GetSnapshotUuid(); got != want {
 			t.Fatalf("round %d: latest_durable = %q, want %q", i, got, want)
+		}
+		if got := st.GetLatestLocal(); got != nil {
+			t.Fatalf("round %d: latest_local = %v, want nil when durable has a higher generation", i, got)
 		}
 	}
 	if len(tr.actors) != 0 {
@@ -601,5 +650,222 @@ func TestTrackerSkipsUnreadableSnapshotState(t *testing.T) {
 	tr := newTracker(t)
 	if got := tr.State(trackedActorUID); !proto.Equal(got, &ateletpb.ActorSnapshotState{}) {
 		t.Errorf("state with a broken file = %v, want empty", got)
+	}
+}
+
+// BeginCheckpoint and BeginPromote accept any generation when atelet holds no
+// snapshot for the actor, and otherwise reject a generation below the actor's
+// newest snapshot or equal to it under another snapshot_uuid with
+// FailedPrecondition.
+func TestTrackerCheckGeneration(t *testing.T) {
+	useTempNodeDirs(t)
+	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tr := newTracker(t)
+	t0 := time.Now()
+	ref := func(uuid string, generation int32) SnapshotRef {
+		return testRef(uuid, generation, t0)
+	}
+	snap := func(uuid string, generation int32) *ateletpb.Snapshot {
+		return ref(uuid, generation).Snapshot
+	}
+	checkBegin := func(t *testing.T, tr *Tracker, r SnapshotRef, wantCode codes.Code) {
+		t.Helper()
+		end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, r.Snapshot)
+		if err == nil {
+			end()
+		}
+		if got := apierror.Code(err); got != wantCode {
+			t.Errorf("BeginCheckpoint(%v) code = %v, want %v", r.Snapshot, got, wantCode)
+		}
+		_, end, err = tr.BeginPromote(t.Context(), trackedActorUID, r)
+		if err == nil {
+			end()
+		}
+		if got := apierror.Code(err); got != wantCode {
+			t.Errorf("BeginPromote(%v) code = %v, want %v", r.Snapshot, got, wantCode)
+		}
+	}
+
+	checkBegin(t, tr, ref("s1", 1), codes.OK)
+
+	// Only a local snapshot is tracked (generation 2).
+	tr.CommitLocal(trackedActorUID, ref("s1", 2))
+	for _, tc := range []struct {
+		name     string
+		ref      SnapshotRef
+		wantCode codes.Code
+	}{
+		{name: "same snapshot at newest generation", ref: ref("s1", 2), wantCode: codes.OK},
+		{name: "higher generation", ref: ref("s2", 3), wantCode: codes.OK},
+		{name: "generation below newest", ref: ref("s0", 1), wantCode: codes.FailedPrecondition},
+		{name: "same uuid at lower generation", ref: ref("s1", 1), wantCode: codes.FailedPrecondition},
+		{name: "different uuid at newest generation", ref: ref("other", 2), wantCode: codes.FailedPrecondition},
+	} {
+		t.Run("localNewest/"+tc.name, func(t *testing.T) {
+			checkBegin(t, tr, tc.ref, tc.wantCode)
+			checkBegin(t, newTracker(t), tc.ref, tc.wantCode)
+		})
+	}
+
+	// Only a durable snapshot is tracked (generation 4); CommitDurable drops
+	// the older local snapshot.
+	tr.CommitDurable(trackedActorUID, ref("s2", 4))
+	for _, tc := range []struct {
+		name     string
+		ref      SnapshotRef
+		wantCode codes.Code
+	}{
+		{name: "same snapshot at newest generation", ref: ref("s2", 4), wantCode: codes.OK},
+		{name: "higher generation", ref: ref("s3", 5), wantCode: codes.OK},
+		{name: "generation below newest", ref: ref("s1", 3), wantCode: codes.FailedPrecondition},
+		{name: "different uuid at newest generation", ref: ref("other", 4), wantCode: codes.FailedPrecondition},
+	} {
+		t.Run("durableNewest/"+tc.name, func(t *testing.T) {
+			checkBegin(t, tr, tc.ref, tc.wantCode)
+		})
+	}
+
+	// Both local (generation 6) and durable (generation 4) are tracked: local is newest.
+	tr.CommitLocal(trackedActorUID, ref("s3", 6))
+	checkBegin(t, tr, ref("s2", 4), codes.FailedPrecondition)
+	checkBegin(t, tr, ref("s3", 6), codes.OK)
+
+	// While a Checkpoint or PromoteSnapshot holds an uncommitted snapshot at
+	// generation 8, it is newest until end() runs.
+	endCp, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, snap("s4", 8))
+	if err != nil {
+		t.Fatalf("BeginCheckpoint(s4@8): %v", err)
+	}
+	checkBegin(t, tr, ref("s3", 6), codes.FailedPrecondition)
+	checkBegin(t, tr, ref("between", 7), codes.FailedPrecondition)
+	checkBegin(t, tr, ref("other", 8), codes.FailedPrecondition)
+	checkBegin(t, tr, ref("s4", 8), codes.OK)
+	checkBegin(t, tr, ref("s5", 9), codes.OK)
+	endCp()
+	// Ending without committing drops the in-flight generation, so s3@6 is newest again.
+	checkBegin(t, tr, ref("s3", 6), codes.OK)
+	checkBegin(t, tr, ref("between", 7), codes.OK)
+
+	_, endPromote, err := tr.BeginPromote(t.Context(), trackedActorUID, ref("s4", 8))
+	if err != nil {
+		t.Fatalf("BeginPromote(s4@8): %v", err)
+	}
+	checkBegin(t, tr, ref("between", 7), codes.FailedPrecondition)
+	checkBegin(t, tr, ref("other", 8), codes.FailedPrecondition)
+	checkBegin(t, tr, ref("s4", 8), codes.OK)
+	endPromote()
+	checkBegin(t, tr, ref("between", 7), codes.OK)
+
+	// If durable has a higher generation than local, durable is newest.
+	a := &actorSnapshots{
+		actorUID: trackedActorUID,
+		actorSnapshotsRecord: actorSnapshotsRecord{
+			LatestLocal:   ref("local", 3).clone(),
+			LatestDurable: ref("durable", 5).clone(),
+		},
+	}
+	if got := apierror.Code(a.checkGeneration(snap("local", 3))); got != codes.FailedPrecondition {
+		t.Errorf("checkGeneration(older local@3) code = %v, want FailedPrecondition", got)
+	}
+	if got := apierror.Code(a.checkGeneration(snap("other", 5))); got != codes.FailedPrecondition {
+		t.Errorf("checkGeneration(other@5) code = %v, want FailedPrecondition", got)
+	}
+	if got := apierror.Code(a.checkGeneration(snap("durable", 5))); got != codes.OK {
+		t.Errorf("checkGeneration(durable@5) code = %v, want OK", got)
+	}
+
+	// If Uploading holds a newer snapshot, it is newest even while no op runs.
+	a.Uploading = ref("saved-uploading", 6).clone()
+	if got := apierror.Code(a.checkGeneration(snap("durable", 5))); got != codes.FailedPrecondition {
+		t.Errorf("checkGeneration(older durable@5) code = %v, want FailedPrecondition", got)
+	}
+	if got := apierror.Code(a.checkGeneration(snap("other", 6))); got != codes.FailedPrecondition {
+		t.Errorf("checkGeneration(other@6) code = %v, want FailedPrecondition", got)
+	}
+	if got := apierror.Code(a.checkGeneration(snap("saved-uploading", 6))); got != codes.OK {
+		t.Errorf("checkGeneration(saved-uploading@6) code = %v, want OK", got)
+	}
+
+	// If an operation in progress acts on a newer snapshot, its target is newest.
+	a.op = &actorOp{target: ref("uploading", 7)}
+	if got := apierror.Code(a.checkGeneration(snap("saved-uploading", 6))); got != codes.FailedPrecondition {
+		t.Errorf("checkGeneration(older saved-uploading@6) code = %v, want FailedPrecondition", got)
+	}
+	if got := apierror.Code(a.checkGeneration(snap("other", 7))); got != codes.FailedPrecondition {
+		t.Errorf("checkGeneration(other@7) code = %v, want FailedPrecondition", got)
+	}
+	if got := apierror.Code(a.checkGeneration(snap("uploading", 7))); got != codes.OK {
+		t.Errorf("checkGeneration(uploading@7) code = %v, want OK", got)
+	}
+}
+
+// CommitLocal and CommitDurable skip older generations, and an older
+// CommitDurable leaves a newer LatestLocal's upload schedule and backoff intact.
+func TestTrackerCommitsSkipOlderGenerations(t *testing.T) {
+	store := newFakeSnapshotStore()
+	tr := newIdleTestTracker(t, store)
+	t0 := tr.clock.Now()
+
+	st := tr.CommitLocal(trackedActorUID, testRef("s3", 3, t0))
+	for _, stale := range []SnapshotRef{
+		testRef("s2", 2, t0.Add(time.Minute)),
+		testRef("other", 3, t0.Add(time.Minute)),
+		testRef("s3", 3, t0.Add(time.Minute)),
+	} {
+		got := tr.CommitLocal(trackedActorUID, stale)
+		if !proto.Equal(got, st) {
+			t.Errorf("CommitLocal(%v) = %v, want unchanged %v", stale.Snapshot, got, st)
+		}
+		if keep := tr.LocalSnapshotsToKeep(trackedActorUID); !slices.Equal(keep, []string{"s3"}) {
+			t.Errorf("LocalSnapshotsToKeep after CommitLocal(%v) = %v, want [s3]", stale.Snapshot, keep)
+		}
+	}
+
+	s4 := testRef("s4", 4, t0.Add(2*time.Minute))
+	s4.UploadTime = t0.Add(2 * time.Minute)
+	st = tr.CommitDurable(trackedActorUID, s4)
+	for _, stale := range []SnapshotRef{
+		testRef("s2", 2, t0.Add(3*time.Minute)),
+		testRef("other", 4, t0.Add(3*time.Minute)),
+		testRef("s4", 4, t0.Add(3*time.Minute)),
+	} {
+		if got := tr.CommitDurable(trackedActorUID, stale); !proto.Equal(got, st) {
+			t.Errorf("CommitDurable(%v) = %v, want unchanged %v", stale.Snapshot, got, st)
+		}
+	}
+	for _, staleLocal := range []SnapshotRef{
+		testRef("s3", 3, t0.Add(3*time.Minute)),
+		testRef("other", 4, t0.Add(3*time.Minute)),
+	} {
+		if got := tr.CommitLocal(trackedActorUID, staleLocal); !proto.Equal(got, st) {
+			t.Errorf("CommitLocal(%v) below durable = %v, want unchanged %v", staleLocal.Snapshot, got, st)
+		}
+	}
+
+	// CommitLocal(s6) sets UndurableSince; CommitDurable(s5) between LatestDurable
+	// (s4) and LatestLocal (s6) advances LatestDurable without clearing
+	// LatestLocal, UndurableSince, or retry backoff.
+	t6 := t0.Add(4 * time.Minute)
+	tr.CommitLocal(trackedActorUID, testRef("s6", 6, t6))
+	stepTo(tr, t6.Add(testUploadDelay))
+	store.setErr(errors.New("boom"))
+	if _, err := tr.Detach(t.Context(), trackedActorUID); err == nil {
+		t.Fatal("detach succeeded, want the store's error")
+	}
+	wantRetry := tr.clock.Now().Add(testRetryDelay)
+
+	s5 := testRef("s5", 5, t6.Add(time.Minute))
+	s5.UploadTime = tr.clock.Now()
+	st = tr.CommitDurable(trackedActorUID, s5)
+	if got := uuidOf(st.GetLatestDurable()); got != "s5" {
+		t.Errorf("latest_durable after CommitDurable(s5) = %q, want s5", got)
+	}
+	if got := uuidOf(st.GetLatestLocal()); got != "s6" {
+		t.Errorf("latest_local after CommitDurable(s5) = %q, want s6", got)
+	}
+	if got := timeOf(st.GetUploadDueTime()); !got.Equal(wantRetry) {
+		t.Errorf("upload_due_time after CommitDurable(s5) during backoff = %v, want %v", got, wantRetry)
 	}
 }

@@ -131,7 +131,8 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	//
 	t.Logf("Suspending Actor %q...", actorID)
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
@@ -304,7 +305,8 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// snapshot's own scope rather than being forced down to data-only.
 	t.Logf("Suspending Actor %q again...", actorID)
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor again: %v", err)
 	}

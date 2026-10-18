@@ -108,6 +108,71 @@ func TestBuildCreateActorRequest(t *testing.T) {
 	}
 }
 
+func TestBuildSuspendActorRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		mode ateapipb.DurabilityMode
+	}{
+		{name: "async", mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		{name: "sync", mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := buildSuspendActorRequest(resources.ActorRef{Atespace: "demo", Name: "my-counter"}, test.mode)
+			want := &ateapipb.SuspendActorRequest{
+				Actor:   &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"},
+				Options: &ateapipb.SuspendOptions{Mode: test.mode},
+			}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("request mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestParseSuspendMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		want    ateapipb.DurabilityMode
+		wantErr string
+	}{
+		{name: "async", mode: "async", want: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		{name: "sync", mode: "sync", want: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		{name: "empty", mode: "", wantErr: `invalid --mode "": must be one of async, sync`},
+		{name: "unknown", mode: "durable", wantErr: `invalid --mode "durable": must be one of async, sync`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseSuspendMode(test.mode)
+			if test.wantErr != "" {
+				if err == nil || err.Error() != test.wantErr {
+					t.Fatalf("got err %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != test.want {
+				t.Errorf("got %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSuspendActorModeFlagDefault(t *testing.T) {
+	flag := suspendActorCmd.Flags().Lookup("mode")
+	if flag == nil {
+		t.Fatal("suspend actor has no --mode flag")
+	}
+	if got, want := flag.DefValue, suspendModeAsync; got != want {
+		t.Errorf("--mode default = %q, want %q", got, want)
+	}
+}
+
 func TestFilterAndDisplayLogLine(t *testing.T) {
 	tests := []struct {
 		name        string

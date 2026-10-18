@@ -104,6 +104,7 @@ type fakeControlClient struct {
 	resumeErr      error
 	suspendErr     error
 	deleteErr      error
+	suspendReqs    []*ateapipb.SuspendActorRequest
 	// Make ResumeActor take time and report a smaller server-side elapsed.
 	resumeDelay     time.Duration
 	resumeElapsedUs string
@@ -160,6 +161,7 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "SuspendActor")
+	f.suspendReqs = append(f.suspendReqs, in)
 	if f.suspendErr != nil {
 		return nil, f.suspendErr
 	}
@@ -403,6 +405,14 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 	wantGRPCCalls := []string{"ResumeActor", "SuspendActor"}
 	if !reflect.DeepEqual(grpcCalls, wantGRPCCalls) {
 		t.Errorf("gRPC calls: got %v, want %v", grpcCalls, wantGRPCCalls)
+	}
+	fakeCtrl.mu.Lock()
+	suspendReqs := fakeCtrl.suspendReqs
+	fakeCtrl.mu.Unlock()
+	for _, req := range suspendReqs {
+		if got := req.GetOptions().GetMode(); got != ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
+			t.Errorf("suspend mode = %v, want %v", got, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+		}
 	}
 
 	mu.Lock()

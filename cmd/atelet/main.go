@@ -121,11 +121,13 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
-	snapshotUploadDelay     = pflag.Duration("snapshot-upload-delay", snapshottracker.DefaultUploadDelay, "How long after an actor's oldest snapshot not yet in object storage was taken atelet uploads the actor's latest local snapshot in the background; later while an upload is in progress or failing.")
-	snapshotDetachDelay     = pflag.Duration("snapshot-detach-delay", snapshottracker.DefaultDetachDelay, "How long an actor stays suspended on this node, its latest snapshot kept locally, before atelet detaches it in the background.")
-	snapshotUploadWorkers   = pflag.Int("snapshot-upload-workers", snapshottracker.DefaultUploadWorkers, "How many background snapshot uploads atelet runs at once.")
-	snapshotDetachWorkers   = pflag.Int("snapshot-detach-workers", snapshottracker.DefaultDetachWorkers, "How many background detaches atelet runs at once.")
+	objectStorePluginSocket   = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
+	snapshotUploadDelay       = pflag.Duration("snapshot-upload-delay", snapshottracker.DefaultUploadDelay, "How long after an actor's oldest snapshot not yet in object storage was taken atelet uploads the actor's latest local snapshot in the background; later while an upload is in progress or failing.")
+	snapshotDetachDelay       = pflag.Duration("snapshot-detach-delay", snapshottracker.DefaultDetachDelay, "How long an actor stays suspended on this node, its latest snapshot kept locally, before atelet detaches it in the background.")
+	snapshotUploadWorkers     = pflag.Int("snapshot-upload-workers", snapshottracker.DefaultUploadWorkers, "How many background snapshot uploads atelet runs at once.")
+	snapshotDetachWorkers     = pflag.Int("snapshot-detach-workers", snapshottracker.DefaultDetachWorkers, "How many background detaches atelet runs at once.")
+	snapshotReportWorkers     = pflag.Int("snapshot-report-workers", snapshottracker.DefaultReportWorkers, "How many background snapshot state reports atelet runs at once. 0 disables background reporting.")
+	snapshotReportGiveUpAfter = pflag.Duration("snapshot-report-give-up-after", snapshottracker.DefaultReportGiveUpAfter, "How long after a background upload or detach atelet keeps retrying a failed snapshot state report before giving up on it.")
 )
 
 var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
@@ -332,6 +334,25 @@ func main() {
 		serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 	}
 
+	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		K8sClient:        k8sClient,
+		CAFile:           *ateapiCAFile,
+		ServerName:       *ateapiServerName,
+		ClientCredBundle: *grpcServerCredBundle,
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
+	}
+	// atelet acts for the system, not a user, so it always opts in to the
+	// preview features the server enables.
+	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
+	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
+	}
+	defer ateapiConn.Close()
+	workerService := ateapipb.NewWorkerServiceClient(ateapiConn)
+
 	// The snapshot tracker's workers get a context of their own, cancelled only
 	// once the gRPC server has drained, so background snapshot work keeps
 	// running while in-flight RPCs finish.
@@ -342,7 +363,10 @@ func main() {
 		snapshottracker.WithDetachDelay(*snapshotDetachDelay),
 		snapshottracker.WithUploadWorkers(*snapshotUploadWorkers),
 		snapshottracker.WithDetachWorkers(*snapshotDetachWorkers),
-		snapshottracker.WithInstruments(trackerInstruments))
+		snapshottracker.WithInstruments(trackerInstruments),
+		snapshottracker.WithReporter(&trackerReporter{workers: workerService}),
+		snapshottracker.WithReportWorkers(*snapshotReportWorkers),
+		snapshottracker.WithReportGiveUpAfter(*snapshotReportGiveUpAfter))
 	// The runtimes this node's workers advertise, read by Run and Restore.
 	// Loaded from disk before anything serves, so a runtime a worker
 	// registered before a restart resolves at once; the worker sandbox
@@ -370,24 +394,6 @@ func main() {
 	store.s = wmService
 	snapshots.Start()
 	go systemInfoVolumes.run(ctx)
-
-	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        k8sClient,
-		CAFile:           *ateapiCAFile,
-		ServerName:       *ateapiServerName,
-		ClientCredBundle: *grpcServerCredBundle,
-	})
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
-	}
-	// atelet acts for the system, not a user, so it always opts in to the
-	// preview features the server enables.
-	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
-	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
-	}
-	defer ateapiConn.Close()
 
 	tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts)
 	if err != nil {
@@ -465,7 +471,7 @@ func main() {
 	workerFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(workerFacingTLS)))
 
 	ateletpb.RegisterWorkerSupportServer(workerFacingSrv, &workerSupportServer{
-		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
+		workers: workerService,
 		control: ateapipb.NewControlClient(ateapiConn),
 	})
 	go func() {
@@ -539,10 +545,10 @@ func rejectStorageEnv() error {
 	return nil
 }
 
-// validateSnapshotDelayFlags checks --snapshot-upload-delay and
-// --snapshot-detach-delay: both must be positive, and the upload delay must not
-// exceed the detach delay, since a detach uploads the latest local snapshot
-// anyway.
+// validateSnapshotDelayFlags checks --snapshot-upload-delay,
+// --snapshot-detach-delay, and --snapshot-report-give-up-after: all three must
+// be positive, and the upload delay must not exceed the detach delay, since a
+// detach uploads the latest local snapshot anyway.
 func validateSnapshotDelayFlags() error {
 	if *snapshotUploadDelay <= 0 {
 		return fmt.Errorf("--snapshot-upload-delay %v must be > 0", *snapshotUploadDelay)
@@ -553,17 +559,24 @@ func validateSnapshotDelayFlags() error {
 	if *snapshotUploadDelay > *snapshotDetachDelay {
 		return fmt.Errorf("--snapshot-upload-delay %v must not exceed --snapshot-detach-delay %v", *snapshotUploadDelay, *snapshotDetachDelay)
 	}
+	if *snapshotReportGiveUpAfter <= 0 {
+		return fmt.Errorf("--snapshot-report-give-up-after %v must be > 0", *snapshotReportGiveUpAfter)
+	}
 	return nil
 }
 
-// validateSnapshotWorkerFlags checks --snapshot-upload-workers and
-// --snapshot-detach-workers: each must be at least 1.
+// validateSnapshotWorkerFlags checks --snapshot-upload-workers,
+// --snapshot-detach-workers, and --snapshot-report-workers: upload and detach
+// must be at least 1, and report must be at least 0.
 func validateSnapshotWorkerFlags() error {
 	if *snapshotUploadWorkers < 1 {
 		return fmt.Errorf("--snapshot-upload-workers %d must be >= 1", *snapshotUploadWorkers)
 	}
 	if *snapshotDetachWorkers < 1 {
 		return fmt.Errorf("--snapshot-detach-workers %d must be >= 1", *snapshotDetachWorkers)
+	}
+	if *snapshotReportWorkers < 0 {
+		return fmt.Errorf("--snapshot-report-workers %d must be >= 0", *snapshotReportWorkers)
 	}
 	return nil
 }
@@ -879,7 +892,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 
 	// A detach in progress finishes first, and none starts until the
 	// checkpoint returns, so it cannot delete the snapshot being written.
-	endCheckpoint, err := s.snapshots.BeginCheckpoint(ctx, actorUID)
+	endCheckpoint, err := s.snapshots.BeginCheckpoint(ctx, actorUID, req.GetSnapshot())
 	if err != nil {
 		return nil, err
 	}

@@ -39,8 +39,7 @@ service Control {
   }
 
   // Suspend a given actor to a new snapshot. A running actor is checkpointed
-  // on its worker; a paused actor's node-local snapshot is uploaded, narrowed
-  // to the template's commit scope where required (Full capture, Data commit).
+  // on its worker. A SUSPENDED actor is returned as it is.
   rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {
     option (method).resource = "Actor";
   }
@@ -372,7 +371,9 @@ message Snapshot {
   string locality = 6;
 
   // durable_snapshot holds the durable storage representation of this snapshot.
-  // Unset when the snapshot only exists locally.
+  // PENDING while the snapshot is uploaded, including a pause's snapshot that
+  // so far exists only on the node named by locality. COMPLETED once the
+  // upload is recorded.
   //
   // +k8s:optional
   SnapshotStorage durable_snapshot = 7;
@@ -1765,7 +1766,10 @@ message SuspendOptions {
 enum DurabilityMode {
   DURABILITY_MODE_UNSPECIFIED = 0;
 
-  // Return only after the snapshot is complete in durable storage.
+  // Return only after the snapshot is complete in durable storage. Applies
+  // only when the call checkpoints a running actor: an actor that is already
+  // SUSPENDED is returned with the snapshot it holds, which may still be on
+  // its node.
   DURABILITY_MODE_SYNCHRONOUS = 1;
 
   // Return once the snapshot is captured on the node. The upload to durable
@@ -2743,6 +2747,9 @@ message MintWorkerActorJwtResponse {
   google.protobuf.Timestamp expire_time = 2;
 }
 
+// TODO: add a durability mode, carried through atelet's
+// RequestActorSuspendRequest, so the Worker can choose how the snapshot is
+// made durable. Until then the suspend uses SuspendActor's default mode.
 message RequestActorSuspendRequest {
   // The Worker making the request. atespace is always empty; Workers are
   // global-scoped. atelet fills this in from its caller's certificate, so it

@@ -674,6 +674,9 @@ func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	if got := control.suspendReqs[0].GetActor().GetName(); got != testTemplateUID {
 		t.Errorf("suspended actor = %q, want %q", got, testTemplateUID)
 	}
+	if got := control.suspendReqs[0].GetOptions().GetMode(); got != ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
+		t.Errorf("golden suspend mode = %v, want %v", got, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+	}
 	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetSnapshotTime() == nil {
 		t.Error("stored snapshot_time is nil, want set")
 	}

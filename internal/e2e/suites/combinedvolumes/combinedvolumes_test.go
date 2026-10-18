@@ -404,7 +404,7 @@ func TestCombinedVolumes(t *testing.T) {
 	})
 
 	t.Run("SurvivesSuspendResume", func(t *testing.T) {
-		if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+		if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}); err != nil {
 			t.Fatalf("SuspendActor: %v", err)
 		}
 

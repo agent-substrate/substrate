@@ -321,7 +321,10 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 // suspendActor waits for the golden actor to produce an external snapshot.
 // SuspendActor completes an in-flight suspend and is a no-op if already suspended.
 func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *ateapipb.ObjectRef) error {
-	resp, err := r.control.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: goldenRef})
+	resp, err := r.control.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   goldenRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
 	if err != nil {
 		// A crash during suspend is observed as CRASHED on the retry.
 		return fmt.Errorf("while suspending golden actor: %w", err)

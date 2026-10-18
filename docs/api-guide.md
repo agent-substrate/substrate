@@ -374,16 +374,17 @@ a `Snapshot` with the following fields:
   sandbox image cannot be resumed under another.
 - `locality`: The node that holds the snapshot's local files. It is set when a
   pause completes and cleared once those files are deleted from the node (when
-  the actor is next paused or suspended, or is reverted). A resume restores from
-  the files without deleting them, so an actor resumed from pause still reports
-  where they are. A paused actor is an `ACTOR_STATE_SUSPENDED` actor whose
-  latest snapshot has `locality` and no `durableSnapshot`; it is pinned to that
-  node (`status.assignedNode`) until it is suspended or reverted.
+  atelet detaches the actor in the background, the actor is next paused or
+  suspended, or it is reverted). A resume restores from the files without
+  deleting them, so an actor resumed from pause still reports where they are. A
+  paused actor is an `ACTOR_STATE_SUSPENDED` actor whose latest snapshot has
+  `locality`; it is pinned to that node (`status.assignedNode`) until atelet
+  detaches it or it is reverted.
 - `durableSnapshot`: The copy in object storage, with its URI in
   `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
-  written and `COMPLETED` once it can be restored from. A snapshot that exists
-  only on a node has no `durableSnapshot`. A tag's snapshot always has one, and
-  the tag can seed actors only once it is `COMPLETED`.
+  written and `COMPLETED` once it can be restored from. A pause records the copy
+  as `PENDING`, and atelet uploads it in the background. A tag's snapshot always
+  has one, and the tag can seed actors only once it is `COMPLETED`.
 - `sandboxRuntime`: The sandbox runtime and hardware compatibility attributes the
   guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
   when the checkpoint is taken. A resume that restores memory or rootfs state
@@ -400,11 +401,11 @@ a `Snapshot` with the following fields:
     worker and downgrades the restore to `SNAPSHOT_FIDELITY_VOLUMES`, preserving
     the snapshot's volume data while booting the guest fresh under the new
     worker's `defaultRuntime`.
-  - A local pause checkpoint (with `locality` and no `durableSnapshot`) is not
-    relaxed; the resume returns `RESOURCE_EXHAUSTED` and the actor remains
-    `PAUSED` on its node until a compatible worker there has room. Suspending
-    the actor uploads the checkpoint and lifts the node pin, after which its
-    next resume may fall back like a durable snapshot.
+  - A local pause checkpoint (with `locality`) is not relaxed; the resume
+    returns `RESOURCE_EXHAUSTED` and the actor stays paused on its node until a
+    compatible worker there has room, or until atelet detaches it. A detach
+    uploads the checkpoint, deletes the local files, and lifts the node pin,
+    after which the next resume may fall back like a durable snapshot.
 
   A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_VOLUMES` imposes
   no runtime placement constraint.
@@ -540,9 +541,16 @@ Once a template is `Ready`, creating an actor logically (via `kubectl ate create
 ### Eviction
 A worker pod can go away while it hosts running actors: when its `WorkerPool` rolls to a new worker image or pod template, as in an [upgrade](upgrade.md), or scales down, when its node is drained, or when its Spot VM is reclaimed.
 
-When the pod gets `SIGTERM`, its worker stops accepting actors and sends `SIGTERM` to the main process of each container of every actor it hosts. Each actor then has 30 minutes, counted from the pod's `SIGTERM`, to be suspended. An actor suspended in that window keeps its state and resumes on another worker like any suspended actor.
+When the pod gets `SIGTERM`, its worker stops accepting actors and sends `SIGTERM` to the main process of each container of every actor it hosts. Each actor then has 30 minutes, counted from the pod's `SIGTERM`, to be suspended. The 30 minutes is the worker's shutdown budget, fixed in ateworker and kept shorter than the pod's one-hour termination grace period so that the worker, not the kubelet, kills what is left. An actor suspended in that window keeps its state and resumes on another worker like any suspended actor.
 
-Substrate does not suspend the actor for you. Whatever drives the actor, usually its harness, has to call `SuspendActor` (`kubectl ate suspend`) within the 30 minutes. Only the actor gets the `SIGTERM`, so it has to pass that on, for example on an endpoint the harness polls.
+Substrate does not suspend the actor for you. Whatever drives the actor, usually its harness, has to call `SuspendActor` with `DURABILITY_MODE_SYNCHRONOUS` (`kubectl ate suspend actor --mode=sync`) before those 30 minutes are up. An asynchronous suspend can lose the snapshot if the node goes away:
+
+- It returns once the snapshot is on the node.
+- atelet schedules the upload to object storage about `--snapshot-upload-delay` (5 minutes by default) after the snapshot is taken. Neither when the upload starts nor when it finishes is promised.
+- Until atelet detaches the actor, `--snapshot-detach-delay` (30 minutes by default, unrelated to the worker's 30 minutes), the actor stays pinned to the node and resumes there.
+- If the node goes away before the upload completes, the snapshot goes with it.
+
+Only the actor gets the `SIGTERM`, so it has to pass that on, for example on an endpoint the harness polls.
 
 Every actor that must keep its state through an eviction needs a `SIGTERM` handler that:
 
@@ -597,8 +605,10 @@ Activates a suspended or paused actor by restoring it onto a physical worker.
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
+    *   `options.mode`: (Optional) `DURABILITY_MODE_SYNCHRONOUS` returns once the snapshot is `COMPLETED` in object storage. `DURABILITY_MODE_ASYNCHRONOUS` (a pause) returns once the snapshot is captured on the worker's node, and atelet uploads it in the background. Unset runs an asynchronous suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.snapshots`.
-*   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended.
+*   Called on an actor that is already `ACTOR_STATE_SUSPENDED`, it returns the actor as it is, in either mode. atelet uploads a paused actor's node-local snapshot in the background, so `status.snapshots` may still show it with `locality` and a `PENDING` `durableSnapshot`.
+*   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended. After an asynchronous suspend, `CreateTag` fails with `FAILED_PRECONDITION` until atelet has uploaded the snapshot. Suspend with `DURABILITY_MODE_SYNCHRONOUS` to tag right away.
 
 #### Snapshot lifetime
 

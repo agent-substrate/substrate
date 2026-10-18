@@ -120,10 +120,11 @@ type actorOp struct {
 }
 
 // Start reads each actor's snapshot state file on this node, queues the actor
-// for when its next background upload or detach is due, so its background work
-// resumes after an atelet restart, and starts each queue's workers.
+// for when its next background upload or detach is due and for any report due,
+// so its background work resumes after an atelet restart, and starts each
+// queue's workers and the report workers.
 func (t *Tracker) Start() {
-	if t.store != nil {
+	if t.store != nil || t.reporting.reporter != nil {
 		actorUIDs, err := savedActorUIDs()
 		if err != nil {
 			// Best-effort: each actor's next commit queues it again.
@@ -134,6 +135,7 @@ func (t *Tracker) Start() {
 				break
 			}
 			if a := t.findLocked(actorUID); a != nil {
+				t.enqueueSavedReportLocked(a)
 				t.requeueLocked(a)
 			}
 			t.unlock(actorUID)
@@ -142,6 +144,11 @@ func (t *Tracker) Start() {
 	for kind, n := range t.workers {
 		for range n {
 			t.workersDone.Go(func() { t.runWorker(opKind(kind)) })
+		}
+	}
+	if t.reporting.reporter != nil {
+		for range t.reporting.workers {
+			t.workersDone.Go(t.runReporter)
 		}
 	}
 }
@@ -351,10 +358,10 @@ func (t *Tracker) endOpLocked(actorUID string, op *actorOp) *actorSnapshots {
 	return a
 }
 
-// endOp ends op, queues the actor for its next background operation, and
-// returns the actor's state. Once Forget has abandoned op, it leaves the actor
-// alone and fails with abandonedError; otherwise it fails with opErr if
-// non-nil.
+// endOp ends op, queues the actor for its next background operation and any
+// report due, and returns the actor's state. Once Forget has abandoned op, it
+// leaves the actor alone and fails with abandonedError; otherwise it fails
+// with opErr if non-nil.
 func (t *Tracker) endOp(actorUID string, op *actorOp, opErr error) (*ateletpb.ActorSnapshotState, error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
@@ -363,6 +370,7 @@ func (t *Tracker) endOp(actorUID string, op *actorOp, opErr error) (*ateletpb.Ac
 		return nil, abandonedError(actorUID, opErr)
 	}
 	t.requeueLocked(a)
+	t.queueReportLocked(a)
 	if opErr != nil {
 		return nil, opErr
 	}
@@ -395,12 +403,18 @@ func (t *Tracker) waitIdleLocked(ctx context.Context, actorUID string, check fun
 // waitForDetachLocked waits, as long as ctx allows, until no detach of the
 // actor is in progress, and returns the actor's entry, which may be nil. It
 // releases the actor's lock while it waits, and holds it again when it
-// returns. Checkpoint, Run, and Restore call this first so they never race
-// with a detach pruning the actor's local directory, without waiting behind
-// an upload.
-func (t *Tracker) waitForDetachLocked(ctx context.Context, actorUID string) (*actorSnapshots, error) {
+// returns. check, if not nil, vets the entry on every pass: an error from it
+// is returned at once, without waiting further. Checkpoint, Run, and Restore
+// call this first so they never race with a detach pruning the actor's local
+// directory, without waiting behind an upload.
+func (t *Tracker) waitForDetachLocked(ctx context.Context, actorUID string, check func(*actorSnapshots) error) (*actorSnapshots, error) {
 	for {
 		a := t.findLocked(actorUID)
+		if a != nil && check != nil {
+			if err := check(a); err != nil {
+				return nil, err
+			}
+		}
 		if a == nil || a.runningDetach() == nil {
 			return a, nil
 		}
@@ -412,11 +426,19 @@ func (t *Tracker) waitForDetachLocked(ctx context.Context, actorUID string) (*ac
 
 // waitForDetachOrSnapshotUploadLocked waits, as long as ctx allows, until no
 // detach of the actor and no background upload of snap is in progress, and
-// returns the actor's entry, which may be nil. PromoteSnapshot calls this
-// first so it never races with a detach or uploads the same snapshot twice.
+// returns the actor's entry, which may be nil. It checks snap's generation on
+// every pass, so a stale generation fails at once without waiting, and one
+// superseded while waiting fails as soon as the wait ends. PromoteSnapshot
+// calls this first so it never races with a detach or uploads the same
+// snapshot twice.
 func (t *Tracker) waitForDetachOrSnapshotUploadLocked(ctx context.Context, actorUID string, snap SnapshotRef) (*actorSnapshots, error) {
 	for {
 		a := t.findLocked(actorUID)
+		if a != nil {
+			if err := a.checkGeneration(snap.Snapshot); err != nil {
+				return nil, err
+			}
+		}
 		if a == nil || a.op == nil {
 			return a, nil
 		}

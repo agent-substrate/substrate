@@ -164,6 +164,10 @@ const (
 	// detach-delay, atelet detaches it: it uploads the latest local snapshot
 	// unless that is durable already, then deletes all the local snapshots.
 	//
+	// atelet reports the actor's state with
+	// WorkerService.ReportActorSnapshotState once such an upload makes a newer
+	// snapshot durable, and once such a detach has deleted the local snapshots.
+	//
 	// atelet never uploads or detaches a snapshot it cannot make durable, such
 	// as one without `snapshot.object`.
 	UploadMode_UPLOAD_MODE_DEFERRED UploadMode = 1
@@ -1803,7 +1807,7 @@ func (x *ArchAssets) GetFiles() map[string]*AssetFile {
 // an actor runs in: a sandbox class, the pause image holding its namespaces,
 // and binaries keyed first by architecture (GOARCH) and then by asset name.
 // atelet's backend code interprets the asset names (gVisor expects "gvisor",
-// the release tarball; legacy "runsc", a bare binary, is still accepted).
+// the release tarball).
 type SandboxAssets struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
@@ -3153,8 +3157,6 @@ type Snapshot struct {
 	// for the actor, or for its newest under another snapshot_uuid: the
 	// caller's view is stale.
 	//
-	// TODO: Temporarily, atelet does not compare it with the snapshots it holds.
-	//
 	// +k8s:required
 	// +k8s:minimum=1
 	Generation int32 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
@@ -3596,9 +3598,9 @@ type CheckpointResponse struct {
 	// uploading ends.
 	//
 	// TODO: Add a snapshot garbage collection system for orphaned objects in
-	// object storage. atelet reports snapshot state to ateapi only on RPC
-	// responses, so a background upload superseded before the next response
-	// leaves objects ateapi never learned were durable.
+	// object storage. atelet reports a background upload only when it records
+	// a newer durable snapshot, so an upload that a newer durable snapshot
+	// superseded while it ran leaves objects ateapi never learned were durable.
 	State         *ActorSnapshotState `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

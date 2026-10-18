@@ -25,7 +25,6 @@ var (
 	createCmd  = &cobra.Command{Use: "create", Short: "Create a resource"}
 	updateCmd  = &cobra.Command{Use: "update", Short: "Update a resource"}
 	deleteCmd  = &cobra.Command{Use: "delete", Short: "Delete a resource"}
-	pauseCmd   = &cobra.Command{Use: "pause", Short: "Pause a resource"}
 	resumeCmd  = &cobra.Command{Use: "resume", Short: "Resume a resource"}
 	suspendCmd = &cobra.Command{Use: "suspend", Short: "Suspend a resource"}
 	logsCmd    = &cobra.Command{Use: "logs", Short: "Print the logs for a resource"}
@@ -33,7 +32,7 @@ var (
 )
 
 func init() {
-	for _, c := range []*cobra.Command{getCmd, createCmd, updateCmd, deleteCmd, pauseCmd, resumeCmd, suspendCmd, logsCmd, topCmd} {
+	for _, c := range []*cobra.Command{getCmd, createCmd, updateCmd, deleteCmd, resumeCmd, suspendCmd, logsCmd, topCmd} {
 		requireSubcommand(c)
 		rootCmd.AddCommand(c)
 	}
