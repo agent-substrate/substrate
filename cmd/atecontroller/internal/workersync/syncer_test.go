@@ -184,6 +184,13 @@ func waitForWorker(t *testing.T, ctx context.Context, api *fakeControl, name str
 	return got
 }
 
+// workerActive reports whether w is registered and ACTIVE. The syncer registers
+// a Worker UNAVAILABLE and marks it available in a later call, so a Worker that
+// exists is not yet one that takes Actors.
+func workerActive(w *ateapipb.Worker) bool {
+	return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE
+}
+
 func TestSyncer_Lifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -216,7 +223,7 @@ func TestSyncer_Lifecycle(t *testing.T) {
 		t.Fatalf("update pod: %v", err)
 	}
 
-	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
+	got := waitForWorker(t, ctx, api, testPodUID, workerActive)
 	if want := []string{"127.0.0.1"}; !slices.Equal(got.GetIps(), want) {
 		t.Errorf("worker ips = %q, want %q", got.GetIps(), want)
 	}
@@ -225,9 +232,6 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	}
 	if !maps.Equal(got.GetLabels(), map[string]string{"foo": "bar"}) {
 		t.Errorf("worker labels = %v, want map[foo:bar]", got.GetLabels())
-	}
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		t.Errorf("worker state = %v, want ACTIVE", got.GetStatus().GetState())
 	}
 
 	if err := fakeK8s.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
@@ -739,9 +743,7 @@ func TestSyncer_SoftDelete_ViaInformer(t *testing.T) {
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod: %v", err)
 	}
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool {
-		return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE
-	})
+	waitForWorker(t, ctx, api, testPodUID, workerActive)
 
 	// The fake clientset stores updates verbatim, so setting DeletionTimestamp
 	// simulates a pod in graceful termination that is still in the cache.
@@ -846,9 +848,7 @@ func TestSyncer_TerminalPod_ViaInformer(t *testing.T) {
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod: %v", err)
 	}
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool {
-		return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE
-	})
+	waitForWorker(t, ctx, api, testPodUID, workerActive)
 
 	failed := pod.DeepCopy()
 	failed.Status.Phase = corev1.PodFailed
