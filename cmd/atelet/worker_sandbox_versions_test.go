@@ -75,22 +75,22 @@ func multiVersionConfig() *v1alpha1.SandboxConfig {
 }
 
 func TestRecordForArch(t *testing.T) {
-	sha := fmt.Sprintf("%x", sha256.Sum256([]byte("runsc")))
+	sha := fmt.Sprintf("%x", sha256.Sum256([]byte("gvisor release")))
 	tests := []struct {
 		name   string
 		assets map[string]map[string]v1alpha1.AssetFile
 		want   *sandboxAssetsRecord
 	}{{
 		name:   "assets for this architecture",
-		assets: map[string]map[string]v1alpha1.AssetFile{runtime.GOARCH: {runscAssetName: {URL: "gs://bucket/runsc", SHA256: sha}}},
+		assets: map[string]map[string]v1alpha1.AssetFile{runtime.GOARCH: {gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}}},
 		want: &sandboxAssetsRecord{
 			SandboxClass: string(v1alpha1.SandboxClassGvisor),
 			PauseImage:   "registry.k8s.io/pause@sha256:abc",
-			Assets:       map[string]assetEntry{runscAssetName: {URL: "gs://bucket/runsc", SHA256: sha}},
+			Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}},
 		},
 	}, {
 		name:   "assets for another architecture only",
-		assets: map[string]map[string]v1alpha1.AssetFile{"other-arch": {runscAssetName: {URL: "gs://bucket/runsc", SHA256: sha}}},
+		assets: map[string]map[string]v1alpha1.AssetFile{"other-arch": {gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}}},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -135,9 +135,9 @@ func TestBundleHash(t *testing.T) {
 		want: "sha256:f86e6f2bd8e25ac31a22e51e6e57e0eb6741eb0b0df77082989cc1e40f906fe1",
 	}, {
 		name:        "the asset under another name",
-		rec:         &sandboxAssetsRecord{SandboxClass: "gvisor", Assets: map[string]assetEntry{runscAssetName: gvisor[gvisorAssetName]}},
+		rec:         &sandboxAssetsRecord{SandboxClass: "gvisor", Assets: map[string]assetEntry{"renamed": gvisor[gvisorAssetName]}},
 		pauseDigest: pause,
-		want:        "sha256:91e241c70c94d67b16127f1ba9c239e76ed1e91cb99fd9587b071cb8ccf7d3d8",
+		want:        "sha256:04bf18376ca0c7227ae9fa65675127b1045d7de33f05ea5d2375eb11a1a8e62e",
 	}, {
 		name: "several assets",
 		rec: &sandboxAssetsRecord{SandboxClass: "microvm", Assets: map[string]assetEntry{
@@ -192,7 +192,7 @@ func TestPoolConfigName(t *testing.T) {
 }
 
 func TestWorkerSandboxResolverResolve(t *testing.T) {
-	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", "abc")
+	cfg := gvisorConfig("gvisor-default", "gs://bucket/gvisor", "abc")
 
 	tests := []struct {
 		name       string
@@ -386,8 +386,8 @@ func TestPlanAndBuild(t *testing.T) {
 	unsupportedClass := multiVersionConfig()
 	unsupportedClass.Spec.SandboxClass = "unknown"
 
-	noRunscAsset := multiVersionConfig()
-	noRunscAsset.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{
+	noGVisorAsset := multiVersionConfig()
+	noGVisorAsset.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{
 		runtime.GOARCH: {"other": {URL: "gs://bucket/other", SHA256: "sha-other"}},
 	}
 
@@ -433,8 +433,8 @@ func TestPlanAndBuild(t *testing.T) {
 		wantErr:       true,
 		wantPermanent: true,
 	}, {
-		name:          "gvisor version has no gvisor or runsc asset",
-		cfg:           noRunscAsset,
+		name:          "gvisor version has no gvisor asset",
+		cfg:           noGVisorAsset,
 		wantErr:       true,
 		wantPermanent: true,
 	}, {

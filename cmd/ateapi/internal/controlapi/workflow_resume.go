@@ -667,6 +667,10 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		return scheduling.Constraints{}, fmt.Errorf("invalid template resource limits: %w", err)
 	}
 	var requiredNodes []string
+	// A paused Actor stays pinned to its node until atelet detaches the local
+	// snapshot, so it cannot resume while that node is full.
+	// TODO: when the node has no room, detach the Actor there and resume it on
+	// another node from the durable snapshot.
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}
@@ -731,7 +735,8 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 // runtime-compatible worker has capacity. A local pause checkpoint is not
 // relaxed: the resume stays pinned to its node, the local restore has no
 // fidelity downgrade, and nothing invalidates the checkpoint files if the actor
-// boots elsewhere. Suspending the actor uploads it and lifts the pin.
+// boots elsewhere. The pin lifts once atelet uploads the checkpoint and
+// detaches it from the node.
 func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
 	if constraints.RequiredRuntime.Runtime() == nil {
 		return false

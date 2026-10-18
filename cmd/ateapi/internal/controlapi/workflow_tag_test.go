@@ -225,7 +225,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 					}
 					if tt.paused {
 						s.LastAssignedGeneration = 2
-						s.Snapshots = append(s.Snapshots, newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, "paused", "node-1"))
+						s.Snapshots = append(s.Snapshots, newPausedSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, "paused", "node-1"))
 					}
 				})
 			}

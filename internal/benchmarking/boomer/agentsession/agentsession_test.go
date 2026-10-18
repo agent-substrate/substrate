@@ -738,7 +738,10 @@ func TestRunStep_HibernateMode(t *testing.T) {
 		{
 			name:          "suspend",
 			lifecycleMode: dynconfig.LifecycleModeSuspend,
-			want:          &ateapipb.SuspendActorRequest{Actor: ref},
+			want: &ateapipb.SuspendActorRequest{
+				Actor:   ref,
+				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

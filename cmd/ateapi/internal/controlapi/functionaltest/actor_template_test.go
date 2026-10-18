@@ -200,7 +200,10 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if !tc.fakeAtelet.RestoreCalled {
 		t.Fatal("actor did not restore golden tag")
 	}
-	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: resources.ActorRefFromActor(late).ToObjectRef()}); err != nil {
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   resources.ActorRefFromActor(late).ToObjectRef(),
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	assertSnapshotPresent(t, tc, uri)
@@ -292,7 +295,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if !ran || restored {
 		t.Fatal("first resume did not cold boot")
 	}
-	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
+	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -75,7 +75,7 @@ func gvisorConfig(name, url, sha string) *v1alpha1.SandboxConfig {
 				PauseImage: "registry.k8s.io/pause@sha256:abc",
 				Assets: map[string]map[string]v1alpha1.AssetFile{
 					runtime.GOARCH: {
-						runscAssetName: {URL: url, SHA256: sha},
+						gvisorAssetName: {URL: url, SHA256: sha},
 					},
 				},
 			}},
@@ -103,14 +103,15 @@ func pauseImageInTestRegistry(t *testing.T) (ref string, host string) {
 	return host + "/pause@" + digest.String(), host
 }
 
-// indexedTestRuntime registers a runtime with one runsc asset of content and
-// the given pause image as a worker's default, and returns its hash.
+// indexedTestRuntime registers a runtime with one gvisor release asset, the
+// tarball content, and the given pause image as a worker's default, and
+// returns its hash.
 func indexedTestRuntime(t *testing.T, index *runtimeIndex, content []byte, pauseImage string) string {
 	t.Helper()
 	rec := &sandboxAssetsRecord{
 		SandboxClass: "gvisor",
 		PauseImage:   pauseImage,
-		Assets:       map[string]assetEntry{runscAssetName: {URL: "gs://bucket/runsc", SHA256: fmt.Sprintf("%x", sha256.Sum256(content))}},
+		Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor.tar", SHA256: fmt.Sprintf("%x", sha256.Sum256(content))}},
 	}
 	hash, err := versionBundleHash(rec)
 	if err != nil {
@@ -138,7 +139,7 @@ func TestRuntimePrewarmProcess(t *testing.T) {
 	useTempAssetScratch(t)
 	ctx := context.Background()
 	index := newRuntimeIndex()
-	hash := indexedTestRuntime(t, index, []byte("runsc"), "")
+	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t), "")
 	herder := &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
 	p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
 
@@ -166,11 +167,12 @@ func TestRuntimePrewarmOnce(t *testing.T) {
 	useTempAssetScratch(t)
 	ctx := context.Background()
 	index := newRuntimeIndex()
-	good := indexedTestRuntime(t, index, []byte("runsc"), "")
+	release := gvisorReleaseTarball(t)
+	good := indexedTestRuntime(t, index, release, "")
 	// The store serves the same bytes for every asset, so this one's digest
 	// never matches and its prewarm fails.
-	bad := indexedTestRuntime(t, index, []byte("another runsc"), "")
-	herder := &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{data: []byte("runsc")}}
+	bad := indexedTestRuntime(t, index, gvisorReleaseTarballWith(t, "another runsc"), "")
+	herder := &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{data: release}}
 	p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
 
 	drain := func() {
@@ -206,7 +208,7 @@ func TestRuntimePrewarmFillsBothCaches(t *testing.T) {
 	useTempAssetScratch(t)
 	ctx := context.Background()
 	pauseRef, _ := pauseImageInTestRegistry(t)
-	content := []byte("runsc binary bytes")
+	content := gvisorReleaseTarball(t)
 	index := newRuntimeIndex()
 	hash := indexedTestRuntime(t, index, content, pauseRef)
 	rt, _ := index.lookup(hash)
@@ -235,7 +237,7 @@ func TestRuntimePrewarmAssetFailureStillPullsImage(t *testing.T) {
 	ctx := context.Background()
 	pauseRef, _ := pauseImageInTestRegistry(t)
 	index := newRuntimeIndex()
-	hash := indexedTestRuntime(t, index, []byte("runsc"), pauseRef)
+	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t), pauseRef)
 	rt, _ := index.lookup(hash)
 
 	images := newTestImageStore(t)
@@ -254,7 +256,7 @@ func TestRuntimePrewarmAssetFailureStillPullsImage(t *testing.T) {
 func TestRuntimePrewarmAttemptTimeout(t *testing.T) {
 	useTempAssetScratch(t)
 	index := newRuntimeIndex()
-	hash := indexedTestRuntime(t, index, []byte("hung runsc"), "")
+	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t), "")
 	rt, _ := index.lookup(hash)
 	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: hangingObjectStorage{}}, newTestImageStore(t))
 	p.attemptTimeout = 50 * time.Millisecond
@@ -341,8 +343,8 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 	}
 
 	pauseRef, _ := pauseImageInTestRegistry(t)
-	content := []byte("runsc binary bytes")
-	cfg := gvisorConfig("gvisor-release", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256(content)))
+	content := gvisorReleaseTarball(t)
+	cfg := gvisorConfig("gvisor-release", "gs://bucket/gvisor.tar", fmt.Sprintf("%x", sha256.Sum256(content)))
 	cfg.Spec.Versions[0].PauseImage = pauseRef
 
 	kube := kubefake.NewClientset([]k8sruntime.Object{workerPod("pod-a", "pool")}...)

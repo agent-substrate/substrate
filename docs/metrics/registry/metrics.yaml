@@ -987,6 +987,34 @@ groups:
       - ref: ate.template.name
         requirement_level: required
 
+  - id: metric.atelet.snapshot.upload.duration
+    type: metric
+    metric_name: atelet.snapshot.upload.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of one background upload of a local snapshot to object storage on atelet.
+    note: >
+      atelet uploads deferred snapshots in the background once the upload delay
+      or the detach delay elapses. A probe that finds the manifest committed
+      already without uploading is not recorded. An upload that Terminate or an
+      atelet shutdown cancels records error.type Canceled. Synchronous uploads
+      from UPLOAD_MODE_IMMEDIATE checkpoints and PromoteSnapshot are recorded
+      on ate.actor.checkpoint.duration instead.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        cuj: Are background snapshot uploads slow or failing on a node?
+    attributes:
+      - ref: ate.snapshot.fidelity
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The upload failed. If this key is absent, the upload was correct.
+
   - id: metric.ate.actor.stats.cpu.time
     type: metric
     metric_name: ate.actor.stats.cpu.time

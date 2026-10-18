@@ -178,14 +178,15 @@ func TestCheckpointDurationShape(t *testing.T) {
 }
 
 // TestCheckpointRecordsCleanup drives a Checkpoint: the node cleanup it does
-// lands in the cleanup phase, even when the upload then fails, and the phases
-// fit in the total.
+// once the snapshot commits lands in the cleanup phase, a failed upload returns
+// before it, and the phases fit in the total.
 func TestCheckpointRecordsCleanup(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		putErr error
+		name        string
+		putErr      error
+		wantCleanup bool
 	}{
-		{name: "succeeded"},
+		{name: "succeeded", wantCleanup: true},
 		{name: "upload failed", putErr: errors.New("object store unavailable")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -199,8 +200,8 @@ func TestCheckpointRecordsCleanup(t *testing.T) {
 			}
 
 			sums := phaseSums(t, collectHistogram(t, reader, checkpointDurationMetric))
-			if sums[ateattr.SnapshotPhaseCleanup] <= 0 {
-				t.Errorf("cleanup = %vs, want the node cleanup timed", sums[ateattr.SnapshotPhaseCleanup])
+			if timed := sums[ateattr.SnapshotPhaseCleanup] > 0; timed != tc.wantCleanup {
+				t.Errorf("cleanup = %vs, want it timed: %v", sums[ateattr.SnapshotPhaseCleanup], tc.wantCleanup)
 			}
 			var parts float64
 			for name, v := range sums {

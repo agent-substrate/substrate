@@ -70,38 +70,17 @@ func findLatestLocalSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 // latestSnapshotIsLocal reports whether the snapshot at the actor's latest
 // generation is node-local: the shape a pause leaves behind, which atelet's
 // upload of the snapshot doesn't change. A paused actor is SUSPENDED with this
-// shape, and resumes only on the node named by Locality; a suspend of such an
-// actor uploads that snapshot, unless atelet already has, instead of
-// checkpointing a workload. A RUNNING actor resumed from pause keeps the local
-// snapshot too, so callers that need "at rest" check the state as well.
+// shape, and resumes only on the node named by Locality. A RUNNING actor
+// resumed from pause keeps the local snapshot too, so callers that need "at
+// rest" check the state as well.
 func latestSnapshotIsLocal(status *ateapipb.ActorStatus) bool {
 	return snapshotAtLatestGeneration(status).GetLocality() != ""
 }
 
 // latestSnapshotIsLocalOnly reports whether the snapshot at the actor's latest
-// generation is node-local with no durable copy: a pause's snapshot with no
-// upload recorded.
+// generation is node-local with no COMPLETED durable copy: a pause's snapshot
+// whose upload is not recorded yet.
 func latestSnapshotIsLocalOnly(status *ateapipb.ActorStatus) bool {
-	snap := snapshotAtLatestGeneration(status)
-	return snap.GetLocality() != "" && snap.GetDurableSnapshot() == nil
-}
-
-// latestSnapshotIsPendingLocal reports whether the snapshot at the actor's
-// latest generation is node-local but not yet captured: it has no locality and
-// no durable copy. This is the shape a pause in progress has, and what tells a
-// SUSPENDING pause from a SUSPENDING suspend, whose latest snapshot has a
-// pending durable copy.
-func latestSnapshotIsPendingLocal(status *ateapipb.ActorStatus) bool {
-	snap := snapshotAtLatestGeneration(status)
-	return snap != nil && snap.GetLocality() == "" && snap.GetDurableSnapshot() == nil
-}
-
-// latestSnapshotIsLocalNotYetDurable reports whether the snapshot at the
-// actor's latest generation is a local checkpoint with no COMPLETED durable
-// copy. A pause leaves it with no durable copy at all, and a suspend of the
-// paused actor marks the copy PENDING before it asks the node to upload, so
-// both shapes mean the node holding the checkpoint still acts for the actor.
-func latestSnapshotIsLocalNotYetDurable(status *ateapipb.ActorStatus) bool {
 	snap := snapshotAtLatestGeneration(status)
 	return snap.GetLocality() != "" &&
 		snap.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
@@ -126,11 +105,11 @@ func clearLocalSnapshots(status *ateapipb.ActorStatus) {
 // beforehand.
 //
 // Dropping PENDING durable snapshots is safe because:
-//   - On pause finalization, pause is only reachable from RUNNING (a failed
-//     suspend cannot resume without reverting first, which discards any
-//     in-flight upload), so no uncleaned PENDING durable snapshot exists.
+//   - On pause finalization, the new snapshot is kept with its PENDING copy.
+//     An earlier pause's PENDING copy is dropped: whatever atelet uploaded of
+//     it stays under the actor's prefix until DeleteActor collects it.
 //   - On revert finalization, ensureInProgressSnapshotDiscarded has already
-//     deleted any in-flight durable snapshot objects.
+//     deleted the objects of every PENDING durable snapshot.
 //   - On suspend finalization, the latest snapshot has already been marked
 //     COMPLETED.
 //
@@ -166,19 +145,6 @@ func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapi
 			Status: storageStatus,
 			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri},
 		},
-	}
-}
-
-// newLocalSnapshot constructs an actor Snapshot for a local pause checkpoint
-// with Uuid, Fidelity, and Locality.
-func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
-	return &ateapipb.Snapshot{
-		Uuid:             uuid,
-		Generation:       gen,
-		Owner:            ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
-		Fidelity:         fidelity,
-		ActorTemplateUid: templateUID,
-		Locality:         locality,
 	}
 }
 

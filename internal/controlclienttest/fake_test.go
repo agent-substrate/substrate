@@ -69,6 +69,10 @@ func TestFakeRecordsSuspendMode(t *testing.T) {
 	if got := f.RecordedCalls(); !reflect.DeepEqual(got, want) {
 		t.Errorf("RecordedCalls() = %v, want %v", got, want)
 	}
+	reqs := f.RecordedSuspendActorRequests()
+	if len(reqs) != 3 || reqs[0] != async || reqs[1] != sync {
+		t.Errorf("RecordedSuspendActorRequests() = %v, want the three requests in order", reqs)
+	}
 }
 
 func TestFakeRecordsDeleteActorRequests(t *testing.T) {

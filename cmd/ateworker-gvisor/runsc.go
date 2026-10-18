@@ -24,13 +24,11 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
-	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/sizing"
 )
 
@@ -111,7 +109,6 @@ func (r *runsc) writeSpec(containerName string) error {
 		ContainerName:  containerName,
 		DurableVolumes: r.durableVolumes,
 		Size:           r.size,
-		ResolvConf:     resolvConfPath(r.actorDirs),
 	})
 	return ocispec.Save(ociBundlePath(r.actorDirs, containerName), spec)
 }
@@ -164,9 +161,10 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 // checkpointArgs builds the argv for `runsc checkpoint <container>`. Factored
 // out so the argument construction can be unit-tested without executing runsc.
 func (r *runsc) checkpointArgs(containerName, checkpointPath string, fsCheckpointPaths []string) []string {
-	extra := []string{"-image-path", checkpointPath}
-	if len(fsCheckpointPaths) > 0 {
-		extra = append(extra, "-fs-checkpoint-paths", strings.Join(fsCheckpointPaths, ","))
+	extra := make([]string, 0, 2+2*len(fsCheckpointPaths))
+	extra = append(extra, "-image-path", checkpointPath)
+	for _, p := range fsCheckpointPaths {
+		extra = append(extra, "-fs-checkpoint-paths", p)
 	}
 	return r.buildArgs("checkpoint", containerName, extra...)
 }
@@ -189,7 +187,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 // executing runsc.
 func (r *runsc) fsCheckpointArgs(containerName, checkpointPath string, fsCheckpointPaths []string) []string {
 	extra := make([]string, 0, 2+2*len(fsCheckpointPaths))
-	extra = append(extra, "-image-path", filepath.Join(checkpointPath, resources.FSCheckpointSubdir))
+	extra = append(extra, "-image-path", checkpointPath)
 	for _, ddv := range fsCheckpointPaths {
 		extra = append(extra, "-path", ddv)
 	}

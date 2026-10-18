@@ -32,9 +32,10 @@ import (
 type Fake struct {
 	ateapipb.ControlClient
 
-	mu             sync.Mutex
-	calls          []string
-	deleteRequests []*ateapipb.DeleteActorRequest
+	mu              sync.Mutex
+	calls           []string
+	deleteRequests  []*ateapipb.DeleteActorRequest
+	suspendRequests []*ateapipb.SuspendActorRequest
 
 	CreateAtespaceFunc func(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error)
 	CreateActorFunc    func(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
@@ -64,6 +65,13 @@ func (f *Fake) RecordedDeleteActorRequests() []*ateapipb.DeleteActorRequest {
 	return append([]*ateapipb.DeleteActorRequest(nil), f.deleteRequests...)
 }
 
+// RecordedSuspendActorRequests returns every SuspendActor request received so far.
+func (f *Fake) RecordedSuspendActorRequests() []*ateapipb.SuspendActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapipb.SuspendActorRequest(nil), f.suspendRequests...)
+}
+
 func (f *Fake) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
 	f.record("CreateAtespace")
 	if f.CreateAtespaceFunc != nil {
@@ -91,11 +99,14 @@ func (f *Fake) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest,
 // SuspendActor records "SuspendActor(async)" for an asynchronous-durability
 // suspend and "SuspendActor" for any other, so tests can tell them apart.
 func (f *Fake) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+	name := "SuspendActor"
 	if in.GetOptions().GetMode() == ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
-		f.record("SuspendActor(async)")
-	} else {
-		f.record("SuspendActor")
+		name = "SuspendActor(async)"
 	}
+	f.mu.Lock()
+	f.calls = append(f.calls, name)
+	f.suspendRequests = append(f.suspendRequests, in)
+	f.mu.Unlock()
 	if f.SuspendActorFunc != nil {
 		return f.SuspendActorFunc(ctx, in, opts...)
 	}

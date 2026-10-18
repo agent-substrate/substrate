@@ -373,6 +373,11 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 	if !reflect.DeepEqual(grpcCalls, wantGRPCCalls) {
 		t.Errorf("gRPC calls: got %v, want %v", grpcCalls, wantGRPCCalls)
 	}
+	for _, req := range fakeCtrl.RecordedSuspendActorRequests() {
+		if got := req.GetOptions().GetMode(); got != ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
+			t.Errorf("suspend mode = %v, want %v", got, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+		}
+	}
 
 	mu.Lock()
 	defer mu.Unlock()

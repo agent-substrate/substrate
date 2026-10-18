@@ -371,7 +371,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		})
 		uploaded := mustActorSnapshotURI(t, &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"}}, paused, "pause-snap")
 		paused = mustUpdateActorStatus(t, ctx, persistence, paused, func(s *ateapipb.ActorStatus) {
-			snap := newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", "node-1")
+			snap := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", "node-1")
 			if name == "uploaded-paused-actor" {
 				snap.DurableSnapshot = &ateapipb.SnapshotStorage{
 					Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,

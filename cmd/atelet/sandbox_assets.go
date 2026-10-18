@@ -60,16 +60,11 @@ const sandboxManifestName = "manifest.json"
 // ponytail: 8GiB ceiling, make it a flag if a rootfs ever needs more.
 var maxAssetBytes int64 = 8 << 30
 
-const (
-	// gvisorAssetName is the gVisor release tarball asset (gvisor.tar.zstd). The
-	// tarball carries `runsc` together with the `gvisor-bin/` helper binaries,
-	// so it is extracted into a content-addressed directory rather than as a
-	// single file.
-	gvisorAssetName = "gvisor"
-
-	// runscAssetName is the legacy single-binary gVisor asset.
-	runscAssetName = "runsc"
-)
+// gvisorAssetName is the gVisor release tarball asset (gvisor.tar.zstd). The
+// tarball carries `runsc` together with the `gvisor-bin/` helper binaries,
+// so it is extracted into a content-addressed directory rather than as a
+// single file.
+const gvisorAssetName = "gvisor"
 
 // assetEntry is one content-addressed sandbox asset (url + sha256).
 type assetEntry struct {
@@ -86,8 +81,7 @@ func (e assetEntry) displayURL() string {
 // sandboxAssetsRecord is the sandbox runtime an actor is running, projected onto
 // the local node's architecture: the sandbox class and pause image plus the
 // asset set keyed by asset name (gVisor uses a single "gvisor" release-tarball
-// asset; records written before the tarball release mechanism use a bare
-// "runsc" asset).
+// asset).
 // It is both the per-actor on-node record (written at Run/Restore, read at
 // Checkpoint) and the snapshot manifest (written at Checkpoint, read at
 // Restore).
@@ -159,8 +153,8 @@ func checkPauseImage(sandboxClass, pauseImage string) error {
 // ensureSandboxAssets stages every asset in the record under dstDir, named
 // by asset name, and returns a map of asset name to the local path the worker
 // runs it from. gVisor has a single "gvisor" release-tarball asset (staged
-// as a directory, the path is its runsc) or a bare "runsc" binary; the
-// micro-VM runtime has several (kata-shim, cloud-hypervisor, ...).
+// as a directory, the path is its runsc); the micro-VM runtime has several
+// (kata-shim, cloud-hypervisor, ...).
 //
 // Each asset is served from the node's content-addressed asset cache as a
 // hard link, so the download runs once per node, concurrent callers for one
@@ -203,19 +197,10 @@ func plainAssetName(name string) bool {
 	return name != "" && name != "." && name == filepath.Base(name) && filepath.IsLocal(name)
 }
 
-// runscAssetNames are the assets that carry the gVisor `runsc` binary, most
-// preferred first.
-var runscAssetNames = []string{gvisorAssetName, runscAssetName}
-
 // runscPathFor returns the local path of the gVisor `runsc` binary from a
 // fetched asset-path map, or "" if the runtime has none (e.g. micro-VM).
 func runscPathFor(paths map[string]string) string {
-	for _, name := range runscAssetNames {
-		if p := paths[name]; p != "" {
-			return p
-		}
-	}
-	return ""
+	return paths[gvisorAssetName]
 }
 
 // assetKey is the asset's cache key: its content hash, which the key
