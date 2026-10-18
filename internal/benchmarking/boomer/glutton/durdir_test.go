@@ -28,6 +28,7 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
+	"go.ate.dev/substrate/internal/controlclienttest"
 	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
@@ -68,7 +69,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &fake.Server{Data: []byte("seq content")}
-			fakeCtrl := &fakeControlClient{}
+			fakeCtrl := &controlclienttest.Fake{}
 			cfg := &userclass.Config{
 				APIStub: fakeCtrl,
 				Dyn: dynconfig.Static(durDirKnobs{
@@ -80,13 +81,13 @@ func TestDurDirLoopSequence(t *testing.T) {
 
 			du.step(context.Background(), dynconfig.Get[durDirKnobs](cfg.Dyn))
 
-			if got := fakeCtrl.recordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
+			if got := fakeCtrl.RecordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
 				t.Errorf("gRPC calls: got %v, want %v", got, tc.wantGRPCCall)
 			}
 			if got := srv.RecordedPaths(); !reflect.DeepEqual(got, tc.wantHTTPCall) {
 				t.Errorf("HTTP calls: got %v, want %v", got, tc.wantHTTPCall)
 			}
-			for _, req := range fakeCtrl.recordedSuspendRequests() {
+			for _, req := range fakeCtrl.RecordedSuspendActorRequests() {
 				if got := req.GetOptions().GetMode(); got != tc.wantMode {
 					t.Errorf("suspend mode = %v, want %v", got, tc.wantMode)
 				}
@@ -200,7 +201,7 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &fake.Server{Data: []byte("data")}
-			fakeCtrl := &fakeControlClient{}
+			fakeCtrl := &controlclienttest.Fake{}
 			cfg := newTestConfig(t, srv, &userclass.Config{
 				APIStub: fakeCtrl,
 				Dyn: dynconfig.Static(durDirKnobs{
@@ -215,10 +216,10 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 				t.Fatalf("startUser failed: %v", err)
 			}
 
-			calls := fakeCtrl.recordedCalls()
+			calls := fakeCtrl.RecordedCalls()
 			gotResumeActor := slices.Contains(calls, "ResumeActor")
 			if gotResumeActor != tc.wantResumeActor {
-				t.Errorf("ResumeActor in recordedCalls: got %v, want %v (calls = %v)", gotResumeActor, tc.wantResumeActor, calls)
+				t.Errorf("ResumeActor in RecordedCalls: got %v, want %v (calls = %v)", gotResumeActor, tc.wantResumeActor, calls)
 			}
 		})
 	}
@@ -226,7 +227,7 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 
 func TestDurDirBootstrapFailureSuspendsBeforeDelete(t *testing.T) {
 	srv := &fake.Server{Status: http.StatusInternalServerError}
-	fakeCtrl := &fakeControlClient{}
+	fakeCtrl := &controlclienttest.Fake{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub: fakeCtrl,
 		Dyn: dynconfig.Static(durDirKnobs{
@@ -241,11 +242,11 @@ func TestDurDirBootstrapFailureSuspendsBeforeDelete(t *testing.T) {
 		t.Fatalf("startUser expected error on failing server, got nil")
 	}
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor" || calls[len(calls)-1] != "DeleteActor" {
-		t.Errorf("recordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
+		t.Errorf("RecordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
 	}
-	suspends := fakeCtrl.recordedSuspendRequests()
+	suspends := fakeCtrl.RecordedSuspendActorRequests()
 	if len(suspends) == 0 {
 		t.Fatalf("got no SuspendActor requests")
 	}
@@ -275,7 +276,7 @@ func TestDurDirShutdownHibernatesBeforeDelete(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			fakeCtrl := &fakeControlClient{}
+			fakeCtrl := &controlclienttest.Fake{}
 			cfg := &userclass.Config{
 				APIStub: fakeCtrl,
 				Dyn: dynconfig.Static(durDirKnobs{
@@ -288,17 +289,17 @@ func TestDurDirShutdownHibernatesBeforeDelete(t *testing.T) {
 			rt.users.Store(boomerutil.GoroutineID(), du)
 			rt.shutdown(context.Background())
 
-			if got := fakeCtrl.recordedCalls(); !reflect.DeepEqual(got, tc.wantCalls) {
-				t.Errorf("recordedCalls = %v, want %v", got, tc.wantCalls)
+			if got := fakeCtrl.RecordedCalls(); !reflect.DeepEqual(got, tc.wantCalls) {
+				t.Errorf("RecordedCalls = %v, want %v", got, tc.wantCalls)
 			}
-			suspends := fakeCtrl.recordedSuspendRequests()
+			suspends := fakeCtrl.RecordedSuspendActorRequests()
 			if len(suspends) != 1 {
 				t.Fatalf("got %d SuspendActor requests, want 1", len(suspends))
 			}
 			if got := suspends[0].GetOptions().GetMode(); got != tc.wantMode {
 				t.Errorf("suspend mode = %v, want %v", got, tc.wantMode)
 			}
-			reqs := fakeCtrl.recordedDeleteRequests()
+			reqs := fakeCtrl.RecordedDeleteActorRequests()
 			if len(reqs) == 0 || !reqs[0].GetAnyState() {
 				t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
 			}

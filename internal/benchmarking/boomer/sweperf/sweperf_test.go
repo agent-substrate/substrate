@@ -35,6 +35,7 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
+	"go.ate.dev/substrate/internal/controlclienttest"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
@@ -95,59 +96,6 @@ func recordedSince(t *testing.T, before map[statKey]statSample, name, status str
 	return statSample{count: now.count - was.count, sumMs: now.sumMs - was.sumMs}
 }
 
-type fakeControlClient struct {
-	ateapipb.ControlClient
-	mu             sync.Mutex
-	calls          []string
-	createSpaceErr error
-	createActorErr error
-	resumeErr      error
-	suspendErr     error
-	deleteErr      error
-	suspendReqs    []*ateapipb.SuspendActorRequest
-	// Make ResumeActor take time and report a smaller server-side elapsed.
-	resumeDelay     time.Duration
-	resumeElapsedUs string
-	// AnyState carried by the most recent DeleteActor request.
-	deleteAnyState bool
-	// beforeDelete, if set, runs at the start of each DeleteActor, outside mu.
-	beforeDelete func()
-}
-
-func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "CreateAtespace")
-	if f.createSpaceErr != nil {
-		return nil, f.createSpaceErr
-	}
-	return &ateapipb.Atespace{}, nil
-}
-
-func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "CreateActor")
-	if f.createActorErr != nil {
-		return nil, f.createActorErr
-	}
-	return &ateapipb.Actor{}, nil
-}
-
-func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "ResumeActor")
-	time.Sleep(f.resumeDelay)
-	if f.resumeElapsedUs != "" {
-		setTrailer(opts, metadata.Pairs(ateinterceptors.ServerElapsedTrailer, f.resumeElapsedUs))
-	}
-	if f.resumeErr != nil {
-		return nil, f.resumeErr
-	}
-	return &ateapipb.ResumeActorResponse{}, nil
-}
-
 // setTrailer fills the metadata that grpc.Trailer asked the call to populate.
 func setTrailer(opts []grpc.CallOption, md metadata.MD) {
 	for _, o := range opts {
@@ -157,46 +105,65 @@ func setTrailer(opts []grpc.CallOption, md metadata.MD) {
 	}
 }
 
-func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "SuspendActor")
-	f.suspendReqs = append(f.suspendReqs, in)
-	if f.suspendErr != nil {
-		return nil, f.suspendErr
+// resumeTrailerFunc makes ResumeActor take delay, report elapsedUs as its
+// server-side elapsed time, then return err.
+func resumeTrailerFunc(delay time.Duration, elapsedUs string, err error) func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+	return func(_ context.Context, _ *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+		time.Sleep(delay)
+		setTrailer(opts, metadata.Pairs(ateinterceptors.ServerElapsedTrailer, elapsedUs))
+		if err != nil {
+			return nil, err
+		}
+		return &ateapipb.ResumeActorResponse{}, nil
 	}
-	return &ateapipb.SuspendActorResponse{}, nil
 }
 
-func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
-	if f.beforeDelete != nil {
-		f.beforeDelete()
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "DeleteActor")
-	f.deleteAnyState = in.GetAnyState()
-	if err := ctx.Err(); err != nil {
+func createAtespaceErrFunc(err error) func(context.Context, *ateapipb.CreateAtespaceRequest, ...grpc.CallOption) (*ateapipb.Atespace, error) {
+	return func(context.Context, *ateapipb.CreateAtespaceRequest, ...grpc.CallOption) (*ateapipb.Atespace, error) {
 		return nil, err
 	}
-	if f.deleteErr != nil {
-		return nil, f.deleteErr
+}
+
+// deleteActorFunc runs before, fails a canceled call, then returns err, like the server.
+func deleteActorFunc(before func(), err error) func(context.Context, *ateapipb.DeleteActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
+	return func(ctx context.Context, _ *ateapipb.DeleteActorRequest, _ ...grpc.CallOption) (*ateapipb.Actor, error) {
+		if before != nil {
+			before()
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &ateapipb.Actor{}, nil
 	}
-	return &ateapipb.Actor{}, nil
 }
 
-func (f *fakeControlClient) recordedCalls() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.calls...)
+func createActorErrFunc(err error) func(context.Context, *ateapipb.CreateActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
+	return func(context.Context, *ateapipb.CreateActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
+		return nil, err
+	}
 }
 
-func newTestConfig(t *testing.T, handler http.Handler) (*userclass.Config, *httptest.Server, *fakeControlClient) {
+func resumeErrFunc(err error) func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+	return func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+		return nil, err
+	}
+}
+
+func suspendErrFunc(err error) func(context.Context, *ateapipb.SuspendActorRequest, ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+	return func(context.Context, *ateapipb.SuspendActorRequest, ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+		return nil, err
+	}
+}
+
+func newTestConfig(t *testing.T, handler http.Handler) (*userclass.Config, *httptest.Server, *controlclienttest.Fake) {
 	t.Helper()
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
-	fakeCtrl := &fakeControlClient{}
+	fakeCtrl := &controlclienttest.Fake{DeleteActorFunc: deleteActorFunc(nil, nil)}
 	cfg := &userclass.Config{
 		APIStub:    fakeCtrl,
 		HTTPClient: ts.Client(),
@@ -401,15 +368,12 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 		t.Errorf("cycleIndex = %d, want 1", u.cycleIndex)
 	}
 
-	grpcCalls := fakeCtrl.recordedCalls()
+	grpcCalls := fakeCtrl.RecordedCalls()
 	wantGRPCCalls := []string{"ResumeActor", "SuspendActor"}
 	if !reflect.DeepEqual(grpcCalls, wantGRPCCalls) {
 		t.Errorf("gRPC calls: got %v, want %v", grpcCalls, wantGRPCCalls)
 	}
-	fakeCtrl.mu.Lock()
-	suspendReqs := fakeCtrl.suspendReqs
-	fakeCtrl.mu.Unlock()
-	for _, req := range suspendReqs {
+	for _, req := range fakeCtrl.RecordedSuspendActorRequests() {
 		if got := req.GetOptions().GetMode(); got != ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
 			t.Errorf("suspend mode = %v, want %v", got, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
 		}
@@ -426,7 +390,7 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 func TestEnsureAtespaceHandling(t *testing.T) {
 	t.Run("treats AlreadyExists error as success", func(t *testing.T) {
 		cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
-		fakeCtrl.createSpaceErr = status.Error(codes.AlreadyExists, "atespace already exists")
+		fakeCtrl.CreateAtespaceFunc = createAtespaceErrFunc(status.Error(codes.AlreadyExists, "atespace already exists"))
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 		if err := u.ensureAtespace(context.Background()); err != nil {
@@ -436,7 +400,7 @@ func TestEnsureAtespaceHandling(t *testing.T) {
 
 	t.Run("returns unexpected gRPC error", func(t *testing.T) {
 		cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
-		fakeCtrl.createSpaceErr = status.Error(codes.Internal, "internal database error")
+		fakeCtrl.CreateAtespaceFunc = createAtespaceErrFunc(status.Error(codes.Internal, "internal database error"))
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 		if err := u.ensureAtespace(context.Background()); err == nil {
@@ -450,7 +414,7 @@ func TestAtespaceCreatedOncePerWorker(t *testing.T) {
 	r := newSweperfRuntime(cfg)
 	countCreateAtespace := func() int {
 		n := 0
-		for _, c := range fakeCtrl.recordedCalls() {
+		for _, c := range fakeCtrl.RecordedCalls() {
 			if c == "CreateAtespace" {
 				n++
 			}
@@ -469,11 +433,11 @@ func TestAtespaceCreatedOncePerWorker(t *testing.T) {
 
 	// A missing atespace comes back from CreateActor as FailedPrecondition;
 	// the next start recreates it.
-	fakeCtrl.createActorErr = status.Error(codes.FailedPrecondition, "Atespace benchmark-test not found")
+	fakeCtrl.CreateActorFunc = createActorErrFunc(status.Error(codes.FailedPrecondition, "Atespace benchmark-test not found"))
 	if _, err := r.startUser(context.Background()); err == nil {
 		t.Fatalf("startUser succeeded despite CreateActor failing")
 	}
-	fakeCtrl.createActorErr = nil
+	fakeCtrl.CreateActorFunc = nil
 	if _, err := r.startUser(context.Background()); err != nil {
 		t.Fatalf("startUser: %v", err)
 	}
@@ -485,7 +449,7 @@ func TestAtespaceCreatedOncePerWorker(t *testing.T) {
 func TestControlClientErrors(t *testing.T) {
 	t.Run("ResumeActor error returns false", func(t *testing.T) {
 		cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
-		fakeCtrl.resumeErr = errors.New("resume RPC failed")
+		fakeCtrl.ResumeActorFunc = resumeErrFunc(errors.New("resume RPC failed"))
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 		if _, ok := u.resume(context.Background()); ok {
@@ -495,7 +459,7 @@ func TestControlClientErrors(t *testing.T) {
 
 	t.Run("SuspendActor error returns false", func(t *testing.T) {
 		cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
-		fakeCtrl.suspendErr = errors.New("suspend failed")
+		fakeCtrl.SuspendActorFunc = suspendErrFunc(errors.New("suspend failed"))
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 		if ok := u.suspend(context.Background()); ok {
@@ -505,7 +469,7 @@ func TestControlClientErrors(t *testing.T) {
 
 	t.Run("DeleteActor error handled gracefully", func(t *testing.T) {
 		cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
-		fakeCtrl.deleteErr = errors.New("delete failed")
+		fakeCtrl.DeleteActorFunc = deleteActorFunc(nil, errors.New("delete failed"))
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
 		u.delete(context.Background())
@@ -607,7 +571,7 @@ func TestSweperfPollLiveness(t *testing.T) {
 func TestStartupFailureLogsUserActorAndTemplate(t *testing.T) {
 	logs := captureLogs(t)
 	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
-	fakeCtrl.createActorErr = errors.New("quota exceeded")
+	fakeCtrl.CreateActorFunc = createActorErrFunc(errors.New("quota exceeded"))
 	r := newSweperfRuntime(cfg)
 
 	if _, err := r.startUser(context.Background()); err == nil {
@@ -758,15 +722,15 @@ func asyncJobHandler() http.HandlerFunc {
 
 func TestNoopFirstResumeNotRecorded(t *testing.T) {
 	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
-	fakeCtrl.resumeElapsedUs = "5000"
+	fakeCtrl.ResumeActorFunc = resumeTrailerFunc(0, "5000", nil)
 	rt := newSweperfRuntime(cfg)
 	u, err := rt.startUser(context.Background())
 	if err != nil {
 		t.Fatalf("startUser: %v", err)
 	}
 	// No extra lifecycle ops at setup: the benchmark flow must match the CUJ.
-	if got, want := fakeCtrl.recordedCalls(), []string{"CreateAtespace", "CreateActor"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("recordedCalls after startUser = %v, want %v", got, want)
+	if got, want := fakeCtrl.RecordedCalls(), []string{"CreateAtespace", "CreateActor"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("RecordedCalls after startUser = %v, want %v", got, want)
 	}
 	u.chunks = []chunk{{0, 5}, {5, 10}}
 	resumeRows := []string{"ResumeActor", "ResumeActor_rtt", "ResumeToFirstExec"}
@@ -793,7 +757,7 @@ func TestNoopFirstResumeNotRecorded(t *testing.T) {
 
 func TestNoopFirstResumeFailureStillRecorded(t *testing.T) {
 	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
-	fakeCtrl.resumeErr = errors.New("resume failed")
+	fakeCtrl.ResumeActorFunc = resumeErrFunc(errors.New("resume failed"))
 	u := &sweperfUser{
 		cfg:       cfg,
 		actorName: "act",
@@ -826,8 +790,8 @@ func TestStartupFailureDeletesWithoutSuspend(t *testing.T) {
 		t.Fatalf("startUser expected error on liveness failure, got nil")
 	}
 
-	if got, want := fakeCtrl.recordedCalls(), []string{"CreateAtespace", "CreateActor", "DeleteActor"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("recordedCalls = %v, want %v", got, want)
+	if got, want := fakeCtrl.RecordedCalls(), []string{"CreateAtespace", "CreateActor", "DeleteActor"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("RecordedCalls = %v, want %v", got, want)
 	}
 }
 
@@ -844,11 +808,11 @@ func TestShutdownDeletesWithoutSuspend(t *testing.T) {
 	rt.users.Store("goroutine-1", u)
 	rt.shutdown(context.Background())
 
-	if got, want := fakeCtrl.recordedCalls(), []string{"DeleteActor"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("recordedCalls = %v, want %v", got, want)
+	if got, want := fakeCtrl.RecordedCalls(), []string{"DeleteActor"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("RecordedCalls = %v, want %v", got, want)
 	}
 	// Without AnyState the server refuses to delete an actor caught mid-cycle.
-	if !fakeCtrl.deleteAnyState {
+	if reqs := fakeCtrl.RecordedDeleteActorRequests(); len(reqs) == 0 || !reqs[len(reqs)-1].GetAnyState() {
 		t.Error("DeleteActor sent AnyState=false; an actor not yet SUSPENDED would leak its worker")
 	}
 }
@@ -856,8 +820,7 @@ func TestShutdownDeletesWithoutSuspend(t *testing.T) {
 func TestTracedCallRecordsBothLatencies(t *testing.T) {
 	cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
 	// 30ms on the wire, 5ms reported by the server.
-	fakeCtrl.resumeDelay = 30 * time.Millisecond
-	fakeCtrl.resumeElapsedUs = "5000"
+	fakeCtrl.ResumeActorFunc = resumeTrailerFunc(30*time.Millisecond, "5000", nil)
 	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass}
 
 	before := readStats(t)
@@ -1014,15 +977,15 @@ func TestFinishedTrajectoryDeletesActorAndStartsFresh(t *testing.T) {
 		t.Errorf("cleanedUp = false after the trajectory finished; the actor was not deleted")
 	}
 	// The final cycle is not suspended; the actor is deleted straight away.
-	if got, want := fakeCtrl.recordedCalls(), []string{"ResumeActor", "DeleteActor"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("recordedCalls = %v, want %v", got, want)
+	if got, want := fakeCtrl.RecordedCalls(), []string{"ResumeActor", "DeleteActor"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("RecordedCalls = %v, want %v", got, want)
 	}
 	if _, ok := r.users.Load(gid); ok {
 		t.Fatalf("finished session still bound to its goroutine; the next iterate would reuse it")
 	}
 
 	// The next iterate creates a brand-new actor for the next trajectory.
-	before := len(fakeCtrl.recordedCalls())
+	before := len(fakeCtrl.RecordedCalls())
 	r.iterate()
 	val, ok := r.users.Load(gid)
 	if !ok {
@@ -1032,7 +995,7 @@ func TestFinishedTrajectoryDeletesActorAndStartsFresh(t *testing.T) {
 	if next == u || next.actorName == u.actorName {
 		t.Errorf("next session reuses actor %q, want a new one", u.actorName)
 	}
-	newCalls := fakeCtrl.recordedCalls()[before:]
+	newCalls := fakeCtrl.RecordedCalls()[before:]
 	if len(newCalls) < 2 || newCalls[0] != "CreateAtespace" || newCalls[1] != "CreateActor" {
 		t.Errorf("next iterate calls = %v, want to start with CreateAtespace, CreateActor", newCalls)
 	}
@@ -1041,7 +1004,7 @@ func TestFinishedTrajectoryDeletesActorAndStartsFresh(t *testing.T) {
 
 func TestRetireRetriesFailedDeleteOnce(t *testing.T) {
 	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
-	fakeCtrl.deleteErr = errors.New("unavailable")
+	fakeCtrl.DeleteActorFunc = deleteActorFunc(nil, errors.New("unavailable"))
 	r := newSweperfRuntime(cfg)
 	u := &sweperfUser{cfg: cfg, actorName: "act-1", userClass: sweperfUserClass, chunks: []chunk{{0, 5}}}
 	r.users.Store(boomerutil.GoroutineID(), u)
@@ -1050,8 +1013,8 @@ func TestRetireRetriesFailedDeleteOnce(t *testing.T) {
 
 	// One retry, then the actor is given up on rather than retried forever.
 	want := []string{"ResumeActor", "DeleteActor", "DeleteActor"}
-	if got := fakeCtrl.recordedCalls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("recordedCalls = %v, want %v", got, want)
+	if got := fakeCtrl.RecordedCalls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("RecordedCalls = %v, want %v", got, want)
 	}
 }
 
@@ -1063,7 +1026,7 @@ func TestRetireRetryGetsFreshTeardownCtx(t *testing.T) {
 	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
 	// The first DeleteActor outlasts its teardown context; the retry is quick.
 	var once sync.Once
-	fakeCtrl.beforeDelete = func() { once.Do(func() { time.Sleep(100 * time.Millisecond) }) }
+	fakeCtrl.DeleteActorFunc = deleteActorFunc(func() { once.Do(func() { time.Sleep(100 * time.Millisecond) }) }, nil)
 	r := newSweperfRuntime(cfg)
 	u := &sweperfUser{cfg: cfg, actorName: "act-1", userClass: sweperfUserClass, chunks: []chunk{{0, 5}}}
 	r.users.Store(boomerutil.GoroutineID(), u)
@@ -1089,8 +1052,8 @@ func TestOnlyFinalCycleSkipsSuspend(t *testing.T) {
 	r.iterate()
 
 	want := []string{"ResumeActor", "SuspendActor", "ResumeActor", "DeleteActor"}
-	if got := fakeCtrl.recordedCalls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("recordedCalls = %v, want %v", got, want)
+	if got := fakeCtrl.RecordedCalls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("RecordedCalls = %v, want %v", got, want)
 	}
 }
 
@@ -1106,7 +1069,7 @@ func TestShutdownAndRetireDeleteOnce(t *testing.T) {
 	r.retireUser(gid, u)
 
 	n := 0
-	for _, c := range fakeCtrl.recordedCalls() {
+	for _, c := range fakeCtrl.RecordedCalls() {
 		if c == "DeleteActor" {
 			n++
 		}
@@ -1158,7 +1121,7 @@ func TestCycleCELUsesContainerDurationNotWallClock(t *testing.T) {
 
 func TestStepSuspendFailureFailsTask(t *testing.T) {
 	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
-	fakeCtrl.suspendErr = errors.New("suspend failed")
+	fakeCtrl.SuspendActorFunc = suspendErrFunc(errors.New("suspend failed"))
 	u := &sweperfUser{
 		cfg:       cfg,
 		actorName: "act",
@@ -1253,7 +1216,7 @@ func TestNoNewActorAfterShutdown(t *testing.T) {
 	r.shutdown(context.Background())
 	r.iterate()
 
-	if calls := fakeCtrl.recordedCalls(); len(calls) != 0 {
+	if calls := fakeCtrl.RecordedCalls(); len(calls) != 0 {
 		t.Errorf("iterate after shutdown sent %v, want no calls", calls)
 	}
 	if _, ok := r.users.Load(boomerutil.GoroutineID()); ok {
@@ -1283,8 +1246,8 @@ func TestShutdownCancelsSlowStartup(t *testing.T) {
 		t.Errorf("shutdown took %v; the liveness poll was not canceled", d)
 	}
 
-	if got, want := fakeCtrl.recordedCalls(), []string{"CreateAtespace", "CreateActor", "DeleteActor"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("recordedCalls = %v, want %v: the starting actor deleted despite cancellation", got, want)
+	if got, want := fakeCtrl.RecordedCalls(), []string{"CreateAtespace", "CreateActor", "DeleteActor"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("RecordedCalls = %v, want %v: the starting actor deleted despite cancellation", got, want)
 	}
 	if got := usersGauge(t); got != before {
 		t.Errorf("locust_users = %v after shutdown, want %v unchanged", got, before)
@@ -1294,8 +1257,7 @@ func TestShutdownCancelsSlowStartup(t *testing.T) {
 func TestTracedCallSkipsFailureWhenCanceled(t *testing.T) {
 	cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
 	// gRPC reports cancellation as a status, which errors.Is does not match.
-	fakeCtrl.resumeErr = status.Error(codes.Canceled, "context canceled")
-	fakeCtrl.resumeElapsedUs = "5000"
+	fakeCtrl.ResumeActorFunc = resumeTrailerFunc(0, "5000", status.Error(codes.Canceled, "context canceled"))
 	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1350,8 +1312,8 @@ func TestShutdownMidCycleRecordsNoFailures(t *testing.T) {
 			t.Errorf("%s recorded %d failures after shutdown canceled the cycle, want 0", name, got.count)
 		}
 	}
-	if got, want := fakeCtrl.recordedCalls(), []string{"ResumeActor", "DeleteActor"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("recordedCalls = %v, want %v: the interrupted actor deleted by the sweep", got, want)
+	if got, want := fakeCtrl.RecordedCalls(), []string{"ResumeActor", "DeleteActor"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("RecordedCalls = %v, want %v: the interrupted actor deleted by the sweep", got, want)
 	}
 }
 
@@ -1360,10 +1322,10 @@ func TestShutdownWaitsForRetire(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	fakeCtrl.beforeDelete = func() {
+	fakeCtrl.DeleteActorFunc = deleteActorFunc(func() {
 		once.Do(func() { close(entered) })
 		<-release
-	}
+	}, nil)
 	unblock := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(unblock)
 	r := newSweperfRuntime(cfg)
@@ -1390,7 +1352,7 @@ func TestShutdownWaitsForRetire(t *testing.T) {
 	unblock()
 	<-done
 	n := 0
-	for _, c := range fakeCtrl.recordedCalls() {
+	for _, c := range fakeCtrl.RecordedCalls() {
 		if c == "DeleteActor" {
 			n++
 		}
@@ -1417,7 +1379,7 @@ func TestTeardownClaimsOnce(t *testing.T) {
 	wg.Wait()
 
 	n := 0
-	for _, c := range fakeCtrl.recordedCalls() {
+	for _, c := range fakeCtrl.RecordedCalls() {
 		if c == "DeleteActor" {
 			n++
 		}
@@ -1429,7 +1391,7 @@ func TestTeardownClaimsOnce(t *testing.T) {
 
 func TestShutdownSweepsConcurrently(t *testing.T) {
 	cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
-	fakeCtrl.beforeDelete = func() { time.Sleep(50 * time.Millisecond) }
+	fakeCtrl.DeleteActorFunc = deleteActorFunc(func() { time.Sleep(50 * time.Millisecond) }, nil)
 	r := newSweperfRuntime(cfg)
 	const n = 20
 	for i := range n {
@@ -1444,7 +1406,7 @@ func TestShutdownSweepsConcurrently(t *testing.T) {
 		t.Errorf("shutdown took %v for %d actors; the sweep is not concurrent", d, n)
 	}
 	deletes := 0
-	for _, c := range fakeCtrl.recordedCalls() {
+	for _, c := range fakeCtrl.RecordedCalls() {
 		if c == "DeleteActor" {
 			deletes++
 		}
@@ -1474,8 +1436,8 @@ func TestShutdownSweepsAfterInflightWaitCap(t *testing.T) {
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("shutdown took %v; the in-flight wait used the whole budget", d)
 	}
-	if got, want := fakeCtrl.recordedCalls(), []string{"DeleteActor"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("recordedCalls = %v, want the bound actor swept despite the stuck iteration", got)
+	if got, want := fakeCtrl.RecordedCalls(), []string{"DeleteActor"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("RecordedCalls = %v, want the bound actor swept despite the stuck iteration", got)
 	}
 }
 
@@ -1544,7 +1506,7 @@ func onlyLine(t *testing.T, lines []map[string]any, msg string) map[string]any {
 func TestTaskRecordForCleanTask(t *testing.T) {
 	logs := captureLogs(t)
 	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
-	fakeCtrl.resumeElapsedUs = "5000"
+	fakeCtrl.ResumeActorFunc = resumeTrailerFunc(0, "5000", nil)
 	cfg.Dyn = dynconfig.Static(knobs{
 		WaitTime:   dynconfig.WaitTime{MinWait: dynconfig.Seconds(3 * time.Millisecond), MaxWait: dynconfig.Seconds(3 * time.Millisecond)},
 		TotalSteps: 10, NumCycles: 2,
@@ -1611,11 +1573,9 @@ func TestTaskRecordResumeFailureAndRetry(t *testing.T) {
 	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass, chunks: []chunk{{0, 5}, {5, 10}}}
 	r.users.Store(boomerutil.GoroutineID(), u)
 
-	fakeCtrl.resumeErr = errors.New("resume failed")
+	fakeCtrl.ResumeActorFunc = resumeErrFunc(errors.New("resume failed"))
 	r.iterate() // cycle 1 fails at resume
-	fakeCtrl.mu.Lock()
-	fakeCtrl.resumeErr = nil
-	fakeCtrl.mu.Unlock()
+	fakeCtrl.ResumeActorFunc = nil
 	r.iterate() // cycle 1 retried
 	r.iterate() // cycle 2 ends the task
 	lines := logs()
