@@ -22,8 +22,10 @@ import (
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/google/go-cmp/cmp"
@@ -125,6 +127,90 @@ func TestActorTemplateCRUD(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
 	_, err = tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
+}
+
+func TestGoldenSnapshotPreferredFidelity(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		preferred  ateapipb.SnapshotFidelity
+		want       ateapipb.SnapshotFidelity
+		wantAtelet ateletpb.SnapshotFidelity
+	}{
+		{"default", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{"memory", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{"volumes", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{"rootfs", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("golden-fidelity")
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
+			createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+			ensureDefaultGvisorSandboxConfig(t, tc)
+			tmpl, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+				ActorTemplate: &ateapipb.ActorTemplate{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "golden-template"},
+					SnapshotConfig: &ateapipb.SnapshotConfig{
+						StorageLocation: testStorageLocation, PreferredFidelity: tt.preferred,
+					},
+					Containers: []*ateapipb.Container{
+						{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}},
+					},
+					WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}},
+					Resources:      resources.CPUMemory(1000, 512<<20),
+				},
+			})
+			if err != nil {
+				t.Fatalf("CreateActorTemplate: %v", err)
+			}
+			controlapi.NewActorTemplateReconciler(tc.persistence, tc.service, 7*time.Second).Start(ctx)
+			var goldenRef *ateapipb.ObjectRef
+			err = wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+				current, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()})
+				if err != nil {
+					return false, err
+				}
+				golden := current.GetStatus().GetGoldenSnapshotStatus()
+				if golden.GetErrorMessage() != "" {
+					return false, fmt.Errorf("golden snapshot failed: %s", golden.GetErrorMessage())
+				}
+				goldenRef = golden.GetGoldenTag()
+				return goldenRef != nil, nil
+			})
+			if err != nil {
+				t.Fatalf("waiting for golden tag: %v", err)
+			}
+			tc.fakeAtelet.Lock.Lock()
+			checkpoint := proto.CloneOf(tc.fakeAtelet.CheckpointRequest)
+			tc.fakeAtelet.Lock.Unlock()
+			if checkpoint == nil {
+				t.Fatal("golden creation did not call Checkpoint")
+			}
+			if got := checkpoint.GetSnapshot().GetFidelity(); got != tt.wantAtelet {
+				t.Errorf("golden Checkpoint fidelity = %v, want %v", got, tt.wantAtelet)
+			}
+			golden, err := tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenRef})
+			if err != nil {
+				t.Fatalf("GetTag: %v", err)
+			}
+			if got := golden.GetStatus().GetSnapshot().GetFidelity(); got != tt.want {
+				t.Errorf("golden tag fidelity = %v, want %v", got, tt.want)
+			}
+			actor, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
+				ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+			}})
+			if err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+			if got := durableSnapshot(actor.GetStatus()).GetFidelity(); got != tt.want {
+				t.Errorf("inherited snapshot fidelity = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestGoldenTagLifecycle(t *testing.T) {
