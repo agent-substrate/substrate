@@ -109,9 +109,14 @@ go run ./tools/setup-gcp create cluster [flags]
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--enable-dataplane-v2` | Enable Dataplane V2. | `ENABLE_DATAPLANE_V2` | `true` |
 | `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for micro-VM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
+
+An existing cluster is never replaced. If its network, subnetwork or Dataplane V2
+setting differs from the flags, the command fails and names the differences;
+set the matching flags or delete the cluster yourself.
 
 `NODE_MACHINE_TYPE` was named `GVISOR_NODE_MACHINE_TYPE`. The old name still
 works and warns; rename it in your `.ate-dev-env.sh`.
@@ -302,6 +307,7 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--enable-dataplane-v2` | Enable Dataplane V2. | `ENABLE_DATAPLANE_V2` | `true` |
 | `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for micro-VM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
