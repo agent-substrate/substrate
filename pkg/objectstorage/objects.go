@@ -17,7 +17,6 @@ package objectstorage
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -524,20 +523,23 @@ func copyZstdSparse(dst *os.File, src io.Reader) (size int64, written int64, err
 	return pos, written, nil
 }
 
-// allZero reports whether b is all zero bytes, checking 8 bytes at a time.
+// zeroBlock is what allZero compares against, as in ateworker-microvm's merge
+// path. It is as large as copyZstdSparse's block, so a whole block is one
+// bytes.Equal call.
+var zeroBlock [64 << 10]byte
+
+// allZero reports whether b is all zero bytes. bytes.Equal is vectorized, so it
+// beats a word-at-a-time loop on the zero blocks that dominate a guest memory
+// image: scanning an all-zero image measures about twice as fast. b longer than
+// zeroBlock is compared in zeroBlock-sized pieces.
 func allZero(b []byte) bool {
-	i := 0
-	for ; i+8 <= len(b); i += 8 {
-		if binary.LittleEndian.Uint64(b[i:]) != 0 {
+	for len(b) > len(zeroBlock) {
+		if !bytes.Equal(b[:len(zeroBlock)], zeroBlock[:]) {
 			return false
 		}
+		b = b[len(zeroBlock):]
 	}
-	for ; i < len(b); i++ {
-		if b[i] != 0 {
-			return false
-		}
-	}
-	return true
+	return bytes.Equal(b, zeroBlock[:len(b)])
 }
 
 func parseGCSURL(gsURL string) (string, string, error) {

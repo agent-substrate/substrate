@@ -553,3 +553,25 @@ func TestCopyZstdSparseClearsStaleData(t *testing.T) {
 		t.Fatalf("stale data not cleared / wrong size: len(got)=%d len(want)=%d", len(got), len(want))
 	}
 }
+
+// TestAllZero checks allZero at the boundaries of its zeroBlock-sized stride:
+// buffers shorter than, equal to, and longer than the block, and a single
+// non-zero byte at the first and last position of each.
+func TestAllZero(t *testing.T) {
+	for _, size := range []int{0, 1, 4096, len(zeroBlock) - 1, len(zeroBlock), len(zeroBlock) + 1, 3*len(zeroBlock) + 7} {
+		b := make([]byte, size)
+		if !allZero(b) {
+			t.Errorf("allZero(%d zero bytes) = false, want true", size)
+		}
+		for _, pos := range []int{0, size / 2, size - 1} {
+			if size == 0 {
+				continue
+			}
+			b[pos] = 1
+			if allZero(b) {
+				t.Errorf("allZero(size=%d, nonzero at %d) = true, want false", size, pos)
+			}
+			b[pos] = 0
+		}
+	}
+}
