@@ -360,7 +360,8 @@ func promoteSnapshotError(ctx context.Context, err error) error {
 	switch status.Code(err) {
 	case codes.Unavailable, codes.Canceled, codes.DeadlineExceeded:
 		return apierror.Unavailable("while calling atelet PromoteSnapshot: %w", err)
-	case codes.FailedPrecondition:
+	// NotFound: the local snapshot is gone and no uploaded copy exists.
+	case codes.FailedPrecondition, codes.NotFound:
 		return apierror.FailedPrecondition("while calling atelet PromoteSnapshot: %w", err)
 	}
 	return apierror.Internal("while calling atelet PromoteSnapshot: %w", err)

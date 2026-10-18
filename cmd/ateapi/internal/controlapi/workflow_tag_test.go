@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -369,8 +370,14 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 			wantCode:    codes.Unavailable,
 		},
 		{
-			name:        "atelet cannot make the snapshot durable",
-			promoteErr:  status.Error(codes.FailedPrecondition, "local snapshot is gone and no uploaded copy exists"),
+			name:        "the paused snapshot is gone and was never uploaded",
+			promoteErr:  fmt.Errorf("local snapshot is gone and no uploaded copy exists: %w", status.Error(codes.NotFound, "manifest not found")),
+			wantPromote: true,
+			wantCode:    codes.FailedPrecondition,
+		},
+		{
+			name:        "the paused snapshot's fidelity does not match",
+			promoteErr:  status.Error(codes.FailedPrecondition, "pause snapshot captured full; upload asks for memory"),
 			wantPromote: true,
 			wantCode:    codes.FailedPrecondition,
 		},
