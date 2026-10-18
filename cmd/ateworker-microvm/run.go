@@ -198,8 +198,27 @@ type actorContainer struct {
 	// cached layer directories, top-most first.
 	erofs       bool
 	erofsLayers []string
+	// erofsVolumes are the image volumes the guest mounts from EROFS layer
+	// images (every image volume of an erofs container), in spec order.
+	erofsVolumes []erofsVolume
 	// imageMounts are the image volumes this container mounts, and where.
 	imageMounts []*ateworkerpb.VolumeMount
+}
+
+// erofsVolume is one image volume the guest mounts from EROFS layer images:
+// its name and its cached layer directories, top-most first.
+type erofsVolume struct {
+	name   string
+	layers []string
+}
+
+// erofsVolumeNames returns the names of c's EROFS image volumes.
+func (c *actorContainer) erofsVolumeNames() []string {
+	names := make([]string, 0, len(c.erofsVolumes))
+	for _, v := range c.erofsVolumes {
+		names = append(names, v.name)
+	}
+	return names
 }
 
 // resolvedRuntime holds the concrete binary paths for a request, taken from fetched
@@ -677,20 +696,19 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 	for i, c := range containers {
 		cn := c.GetName()
 		bundle := ociBundlePath(actorDirs, cn)
-		spec := ocispec.Build(ocispec.Options{ActorUID: actorUID, ActorDirs: actorDirs, Container: c})
-		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerName: cn}); err != nil {
-			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
-		}
 		ac := actorContainer{
 			name:         cn,
 			id:           ocispec.GuestContainerID(cn),
 			bundle:       bundle,
 			bundleRootfs: filepath.Join(bundle, "rootfs"),
-			spec:         spec,
 			imageMounts:  c.GetImageVolumeMounts(),
 		}
 		if err := loadBundleOverlay(&ac); err != nil {
 			return nil, fmt.Errorf("while reading the rootfs overlay spec for %q: %w", cn, err)
+		}
+		ac.spec = ocispec.Build(ocispec.Options{ActorUID: actorUID, ActorDirs: actorDirs, Container: c})
+		if err := ocispec.ShapeMicroVM(ac.spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerName: cn, EROFSImageVolumes: ac.erofsVolumeNames()}); err != nil {
+			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
 		}
 		if err := rec.checkMode(&ac); err != nil {
 			return nil, fmt.Errorf("while checking the snapshot's layer images: %w", err)
@@ -704,12 +722,9 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		ac := &ctrs[i]
 		cn, bundle := ac.name, ac.bundle
 		if ac.erofs {
-			// The guest merges the layers (see erofs.go). The host composes
-			// only the image volumes, served over virtio-fs, and
+			// The guest merges the layers and mounts the image volumes from
+			// theirs (see erofs.go); the host composes nothing.
 			// prepareEROFSUppers writes the guest /etc files into the upper.
-			if err := imagecache.SetupBundleImageVolumes(bundle); err != nil {
-				return nil, fmt.Errorf("while composing image volumes for %q: %w", cn, err)
-			}
 			continue
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an
@@ -756,6 +771,10 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 			}
 		} else if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, c.name, id, c.id); err != nil {
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
+		}
+		if c.erofs {
+			// Image volumes are mounted in the guest from layer images.
+			continue
 		}
 		for _, vm := range c.imageMounts {
 			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetName())
@@ -959,7 +978,7 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 	tNetwork := time.Now()
 
 	for _, c := range ctrs {
-		if err := s.startRootfsContainer(ctx, ac, vsockPath, c, devs.overlay(c)); err != nil {
+		if err := s.startRootfsContainer(ctx, ac, vsockPath, c, devs.overlay(c), devs.volumeStorages(c)); err != nil {
 			return err
 		}
 	}
@@ -978,9 +997,9 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 // kernel log (where overlayfs says why a mount was refused).
 //
 // Its spec binds every declared volume at its mount path.
-func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer, ovl *kata.GuestOverlay) error {
+func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer, ovl *kata.GuestOverlay, volumes []*agentpb.Storage) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := ac.StartRootfsContainer(cCtx, c.id, c.spec, ovl)
+	err := ac.StartRootfsContainer(cCtx, c.id, c.spec, ovl, volumes)
 	cancel()
 	if err != nil {
 		if s.guestDebug {

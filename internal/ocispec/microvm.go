@@ -48,12 +48,23 @@ const (
 // https://github.com/kata-containers/kata-containers/blob/4.1.0/src/libs/kata-sys-util/src/validate.rs#L17-L22
 func GuestContainerID(name string) string { return "c_" + name }
 
+// GuestEROFSImageVolume is the in-guest path the worker has the kata agent
+// mount an EROFS image volume at (cmd/ateworker-microvm/erofs.go): under the
+// agent's directory for the container, beside its rootfs. The container's
+// bind of the volume takes it from there instead of from the virtio-fs share.
+func GuestEROFSImageVolume(containerID, volumeName string) string {
+	return path.Join("/run/kata-containers", containerID, ShareVolumes, volumeName)
+}
+
 // MicroVMOptions describes the micro-VM context of one actor container.
 type MicroVMOptions struct {
 	// ActorDirs are the actor's directories; volume bind sources under them are
 	// staged into the share.
 	ActorDirs     *ateworkerpb.ActorDirs
 	ContainerName string
+	// EROFSImageVolumes names the image volumes the guest mounts from EROFS
+	// layer images (GuestEROFSImageVolume) rather than from the share.
+	EROFSImageVolumes []string
 }
 
 // ShapeMicroVM replaces host system mounts with guest mounts, repoints volume
@@ -67,7 +78,7 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 		if m.Type != "bind" {
 			continue
 		}
-		src, err := guestVolumeSource(m.Source, o.ActorDirs, o.ContainerName)
+		src, err := guestVolumeSource(m.Source, o)
 		if err != nil {
 			return fmt.Errorf("mount %q: %w", m.Destination, err)
 		}
@@ -121,12 +132,19 @@ func mergeKataResources(from *specs.LinuxResources) *specs.LinuxResources {
 }
 
 // guestVolumeSource maps a volume's host directory to its guest path.
-func guestVolumeSource(hostPath string, actorDirs *ateworkerpb.ActorDirs, containerName string) (string, error) {
+func guestVolumeSource(hostPath string, o MicroVMOptions) (string, error) {
+	actorDirs, containerName := o.ActorDirs, o.ContainerName
+	containerID := GuestContainerID(containerName)
+	for _, name := range o.EROFSImageVolumes {
+		if hostPath == imagecache.ImageVolumeMountPath(filepath.Join(actorDirs.GetOciBundleDir(), containerName), name) {
+			return GuestEROFSImageVolume(containerID, name), nil
+		}
+	}
 	for _, staged := range []struct{ host, guest string }{
 		{actorDirs.GetDurableDirVolumeMountsDir(), path.Join(GuestSharedDir, ShareDurable)},
 		{actorDirs.GetExternalVolumeMountsDir(), path.Join(GuestSharedDir, ShareCSI)},
 		{actorDirs.GetSystemInfoVolumeRootsDir(), path.Join(GuestSharedDir, ShareSystemInfo)},
-		{imagecache.ImageVolumeMountPath(filepath.Join(actorDirs.GetOciBundleDir(), containerName), ""), path.Join(GuestSharedDir, GuestContainerID(containerName), ShareVolumes)},
+		{imagecache.ImageVolumeMountPath(filepath.Join(actorDirs.GetOciBundleDir(), containerName), ""), path.Join(GuestSharedDir, containerID, ShareVolumes)},
 	} {
 		if rel, ok := strings.CutPrefix(hostPath, staged.host+"/"); ok {
 			return path.Join(staged.guest, rel), nil

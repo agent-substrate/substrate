@@ -218,9 +218,9 @@ paths through the images with overlayfs lookup rules and creates in the
 fresh upper the directories the host writes into (such as `etc` for
 `resolv.conf`) and the implicit-parent repairs, so a directory like `/tmp`
 keeps its declared mode. Each gets the merged view's owner, mode, mtime and
-`user.*` / `security.capability` xattrs. `SetupBundleImageVolumes` composes
-only a bundle's image volumes. `SetupBundleRootfs` refuses a bundle on EROFS
-images.
+`user.*` / `security.capability` xattrs. `SetupBundleRootfs` refuses a bundle
+on EROFS images, and an EROFS bundle's image volumes
+(`ImageVolumeOverlay.EROFS`) are the guest's to mount too.
 
 **Teardown**: `UnmountAllUnder(bundleDir)` lazily detaches every mount below
 an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes

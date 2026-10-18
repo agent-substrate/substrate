@@ -116,7 +116,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	})
 	g.Go(func() error {
 		var err error
-		imageVolumes, err = resolveImageVolumes(gctx, imageCache, volumes, volumeMounts)
+		imageVolumes, err = resolveImageVolumes(gctx, imageCache, volumes, volumeMounts, form)
 		return err
 	})
 	if err := g.Wait(); err != nil {
@@ -144,8 +144,10 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 }
 
 // resolveImageVolumes pulls the image behind every image-typed volume this
-// container mounts and returns what the overlay spec needs to compose each.
-func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) ([]imagecache.ImageVolumeOverlay, error) {
+// container mounts, in the same form as the container's image (the sandbox
+// that mounts the rootfs mounts the volumes too), and returns what the
+// overlay spec needs to compose each.
+func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, form imagecache.Form) ([]imagecache.ImageVolumeOverlay, error) {
 	mounted := make(map[string]bool, len(volumeMounts))
 	for _, vm := range volumeMounts {
 		mounted[vm.GetName()] = true
@@ -166,14 +168,15 @@ func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volu
 	for i, vol := range wanted {
 		g.Go(func() error {
 			volRef := vol.GetImage().GetReference()
-			img, err := imageCache.EnsureImage(gctx, volRef)
+			img, err := imageCache.EnsureImageAs(gctx, volRef, form)
 			if err != nil {
-				return fmt.Errorf("in imageCache.EnsureImage(%q) for volume %q: %w", volRef, vol.GetName(), err)
+				return fmt.Errorf("in imageCache.EnsureImageAs(%q) for volume %q: %w", volRef, vol.GetName(), err)
 			}
 			out[i] = imagecache.ImageVolumeOverlay{
 				Name:        vol.GetName(),
 				ImageDigest: img.Digest.String(),
 				Layers:      img.LayerDirs,
+				EROFS:       img.EROFS,
 			}
 			return nil
 		})

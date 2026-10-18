@@ -81,6 +81,23 @@ type ImageVolumeOverlay struct {
 	ImageDigest string `json:"imageDigest,omitempty"`
 	// Layers are the cached layer directories, bottom-most first.
 	Layers []string `json:"layers"`
+	// EROFS indicates that every layer in Layers has a layer.erofs image
+	// (see LayerEROFSPath), as OverlaySpec.EROFS does for the rootfs: a
+	// micro-VM guest mounts the volume from them; the host composes only
+	// fs/ trees.
+	EROFS bool `json:"erofs,omitempty"`
+}
+
+// EROFSVolumeLayers returns the distinct layer directories of an EROFS image
+// volume, top-most first (overlayfs lowerdir order).
+func EROFSVolumeLayers(vol ImageVolumeOverlay) ([]string, error) {
+	if !vol.EROFS {
+		return nil, fmt.Errorf("image volume %q has no EROFS layer images", vol.Name)
+	}
+	if len(vol.Layers) == 0 {
+		return nil, fmt.Errorf("image volume %q has no layers", vol.Name)
+	}
+	return lowerLayers(vol.Layers), nil
 }
 
 // WriteSpec writes spec into the bundle at bundlePath.

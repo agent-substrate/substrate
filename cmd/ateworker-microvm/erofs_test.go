@@ -29,6 +29,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
@@ -391,5 +392,121 @@ func TestMixedModesFromRecord(t *testing.T) {
 	devs := newEROFSDevices(ctrs)
 	if len(devs.pmem) != 2 || devs.overlay(ctrs[1]) != nil {
 		t.Errorf("devices for the mixed actor = %+v", devs)
+	}
+}
+
+// Image volumes of an EROFS container ride the same devices as the rootfs: a
+// layer the rootfs and a volume share gets one device, volume layers count
+// toward the budget, and the guest mounts each volume from its layer mounts
+// (a bind for one layer, a read-only overlay for more).
+func TestEROFSImageVolumes(t *testing.T) {
+	pool := t.TempDir()
+	base := fakeEROFSLayer(t, pool, "base", "sha256:bbb")
+	app := fakeEROFSLayer(t, pool, "app", "sha256:aaa")
+	tool := fakeEROFSLayer(t, pool, "tool", "sha256:ccc")
+	data := fakeEROFSLayer(t, pool, "data", "sha256:ddd")
+	web := actorContainer{
+		name: "web", id: "c_web", erofs: true, erofsLayers: []string{app, base},
+		erofsVolumes: []erofsVolume{
+			{name: "tools", layers: []string{tool, base}}, // shares base with the rootfs
+			{name: "data", layers: []string{data}},
+		},
+	}
+	devs := newEROFSDevices([]actorContainer{web})
+	if len(devs.pmem) != 4 {
+		t.Fatalf("devices = %d, want 4 (base shared between rootfs and tools)", len(devs.pmem))
+	}
+	wantOrder := []string{app, base, tool, data}
+	for i, layer := range wantOrder {
+		if devs.index[layer] != i || devs.pmem[i].File != imagecache.LayerEROFSPath(layer) {
+			t.Errorf("device %d = %q (index %d), want %q", i, devs.pmem[i].File, devs.index[layer], layer)
+		}
+	}
+	storages := devs.volumeStorages(web)
+	if len(storages) != 2 {
+		t.Fatalf("volume storages = %d, want 2", len(storages))
+	}
+	if st := storages[0]; st.Fstype != "overlay" || st.MountPoint != ocispec.GuestEROFSImageVolume("c_web", "tools") ||
+		!slices.Equal(st.Options, []string{"lowerdir=" + kata.EROFSLayerMountPoint(2) + ":" + kata.EROFSLayerMountPoint(1)}) {
+		t.Errorf("tools storage = %+v, want a lowerdir-only overlay of tool:base at the guest volume path", st)
+	}
+	if st := storages[1]; st.Fstype != "bind" || st.Source != kata.EROFSLayerMountPoint(3) || st.MountPoint != ocispec.GuestEROFSImageVolume("c_web", "data") {
+		t.Errorf("data storage = %+v, want a bind of layer mount 3", st)
+	}
+	if got := devs.volumeStorages(actorContainer{name: "plain"}); got != nil {
+		t.Errorf("volumeStorages(host-merged) = %v, want nil", got)
+	}
+
+	// Budget: volume layers count, shared ones once.
+	layers := func(prefix string, n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("/pool/%s%d", prefix, i)
+		}
+		return out
+	}
+	full := actorContainer{name: "big", erofs: true, erofsLayers: layers("r", maxEROFSLayers-1),
+		erofsVolumes: []erofsVolume{{name: "v", layers: append([]string{"/pool/r0"}, "/pool/v0")}}}
+	if err := checkEROFSLayerBudget([]actorContainer{full}); err != nil {
+		t.Errorf("budget with %d distinct layers = %v, want ok", maxEROFSLayers, err)
+	}
+	full.erofsVolumes = append(full.erofsVolumes, erofsVolume{name: "w", layers: []string{"/pool/w0"}})
+	if err := checkEROFSLayerBudget([]actorContainer{full}); err == nil {
+		t.Errorf("budget with %d distinct layers = nil, want refused", maxEROFSLayers+1)
+	}
+
+	// The record carries the volumes; verify and checkMode hold them to it.
+	dir := t.TempDir()
+	if err := writeEROFSLayers(dir, []actorContainer{web}); err != nil {
+		t.Fatalf("writeEROFSLayers: %v", err)
+	}
+	rec, err := readEROFSLayers(dir)
+	if err != nil {
+		t.Fatalf("readEROFSLayers: %v", err)
+	}
+	if err := rec.verify([]actorContainer{web}); err != nil {
+		t.Errorf("verify on the same node: %v", err)
+	}
+	if err := rec.checkMode(&web); err != nil {
+		t.Errorf("checkMode as recorded: %v", err)
+	}
+	if !rec.hasImage(imagecache.LayerEROFSPath(data)) {
+		t.Error("hasImage(volume-only layer) = false, want true")
+	}
+	changed := web
+	changed.erofsVolumes = []erofsVolume{web.erofsVolumes[0], {name: "data", layers: []string{tool}}}
+	if err := rec.verify([]actorContainer{changed}); err == nil || !strings.Contains(err.Error(), "image volume data") {
+		t.Errorf("verify with a different volume layer = %v, want an error naming the volume", err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "layer.erofs.sha256"), []byte("sha256:eee\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.verify([]actorContainer{web}); err == nil || !strings.Contains(err.Error(), "in the snapshot") {
+		t.Errorf("verify with a changed volume digest = %v, want a digest error", err)
+	}
+	fewer := web
+	fewer.erofsVolumes = web.erofsVolumes[:1]
+	if err := rec.checkMode(&fewer); err == nil || !strings.Contains(err.Error(), "image volumes") {
+		t.Errorf("checkMode with a volume missing = %v, want an error", err)
+	}
+	// A record from before volumes were recorded still restores a container
+	// without any.
+	old := &erofsLayers{Containers: map[string][]erofsLayerRecord{"web": rec.Containers["web"]}}
+	plainWeb := actorContainer{name: "web", erofs: true, erofsLayers: web.erofsLayers}
+	if err := old.checkMode(&plainWeb); err != nil {
+		t.Errorf("checkMode(old record, no volumes) = %v", err)
+	}
+	if err := old.checkMode(&web); err == nil {
+		t.Error("checkMode(old record, bundle with volumes) = nil, want an error")
+	}
+	if err := rec.verify([]actorContainer{plainWeb}); err == nil || !strings.Contains(err.Error(), "image volumes") {
+		t.Errorf("verify with missing volume = %v, want an error", err)
+	}
+	extraVol := &erofsLayers{
+		Containers: rec.Containers,
+		Volumes:    map[string]map[string][]erofsLayerRecord{"ghost": rec.Volumes["web"]},
+	}
+	if err := extraVol.verify([]actorContainer{plainWeb}); err == nil || !strings.Contains(err.Error(), "unknown container") {
+		t.Errorf("verify with unknown volume container = %v, want an error", err)
 	}
 }
