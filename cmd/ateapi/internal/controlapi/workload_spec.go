@@ -55,7 +55,7 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 	// already ensured that only one source is set.
 	for _, vol := range actorTemplate.GetVolumes() {
 		switch {
-		case vol.GetExternal().GetSharedVolume() != nil && isGoldenActor(actor):
+		case vol.GetExternal().GetSharedVolume() != nil && isGoldenActor(actor, actorTemplate):
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name:     vol.GetName(),
 				EmptyDir: &ateletpb.EmptyDirVolumeSource{},
@@ -171,7 +171,7 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapi
 			if !isVolumeMounted(vol.GetName(), template) {
 				continue
 			}
-			if vol.GetExternal().GetSharedVolume() != nil && isGoldenActor(actor) {
+			if vol.GetExternal().GetSharedVolume() != nil && isGoldenActor(actor, template) {
 				continue
 			}
 			if actor == nil {

@@ -423,8 +423,8 @@ func TestSharedVolume_HeldByAnotherActor(t *testing.T) {
 		t.Errorf("attached volumes = %v, want only the producer's attach", attached)
 	}
 
-	if _, err := tc.client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "producer"}}); err != nil {
-		t.Fatalf("PauseActor(producer) failed: %v", err)
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "producer"}, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}); err != nil {
+		t.Fatalf("SuspendActor(producer) failed: %v", err)
 	}
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "consumer"}}); err != nil {
 		t.Fatalf("ResumeActor(consumer) after the handoff failed: %v", err)

@@ -132,7 +132,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		}
 		return nil, resources.ToAPIError(errs)
 	}
-	if !isGoldenActor(inActor) {
+	if !isGoldenActor(inActor, template) {
 		refVols, err := resolveSharedVolumeRefs(ctx, s.store, inActor, template)
 		if err != nil {
 			return nil, err
@@ -189,8 +189,9 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	return stored, nil
 }
 
-func isGoldenActor(actor *ateapipb.Actor) bool {
-	return actor.GetMetadata().GetAtespace() == resources.GoldenActorAtespace
+func isGoldenActor(actor *ateapipb.Actor, template *ateapipb.ActorTemplate) bool {
+	metadata := template.GetMetadata()
+	return metadata.GetUid() != "" && actor.GetMetadata().GetName() == metadata.GetUid() && actor.GetMetadata().GetAtespace() == metadata.GetAtespace()
 }
 
 // resolveTagSource resolves a CreateActor request's source tag

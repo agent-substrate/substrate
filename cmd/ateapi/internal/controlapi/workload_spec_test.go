@@ -20,7 +20,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
 )
@@ -657,7 +656,7 @@ func TestWorkloadSpecFromActorTemplateRejectsUnknownVolumeSource(t *testing.T) {
 
 func TestWorkloadSpecBorrowedVolume(t *testing.T) {
 	template := &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "space-abc", Name: "tmpl1"},
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "space-abc", Name: "tmpl1", Uid: "tmpl1-uid"},
 		Volumes: []*ateapipb.Volume{
 			{Name: "borrowed", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{}}},
 			{Name: "owned", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard"}}},
@@ -687,7 +686,7 @@ func TestWorkloadSpecBorrowedVolume(t *testing.T) {
 		{
 			name: "golden actor gets an empty dir in place of the shared volume",
 			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "tmpl1-uid"},
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "space-abc", Name: "tmpl1-uid"},
 				Status: &ateapipb.ActorStatus{ExternalVolumes: []*ateapipb.ExternalVolume{
 					{Name: "owned", StorageVolumeId: "disk-1", VolumeType: "pd.csi.storage.gke.io"},
 				}},

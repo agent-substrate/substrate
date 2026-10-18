@@ -43,3 +43,25 @@ func TestTemplateHasSharedVolumeRef(t *testing.T) {
 		})
 	}
 }
+
+func TestIsGoldenActor(t *testing.T) {
+	template := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: "team", Name: "template", Uid: "template-uid"}}
+	for _, tc := range []struct {
+		name, space, actor string
+		want               bool
+	}{
+		{"golden", "team", "template-uid", true},
+		{"ordinary", "team", "user-actor", false},
+		{"other atespace", "other", "template-uid", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: tc.space, Name: tc.actor}}
+			if got := isGoldenActor(actor, template); got != tc.want {
+				t.Fatalf("isGoldenActor = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if isGoldenActor(nil, nil) {
+		t.Fatal("missing metadata identifies a golden actor")
+	}
+}
