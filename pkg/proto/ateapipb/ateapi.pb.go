@@ -262,9 +262,9 @@ const (
 	ActorState_ACTOR_STATE_RUNNING     ActorState = 2
 	ActorState_ACTOR_STATE_SUSPENDING  ActorState = 3
 	ActorState_ACTOR_STATE_SUSPENDED   ActorState = 4
-	ActorState_ACTOR_STATE_CRASHED     ActorState = 7
-	ActorState_ACTOR_STATE_DELETING    ActorState = 8
-	ActorState_ACTOR_STATE_REVERTING   ActorState = 9 // Keep this in sync with ActorStatus.state's maximum.
+	ActorState_ACTOR_STATE_CRASHED     ActorState = 5
+	ActorState_ACTOR_STATE_DELETING    ActorState = 6
+	ActorState_ACTOR_STATE_REVERTING   ActorState = 7 // Keep this in sync with ActorStatus.state's maximum.
 )
 
 // Enum value maps for ActorState.
@@ -275,9 +275,9 @@ var (
 		2: "ACTOR_STATE_RUNNING",
 		3: "ACTOR_STATE_SUSPENDING",
 		4: "ACTOR_STATE_SUSPENDED",
-		7: "ACTOR_STATE_CRASHED",
-		8: "ACTOR_STATE_DELETING",
-		9: "ACTOR_STATE_REVERTING",
+		5: "ACTOR_STATE_CRASHED",
+		6: "ACTOR_STATE_DELETING",
+		7: "ACTOR_STATE_REVERTING",
 	}
 	ActorState_value = map[string]int32{
 		"ACTOR_STATE_UNSPECIFIED": 0,
@@ -285,9 +285,9 @@ var (
 		"ACTOR_STATE_RUNNING":     2,
 		"ACTOR_STATE_SUSPENDING":  3,
 		"ACTOR_STATE_SUSPENDED":   4,
-		"ACTOR_STATE_CRASHED":     7,
-		"ACTOR_STATE_DELETING":    8,
-		"ACTOR_STATE_REVERTING":   9,
+		"ACTOR_STATE_CRASHED":     5,
+		"ACTOR_STATE_DELETING":    6,
+		"ACTOR_STATE_REVERTING":   7,
 	}
 )
 
@@ -1122,7 +1122,7 @@ type ExternalVolumeStatus struct {
 	//
 	// +k8s:optional
 	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
-	VolumeContext map[string]string `protobuf:"bytes,5,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	VolumeContext map[string]string `protobuf:"bytes,4,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1196,7 +1196,7 @@ type Actor struct {
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	// +k8s:mutable
-	ActorTemplate *ObjectRef `protobuf:"bytes,4,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
+	ActorTemplate *ObjectRef `protobuf:"bytes,2,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	// worker_selector is the per-actor placement constraint. The scheduler
 	// evaluates the AND of this selector and the template's workerSelector to
 	// find eligible pools. It narrows the template's selection; pinning a
@@ -1204,7 +1204,7 @@ type Actor struct {
 	// Changes take effect on the next ResumeActor call.
 	//
 	// +k8s:optional
-	WorkerSelector *Selector `protobuf:"bytes,5,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
+	WorkerSelector *Selector `protobuf:"bytes,3,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
 	// The tag specified by the caller at CreateActor to seed this Actor from an
 	// ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
 	// once at creation and immutable afterward.
@@ -1212,12 +1212,12 @@ type Actor struct {
 	// +k8s:optional
 	// +k8s:subfield(atespace)=+k8s:required
 	// +k8s:immutable
-	SourceTag *ObjectRef `protobuf:"bytes,6,opt,name=source_tag,json=sourceTag,proto3" json:"source_tag,omitempty"`
+	SourceTag *ObjectRef `protobuf:"bytes,4,opt,name=source_tag,json=sourceTag,proto3" json:"source_tag,omitempty"`
 	// status is the system-managed state of the Actor. It is updated by the
 	// server and ignored on input. It is always present in output.
 	//
 	// +k8s:optional
-	Status        *ActorStatus `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
+	Status        *ActorStatus `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2037,7 +2037,7 @@ type ActorStatus struct {
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=9 # keep this in sync with the ActorState enum
+	// +k8s:maximum=7 # keep this in sync with the ActorState enum
 	State ActorState `protobuf:"varint,1,opt,name=state,proto3,enum=ateapi.ActorState" json:"state,omitempty"`
 	// worker_assignment points at the worker currently hosting this Actor.
 	// Unset whenever the Actor has no worker (SUSPENDED, CRASHED).
@@ -2051,19 +2051,19 @@ type ActorStatus struct {
 	//
 	// +ate:preview=ExternalVolumes
 	// +k8s:optional
-	ExternalVolumes *ExternalVolumes `protobuf:"bytes,7,opt,name=external_volumes,json=externalVolumes,proto3" json:"external_volumes,omitempty"`
+	ExternalVolumes *ExternalVolumes `protobuf:"bytes,3,opt,name=external_volumes,json=externalVolumes,proto3" json:"external_volumes,omitempty"`
 	// crash records why and when the Actor entered CRASHED. It is set with the
 	// CRASHED state and cleared when a revert returns the Actor to SUSPENDED.
 	//
 	// +k8s:optional
-	Crash *ActorCrash `protobuf:"bytes,9,opt,name=crash,proto3" json:"crash,omitempty"`
+	Crash *ActorCrash `protobuf:"bytes,4,opt,name=crash,proto3" json:"crash,omitempty"`
 	// assigned_node is the Kubernetes node the Actor is currently attached to
 	// (hosting its active worker or its node-local snapshots). Unset when the
 	// Actor is detached from any node.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-long-name
-	AssignedNode string `protobuf:"bytes,10,opt,name=assigned_node,json=assignedNode,proto3" json:"assigned_node,omitempty"`
+	AssignedNode string `protobuf:"bytes,5,opt,name=assigned_node,json=assignedNode,proto3" json:"assigned_node,omitempty"`
 	// snapshots holds the Actor's active and in-progress snapshot generations.
 	//
 	// +k8s:optional
@@ -2071,7 +2071,7 @@ type ActorStatus struct {
 	// +k8s:listType=atomic
 	// +k8s:unique=map
 	// +k8s:listMapKey=generation
-	Snapshots []*Snapshot `protobuf:"bytes,11,rep,name=snapshots,proto3" json:"snapshots,omitempty"`
+	Snapshots []*Snapshot `protobuf:"bytes,6,rep,name=snapshots,proto3" json:"snapshots,omitempty"`
 	// last_assigned_generation tracks the last snapshot generation assigned for
 	// this Actor during a Suspend or Pause request.
 	// Even during Revert, the generation is not decreased to keep track of snapshots
@@ -2081,7 +2081,7 @@ type ActorStatus struct {
 	// +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
 	// +k8s:minimum=0
 	// +k8s:update=NoUnset
-	LastAssignedGeneration int32 `protobuf:"varint,12,opt,name=last_assigned_generation,json=lastAssignedGeneration,proto3" json:"last_assigned_generation,omitempty"`
+	LastAssignedGeneration int32 `protobuf:"varint,7,opt,name=last_assigned_generation,json=lastAssignedGeneration,proto3" json:"last_assigned_generation,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -2710,9 +2710,9 @@ type ActorTemplate struct {
 	//
 	// +k8s:required
 	// +k8s:customValidation # cpu and memory limits are both set
-	Resources *Resources `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *Resources `protobuf:"bytes,6,opt,name=resources,proto3" json:"resources,omitempty"`
 	// +k8s:optional
-	Status        *ActorTemplateStatus `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
+	Status        *ActorTemplateStatus `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3053,7 +3053,7 @@ type SnapshotConfig struct {
 	// Golden snapshots are enabled when this config is omitted.
 	//
 	// +k8s:optional
-	GoldenSnapshotConfig *GoldenSnapshotConfig `protobuf:"bytes,5,opt,name=golden_snapshot_config,json=goldenSnapshotConfig,proto3" json:"golden_snapshot_config,omitempty"`
+	GoldenSnapshotConfig *GoldenSnapshotConfig `protobuf:"bytes,3,opt,name=golden_snapshot_config,json=goldenSnapshotConfig,proto3" json:"golden_snapshot_config,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -3652,15 +3652,15 @@ type Volume struct {
 	// +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
 	// +k8s:optional
 	// +k8s:unionMember
-	External *ExternalVolumeSource `protobuf:"bytes,7,opt,name=external,proto3" json:"external,omitempty"`
+	External *ExternalVolumeSource `protobuf:"bytes,3,opt,name=external,proto3" json:"external,omitempty"`
 	// +k8s:optional
 	// +k8s:unionMember
-	SystemInfo *SystemInfoVolumeSource `protobuf:"bytes,5,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
+	SystemInfo *SystemInfoVolumeSource `protobuf:"bytes,4,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
 	// image mounts the contents of an OCI image, read-only.
 	//
 	// +k8s:optional
 	// +k8s:unionMember
-	Image         *ImageVolumeSource `protobuf:"bytes,6,opt,name=image,proto3" json:"image,omitempty"`
+	Image         *ImageVolumeSource `protobuf:"bytes,5,opt,name=image,proto3" json:"image,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4188,7 +4188,7 @@ type TrustBundleDataSource struct {
 	// +k8s:eachVal=+k8s:minLength=1
 	// +k8s:eachVal=+k8s:maxLength=253
 	// +k8s:listType=set
-	Names []string `protobuf:"bytes,3,rep,name=names,proto3" json:"names,omitempty"`
+	Names []string `protobuf:"bytes,1,rep,name=names,proto3" json:"names,omitempty"`
 	// path must be a clean relative Unix path: at most 16 '/'-separated
 	// segments, none of them empty, '.' or '..', and no NUL byte.
 	//
@@ -5696,7 +5696,7 @@ type MintActorJwtRequest struct {
 	// Must be a valid actor that currently exists according to the actor store.
 	//
 	// +k8s:required
-	Actor *ObjectRef `protobuf:"bytes,5,opt,name=actor,proto3" json:"actor,omitempty"`
+	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// The audiences the minted JWT is bound to. Tokens are only issued with
 	// audience bindings, so at least one is required.
 	//
@@ -5704,13 +5704,13 @@ type MintActorJwtRequest struct {
 	// +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
 	// +k8s:listType=set
 	// +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
-	Audiences []string `protobuf:"bytes,1,rep,name=audiences,proto3" json:"audiences,omitempty"`
+	Audiences []string `protobuf:"bytes,2,rep,name=audiences,proto3" json:"audiences,omitempty"`
 	// Lifetime of the JWT, in seconds.
 	//
 	// +k8s:required
 	// +k8s:minimum=300
 	// +k8s:maximum=3600
-	ExpirationSeconds int64 `protobuf:"varint,8,opt,name=expiration_seconds,json=expirationSeconds,proto3" json:"expiration_seconds,omitempty"`
+	ExpirationSeconds int64 `protobuf:"varint,3,opt,name=expiration_seconds,json=expirationSeconds,proto3" json:"expiration_seconds,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -5847,20 +5847,20 @@ type MintActorCertificateRequest struct {
 	// Must be a valid actor that currently exists according to the actor store.
 	//
 	// +k8s:required
-	Actor *ObjectRef `protobuf:"bytes,6,opt,name=actor,proto3" json:"actor,omitempty"`
+	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// The UID of the actor --- used to guard against deletion and recreation of
 	// an actor with the same name.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-uuid
-	ActorUid string `protobuf:"bytes,7,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorUid string `protobuf:"bytes,2,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// Request contains DER encoded bytes of a x509 certificate signing request.
 	// The signer will ignore the contents of the CSR except to extract the
 	// subject public key.
 	//
 	// +k8s:required
 	// +k8s:maxBytes=16384
-	CertificateSigningRequest []byte `protobuf:"bytes,2,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
+	CertificateSigningRequest []byte `protobuf:"bytes,3,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
 }
@@ -7264,14 +7264,14 @@ type Worker struct {
 	// +k8s:maxLength=2048
 	// +k8s:customValidation # a SPIFFE ID
 	// +k8s:immutable
-	WorkerSpiffeId string `protobuf:"bytes,13,opt,name=worker_spiffe_id,json=workerSpiffeId,proto3" json:"worker_spiffe_id,omitempty"`
+	WorkerSpiffeId string `protobuf:"bytes,8,opt,name=worker_spiffe_id,json=workerSpiffeId,proto3" json:"worker_spiffe_id,omitempty"`
 	// sandbox_class mirrors the WorkerPool's default sandbox class
 	//
 	// +k8s:optional
 	// +k8s:maxLength=63
 	// +k8s:customValidation # gvisor or microvm
 	// +k8s:immutable
-	SandboxClass string `protobuf:"bytes,8,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
+	SandboxClass string `protobuf:"bytes,9,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// labels mirror the WorkerPool object's Kubernetes labels, which selectors
 	// match against.
 	// Kubernetes does not cap an object's label count, so the bound below is
@@ -7281,7 +7281,7 @@ type Worker struct {
 	// +k8s:maxProperties=64
 	// +k8s:eachKey=+k8s:format=k8s-label-key
 	// +k8s:eachVal=+k8s:format=k8s-label-value
-	Labels map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Labels map[string]string `protobuf:"bytes,10,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// epoch counts the runs of the worker pod's worker container: 1 for its first
 	// run and one more for each restart. 0 means it has not been reported.
 	//
@@ -7294,14 +7294,14 @@ type Worker struct {
 	// +k8s:minimum=0
 	// +k8s:update=NoUnset
 	// +k8s:customValidation
-	Epoch int64 `protobuf:"varint,12,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Epoch int64 `protobuf:"varint,11,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	// Output-only server-managed state. Absent from Create/Update request
 	// payloads; whatever a request carries here is ignored. A client moves
 	// state only through DrainWorker, MarkWorkerAvailable and
 	// MarkWorkerUnavailable, and the assignments are the scheduler's.
 	//
 	// +k8s:optional
-	Status        *WorkerStatus `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
+	Status        *WorkerStatus `protobuf:"bytes,12,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7817,7 +7817,7 @@ type ActorAssignment struct {
 	//
 	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
-	Metadata *ResourceMetadata `protobuf:"bytes,6,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// actor is the Actor that is assigned to the Worker.
 	//
 	// +k8s:required
@@ -7829,12 +7829,12 @@ type ActorAssignment struct {
 	// The resources allocated to the Actor when it was assigned.
 	//
 	// +k8s:optional
-	Resources *Resources `protobuf:"bytes,5,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *Resources `protobuf:"bytes,4,opt,name=resources,proto3" json:"resources,omitempty"`
 	// worker_epoch is the Worker's epoch when the Actor was bound.
 	//
 	// +k8s:optional
 	// +k8s:minimum=0
-	WorkerEpoch   int64 `protobuf:"varint,7,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
+	WorkerEpoch   int64 `protobuf:"varint,5,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9489,17 +9489,17 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x11storage_volume_id\x18\x02 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x03 \x01(\tR\n" +
 	"volumeType\x12V\n" +
-	"\x0evolume_context\x18\x05 \x03(\v2/.ateapi.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x1a@\n" +
+	"\x0evolume_context\x18\x04 \x03(\v2/.ateapi.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa1\x02\n" +
 	"\x05Actor\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x128\n" +
-	"\x0eactor_template\x18\x04 \x01(\v2\x11.ateapi.ObjectRefR\ractorTemplate\x129\n" +
-	"\x0fworker_selector\x18\x05 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x120\n" +
+	"\x0eactor_template\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\ractorTemplate\x129\n" +
+	"\x0fworker_selector\x18\x03 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x120\n" +
 	"\n" +
-	"source_tag\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\tsourceTag\x12+\n" +
-	"\x06status\x18\a \x01(\v2\x13.ateapi.ActorStatusR\x06status:\x0e\x82\xb5\x18\n" +
+	"source_tag\x18\x04 \x01(\v2\x11.ateapi.ObjectRefR\tsourceTag\x12+\n" +
+	"\x06status\x18\x05 \x01(\v2\x13.ateapi.ActorStatusR\x06status:\x0e\x82\xb5\x18\n" +
 	"\x18\x01\"\x06Actors\"\x8d\x01\n" +
 	"\fEgressPolicy\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12(\n" +
@@ -9539,12 +9539,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\vActorStatus\x12(\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x12.ateapi.ActorStateR\x05state\x12E\n" +
 	"\x11worker_assignment\x18\x02 \x01(\v2\x18.ateapi.WorkerAssignmentR\x10workerAssignment\x12B\n" +
-	"\x10external_volumes\x18\a \x01(\v2\x17.ateapi.ExternalVolumesR\x0fexternalVolumes\x12(\n" +
-	"\x05crash\x18\t \x01(\v2\x12.ateapi.ActorCrashR\x05crash\x12#\n" +
-	"\rassigned_node\x18\n" +
-	" \x01(\tR\fassignedNode\x12.\n" +
-	"\tsnapshots\x18\v \x03(\v2\x10.ateapi.SnapshotR\tsnapshots\x128\n" +
-	"\x18last_assigned_generation\x18\f \x01(\x05R\x16lastAssignedGeneration\"a\n" +
+	"\x10external_volumes\x18\x03 \x01(\v2\x17.ateapi.ExternalVolumesR\x0fexternalVolumes\x12(\n" +
+	"\x05crash\x18\x04 \x01(\v2\x12.ateapi.ActorCrashR\x05crash\x12#\n" +
+	"\rassigned_node\x18\x05 \x01(\tR\fassignedNode\x12.\n" +
+	"\tsnapshots\x18\x06 \x03(\v2\x10.ateapi.SnapshotR\tsnapshots\x128\n" +
+	"\x18last_assigned_generation\x18\a \x01(\x05R\x16lastAssignedGeneration\"a\n" +
 	"\n" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +
@@ -9585,8 +9584,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"containers\x12(\n" +
 	"\avolumes\x18\x04 \x03(\v2\x0e.ateapi.VolumeR\avolumes\x12?\n" +
 	"\x0fsnapshot_config\x18\x05 \x01(\v2\x16.ateapi.SnapshotConfigR\x0esnapshotConfig\x12/\n" +
-	"\tresources\x18\a \x01(\v2\x11.ateapi.ResourcesR\tresources\x123\n" +
-	"\x06status\x18\b \x01(\v2\x1b.ateapi.ActorTemplateStatusR\x06status:\x16\x82\xb5\x18\x12\x18\x01\"\x0eActorTemplates\"3\n" +
+	"\tresources\x18\x06 \x01(\v2\x11.ateapi.ResourcesR\tresources\x123\n" +
+	"\x06status\x18\a \x01(\v2\x1b.ateapi.ActorTemplateStatusR\x06status:\x16\x82\xb5\x18\x12\x18\x01\"\x0eActorTemplates\"3\n" +
 	"\tResources\x12&\n" +
 	"\x06limits\x18\x01 \x03(\v2\x0e.ateapi.LimitsR\x06limits\"8\n" +
 	"\x06Limits\x12\x12\n" +
@@ -9602,7 +9601,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0eSnapshotConfig\x12)\n" +
 	"\x10storage_location\x18\x01 \x01(\tR\x0fstorageLocation\x12G\n" +
 	"\x12preferred_fidelity\x18\x02 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\x11preferredFidelity\x12R\n" +
-	"\x16golden_snapshot_config\x18\x05 \x01(\v2\x1c.ateapi.GoldenSnapshotConfigR\x14goldenSnapshotConfig\"F\n" +
+	"\x16golden_snapshot_config\x18\x03 \x01(\v2\x1c.ateapi.GoldenSnapshotConfigR\x14goldenSnapshotConfig\"F\n" +
 	"\x14GoldenSnapshotConfig\x12.\n" +
 	"\x04mode\x18\x01 \x01(\x0e2\x1a.ateapi.GoldenSnapshotModeR\x04mode\"\xec\x02\n" +
 	"\tContainer\x12\x12\n" +
@@ -9633,10 +9632,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12?\n" +
 	"\vdurable_dir\x18\x02 \x01(\v2\x1e.ateapi.DurableDirVolumeSourceR\n" +
 	"durableDir\x128\n" +
-	"\bexternal\x18\a \x01(\v2\x1c.ateapi.ExternalVolumeSourceR\bexternal\x12?\n" +
-	"\vsystem_info\x18\x05 \x01(\v2\x1e.ateapi.SystemInfoVolumeSourceR\n" +
+	"\bexternal\x18\x03 \x01(\v2\x1c.ateapi.ExternalVolumeSourceR\bexternal\x12?\n" +
+	"\vsystem_info\x18\x04 \x01(\v2\x1e.ateapi.SystemInfoVolumeSourceR\n" +
 	"systemInfo\x12/\n" +
-	"\x05image\x18\x06 \x01(\v2\x19.ateapi.ImageVolumeSourceR\x05image\"R\n" +
+	"\x05image\x18\x05 \x01(\v2\x19.ateapi.ImageVolumeSourceR\x05image\"R\n" +
 	"\x14ExternalVolumeSource\x12:\n" +
 	"\btemplate\x18\x01 \x01(\v2\x1e.ateapi.ExternalVolumeTemplateR\btemplate\"1\n" +
 	"\x11ImageVolumeSource\x12\x1c\n" +
@@ -9654,10 +9653,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x05items\x18\x01 \x03(\v2\x19.ateapi.ActorMetadataItemR\x05items\"Y\n" +
 	"\x11ActorMetadataItem\x120\n" +
 	"\x05field\x18\x01 \x01(\x0e2\x1a.ateapi.ActorMetadataFieldR\x05field\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\"M\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"A\n" +
 	"\x15TrustBundleDataSource\x12\x14\n" +
-	"\x05names\x18\x03 \x03(\tR\x05names\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04pathJ\x04\b\x01\x10\x02R\x04name\"@\n" +
+	"\x05names\x18\x01 \x03(\tR\x05names\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"@\n" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
@@ -9728,17 +9727,17 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rGetTagRequest\x12#\n" +
 	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\"\x8b\x01\n" +
 	"\x13MintActorJwtRequest\x12'\n" +
-	"\x05actor\x18\x05 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1c\n" +
-	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
-	"\x12expiration_seconds\x18\b \x01(\x03R\x11expirationSeconds\"u\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1c\n" +
+	"\taudiences\x18\x02 \x03(\tR\taudiences\x12-\n" +
+	"\x12expiration_seconds\x18\x03 \x01(\x03R\x11expirationSeconds\"u\n" +
 	"\x14MintActorJwtResponse\x12 \n" +
 	"\tactor_jwt\x18\x01 \x01(\tB\x03\x80\x01\x01R\bactorJwt\x12;\n" +
 	"\vexpire_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"expireTime\"\xa3\x01\n" +
 	"\x1bMintActorCertificateRequest\x12'\n" +
-	"\x05actor\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
-	"\tactor_uid\x18\a \x01(\tR\bactorUid\x12>\n" +
-	"\x1bcertificate_signing_request\x18\x02 \x01(\fR\x19certificateSigningRequest\"M\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
+	"\tactor_uid\x18\x02 \x01(\tR\bactorUid\x12>\n" +
+	"\x1bcertificate_signing_request\x18\x03 \x01(\fR\x19certificateSigningRequest\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\\\n" +
 	"\x0fListTagsRequest\x12\x1a\n" +
@@ -9809,11 +9808,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0eworker_pod_uid\x18\x05 \x01(\tR\fworkerPodUid\x12\x1b\n" +
 	"\tnode_name\x18\x06 \x01(\tR\bnodeName\x12\x10\n" +
 	"\x03ips\x18\a \x03(\tR\x03ips\x12(\n" +
-	"\x10worker_spiffe_id\x18\r \x01(\tR\x0eworkerSpiffeId\x12#\n" +
-	"\rsandbox_class\x18\b \x01(\tR\fsandboxClass\x122\n" +
-	"\x06labels\x18\t \x03(\v2\x1a.ateapi.Worker.LabelsEntryR\x06labels\x12\x14\n" +
-	"\x05epoch\x18\f \x01(\x03R\x05epoch\x12,\n" +
-	"\x06status\x18\v \x01(\v2\x14.ateapi.WorkerStatusR\x06status\x1a9\n" +
+	"\x10worker_spiffe_id\x18\b \x01(\tR\x0eworkerSpiffeId\x12#\n" +
+	"\rsandbox_class\x18\t \x01(\tR\fsandboxClass\x122\n" +
+	"\x06labels\x18\n" +
+	" \x03(\v2\x1a.ateapi.Worker.LabelsEntryR\x06labels\x12\x14\n" +
+	"\x05epoch\x18\v \x01(\x03R\x05epoch\x12,\n" +
+	"\x06status\x18\f \x01(\v2\x14.ateapi.WorkerStatusR\x06status\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x0f\x82\xb5\x18\v\x18\x02\"\aWorkers\"\xd6\x02\n" +
@@ -9839,11 +9839,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\tresources\x18\x01 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12\x16\n" +
 	"\x06actors\x18\x02 \x01(\x05R\x06actors\"\x81\x02\n" +
 	"\x0fActorAssignment\x124\n" +
-	"\bmetadata\x18\x06 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12'\n" +
+	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12'\n" +
 	"\x05actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12/\n" +
-	"\tresources\x18\x05 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12!\n" +
-	"\fworker_epoch\x18\a \x01(\x03R\vworkerEpoch:\x1e\x82\xb5\x18\x1a\n" +
+	"\tresources\x18\x04 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12!\n" +
+	"\fworker_epoch\x18\x05 \x01(\x03R\vworkerEpoch:\x1e\x82\xb5\x18\x1a\n" +
 	"\x06Worker\"\x10ActorAssignments\"\x81\x02\n" +
 	"\x15RegisterWorkerRequest\x12)\n" +
 	"\x06worker\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x123\n" +
@@ -9950,9 +9950,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x13ACTOR_STATE_RUNNING\x10\x02\x12\x1a\n" +
 	"\x16ACTOR_STATE_SUSPENDING\x10\x03\x12\x19\n" +
 	"\x15ACTOR_STATE_SUSPENDED\x10\x04\x12\x17\n" +
-	"\x13ACTOR_STATE_CRASHED\x10\a\x12\x18\n" +
-	"\x14ACTOR_STATE_DELETING\x10\b\x12\x19\n" +
-	"\x15ACTOR_STATE_REVERTING\x10\t*\x7f\n" +
+	"\x13ACTOR_STATE_CRASHED\x10\x05\x12\x18\n" +
+	"\x14ACTOR_STATE_DELETING\x10\x06\x12\x19\n" +
+	"\x15ACTOR_STATE_REVERTING\x10\a*\x7f\n" +
 	"\x12GoldenSnapshotMode\x12$\n" +
 	" GOLDEN_SNAPSHOT_MODE_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cGOLDEN_SNAPSHOT_MODE_ENABLED\x10\x01\x12!\n" +

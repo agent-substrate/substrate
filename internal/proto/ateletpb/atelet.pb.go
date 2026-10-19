@@ -1187,22 +1187,22 @@ type MintActorCertificateRequest struct {
 	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	ActorAtespace string `protobuf:"bytes,3,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
+	ActorAtespace string `protobuf:"bytes,1,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	ActorName string `protobuf:"bytes,4,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	// The UID of the actor --- used to guard against deletion and recreation of
 	// an actor with the same name.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-uuid
-	ActorUid string `protobuf:"bytes,5,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// DER-encoded PKCS #10 certificate signing request. Atunnel retains the
 	// corresponding private key.
 	//
 	// +k8s:required
 	// +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
-	CertificateSigningRequest []byte `protobuf:"bytes,1,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
+	CertificateSigningRequest []byte `protobuf:"bytes,4,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
 }
@@ -2250,7 +2250,7 @@ type TrustBundleDataSource struct {
 	// +k8s:listType=set
 	// +k8s:eachVal=+k8s:minLength=1
 	// +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
-	Names         []string `protobuf:"bytes,3,rep,name=names,proto3" json:"names,omitempty"`
+	Names         []string `protobuf:"bytes,2,rep,name=names,proto3" json:"names,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3676,7 +3676,7 @@ type RestoreRequest struct {
 	// When absent the actor has no egress: its TCP is captured and refused.
 	//
 	// +k8s:optional
-	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
+	EgressGateway *EgressGateway `protobuf:"bytes,9,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. For
 	// gVisor and micro-VM VOLUMES restores the sandbox is (re)sized to these;
 	// for a MEMORY micro-VM restore the size baked into the snapshot wins. Zero
@@ -3685,15 +3685,15 @@ type RestoreRequest struct {
 	// +k8s:optional
 	// +k8s:minimum=0
 	// +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-	CpuMilli int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
+	CpuMilli int64 `protobuf:"varint,10,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
 	// +k8s:optional
 	// +k8s:minimum=0
-	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	MemoryBytes int64 `protobuf:"varint,11,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// The sandbox binaries and pause image to restore with, resolved from the
 	// assigned worker pool's SandboxConfig.
 	//
 	// +k8s:required
-	SandboxAssets *SandboxAssets `protobuf:"bytes,16,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
+	SandboxAssets *SandboxAssets `protobuf:"bytes,12,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	// The runtime the assigned worker restores this actor under, from
 	// WorkerAssignment.sandbox_runtime.
 	//
@@ -3702,7 +3702,7 @@ type RestoreRequest struct {
 	// sandbox_assets.
 	//
 	// +k8s:optional
-	SandboxRuntime *SandboxRuntime `protobuf:"bytes,17,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
+	SandboxRuntime *SandboxRuntime `protobuf:"bytes,13,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -4180,11 +4180,11 @@ const file_atelet_proto_rawDesc = "" +
 	"\anumbers\x18\x02 \x03(\x05R\anumbers\"\x10\n" +
 	"\x0eEgressAllPorts\"\xc0\x01\n" +
 	"\x1bMintActorCertificateRequest\x12%\n" +
-	"\x0eactor_atespace\x18\x03 \x01(\tR\ractorAtespace\x12\x1d\n" +
+	"\x0eactor_atespace\x18\x01 \x01(\tR\ractorAtespace\x12\x1d\n" +
 	"\n" +
-	"actor_name\x18\x04 \x01(\tR\tactorName\x12\x1b\n" +
-	"\tactor_uid\x18\x05 \x01(\tR\bactorUid\x12>\n" +
-	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\"M\n" +
+	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12>\n" +
+	"\x1bcertificate_signing_request\x18\x04 \x01(\fR\x19certificateSigningRequest\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa2\x02\n" +
 	"\x10TerminateRequest\x12$\n" +
@@ -4258,10 +4258,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x05field\x18\x01 \x01(\x0e2\x1a.atelet.ActorMetadataFieldR\x05field\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\"J\n" +
 	"\x17ActorMetadataDataSource\x12/\n" +
-	"\x05items\x18\x01 \x03(\v2\x19.atelet.ActorMetadataItemR\x05items\"M\n" +
+	"\x05items\x18\x01 \x03(\v2\x19.atelet.ActorMetadataItemR\x05items\"A\n" +
 	"\x15TrustBundleDataSource\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
-	"\x05names\x18\x03 \x03(\tR\x05namesJ\x04\b\x02\x10\x03R\x04name\"\xa0\x01\n" +
+	"\x05names\x18\x02 \x03(\tR\x05names\"\xa0\x01\n" +
 	"\x14SystemInfoDataSource\x12F\n" +
 	"\x0eactor_metadata\x18\x01 \x01(\v2\x1f.atelet.ActorMetadataDataSourceR\ractorMetadata\x12@\n" +
 	"\ftrust_bundle\x18\x02 \x01(\v2\x1d.atelet.TrustBundleDataSourceR\vtrustBundle\"Y\n" +
@@ -4351,11 +4351,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12,\n" +
 	"\bsnapshot\x18\b \x01(\v2\x10.atelet.SnapshotR\bsnapshot\x12A\n" +
-	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
-	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
-	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12<\n" +
-	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\x12?\n" +
-	"\x0fsandbox_runtime\x18\x11 \x01(\v2\x16.atelet.SandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
+	"\x0eegress_gateway\x18\t \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
+	"\tcpu_milli\x18\n" +
+	" \x01(\x03R\bcpuMilli\x12!\n" +
+	"\fmemory_bytes\x18\v \x01(\x03R\vmemoryBytes\x12<\n" +
+	"\x0esandbox_assets\x18\f \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\x12?\n" +
+	"\x0fsandbox_runtime\x18\r \x01(\v2\x16.atelet.SandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse\"\x86\x02\n" +
 	"\x16PromoteSnapshotRequest\x12\x1a\n" +

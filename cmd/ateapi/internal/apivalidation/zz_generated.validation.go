@@ -784,7 +784,7 @@ func Validate_ActorStatus(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 9); len(e) != 0 {
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 7); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {

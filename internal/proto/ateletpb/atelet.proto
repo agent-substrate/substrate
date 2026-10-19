@@ -283,25 +283,25 @@ message MintActorCertificateRequest {
   //
   // +k8s:required
   // +k8s:format=k8s-short-name
-  string actor_atespace = 3;
+  string actor_atespace = 1;
 
   // +k8s:required
   // +k8s:format=k8s-short-name
-  string actor_name = 4;
+  string actor_name = 2;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
-  string actor_uid = 5;
+  string actor_uid = 3;
 
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
   //
   // +k8s:required
   // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
-  bytes certificate_signing_request = 1;
+  bytes certificate_signing_request = 4;
 }
 
 message MintActorCertificateResponse {
@@ -651,9 +651,7 @@ message TrustBundleDataSource {
   // +k8s:listType=set
   // +k8s:eachVal=+k8s:minLength=1
   // +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
-  repeated string names = 3;
-  reserved 2;
-  reserved "name";
+  repeated string names = 2;
 }
 
 // SystemInfoDataSource selects exactly one projection to place in the
@@ -1119,7 +1117,7 @@ message RestoreRequest {
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  optional EgressGateway egress_gateway = 13;
+  optional EgressGateway egress_gateway = 9;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For
   // gVisor and micro-VM VOLUMES restores the sandbox is (re)sized to these;
@@ -1129,17 +1127,17 @@ message RestoreRequest {
   // +k8s:optional
   // +k8s:minimum=0
   // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
+  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
 
   // +k8s:optional
   // +k8s:minimum=0
-  int64 memory_bytes = 15; // Memory limit in bytes.
+  int64 memory_bytes = 11; // Memory limit in bytes.
 
   // The sandbox binaries and pause image to restore with, resolved from the
   // assigned worker pool's SandboxConfig.
   //
   // +k8s:required
-  SandboxAssets sandbox_assets = 16;
+  SandboxAssets sandbox_assets = 12;
 
   // The runtime the assigned worker restores this actor under, from
   // WorkerAssignment.sandbox_runtime.
@@ -1149,7 +1147,7 @@ message RestoreRequest {
   // sandbox_assets.
   //
   // +k8s:optional
-  SandboxRuntime sandbox_runtime = 17;
+  SandboxRuntime sandbox_runtime = 13;
 }
 
 message RestoreResponse {
