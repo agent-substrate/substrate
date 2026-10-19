@@ -5,10 +5,8 @@
 `hack/install-microvm-deps.sh`.
 
 The port has replaced them. The demo, CSI, and micro-VM asset scripts are
-deleted, and `hack/install-ate.sh` is a shim holding no install logic of its
-own: it translates the flags and environment variables the installer has always
-accepted onto `ate-setup` commands, so existing command lines keep working. See
-[`commands.md`](commands.md) for the flag-by-flag mapping.
+deleted, and `hack/install-ate.sh` forwards its arguments directly to
+`ate-setup`. See [`commands.md`](commands.md) for the historical flag mapping.
 
 This document covers what changed *behind* that mapping: the design decisions
 of the port, against the shell it replaced. For what a user of

@@ -28,7 +28,7 @@ asset set is four files per architecture (`amd64` and `arm64`):
 
 `go run ./cmd/ate-setup deploy ate-system` (and `deploy sandboxconfig`)
 assembles both architectures into `bin/microvm-assets/{amd64,arm64}/`, verifies
-their SHA-256 digests against `manifests/microvm/sandboxconfig-microvm.yaml.tmpl`,
+their SHA-256 digests against `manifests/ate-install/sandboxconfig-microvm.yaml.tmpl`,
 stages them into the cluster's object store under `kata-assets/<arch>/` (the
 shared `rustfs` bucket on kind, and `<BUCKET_NAME>-assets` on GKE, the only
 bucket `setup-gcp` lets nodes read), and applies the cluster-wide `microvm`

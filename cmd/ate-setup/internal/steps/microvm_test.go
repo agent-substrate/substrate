@@ -116,7 +116,7 @@ func TestVerifyMicroVMAssetDigests(t *testing.T) {
 
 func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 	stamp := microvmAssetStamp("amd64", defaultKataVersion, defaultCloudHypervisorVersion)
-	const wantStamp = "arch=amd64\nkata=4.1.0\ncloud-hypervisor=v53.0\nvirtiofsd=1.14.0\n"
+	const wantStamp = "arch=amd64\nkata=4.1.0\ncloud-hypervisor=v53.0\n"
 	if stamp != wantStamp {
 		t.Fatalf("microvmAssetStamp() =\n%q\nwant\n%q", stamp, wantStamp)
 	}
@@ -288,8 +288,17 @@ func serveFakeReleases(t *testing.T, archive []byte, chBody string, failCH bool)
 func TestAssembleMicroVMAssets(t *testing.T) {
 	silenceStepLog(t)
 
-	virtiofsdBody := "#!/bin/sh\necho 'virtiofsd " + virtiofsdVersion + "'\n"
+	const virtiofsdBody = "fake-virtiofsd-binary"
 	const chBody = "fake-cloud-hypervisor-binary"
+	origDigests := microvmAssetDigests["amd64"]
+	microvmAssetDigests["amd64"] = map[string]string{
+		"cloud-hypervisor": sha256HexString(chBody),
+		"virtiofsd":        sha256HexString(virtiofsdBody),
+		"vmlinux":          sha256HexString("fake-kernel-bytes"),
+		"rootfs.img":       sha256HexString("fake-rootfs-bytes"),
+	}
+	t.Cleanup(func() { microvmAssetDigests["amd64"] = origDigests })
+
 	serveFakeReleases(t, validKataArchive(t, virtiofsdBody), chBody, false)
 
 	outDir := t.TempDir()
@@ -334,7 +343,7 @@ func TestAssembleMicroVMAssets(t *testing.T) {
 func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 	silenceStepLog(t)
 
-	serveFakeReleases(t, validKataArchive(t, "#!/bin/sh\necho 'virtiofsd "+virtiofsdVersion+"'\n"), "", true)
+	serveFakeReleases(t, validKataArchive(t, "fake-virtiofsd-binary"), "", true)
 
 	outDir := t.TempDir()
 	stampPath := filepath.Join(outDir, assetStampFile)
@@ -350,18 +359,18 @@ func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 	}
 }
 
-func TestAssembleMicroVMAssetsRejectsVirtiofsdVersionMismatch(t *testing.T) {
+func TestAssembleMicroVMAssetsRejectsDigestMismatchBeforeStamping(t *testing.T) {
 	silenceStepLog(t)
 
-	serveFakeReleases(t, validKataArchive(t, "#!/bin/sh\necho 'virtiofsd 1.13.3'\n"), "ch", false)
+	serveFakeReleases(t, validKataArchive(t, "bad-virtiofsd-bytes"), "ch", false)
 
 	outDir := t.TempDir()
 	err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.1.0", "v53.0")
-	if err == nil || !strings.Contains(err.Error(), "1.13.3") {
-		t.Fatalf("assembleMicroVMAssets() = %v, want virtiofsd 1.13.3 mismatch error", err)
+	if err == nil || !strings.Contains(err.Error(), "sha256 =") {
+		t.Fatalf("assembleMicroVMAssets() = %v, want sha256 mismatch error", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(outDir, assetStampFile)); !errors.Is(statErr, os.ErrNotExist) {
-		t.Errorf("stamp written despite virtiofsd mismatch: %v", statErr)
+		t.Errorf("stamp written despite digest mismatch: %v", statErr)
 	}
 }
 

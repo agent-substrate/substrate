@@ -104,7 +104,7 @@ that already names a manifest is used as written, and is not looked up.
 |---|---|
 | `deploy ate-system` | `--deploy-ate-system` |
 | `deploy ate-system --setup-csi=nfs` | `--deploy-ate-system --setup-csi=nfs` |
-| `deploy ate-system --skip-microvm-deps` | `--deploy-ate-system --skip-microvm-deps` |
+| `deploy ate-system --skip-microvm-deps` | (no shell equivalent) |
 | `deploy atelet` | `--deploy-atelet` |
 | `deploy apiserver` | `--deploy-ate-apiserver` |
 | `deploy ate-controller` | (no shell equivalent) |
