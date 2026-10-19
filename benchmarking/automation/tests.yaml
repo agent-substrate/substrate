@@ -688,7 +688,9 @@ tests:
   # and checkpoint alike, after 150 ms on every atelet node, so a cycle
   # spends 300 ms in the data plane, after minting the actor's certificate
   # on each restore as ateom does. The 200 fake Workers hold 1000 actors
-  # each, so placement never binds. resumepaused sends the actors no
+  # each, and at 10m CPU an actor books next to nothing of a Worker's CPU,
+  # which a fake Worker reports as its node's allocatable, so placement
+  # never binds on any node size. resumepaused sends the actors no
   # requests, which the fake data plane needs.
   - name: ateapi_cold_resume_pause_fake_2cpu
     type: locust
@@ -698,6 +700,7 @@ tests:
     duration: 23m
     users: 1000
     workerCount: 200
+    actorCPU: "10m"
     runnerCpu: "8"
     runnerMemory: "2Gi"
     isolate:
@@ -726,6 +729,7 @@ tests:
     duration: 6m
     users: 50
     workerCount: 2
+    actorCPU: "10m"
     isolate:
       delay: 150ms
     ateArgs:
