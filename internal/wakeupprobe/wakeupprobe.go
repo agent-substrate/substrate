@@ -71,6 +71,20 @@ func newClient(dial DialFunc) *http.Client {
 // or returns the first error. Containers without a probe are skipped (their
 // absence means "no wakeup gate").
 func WaitAll(ctx context.Context, containers []*ateworkerpb.Container, actorIP string, dial DialFunc) error {
+	return waitAll(ctx, containers, actorIP, dial, false)
+}
+
+// WaitAllFast is WaitAll with adaptive short per-attempt timeouts on the initial
+// polls so a SYN silently dropped while a userspace netstack or restored
+// virtio-net ring finishes waking up is retried in milliseconds rather than
+// waiting out RequestTimeout (250ms).
+func WaitAllFast(ctx context.Context, containers []*ateworkerpb.Container, actorIP string, dial DialFunc) error {
+	return waitAll(ctx, containers, actorIP, dial, true)
+}
+
+// waitAll polls all containers with a configured WakeupProbe in parallel,
+// using adaptive fast initial attempt timeouts when fast is true.
+func waitAll(ctx context.Context, containers []*ateworkerpb.Container, actorIP string, dial DialFunc, fast bool) error {
 	g, gctx := errgroup.WithContext(ctx)
 	for _, ac := range containers {
 		if ac.GetWakeupProbe() == nil {
@@ -78,7 +92,7 @@ func WaitAll(ctx context.Context, containers []*ateworkerpb.Container, actorIP s
 		}
 		ac := ac
 		g.Go(func() error {
-			return Wait(gctx, ac.GetName(), ac.GetWakeupProbe(), actorIP, dial)
+			return waitWithMode(gctx, ac.GetName(), ac.GetWakeupProbe(), actorIP, dial, fast)
 		})
 	}
 	return g.Wait()
@@ -87,6 +101,31 @@ func WaitAll(ctx context.Context, containers []*ateworkerpb.Container, actorIP s
 // Wait polls the configured HTTP endpoint through dial until it returns 200,
 // the context is cancelled, or the overall deadline is exceeded.
 func Wait(ctx context.Context, containerName string, probe *ateworkerpb.WakeupProbe, actorIP string, dial DialFunc) error {
+	return waitWithMode(ctx, containerName, probe, actorIP, dial, false)
+}
+
+// WaitFast is Wait with adaptive short per-attempt timeouts on the first polls.
+func WaitFast(ctx context.Context, containerName string, probe *ateworkerpb.WakeupProbe, actorIP string, dial DialFunc) error {
+	return waitWithMode(ctx, containerName, probe, actorIP, dial, true)
+}
+
+// fastAttemptTimeout returns the per-attempt HTTP probe timeout for the given
+// 1-based attempt number in fast mode, starting at 15ms for attempts 1-3,
+// stepping to 40ms for attempts 4-8, and falling back to RequestTimeout.
+func fastAttemptTimeout(attempt int) time.Duration {
+	switch {
+	case attempt <= 3:
+		return 15 * time.Millisecond
+	case attempt <= 8:
+		return 40 * time.Millisecond
+	default:
+		return RequestTimeout
+	}
+}
+
+// waitWithMode polls containerName's wakeup probe endpoint until HTTP 200 or
+// timeout, applying fastAttemptTimeout to early attempts when fast is true.
+func waitWithMode(ctx context.Context, containerName string, probe *ateworkerpb.WakeupProbe, actorIP string, dial DialFunc, fast bool) error {
 	url, err := URL(probe, actorIP)
 	if err != nil {
 		return fmt.Errorf("invalid wakeup probe config for %q: %w", containerName, err)
@@ -117,7 +156,17 @@ func Wait(ctx context.Context, containerName string, probe *ateworkerpb.WakeupPr
 		}
 
 		attempts++
-		ok, err := tryOnce(ctx, client, url)
+		attemptCtx := ctx
+		var cancel context.CancelFunc
+		if fast {
+			if d := fastAttemptTimeout(attempts); d < RequestTimeout {
+				attemptCtx, cancel = context.WithTimeout(ctx, d)
+			}
+		}
+		ok, err := tryOnce(attemptCtx, client, url)
+		if cancel != nil {
+			cancel()
+		}
 		if err != nil {
 			lastErr = err
 		}

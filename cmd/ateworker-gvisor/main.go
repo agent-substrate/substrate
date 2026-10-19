@@ -631,30 +631,58 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	//   * Correct runsc version is downloaded and placed on disk.
 	//   * The OCI bundles of the application containers are set up.
 
-	egress, err := s.tunnel.PrepareEgress(ctx, workerstats.ActorAttributionFromRequest(req), req.GetEgressGateway())
-	if err != nil {
-		return nil, err
-	}
-	// Publish attribution before boot so stats can include startup usage.
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
-	if err != nil {
-		return nil, err
-	}
+	containers := req.GetSpec().GetContainers()
 	rcmd := &runsc{
 		path:           req.GetRunscPath(),
 		actorUID:       req.GetActorUid(),
 		actorDirs:      req.GetActorDirs(),
 		size:           sizing.FromLimits(req.GetResources().GetLimits()),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
-		containers:     req.GetSpec().GetContainers(),
+		containers:     containers,
 		flags:          s.flags,
 	}
+
+	bgCtx, cancelBg := context.WithCancel(ctx)
+	defer cancelBg()
+
+	var egress *atunnel.ActorEgress
+	egressDone := make(chan error, 1)
+	egressJoined := false
+	go func() {
+		var err error
+		egress, err = s.tunnel.PrepareEgress(bgCtx, attribution, req.GetEgressGateway())
+		egressDone <- err
+	}()
+
+	sandboxSpecDone := make(chan error, 1)
+	sandboxSpecJoined := false
+	go func() {
+		sandboxSpecDone <- rcmd.ensureSpec(ocispec.SandboxID)
+	}()
+
+	appPrepDone := make(chan error, 1)
+	appPrepJoined := false
+	go func() {
+		appPrepDone <- prepareAppContainers(bgCtx, req.GetActorDirs(), rcmd, containers)
+	}()
+
+	var hosted *hostedActor
 	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
+			cancelBg()
+			if !egressJoined {
+				<-egressDone
+			}
+			if !sandboxSpecJoined {
+				<-sandboxSpecDone
+			}
+			if !appPrepJoined {
+				<-appPrepDone
+			}
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			if err := s.tunnel.Deactivate(cleanupCtx, workerstats.ActorAttributionFromRequest(req)); err != nil {
+			if err := s.tunnel.Deactivate(cleanupCtx, attribution); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", err))
 			}
 			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Run")
@@ -666,11 +694,24 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
-			if err := s.unhostActor(cleanupCtx, req.GetActorUid()); err != nil {
-				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Run failure", slog.Any("err", err))
+			if hosted != nil {
+				if err := s.unhostActor(cleanupCtx, req.GetActorUid()); err != nil {
+					slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Run failure", slog.Any("err", err))
+				}
 			}
 		}
 	}()
+
+	// Publish attribution before boot so stats can include startup usage.
+	hosted, err = s.hostActor(ctx, attribution, req.GetActorDirs())
+	if err != nil {
+		return nil, err
+	}
+	err = <-sandboxSpecDone
+	sandboxSpecJoined = true
+	if err != nil {
+		return nil, fmt.Errorf("while writing the OCI spec for %q: %w", ocispec.SandboxID, err)
+	}
 	containersToDelete = append(containersToDelete, ocispec.SandboxID)
 	// Attribute the sandbox's runsc CLI output to the actor.
 	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
@@ -688,19 +729,21 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 
 	// Create and start each application container, each with its own log pipe so
 	// every line is tagged with the originating container (ate.actor.container.name).
-	// The bundle rootfs is composed here, as an overlay of the node's cached
-	// image layers plus the bundle's private upper. atelet runs with no
+	// The bundle rootfs is composed in parallel above, as an overlay of the node's
+	// cached image layers plus the bundle's private upper. atelet runs with no
 	// capabilities, so ateworker mounts it, and runsc's gofer resolves the
 	// mount in this pod's mount namespace.
-	for _, ac := range req.GetSpec().GetContainers() {
+	err = <-appPrepDone
+	appPrepJoined = true
+	if err != nil {
+		return nil, err
+	}
+	for _, ac := range containers {
 		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
 		if err != nil {
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := setupAppRootfs(req.GetActorDirs(), ac.GetName()); err != nil {
-			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
-		}
 		containersToDelete = append(containersToDelete, ac.GetName())
 		if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
@@ -711,19 +754,42 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
+	if err := wakeupprobe.WaitAllFast(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
-	if err := s.tunnel.Activate(workerstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {
+	err = <-egressDone
+	egressJoined = true
+	if err != nil {
+		return nil, err
+	}
+	if err := s.tunnel.Activate(attribution, s.sandboxDialer(req.GetActorUid()), egress); err != nil {
 		return nil, err
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
-	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())})
+	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(containers)})
 	s.recordInitial(ctx, hosted)
-	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
+	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), containers)
 
 	return &ateworkerpb.RunWorkloadResponse{}, nil
+}
+
+// prepareAppContainers composes the bundle rootfs overlay and writes the OCI
+// config.json for each application container in containers, stopping early if
+// ctx is canceled.
+func prepareAppContainers(ctx context.Context, actorDirs *ateworkerpb.ActorDirs, rcmd *runsc, containers []*ateworkerpb.Container) error {
+	for _, ac := range containers {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := setupAppRootfs(actorDirs, ac.GetName()); err != nil {
+			return fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
+		}
+		if err := rcmd.ensureSpec(ac.GetName()); err != nil {
+			return fmt.Errorf("while writing the OCI spec for %q: %w", ac.GetName(), err)
+		}
+	}
+	return nil
 }
 
 // Allow checkpointing even if the pod is shutting down. This will allow actors
@@ -1046,28 +1112,70 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	//   * The OCI bundles of the application containers are set up.
 	//   * Checkpoint downloaded and placed on disk
 
-	egress, err := s.tunnel.PrepareEgress(ctx, attribution, req.GetEgressGateway())
-	timing.egressPrepare = lap(&tLast)
+	checkpointDir := req.GetActorDirs().GetRestoreDir()
+	restoreArgs, err := fsRestoreArgs(checkpointDir, fidelity)
 	if err != nil {
 		return nil, err
 	}
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
-	timing.netSetup = lap(&tLast)
-	if err != nil {
-		return nil, err
-	}
+
 	rcmd := &runsc{
 		path:           req.GetRunscPath(),
 		actorUID:       req.GetActorUid(),
 		actorDirs:      req.GetActorDirs(),
 		size:           sizing.FromLimits(req.GetResources().GetLimits()),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
-		containers:     req.GetSpec().GetContainers(),
+		containers:     containers,
 		flags:          s.flags,
 	}
+
+	bgCtx, cancelBg := context.WithCancel(ctx)
+	defer cancelBg()
+
+	var egress *atunnel.ActorEgress
+	egressDone := make(chan error, 1)
+	egressJoined := false
+	go func() {
+		var err error
+		egress, err = s.tunnel.PrepareEgress(bgCtx, attribution, req.GetEgressGateway())
+		egressDone <- err
+	}()
+
+	sandboxSpecDone := make(chan error, 1)
+	sandboxSpecJoined := false
+	go func() {
+		sandboxSpecDone <- rcmd.ensureSpec(ocispec.SandboxID)
+	}()
+
+	appPrepDone := make(chan error, 1)
+	appPrepJoined := false
+	go func() {
+		appPrepDone <- prepareAppContainers(bgCtx, req.GetActorDirs(), rcmd, containers)
+	}()
+
+	readaheadDone := make(chan struct{})
+	readaheadJoined := false
+	go func() {
+		defer close(readaheadDone)
+		readaheadCheckpointDir(bgCtx, checkpointDir)
+	}()
+
+	var hosted *hostedActor
 	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
+			cancelBg()
+			if !egressJoined {
+				<-egressDone
+			}
+			if !sandboxSpecJoined {
+				<-sandboxSpecDone
+			}
+			if !appPrepJoined {
+				<-appPrepDone
+			}
+			if !readaheadJoined {
+				<-readaheadDone
+			}
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			if err := s.tunnel.Deactivate(cleanupCtx, attribution); err != nil {
@@ -1079,15 +1187,23 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
-			if err := s.unhostActor(cleanupCtx, req.GetActorUid()); err != nil {
-				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Restore failure", slog.Any("err", err))
+			if hosted != nil {
+				if err := s.unhostActor(cleanupCtx, req.GetActorUid()); err != nil {
+					slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Restore failure", slog.Any("err", err))
+				}
 			}
 		}
 	}()
-	checkpointDir := req.GetActorDirs().GetRestoreDir()
-	restoreArgs, err := fsRestoreArgs(checkpointDir, fidelity)
+
+	hosted, err = s.hostActor(ctx, attribution, req.GetActorDirs())
+	timing.netSetup = lap(&tLast)
 	if err != nil {
 		return nil, err
+	}
+	err = <-sandboxSpecDone
+	sandboxSpecJoined = true
+	if err != nil {
+		return nil, fmt.Errorf("while writing the OCI spec for %q: %w", ocispec.SandboxID, err)
 	}
 
 	// Attribute the sandbox's runsc CLI output to the actor.
@@ -1130,6 +1246,12 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	// Create and restore each application container, each with its own log pipe so
 	// every line is tagged with the originating container (ate.actor.container.name).
 	// app_create includes starting that pipe.
+	err = <-appPrepDone
+	appPrepJoined = true
+	timing.appRootfs = lap(&tLast)
+	if err != nil {
+		return nil, err
+	}
 	for _, ac := range containers {
 		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
 		timing.appCreate += lap(&tLast)
@@ -1137,11 +1259,6 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		err = setupAppRootfs(req.GetActorDirs(), ac.GetName())
-		timing.appRootfs += lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
-		}
 		containersToDelete = append(containersToDelete, ac.GetName())
 		err = rcmd.cmdCreate(ctx, pw, ac.GetName(), nil)
 		timing.appCreate += lap(&tLast)
@@ -1165,16 +1282,24 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	err = wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
+	err = wakeupprobe.WaitAllFast(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
 	timing.wakeupProbe = lap(&tLast)
 	if err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
+	}
+	err = <-egressDone
+	egressJoined = true
+	timing.egressPrepare = lap(&tLast)
+	if err != nil {
+		return nil, err
 	}
 	err = s.tunnel.Activate(attribution, s.sandboxDialer(req.GetActorUid()), egress)
 	timing.activate = lap(&tLast)
 	if err != nil {
 		return nil, err
 	}
+	<-readaheadDone
+	readaheadJoined = true
 	dropActorCheckpointCacheAsync(hosted.ctx, req.GetActorUid(), checkpointDir, req.GetPreserveRestoreDir(), func(waitCtx context.Context) error {
 		if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 			if err := rcmd.cmdWaitRestore(waitCtx, ocispec.SandboxID); err != nil {

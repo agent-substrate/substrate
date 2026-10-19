@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -615,4 +616,24 @@ func TestEvictPreservedRestoreDir(t *testing.T) {
 		case <-time.After(50 * time.Millisecond):
 		}
 	})
+}
+
+func TestReadaheadCheckpointDir(t *testing.T) {
+	// Missing or empty directory is a safe no-op.
+	readaheadCheckpointDir(t.Context(), "")
+	readaheadCheckpointDir(t.Context(), filepath.Join(t.TempDir(), "nonexistent"))
+	readaheadFile(t.Context(), filepath.Join(t.TempDir(), "nonexistent"), 4096)
+	readaheadFile(t.Context(), filepath.Join(t.TempDir(), "empty"), 0)
+
+	restoreDir := newRestoreDir(t)
+	mustMkdir(t, filepath.Join(restoreDir, "rootfs"))
+	mustWrite(t, filepath.Join(restoreDir, "pages.img"), string(bytes.Repeat([]byte{0x42}, 300*1024)))
+	mustWrite(t, filepath.Join(restoreDir, "rootfs/pages.img"), string(bytes.Repeat([]byte{0x24}, 200*1024)))
+	mustWrite(t, filepath.Join(restoreDir, "rootfs/layer.tar"), string(bytes.Repeat([]byte{0x11}, 64*1024)))
+
+	readaheadCheckpointDir(t.Context(), restoreDir)
+
+	cancelCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	readaheadCheckpointDir(cancelCtx, restoreDir)
 }

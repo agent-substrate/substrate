@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -381,4 +382,236 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEnsureSpecWritesOnce(t *testing.T) {
+	root := t.TempDir()
+	actorDirs := &ateworkerpb.ActorDirs{RootDir: root, OciBundleDir: filepath.Join(root, "bundles")}
+	r := &runsc{
+		actorUID:   "uid-ensure",
+		actorDirs:  actorDirs,
+		containers: []*ateworkerpb.Container{{Name: "app", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}},
+	}
+	if err := os.MkdirAll(ociBundlePath(actorDirs, "app"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{ocispec.SandboxID, "app"} {
+		if err := r.ensureSpec(name); err != nil {
+			t.Fatalf("first ensureSpec(%q) = %v", name, err)
+		}
+		cfgPath := filepath.Join(ociBundlePath(actorDirs, name), "config.json")
+		sentinel := []byte(`{"sentinel":true}`)
+		if err := os.WriteFile(cfgPath, sentinel, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Second ensureSpec call must be a no-op and preserve the sentinel file.
+		if err := r.ensureSpec(name); err != nil {
+			t.Fatalf("second ensureSpec(%q) = %v", name, err)
+		}
+		got, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, sentinel) {
+			t.Errorf("second ensureSpec(%q) overwrote config.json: got %s, want %s", name, got, sentinel)
+		}
+	}
+
+	if err := r.ensureSpec("missing"); err == nil {
+		t.Error("ensureSpec(missing) = nil, want error")
+	}
+	if r.specsWritten["missing"] {
+		t.Error("specsWritten[missing] = true after failed writeSpec")
+	}
+}
+
+func TestPrepareAppContainers(t *testing.T) {
+	root := t.TempDir()
+	bundleDir := filepath.Join(root, "bundles")
+	actorDirs := &ateworkerpb.ActorDirs{RootDir: root, OciBundleDir: bundleDir}
+	containers := []*ateworkerpb.Container{
+		{Name: "init", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/init"}}},
+		{Name: "app", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}},
+	}
+	for _, ac := range containers {
+		if err := os.MkdirAll(filepath.Join(bundleDir, ac.GetName(), "rootfs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &runsc{
+		actorUID:   "uid-prep",
+		actorDirs:  actorDirs,
+		containers: containers,
+	}
+
+	if err := prepareAppContainers(t.Context(), actorDirs, r, containers); err != nil {
+		t.Fatalf("prepareAppContainers() = %v", err)
+	}
+	for _, ac := range containers {
+		bundle := ociBundlePath(actorDirs, ac.GetName())
+		if _, err := os.Stat(filepath.Join(bundle, "config.json")); err != nil {
+			t.Errorf("%s config.json missing: %v", ac.GetName(), err)
+		}
+		if _, err := os.Stat(filepath.Join(bundle, "rootfs", "etc", "hosts")); err != nil {
+			t.Errorf("%s rootfs/etc/hosts missing: %v", ac.GetName(), err)
+		}
+		if !r.specsWritten[ac.GetName()] {
+			t.Errorf("specsWritten[%q] = false, want true", ac.GetName())
+		}
+	}
+
+	cancelCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := prepareAppContainers(cancelCtx, actorDirs, r, containers); err == nil {
+		t.Error("prepareAppContainers with canceled context = nil, want error")
+	}
+}
+
+func BenchmarkGVisorRestorePrep(b *testing.B) {
+	containers := []*ateworkerpb.Container{
+		{
+			Name:          "init",
+			ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/init", "--setup"}},
+			DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+				{Name: "data", MountPath: "/var/data"},
+			},
+		},
+		{
+			Name:          "app",
+			ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app", "--serve"}},
+			DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+				{Name: "data", MountPath: "/var/data"},
+			},
+		},
+		{
+			Name:          "sidecar",
+			ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/sidecar", "--proxy"}},
+			DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+				{Name: "logs", MountPath: "/var/log/app"},
+			},
+		},
+	}
+	spec := &ateworkerpb.WorkloadSpec{Containers: containers}
+	durableVols := durableVolumeNames(spec)
+
+	setupFixture := func(b *testing.B) (restoreDir string, actorDirs *ateworkerpb.ActorDirs) {
+		b.Helper()
+		root := b.TempDir()
+		bundleDir := filepath.Join(root, "bundles")
+		for _, ac := range containers {
+			if err := os.MkdirAll(filepath.Join(bundleDir, ac.GetName(), "rootfs"), 0o755); err != nil {
+				b.Fatal(err)
+			}
+		}
+		restoreDir = filepath.Join(root, "restore")
+		for _, sub := range []string{"", "fs", "rootfs"} {
+			if err := os.MkdirAll(filepath.Join(restoreDir, sub), 0o700); err != nil {
+				b.Fatal(err)
+			}
+		}
+		files := map[string]int{
+			"checkpoint.img":         256 * 1024,
+			"pages.img":              8 * 1024 * 1024,
+			"rootfs/fscheckpoint.pb": 1024,
+			"rootfs/pages.img":       4 * 1024 * 1024,
+			"fs/fscheckpoint.pb":     1024,
+			"fs/pages.img":           2 * 1024 * 1024,
+		}
+		for rel, sz := range files {
+			if err := os.WriteFile(filepath.Join(restoreDir, rel), bytes.Repeat([]byte{0x5A}, sz), 0o600); err != nil {
+				b.Fatal(err)
+			}
+		}
+		actorDirs = &ateworkerpb.ActorDirs{
+			RootDir:                   root,
+			OciBundleDir:              bundleDir,
+			RestoreDir:                restoreDir,
+			DurableDirVolumeMountsDir: filepath.Join(root, "durable"),
+			SystemInfoVolumeRootsDir:  filepath.Join(root, "sysinfo"),
+			ExternalVolumeMountsDir:   filepath.Join(root, "extvols"),
+		}
+		return restoreDir, actorDirs
+	}
+
+	b.Run("Sequential", func(b *testing.B) {
+		restoreDir, actorDirs := setupFixture(b)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			rcmd := &runsc{
+				actorUID:       "bench-gvisor-actor",
+				actorDirs:      actorDirs,
+				durableVolumes: durableVols,
+				containers:     containers,
+			}
+			readaheadCheckpointDir(b.Context(), restoreDir)
+			// Without ensureSpec, cmdCreate and cmdRestore each called writeSpec.
+			if err := rcmd.writeSpec(ocispec.SandboxID); err != nil {
+				b.Fatal(err)
+			}
+			if err := rcmd.writeSpec(ocispec.SandboxID); err != nil {
+				b.Fatal(err)
+			}
+			for _, ac := range containers {
+				if err := setupAppRootfs(actorDirs, ac.GetName()); err != nil {
+					b.Fatal(err)
+				}
+				if err := rcmd.writeSpec(ac.GetName()); err != nil {
+					b.Fatal(err)
+				}
+				if err := rcmd.writeSpec(ac.GetName()); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
+
+	b.Run("Parallel", func(b *testing.B) {
+		restoreDir, actorDirs := setupFixture(b)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			rcmd := &runsc{
+				actorUID:       "bench-gvisor-actor",
+				actorDirs:      actorDirs,
+				durableVolumes: durableVols,
+				containers:     containers,
+			}
+			sandboxSpecDone := make(chan error, 1)
+			go func() {
+				sandboxSpecDone <- rcmd.ensureSpec(ocispec.SandboxID)
+			}()
+			appPrepDone := make(chan error, 1)
+			go func() {
+				appPrepDone <- prepareAppContainers(b.Context(), actorDirs, rcmd, containers)
+			}()
+			readaheadDone := make(chan struct{})
+			go func() {
+				defer close(readaheadDone)
+				readaheadCheckpointDir(b.Context(), restoreDir)
+			}()
+			if err := <-sandboxSpecDone; err != nil {
+				b.Fatal(err)
+			}
+			if err := rcmd.ensureSpec(ocispec.SandboxID); err != nil {
+				b.Fatal(err)
+			}
+			if err := rcmd.ensureSpec(ocispec.SandboxID); err != nil {
+				b.Fatal(err)
+			}
+			if err := <-appPrepDone; err != nil {
+				b.Fatal(err)
+			}
+			for _, ac := range containers {
+				if err := rcmd.ensureSpec(ac.GetName()); err != nil {
+					b.Fatal(err)
+				}
+				if err := rcmd.ensureSpec(ac.GetName()); err != nil {
+					b.Fatal(err)
+				}
+			}
+			<-readaheadDone
+		}
+	})
 }
