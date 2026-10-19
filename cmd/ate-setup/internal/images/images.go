@@ -58,6 +58,31 @@ var Components = []string{
 	"demos/sandbox",
 }
 
+// unreleased maps each of Components that a release does not publish to what
+// it is. Such an image exists only in a build from source, so a pre-built
+// install that needs one fails naming it rather than with a registry 404.
+var unreleased = map[string]string{
+	"cmd/benchmarking/isolate/fake-atelet":       "a benchmarking fake",
+	"cmd/benchmarking/isolate/fake-workersync":   "a benchmarking fake",
+	"cmd/credential-provider/kubernetes-secrets": "the Kubernetes Secrets credential provider",
+	"cmd/objectstore-plugin":                     "the object storage plugin",
+	"demos/counter":                              "a demo",
+	"demos/egress":                               "a demo",
+	"demos/multi-template/fspersist":             "a demo",
+	"demos/sandbox":                              "a demo",
+}
+
+// ReleaseComponents returns the Components a release publishes, in order.
+func ReleaseComponents() []string {
+	var pkgs []string
+	for _, pkg := range Components {
+		if _, ok := unreleased[pkg]; !ok {
+			pkgs = append(pkgs, pkg)
+		}
+	}
+	return pkgs
+}
+
 // KoReference is the ko:// reference the manifests name pkg by.
 //
 // ko resolves a manifest reference as written, so a "./"-relative import path

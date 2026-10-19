@@ -62,7 +62,7 @@ built unless --overwrite is set. After pushing, every image is checked for
 every platform, and a missing one fails the command.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		opts := steps.PublishReleaseOptions{Force: env.Cfg.Resolved().Bool("publish.overwrite")}
+		opts := steps.PublishReleaseOptions{Overwrite: env.Cfg.Resolved().Bool("publish.overwrite")}
 		return env.PublishReleaseImages(cmd.Context(), cmd.OutOrStdout(), opts)
 	},
 }

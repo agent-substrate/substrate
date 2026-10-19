@@ -148,11 +148,14 @@ fi
 
 # Only the upstream release workflow publishes images (see
 # .github/workflows/release.yaml), so only its notes say where they are.
+# Releases do not publish the Kubernetes Secrets credential provider, so the
+# command turns egress credential injection off; ate-setup requires a choice.
 if [[ "${REPO}" == "${UPSTREAM_REPO}" ]]; then
   notes+=$'\n\n## Install\n\n'
   notes+="Container images for this release are published to \`${RELEASE_IMAGE_REPO}\`."
   notes+=$' From a checkout of the tag:\n\n```sh\n'
-  notes+="ate-setup deploy ate-system --image-repo ${RELEASE_IMAGE_REPO} --image-tag ${tag}"
+  notes+="ate-setup deploy ate-system --credential-provider='{\"enabled\":false}'"
+  notes+=" --image-repo ${RELEASE_IMAGE_REPO} --image-tag ${tag}"
   notes+=$'\n```'
 fi
 

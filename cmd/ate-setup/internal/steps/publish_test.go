@@ -97,16 +97,41 @@ func TestPublishReleaseImagesSkipsACompleteRelease(t *testing.T) {
 	}
 }
 
-// The release covers every component and envoy-dataplane, each under the name
-// and tag that `deploy --image-repo --image-tag` looks up.
+// A stray tag or a value ko would split publishes nothing, with --overwrite as
+// well as without: the check runs before the registry is read or ko is
+// located, and the Root has no ko tool.
+func TestPublishReleaseImagesRejectsANonReleaseTag(t *testing.T) {
+	for _, version := range []string{"v1-test", "v1.2.3,latest", "dev"} {
+		t.Run(version, func(t *testing.T) {
+			t.Setenv("VERSION", version)
+			e := &Env{Cfg: &config.Config{Root: t.TempDir(), KODockerRepo: "example.com/substrate"}}
+			err := e.PublishReleaseImages(t.Context(), io.Discard, PublishReleaseOptions{Overwrite: true})
+			if err == nil || !strings.Contains(err.Error(), "not a release tag") {
+				t.Errorf("PublishReleaseImages() error = %v, want one saying %q is not a release tag", err, version)
+			}
+		})
+	}
+}
+
+// The release covers every released component, each under the name and tag
+// that `deploy --image-repo --image-tag` looks up, and nothing releases leave
+// out.
 func TestReleaseImageRefs(t *testing.T) {
 	refs := releaseImageRefs("example.com/substrate/", "v1")
-	if len(refs) != len(images.Components)+1 {
-		t.Fatalf("releaseImageRefs() returned %d refs, want %d", len(refs), len(images.Components)+1)
+	if want := len(images.ReleaseComponents()); len(refs) != want {
+		t.Fatalf("releaseImageRefs() returned %d refs, want %d", len(refs), want)
 	}
-	for _, want := range []string{"example.com/substrate/ateapi:v1", "example.com/substrate/envoy-dataplane:v1"} {
-		if !slices.Contains(refs, want) {
-			t.Errorf("releaseImageRefs() = %v, want %s", refs, want)
+	if !slices.Contains(refs, "example.com/substrate/ateapi:v1") {
+		t.Errorf("releaseImageRefs() = %v, want example.com/substrate/ateapi:v1", refs)
+	}
+	for _, unwanted := range []string{
+		"example.com/substrate/counter:v1",
+		"example.com/substrate/kubernetes-secrets:v1",
+		"example.com/substrate/objectstore-plugin:v1",
+		"example.com/substrate/envoy-dataplane:v1",
+	} {
+		if slices.Contains(refs, unwanted) {
+			t.Errorf("releaseImageRefs() = %v, want no %s", refs, unwanted)
 		}
 	}
 }

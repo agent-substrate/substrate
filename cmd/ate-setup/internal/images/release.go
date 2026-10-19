@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -32,8 +34,79 @@ import (
 // lets the repository's workflows push later versions with their GITHUB_TOKEN.
 const SourceLabel = "org.opencontainers.image.source"
 
-// SourceURL is the SourceLabel value for images built from this repository.
-const SourceURL = "https://" + ModulePath
+// SourceURL is the SourceLabel value for images built from this repository:
+// its GitHub URL, which is what ghcr.io matches. The module path is a vanity
+// import path, not a repository URL.
+const SourceURL = "https://github.com/agent-substrate/substrate"
+
+// RevisionLabel is the OCI image label naming the commit an image was built
+// from.
+const RevisionLabel = "org.opencontainers.image.revision"
+
+// Revision returns the commit checked out at rootDir, the RevisionLabel value.
+func Revision(ctx context.Context, rootDir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	cmd.Dir = rootDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("while reading the commit checked out at %s: %w", rootDir, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// releaseTag matches a release tag, vMAJOR.MINOR.PATCH, or a release candidate,
+// vMAJOR.MINOR.PATCH-PRERELEASE. hack/release/draft-release.sh accepts the same.
+var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
+
+// CheckReleaseTag returns an error unless tag is a release tag that makes a
+// valid image reference under repo. It runs before anything is built, so a
+// stray tag or a value ko would split, such as "v1.2.3,latest", publishes
+// nothing.
+func CheckReleaseTag(repo, tag string) error {
+	if !releaseTag.MatchString(tag) {
+		return fmt.Errorf("%q is not a release tag (vMAJOR.MINOR.PATCH[-PRERELEASE])", tag)
+	}
+	if _, err := name.NewTag(strings.TrimSuffix(repo, "/")+"/image:"+tag, name.StrictValidation); err != nil {
+		return fmt.Errorf("%s with tag %s is not a valid image reference: %w", repo, tag, err)
+	}
+	return nil
+}
+
+// StaleTags returns a line for each of tagged whose tag does not name the
+// digest pushed for its repository. pushed are digest references, one per
+// repository, as ko and buildx print them (repo/name:tag@sha256:... or
+// repo/name@sha256:...). It catches a tag that still names an earlier push,
+// which a platform check alone would pass.
+func StaleTags(ctx context.Context, tagged, pushed []string) ([]string, error) {
+	want := make(map[string]string, len(pushed))
+	for _, ref := range pushed {
+		d, err := name.NewDigest(ref)
+		if err != nil {
+			return nil, fmt.Errorf("%s is not a digest reference: %w", ref, err)
+		}
+		want[d.Context().Name()] = d.DigestStr()
+	}
+	var stale []string
+	for _, ref := range tagged {
+		t, err := name.NewTag(ref)
+		if err != nil {
+			return nil, fmt.Errorf("%s is not a tagged reference: %w", ref, err)
+		}
+		expected, ok := want[t.Context().Name()]
+		if !ok {
+			stale = append(stale, fmt.Sprintf("%s: nothing was pushed for it", ref))
+			continue
+		}
+		got, err := RemoteDigest(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
+		if got != expected {
+			stale = append(stale, fmt.Sprintf("%s names %s, not the pushed %s", ref, got, expected))
+		}
+	}
+	return stale, nil
+}
 
 // Platforms returns the platforms a build produces, the way ko chooses them:
 // KO_DEFAULTPLATFORMS, else defaultPlatforms from the ko config, else

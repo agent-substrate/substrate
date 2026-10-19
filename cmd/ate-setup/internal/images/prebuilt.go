@@ -119,12 +119,17 @@ func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error)
 	// registry that is unreachable or a tag that was never pushed fails for
 	// every component at once.
 	unknown := make(map[string]bool)
+	notReleased := make(map[string]string)
 	unpinned := make(map[string]error)
 
 	out := koRef.ReplaceAllFunc(manifest, func(match []byte) []byte {
 		image, ok := imageByRef[string(match)]
 		if !ok {
 			unknown[string(match)] = true
+			return match
+		}
+		if what, ok := unreleased[strings.TrimPrefix(string(match), "ko://"+ModulePath+"/")]; ok {
+			notReleased[string(match)] = what
 			return match
 		}
 		ref, err := p.Pin(ctx, image)
@@ -145,6 +150,10 @@ func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error)
 		errs = append(errs, fmt.Errorf("installable packages under %s are %s; a reference that is "+
 			"templated has to be rendered before it can be resolved",
 			ModulePath, strings.Join(Components, ", ")))
+	}
+	for _, ref := range slices.Sorted(maps.Keys(notReleased)) {
+		errs = append(errs, fmt.Errorf("%s is %s, which releases do not publish; build it from source by dropping --image-repo",
+			ref, notReleased[ref]))
 	}
 	for _, image := range slices.Sorted(maps.Keys(unpinned)) {
 		errs = append(errs, unpinned[image])

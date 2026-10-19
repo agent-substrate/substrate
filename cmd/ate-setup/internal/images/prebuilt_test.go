@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -83,8 +84,8 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 		},
 		{
 			name: "flow sequence",
-			in:   `images: [ko://go.ate.dev/substrate/demos/counter, other]`,
-			want: `images: [example.com/substrate/counter:v1.2.3` + digestSuffix + `, other]`,
+			in:   `images: [ko://go.ate.dev/substrate/cmd/atecontroller, other]`,
+			want: `images: [example.com/substrate/atecontroller:v1.2.3` + digestSuffix + `, other]`,
 		},
 		{
 			// The reference is a plain CRD field here, not a pod spec, which is
@@ -103,14 +104,9 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 			want: "image: example.com/substrate/ateapi:v1.2.3" + digestSuffix + "\n",
 		},
 		{
-			name: "nested package maps to its image name",
-			in:   "image: ko://go.ate.dev/substrate/demos/multi-template/fspersist\n",
-			want: "image: example.com/substrate/fspersist:v1.2.3" + digestSuffix + "\n",
-		},
-		{
 			name: "two references on one line",
-			in:   "a: ko://go.ate.dev/substrate/cmd/ateapi, b: ko://go.ate.dev/substrate/demos/egress\n",
-			want: "a: example.com/substrate/ateapi:v1.2.3" + digestSuffix + ", b: example.com/substrate/egress:v1.2.3" + digestSuffix + "\n",
+			in:   "a: ko://go.ate.dev/substrate/cmd/ateapi, b: ko://go.ate.dev/substrate/cmd/atelet\n",
+			want: "a: example.com/substrate/ateapi:v1.2.3" + digestSuffix + ", b: example.com/substrate/atelet:v1.2.3" + digestSuffix + "\n",
 		},
 		{
 			// The demo templates carry "# ko:// image reference" as prose. The
@@ -233,6 +229,34 @@ func TestPrebuiltReportsEveryFailure(t *testing.T) {
 	}
 }
 
+// An image releases do not publish fails naming what it is, without a registry
+// lookup: the lookup could only end in a 404 that does not say why.
+func TestPrebuiltRejectsUnreleasedImages(t *testing.T) {
+	registry := newStubRegistry()
+	in := "a: ko://go.ate.dev/substrate/demos/counter\n" +
+		"b: ko://go.ate.dev/substrate/cmd/benchmarking/isolate/fake-atelet\n" +
+		"c: ko://go.ate.dev/substrate/cmd/credential-provider/kubernetes-secrets\n"
+
+	_, err := images.NewPrebuilt(testSource, registry.digest).
+		ResolveBytes(context.Background(), []byte(in))
+	if err == nil {
+		t.Fatal("ResolveBytes() = nil error, want failures for unreleased images")
+	}
+	for _, want := range []string{
+		"demos/counter is a demo, which releases do not publish",
+		"fake-atelet is a benchmarking fake, which releases do not publish",
+		"kubernetes-secrets is the Kubernetes Secrets credential provider, which releases do not publish",
+		"dropping --image-repo",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q:\n%v", want, err)
+		}
+	}
+	if len(registry.calls) != 0 {
+		t.Errorf("registry lookups = %v, want none", registry.calls)
+	}
+}
+
 // A repeated bad reference is one problem, not one per occurrence.
 func TestPrebuiltDeduplicatesFailures(t *testing.T) {
 	ref := "image: ko://go.ate.dev/substrate/cmd/nope\n"
@@ -334,7 +358,8 @@ var resolvedRef = regexp.MustCompile(regexp.QuoteMeta(testSource.Repo) + `/[^\s"
 
 // Resolving the control plane manifests must produce a manifest that still
 // parses and holds no unresolved reference. This is the closest a unit test
-// gets to the install itself.
+// gets to the install itself. A manifest that references an image releases do
+// not publish must instead fail, naming each such image and nothing else.
 func TestResolveEveryInstallManifest(t *testing.T) {
 	root, err := config.RepoRoot()
 	if err != nil {
@@ -348,6 +373,16 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 	}
 
 	resolver := images.NewPrebuilt(testSource, newStubRegistry().digest)
+
+	var unreleased []string
+	for _, pkg := range images.Components {
+		if !slices.Contains(images.ReleaseComponents(), pkg) {
+			unreleased = append(unreleased, pkg)
+		}
+	}
+	// Counts the manifests that resolved, so the test cannot pass with every
+	// manifest taking the unreleased branch.
+	resolved := 0
 
 	// The directory as a whole is what a plain GKE install applies.
 	paths := []string{installDir}
@@ -363,10 +398,33 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadPath() = %v", err)
 			}
+			var excluded []string
+			for _, ref := range koRefPattern.FindAllString(string(manifest), -1) {
+				pkg := strings.TrimPrefix(ref, "ko://"+images.ModulePath+"/")
+				if slices.Contains(unreleased, pkg) && !slices.Contains(excluded, ref) {
+					excluded = append(excluded, ref)
+				}
+			}
 			out, err := resolver.ResolveBytes(context.Background(), manifest)
+			if len(excluded) > 0 {
+				if err == nil {
+					t.Fatalf("ResolveBytes() = nil error, want one naming %v", excluded)
+				}
+				lines := strings.Split(err.Error(), "\n")
+				if len(lines) != len(excluded) {
+					t.Errorf("ResolveBytes() reported %d problem(s), want only the %d unreleased image(s):\n%v", len(lines), len(excluded), err)
+				}
+				for _, ref := range excluded {
+					if !strings.Contains(err.Error(), ref+" is ") || !strings.Contains(err.Error(), "which releases do not publish") {
+						t.Errorf("error does not name %s as unreleased:\n%v", ref, err)
+					}
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("ResolveBytes() = %v", err)
 			}
+			resolved++
 			if refs := koRefPattern.FindAllString(string(out), -1); len(refs) > 0 {
 				t.Errorf("unresolved references survived: %v", refs)
 			}
@@ -383,5 +441,8 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 				t.Errorf("the resolved manifest no longer parses: %v", err)
 			}
 		})
+	}
+	if resolved == 0 {
+		t.Error("no install manifest resolved; every one referenced an unreleased image")
 	}
 }

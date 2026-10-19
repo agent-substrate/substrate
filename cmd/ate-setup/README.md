@@ -21,13 +21,17 @@ credentials:
 
 ```
 ate-setup deploy ate-system \
-  --credential-provider='{"name":"k8s.io"}' \
+  --credential-provider='{"enabled":false}' \
   --image-repo ghcr.io/agent-substrate/substrate \
   --image-tag vX.Y.Z
 ```
 
-A registry you published to yourself with `ate-setup publish release-images`
-works the same way. Nothing is built and no registry is pushed to; the
+Releases publish the control plane, the node and worker images, and
+`envoy-dataplane`. The demos, the benchmarking fakes, and the Kubernetes Secrets
+credential provider are not published, so a pre-built install turns egress
+credential injection off, and anything that needs one of those images has to
+be built from source. A registry you published to yourself with
+`ate-setup publish release-images` works the same way. Nothing is built and no registry is pushed to; the
 manifests still come from the checkout, which should be the tag being
 installed. Each reference is pinned to the digest its tag names, so the
 registry has to be readable from here as well as from the cluster.

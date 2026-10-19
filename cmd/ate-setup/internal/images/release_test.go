@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -30,6 +31,121 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
+
+// An entry in unreleased that is not a component excludes nothing, and hides
+// that the component it meant was renamed or removed.
+func TestUnreleasedAreComponents(t *testing.T) {
+	for pkg := range unreleased {
+		if !slices.Contains(Components, pkg) {
+			t.Errorf("unreleased names %s, which is not in Components", pkg)
+		}
+	}
+}
+
+// ghcr.io links a package to the repository its source label names, so the
+// label has to be the GitHub repository, whatever the module path is.
+func TestSourceURL(t *testing.T) {
+	if want := "https://github.com/agent-substrate/substrate"; SourceURL != want {
+		t.Errorf("SourceURL = %q, want %q", SourceURL, want)
+	}
+}
+
+// Only a release tag that makes a valid reference passes. A comma would be
+// split by ko into two tags, and a stray tag would publish a full image set to
+// the release repository.
+func TestCheckReleaseTag(t *testing.T) {
+	for _, tag := range []string{"v1.2.3", "v0.5.0-rc", "v0.5.0-rc.1", "v0.5.0-pre", "v0.5.0-pre.4", "v10.0.0-alpha.2-x"} {
+		if err := CheckReleaseTag("ghcr.io/agent-substrate/substrate", tag); err != nil {
+			t.Errorf("CheckReleaseTag(%q) = %v, want nil", tag, err)
+		}
+	}
+	for _, tag := range []string{"v1-test", "vnext", "v1.2.3,latest", "1.2.3", "v1.2", "v1.2.3-", "v1.2.3foo", ""} {
+		if err := CheckReleaseTag("ghcr.io/agent-substrate/substrate", tag); err == nil {
+			t.Errorf("CheckReleaseTag(%q) = nil, want an error", tag)
+		}
+	}
+	if err := CheckReleaseTag("not a repo", "v1.2.3"); err == nil {
+		t.Error("CheckReleaseTag() with an invalid repository = nil, want an error")
+	}
+}
+
+// A tag that names an earlier push passes a platform check, so the digest is
+// compared too.
+func TestStaleTags(t *testing.T) {
+	srv := httptest.NewServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
+	t.Cleanup(srv.Close)
+	repo := strings.TrimPrefix(srv.URL, "http://") + "/substrate"
+
+	amd64 := v1.Platform{OS: "linux", Architecture: "amd64"}
+	arm64 := v1.Platform{OS: "linux", Architecture: "arm64"}
+	pushIndex(t, repo+"/current:v1", amd64)
+	pushIndex(t, repo+"/stale:v1", amd64)
+	current := indexDigest(t, repo+"/current:v1")
+	// What the run pushed for "stale": a different index, never tagged.
+	pushed := mutate.AppendManifests(empty.Index, mutate.IndexAddendum{
+		Add: empty.Image, Descriptor: v1.Descriptor{Platform: &arm64},
+	})
+	pushedDigest, err := pushed.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := StaleTags(t.Context(),
+		[]string{repo + "/current:v1", repo + "/stale:v1", repo + "/missing:v1"},
+		[]string{repo + "/current:v1@" + current, repo + "/stale@" + pushedDigest.String()},
+	)
+	if err != nil {
+		t.Fatalf("StaleTags() error = %v", err)
+	}
+	if len(got) != 2 || !strings.Contains(got[0], "stale:v1 names") || !strings.Contains(got[1], "missing:v1: nothing was pushed") {
+		t.Errorf("StaleTags() = %q, want the stale and the missing tag", got)
+	}
+}
+
+// indexDigest is the digest ref's tag names in the test registry.
+func indexDigest(t *testing.T, ref string) string {
+	t.Helper()
+	d, err := RemoteDigest(t.Context(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// The revision label names the commit the images were built from, so it has
+// to be the checked-out commit itself, and a directory with no commit fails
+// rather than labeling images with nothing.
+func TestRevision(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "test"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	head := exec.Command("git", "rev-parse", "HEAD")
+	head.Dir = dir
+	want, err := head.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Revision(t.Context(), dir)
+	if err != nil {
+		t.Fatalf("Revision() error = %v", err)
+	}
+	if got != strings.TrimSpace(string(want)) {
+		t.Errorf("Revision() = %q, want %q", got, strings.TrimSpace(string(want)))
+	}
+
+	if got, err := Revision(t.Context(), t.TempDir()); err == nil {
+		t.Errorf("Revision() outside a repository = %q, nil; want an error", got)
+	}
+}
 
 func parseRef(t *testing.T, ref string) name.Reference {
 	t.Helper()

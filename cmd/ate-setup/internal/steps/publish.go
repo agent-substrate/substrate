@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
@@ -63,51 +62,55 @@ func (e *Env) PublishWorkerImages(ctx context.Context, w io.Writer) error {
 
 // PublishReleaseOptions are the publish release-images settings.
 type PublishReleaseOptions struct {
-	// Force rebuilds and replaces images the registry already holds for the
-	// tag. Without it, a complete set is left alone.
-	Force bool
+	// Overwrite rebuilds and replaces images the registry already holds for
+	// the tag. Without it, a complete set is left alone.
+	Overwrite bool
 }
 
 // releaseImageRefs returns the tagged reference of every image a release
-// publishes to repo: one per images.Components entry, plus envoy-dataplane.
+// publishes to repo: one per images.ReleaseComponents entry.
 func releaseImageRefs(repo, tag string) []string {
 	repo = strings.TrimSuffix(repo, "/")
-	refs := make([]string, 0, len(images.Components)+1)
-	for _, pkg := range images.Components {
+	pkgs := images.ReleaseComponents()
+	refs := make([]string, 0, len(pkgs))
+	for _, pkg := range pkgs {
 		refs = append(refs, repo+"/"+images.ImageName(pkg)+":"+tag)
 	}
-	return append(refs, repo+"/"+envoyDataplaneImage+":"+tag)
+	return refs
 }
 
-// PublishReleaseImages builds and pushes every image a pre-built install
-// needs, all tagged with the build version, and writes their pushed references
-// to w. That is what `deploy --image-repo KO_DOCKER_REPO --image-tag VERSION`
-// installs: the ko images in images.Components, plus envoy-dataplane, which is
-// built from a Dockerfile.
+// PublishReleaseImages builds and pushes every image a release publishes, the
+// ko images in images.ReleaseComponents, all tagged with the build version,
+// and writes their pushed references to w. The version has to be a release
+// tag. Releases do not publish envoy-dataplane, the one Dockerfile-built
+// image, so nothing here needs docker.
 //
 // If the registry already holds every image for the tag on every platform,
-// nothing is built unless opts.Force is set, so rerunning a release never
+// nothing is built unless opts.Overwrite is set, so rerunning a release never
 // replaces published digests by accident. An incomplete set, left by a failed
-// run, is rebuilt in full. After pushing, every image is checked for every
-// platform.
+// run, is rebuilt in full. After pushing, every tag is checked to name the
+// digest just pushed, on every platform.
 func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer, opts PublishReleaseOptions) error {
 	if e.Cfg.KODockerRepo == "" {
 		return fmt.Errorf("publishing release images needs a registry to push to; set KO_DOCKER_REPO or --ko-docker-repo")
 	}
 	tag := e.SubstrateVersion()
+	if err := images.CheckReleaseTag(e.Cfg.KODockerRepo, tag); err != nil {
+		return fmt.Errorf("the build version: %w; set VERSION to the release tag", err)
+	}
 	log.Stepf("publish_release_images (%s)", tag)
 	platforms, err := images.Platforms(e.Cfg.Root, e.Cfg.KODefaultPlatforms)
 	if err != nil {
 		return err
 	}
 	tagged := releaseImageRefs(e.Cfg.KODockerRepo, tag)
-	if !opts.Force {
+	if !opts.Overwrite {
 		incomplete, err := images.CheckPublished(ctx, tagged, platforms)
 		if err != nil {
 			return err
 		}
 		if len(incomplete) == 0 {
-			log.Infof("%s already holds every image for %s; nothing built. Pass --force to rebuild and replace them.",
+			log.Infof("%s already holds every image for %s; nothing built. Pass --overwrite to rebuild and replace them.",
 				e.Cfg.KODockerRepo, tag)
 			return nil
 		}
@@ -120,22 +123,22 @@ func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer, opts Publis
 	if err != nil {
 		return err
 	}
-	pkgs := make([]string, 0, len(images.Components))
-	for _, pkg := range images.Components {
+	var pkgs []string
+	for _, pkg := range images.ReleaseComponents() {
 		pkgs = append(pkgs, "./"+pkg)
 	}
-	source := images.SourceLabel + "=" + images.SourceURL
-	refs, err := runner.BuildTagged(ctx, tag, []string{source}, pkgs...)
+	revision, err := images.Revision(ctx, e.Cfg.Root)
 	if err != nil {
 		return err
 	}
-	dockerFlags := append(slices.Clone(e.Cfg.DockerBuildFlags), "--label="+source)
-	envoy, err := images.PublishDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, envoyDataplaneImage, tag,
-		e.Cfg.Path(envoyDataplaneDockefile), e.Cfg.KODefaultPlatforms, dockerFlags)
+	labels := []string{
+		images.SourceLabel + "=" + images.SourceURL,
+		images.RevisionLabel + "=" + revision,
+	}
+	refs, err := runner.BuildTagged(ctx, tag, labels, pkgs...)
 	if err != nil {
 		return err
 	}
-	refs = append(refs, envoy)
 
 	incomplete, err := images.CheckPublished(ctx, tagged, platforms)
 	if err != nil {
@@ -147,6 +150,13 @@ func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer, opts Publis
 			lines = append(lines, i.String())
 		}
 		return fmt.Errorf("after publishing, %d image(s) are incomplete:\n  %s", len(incomplete), strings.Join(lines, "\n  "))
+	}
+	stale, err := images.StaleTags(ctx, tagged, refs)
+	if err != nil {
+		return err
+	}
+	if len(stale) > 0 {
+		return fmt.Errorf("after publishing, %d tag(s) do not name the pushed image:\n  %s", len(stale), strings.Join(stale, "\n  "))
 	}
 	if _, err := fmt.Fprintf(w, "\nRelease images for %s:\n", tag); err != nil {
 		return err

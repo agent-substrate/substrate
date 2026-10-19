@@ -68,7 +68,7 @@ unchanged.
 
 ```
 ate-setup deploy ate-system \
-  --credential-provider='{"name":"k8s.io"}' \
+  --credential-provider='{"enabled":false}' \
   --image-repo ghcr.io/agent-substrate/substrate \
   --image-tag vX.Y.Z
 ```
@@ -83,7 +83,11 @@ toolchain, and write access to a registry.
 same tag, which is how a release publishes them. A release that adds a component
 has to publish it alongside the others before a pre-built install can use it.
 `VERSION=TAG ate-setup publish release-images --ko-docker-repo REPO` publishes
-the full set, including `envoy-dataplane`, which is built from a Dockerfile with
+the release set, `images.ReleaseComponents`. It leaves out the demos, the
+benchmarking fakes, and the Kubernetes Secrets credential provider, so
+`--credential-provider='{"name":"k8s.io"}'`, `deploy demo`, and the fake data
+plane fail under `--image-repo`, naming the image, and have to be built from
+source. The set includes `envoy-dataplane`, which is built from a Dockerfile with
 `docker buildx` rather than with `ko`. A build from source builds that image itself, so
 it needs `docker` as well as `ko`.
 Each reference is then pinned to the digest its tag names, which takes one HEAD

@@ -5,7 +5,7 @@ A release is a `vX.Y.Z` tag, or `vX.Y.Z-rc.N` for a release candidate, with cont
 ## Cut a release
 
 1. Tag the release commit and push the tag. The [`release`](../../.github/workflows/release.yaml) workflow does two things, in order:
-   1. The `images` job runs `ate-setup publish release-images`, which builds every release image for `linux/amd64` and `linux/arm64`, pushes it to `ghcr.io/agent-substrate/substrate/<image>:<tag>`, and then checks that every image exists for both platforms. Most of the job's time goes to building `envoy-dataplane` for arm64 under emulation.
+   1. The `images` job runs `ate-setup publish release-images`, which builds every release image for `linux/amd64` and `linux/arm64`, pushes it to `ghcr.io/agent-substrate/substrate/<image>:<tag>`, and then checks that every tag names the image just pushed, for both platforms. Most of the job's time goes to building `envoy-dataplane` for arm64 under emulation.
    2. Once the images are verified, the `draft` job runs [`hack/release/draft-release.sh`](../../hack/release/draft-release.sh), which creates a draft release. The notes cover every change since the previous `vX.Y.Z` release, give the `ate-setup` command that installs the release images, and end with a list of committers. A release candidate is marked as a prerelease.
 
    If the `images` job fails, no draft is created. Fix the cause and run the workflow again from the Actions tab with the tag as input.
@@ -29,9 +29,13 @@ To preview the notes before tagging, run the dry run with the tag you plan to pu
 
 ## Release images
 
+A release publishes `ate-idp-server`, `ateapi`, `atecontroller`, `atelet`, `atenet`, `ateworker-gvisor`, `ateworker-microvm`, `objectstore-plugin`, `podcertcontroller`, and `envoy-dataplane` (`images.ReleaseComponents` in [`cmd/ate-setup/internal/images`](../../cmd/ate-setup/internal/images/images.go), plus `envoy-dataplane`). It leaves out the demos, the benchmarking fakes, and the Kubernetes Secrets credential provider; an install from release images that needs one of them fails naming it. That is why the install command in the notes passes `--credential-provider='{"enabled":false}'`.
+
+Only tags of the form `vX.Y.Z` or `vX.Y.Z-PRERELEASE` start the workflow, and `ate-setup` refuses any other version before building.
+
 Only `agent-substrate/substrate` publishes images. In a fork the `images` job is skipped, since GitHub bills package storage to the fork's owner, and the draft is created without them.
 
-A rerun builds nothing if every image already exists for the tag on both platforms. An incomplete set, left by a failed run, is rebuilt in full. To rebuild and replace a complete set, run the workflow manually with `overwrite` checked. Replacing images changes their digests, so avoid it once a release is published.
+A rerun builds nothing if every image already exists for the tag on both platforms. An incomplete set, left by a failed run, is rebuilt in full. To rebuild and replace a complete set, run the workflow manually with `overwrite` checked. Replacing images changes their digests, so the workflow refuses `overwrite` once the tag has a published (non-draft) release.
 
 To test the image build without publishing anything, for example in a fork, run the workflow manually with `dry_run_images` checked. The images are pushed to a registry that exists only inside the job and are checked there. No draft is created.
 
