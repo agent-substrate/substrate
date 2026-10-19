@@ -313,6 +313,10 @@ const (
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
+//
+// atelet runs at most one Run, Restore, Checkpoint, PromoteSnapshot,
+// DetachActor, or Terminate of an actor at a time. A call waits for the one in
+// progress, up to the call's deadline.
 type AteletClient interface {
 	// Run tells atelet to create a new containerized workload from scratch on a
 	// worker.
@@ -344,8 +348,7 @@ type AteletClient interface {
 	// report a DetachActor call, whose caller reads the state from the response.
 	// Waits for an operation already in progress on the actor, such as an
 	// upload or a detach. Does nothing when atelet holds no local snapshot for
-	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-	// actor is in progress or the actor runs on this node, and
+	// the actor. Returns ABORTED when the actor runs on this node, and
 	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
 	// durable, such as when it has no `snapshot.object`.
 	DetachActor(ctx context.Context, in *DetachActorRequest, opts ...grpc.CallOption) (*DetachActorResponse, error)
@@ -430,6 +433,10 @@ func (c *ateletClient) Terminate(ctx context.Context, in *TerminateRequest, opts
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
+//
+// atelet runs at most one Run, Restore, Checkpoint, PromoteSnapshot,
+// DetachActor, or Terminate of an actor at a time. A call waits for the one in
+// progress, up to the call's deadline.
 type AteletServer interface {
 	// Run tells atelet to create a new containerized workload from scratch on a
 	// worker.
@@ -461,8 +468,7 @@ type AteletServer interface {
 	// report a DetachActor call, whose caller reads the state from the response.
 	// Waits for an operation already in progress on the actor, such as an
 	// upload or a detach. Does nothing when atelet holds no local snapshot for
-	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-	// actor is in progress or the actor runs on this node, and
+	// the actor. Returns ABORTED when the actor runs on this node, and
 	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
 	// durable, such as when it has no `snapshot.object`.
 	DetachActor(context.Context, *DetachActorRequest) (*DetachActorResponse, error)

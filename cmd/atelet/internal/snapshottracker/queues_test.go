@@ -173,10 +173,10 @@ func TestTrackerSameActorUploadAndDetachDue(t *testing.T) {
 	})
 }
 
-// A Checkpoint hold (a.holds > 0) keeps opDetach from pruning local snapshots
-// underneath the checkpoint, while opUpload still runs in the background. When
-// the hold ends, opDetach prunes the now-durable snapshot without uploading
-// again.
+// A Checkpoint hold (a.hold != holdNone) keeps opDetach from pruning local
+// snapshots underneath the checkpoint, while opUpload still runs in the
+// background. When the hold ends, opDetach prunes the now-durable snapshot
+// without uploading again.
 func TestTrackerUploadRunsDuringCheckpointHoldWhileDetachWaits(t *testing.T) {
 	store := newFakeSnapshotStore()
 	tr := newIdleTestTracker(t, store)

@@ -732,33 +732,6 @@ func TestTrackerCheckGeneration(t *testing.T) {
 	tr.CommitLocal(trackedActorUID, ref("s3", 6))
 	checkBegin(t, tr, ref("s2", 4), codes.Aborted)
 	checkBegin(t, tr, ref("s3", 6), codes.OK)
-
-	// While a Checkpoint or PromoteSnapshot holds an uncommitted snapshot at
-	// generation 8, it is newest until end() runs.
-	endCp, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, snap("s4", 8))
-	if err != nil {
-		t.Fatalf("BeginCheckpoint(s4@8): %v", err)
-	}
-	checkBegin(t, tr, ref("s3", 6), codes.Aborted)
-	checkBegin(t, tr, ref("between", 7), codes.Aborted)
-	checkBegin(t, tr, ref("other", 8), codes.Aborted)
-	checkBegin(t, tr, ref("s4", 8), codes.OK)
-	checkBegin(t, tr, ref("s5", 9), codes.OK)
-	endCp()
-	// Ending without committing drops the in-flight generation, so s3@6 is newest again.
-	checkBegin(t, tr, ref("s3", 6), codes.OK)
-	checkBegin(t, tr, ref("between", 7), codes.OK)
-
-	_, endPromote, err := tr.BeginPromote(t.Context(), trackedActorUID, ref("s4", 8))
-	if err != nil {
-		t.Fatalf("BeginPromote(s4@8): %v", err)
-	}
-	checkBegin(t, tr, ref("between", 7), codes.Aborted)
-	checkBegin(t, tr, ref("other", 8), codes.Aborted)
-	checkBegin(t, tr, ref("s4", 8), codes.OK)
-	endPromote()
-	checkBegin(t, tr, ref("between", 7), codes.OK)
-
 	// If durable has a higher generation than local, durable is newest.
 	a := &actorSnapshots{
 		actorUID: trackedActorUID,

@@ -124,7 +124,7 @@ func (t *Tracker) queueReportLocked(a *actorSnapshots) {
 	if t.reporting.reporter == nil || !a.reportDue() {
 		return
 	}
-	if a.holds > 0 {
+	if a.hold != holdNone {
 		a.reportDeferred = true
 		return
 	}
@@ -255,7 +255,7 @@ func (t *Tracker) beginReport(actorUID string) (resources.ActorRef, *ateletpb.Ac
 		t.reporting.retries.Forget(actorUID)
 		return resources.ActorRef{}, nil, time.Time{}, false
 	}
-	if a.holds > 0 {
+	if a.hold != holdNone {
 		// A Run, Restore, Checkpoint, or PromoteSnapshot of the actor is in
 		// progress, and queues the report when it ends (see holdLocked).
 		a.reportDeferred = true

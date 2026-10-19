@@ -39,6 +39,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
 	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
+	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateapiauth"
 	"go.ate.dev/substrate/internal/ateattr"
@@ -667,9 +668,20 @@ type Atelet struct {
 
 	// snapshots tracks each actor's snapshots on this node.
 	snapshots *snapshottracker.Tracker
+	// actorLocks serializes lifecycle RPCs per actor.
+	actorLocks actorlock.Locks
 }
 
 var _ ateletpb.AteletServer = (*Atelet)(nil)
+
+// lockActor acquires the per-actor RPC lock for actorUID, or returns an error
+// wrapping ctx.Err() if ctx ends while waiting.
+func (s *Atelet) lockActor(ctx context.Context, actorUID string) (func(), error) {
+	if !s.actorLocks.Lock(ctx, actorUID) {
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
+	}
+	return func() { s.actorLocks.Unlock(actorUID) }, nil
+}
 
 // NewService creates a new WorkersManagerService.
 func NewService(
@@ -723,6 +735,11 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	if err != nil {
 		return nil, err
 	}
+	unlockActor, err := s.lockActor(ctx, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
 	endStart, err := s.snapshots.BeginStart(ctx, actorUID)
 	if err != nil {
 		return nil, err
@@ -902,7 +919,13 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 			snapshotLogAttrs(attribution, op, checkpointDurationMetric, err, phases)...)
 	}()
 
-	// A detach in progress finishes first, and none starts until the
+	unlockActor, err := s.lockActor(ctx, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
+
+	// A detach in progress finishes first, and no detach starts until the
 	// checkpoint returns, so it cannot delete the snapshot being written.
 	endCheckpoint, err := s.snapshots.BeginCheckpoint(ctx, actorUID, req.GetSnapshot())
 	if err != nil {
@@ -1213,6 +1236,12 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	}
 	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetSnapshot().GetSnapshotUuid())
 
+	unlockActor, err := s.lockActor(ctx, req.GetActorUid())
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
+
 	// A detach or a background upload of this snapshot in progress finishes
 	// first, and no detach starts until the promote returns.
 	snap := snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot(), Actor: resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}}
@@ -1398,8 +1427,14 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			snapshotLogAttrs(attribution, op, restoreDurationMetric, err, phases)...)
 	}()
 
-	// A detach in progress finishes first; its local copy is then gone, and
-	// the restore reads snapshot.object.
+	unlockActor, err := s.lockActor(ctx, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
+
+	// A detach in progress finishes first. If it ran, its local copy is gone,
+	// and the restore reads snapshot.object.
 	endStart, err := s.snapshots.BeginStart(ctx, actorUID)
 	if err != nil {
 		return nil, err
@@ -1606,6 +1641,12 @@ func (s *Atelet) DetachActor(ctx context.Context, req *ateletpb.DetachActorReque
 	if errs := apivalidation.ValidateDetachActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
+	unlockActor, err := s.lockActor(ctx, req.GetActorUid())
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
+
 	state, err := s.snapshots.Detach(ctx, req.GetActorUid())
 	if err != nil {
 		return nil, err
@@ -1622,6 +1663,12 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
+
+	unlockActor, err := s.lockActor(ctx, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
 
 	if req.GetWorkerPodUid() != "" {
 		var assetPaths map[string]string
