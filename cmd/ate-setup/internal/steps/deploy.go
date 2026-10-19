@@ -186,7 +186,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		waits = append(waits, rollout{kube.KindDeployment, k8sCredentialProviderDeployment})
 	}
 	for _, w := range waits {
-		if err := e.Kube.RolloutStatus(ctx, w.kind, e.Namespace(), w.name, e.Cfg.RolloutTimeout); err != nil {
+		if err := e.Kube.RolloutStatus(ctx, w.kind, e.Namespace(), w.name, e.rolloutTimeout()); err != nil {
 			return err
 		}
 	}
@@ -200,12 +200,12 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 // the podcertificate controller, and waits until it is rolling and has
 // published its trust bundles.
 //
-// size10 clusters render the podcert-size10 overlay instead of the base file.
-// It appends --kube-api-qps=100 / --kube-api-burst=200 so the controller keeps
-// up with the request volume the size10 postgres profile enables. An overlay
-// rather than a post-apply patch, so that no later apply of the base file can
-// reconcile the flags away; the base kustomization leaves the file out for the
-// same reason.
+// size10 and size100 clusters render the podcert-size10 overlay instead of the
+// base file, and size100 additionally scales the Deployment to 10 replicas so
+// signing keeps up with the request volume the profile enables. An
+// overlay rather than a post-apply patch ensures no later apply of the base
+// file can reconcile the flags away; the base kustomization leaves the file out
+// for the same reason.
 //
 // --podcert-workers-per-signer is set on the rendered objects for the same
 // reason: one apply means one rollout, and the rollout wait sees the pod that
@@ -232,6 +232,13 @@ func (e *Env) DeployPodCertificateController(ctx context.Context) error {
 		log.Infof("Setting WORKERS_PER_SIGNER to %d", e.Cfg.PodcertWorkersPerSigner)
 		if err := setPodcertWorkersPerSigner(objs, e.Cfg.PodcertWorkersPerSigner); err != nil {
 			return err
+		}
+	}
+	if e.Cfg.Size100() {
+		for _, obj := range objs {
+			if obj.GetKind() == "Deployment" && obj.GetNamespace() == NamespacePodCert && obj.GetName() == "podcertificate-controller" {
+				_ = unstructured.SetNestedField(obj.Object, int64(10), "spec", "replicas")
+			}
 		}
 	}
 	if err := e.Kube.Apply(ctx, objs); err != nil {
@@ -338,11 +345,20 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 		return err
 	}
 	for _, name := range []string{"ate-api-server", "ate-idp-server"} {
-		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), name, e.Cfg.RolloutTimeout); err != nil {
+		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), name, e.rolloutTimeout()); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// rolloutTimeout returns the rollout timeout for ate-system workloads, raising
+// the default to 180s on size10 clusters unless --rollout-timeout was set.
+func (e *Env) rolloutTimeout() time.Duration {
+	if e.Cfg.Size10() {
+		return e.Cfg.WaitTimeout(180 * time.Second)
+	}
+	return e.Cfg.RolloutTimeout
 }
 
 // apiServerManifestPath is the ate-api-server manifest for the environment.
@@ -373,10 +389,19 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := e.ResolveAndApplyBytes(ctx, manifest); err != nil {
+	manifest, err = e.ResolveManifestBytes(ctx, manifest)
+	if err != nil {
 		return err
 	}
-	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-controller", e.Cfg.RolloutTimeout); err != nil {
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
+		return err
+	}
+	applyWorkloadScaleOverrides(objs, e.Cfg.Size100(), e.Cfg.FakeDataPlane)
+	if err := e.Kube.Apply(ctx, objs); err != nil {
+		return err
+	}
+	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-controller", e.rolloutTimeout()); err != nil {
 		return err
 	}
 	return e.waitFakeWorkersync(ctx)
@@ -475,7 +500,7 @@ func (e *Env) waitFakeWorkersync(ctx context.Context) error {
 	if !e.Cfg.FakeDataPlane {
 		return nil
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), fakeWorkersyncDeployment, e.Cfg.RolloutTimeout)
+	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), fakeWorkersyncDeployment, e.rolloutTimeout())
 }
 
 // DeployAtelet redeploys only the atelet DaemonSet.
@@ -506,10 +531,15 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := e.Kube.ApplyBytes(ctx, manifest); err != nil {
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
 		return err
 	}
-	if err := e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, e.Namespace(), "atelet", e.Cfg.RolloutTimeout); err != nil {
+	applyWorkloadScaleOverrides(objs, e.Cfg.Size100(), e.Cfg.FakeDataPlane)
+	if err := e.Kube.Apply(ctx, objs); err != nil {
+		return err
+	}
+	if err := e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, e.Namespace(), "atelet", e.rolloutTimeout()); err != nil {
 		return err
 	}
 	return e.waitFakeWorkersync(ctx)
@@ -551,7 +581,12 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := e.Kube.ApplyBytes(ctx, routerManifest); err != nil {
+	routerObjs, err := kube.DecodeManifestBytes(routerManifest)
+	if err != nil {
+		return err
+	}
+	applyWorkloadScaleOverrides(routerObjs, e.Cfg.Size100(), e.Cfg.FakeDataPlane)
+	if err := e.Kube.Apply(ctx, routerObjs); err != nil {
 		return err
 	}
 	if err := e.EnsureEgressMITMCAPoolSecret(ctx); err != nil {
@@ -574,7 +609,7 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 		deployments = append(deployments, k8sCredentialProviderDeployment)
 	}
 	for _, name := range deployments {
-		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), name, e.Cfg.RolloutTimeout); err != nil {
+		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), name, e.rolloutTimeout()); err != nil {
 			return err
 		}
 	}
@@ -670,8 +705,12 @@ func (e *Env) DeployCRDs(ctx context.Context) error {
 
 // waitCRDsEstablished waits until the CRDs are served.
 func (e *Env) waitCRDsEstablished(ctx context.Context, crds []*unstructured.Unstructured) error {
+	timeout := 30 * time.Second
+	if e.Cfg.Size100() {
+		timeout = 2 * time.Minute
+	}
 	for _, crd := range crds {
-		if err := e.Kube.WaitCondition(ctx, crdGVK, "", crd.GetName(), "Established", 30*time.Second); err != nil {
+		if err := e.Kube.WaitCondition(ctx, crdGVK, "", crd.GetName(), "Established", timeout); err != nil {
 			return err
 		}
 	}
@@ -679,4 +718,114 @@ func (e *Env) waitCRDsEstablished(ctx context.Context, crds []*unstructured.Unst
 	// has to see the kinds that were just installed.
 	e.Kube.InvalidateDiscovery()
 	return nil
+}
+
+// applyWorkloadScaleOverrides mutates decoded workload objects in place before
+// server-side apply when the size100 profile is selected. Under size100 it
+// scales control-plane replicas and resources and sizes fake-data-plane
+// components when enabled.
+func applyWorkloadScaleOverrides(objs []*unstructured.Unstructured, size100, fakeDataPlane bool) {
+	if !size100 {
+		return
+	}
+	for _, obj := range objs {
+		kind := obj.GetKind()
+		name := obj.GetName()
+		switch {
+		case kind == "Deployment" && name == "ate-api-server":
+			_ = unstructured.SetNestedField(obj.Object, int64(6), "spec", "replicas")
+			mutatePodContainers(obj, func(cname string, c map[string]any) {
+				if cname == "ate-api-server" {
+					setContainerResources(c, "8", "16Gi", "16", "32Gi")
+				}
+			})
+
+		case kind == "Deployment" && name == "ate-controller":
+			mutatePodContainers(obj, func(cname string, c map[string]any) {
+				if cname == "ate-controller" {
+					setContainerArgPrefix(c, "--worker-sync-concurrency=", "--worker-sync-concurrency=32")
+					setContainerResources(c, "4", "8Gi", "8", "16Gi")
+				}
+			})
+
+		case kind == "Deployment" && name == "atenet-router":
+			_ = unstructured.SetNestedField(obj.Object, int64(8), "spec", "replicas")
+			mutatePodContainers(obj, func(cname string, c map[string]any) {
+				if cname == "atenet-router" {
+					setContainerResources(c, "4", "4Gi", "8", "8Gi")
+				}
+			})
+
+		case kind == "DaemonSet" && name == "atelet":
+			if fakeDataPlane {
+				mutatePodContainers(obj, func(cname string, c map[string]any) {
+					if cname == "atelet" {
+						setContainerResources(c, "2", "4Gi", "4", "8Gi")
+					}
+				})
+			}
+
+		case kind == "Deployment" && name == fakeWorkersyncDeployment:
+			if fakeDataPlane {
+				mutatePodContainers(obj, func(_ string, c map[string]any) {
+					setContainerResources(c, "2", "4Gi", "4", "8Gi")
+				})
+			}
+		}
+	}
+}
+
+// mutatePodContainers invokes fn on every container and initContainer in obj's
+// pod template spec and writes the mutated slice back to obj.
+func mutatePodContainers(obj *unstructured.Unstructured, fn func(name string, container map[string]any)) {
+	for _, field := range []string{"containers", "initContainers"} {
+		containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", field)
+		if err != nil || !found {
+			continue
+		}
+		for i, raw := range containers {
+			c, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			cname, _ := c["name"].(string)
+			fn(cname, c)
+			containers[i] = c
+		}
+		_ = unstructured.SetNestedSlice(obj.Object, containers, "spec", "template", "spec", field)
+	}
+}
+
+// setContainerResources sets the CPU and memory requests and limits on an
+// unstructured container map, removing resources.limits.cpu when limCPU is empty.
+func setContainerResources(c map[string]any, reqCPU, reqMem, limCPU, limMem string) {
+	_ = unstructured.SetNestedField(c, reqCPU, "resources", "requests", "cpu")
+	_ = unstructured.SetNestedField(c, reqMem, "resources", "requests", "memory")
+	if limCPU == "" {
+		unstructured.RemoveNestedField(c, "resources", "limits", "cpu")
+	} else {
+		_ = unstructured.SetNestedField(c, limCPU, "resources", "limits", "cpu")
+	}
+	_ = unstructured.SetNestedField(c, limMem, "resources", "limits", "memory")
+}
+
+// setContainerArgPrefix replaces the first container argument starting with
+// prefix by fullArg, or appends fullArg if no existing argument matches.
+func setContainerArgPrefix(c map[string]any, prefix, fullArg string) {
+	args, _, err := unstructured.NestedStringSlice(c, "args")
+	if err != nil {
+		return
+	}
+	replaced := false
+	for i, arg := range args {
+		if strings.HasPrefix(arg, prefix) {
+			args[i] = fullArg
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		args = append(args, fullArg)
+	}
+	_ = unstructured.SetNestedStringSlice(c, args, "args")
 }

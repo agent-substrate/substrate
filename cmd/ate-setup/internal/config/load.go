@@ -245,7 +245,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		},
 		Router:               r.String("atenet.dataplane"),
 		PostgresSchema:       r.String("ateapi.postgres.schema"),
-		PostgresPoolMaxConns: r.String("ateapi.postgres.poolMaxConns"),
+		PostgresPoolMaxConns: defaultPostgresPoolMaxConns(r.String("ateapi.postgres.poolMaxConns"), r.String("clusterSize")),
 		PostgresServerCAFile: r.String("ateapi.postgres.serverCAFile"),
 		PostgresStorageClass: r.String("ateapi.postgres.storageClass"),
 
@@ -291,6 +291,18 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// defaultPostgresPoolMaxConns returns the configured pool size, defaulting to
+// 192 on size100 when no explicit pool size was supplied.
+func defaultPostgresPoolMaxConns(configured, clusterSize string) string {
+	if configured != "" {
+		return configured
+	}
+	if clusterSize == ClusterSizeSize100 {
+		return "192"
+	}
+	return ""
 }
 
 // splitList splits a comma-separated value, dropping empty items, so an empty
@@ -406,8 +418,8 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		}
 	}
 
-	if size, _ := r.Value("clusterSize"); cfg.ClusterSize != ClusterSizeSize0 && cfg.ClusterSize != ClusterSizeSize10 {
-		return &InvalidError{Value: size, Want: ClusterSizeSize0 + " or " + ClusterSizeSize10}
+	if size, _ := r.Value("clusterSize"); cfg.ClusterSize != ClusterSizeSize0 && cfg.ClusterSize != ClusterSizeSize10 && cfg.ClusterSize != ClusterSizeSize100 {
+		return &InvalidError{Value: size, Want: ClusterSizeSize0 + ", " + ClusterSizeSize10 + ", or " + ClusterSizeSize100}
 	}
 
 	// The router rejects a malformed ID at startup; catch it before the

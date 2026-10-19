@@ -279,7 +279,7 @@ var Registry = []Setting{
 	{
 		Key: "clusterSize", Env: "ATE_INSTALL_CLUSTER_SIZE", Flag: "cluster-size", Kind: KindString,
 		Default: ClusterSizeSize0,
-		Usage:   "Coarse-grained sizing of Substrate: size0 or size10",
+		Usage:   "Coarse-grained sizing of Substrate: size0, size10, or size100",
 	},
 	{
 		Key: "cordonControlPlane", Env: "ATE_INSTALL_CORDON_CONTROL_PLANE", Flag: "cordon-control-plane",

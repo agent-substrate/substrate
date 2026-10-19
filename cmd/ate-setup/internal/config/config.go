@@ -45,11 +45,14 @@ const (
 	SandboxClassGvisor  = "gvisor"
 	SandboxClassMicrovm = "microvm"
 
-	// Cluster size profiles. size0 is the shipped footprint; size10 assumes a
+	// Cluster size profiles. size0 is the shipped footprint. size10 assumes a
 	// dedicated node for PostgreSQL and raises the store, its client pool, and
-	// the podcertificate controller's API rate limits to match.
-	ClusterSizeSize0  = "size0"
-	ClusterSizeSize10 = "size10"
+	// the podcertificate controller's API rate limits to match. size100
+	// additionally scales control-plane replicas, resources, and PostgreSQL
+	// connection and WAL capacity for multi-replica scale runs.
+	ClusterSizeSize0   = "size0"
+	ClusterSizeSize10  = "size10"
+	ClusterSizeSize100 = "size100"
 )
 
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
@@ -194,8 +197,8 @@ type Config struct {
 	// EnvoyConcurrency overrides --concurrency on the envoy container in atenet-egress.
 	EnvoyConcurrency int
 
-	// ClusterSize is the footprint profile (ATE_INSTALL_CLUSTER_SIZE): size0
-	// or size10.
+	// ClusterSize is the footprint profile (ATE_INSTALL_CLUSTER_SIZE): size0,
+	// size10, or size100.
 	ClusterSize string
 
 	// CordonControlPlane keeps the control plane off the worker nodes
@@ -361,9 +364,15 @@ func validateExtprocService(v Value) error {
 	return nil
 }
 
-// Size10 reports whether the size10 footprint profile is selected.
+// Size10 reports whether a large-cluster footprint profile (size10 or size100)
+// is selected.
 func (c *Config) Size10() bool {
-	return c.ClusterSize == ClusterSizeSize10
+	return c.ClusterSize == ClusterSizeSize10 || c.ClusterSize == ClusterSizeSize100
+}
+
+// Size100 reports whether the size100 footprint profile is selected.
+func (c *Config) Size100() bool {
+	return c.ClusterSize == ClusterSizeSize100
 }
 
 // PostgresSchemaName returns the configured schema, falling back to the
