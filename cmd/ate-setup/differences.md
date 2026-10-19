@@ -232,14 +232,6 @@ demo is its own package registering itself from `init`, and
 `internal/demos/all` is the single list of what gets linked in — with a test
 asserting no demo package is missing from it.
 
-**Kind-only demos are visible but refuse.** `demo-autoscaled-workerpool`
-registered itself only when `ATE_INSTALL_KIND=true`, so on GKE
-`--deploy-demo-autoscaled-workerpool` was rejected as an *unknown option*. The
-cobra tree is built before flags are parsed, so `--kind` is not known yet; the
-subcommand always exists and fails at run time with `demo-autoscaled-workerpool
-is only supported for Kind installations; re-run with --kind`. `delete all`
-still skips it on a non-Kind install, via `demos.For`.
-
 **Template expansion is not sed.** The demo templates were expanded by a stack
 of `sed -e` expressions doing two things: substitute `${PLACEHOLDER}`, or delete
 the whole line (`/${NAME}/d`) when the placeholder is not in play.

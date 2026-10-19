@@ -24,7 +24,7 @@ import (
 const bucketNamePlaceholder = "BUCKET_NAME"
 
 // ExternalVolumePlaceholders are the optional external-volume hooks in the
-// counter and autoscaled-workerpool templates. Every path except
+// counter templates. Every path except
 // `deploy demo counter --with-external-volume` drops them, which removes the
 // lines entirely.
 var ExternalVolumePlaceholders = []string{

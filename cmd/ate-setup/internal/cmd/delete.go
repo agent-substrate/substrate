@@ -48,7 +48,7 @@ var deleteAllCmd = &cobra.Command{
 	Short: "Delete every demo and then the core system",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.DeleteAll(cmd.Context(), demos.Deleters(env.Cfg))
+		return env.DeleteAll(cmd.Context(), demos.Deleters())
 	},
 }
 
