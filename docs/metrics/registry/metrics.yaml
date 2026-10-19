@@ -828,9 +828,12 @@ groups:
       ateapi reads this value with a callback. You can add the counts together.
       The sum across the states is the size of the pool. The sum across the
       pools is the size of the fleet. Thus this instrument is an UpDownCounter
-      and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
-      full pool or an empty pool reports 0. An absent series would stop an alert
-      on idle == 0.
+      and not a gauge. ateapi sets every state to 0 for each pool with
+      registered workers. Thus a full pool reports 0 for idle rather than an
+      absent series, which would stop an alert on idle == 0. A pool with no
+      registered workers has no series here: alert on
+      ate.workerpool.ready_workers, which atecontroller reports for every
+      WorkerPool, to catch an empty pool.
       The states count workers, not actor slots. A worker with 1 of 20 slots
       used and one with 19 of 20 are both partial. Do not read utilization of
       the pool from this instrument.
