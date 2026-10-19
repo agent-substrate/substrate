@@ -852,17 +852,23 @@ groups:
       class, and add after that. Within one replica you can add the counts
       together. The sum across the states is the size of the pool. The sum
       across the pools is the size of the fleet. Thus this instrument is an
-      UpDownCounter
-      and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
-      full pool or an empty pool reports 0. An absent series would stop an alert
-      on idle == 0.
+      UpDownCounter and not a gauge. For each worker with a known class, ateapi
+      sets every state of that pool and class to 0. Thus a full pool reports 0
+      for idle, and an alert on idle == 0 fires. A pool with no Worker has no
+      series here; atecontroller reports ate.workerpool.desired_workers and
+      ate.workerpool.ready_workers for every WorkerPool.
       The states count workers, not actor slots. A worker with 1 of 20 slots
       used and one with 19 of 20 are both partial. Do not read utilization of
       the pool from this instrument.
-      A worker with the class unknown is not capacity of the pool: the scheduler
-      puts no actor on it. Thus a query that asks how much capacity a pool has
-      must keep ate.sandbox.class, because a sum across the classes adds that
-      worker back into the total.
+      A worker counts under the class unknown from its creation, and again from
+      each restart, until its process registers and reports a class. Such a
+      worker is not capacity of the pool: the scheduler puts no actor on it.
+      Thus a query that asks how much capacity a pool has must keep
+      ate.sandbox.class, because a sum across the classes adds that worker back
+      into the total. An unknown worker seeds no series. Thus a pool whose
+      workers all count under unknown has no series for its class, and an alert
+      on idle == 0 alone does not fire for it. The idle query in
+      docs/observability.md takes such a pool as 0 idle.
     annotations:
       substrate:
         emitted_by: [ateapi]

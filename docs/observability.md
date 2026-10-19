@@ -319,6 +319,26 @@ For `ate.workerpool.workers`:
 
   When one backend receives several clusters, add `cluster` to both groupings, or same-named pools in different clusters merge.
 
+* A worker counts under `ate.sandbox.class` `unknown` until its process reports a class, and only a worker with a known class gives its pool zero-valued series for that class. So a pool whose workers have all yet to report has no `idle` series for its class, and `idle == 0` alone does not fire for it. Idle workers per pool, with such a pool as 0:
+
+  ```promql
+  (
+    sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      max by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+        {"ate.workerpool.workers", "ate.worker.state"="idle", "ate.sandbox.class"!="unknown"}
+      )
+    )
+    or
+    0 * sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      max by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+        {"ate.workerpool.workers"}
+      )
+    )
+  )
+  ```
+
+  Alert on `== 0`. A pool with no Worker at all has no series on this instrument; atecontroller reports `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers` for every WorkerPool.
+
 For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, `denied`, or `resume_error`. `denied` is a request the router refused by policy (a 403 or `PermissionDenied`), such as an egress request outside the actor's egress policy; `resume_error` is left for a resume that failed for any other reason, a router defect.
 * The router and the scheduler both report `no_capacity` for one condition, but they count different events. The scheduler records one sample on `ate.scheduler.assignment.duration` for each resume. The router records one sample for each request. Many requests can join one resume, and one parked request can cause more than one resume. Thus do not compare the two counts directly.
