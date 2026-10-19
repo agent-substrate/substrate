@@ -48,12 +48,11 @@ const logMsgLayerRetirePinned = "Image cache layer retirement vetoed: in use by 
 type retireStatus int
 
 const (
-	// retireGone: no dir under the layer's final name — already removed, or
-	// mid-unpack (only the commit rename creates the final name). Nothing
-	// stranded.
+	// retireGone: no dir under the layer's final name and no pull pinning
+	// it — already removed. Nothing stranded.
 	retireGone retireStatus = iota
-	// retireVetoed: the layer stays — pinned by an in-flight pull, fresh
-	// mtime, or a failed rename.
+	// retireVetoed: the layer stays — pinned by an in-flight pull (landed
+	// or still unpacking), fresh mtime, or a failed rename.
 	retireVetoed
 	// retireRetired: renamed to a ".rm-*" name, gone from the pool; the
 	// caller removes the renamed dir afterwards.
@@ -81,14 +80,18 @@ func isLayerDirName(name string) bool {
 // pinned by an in-flight pull, or with an mtime after cutoff, is vetoed
 // and left in place.
 //
-// A missing or fresh layer is ruled out before taking pinMu, which every
-// pull takes to pin, and the logging happens outside it.
+// A fresh layer is ruled out before taking pinMu, which every pull takes to
+// pin, and the logging happens outside it. A missing layer that a pull has
+// pinned is still unpacking, so it is vetoed to keep the record.
 func (s *Store) retireLayer(hex string, cutoff time.Time) (string, retireStatus, error) {
 	if !isLayerDirName(hex) {
 		return "", retireVetoed, fmt.Errorf("not a layer dir name: %q", hex)
 	}
 	dir := filepath.Join(s.layersDir(), hex)
 	if st, mtime, err := retirable(dir, cutoff); st != retireRetired {
+		if st == retireGone && s.pinned(hex) {
+			return "", retireVetoed, nil
+		}
 		if st == retireVetoed && err == nil {
 			slog.Info(logMsgLayerRetireVetoed, slog.String("diffid", hex), slog.Time("last_used", mtime))
 		}

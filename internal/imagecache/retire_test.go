@@ -40,6 +40,16 @@ func TestRetireLayerStatuses(t *testing.T) {
 		t.Errorf("retireLayer(absent) = %v, %v; want retireGone, nil", st, err)
 	}
 
+	// Absent but pinned: still unpacking, so vetoed to keep its record.
+	unpin := store.pinLayers([]string{hex})
+	if _, st, err := store.retireLayer(hex, time.Now()); err != nil || st != retireVetoed {
+		t.Errorf("retireLayer(absent, pinned) = %v, %v; want retireVetoed, nil", st, err)
+	}
+	if _, st := store.dryRunRetire(hex, time.Now()); st != retireVetoed {
+		t.Errorf("dryRunRetire(absent, pinned) = %v; want retireVetoed", st)
+	}
+	unpin()
+
 	dir := filepath.Join(store.layersDir(), hex)
 	if err := os.MkdirAll(filepath.Join(dir, layerFSDirName), 0o700); err != nil {
 		t.Fatal(err)
@@ -349,8 +359,8 @@ func TestPullPinsBeforeJoiningLayerFlight(t *testing.T) {
 	}
 }
 
-// A missing or fresh layer is ruled out before pinMu is taken, so eviction
-// passes over them without blocking pulls of unrelated images.
+// A fresh layer is ruled out before pinMu is taken, so eviction passes over
+// it without blocking pulls of unrelated images.
 func TestRetireLayerPreflightSkipsPinLock(t *testing.T) {
 	store := newTestStore(t)
 	fresh := layerFromEntries(t, []tarEntry{
@@ -365,29 +375,25 @@ func TestRetireLayerPreflightSkipsPinLock(t *testing.T) {
 	}
 	cutoff := time.Now().Add(-time.Hour)
 
-	// Held for the whole check, so a retireLayer that takes pinMu for either
-	// case blocks until the timeout below.
+	// Held for the whole check, so a retireLayer that takes pinMu blocks
+	// until the timeout below.
 	store.pinMu.Lock()
 	defer store.pinMu.Unlock()
 	type result struct {
 		st  retireStatus
 		err error
 	}
-	results := make(chan result, 2)
+	results := make(chan result, 1)
 	go func() {
-		for _, hex := range []string{strings.Repeat("ab", 32), freshID.Hex} {
-			_, st, err := store.retireLayer(hex, cutoff)
-			results <- result{st, err}
-		}
+		_, st, err := store.retireLayer(freshID.Hex, cutoff)
+		results <- result{st, err}
 	}()
-	for _, want := range []retireStatus{retireGone, retireVetoed} {
-		select {
-		case got := <-results:
-			if got.st != want || got.err != nil {
-				t.Errorf("retireLayer = %v, %v; want %v", got.st, got.err, want)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("retireLayer took pinMu for a missing or fresh layer")
+	select {
+	case got := <-results:
+		if got.st != retireVetoed || got.err != nil {
+			t.Errorf("retireLayer(fresh) = %v, %v; want retireVetoed", got.st, got.err)
 		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("retireLayer took pinMu for a fresh layer")
 	}
 }
