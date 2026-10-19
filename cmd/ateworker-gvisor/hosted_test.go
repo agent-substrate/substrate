@@ -40,11 +40,9 @@ func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range ceiling * 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, _, _ = s.admitActor(resources.ActorAttribution{UID: fmt.Sprintf("actor-%d", i)})
-		}()
+		})
 	}
 	wg.Wait()
 

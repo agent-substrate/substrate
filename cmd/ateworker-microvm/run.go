@@ -317,15 +317,6 @@ type actorBootParams struct {
 	rootfsUpperSnapshotDir string
 }
 
-func (p actorBootParams) attribution() resources.ActorAttribution {
-	return resources.ActorAttribution{
-		Ref:              p.actorRef,
-		UID:              p.actorUID,
-		TemplateAtespace: p.templateAtespace,
-		TemplateName:     p.templateName,
-	}
-}
-
 // actorAttribution regroups the actor fields that arrived on the Run/Restore
 // request.
 func (p actorBootParams) actorAttribution() resources.ActorAttribution {
@@ -364,7 +355,7 @@ func (s *AteWorkerService) coldBootActorRetrying(ctx context.Context, p actorBoo
 			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
 		// The failed attempt deactivated egress, which retires the listener
 		// bound to it, so the network is rebuilt. The actor keeps its slot.
-		if _, err := s.hostActor(ctx, p.attribution(), false); err != nil {
+		if _, err := s.hostActor(ctx, p.actorAttribution(), false); err != nil {
 			return err
 		}
 	}
@@ -390,7 +381,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return fmt.Errorf("ateworker-microvm requires %q and %q asset paths", assetKernel, assetImage)
 	}
 	rr := s.resolveRuntime(paths)
-	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
+	egress, err := s.tunnel.PrepareEgress(ctx, p.actorAttribution(), p.egressGateway)
 	if err != nil {
 		return err
 	}
@@ -402,7 +393,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			if cleanupErr := s.tunnel.Deactivate(cleanupCtx, p.attribution()); cleanupErr != nil {
+			if cleanupErr := s.tunnel.Deactivate(cleanupCtx, p.actorAttribution()); cleanupErr != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
@@ -587,7 +578,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	tContainers := time.Now()
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, s.sandboxDialer(actorUID)); err != nil {
 		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 
@@ -601,7 +592,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("since_boot", time.Since(tBooted)))
 
 	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
-	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
+	if err := s.tunnel.Activate(p.actorAttribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
 	}
 	s.setRunningVM(actorUID, ra)
@@ -1053,7 +1044,7 @@ func (s *AteWorkerService) configureGuestNetwork(ctx context.Context, ac *kata.A
 		ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: actornet.ActorVethGateway},
 		Device:      actornet.ActorVethName,
 		Lladdr:      gatewayMAC,
-		State:       0x80, // NUD_PERMANENT
+		State:       unix.NUD_PERMANENT,
 	}})
 }
 

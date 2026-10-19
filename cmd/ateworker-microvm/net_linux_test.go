@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"testing"
 
 	"github.com/vishvananda/netlink"
@@ -110,7 +111,7 @@ func TestSetupActorTap(t *testing.T) {
 		if got := link.Attrs().HardwareAddr.String(); got != gatewayMAC {
 			t.Errorf("tap MAC = %s, want the fixed %s the guest's frozen ARP entry names", got, gatewayMAC)
 		}
-		if link.Attrs().Flags&1 == 0 { // net.FlagUp
+		if link.Attrs().Flags&net.FlagUp == 0 {
 			t.Error("tap is down")
 		}
 		if got := link.Attrs().MTU; got != actorTapMTU {
