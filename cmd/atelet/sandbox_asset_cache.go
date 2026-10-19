@@ -28,11 +28,10 @@ import (
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
-	"go.ate.dev/substrate/internal/nodepath"
 )
 
 var (
-	sandboxAssetCacheDir     = pflag.String("sandbox-asset-cache-dir", ateletpath.SandboxAssetCacheDir, "Directory for the node-local sandbox asset cache (gVisor releases, micro-VM kernels, VMMs and guest images). Must be on the same filesystem mount as the actor state dirs: an actor's assets are hard links from the cache into its own directory.")
+	sandboxAssetCacheDir     = pflag.String("sandbox-asset-cache-dir", ateletpath.SandboxAssetCacheDir, "Directory for the node-local sandbox asset cache (gVisor releases, micro-VM kernels, VMMs and guest images). Must be on the same filesystem mount as the actor state dirs and the worker dirs: an actor's assets, and a worker's default runtime, are hard links from the cache into their own directories.")
 	sandboxAssetCacheMinAge  = pflag.Duration("sandbox-asset-cache-min-age", time.Hour, "Cached sandbox assets younger than this are never evicted. A running actor's assets, and the default runtime of every local worker, are protected by their links regardless; this covers an asset between its fetch and its first link.")
 	sandboxAssetFetchTimeout = pflag.Duration("sandbox-asset-fetch-timeout", 5*time.Minute, "Bound on one sandbox asset download (and, for a gVisor release, its extraction). Downloads run detached from the requests waiting on them, so this is the only bound on how long one can run; a Run arriving while a download hangs waits on it until then. Sized for multi-hundred-MiB micro-VM guest images on a busy node.")
 )
@@ -51,15 +50,18 @@ func validateSandboxAssetCacheFlags() error {
 
 // openSandboxAssetCache opens the asset cache at dir, sweeps the debris a
 // crash may have left, and empties the scratch dir asset fetches without
-// an actor link into. It refuses a dir from which the actor dirs cannot be
-// hard-linked: every hit is such a link, so none could be served.
-func openSandboxAssetCache(ctx context.Context, dir string, minAge, fetchTimeout time.Duration) (*filecache.Store, error) {
+// an actor link into. It refuses a dir from which any of linkDirs cannot be
+// hard-linked: the actors dir, where every hit is such a link, and the
+// workers dir, where each worker's default runtime is kept by them.
+func openSandboxAssetCache(ctx context.Context, dir string, minAge, fetchTimeout time.Duration, linkDirs ...string) (*filecache.Store, error) {
 	store, err := filecache.New(dir, filecache.WithMinAge(minAge), filecache.WithFetchTimeout(fetchTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("while opening sandbox asset cache at %s: %w", dir, err)
 	}
-	if err := canHardLink(dir, nodepath.ActorsDir); err != nil {
-		return nil, fmt.Errorf("sandbox asset cache: %w", err)
+	for _, linkDir := range linkDirs {
+		if err := canHardLink(dir, linkDir); err != nil {
+			return nil, fmt.Errorf("sandbox asset cache: %w", err)
+		}
 	}
 	stats, err := store.SweepDebris(ctx)
 	if err != nil {
@@ -80,14 +82,14 @@ func openSandboxAssetCache(ctx context.Context, dir string, minAge, fetchTimeout
 }
 
 // canHardLink fails unless a file under cacheDir can be hard-linked into
-// actorsDir, which every cache hit relies on. It links a probe file and
-// removes it again. Nothing short of the probe is exact: Linux refuses a
-// link across two mounts even when they are bind mounts of one filesystem,
-// so equal device numbers do not settle it, and a path check cannot see a
-// mount at all. actorsDir is created if it does not exist yet.
-func canHardLink(cacheDir, actorsDir string) error {
-	if err := os.MkdirAll(actorsDir, 0o700); err != nil {
-		return fmt.Errorf("while creating %s: %w", actorsDir, err)
+// linkDir, which every cache hit into it relies on. It links a probe file
+// and removes it again. Nothing short of the probe is exact: Linux refuses
+// a link across two mounts even when they are bind mounts of one
+// filesystem, so equal device numbers do not settle it, and a path check
+// cannot see a mount at all. linkDir is created if it does not exist yet.
+func canHardLink(cacheDir, linkDir string) error {
+	if err := os.MkdirAll(linkDir, 0o700); err != nil {
+		return fmt.Errorf("while creating %s: %w", linkDir, err)
 	}
 	probe, err := os.CreateTemp(cacheDir, ".linkprobe-")
 	if err != nil {
@@ -97,12 +99,12 @@ func canHardLink(cacheDir, actorsDir string) error {
 	if err := probe.Close(); err != nil {
 		return fmt.Errorf("while closing the link probe: %w", err)
 	}
-	link := filepath.Join(actorsDir, filepath.Base(probe.Name()))
+	link := filepath.Join(linkDir, filepath.Base(probe.Name()))
 	if err := os.Link(probe.Name(), link); err != nil {
 		if errors.Is(err, syscall.EXDEV) {
-			return fmt.Errorf("%s and %s are on different mounts, so assets cannot be hard-linked into actor dirs; put the cache on the mount that holds %s: %w", cacheDir, actorsDir, actorsDir, err)
+			return fmt.Errorf("%s and %s are on different mounts, so assets cannot be hard-linked under %s; put the cache on the mount that holds it: %w", cacheDir, linkDir, linkDir, err)
 		}
-		return fmt.Errorf("while probing a hard link from %s into %s: %w", cacheDir, actorsDir, err)
+		return fmt.Errorf("while probing a hard link from %s into %s: %w", cacheDir, linkDir, err)
 	}
 	return os.Remove(link)
 }

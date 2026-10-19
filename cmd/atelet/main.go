@@ -262,7 +262,7 @@ func main() {
 	if err := validateSandboxAssetCacheFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid sandbox asset cache flags", err)
 	}
-	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout)
+	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout, nodepath.ActorsDir, nodepath.WorkersDir())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open sandbox asset cache", err)
 	}
