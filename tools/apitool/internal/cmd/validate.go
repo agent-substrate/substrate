@@ -71,6 +71,21 @@ func runValidate(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		fmt.Fprintf(out, "wrote %d exemption(s) to %s\n", len(current), path)
+
+		// Also log the findings that can't be exempted and must be fixed
+		// by the user.
+		var crossProtoTotal int
+		for _, r := range crossProtoResults {
+			crossProtoTotal += len(r.Findings)
+		}
+		if crossProtoTotal > 0 {
+			fmt.Fprintf(out, "\nwarning: %d cross-proto finding(s) were not exempted because they cannot be. Fix them:\n", crossProtoTotal)
+			for _, r := range crossProtoResults {
+				if len(r.Findings) > 0 {
+					printRule(out, r.Rule, r.Findings)
+				}
+			}
+		}
 		return nil
 	}
 
