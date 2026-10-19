@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shapes the control plane, ate-api-server and Postgres, for a capacity
-run, as a test entry's `ateapi:` block asks (see ATEAPI_DEFAULTS).
+"""Shapes the control plane for a capacity run, as a test entry's
+`controlPlane:` block asks: an `apiServer:` section for ate-api-server
+(see API_SERVER_DEFAULTS) and a `postgres:` section (see POSTGRES_DEFAULTS).
 
 A test type validates the block with validate() and calls shape() from its
 pre_test. Isolation from the load is the install's: --cordon-control-plane
@@ -28,9 +29,9 @@ from util import run, run_no_check
 
 NAMESPACE = "ate-system"
 
-# Knobs of the `ateapi:` block. `cpu` has no default: it is the independent
-# variable of the run.
-ATEAPI_DEFAULTS = {
+# Knobs of the `apiServer:` section. `cpu` has no default: it is the
+# independent variable of the run.
+API_SERVER_DEFAULTS = {
     # ate-api-server replicas, each with requests = limits of cpu and
     # memory. Go sizes GOMAXPROCS from the CPU limit.
     "replicas": 1,
@@ -39,52 +40,70 @@ ATEAPI_DEFAULTS = {
     # ConfigMap (see set_pool_max_conns). None keeps the installed value (64
     # on size10).
     "poolMaxConns": None,
+}
+
+# Knobs of the `postgres:` section.
+POSTGRES_DEFAULTS = {
     # Load pg_stat_statements and run postgres_exporter next to Postgres,
     # for Prometheus (benchmarking/monitoring.yaml) to scrape.
-    "pgStats": True,
+    "stats": True,
     # Postgres settings as name=value, passed to the server as -c flags in
-    # the restart pgStats makes, over postgresql.conf.
-    "postgresArgs": [],
+    # the restart stats makes, over postgresql.conf.
+    "args": [],
 }
 
 
 def config(block: dict[str, Any]) -> dict[str, Any]:
-    """The `ateapi:` block merged over ATEAPI_DEFAULTS."""
-    return {**ATEAPI_DEFAULTS, **block}
+    """The `controlPlane:` block with each section merged over its
+    defaults."""
+    return {
+        "apiServer": {**API_SERVER_DEFAULTS, **block.get("apiServer", {})},
+        "postgres": {**POSTGRES_DEFAULTS, **block.get("postgres", {})},
+    }
 
 
 def validate(block: Any) -> None:
-    """Raise ValueError unless block is a valid `ateapi:` block."""
+    """Raise ValueError unless block is a valid `controlPlane:` block."""
     if not isinstance(block, dict):
-        raise ValueError("ateapi must be a mapping")
-    allowed = set(ATEAPI_DEFAULTS) | {"cpu"}
-    unknown = set(block) - allowed
-    if unknown:
-        raise ValueError(
-            f"unknown ateapi knob(s) {sorted(unknown)}; allowed: {sorted(allowed)}"
-        )
+        raise ValueError("controlPlane must be a mapping")
+    _check_knobs("controlPlane", block, {"apiServer", "postgres"})
+    if "apiServer" not in block:
+        raise ValueError("needs controlPlane.apiServer")
+    _check_knobs("controlPlane.apiServer", block["apiServer"], set(API_SERVER_DEFAULTS) | {"cpu"})
+    _check_knobs("controlPlane.postgres", block.get("postgres", {}), set(POSTGRES_DEFAULTS))
     cfg = config(block)
-    if "cpu" not in block or not _is_quantity(cfg["cpu"]):
-        raise ValueError("needs ateapi.cpu, as in 2 or 1500m")
-    if not _is_quantity(cfg["memory"]):
-        raise ValueError("invalid ateapi.memory")
-    if not _is_positive_int(cfg["replicas"]):
-        raise ValueError("ateapi.replicas must be an int >= 1")
-    if cfg["poolMaxConns"] is not None and not _is_positive_int(cfg["poolMaxConns"]):
-        raise ValueError("ateapi.poolMaxConns must be an int >= 1")
-    if not isinstance(cfg["pgStats"], bool):
-        raise ValueError("ateapi.pgStats must be a bool")
-    args = cfg["postgresArgs"]
+    api, pg = cfg["apiServer"], cfg["postgres"]
+    if "cpu" not in block["apiServer"] or not _is_quantity(api["cpu"]):
+        raise ValueError("needs controlPlane.apiServer.cpu, as in 2 or 1500m")
+    if not _is_quantity(api["memory"]):
+        raise ValueError("invalid controlPlane.apiServer.memory")
+    if not _is_positive_int(api["replicas"]):
+        raise ValueError("controlPlane.apiServer.replicas must be an int >= 1")
+    if api["poolMaxConns"] is not None and not _is_positive_int(api["poolMaxConns"]):
+        raise ValueError("controlPlane.apiServer.poolMaxConns must be an int >= 1")
+    if not isinstance(pg["stats"], bool):
+        raise ValueError("controlPlane.postgres.stats must be a bool")
+    args = pg["args"]
     if not isinstance(args, list) or not all(
         isinstance(a, str) and POSTGRES_ARG_PATTERN.fullmatch(a) for a in args
     ):
         raise ValueError(
-            "ateapi.postgresArgs must be a list of name=value settings, "
+            "controlPlane.postgres.args must be a list of name=value settings, "
             "as in commit_delay=100"
         )
-    if args and not cfg["pgStats"]:
+    if args and not pg["stats"]:
         raise ValueError(
-            "ateapi.postgresArgs needs pgStats: true, whose Postgres restart applies them"
+            "controlPlane.postgres.args needs stats: true, whose Postgres restart applies them"
+        )
+
+
+def _check_knobs(path: str, section: Any, allowed: set[str]) -> None:
+    if not isinstance(section, dict):
+        raise ValueError(f"{path} must be a mapping")
+    unknown = set(section) - allowed
+    if unknown:
+        raise ValueError(
+            f"unknown {path} knob(s) {sorted(unknown)}; allowed: {sorted(allowed)}"
         )
 
 
@@ -101,7 +120,7 @@ def _is_quantity(v: Any) -> bool:
     return isinstance(v, str) and bool(QUANTITY_PATTERN.fullmatch(v))
 
 
-# A Postgres setting as postgresArgs spells it: a lowercase name, an equals
+# A Postgres setting as postgres.args spells it: a lowercase name, an equals
 # sign, and a value with no whitespace, which the -c flag takes as is.
 POSTGRES_ARG_PATTERN = re.compile(r"[a-z_]+=\S+")
 
@@ -121,13 +140,14 @@ QUANTITY_PATTERN = re.compile(
 # carry the requested resources and Postgres the requested settings.
 def shape(cfg: dict[str, Any]) -> None:
     """Shape the control plane for the run: Postgres statistics, the pool
-    size, then ateapi's resources, whose rollout picks up the pool size. No
-    unpatch: every test redeploys substrate."""
-    if cfg["pgStats"]:
-        enable_postgres_stats(cfg["postgresArgs"])
-    if cfg["poolMaxConns"] is not None:
-        set_pool_max_conns(cfg["poolMaxConns"])
-    resize_ateapi(cfg)
+    size, then ate-api-server's resources, whose rollout picks up the pool
+    size. No unpatch: every test redeploys substrate."""
+    api, pg = cfg["apiServer"], cfg["postgres"]
+    if pg["stats"]:
+        enable_postgres_stats(pg["args"])
+    if api["poolMaxConns"] is not None:
+        set_pool_max_conns(api["poolMaxConns"])
+    resize_api_server(api)
     # The placement of the run, for comparing runs: a step compares across
     # runs only when ateapi and Postgres sat on the same nodes.
     run_no_check(
@@ -209,32 +229,32 @@ def pool_max_conns_patch(n: int) -> dict[str, Any]:
 
 
 def set_pool_max_conns(n: int) -> None:
-    """Set the read/write pool size ateapi reads at start; the resize_ateapi
-    rollout that follows picks it up. The owner and watch pools stay at 2
-    and 3 connections per replica."""
+    """Set the read/write pool size ateapi reads at start; the
+    resize_api_server rollout that follows picks it up. The owner and watch
+    pools stay at 2 and 3 connections per replica."""
     run(
         ["kubectl", "-n", NAMESPACE, "patch", "configmap", ENV_CONFIGMAP,
          "--type", "merge", "-p", json.dumps(pool_max_conns_patch(n))]
     )
 
 
-def ateapi_patch(cfg: dict[str, Any]) -> dict[str, Any]:
+def api_server_patch(api: dict[str, Any]) -> dict[str, Any]:
     pod_spec = {
         "containers": [
             {
                 "name": "ate-api-server",
                 "resources": {
-                    "requests": {"cpu": str(cfg["cpu"]), "memory": cfg["memory"]},
-                    "limits": {"cpu": str(cfg["cpu"]), "memory": cfg["memory"]},
+                    "requests": {"cpu": str(api["cpu"]), "memory": api["memory"]},
+                    "limits": {"cpu": str(api["cpu"]), "memory": api["memory"]},
                 },
             }
         ]
     }
-    return {"spec": {"replicas": cfg["replicas"], "template": {"spec": pod_spec}}}
+    return {"spec": {"replicas": api["replicas"], "template": {"spec": pod_spec}}}
 
 
-def resize_ateapi(cfg: dict[str, Any]) -> None:
-    _patch_and_wait("deployment", "ate-api-server", ateapi_patch(cfg))
+def resize_api_server(api: dict[str, Any]) -> None:
+    _patch_and_wait("deployment", "ate-api-server", api_server_patch(api))
 
 
 def _patch_and_wait(kind: str, name: str, patch: dict[str, Any]) -> None:

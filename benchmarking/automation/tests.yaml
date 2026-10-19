@@ -112,17 +112,21 @@
 # seconds, or the step falls short of its rate. A resumepaused iteration is a
 # resume plus a pause, so size it by the p99 of both together.
 #
-# An optional `ateapi:` block shapes the control plane for a capacity run of
-# ate-api-server and Postgres; pre_test applies it after the deploy:
-#   cpu            Required. CPU of each ate-api-server replica, set as both
-#                  request and limit (e.g. 2 or "1500m").
+# An optional `controlPlane:` block shapes the control plane for a capacity
+# run; pre_test applies it after the deploy. Its `apiServer:` section, which
+# is required, sizes ate-api-server:
+#   cpu            Required. CPU of each replica, set as both request and
+#                  limit (e.g. 2 or "1500m").
 #   memory         Optional (default "4Gi"). Memory request and limit.
 #   replicas       Optional (default 1).
 #   poolMaxConns   Optional. pgxpool max connections per replica, set
 #                  through ateapi's env ConfigMap. Unset keeps the installed
 #                  value.
-#   pgStats        Optional (default true). Load pg_stat_statements and add
+# Its optional `postgres:` section:
+#   stats          Optional (default true). Load pg_stat_statements and add
 #                  a postgres_exporter sidecar, scraped by monitoring.yaml.
+#   args           Optional. Postgres settings as name=value (e.g.
+#                  commit_delay=100), applied in the restart stats makes.
 # The block leaves placement to the install. A capacity run sets
 # --cordon-control-plane in ateArgs, which keeps ate-api-server and Postgres
 # off the nodes that run the load, on the tainted pools that flag expects.
@@ -700,10 +704,11 @@ tests:
       delay: 150ms
     ateArgs:
       - "--cordon-control-plane"
-    ateapi:
-      cpu: 2
-      memory: 4Gi
-      poolMaxConns: 64
+    controlPlane:
+      apiServer:
+        cpu: 2
+        memory: 4Gi
+        poolMaxConns: 64
     flags:
       - "--ladder-spawn-rate"
       - "1000"
@@ -725,10 +730,11 @@ tests:
       delay: 150ms
     ateArgs:
       - "--cordon-control-plane"
-    ateapi:
-      cpu: 2
-      memory: 4Gi
-      poolMaxConns: 64
+    controlPlane:
+      apiServer:
+        cpu: 2
+        memory: 4Gi
+        poolMaxConns: 64
     flags:
       - "--ladder-spawn-rate"
       - "50"

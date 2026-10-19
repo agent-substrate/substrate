@@ -179,8 +179,8 @@ data:
             action: replace
             target_label: pod
 
-      # The postgres_exporter sidecar that an automation test with an
-      # `ateapi:` block adds to Postgres (benchmarking/automation/
+      # The postgres_exporter sidecar that an automation test with a
+      # `controlPlane:` block adds to Postgres (benchmarking/automation/
       # controlplane.py): connections by state, commits, cache hits, and
       # pg_stat_statements.
       - job_name: 'postgres-exporter'

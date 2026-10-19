@@ -23,7 +23,7 @@ Each module implements the TestType hooks, called in lifecycle order:
                         once per (target cluster, type).
   pre_test(test)        after deploy_substrate, before deploy_workloads —
                         the type's chance to shape the cluster (nighthawk-ingress
-                        pins the router; locust, given an `ateapi:` block, shapes
+                        pins the router; locust, given a `controlPlane:` block, shapes
                         ate-api-server and Postgres through controlplane.py).
   job_tmpl(manifests_dir)
                         path of the type's own Job template.

@@ -31,54 +31,72 @@ def stub(test, **fakes):
         test.addCleanup(patcher.stop)
 
 
+API = {"apiServer": {"cpu": 2}}
+
+
 class ConfigTest(unittest.TestCase):
     def test_defaults(self):
-        cfg = controlplane.config({"cpu": 2})
-        self.assertEqual(cfg["cpu"], 2)
-        self.assertEqual(cfg["replicas"], 1)
-        self.assertEqual(cfg["memory"], "4Gi")
-        self.assertIsNone(cfg["poolMaxConns"])
-        self.assertTrue(cfg["pgStats"])
-        self.assertEqual(cfg["postgresArgs"], [])
+        cfg = controlplane.config(API)
+        self.assertEqual(
+            cfg["apiServer"], {"cpu": 2, "replicas": 1, "memory": "4Gi", "poolMaxConns": None})
+        self.assertEqual(cfg["postgres"], {"stats": True, "args": []})
 
 
 class ValidateTest(unittest.TestCase):
     def test_valid_knobs(self):
-        controlplane.validate({"cpu": 2})
+        controlplane.validate(API)
         controlplane.validate(
-            {"cpu": "1500m", "memory": "8Gi", "replicas": 2,
-             "poolMaxConns": 16, "pgStats": False})
+            {"apiServer": {"cpu": "1500m", "memory": "8Gi", "replicas": 2, "poolMaxConns": 16},
+             "postgres": {"stats": False}})
         controlplane.validate(
-            {"cpu": 2, "postgresArgs": ["commit_delay=100", "max_wal_size=16GB"]})
+            {**API, "postgres": {"args": ["commit_delay=100", "max_wal_size=16GB"]}})
 
     def test_invalid(self):
+        def api(**knobs):
+            return {"apiServer": {"cpu": 2, **knobs}}
+
+        def pg(**knobs):
+            return {**API, "postgres": knobs}
+
         bad = [
             {},
             "2",
-            {"cpu": 0},
-            {"cpu": "two"},
-            {"cpu": True},
-            {"cpu": 2, "cpus": 2},
-            {"cpu": 2, "replicas": 0},
-            {"cpu": 2, "replicas": True},
-            {"cpu": 2, "poolMaxConns": "64"},
-            {"cpu": 2, "pgStats": "yes"},
-            {"cpu": 2, "memory": "4 GiB"},
-            {"cpu": 2, "postgresArgs": "commit_delay=100"},
-            {"cpu": 2, "postgresArgs": ["commit_delay"]},
-            {"cpu": 2, "postgresArgs": ["commit_delay = 100"]},
-            {"cpu": 2, "postgresArgs": ["-c commit_delay=100"]},
-            {"cpu": 2, "postgresArgs": [100]},
-            # The settings ride on the restart pgStats makes.
-            {"cpu": 2, "pgStats": False, "postgresArgs": ["commit_delay=100"]},
+            {"apiServer": "2"},
+            {"apiServer": {}},
+            {**API, "ateapi": {}},
+            {**API, "postgres": "on"},
+            api(cpu=0),
+            api(cpu="two"),
+            api(cpu=True),
+            api(cpus=2),
+            api(replicas=0),
+            api(replicas=True),
+            api(poolMaxConns="64"),
+            api(memory="4 GiB"),
+            pg(stats="yes"),
+            pg(statz=True),
+            pg(args="commit_delay=100"),
+            pg(args=["commit_delay"]),
+            pg(args=["commit_delay = 100"]),
+            pg(args=["-c commit_delay=100"]),
+            pg(args=[100]),
+            # The settings ride on the restart stats makes.
+            pg(stats=False, args=["commit_delay=100"]),
         ]
         for block in bad:
             with self.assertRaises(ValueError, msg=repr(block)):
                 controlplane.validate(block)
 
-class AteapiPatchTest(unittest.TestCase):
+    def test_errors_name_the_knob(self):
+        with self.assertRaisesRegex(ValueError, "controlPlane.apiServer.cpu"):
+            controlplane.validate({"apiServer": {}})
+        with self.assertRaisesRegex(ValueError, r"unknown controlPlane.postgres knob\(s\) \['statz'\]"):
+            controlplane.validate({**API, "postgres": {"statz": True}})
+
+
+class ApiServerPatchTest(unittest.TestCase):
     def test_guaranteed(self):
-        patch = controlplane.ateapi_patch(controlplane.config({"cpu": 2}))
+        patch = controlplane.api_server_patch(controlplane.config(API)["apiServer"])
         self.assertEqual(patch["spec"]["replicas"], 1)
         pod = patch["spec"]["template"]["spec"]
         resources = pod["containers"][0]["resources"]
@@ -89,26 +107,27 @@ class AteapiPatchTest(unittest.TestCase):
 
 
 class ShapeTest(unittest.TestCase):
-    # Postgres restarts once, then ateapi rolls once and reads the pool size.
+    # Postgres restarts once, then ate-api-server rolls once and reads the
+    # pool size.
     def test_order(self):
         calls = []
         stub(self, **{
             name: lambda *_, name=name: calls.append(name)
-            for name in ("enable_postgres_stats", "set_pool_max_conns", "resize_ateapi", "run_no_check")
+            for name in ("enable_postgres_stats", "set_pool_max_conns", "resize_api_server", "run_no_check")
         })
-        controlplane.shape(controlplane.config({"cpu": 2, "poolMaxConns": 40}))
+        controlplane.shape(controlplane.config({"apiServer": {"cpu": 2, "poolMaxConns": 40}}))
         self.assertEqual(
             [c for c in calls if c != "run_no_check"],
-            ["enable_postgres_stats", "set_pool_max_conns", "resize_ateapi"],
+            ["enable_postgres_stats", "set_pool_max_conns", "resize_api_server"],
         )
 
     def test_passes_the_settings(self):
         got = []
         stub(self,
              enable_postgres_stats=lambda settings: got.append(settings),
-             resize_ateapi=lambda *_: None,
+             resize_api_server=lambda *_: None,
              run_no_check=lambda *_: None)
-        controlplane.shape(controlplane.config({"cpu": 2, "postgresArgs": ["commit_delay=100"]}))
+        controlplane.shape(controlplane.config({**API, "postgres": {"args": ["commit_delay=100"]}}))
         self.assertEqual(got, [["commit_delay=100"]])
 
 
