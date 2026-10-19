@@ -44,23 +44,15 @@ service Control {
     option (method).resource = "Actor";
   }
 
-  // Pause a given actor: checkpoint it to its worker's node and leave it
-  // SUSPENDED with that node-local snapshot, pinned to the node. A paused
-  // actor is told from a suspended one by its snapshots, not its state.
-  //
-  // Deprecated: use SuspendActor with DURABILITY_MODE_ASYNCHRONOUS.
-  rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {
-    option deprecated = true;
-    option (method).resource = "Actor";
-  }
-
   // Resume an actor from its latest snapshot.
   rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {
     option (method).resource = "Actor";
   }
 
   // Revert an actor to SUSPENDED state at its durable snapshot.
-  // Only crashed, running or paused actors can be reverted.
+  // Only crashed or running actors, or suspended actors with a node-local
+  // snapshot, can be reverted. A suspended actor without a node-local snapshot
+  // is already at its durable snapshot, so there is nothing to revert.
   rpc RevertActor(RevertActorRequest) returns (RevertActorResponse) {
     option (method).resource = "Actor";
   }
@@ -110,7 +102,8 @@ service Control {
 
   // Tag the external snapshot a suspended Actor holds. The tag gets its own
   // copy of that snapshot, so suspending or deleting the Actor afterwards
-  // cannot collect it.
+  // cannot collect it. When the Actor's latest snapshot is not uploaded yet,
+  // atelet uploads it first, so the call can take as long as that upload.
   rpc CreateTag(CreateTagRequest) returns (Tag) {
     option (method).resource = "Tag";
   }
@@ -233,7 +226,7 @@ service Control {
   }
 
   // Delete an ActorTemplate together with its golden actor and golden
-  // tag in the reserved ate-golden atespace.
+  // tag in the template's atespace.
   rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {
     option (method).resource = "ActorTemplate";
   }
@@ -1776,16 +1769,6 @@ enum DurabilityMode {
   // storage continues in the background.
   DURABILITY_MODE_ASYNCHRONOUS = 2;
   // Keep this in sync with SuspendOptions.mode's maximum.
-}
-
-message PauseActorRequest {
-  // +k8s:required
-  // +k8s:subfield(atespace)=+k8s:required
-  ObjectRef actor = 1;
-}
-
-message PauseActorResponse {
-  Actor actor = 1;
 }
 
 message ResumeActorRequest {

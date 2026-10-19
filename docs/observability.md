@@ -173,7 +173,7 @@ ateapi's `Actor state changed` is written once per committed actor state transit
 
 `ate.actor.state` takes the `ateapipb.ActorState` values lowercased, so the log vocabulary and the state machine cannot fork. The last record for an actor's uid is the state it is in now, and its timestamp is when that state began. Query it per actor, not in aggregate: neither key is a metric label, because both only ever appear beside actor identity, which [the cardinality rules](#the-metric-registry) keep off metrics entirely.
 
-`ate.actor.operation.name` says which operation drove the transition, which the state alone does not: an actor reaches `suspended` both when it is created and when it is suspended. SuspendActor in either durability mode and PauseActor are one operation and are all labeled `suspend`.
+`ate.actor.operation.name` says which operation drove the transition, which the state alone does not: an actor reaches `suspended` both when it is created and when it is suspended. SuspendActor in either durability mode is one operation, labeled `suspend`.
 
 The record goes out after the store commit, never before, and the state is read straight off the committed record rather than named by the caller. Every state commit has a version check too, so if two writers race, the one that lost writes nothing. You will never see a state here that the store did not actually hold.
 
@@ -290,6 +290,11 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.fidelity`, `ate.template.atespace`, `ate.template.name`, `ate.sandbox.class`) |
 | `ate.actor.checkpoint.duration` | atelet | histogram | the same phase breakdown for writing a snapshot, so a slow suspend can be attributed to ateworker or to the upload (same labels as the restore histogram) |
 | `atelet.snapshot.upload.duration` | atelet | histogram | how long a background upload of a local snapshot to object storage takes and whether it failed (`error.type` present = failure, absent = success; label `ate.snapshot.fidelity`) |
+| `atelet.snapshot.detach.duration` | atelet | histogram | how long a background detach takes to delete an actor's local snapshots, excluding any snapshot upload, and whether it failed (`error.type` present = failure, absent = success; label `ate.snapshot.fidelity`) |
+| `atelet.snapshot.upload.overdue.duration` | atelet | histogram | how long after a background snapshot upload came due a worker started it: near zero while an upload worker is free, growing when the node's upload workers fall behind (no labels) |
+| `atelet.snapshot.detach.overdue.duration` | atelet | histogram | how long after a background detach came due a worker started it: near zero while a detach worker is free, growing when the node's detach workers fall behind (no labels) |
+| `atelet.snapshot.upload.overdue.actors` | atelet | up/down counter | actors on the node with an undurable local snapshot past `--snapshot-upload-delay` waiting for an upload to finish, bucketed by time overdue (label `ate.snapshot.upload_overdue_band`: `under_1m`, `1m_to_5m`, `5m_to_15m`, `over_15m`) |
+| `atelet.snapshot.undurable.age.max` | atelet | gauge | age of the oldest local snapshot on the node that is not durable yet, counted from when the actor's state stopped being durable, or 0 when every local snapshot is durable; a healthy node stays below `--snapshot-upload-delay` plus one upload |
 | `ate.imagecache.requests` | atelet | counter | image lookups in the node-local image cache, by outcome (`ate.imagecache.outcome`), with `error.type` on the `error` outcome. A miss pays for the pull and the unpack, so the hit ratio per node is a leading indicator of resume latency |
 
 The table lists the OpenTelemetry instrument names. How a name appears in a query depends on the backend (Cloud Monitoring (GMP) / Kind collector).
@@ -312,9 +317,15 @@ For `ate.imagecache.requests`:
 **No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_capacity` outcome, names no pool. No instrument sends the pair with both keys empty.
 
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
-* `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a pause), `latest` (the actor's own durable snapshot), `golden` (the template's image), or `boot` (from scratch, so it never appears on the atelet histograms).
+* `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a pause), `latest` (a durable snapshot, including a template's golden snapshot), or `boot` (from scratch, so it never appears on the atelet histograms).
 * `ate.snapshot.fidelity`: what state it holds. `volumes`, `rootfs`, or `memory`.
 * `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `worker_restore` on restore; `sandbox_assets`, `worker_checkpoint`, `persist`, `cleanup` on checkpoint; `total` on both.
+
+Golden snapshots use `latest` on both control-plane and atelet histograms, so
+the resulting series also includes other durable restores and does not isolate
+golden first restores. To investigate an individual activation, correlate the
+Actor's recorded snapshots with its logs and traces instead of adding Actor
+identity to metric labels.
 
 **Phases overlap and do not sum to `total`.** The download runs concurrently with the asset fetch and OCI unpack, so each is an independent observation; use `total` as the denominator. A phase that never started is absent rather than zero.
 

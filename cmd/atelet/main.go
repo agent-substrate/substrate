@@ -1185,8 +1185,7 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
-		// Always the actor's durable latest: golden actors are never paused
-		// (validation above rejects the golden atespace).
+		// Uploading a paused checkpoint creates a durable latest snapshot.
 		kind:     ateattr.SnapshotKindLatest,
 		fidelity: ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
 	}
@@ -1248,7 +1247,7 @@ func (s *Atelet) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.Pro
 			return "", false, nil
 		}
 		if status.Code(fetchErr) == codes.NotFound {
-			return "", false, fmt.Errorf("local snapshot %q is gone and no uploaded copy exists: %w",
+			return "", false, apierror.NotFound("local snapshot %q is gone and no uploaded copy exists: %w",
 				localSnapshotName, fetchErr)
 		}
 		return "", false, fmt.Errorf("while probing for an already-uploaded snapshot manifest: %w", fetchErr)
@@ -1447,10 +1446,6 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		checkpointDir = localDir
 		sandboxRec = localRec
 	} else {
-		if durable == nil {
-			return nil, apierror.NotFound("snapshot %q has no usable local copy and no snapshot.object to fall back to: %w",
-				req.GetSnapshot().GetSnapshotUuid(), localErr)
-		}
 		if errors.Is(localErr, errUnusableLocalSnapshot) {
 			// The next checkpoint or terminate prunes the unusable copy.
 			slog.WarnContext(ctx, "Local snapshot is unusable; restoring from object storage",
@@ -1472,8 +1467,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	dManifest = time.Since(tManifest)
 	manifestDone = true
 
-	// The manifest is what tells a golden restore from a latest one, so the
-	// snapshot kind only becomes knowable here.
+	// The snapshot kind is recorded once the manifest has been read.
 	op.kind = restoreSnapshotKind(directLocal, sandboxRec)
 
 	var registration *registeredActor

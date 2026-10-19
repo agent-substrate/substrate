@@ -1659,12 +1659,6 @@ func TestValidation_Actor(t *testing.T) {
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
-	t.Run("PauseActor", func(t *testing.T) {
-		//nolint:staticcheck // PauseActor is still served until it is removed.
-		_, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{})
-		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
-	})
-
 	t.Run("SuspendActor", func(t *testing.T) {
 		_, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
@@ -2781,7 +2775,7 @@ func TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState(t *testing.T) {
 	}
 }
 
-// TestPauseActor_VolumeLifecycle_DetachResumeAndMigrate tests external volume
+// TestSuspendActorAsync_VolumeLifecycle_DetachResumeAndMigrate tests external volume
 // attachment, publishContext delivery, detachment, cross-node migration, and
 // deletion across async SuspendActor, ResumeActor, SuspendActor, and DeleteActor:
 // 1. Creates a template with an external volume and a mock worker pod on node1.
@@ -2790,7 +2784,7 @@ func TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState(t *testing.T) {
 // 4. Calls ResumeActor from pause; verifies volume is re-attached to node1 and restore request carries node1 publishContext.
 // 5. Calls SuspendActor, replaces worker-1 (node1) with worker-2 (node2), and calls ResumeActor; verifies volume is attached to node2 and restore request carries node2 publishContext.
 // 6. Calls SuspendActor and DeleteActor; verifies volume is detached from node2 and deleted.
-func TestPauseActor_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) {
+func TestSuspendActorAsync_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) {
 	preview.InitForTest(t, "ExternalVolumes")
 
 	ns := namespaceForTest("ns-pause-vol-lifecycle")
@@ -2967,7 +2961,7 @@ func TestPauseActor_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) {
 	}
 }
 
-// TestPauseActor_VolumeDetachFailure_RetrySuccess tests scenario D:
+// TestSuspendActorAsync_VolumeDetachFailure_RetrySuccess tests scenario D:
 // when volume detachment fails during async SuspendActor:
 // 1. Async SuspendActor fails, leaving the actor in ACTOR_STATE_SUSPENDING.
 // 2. A subsequent retry of async SuspendActor re-attempts volume detachment and succeeds, transitioning the actor to ACTOR_STATE_SUSPENDED.
@@ -2980,7 +2974,7 @@ func TestPauseActor_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) {
 // 5. Calls async SuspendActor a second time (retry); detachment succeeds.
 // 6. Verifies actor state transitions to ACTOR_STATE_SUSPENDED with a local snapshot.
 // 7. Cleans up by deleting the actor with AnyState=true.
-func TestPauseActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
+func TestSuspendActorAsync_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 	preview.InitForTest(t, "ExternalVolumes")
 
 	ns := namespaceForTest("ns-pause-vol-detach-retry")
@@ -3278,13 +3272,12 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 
 	// Publish the golden snapshot as a tag and point the template at it, as
 	// createTemplateWithContainersAndVolumes does.
-	createAtespace(t, tc, resources.GoldenActorAtespace)
 	tag, err := tc.persistence.CreateTag(context.Background(), &ateapipb.Tag{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
-		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
+		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapipb.TagStatus{
-			Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, created.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+			Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, created.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
 			ActorTemplateUid: created.GetMetadata().GetUid(),
 		},
 	})
@@ -3722,8 +3715,13 @@ func TestResumeActor_LocalRestoreFailureCrashesActor(t *testing.T) {
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
-	if _, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: ref, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}); err != nil {
+	pauseResp, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: ref, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}})
+	if err != nil {
 		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	paused := localSnapshot(pauseResp.GetActor().GetStatus())
+	if paused.GetDurableSnapshot().GetObject().GetSnapshotUri() == "" {
+		t.Fatalf("pause left no local snapshot naming its upload: %v", pauseResp.GetActor().GetStatus())
 	}
 
 	tc.fakeAtelet.Reset()
@@ -3731,8 +3729,8 @@ func TestResumeActor_LocalRestoreFailureCrashesActor(t *testing.T) {
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref}); status.Code(err) != codes.Internal {
 		t.Fatalf("ResumeActor status code = %v, want Internal (err: %v)", status.Code(err), err)
 	}
-	if got := tc.fakeAtelet.RestoreRequest.GetSnapshot(); got.GetSnapshotUuid() == "" || got.GetObject() != nil {
-		t.Fatalf("restore snapshot = %v, want local snapshot (uuid set, no object)", got)
+	if got := tc.fakeAtelet.RestoreRequest.GetSnapshot(); got.GetSnapshotUuid() != paused.GetUuid() || got.GetObject().GetSnapshotUri() != paused.GetDurableSnapshot().GetObject().GetSnapshotUri() {
+		t.Fatalf("restore snapshot = %v, want the local snapshot %v, naming its upload", got, paused)
 	}
 
 	actor, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: ref})
@@ -3949,10 +3947,15 @@ func TestSuspendActor(t *testing.T) {
 	// It stopped borrowing without releasing what it had borrowed.
 	assertSnapshotPresent(t, tc, taggedSnapshotURI)
 	assertSnapshotPresent(t, tc, cloneSnapshotURI)
-	// The untagged suspend created no tag.
+	// The untagged suspend created no tag: only the golden and explicit tag remain.
 	listed, err = tc.client.ListTags(context.Background(), &ateapipb.ListTagsRequest{Atespace: testAtespace})
-	if err != nil || len(listed.GetTags()) != 1 {
-		t.Fatalf("ListTags after clone suspension = (%v, %v), want one", listed, err)
+	if err != nil || len(listed.GetTags()) != 2 {
+		t.Fatalf("ListTags after clone suspension = (%v, %v), want golden and explicit tags", listed, err)
+	}
+	for _, tag := range listed.GetTags() {
+		if ref := resources.TagRefFromTag(tag).ToObjectRef(); !proto.Equal(ref, tagRef) && !proto.Equal(ref, tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()) {
+			t.Errorf("unexpected tag after clone suspension: %v", ref)
+		}
 	}
 
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
@@ -4180,8 +4183,13 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 		t.Fatalf("first resume on v2 had scope = %v, want DATA", got)
 	}
-	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}); err != nil {
+	pauseResp, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}})
+	if err != nil {
 		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	paused := localSnapshot(pauseResp.GetActor().GetStatus())
+	if paused.GetDurableSnapshot().GetObject().GetSnapshotUri() == "" {
+		t.Fatalf("pause left no local snapshot naming its upload: %v", pauseResp.GetActor().GetStatus())
 	}
 	waitForWorkerAvailable(t, tc, worker)
 
@@ -4191,8 +4199,8 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 		t.Fatalf("ResumeActor(from v2 pause) failed: %v", err)
 	}
 	restoreReq := tc.fakeAtelet.lastRestoreRequest()
-	if got := restoreReq.GetSnapshot(); got.GetSnapshotUuid() == "" || got.GetObject() != nil {
-		t.Errorf("restore request snapshot = %v, want local snapshot (uuid set, no object)", got)
+	if got := restoreReq.GetSnapshot(); got.GetSnapshotUuid() != paused.GetUuid() || got.GetObject().GetSnapshotUri() != paused.GetDurableSnapshot().GetObject().GetSnapshotUri() {
+		t.Errorf("restore request snapshot = %v, want the local snapshot %v, naming its upload", got, paused)
 	}
 	if got := restoreReq.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		t.Errorf("restore request scope = %v, want FULL (local checkpoint was captured on v2)", got)
@@ -4200,7 +4208,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 }
 
 // TestSuspendActorAsynchronous tests the full workflow of suspending a running
-// actor asynchronously, through SuspendActor and through PauseActor.
+// actor asynchronously.
 // Workflow:
 //  1. Creates a mock ActorTemplate.
 //  2. Creates a mock Atelet Pod on 'node1'.
@@ -4223,14 +4231,6 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 					Actor:   ref,
 					Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 				})
-				return err
-			},
-		},
-		{
-			name: "PauseActor",
-			suspend: func(ctx context.Context, client ateapipb.ControlClient, ref *ateapipb.ObjectRef) error {
-				//nolint:staticcheck // PauseActor is still served until it is removed.
-				_, err := client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: ref})
 				return err
 			},
 		},
@@ -6311,8 +6311,8 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	goldenSnap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t))
 	goldenSnap.SandboxRuntime = proto.Clone(rtA).(*ateapipb.SandboxRuntime)
 	stampedGoldenTag, err := tc.persistence.CreateTag(ctx, &ateapipb.Tag{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "golden-rt-a"},
-		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()},
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "golden-rt-a"},
+		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapipb.TagStatus{
 			Snapshot:         goldenSnap,

@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -705,23 +704,18 @@ func TestValidateRestoreRequest(t *testing.T) {
 		}
 		return r
 	}
-	local := func(name string) func(*ateletpb.RestoreRequest) {
-		return func(r *ateletpb.RestoreRequest) {
-			r.Snapshot.SnapshotUuid = name
-			r.Snapshot.Object = nil
-		}
-	}
 
 	tests := []struct {
 		name string
 		obj  *ateletpb.RestoreRequest
 		want field.ErrorList
 	}{{
-		name: "valid with object storage",
+		name: "valid",
 		obj:  valid(),
 	}, {
-		name: "valid local only",
-		obj:  valid(local("pause-snap-1")),
+		name: "missing object storage",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Object = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object"), "")},
 	}, {
 		name: "valid volumes fidelity",
 		obj: valid(func(r *ateletpb.RestoreRequest) {
@@ -784,11 +778,11 @@ func TestValidateRestoreRequest(t *testing.T) {
 		want: field.ErrorList{field.Required(field.NewPath("snapshot"), "")},
 	}, {
 		name: "missing snapshot_uuid",
-		obj:  valid(local("")),
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.SnapshotUuid = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("snapshot", "snapshot_uuid"), "")},
 	}, {
 		name: "invalid snapshot_uuid: path escape",
-		obj:  valid(local("../escape")),
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.SnapshotUuid = "../escape" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "snapshot_uuid"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "missing generation",
@@ -910,10 +904,6 @@ func TestValidatePromoteSnapshotRequest(t *testing.T) {
 		name: "invalid atespace: path escape",
 		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Atespace = "../escape" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
-		name: "golden atespace",
-		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Atespace = resources.GoldenActorAtespace }),
-		want: field.ErrorList{field.Forbidden(field.NewPath("atespace"), "")},
 	}, {
 		name: "invalid actor_name: uppercase",
 		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.ActorName = "UPPER" }),

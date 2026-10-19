@@ -153,12 +153,12 @@ func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, 
 	return nil
 }
 
-// applyCheckpointState records an upload that atelet's state, as returned by
-// Checkpoint, says finished, with the same rules as a report. It records the
-// fidelity atelet reports, which for Checkpoint is the one requested. Unlike a
-// report, a state with no local snapshot is not a detach. The workflow that
-// made the call records where its snapshot lives.
-func applyCheckpointState(ctx context.Context, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState) error {
+// applyAteletResponseState records an upload that atelet's state, as returned
+// by Checkpoint or PromoteSnapshot, says finished, with the same rules as a
+// report. It records the fidelity atelet reports, which for both RPCs is the
+// one requested. Unlike a report, a state with no local snapshot is not a
+// detach. The workflow that made the call records where its snapshot lives.
+func applyAteletResponseState(ctx context.Context, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState) error {
 	return applyLatestDurable(ctx, status, snapshotReportFromAtelet(state.GetLatestDurable()))
 }
 

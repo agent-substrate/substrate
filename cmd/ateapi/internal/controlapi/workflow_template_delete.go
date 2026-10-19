@@ -53,12 +53,12 @@ func (w *ActorWorkflow) DeleteActorTemplate(ctx context.Context, templateRef res
 		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	}
 
-	// Both are named after the template's uid, in the reserved atespace.
+	// Both are named after the template's UID, in the template's atespace.
 	goldenName := tmpl.GetMetadata().GetUid()
-	if err := w.ensureGoldenActorDeleted(ctx, resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: goldenName}); err != nil {
+	if err := w.ensureGoldenActorDeleted(ctx, resources.ActorRef{Atespace: templateRef.Atespace, Name: goldenName}); err != nil {
 		return nil, err
 	}
-	if err := w.ensureGoldenTagDeleted(ctx, resources.TagRef{Atespace: resources.GoldenActorAtespace, Name: goldenName}); err != nil {
+	if err := w.ensureGoldenTagDeleted(ctx, resources.TagRef{Atespace: templateRef.Atespace, Name: goldenName}); err != nil {
 		return nil, err
 	}
 	return w.finalizeTemplateDeleted(ctx, templateRef, precondition)

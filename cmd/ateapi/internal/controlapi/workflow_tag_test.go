@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -26,9 +27,12 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -165,10 +169,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 		// under, as every real path to holding one does. Only the case that
 		// exercises the missing record leaves it false.
 		builtOnTemplate bool
-		// paused adds a node-local snapshot above the external one, the
-		// shape a pause leaves behind.
-		paused   bool
-		wantCode codes.Code
+		wantCode        codes.Code
 	}{
 		{
 			name:            "the actor is not suspended",
@@ -187,14 +188,6 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 			state:        ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			withSnapshot: true,
 			wantCode:     codes.Internal,
-		},
-		{
-			name:            "the actor is paused above its external snapshot",
-			state:           ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			withSnapshot:    true,
-			builtOnTemplate: true,
-			paused:          true,
-			wantCode:        codes.FailedPrecondition,
 		},
 	}
 
@@ -222,10 +215,6 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 					s.LastAssignedGeneration = 1
 					s.Snapshots = []*ateapipb.Snapshot{
 						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					}
-					if tt.paused {
-						s.LastAssignedGeneration = 2
-						s.Snapshots = append(s.Snapshots, newPausedSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, "paused", "node-1"))
 					}
 				})
 			}
@@ -293,6 +282,299 @@ func TestTagActorSnapshot_TagsNewestExternalSnapshot(t *testing.T) {
 
 			if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); err != nil {
 				t.Fatalf("TagActorSnapshot: %v", err)
+			}
+		})
+	}
+}
+
+// TestTagActorSnapshot_PromotesLocalSnapshot verifies that tagging a paused
+// actor whose snapshot is not uploaded yet has the atelet on the snapshot's
+// node upload it first, records the upload on the actor, and tags that
+// snapshot. A failed upload fails the tag without reserving its name and leaves
+// the actor as it was. A create that cannot succeed fails before the upload.
+func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
+	// reported is the state atelet answers with once it made snap durable.
+	reported := func(snap *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+		report := &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: snap.GetUuid(),
+			Generation:   snap.GetGeneration(),
+			Fidelity:     fidelityToAtelet(snap.GetFidelity()),
+			Object:       &ateletpb.ObjectStorage{SnapshotUri: snap.GetDurableSnapshot().GetObject().GetSnapshotUri()},
+		}}
+		return &ateletpb.ActorSnapshotState{LatestLocal: report, LatestDurable: proto.CloneOf(report)}
+	}
+
+	tests := []struct {
+		name string
+		// olderDurable seeds a COMPLETED snapshot below the paused one.
+		olderDurable bool
+		// uploaded records the paused snapshot's durable copy COMPLETED.
+		uploaded bool
+		// nodeLost clears the paused snapshot's locality, as when its node
+		// was lost before the upload finished.
+		nodeLost bool
+		// nameTaken seeds a tag under the name the create asks for.
+		nameTaken bool
+		// badLocation points the template at an unusable storage location.
+		badLocation bool
+		// noTemplateUID records no template the paused snapshot was built
+		// under, a broken row.
+		noTemplateUID bool
+		// promoteState builds the state PromoteSnapshot answers with from the
+		// paused snapshot.
+		promoteState func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState
+		promoteErr   error
+		wantPromote  bool
+		wantCode     codes.Code
+	}{
+		{
+			name:         "the paused snapshot is above an older durable one",
+			olderDurable: true,
+			promoteState: reported,
+			wantPromote:  true,
+		},
+		{
+			name:         "the paused snapshot is the actor's only one",
+			promoteState: reported,
+			wantPromote:  true,
+		},
+		{
+			name:     "the paused snapshot's upload is already recorded",
+			uploaded: true,
+		},
+		{
+			name:         "the paused snapshot's node was lost before its upload finished",
+			olderDurable: true,
+			nodeLost:     true,
+		},
+		{
+			name:      "the name is already taken",
+			nameTaken: true,
+			wantCode:  codes.AlreadyExists,
+		},
+		{
+			name:        "the storage location is unusable",
+			badLocation: true,
+			wantCode:    codes.Internal,
+		},
+		{
+			name:          "the paused snapshot records no template",
+			olderDurable:  true,
+			noTemplateUID: true,
+			wantCode:      codes.Internal,
+		},
+		{
+			name:        "atelet is unavailable",
+			promoteErr:  apierror.Unavailable("plugin: object store restarting"),
+			wantPromote: true,
+			wantCode:    codes.Unavailable,
+		},
+		{
+			name:        "the snapshot conflicts with atelet's newer state",
+			promoteErr:  apierror.Aborted("stale snapshot generation"),
+			wantPromote: true,
+			wantCode:    codes.Aborted,
+		},
+		{
+			name:        "the paused snapshot is gone and was never uploaded",
+			promoteErr:  apierror.NotFound("local snapshot is gone and no uploaded copy exists: %w", status.Error(codes.NotFound, "manifest not found")),
+			wantPromote: true,
+			wantCode:    codes.FailedPrecondition,
+		},
+		{
+			name:        "the paused snapshot's fidelity does not match",
+			promoteErr:  apierror.FailedPrecondition("pause snapshot captured full; upload asks for memory"),
+			wantPromote: true,
+			wantCode:    codes.FailedPrecondition,
+		},
+		{
+			name:        "the upload fails with a plugin error atelet does not classify",
+			promoteErr:  fmt.Errorf("while uploading snapshot files: %w", status.Error(codes.NotFound, "bucket not found")),
+			wantPromote: true,
+			wantCode:    codes.Internal,
+		},
+		{
+			name:         "atelet reports no durable snapshot",
+			promoteState: func(*ateapipb.Snapshot) *ateletpb.ActorSnapshotState { return &ateletpb.ActorSnapshotState{} },
+			wantPromote:  true,
+			wantCode:     codes.Internal,
+		},
+		{
+			name: "atelet reports another snapshot at the generation",
+			promoteState: func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+				state := reported(paused)
+				state.LatestDurable.Snapshot.SnapshotUuid = "another-snapshot"
+				return state
+			},
+			wantPromote: true,
+			wantCode:    codes.Internal,
+		},
+		{
+			name: "atelet reports the snapshot at another generation",
+			promoteState: func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+				state := reported(paused)
+				state.LatestDurable.Snapshot.Generation = 1
+				return state
+			},
+			wantPromote: true,
+			wantCode:    codes.Internal,
+		},
+		{
+			name: "atelet reports the snapshot uploaded to another URI",
+			promoteState: func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+				state := reported(paused)
+				state.LatestDurable.Snapshot.Object.SnapshotUri += "-elsewhere"
+				return state
+			},
+			wantPromote: true,
+			wantCode:    codes.Internal,
+		},
+		{
+			name: "atelet reports the snapshot without a fidelity",
+			promoteState: func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+				state := reported(paused)
+				state.LatestDurable.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+				return state
+			},
+			wantPromote: true,
+			wantCode:    codes.Internal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+			w, atelet, objects := newWireFinalizeWorkflow(t, persistence)
+			tmplUID := template.GetMetadata().GetUid()
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, AssignedNode: "node-1"},
+			})
+			pausedURI := mustActorSnapshotURI(t, template, actor, "paused")
+			objects.PutSnapshot(t, pausedURI, "manifest.json", "memory.zst")
+			pausedStatus := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+			if tt.uploaded {
+				pausedStatus = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+			}
+			paused := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, pausedURI.Name(), pausedURI.String(), pausedStatus)
+			if !tt.nodeLost {
+				paused.Locality = "node-1"
+			}
+			if tt.noTemplateUID {
+				paused.ActorTemplateUid = ""
+			}
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				s.LastAssignedGeneration = 2
+				if tt.olderDurable {
+					olderURI := mustActorSnapshotURI(t, template, actor, "older")
+					objects.PutSnapshot(t, olderURI, "manifest.json")
+					s.Snapshots = append(s.Snapshots, newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, olderURI.Name(), olderURI.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
+				}
+				s.Snapshots = append(s.Snapshots, proto.CloneOf(paused))
+			})
+			tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
+			var takenBy *ateapipb.Tag
+			if tt.nameTaken {
+				var err error
+				takenBy, err = persistence.CreateTag(ctx, &ateapipb.Tag{
+					Metadata:    &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
+					Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+					SourceActor: actorRef.ToObjectRef(),
+					Status:      &ateapipb.TagStatus{ActorTemplateUid: tmplUID},
+				})
+				if err != nil {
+					t.Fatalf("CreateTag: %v", err)
+				}
+			}
+			if tt.badLocation {
+				_, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(template), store.PreconditionFrom(template), func(tmpl *ateapipb.ActorTemplate) error {
+					tmpl.SnapshotConfig.StorageLocation = "gs://ate-snapshots/team-a/?query"
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("UpdateActorTemplate: %v", err)
+				}
+			}
+			if tt.promoteState != nil {
+				atelet.promoteState = tt.promoteState(paused)
+			}
+			atelet.promoteErr = tt.promoteErr
+
+			tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+			if code := apierror.Code(err); code != tt.wantCode {
+				t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, tt.wantCode)
+			}
+
+			gotPromote := atelet.promoteRequest()
+			switch {
+			case !tt.wantPromote && gotPromote != nil:
+				t.Errorf("PromoteSnapshot request = %v, want none", gotPromote)
+			case tt.wantPromote:
+				wantPromote := &ateletpb.PromoteSnapshotRequest{
+					Atespace:              "team-a",
+					ActorName:             "actor-1",
+					ActorUid:              actor.GetMetadata().GetUid(),
+					ActorTemplateAtespace: "team-a",
+					ActorTemplateName:     "sub-tmpl",
+					Snapshot: &ateletpb.Snapshot{
+						SnapshotUuid: pausedURI.Name(),
+						Generation:   2,
+						Fidelity:     fidelityToAtelet(ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
+						Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedURI.String()},
+					},
+				}
+				if diff := cmp.Diff(wantPromote, gotPromote, protocmp.Transform()); diff != "" {
+					t.Errorf("PromoteSnapshot request mismatch (-want +got):\n%s", diff)
+				}
+			}
+
+			stored, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if tt.wantCode != codes.OK {
+				if diff := cmp.Diff(actor.GetStatus(), stored.GetStatus(), protocmp.Transform()); diff != "" {
+					t.Errorf("a failed promote changed the actor's status (-want +got):\n%s", diff)
+				}
+				got, err := persistence.GetTag(ctx, tagRef)
+				switch {
+				case takenBy != nil:
+					if diff := cmp.Diff(takenBy, got, protocmp.Transform()); diff != "" {
+						t.Errorf("the failed create changed the tag holding the name (-want +got):\n%s", diff)
+					}
+				case !errors.Is(err, store.ErrNotFound):
+					t.Errorf("GetTag = %v, want ErrNotFound: the failed create reserved the name", err)
+				}
+				return
+			}
+
+			tagSnapshot := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			if tt.nodeLost {
+				// Nothing to upload from: the actor is left as it was, and the
+				// tag copied the older durable snapshot.
+				if diff := cmp.Diff(actor.GetStatus(), stored.GetStatus(), protocmp.Transform()); diff != "" {
+					t.Errorf("the actor's status changed (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff([]string{"manifest.json"}, objects.Snapshot(t, mustParseSnapshotURI(t, tagSnapshot))); diff != "" {
+					t.Errorf("the tag's external snapshot mismatch (-want +got):\n%s", diff)
+				}
+				return
+			}
+
+			// The paused snapshot is now durable and stays on its node.
+			wantPaused := proto.CloneOf(paused)
+			wantPaused.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+			if diff := cmp.Diff(wantPaused, findSnapshotByGeneration(stored.GetStatus().GetSnapshots(), 2), protocmp.Transform()); diff != "" {
+				t.Errorf("the actor's latest snapshot mismatch (-want +got):\n%s", diff)
+			}
+			// The tag copied the paused snapshot, not the older one.
+			if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, tagSnapshot))); diff != "" {
+				t.Errorf("the tag's external snapshot mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

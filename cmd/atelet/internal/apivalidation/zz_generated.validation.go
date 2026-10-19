@@ -713,21 +713,6 @@ func Validate_CheckpointRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			func() { // cohort = "object"
-				earlyReturn := false
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "object",
-					func(o *ateletpb.Snapshot) *ateletpb.ObjectStorage { return o.Object }, ateDeepEqual, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
-					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "object",
-					func(o *ateletpb.Snapshot) *ateletpb.ObjectStorage { return o.Object }, ateDeepEqual, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if earlyReturn {
-					return // do not proceed
-				}
-			}()
 			// call the type's validation function
 			errs = append(errs, Validate_Snapshot(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -1966,10 +1951,6 @@ func Validate_PromoteSnapshotRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_PromoteSnapshotRequest_Atespace(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
 			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
@@ -2128,21 +2109,6 @@ func Validate_PromoteSnapshotRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			func() { // cohort = "object"
-				earlyReturn := false
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "object",
-					func(o *ateletpb.Snapshot) *ateletpb.ObjectStorage { return o.Object }, ateDeepEqual, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
-					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "object",
-					func(o *ateletpb.Snapshot) *ateletpb.ObjectStorage { return o.Object }, ateDeepEqual, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if earlyReturn {
-					return // do not proceed
-				}
-			}()
 			// call the type's validation function
 			errs = append(errs, Validate_Snapshot(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -3665,7 +3631,8 @@ func Validate_Snapshot(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
 				earlyReturn = true
 			}
 			if earlyReturn {

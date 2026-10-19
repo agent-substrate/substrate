@@ -28,7 +28,6 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
@@ -487,7 +486,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 					t.Errorf("DeleteWorker: %v", err)
 					return err
 				}
-				return status.Error(codes.Unavailable, "worker pod is gone")
+				return apierror.Unavailable("worker pod is gone")
 			}
 			if _, err := actorWorkflow.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.Unavailable {
 				t.Fatalf("SuspendActor err = %v, want Unavailable from the failed checkpoint", err)

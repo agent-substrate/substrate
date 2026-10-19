@@ -141,20 +141,6 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	return actor, true, nil
 }
 
-// validateGoldenSnapshotFidelity rejects a golden snapshot that does not carry
-// the guest state (memory + fs delta) a restore needs. Golden actors always
-// commit MEMORY (preferredFidelity), so this only trips on a golden snapshot
-// whose record drifted — surface a clear error instead of shipping a restore
-// request atelet would reject (or that would boot an empty guest).
-func validateGoldenSnapshotFidelity(snapshot *ateapipb.Snapshot) error {
-	if fidelity := snapshot.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
-		return apierror.FailedPrecondition(
-			"ActorTemplate golden snapshot %q was taken with fidelity %s, not MEMORY; regenerate the golden snapshot",
-			snapshot.GetDurableSnapshot().GetObject().GetSnapshotUri(), fidelity)
-	}
-	return nil
-}
-
 // loadActorForResume fetches the current actor record and its template, and
 // resolves the boot source for the pending restore.
 func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
@@ -192,6 +178,13 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		src.Fidelity = snap.GetFidelity()
 		capturedUnder := snap.GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
+	}
+	// A local restore also names the local snapshot's upload, so a URI that
+	// does not parse fails here too, before a worker is claimed.
+	if local := findLatestLocalSnapshot(actor.GetStatus()); local != nil {
+		if _, err = resources.ParseSnapshotURI(local.GetDurableSnapshot().GetObject().GetSnapshotUri()); err != nil {
+			return nil, nil, src, apierror.DataLoss("Actor %s local snapshot: %v", actorRef, err)
+		}
 	}
 
 	return actor, actorTemplate, src, nil
@@ -850,6 +843,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 				SnapshotUuid: localSnap.GetUuid(),
 				Generation:   localSnap.GetGeneration(),
 				Fidelity:     fidelity,
+				// Named even while the upload is PENDING: atelet may have
+				// uploaded the snapshot and detached the actor before its
+				// report of the upload lands. atelet reads it only when it
+				// holds no usable local copy, and the manifest, uploaded
+				// last, tells a complete upload from a partial one.
+				Object: &ateletpb.ObjectStorage{SnapshotUri: localSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()},
 			},
 			SandboxAssets:  sandboxAssets,
 			SandboxRuntime: sandboxRuntime,
@@ -857,11 +856,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			EgressGateway:  egressGateway,
 			CpuMilli:       cpuMilli,
 			MemoryBytes:    memBytes,
-		}
-		// atelet uploads a pause's snapshot in the background. Once that upload
-		// is recorded, atelet can download it if its local copy is gone.
-		if durable := localSnap.GetDurableSnapshot(); durable.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
-			req.Snapshot.Object = &ateletpb.ObjectStorage{SnapshotUri: durable.GetObject().GetSnapshotUri()}
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 

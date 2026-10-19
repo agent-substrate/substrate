@@ -555,7 +555,7 @@ func ateletReported(t *testing.T, gen int32) *ateletpb.SnapshotReport {
 	}}
 }
 
-func TestApplyCheckpointState(t *testing.T) {
+func TestApplyAteletResponseState(t *testing.T) {
 	const (
 		pending    = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
 		completed  = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
@@ -674,15 +674,15 @@ func TestApplyCheckpointState(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := applyCheckpointState(context.Background(), tt.status, tt.state)
+			err := applyAteletResponseState(context.Background(), tt.status, tt.state)
 			if tt.wantCode != codes.OK {
 				if got := apierror.Code(err); got != tt.wantCode {
-					t.Fatalf("applyCheckpointState() error = %v, want code %v", err, tt.wantCode)
+					t.Fatalf("applyAteletResponseState() error = %v, want code %v", err, tt.wantCode)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("applyCheckpointState() error = %v", err)
+				t.Fatalf("applyAteletResponseState() error = %v", err)
 			}
 			if diff := cmp.Diff(tt.want, tt.status, protocmp.Transform()); diff != "" {
 				t.Errorf("status mismatch (-want +got):\n%s", diff)

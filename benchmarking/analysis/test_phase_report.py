@@ -291,14 +291,14 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(downloads[0]["count"], 1)  # the failed 30s never entered
 
     def test_percentiles_split_by_sandbox_class_and_kind(self):
-        golden = dict(ATELET_RESTORE, **{"time": "2026-09-23T09:59:00.000000000Z",
-                                         "ate.snapshot.kind": "golden", "ate.sandbox.class": "gvisor",
-                                         "ate.actor.restore.duration.download": 9.0,
-                                         "ate.actor.restore.duration.total": 10.0})
+        local = dict(ATELET_RESTORE, **{"time": "2026-09-23T09:59:00.000000000Z",
+                                        "ate.snapshot.kind": "local", "ate.sandbox.class": "gvisor",
+                                        "ate.actor.restore.duration.download": 9.0,
+                                        "ate.actor.restore.duration.total": 10.0})
         latest = dict(ATELET_RESTORE, **{"ate.sandbox.class": "gvisor"})
-        rows = phase_report.report_phases(parse(golden, latest).breakdowns, lambda _: None)
+        rows = phase_report.report_phases(parse(local, latest).breakdowns, lambda _: None)
         downloads = {(r["class"], r["kind"]): r["p50_ms"] for r in rows if r["phase"] == "download"}
-        self.assertEqual(downloads, {("gvisor", "golden"): 9000.0, ("gvisor", "latest"): 2400.0})
+        self.assertEqual(downloads, {("gvisor", "local"): 9000.0, ("gvisor", "latest"): 2400.0})
 
     def test_paired_ateworker_record_inherits_the_atelet_kind(self):
         out = parse(ATEWORKER_RESTORE, ATELET_RESTORE)

@@ -103,10 +103,13 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	defer close(op.done)
 	uploaded := false
 	target := op.target
-	start := t.clock.Now()
-	err := ctx.Err()
-	if err == nil && !alreadyDurable {
-		uploaded, _, err = t.uploadSnapshot(ctx, actorUID, target, background)
+	detachStart := t.clock.Now()
+	var err error
+	if !alreadyDurable {
+		err = ctx.Err()
+		if err == nil {
+			uploaded, _, err = t.uploadSnapshot(ctx, actorUID, target, background)
+		}
 		if err == nil {
 			err = t.updateOp(actorUID, op, nil, func(a *actorSnapshots) {
 				if t.recordUploadLocked(a, target, uploaded) && background {
@@ -123,9 +126,9 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	// safe because the snapshot is durable: Restore reads snapshot.object
 	// when the local copy is unusable. The prune runs with op in progress
 	// (before op.done is closed), so Run, Restore, and Checkpoint wait for it.
-	// TODO: Notify ateapi of the upcoming detach before deleting the actor's
-	// local snapshots, so it stops sending Restores that rely on them.
-	if err == nil {
+	recordDetach := err == nil
+	if recordDetach {
+		detachStart = t.clock.Now()
 		// Forget or the caller may have ended ctx as the upload finished.
 		err = ctx.Err()
 	}
@@ -150,7 +153,11 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 		err = abErr
 	}
 
-	// Log before endOp, which ends ctx.
-	logOp(ctx, actorUID, op.kind, target, uploaded, background, t.clock.Since(start), err)
+	// Log and record before endOp, which ends ctx.
+	elapsed := t.clock.Since(detachStart)
+	logOp(ctx, actorUID, op.kind, target, uploaded, background, elapsed, err)
+	if background && recordDetach {
+		t.instruments.recordDetach(ctx, target, elapsed, err)
+	}
 	return t.endOp(actorUID, op, err)
 }

@@ -188,12 +188,13 @@ func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, r
 }
 
 // newStoreTracker returns a tracker over store on a fake clock, with the test
-// delays, whose workers have not started: background work starts only once a
-// test advances the clock to when it is due (see stepTo). Its workers stop
-// once the test ends, before the node directories are restored.
-func newStoreTracker(t *testing.T, store Store) *Tracker {
+// delays and opts, whose workers have not started: background work starts only
+// once a test advances the clock to when it is due (see stepTo). Its workers
+// stop once the test ends, before the node directories are restored.
+func newStoreTracker(t *testing.T, store Store, opts ...Option) *Tracker {
 	t.Helper()
-	tr := New(t.Context(), store, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)), WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay))
+	opts = append([]Option{WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay)}, opts...)
+	tr := New(t.Context(), store, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)), opts...)
 	tr.retries = workqueue.NewTypedItemExponentialFailureRateLimiter[string](testRetryDelay, testMaxRetryDelay)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

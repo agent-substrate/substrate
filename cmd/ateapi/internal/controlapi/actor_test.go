@@ -825,16 +825,15 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
 			storetest.MustCreateAtespace(t, ctx, persistence, "team-a")
-			storetest.MustCreateAtespace(t, ctx, persistence, resources.GoldenActorAtespace)
 			tmpl := seedSubstrateTemplate(t, ctx, persistence, "tmpl")
-			ref := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: "golden"}
+			ref := &ateapipb.ObjectRef{Atespace: "team-a", Name: tmpl.GetMetadata().GetUid()}
 			tag := &ateapipb.Tag{
 				Metadata:    &ateapipb.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
 				SourceActor: ref,
 				Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 				Status: &ateapipb.TagStatus{
 					ActorTemplateUid: tmpl.GetMetadata().GetUid(),
-					Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), someActorUID, "gs://bucket/atespaces/ate-golden/tags/"+someActorUID, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), someActorUID, "gs://bucket/atespaces/team-a/tags/"+someActorUID, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 				},
 			}
 			wantCode := codes.OK
@@ -849,7 +848,6 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				wantCode = codes.FailedPrecondition
 			case "data scope":
 				tag.Status.Snapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-				wantCode = codes.FailedPrecondition
 			}
 			if scenario != "missing" {
 				if _, err := persistence.CreateTag(ctx, tag); err != nil {
@@ -865,7 +863,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor"}, ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}
 			if scenario == "explicit tag" {
 				tag.Metadata.Name = "explicit"
-				tag.Status.Snapshot = newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "explicit", "gs://bucket/atespaces/ate-golden/tags/explicit", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+				tag.Status.Snapshot = newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "explicit", "gs://bucket/atespaces/team-a/tags/explicit", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 				if _, err := persistence.CreateTag(ctx, tag); err != nil {
 					t.Fatal(err)
 				}

@@ -167,9 +167,6 @@ const (
 	// atelet reports the actor's state with
 	// WorkerService.ReportActorSnapshotState once such an upload makes a newer
 	// snapshot durable, and once such a detach has deleted the local snapshots.
-	//
-	// atelet never uploads or detaches a snapshot it cannot make durable, such
-	// as one without `snapshot.object`.
 	UploadMode_UPLOAD_MODE_DEFERRED UploadMode = 1
 	// Upload the snapshot synchronously before Checkpoint returns, and keep a
 	// local copy if atelet can: failing to store it does not fail the
@@ -3174,14 +3171,10 @@ type Snapshot struct {
 	// +k8s:minimum=1
 	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
 	Fidelity SnapshotFidelity `protobuf:"varint,3,opt,name=fidelity,proto3,enum=atelet.SnapshotFidelity" json:"fidelity,omitempty"`
-	// The snapshot's durable copy in object storage. Required on Checkpoint
-	// and PromoteSnapshot: atelet uploads there, or reads from there when it
-	// holds no usable local copy.
+	// The snapshot's durable copy in object storage: atelet uploads there, or
+	// reads from there when it holds no usable local copy.
 	//
-	// TODO: Temporarily, this is optional on RestoreRequest while the control
-	// plane does not set it when restoring a paused actor.
-	//
-	// +k8s:optional
+	// +k8s:required
 	Object        *ObjectStorage `protobuf:"bytes,4,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3487,7 +3480,6 @@ type CheckpointRequest struct {
 	// workload.
 	//
 	// +k8s:required
-	// +k8s:subfield(object)=+k8s:required
 	Snapshot *Snapshot `protobuf:"bytes,8,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	// When the snapshot becomes durable.
 	//
@@ -3675,9 +3667,9 @@ type RestoreRequest struct {
 	// detaching the actor, it waits for the detach to finish and then reads
 	// `snapshot.object`. Fails if neither copy exists: that generation is lost.
 	//
-	// TODO: Temporarily, the control plane does not set `snapshot.object` when
-	// it restores a paused actor, so atelet has nothing to fall back to if that
-	// actor's local copy is missing or unusable.
+	// `snapshot.object` is required even while the control plane has not
+	// recorded the snapshot's upload complete: atelet may have uploaded the
+	// snapshot and detached the actor before its report of the upload landed.
 	//
 	// +k8s:required
 	Snapshot *Snapshot `protobuf:"bytes,8,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
@@ -3874,11 +3866,8 @@ func (*RestoreResponse) Descriptor() ([]byte, []int) {
 
 type PromoteSnapshotRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Golden actors are never paused, so the golden atespace is rejected.
-	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # not the golden atespace
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
@@ -3898,7 +3887,6 @@ type PromoteSnapshotRequest struct {
 	// it is, or will be, uploaded.
 	//
 	// +k8s:required
-	// +k8s:subfield(object)=+k8s:required
 	Snapshot      *Snapshot `protobuf:"bytes,6,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

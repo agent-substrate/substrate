@@ -72,9 +72,11 @@ A failed atelet operation still writes its record, marked with `error.type`
 ## Reading the report
 
 **Phase percentiles.** Per layer, operation, sandbox class, snapshot kind,
-scope and phase: count, p50, p90, p95 and max. A `golden` restore downloads
-the golden image and a `latest` one the actor's own, so they are separate
-rows, as are gVisor and micro-VM operations. The atelet rows split a
+scope and phase: count, p50, p90, p95 and max. A `local` restore reads a
+node-local snapshot and a `latest` one a durable snapshot from object
+storage, so they are separate rows, as are gVisor and micro-VM operations.
+A restore from a template's golden snapshot reports `latest`, like the
+actor's own durable snapshot. The atelet rows split a
 checkpoint between `sandbox_assets`, `worker_checkpoint`, `persist` and
 `cleanup`, and a
 restore between `volume_mount`, `manifest_fetch`, `sandbox_assets`,

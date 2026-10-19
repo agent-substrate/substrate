@@ -391,7 +391,6 @@ func TestMetricLabelValues(t *testing.T) {
 		{SchedulerOutcomeNoCapacity, "no_capacity"},
 		{SchedulerOutcomeError, "error"},
 
-		{SnapshotKindGolden, "golden"},
 		{SnapshotKindLatest, "latest"},
 		{SnapshotKindLocal, "local"},
 		{SnapshotKindBoot, "boot"},
