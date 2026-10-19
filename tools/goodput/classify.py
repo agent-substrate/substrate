@@ -43,7 +43,8 @@ REASON_SLOW = "slow"
 REASON_SLOW_WALL = "slow_wall"  # the optional wall check (g3_wall) on a task with a record
 
 FAIL_KIND = {parse.MSG_RESUME_FAIL: REASON_RESUME, parse.MSG_EXEC_FAIL: REASON_EXECUTE,
-             parse.MSG_SUSPEND_FAIL: REASON_SUSPEND}
+             parse.MSG_SUSPEND_FAIL: REASON_SUSPEND, parse.MSG_AGENTSESSION_WAKE_FAIL: REASON_RESUME,
+             parse.MSG_AGENTSESSION_STEP_FAIL: REASON_EXECUTE}
 RECORD_FAIL_STEP = {"resume": REASON_RESUME, "execute": REASON_EXECUTE, "suspend": REASON_SUSPEND}
 
 LSSD_SUFFIX = "-lssd"  # machine types with local SSD, which get G2's tighter resume bound
@@ -121,8 +122,8 @@ def cutoff(events: list[parse.Event], run_end: Optional[float],
     Order: the benchmark's shutdown marker, boomer's quit line, trial_summary
     run_end, server_summary end_ts.
     """
-    for msg, source in ((parse.MSG_SHUTDOWN, "shutdown_marker"), (parse.MSG_BOOMER_QUIT, "boomer_quit")):
-        ts = [ev.t for ev in events if ev.msg == msg]
+    for msgs, source in ((parse.SHUTDOWN_MSGS, "shutdown_marker"), ({parse.MSG_BOOMER_QUIT}, "boomer_quit")):
+        ts = [ev.t for ev in events if ev.msg in msgs]
         if ts:
             return min(ts), source
     if run_end:
@@ -149,7 +150,7 @@ def build_tasks(events: list[parse.Event], cut: Optional[float]) -> tuple[list[T
     for ev in events:
         if ev.t > limit:
             continue
-        if ev.msg.startswith(parse.MSG_ONSTART_FAIL_PREFIX):
+        if ev.msg.startswith(parse.ONSTART_FAIL_PREFIXES):
             startup.append(StartupFailure(t=ev.t, actor=ev.actor, user=ev.user))
             continue
         if not ev.actor:
@@ -199,7 +200,7 @@ def build_record_tasks(events: list[parse.Event],
     for ev in events:
         if ev.t > limit:
             continue
-        if ev.msg.startswith(parse.MSG_ONSTART_FAIL_PREFIX):
+        if ev.msg.startswith(parse.ONSTART_FAIL_PREFIXES):
             startup.append(StartupFailure(t=ev.t, actor=ev.actor, user=ev.user))
         elif ev.actor and ev.record is not None:
             task = seg(ev.actor)
@@ -334,6 +335,7 @@ def run_validity(tasks_finished: int, startup_failure_attempts: int,
 
 
 def sessions_started(events: list[parse.Event], cut: Optional[float]) -> int:
-    """Actors that started a cycle by the cut-off."""
+    """Actors that started a cycle or completed a step by the cut-off."""
     limit = cut if cut is not None else float("inf")
-    return len({ev.actor for ev in events if ev.msg == parse.MSG_START and ev.actor and ev.t <= limit})
+    return len({ev.actor for ev in events
+                if ev.msg in (parse.MSG_START, parse.MSG_AGENTSESSION_STEP_DONE) and ev.actor and ev.t <= limit})

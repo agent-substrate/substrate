@@ -930,6 +930,31 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("## Notes", md)
         self.assertIn("| t | 2026-10-18 | 1 | no task finished within the run |", md)
 
+    def test_sol_normalization_and_agentsession_records(self):
+        logs = [
+            line(10, parse.MSG_AGENTSESSION_TASK_RECORD, "agent-11111111-1111-1111-1111-111111111111",
+                 v=1, user=1, template="agentsession-coding-session", cycles=20, steps=20,
+                 task_start=ts(0), end=ts(10), startup_ms=300.0, cel_ms=25000.0, wall_ms=40000.0,
+                 think_ms=5000.0, resume_max_ms=250.0, ttfe_max_ms=300.0, retries=0, failed=False,
+                 fail_step="", fail_cycle=0),
+            line(20, parse.MSG_AGENTSESSION_SHUTDOWN, actor=""),
+        ]
+        cfg = dict(CONFIG, baselines=[{
+            "name": "gvisor-c3-as", "runtime": "gvisor", "machine_type": "c3-highcpu-88",
+            "template": "agentsession-coding-session", "format": parse.FORMAT_TASK_RECORD,
+            "task_cel_ref_ms": 25000.0, "wall_ref_ms": 40000.0,
+        }])
+        meta = {"start_ts": T0, "end_ts": T0 + 36, "steady_start_ts": T0, "steady_end_ts": T0 + 36,
+                "node_count": 1, "machine_type": "c3-highcpu-88", "sandbox_class": "gvisor"}
+        with tempfile.TemporaryDirectory() as tmp:
+            r = goodput.compute(write_run(Path(tmp), logs, meta), cfg)
+        st = r["modes"]["strict"]["steady"]
+        # 1 good task in 36s = 100 tasks/h; on 100 vCPUs = 1.0 tasks/vCPU-h;
+        # * 25s ref compute = 25.0 good_compute_s/vCPU-h = 0.6944% SoL.
+        self.assertEqual(st["tasks_good"], 1)
+        self.assertEqual(st["good_compute_s_per_vcpu_hr"], 25.0)
+        self.assertEqual(st["sol_efficiency_pct"], 0.6944)
+
 
 if __name__ == "__main__":
     unittest.main()

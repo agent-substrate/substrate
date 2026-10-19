@@ -103,5 +103,17 @@ def window_metrics(rows: list[dict[str, Any]], startup_ts: list[float], window: 
             m[f"{name}_p{p}"] = percentile(xs, p)
     # Reference CEL / median wall of the finished tasks, when they share one reference.
     cel_ref = cel_refs.pop() if len(cel_refs) == 1 else None
-    m["eta_infra"] = round(cel_ref / percentile(done_walls, 50), 4) if cel_ref else None
+    m["eta_infra"] = round(cel_ref / percentile(done_walls, 50), 4) if cel_ref and done_walls else None
+    # Task-complexity / speed-of-light normalization (Work Goodput):
+    # good_compute_s / vCPU-hr = sum(task_cel_ref_s of good tasks) / (hours * allocatable_cores).
+    vcpu = capacity.get("allocatable_cores")
+    good_refs = [_ref(r, baseline, "task_cel_ref_ms") for r in good]
+    base_ref = float(baseline["task_cel_ref_ms"]) if baseline and baseline.get("task_cel_ref_ms") else None
+    if hours and vcpu and (good and all(good_refs) or not good and base_ref):
+        work_s = sum(ref / 1000.0 for ref in good_refs if ref) / (hours * vcpu)
+        m["good_compute_s_per_vcpu_hr"] = round(work_s, 4)
+        m["sol_efficiency_pct"] = round(100.0 * work_s / 3600.0, 4)
+    else:
+        m["good_compute_s_per_vcpu_hr"] = None
+        m["sol_efficiency_pct"] = None
     return m

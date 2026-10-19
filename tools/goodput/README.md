@@ -142,6 +142,11 @@ and `summary` leaves it out. A log with no sweperf line at all is an error.
   - `tasks_done`, `tasks_good`, `tasks_bad`, `tasks_unfinished_bad`, `bad_reasons`,
     `startup_failure_attempts`;
   - `good_tasks_per_hr`, and per node/vCPU/GB-RAM hour; `done_tasks_per_hr`;
+  - with a baseline and node count/machine type: `good_compute_s_per_vcpu_hr`
+    (`good_tasks_per_vcpu_hr × task_cel_ref_ms / 1000`, i.e., reference sandbox
+    compute-seconds delivered per vCPU-hour) and `sol_efficiency_pct`
+    (`good_compute_s_per_vcpu_hr / 3600 × 100%`, task-complexity / speed-of-light
+    normalized efficiency for comparing workloads with different task durations);
   - `goodput_ratio_pct` = good ÷ (done + unfinished bad);
   - wall-time percentiles of good tasks;
   - from task records: percentiles of `resume_max_ms` and `ttfe_max_ms`;

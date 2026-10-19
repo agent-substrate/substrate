@@ -41,10 +41,20 @@ MSG_ONSTART_FAIL_PREFIX = "sweperf on_start failed"  # older runs name the actor
 MSG_SHUTDOWN = "sweperf shutdown started"
 MSG_BOOMER_QUIT = "Recv quit message from master, all the goroutines are stopped"
 MSG_TASK_RECORD = "sweperf task record"  # one per finished task, in newer runs
-ACTOR_IN_TEXT = re.compile(r"\b(sb-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b")
+MSG_AGENTSESSION_TASK_RECORD = "agentsession task record"
+MSG_AGENTSESSION_ONSTART_FAIL = "agentsession start failed; goroutine will retry next iter"
+MSG_AGENTSESSION_WAKE_FAIL = "agent session wake failed"
+MSG_AGENTSESSION_STEP_FAIL = "agent session step failed"
+MSG_AGENTSESSION_STEP_DONE = "Completed agentsession step"
+MSG_AGENTSESSION_SHUTDOWN = "agentsession shutdown started"
+ACTOR_IN_TEXT = re.compile(r"\b((?:sb|agent)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b")
 
+TASK_RECORD_MSGS = {MSG_TASK_RECORD, MSG_AGENTSESSION_TASK_RECORD}
+ONSTART_FAIL_PREFIXES = (MSG_ONSTART_FAIL_PREFIX, MSG_AGENTSESSION_ONSTART_FAIL)
+SHUTDOWN_MSGS = {MSG_SHUTDOWN, MSG_AGENTSESSION_SHUTDOWN}
 KNOWN = {MSG_START, MSG_DONE, MSG_RESUME_FAIL, MSG_EXEC_FAIL, MSG_SUSPEND_FAIL, MSG_SHUTDOWN,
-         MSG_BOOMER_QUIT, MSG_TASK_RECORD}
+         MSG_BOOMER_QUIT, MSG_TASK_RECORD, MSG_AGENTSESSION_TASK_RECORD, MSG_AGENTSESSION_WAKE_FAIL,
+         MSG_AGENTSESSION_STEP_FAIL, MSG_AGENTSESSION_STEP_DONE, MSG_AGENTSESSION_SHUTDOWN}
 
 # Task log formats: the two task-end wordings of runs without task records, and
 # runs with task records.
@@ -102,7 +112,7 @@ def parse_time(s: str) -> float:
 
 
 def is_known(msg: str) -> bool:
-    return msg in KNOWN or msg.startswith((MSG_FINISHED_PREFIX, MSG_ONSTART_FAIL_PREFIX))
+    return msg in KNOWN or msg.startswith((MSG_FINISHED_PREFIX, *ONSTART_FAIL_PREFIXES))
 
 
 def parse_line(line: str) -> Optional[Event]:
@@ -123,12 +133,12 @@ def parse_line(line: str) -> Optional[Event]:
     except ValueError:
         return None
     actor = str(j.get("actor") or "")
-    if not actor and msg.startswith(MSG_ONSTART_FAIL_PREFIX):
+    if not actor and msg.startswith(ONSTART_FAIL_PREFIXES):
         m = ACTOR_IN_TEXT.search(str(j.get("err") or ""))
         actor = m.group(1) if m else ""
     ev = Event(t=t, msg=msg, actor=actor, cycle=_int(j.get("cycle")), user=_int(j.get("user")),
                ok=j["ok"] if isinstance(j.get("ok"), bool) else None)
-    if msg == MSG_TASK_RECORD:
+    if msg in TASK_RECORD_MSGS:
         ev.record = parse_record(j, t)
     return ev
 

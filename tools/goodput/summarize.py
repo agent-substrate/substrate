@@ -28,9 +28,9 @@ import classify
 
 # Steady-window metrics, per mode.
 METRICS = ("tasks_done", "tasks_good", "tasks_unfinished_bad", "startup_failure_attempts", "goodput_ratio_pct",
-           "done_tasks_per_hr", "good_tasks_per_hr", "good_tasks_per_vcpu_hr", "resume_max_ms_p50",
-           "resume_max_ms_p90", "ttfe_max_ms_p50", "ttfe_max_ms_p90", "cel_slowdown_p50", "cel_slowdown_p90",
-           "wall_ratio_p50", "wall_ratio_p90", "eta_infra")
+           "done_tasks_per_hr", "good_tasks_per_hr", "good_tasks_per_vcpu_hr", "good_compute_s_per_vcpu_hr",
+           "sol_efficiency_pct", "resume_max_ms_p50", "resume_max_ms_p90", "ttfe_max_ms_p50", "ttfe_max_ms_p90",
+           "cel_slowdown_p50", "cel_slowdown_p90", "wall_ratio_p50", "wall_ratio_p90", "eta_infra")
 AGGREGATES = ("median", "min", "max")
 IDENTITY = ("runtime", "machine_type", "template", "log_format")
 CSV_NAME = "goodput_summary.csv"
