@@ -37,16 +37,10 @@ import (
 // conflicts are retried; capacity errors fail immediately.
 const failFastResumeBudget = 15 * time.Second
 
-// attemptCeiling bounds a single ResumeActor RPC. The flight's budget cannot:
-// each attempt detaches the budget's deadline along with its cancellation so a
-// restore is never canceled mid-flight, and the router dials ateapi without a
-// client keepalive, so a wedged connection would leave the RPC — and with it
-// the retry loop and the flight, whose only eviction is publish — hanging
-// forever, wedging every later request for the same actor. The ceiling sits
-// above ateapi's 10-minute maximum RPC deadline (see maxRPCDeadline in
-// cmd/ateapi), so on a live connection the server's own deadline always fires
-// first and the ceiling only ever ends an attempt whose outcome can no longer
-// be observed.
+// attemptCeiling bounds a ResumeActor RPC independently of the retry budget.
+// It leaves a minute beyond ateapi's 10-minute handler deadline (maxRPCDeadline)
+// before the client stops waiting. The server deadline alone cannot bound a
+// stalled RPC or guarantee that the handler has stopped.
 const attemptCeiling = 11 * time.Minute
 
 // resumeBackoff builds the backoff between resume attempts while a request is

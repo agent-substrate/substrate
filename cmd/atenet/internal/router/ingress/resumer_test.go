@@ -506,43 +506,99 @@ func TestActorResumer_Parking(t *testing.T) {
 	})
 
 	t.Run("WedgedAttemptIsCeilingedAndFlightEvicted", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			opts []resumerOption
+		}{
+			{name: "ParkingDisabled"},
+			{name: "ParkingEnabled", opts: []resumerOption{withParking(ParkedRequestConfig{Max: 1, Budget: time.Second})}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					// The RPC returns only when its context expires. The flight must
+					// then publish so later requests can start another attempt.
+					var calls atomic.Int32
+					mock := &resumerMockClient{
+						resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+							if calls.Add(1) >= 2 {
+								return &ateapipb.ResumeActorResponse{
+									Actor:   &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
+									Resumed: true,
+								}, nil
+							}
+							<-ctx.Done() // the connection is wedged; only the ceiling ends this
+							// A real client surfaces the attempt deadline as a gRPC
+							// status error, not a bare context error.
+							return nil, status.Error(codes.DeadlineExceeded, "context deadline exceeded")
+						},
+					}
+
+					resumer := NewActorResumer(mock, tc.opts...)
+					start := time.Now()
+					_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+					if got := status.Code(err); got != codes.DeadlineExceeded {
+						t.Fatalf("expected DeadlineExceeded once the attempt ceiling fired, got %v (err=%v)", got, err)
+					}
+					if elapsed := time.Since(start); elapsed != 11*time.Minute {
+						t.Fatalf("expected the attempt to expire after 11m, got %v", elapsed)
+					}
+					if n := calls.Load(); n != 1 {
+						t.Fatalf("expected exactly 1 attempt on the wedged flight, got %d", n)
+					}
+
+					// The wedged flight was evicted, so this request starts a fresh
+					// flight instead of joining the dead one.
+					actor, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
+					if err != nil {
+						t.Fatalf("expected the post-eviction resume to succeed, got %v", err)
+					}
+					if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+						t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
+					}
+					if outcome != ResumeOutcomeTriggered {
+						t.Errorf("expected outcome %q, got %q", ResumeOutcomeTriggered, outcome)
+					}
+					if n := calls.Load(); n != 2 {
+						t.Errorf("expected a second attempt on a fresh flight, got %d total", n)
+					}
+				})
+			})
+		}
+	})
+
+	t.Run("LongAttemptReceivesFreshCeilingAfterRetry", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			// A wedged connection: the RPC never returns on its own, and the
-			// router dials ateapi without a client keepalive, so nothing but
-			// the attempt ceiling ends it. Without the ceiling the retry loop
-			// blocks inside the attempt forever and publish — the flight's
-			// only eviction — never runs, so every later request for the actor
-			// joins the wedged flight.
+			const budget = time.Minute
 			var calls atomic.Int32
 			mock := &resumerMockClient{
 				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-					if calls.Add(1) >= 2 {
-						return &ateapipb.ResumeActorResponse{
-							Actor:   &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
-							Resumed: true,
-						}, nil
+					deadline, ok := ctx.Deadline()
+					if !ok {
+						t.Error("expected an attempt deadline")
+					} else if remaining := time.Until(deadline); remaining != 11*time.Minute {
+						t.Errorf("expected a fresh 11m deadline, got %v", remaining)
 					}
-					<-ctx.Done() // the connection is wedged; only the ceiling ends this
-					// A real client surfaces the attempt deadline as a gRPC
-					// status error, not a bare context error.
-					return nil, status.Error(codes.DeadlineExceeded, "context deadline exceeded")
+					if calls.Add(1) == 1 {
+						time.Sleep(budget / 2)
+						return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+					}
+					// A restore near ateapi's handler deadline must retain its
+					// full attempt ceiling, even after the retry budget expires.
+					time.Sleep(10 * time.Minute)
+					if err := ctx.Err(); err != nil {
+						t.Errorf("long-running restore was canceled: %v", err)
+					}
+					return &ateapipb.ResumeActorResponse{
+						Actor:   &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
+						Resumed: true,
+					}, nil
 				},
 			}
 
-			resumer := NewActorResumer(mock)
-			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
-			if got := status.Code(err); got != codes.DeadlineExceeded {
-				t.Fatalf("expected DeadlineExceeded once the attempt ceiling fired, got %v (err=%v)", got, err)
-			}
-			if n := calls.Load(); n != 1 {
-				t.Fatalf("expected exactly 1 attempt on the wedged flight, got %d", n)
-			}
-
-			// The wedged flight was evicted, so this request starts a fresh
-			// flight instead of joining the dead one.
+			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: budget}))
 			actor, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
 			if err != nil {
-				t.Fatalf("expected the post-eviction resume to succeed, got %v", err)
+				t.Fatalf("expected the long-running resume to succeed, got %v", err)
 			}
 			if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
 				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
@@ -551,7 +607,7 @@ func TestActorResumer_Parking(t *testing.T) {
 				t.Errorf("expected outcome %q, got %q", ResumeOutcomeTriggered, outcome)
 			}
 			if n := calls.Load(); n != 2 {
-				t.Errorf("expected a second attempt on a fresh flight, got %d total", n)
+				t.Errorf("expected exactly 2 attempts, got %d", n)
 			}
 		})
 	})
