@@ -5049,9 +5049,9 @@ func TestSuspendActor_Mode(t *testing.T) {
 	}
 }
 
-// TestCheckpointFailureCrashes: an atelet Checkpoint error while pausing or
-// suspending a running actor crashes it, records atelet's error text, and
-// releases its worker.
+// TestSuspendActor_SnapshotConflictPreservesState verifies that checkpoint
+// conflicts preserve the actor's worker and last completed snapshot, and that
+// retries send the same pending snapshot until atelet accepts it.
 func TestSuspendActor_SnapshotConflictPreservesState(t *testing.T) {
 	for _, mode := range []ateapipb.DurabilityMode{
 		ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
@@ -5089,6 +5089,7 @@ func TestSuspendActor_SnapshotConflictPreservesState(t *testing.T) {
 			}
 
 			tc.fakeAtelet.Reset()
+			tc.fakeAtelet.SetObjectStore(tc.objectStore)
 			tc.fakeAtelet.FailCheckpoint = status.Error(codes.Aborted, "stale snapshot generation")
 			req := &ateapipb.SuspendActorRequest{Actor: ref, Options: &ateapipb.SuspendOptions{Mode: mode}}
 			_, err = tc.client.SuspendActor(ctx, req)
@@ -5129,9 +5130,19 @@ func TestSuspendActor_SnapshotConflictPreservesState(t *testing.T) {
 			assertSnapshotCollected(t, tc, pending.GetDurableSnapshot().GetObject().GetSnapshotUri())
 
 			// A repeated conflict must not finalize or allocate another generation.
+			tc.fakeAtelet.Reset()
+			tc.fakeAtelet.SetObjectStore(tc.objectStore)
+			tc.fakeAtelet.FailCheckpoint = status.Error(codes.Aborted, "stale snapshot generation")
 			_, err = tc.client.SuspendActor(ctx, req)
 			if status.Code(err) != codes.Aborted {
 				t.Fatalf("repeated SuspendActor error = %v, want Aborted", err)
+			}
+			if !tc.fakeAtelet.CheckpointCalled {
+				t.Fatal("repeated conflict did not call atelet Checkpoint")
+			}
+			conflicted := tc.fakeAtelet.CheckpointRequest.GetSnapshot()
+			if conflicted.GetSnapshotUuid() != pending.GetUuid() || conflicted.GetGeneration() != pending.GetGeneration() {
+				t.Errorf("repeated Checkpoint snapshot = %v, want pending snapshot %v", conflicted, pending)
 			}
 			repeated, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
 			if err != nil {
@@ -5140,12 +5151,24 @@ func TestSuspendActor_SnapshotConflictPreservesState(t *testing.T) {
 			if !proto.Equal(repeated.GetStatus(), st) {
 				t.Error("repeated conflict changed the actor's status")
 			}
+			assertSnapshotPresent(t, tc, savedURI)
 
 			// Once atelet accepts the request, retry the same persisted snapshot.
-			tc.fakeAtelet.FailCheckpoint = nil
+			tc.fakeAtelet.Reset()
+			tc.fakeAtelet.SetObjectStore(tc.objectStore)
 			finished, err := tc.client.SuspendActor(ctx, req)
 			if err != nil {
 				t.Fatalf("SuspendActor after conflict cleared: %v", err)
+			}
+			if !tc.fakeAtelet.CheckpointCalled {
+				t.Fatal("retry did not call atelet Checkpoint")
+			}
+			retried := tc.fakeAtelet.CheckpointRequest.GetSnapshot()
+			if got := retried.GetSnapshotUuid(); got != pending.GetUuid() {
+				t.Errorf("retry snapshot UUID = %q, want %q", got, pending.GetUuid())
+			}
+			if got := retried.GetGeneration(); got != pending.GetGeneration() {
+				t.Errorf("retry snapshot generation = %d, want %d", got, pending.GetGeneration())
 			}
 			if got := finished.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				t.Errorf("state after retry = %v, want SUSPENDED", got)
@@ -5160,6 +5183,9 @@ func TestSuspendActor_SnapshotConflictPreservesState(t *testing.T) {
 	}
 }
 
+// TestCheckpointFailureCrashes: an atelet Checkpoint error while pausing or
+// suspending a running actor crashes it, records atelet's error text, and
+// releases its worker.
 func TestCheckpointFailureCrashes(t *testing.T) {
 	tests := []struct {
 		name        string
