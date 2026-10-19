@@ -28,7 +28,6 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/pluginsocket"
 	"go.ate.dev/substrate/internal/resources"
-	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/otel"
@@ -109,8 +108,6 @@ type ActorWorkflow struct {
 	workerCache          *workercache.Cache
 	scheduler            scheduling.Scheduler
 	dialer               *AteletDialer
-	workerPoolLister     listersv1alpha1.WorkerPoolLister
-	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
 	storageClassLister   storagev1listers.StorageClassLister
 	instruments          *Instruments
 	egressGatewayAddress string
@@ -127,8 +124,6 @@ func NewActorWorkflow(
 	store actorWorkflowStore,
 	workerCache *workercache.Cache,
 	dialer *AteletDialer,
-	workerPoolLister listersv1alpha1.WorkerPoolLister,
-	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
 	instruments *Instruments,
 	egressGatewayAddress string,
@@ -140,8 +135,6 @@ func NewActorWorkflow(
 		workerCache:          workerCache,
 		scheduler:            scheduling.New(workerCache),
 		dialer:               dialer,
-		workerPoolLister:     workerPoolLister,
-		sandboxConfigLister:  sandboxConfigLister,
 		storageClassLister:   storageClassLister,
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,

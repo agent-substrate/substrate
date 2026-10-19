@@ -40,36 +40,29 @@ import (
 )
 
 // TestRedactedRecursesIntoRealMapFields walks real messages whose maps hold
-// messages (atelet sandbox assets) and strings (ateapi selectors): map values
-// are visited without panicking, labeled fields in them are masked, and
+// strings (atelet volume contexts and ateapi selectors): map values are
+// visited without panicking, labeled fields in the message are masked, and
 // non-sensitive content is left intact.
 func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
 	run := &ateletpb.RunRequest{
-		SandboxAssets: &ateletpb.SandboxAssets{
-			SandboxClass: "gvisor",
-			Assets: map[string]*ateletpb.ArchAssets{
-				"amd64": {Files: map[string]*ateletpb.AssetFile{
-					"runsc": {Url: "https://assets.example/runsc", Sha256: "abc123"},
-				}},
-			},
+		Spec: &ateletpb.WorkloadSpec{
+			Volumes: []*ateletpb.Volume{{
+				Name:     "data",
+				External: &ateletpb.ExternalVolumeSource{VolumeContext: map[string]string{"fsType": "ext4"}},
+			}},
+			Containers: []*ateletpb.Container{{
+				Name: "main",
+				Env:  []*ateletpb.EnvVar{{Name: "API_KEY", Value: "sk-secret"}},
+			}},
 		},
-		Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
-			Name: "main",
-			Env:  []*ateletpb.EnvVar{{Name: "API_KEY", Value: "sk-secret"}},
-		}}},
 	}
 	redacted, _ := protoredact.Redacted(run)
 	got := redacted.(*ateletpb.RunRequest)
 	if v := got.GetSpec().GetContainers()[0].GetEnv()[0].GetValue(); v != protoredact.Placeholder {
 		t.Fatalf("env value = %q, want placeholder", v)
 	}
-	// Inside the map value, the labeled url is masked and the sha256 is kept.
-	file := got.GetSandboxAssets().GetAssets()["amd64"].GetFiles()["runsc"]
-	if u := file.GetUrl(); u != protoredact.Placeholder {
-		t.Fatalf("asset url in a map value = %q, want placeholder", u)
-	}
-	if sum := file.GetSha256(); sum != "abc123" {
-		t.Fatalf("map-of-message content was altered: sha256 = %q", sum)
+	if fsType := got.GetSpec().GetVolumes()[0].GetExternal().GetVolumeContext()["fsType"]; fsType != "ext4" {
+		t.Fatalf("map content was altered: fsType = %q", fsType)
 	}
 	if run.GetSpec().GetContainers()[0].GetEnv()[0].GetValue() != "sk-secret" {
 		t.Fatal("original mutated")
@@ -420,7 +413,6 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 		"ateapi.EnvVar.value":                            true,
 		"ateapi.MintActorJwtResponse.actor_jwt":          true,
 		"ateapi.MintWorkerActorJwtResponse.actor_jwt":    true,
-		"atelet.AssetFile.url":                           true,
 		"atelet.EnvVar.value":                            true,
 		"ateworker.ContainerSpec.env":                    true,
 		"credprovider.FetchSecretResponse.opaque_bytes":  true,

@@ -238,7 +238,7 @@ func (s *workerSandboxSyncer) workerPoolHandler() cache.ResourceEventHandler {
 		UpdateFunc: func(oldObj, newObj any) {
 			oldPool, oldOK := oldObj.(*v1alpha1.WorkerPool)
 			newPool, newOK := newObj.(*v1alpha1.WorkerPool)
-			if oldOK && newOK && poolConfigName(oldPool) != poolConfigName(newPool) {
+			if oldOK && newOK && oldPool.ResolvedSandboxConfig() != newPool.ResolvedSandboxConfig() {
 				s.enqueuePool(newPool, s.maxJitter)
 			}
 		},
@@ -254,7 +254,7 @@ func (s *workerSandboxSyncer) sandboxConfigHandler() cache.ResourceEventHandler 
 			return
 		}
 		for _, pool := range pools {
-			if poolConfigName(pool) == cfg.Name {
+			if pool.ResolvedSandboxConfig() == cfg.Name {
 				s.enqueuePool(pool, s.maxJitter)
 			}
 		}

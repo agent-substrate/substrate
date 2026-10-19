@@ -575,7 +575,11 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 		WorkerPodUid:    name,
 		SandboxClass:    "gvisor",
 		Epoch:           1,
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+		Status: &ateapipb.WorkerStatus{
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:       &ateapipb.WorkerResources{Actors: 1},
+			DefaultRuntime: testSandboxRuntime(),
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateWorker: %v", err)

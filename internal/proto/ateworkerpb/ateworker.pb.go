@@ -484,8 +484,8 @@ type RunWorkloadRequest struct {
 	// the gVisor runtime, which uses runsc_path.
 	//
 	// +k8s:optional
-	// +k8s:maxProperties=16 # matches atelet.ArchAssets.files
-	// +k8s:eachKey=+k8s:maxLength=64 # matches atelet.ArchAssets.files
+	// +k8s:maxProperties=16
+	// +k8s:eachKey=+k8s:maxLength=64
 	// +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,8,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// When absent the actor has no egress: its TCP is captured and refused.
@@ -1434,8 +1434,8 @@ type RestoreWorkloadRequest struct {
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
 	//
 	// +k8s:optional
-	// +k8s:maxProperties=16 # matches atelet.ArchAssets.files
-	// +k8s:eachKey=+k8s:maxLength=64 # matches atelet.ArchAssets.files
+	// +k8s:maxProperties=16
+	// +k8s:eachKey=+k8s:maxLength=64
 	// +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Fidelity to restore from the snapshot.

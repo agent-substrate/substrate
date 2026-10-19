@@ -168,8 +168,9 @@ func TestListWorkers(t *testing.T) {
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
 			Status: &ateapipb.WorkerStatus{
-				State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity: &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(1000, 512<<20)},
+				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity:       &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(1000, 512<<20)},
+				DefaultRuntime: defaultWorkerRuntime("gvisor"),
 			},
 		},
 	}

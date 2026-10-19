@@ -178,7 +178,7 @@ type Field struct {
 	// TypeDisplay is always a ready-to-render string. For example, "string"
 	// for ResourceMetadata.name, "int64" for ResourceMetadata.version,
 	// "repeated ExternalVolume" for ActorStatus.external_volumes,
-	// "map<string, ArchAssets>" for SandboxAssets.assets, "ActorState" for
+	// "map<string, string>" for Selector.match_labels, "ActorState" for
 	// ActorStatus.state, or "google.protobuf.Timestamp" for
 	// ResourceMetadata.create_time.
 	TypeDisplay string
@@ -203,11 +203,11 @@ type Field struct {
 
 	// MapValueKind and MapValueFullName mirror Kind/TypeFullName, but for a
 	// map field's value type. Both are empty for a field that isn't a map.
-	// For example, for SandboxAssets.assets (`map<string, ArchAssets>
-	// assets = 2;`), MapValueKind is MessageKind and MapValueFullName is
-	// "ateapi.ArchAssets"; for Selector.match_labels (`map<string, string>
+	// For example, for Selector.match_labels (`map<string, string>
 	// match_labels = 1;`), MapValueKind is StringKind and MapValueFullName
-	// is empty, since the map's value is a scalar.
+	// is empty, since the map's value is a scalar; for a map with message
+	// values, MapValueKind is MessageKind and MapValueFullName is the
+	// message's full name.
 	MapValueKind     protoreflect.Kind
 	MapValueFullName protoreflect.FullName
 

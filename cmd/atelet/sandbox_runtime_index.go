@@ -283,12 +283,11 @@ func (x *runtimeIndex) worker(podUID string) (*workerRuntime, bool) {
 // under rt's bundle hash. ate-api-server fills rt from the worker
 // assignment, which is a runtime the worker registered from the file this
 // node wrote, so the hash resolves as long as the request reached the node
-// the actor was placed on. The request's sandbox_assets are not consulted.
+// the actor was placed on.
 //
-// A miss is not served from the request: it means the request reached a
-// node whose workers never advertised the runtime, which must surface. A
-// runtime registered before an atelet restart is no miss: the index is
-// loaded from disk before atelet serves.
+// A miss means the request reached a node whose workers never advertised the
+// runtime, which must surface. A runtime registered before an atelet restart
+// is no miss: the index is loaded from disk before atelet serves.
 func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.SandboxRuntime) (*sandboxAssetsRecord, error) {
 	hash, err := bundleHashOf(rt)
 	if err != nil {

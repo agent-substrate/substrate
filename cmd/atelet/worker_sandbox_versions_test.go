@@ -155,42 +155,6 @@ func TestBundleHash(t *testing.T) {
 	}
 }
 
-func TestPoolConfigName(t *testing.T) {
-	tests := []struct {
-		name string
-		pool *v1alpha1.WorkerPool
-		want string
-	}{{
-		name: "confirmed config of the pool's class",
-		pool: resolvedPool("pool", "gvisor-default"),
-		want: "gvisor-default",
-	}, {
-		name: "not resolved yet",
-		pool: resolvedPool("pool", ""),
-	}, {
-		name: "only a pending config",
-		pool: func() *v1alpha1.WorkerPool {
-			pool := resolvedPool("pool", "")
-			pool.Status.SandboxClasses[0].PendingConfigRef = &v1alpha1.SandboxConfigReference{Name: "gvisor-next"}
-			return pool
-		}(),
-	}, {
-		name: "status resolved another class than the pool's",
-		pool: func() *v1alpha1.WorkerPool {
-			pool := resolvedPool("pool", "gvisor-default")
-			pool.Spec.SandboxClasses[0].Name = v1alpha1.SandboxClassMicroVM
-			return pool
-		}(),
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := poolConfigName(tt.pool); got != tt.want {
-				t.Errorf("poolConfigName() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestWorkerSandboxResolverResolve(t *testing.T) {
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/gvisor", "abc")
 

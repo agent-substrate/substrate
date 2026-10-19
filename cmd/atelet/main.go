@@ -525,7 +525,7 @@ func servingCheck(served <-chan struct{}) func(context.Context) error {
 
 // ateletServerOptions are the options of the gRPC server that serves
 // Atelet to ate-api-server. Its interceptor logs every request; fields
-// marked debug_redact (env values, asset URLs) are masked in that log.
+// marked debug_redact (env values) are masked in that log.
 func ateletServerOptions(creds credentials.TransportCredentials) []grpc.ServerOption {
 	return []grpc.ServerOption{
 		grpc.Creds(creds),
@@ -1361,7 +1361,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
 		fidelity:          ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
-		sandboxClass:      req.GetSandboxAssets().GetSandboxClass(),
+		sandboxClass:      req.GetSandboxRuntime().GetSandboxClass(),
 	}
 	attribution := resources.ActorAttribution{
 		Ref:              actorRef,

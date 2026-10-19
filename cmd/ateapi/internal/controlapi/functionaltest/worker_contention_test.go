@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
@@ -153,6 +154,24 @@ func setWorkerActorCapacity(t *testing.T, tc *testContext, pool string, actors i
 	}
 }
 
+// defaultWorkerRuntime returns the default SandboxRuntime that
+// reportWorkerCapacity records on a test worker of the given sandbox class.
+func defaultWorkerRuntime(class string) *ateapipb.SandboxRuntime {
+	if class == "" {
+		class = "gvisor"
+	}
+	return &ateapipb.SandboxRuntime{
+		SandboxClass: class,
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: hardware.SchemaVersionV1,
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: hardware.AttrArchitecture, Value: "amd64"},
+				{Key: hardware.AttrSandboxBundleHash, Value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+			},
+		},
+	}
+}
+
 // reportWorkerCapacity stands in for the worker's capacity report, which atelet
 // forwards to WorkerService in a real cluster, with compute for actors of the
 // size test templates declare. It waits for the worker cache, which placement
@@ -168,6 +187,9 @@ func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int
 		toUpdate.Status.Capacity = &ateapipb.WorkerResources{
 			Actors:    actors,
 			Resources: resources.CPUMemory(int64(actors)*1000, int64(actors)*512<<20),
+		}
+		if toUpdate.Status.DefaultRuntime == nil {
+			toUpdate.Status.DefaultRuntime = defaultWorkerRuntime(toUpdate.GetSandboxClass())
 		}
 		return nil
 	}); err != nil {

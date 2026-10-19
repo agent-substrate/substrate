@@ -602,16 +602,6 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime hardware.Requirement) 
 		// The runtime the actor is started or restored under. Snapshots taken
 		// during this assignment are stamped with it, so a worker that later
 		// changes its default does not relabel state captured on the old one.
-		//
-		// TODO: Workers report restorable_runtimes, so a match on one records
-		// that older runtime here and ensureAteletRestored sends it on Run and
-		// Restore, but atelet still restores with the assets in the request
-		// (the worker pool's SandboxConfig default version): the restore runs on
-		// the newer version and fails, or its next checkpoint is stamped with a
-		// runtime that did not produce it. A follow-up resolves the matching
-		// version of the worker pool's SandboxConfig from sandbox_runtime in
-		// atelet and removes sandbox_assets; until it lands, keep a config's
-		// default version the only enabled one.
 		SandboxRuntime: proto.CloneOf(snapRuntime.RuntimeFor(w.GetStatus())),
 	}
 }
@@ -816,13 +806,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		return tele, err
 	}
 
-	// The sandbox binaries and pause image come from the assigned worker's
-	// pool SandboxConfig on every path, restores included.
-	sandboxAssets, err := resolveSandboxAssets(w.workerPoolLister, w.sandboxConfigLister, assignment)
-	if err != nil {
-		return tele, fmt.Errorf("while resolving sandbox assets: %w", err)
-	}
-
 	// The assignment is what the next checkpoint is stamped from, so it is also
 	// what decides how this restore runs.
 	sandboxRuntime := toAteletSandboxRuntime(assignment.GetSandboxRuntime())
@@ -850,7 +833,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 				// last, tells a complete upload from a partial one.
 				Object: &ateletpb.ObjectStorage{SnapshotUri: localSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()},
 			},
-			SandboxAssets:  sandboxAssets,
 			SandboxRuntime: sandboxRuntime,
 			ActorUid:       actor.GetMetadata().Uid,
 			EgressGateway:  egressGateway,
@@ -893,7 +875,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
-			SandboxAssets:  sandboxAssets,
 			SandboxRuntime: sandboxRuntime,
 			ActorUid:       actor.GetMetadata().Uid,
 			EgressGateway:  egressGateway,
@@ -914,7 +895,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			ActorName:             actor.GetMetadata().GetName(),
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 			ActorTemplateName:     actor.GetActorTemplate().GetName(),
-			SandboxAssets:         sandboxAssets,
 			SandboxRuntime:        sandboxRuntime,
 			Spec:                  workloadSpec,
 			ActorUid:              actor.GetMetadata().Uid,

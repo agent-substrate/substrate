@@ -433,13 +433,6 @@ message RunRequest {
   // +k8s:required
   WorkloadSpec spec = 7;
 
-  // The sandbox binaries to use for booting this actor from scratch. atelet
-  // fetches the relevant assets and records them with the actor's on-node state
-  // so a later Checkpoint can pin the same version into the snapshot manifest.
-  //
-  // +k8s:required
-  SandboxAssets sandbox_assets = 8;
-
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
@@ -459,13 +452,11 @@ message RunRequest {
   int64 memory_bytes = 11; // Memory limit in bytes.
 
   // The runtime the assigned worker runs this actor under, from
-  // WorkerAssignment.sandbox_runtime.
+  // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
+  // sandbox binaries through its advertised-runtime index and records the
+  // runtime for the actor so a later Checkpoint pins the snapshot to it.
   //
-  // TODO: atelet still runs with sandbox_assets; a follow-up resolves the
-  // SandboxConfig version from this field, makes it required, and removes
-  // sandbox_assets.
-  //
-  // +k8s:optional
+  // +k8s:required
   SandboxRuntime sandbox_runtime = 12;
 }
 
@@ -478,64 +469,6 @@ message EgressGateway {
   // +k8s:maxLength=261 # a bracketed or 253-character host, ':' and a 5-digit port
   // +k8s:customValidation # host:port shape
   string address = 1;
-}
-
-// AssetFile is one content-addressed file atelet fetches for a sandbox runtime
-// (e.g. the gVisor release tarball).
-message AssetFile {
-  // URL to download the asset from. atelet fetches every URL through the
-  // node's object-store plugin, and reads a gs:// URL anonymously only when
-  // the plugin cannot serve it.
-  // Masked in logged requests, since a signed URL carries its credential in
-  // the query.
-  //
-  // +k8s:required
-  // +k8s:maxLength=2048 # matches the SandboxConfig asset url's bound
-  string url = 1 [ debug_redact = true ];
-
-  // Lower-case hex SHA256; names the cached file and verifies its integrity.
-  //
-  // +k8s:required
-  // +k8s:maxLength=64
-  // +k8s:customValidation # 64 hex characters
-  string sha256 = 2;
-}
-
-// ArchAssets is the set of assets for a single architecture, keyed by asset
-// name (a wrapper message because proto map values cannot themselves be maps).
-message ArchAssets {
-  // +k8s:required
-  // +k8s:maxProperties=16
-  // +k8s:eachKey=+k8s:maxLength=64
-  map<string, AssetFile> files = 1; // asset name -> file
-}
-
-// SandboxAssets is the generic, backend-agnostic description of the sandbox
-// an actor runs in: a sandbox class, the pause image holding its namespaces,
-// and binaries keyed first by architecture (GOARCH) and then by asset name.
-// atelet's backend code interprets the asset names (gVisor expects "gvisor",
-// the release tarball).
-message SandboxAssets {
-  // +k8s:required
-  // +k8s:maxLength=63 # guardrail; the class names are a few characters
-  // +k8s:customValidation # gvisor or microvm
-  string sandbox_class = 1; // e.g. "gvisor"
-
-  // +k8s:required
-  // +k8s:maxProperties=8 # one entry per architecture
-  // +k8s:eachKey=+k8s:maxLength=16
-  map<string, ArchAssets> assets = 2; // arch -> {name -> file}
-
-  // pause_image is the image for the sandbox's root container. Like the
-  // binaries above it is sandbox configuration, not workload configuration,
-  // and atelet pins it into the snapshot manifest so a restore rebuilds the
-  // sandbox from the same image. Empty for sandboxes without a pause
-  // container (microvm).
-  //
-  // +k8s:optional
-  // +k8s:maxLength=512
-  // +k8s:customValidation # must be a well-formed image reference, pinned by digest
-  string pause_image = 3;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -1137,20 +1070,13 @@ message RestoreRequest {
   // +k8s:minimum=0
   int64 memory_bytes = 15; // Memory limit in bytes.
 
-  // The sandbox binaries and pause image to restore with, resolved from the
-  // assigned worker pool's SandboxConfig.
+  // The runtime the assigned worker restores this actor under, from
+  // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
+  // sandbox binaries through its advertised-runtime index and records the
+  // runtime for the actor so the next Checkpoint pins the snapshot to what ran
+  // this activation, not what the restored snapshot was taken under.
   //
   // +k8s:required
-  SandboxAssets sandbox_assets = 16;
-
-  // The runtime the assigned worker restores this actor under, from
-  // WorkerAssignment.sandbox_runtime.
-  //
-  // TODO: atelet still restores with sandbox_assets; a follow-up resolves the
-  // SandboxConfig version from this field, makes it required, and removes
-  // sandbox_assets.
-  //
-  // +k8s:optional
   SandboxRuntime sandbox_runtime = 17;
 }
 

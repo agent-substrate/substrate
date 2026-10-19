@@ -3136,6 +3136,7 @@ func TestResumeActor(t *testing.T) {
 				WorkerPodUid:    podUID,
 				WorkerPodIps:    []string{"127.0.0.1"},
 				NodeName:        "node1",
+				SandboxRuntime:  defaultWorkerRuntime("gvisor"),
 			},
 		},
 	}
@@ -3175,7 +3176,8 @@ func TestResumeActor(t *testing.T) {
 			Capacity: &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(1000, 512<<20)},
 			// All a listing reports of the assignments: one actor and the
 			// compute its template declares.
-			Allocated: &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(1000, 512<<20)},
+			Allocated:      &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(1000, 512<<20)},
+			DefaultRuntime: defaultWorkerRuntime("gvisor"),
 		},
 	}
 
@@ -3856,6 +3858,7 @@ func TestSuspendActor(t *testing.T) {
 	assertSnapshotPresent(t, tc, taggedSnapshotURI)
 
 	wantTagSnap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, durableSnapshot(sourceActor.GetStatus()).GetFidelity(), "", snapshotName(t, taggedSnapshotURI), taggedSnapshotURI)
+	wantTagSnap.SandboxRuntime = defaultWorkerRuntime("gvisor")
 	wantTag := &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
@@ -3965,6 +3968,7 @@ func TestSuspendActor(t *testing.T) {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	wantActorSnap := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, durableSnapshot(sourceActor.GetStatus()).GetFidelity(), tmpl.GetMetadata().GetUid(), snapshotName(t, snapshotURI), snapshotURI)
+	wantActorSnap.SandboxRuntime = defaultWorkerRuntime("gvisor")
 	want := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
@@ -4280,6 +4284,8 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 			if ls.GetUuid() == "" {
 				t.Error("Snapshot.Uuid is empty, want the name the pause checkpointed under")
 			}
+			wantPausedSnap := newPausedSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), getResp.GetMetadata().GetUid(), ls.GetUuid(), "node1")
+			wantPausedSnap.SandboxRuntime = defaultWorkerRuntime("gvisor")
 			want := &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
@@ -4289,7 +4295,7 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 					LastAssignedGeneration: 2,
 					Snapshots: []*ateapipb.Snapshot{
 						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
-						newPausedSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), getResp.GetMetadata().GetUid(), ls.GetUuid(), "node1"),
+						wantPausedSnap,
 					},
 				},
 			}

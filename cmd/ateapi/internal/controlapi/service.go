@@ -75,8 +75,6 @@ type VolumePluginRegistry interface {
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
-	workerPoolLister listersv1alpha1.WorkerPoolLister,
-	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
 	dialer *AteletDialer,
@@ -102,7 +100,7 @@ func NewRPCService(
 		actorIDJWTPool:        actorIDJWTPool,
 		actorIDCAPool:         actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }

@@ -236,6 +236,14 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 		return false
 	}
 
+	// The assignment records this runtime and atelet requires it on
+	// Run/Restore, so a worker that has not registered one cannot host
+	// anything yet (see ServiceImpl.CreateWorker: "Nothing is placed on it
+	// in the meantime").
+	if worker.GetStatus().GetDefaultRuntime() == nil {
+		return false
+	}
+
 	if len(constraints.RequiredNodes) > 0 && !slices.Contains(constraints.RequiredNodes, worker.GetNodeName()) {
 		return false
 	}

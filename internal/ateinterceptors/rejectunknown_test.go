@@ -22,10 +22,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -127,13 +127,13 @@ func TestFindUnknownFields(t *testing.T) {
 		{
 			name: "unknown field inside a map value message",
 			in: func() proto.Message {
-				return &ateletpb.SandboxAssets{
-					Assets: map[string]*ateletpb.ArchAssets{
-						"amd64": withUnknown(&ateletpb.ArchAssets{}, 9999),
+				return &structpb.Struct{
+					Fields: map[string]*structpb.Value{
+						"amd64": withUnknown(&structpb.Value{}, 9999),
 					},
 				}
 			},
-			want: field.ErrorList{field.Invalid(field.NewPath("assets").Key("amd64"), field.OmitValueType{}, "")},
+			want: field.ErrorList{field.Invalid(field.NewPath("fields").Key("amd64"), field.OmitValueType{}, "")},
 		},
 		{
 			name: "scalar map values cannot carry unknown fields",

@@ -145,31 +145,6 @@ func TestValidateWorkerPodUID(t *testing.T) {
 	}
 }
 
-func TestValidateAssetHash(t *testing.T) {
-	const valid = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-	tests := []struct {
-		name    string
-		hash    string
-		wantErr bool
-	}{
-		{"valid lowercase", valid, false},
-		{"valid uppercase", strings.ToUpper(valid), false},
-		{"empty", "", true},
-		{"too short", "abc123", true},
-		{"too long", valid + "00", true},
-		{"separator", strings.Repeat("a", 60) + "/../", true},
-		{"non-hex", strings.Repeat("g", 64), true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateAssetHash(tt.hash); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateAssetHash(%q) err = %v, wantErr %v", tt.hash, err, tt.wantErr)
-			}
-		})
-	}
-}
-
 func TestValidateSnapshotLocation(t *testing.T) {
 	tests := []struct {
 		name    string

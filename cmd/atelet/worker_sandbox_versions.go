@@ -100,19 +100,6 @@ type workerSandboxResolver struct {
 	configs     listersv1alpha1.SandboxConfigLister
 }
 
-// poolConfigName returns the SandboxConfig the atecontroller confirmed for the
-// class the pool's workers run, or "" if it has not resolved one yet. It never
-// returns pendingConfigRef: that config is not confirmed yet.
-func poolConfigName(pool *v1alpha1.WorkerPool) string {
-	class := pool.Spec.DefaultSandboxClass()
-	for _, c := range pool.Status.SandboxClasses {
-		if c.Name == class && c.ConfigRef != nil {
-			return c.ConfigRef.Name
-		}
-	}
-	return ""
-}
-
 // resolve returns the SandboxConfig of a worker pod on this node. Apart from
 // a pod in no pool, every failure can succeed once an informer catches up or
 // the atecontroller resolves the pool.
@@ -139,7 +126,7 @@ func (r *workerSandboxResolver) pool(pod *corev1.Pod) (*v1alpha1.WorkerPool, err
 
 // config returns the SandboxConfig the workers of pool run.
 func (r *workerSandboxResolver) config(pool *v1alpha1.WorkerPool) (*v1alpha1.SandboxConfig, error) {
-	configName := poolConfigName(pool)
+	configName := pool.ResolvedSandboxConfig()
 	if configName == "" {
 		return nil, fmt.Errorf("%w: WorkerPool %s/%s has not resolved a SandboxConfig for sandbox class %q", errUnresolved, pool.Namespace, pool.Name, pool.Spec.DefaultSandboxClass())
 	}
@@ -201,8 +188,8 @@ func planVersions(cfg *v1alpha1.SandboxConfig) ([]versionPlan, error) {
 }
 
 // recordForArch projects the assets of one version of a SandboxConfig onto
-// this node's architecture, mirroring recordFromRequest. It reports false when
-// the version lists no assets for this architecture.
+// this node's architecture. It reports false when the version lists no assets
+// for this architecture.
 func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConfig) (*sandboxAssetsRecord, bool) {
 	files := ver.Assets[runtime.GOARCH]
 	if len(files) == 0 {

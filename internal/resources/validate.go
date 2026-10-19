@@ -15,7 +15,6 @@
 package resources
 
 import (
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/netip"
@@ -206,20 +205,6 @@ func ValidateSandboxAssetsDir(actorUID, dir string, fldPath *field.Path) field.E
 	}
 	if want := nodepath.ActorSandboxAssetsDir(actorUID); dir != want {
 		return field.ErrorList{field.Invalid(fldPath, dir, fmt.Sprintf("must be the actor's own sandbox assets dir %s", want))}
-	}
-	return nil
-}
-
-// ValidateAssetHash ensures a sandbox asset's SHA-256 hash is exactly 64 hex
-// characters before it becomes the asset's cache key, so a malformed hash is
-// rejected as the request's fault rather than failing deep inside the cache.
-func ValidateAssetHash(sha256Hash string) error {
-	if len(sha256Hash) != 64 {
-		return fmt.Errorf("invalid asset sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
-	}
-	// Same decoder atelet's digest comparison uses.
-	if _, err := hex.DecodeString(sha256Hash); err != nil {
-		return fmt.Errorf("invalid asset sha256 hash %q: must be hex", sha256Hash)
 	}
 	return nil
 }

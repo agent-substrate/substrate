@@ -166,7 +166,11 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		WorkerPodUid:    testWorkerUID("stale-pod"),
 		NodeName:        "node1",
 		SandboxClass:    "microvm",
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+		Status: &ateapipb.WorkerStatus{
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:       &ateapipb.WorkerResources{Actors: 1},
+			DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "microvm", Version: testSandboxRuntime().GetVersion()},
+		},
 	}
 	free := &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("free-pod")},
@@ -177,7 +181,11 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		NodeName:        "node2",
 		SandboxClass:    "gvisor",
 		Labels:          map[string]string{"pool": "b"},
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+		Status: &ateapipb.WorkerStatus{
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:       &ateapipb.WorkerResources{Actors: 1},
+			DefaultRuntime: testSandboxRuntime(),
+		},
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {
 		if _, err := persistence.CreateWorker(ctx, w); err != nil {

@@ -224,8 +224,8 @@ message RunWorkloadRequest {
   // the gVisor runtime, which uses runsc_path.
   //
   // +k8s:optional
-  // +k8s:maxProperties=16 # matches atelet.ArchAssets.files
-  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet.ArchAssets.files
+  // +k8s:maxProperties=16
+  // +k8s:eachKey=+k8s:maxLength=64
   // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 8;
 
@@ -506,8 +506,8 @@ message RestoreWorkloadRequest {
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   //
   // +k8s:optional
-  // +k8s:maxProperties=16 # matches atelet.ArchAssets.files
-  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet.ArchAssets.files
+  // +k8s:maxProperties=16
+  // +k8s:eachKey=+k8s:maxLength=64
   // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 9;
 
