@@ -39,16 +39,42 @@ def control_plane_config(test: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def validate(test: dict[str, Any]) -> None:
+    """Validate required locust entry fields (file, duration, users) and
+    normalize optional cpuCores and cpuDutyCycle keys into runner flags."""
     name = test.get("name")
     for field in ("file", "duration", "users"):
         if field not in test:
             raise ValueError(f"locust test {name!r} missing {field!r}")
-    if "controlPlane" not in test:
-        return
-    try:
-        controlplane.validate(test["controlPlane"])
-    except ValueError as e:
-        raise ValueError(f"locust test {name!r}: {e}") from None
+    if "controlPlane" in test:
+        try:
+            controlplane.validate(test["controlPlane"])
+        except ValueError as e:
+            raise ValueError(f"locust test {name!r}: {e}") from None
+
+    flags = list(test.get("flags", []))
+    cpu_cores = test.get("cpuCores")
+    if cpu_cores is not None:
+        if isinstance(cpu_cores, bool) or not isinstance(cpu_cores, int) or cpu_cores < 0:
+            raise ValueError(
+                f"test {name!r}: 'cpuCores' must be a non-negative integer, got {cpu_cores!r}"
+            )
+        flags.extend(["--cpu-cores", str(cpu_cores)])
+
+    cpu_duty_cycle = test.get("cpuDutyCycle")
+    if cpu_duty_cycle is not None:
+        if (
+            isinstance(cpu_duty_cycle, bool)
+            or not isinstance(cpu_duty_cycle, (int, float))
+            or cpu_duty_cycle < 0.0
+            or cpu_duty_cycle > 1.0
+        ):
+            raise ValueError(
+                f"test {name!r}: 'cpuDutyCycle' must be a float in [0.0, 1.0], got {cpu_duty_cycle!r}"
+            )
+        flags.extend(["--cpu-duty-cycle", str(float(cpu_duty_cycle))])
+
+    if cpu_cores is not None or cpu_duty_cycle is not None:
+        test["flags"] = flags
 
 
 def build_image(commit: str) -> str:
