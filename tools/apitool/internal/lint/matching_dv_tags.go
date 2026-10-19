@@ -17,6 +17,7 @@ package lint
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 
@@ -24,8 +25,8 @@ import (
 )
 
 // matchesDVPrefix starts the note of a tag that copies another field's tag.
-// The full name of that field follows it, then optionally a comma or space
-// and free text. For example,
+// A space and the full name of that field follow it, then optionally a comma
+// or space and free text. For example,
 // `+k8s:maxItems=32 # matches substrate.ateapi.v1.ActorTemplate.volumes`.
 const matchesDVPrefix = "matches"
 
@@ -50,15 +51,25 @@ func checkMatchingDVTags(api *model.API) ([]Finding, error) {
 				return nil, fmt.Errorf("%s: %w", subject, err)
 			}
 			for _, tag := range tags {
-				// Only process a note that is "matches" or starts with "matches ".
-				rest, ok := strings.CutPrefix(tag.Note, matchesDVPrefix)
-				if !ok || rest != "" && rest[0] != ' ' {
+				// Only process a note whose first word is "matches", in any
+				// case, so a misspelled one is reported, not skipped.
+				rest := strings.TrimLeftFunc(tag.Note, unicode.IsLetter)
+				gotDVPrefix := tag.Note[:len(tag.Note)-len(rest)]
+				// Check if gotDVPrefix is matches/Matches
+				if !strings.EqualFold(gotDVPrefix, matchesDVPrefix) {
 					continue
 				}
-				// The reference is the next word, minus a trailing comma.
-				// A bare "matches" leaves it empty, which lookupField rejects.
+
+				if gotDVPrefix != matchesDVPrefix || rest != "" && rest[0] != ' ' {
+					findings = append(findings, findingf(subject, "+k8s:%s note %q must start with %q", tag.Name, tag.Note, matchesDVPrefix+" "))
+					continue
+				}
+				// The reference ends at the first space or comma, minus a
+				// trailing period. A bare "matches" leaves it empty, which
+				// lookupField rejects.
 				ref, _, _ := strings.Cut(strings.TrimSpace(rest), " ")
-				ref = strings.TrimSuffix(ref, ",")
+				ref, _, _ = strings.Cut(ref, ",")
+				ref = strings.TrimSuffix(ref, ".")
 				if protoreflect.FullName(ref) == subject {
 					findings = append(findings, findingf(subject, "+k8s:%s matches its own field", tag.Name))
 					continue
