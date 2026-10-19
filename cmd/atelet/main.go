@@ -38,6 +38,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/credentialprovider"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
+	"go.ate.dev/substrate/cmd/atelet/internal/filecachegc"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
 	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
@@ -270,17 +271,16 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open sandbox asset cache", err)
 	}
-	if err := validateSandboxAssetCacheGCFlags(); err != nil {
+	if err := sandboxAssetCacheGCFlags.Validate(); err != nil {
 		serverboot.Fatal(ctx, "Invalid sandbox asset cache GC flags", err)
 	}
-	sandboxAssetCacheInstruments, err := newSandboxAssetCacheInstruments(otel.Meter("atelet"), sandboxAssetCache)
+	// One set of instruments for every file cache on the node, by name.
+	fileCacheInstruments, err := filecachegc.NewInstruments(otel.Meter("atelet"))
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create sandbox asset cache metrics", err)
+		serverboot.Fatal(ctx, "Failed to create file cache metrics", err)
 	}
-	if *sandboxAssetCacheMaxBytes == 0 {
-		slog.WarnContext(ctx, "Sandbox asset cache has no budget; it only grows", slog.String("flag", "--sandbox-asset-cache-max-bytes"))
-	} else if *sandboxAssetCacheGCPeriod > 0 {
-		go newSandboxAssetCacheGC(sandboxAssetCache, sandboxAssetCacheInstruments).Run(ctx)
+	if err := filecachegc.Start(ctx, ateattr.FileCacheSandboxAsset, sandboxAssetCache, sandboxAssetCacheGCFlags, fileCacheInstruments); err != nil {
+		serverboot.Fatal(ctx, "Failed to start the sandbox asset cache GC", err)
 	}
 
 	// Sandbox assets go through the object-store plugin; a gs:// asset it

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package filecachegc
 
 import (
 	"context"
@@ -27,7 +27,9 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 )
 
-func TestSandboxAssetCacheGCTarget(t *testing.T) {
+const testCache = "test_cache"
+
+func TestTarget(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		total, maxBytes int64
@@ -40,39 +42,38 @@ func TestSandboxAssetCacheGCTarget(t *testing.T) {
 		{"far over budget frees down to the low water", 10_000, 1000, 9100},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sandboxAssetCacheGCTarget(tc.total, tc.maxBytes); got != tc.want {
-				t.Errorf("sandboxAssetCacheGCTarget(%d, %d) = %d, want %d", tc.total, tc.maxBytes, got, tc.want)
+			if got := Target(tc.total, tc.maxBytes); got != tc.want {
+				t.Errorf("Target(%d, %d) = %d, want %d", tc.total, tc.maxBytes, got, tc.want)
 			}
 		})
 	}
 }
 
-func TestValidateSandboxAssetCacheGCFlags(t *testing.T) {
-	origPeriod, origMax := *sandboxAssetCacheGCPeriod, *sandboxAssetCacheMaxBytes
-	t.Cleanup(func() { *sandboxAssetCacheGCPeriod, *sandboxAssetCacheMaxBytes = origPeriod, origMax })
+func TestFlagsValidate(t *testing.T) {
+	f := NewFlags("test-cache", "test cache")
 	for _, tc := range []struct {
 		name     string
 		period   time.Duration
 		maxBytes int64
 		wantErr  bool
 	}{
-		{"defaults", origPeriod, origMax, false},
+		{"defaults", *f.Period, *f.MaxBytes, false},
 		{"disabled period", 0, 1 << 30, false},
 		{"negative period", -time.Second, 1 << 30, true},
 		{"negative budget", time.Minute, -1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			*sandboxAssetCacheGCPeriod, *sandboxAssetCacheMaxBytes = tc.period, tc.maxBytes
-			if err := validateSandboxAssetCacheGCFlags(); (err != nil) != tc.wantErr {
-				t.Errorf("validateSandboxAssetCacheGCFlags() = %v, wantErr %v", err, tc.wantErr)
+			*f.Period, *f.MaxBytes = tc.period, tc.maxBytes
+			if err := f.Validate(); (err != nil) != tc.wantErr {
+				t.Errorf("Validate() = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
 	}
 }
 
-// fakeAssetGCStore stands in for the cache: a size to report and a canned
-// eviction result.
-type fakeAssetGCStore struct {
+// fakeStore stands in for the cache: a size to report and a canned eviction
+// result.
+type fakeStore struct {
 	size         int64
 	sizeErr      error
 	sizeCalls    int
@@ -84,12 +85,12 @@ type fakeAssetGCStore struct {
 	panicOnEvict bool
 }
 
-func (f *fakeAssetGCStore) TotalBytes(context.Context) (int64, error) {
+func (f *fakeStore) TotalBytes(context.Context) (int64, error) {
 	f.sizeCalls++
 	return f.size, f.sizeErr
 }
 
-func (f *fakeAssetGCStore) EvictUnused(_ context.Context, target int64, dryRun bool) (filecache.EvictStats, error) {
+func (f *fakeStore) EvictUnused(_ context.Context, target int64, dryRun bool) (filecache.EvictStats, error) {
 	f.evictCalls++
 	f.gotTarget = target
 	f.gotDryRun = dryRun
@@ -99,17 +100,20 @@ func (f *fakeAssetGCStore) EvictUnused(_ context.Context, target int64, dryRun b
 	return f.stats, f.evictErr
 }
 
-// newTestAssetCacheGC returns a loop over fake with instruments on a manual
-// reader, so a test can assert what a pass recorded.
-func newTestAssetCacheGC(t *testing.T, fake *fakeAssetGCStore, maxBytes int64) (*sandboxAssetCacheGC, *sdkmetric.ManualReader) {
+// newTestGC returns a loop over fake with instruments on a manual reader, so
+// a test can assert what a pass recorded.
+func newTestGC(t *testing.T, fake *fakeStore, maxBytes int64) (*GC, *sdkmetric.ManualReader) {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	inst, err := newSandboxAssetCacheInstruments(mp.Meter("atelet"), fake)
+	inst, err := NewInstruments(mp.Meter("atelet"))
 	if err != nil {
-		t.Fatalf("newSandboxAssetCacheInstruments: %v", err)
+		t.Fatalf("NewInstruments: %v", err)
 	}
-	return &sandboxAssetCacheGC{store: fake, instruments: inst, maxBytes: maxBytes, period: time.Hour}, reader
+	if err := inst.Observe(testCache, fake); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	return &GC{name: testCache, store: fake, instruments: inst, maxBytes: maxBytes, period: time.Hour}, reader
 }
 
 // collectMetric returns the named metric from one collection, or nil if it
@@ -130,7 +134,8 @@ func collectMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) *m
 	return nil
 }
 
-// sumByOutcome returns a counter's data points keyed by the GC outcome.
+// sumByOutcome returns a counter's data points keyed by the GC outcome,
+// checking that every point carries the cache's name.
 func sumByOutcome(t *testing.T, m *metricdata.Metrics) map[string]int64 {
 	t.Helper()
 	sum, ok := m.Data.(metricdata.Sum[int64])
@@ -139,7 +144,10 @@ func sumByOutcome(t *testing.T, m *metricdata.Metrics) map[string]int64 {
 	}
 	out := map[string]int64{}
 	for _, dp := range sum.DataPoints {
-		v, ok := dp.Attributes.Value(ateattr.SandboxAssetCacheGCOutcomeKey)
+		if name, ok := dp.Attributes.Value(ateattr.FileCacheNameKey); !ok || name.AsString() != testCache {
+			t.Fatalf("%s datapoint without the cache's name: %v", m.Name, dp.Attributes.ToSlice())
+		}
+		v, ok := dp.Attributes.Value(ateattr.FileCacheGCOutcomeKey)
 		if !ok {
 			t.Fatalf("%s datapoint without an outcome: %v", m.Name, dp.Attributes.ToSlice())
 		}
@@ -148,95 +156,99 @@ func sumByOutcome(t *testing.T, m *metricdata.Metrics) map[string]int64 {
 	return out
 }
 
-func TestSandboxAssetCacheGCPassWithinBudgetDoesNothing(t *testing.T) {
-	fake := &fakeAssetGCStore{size: 500}
-	g, reader := newTestAssetCacheGC(t, fake, 1000)
+func TestPassWithinBudgetDoesNothing(t *testing.T) {
+	fake := &fakeStore{size: 500}
+	g, reader := newTestGC(t, fake, 1000)
 	g.runPass(context.Background())
 	if fake.evictCalls != 0 {
 		t.Errorf("evictCalls = %d, want 0 within budget", fake.evictCalls)
 	}
-	if m := collectMetric(t, reader, sandboxAssetCacheGCPassesMetric); m != nil {
+	if m := collectMetric(t, reader, GCPassesMetric); m != nil {
 		t.Errorf("a quiet pass recorded %v, want nothing", m)
 	}
 }
 
-func TestSandboxAssetCacheGCPassSkipsWhenSizingFails(t *testing.T) {
-	fake := &fakeAssetGCStore{sizeErr: errors.New("unreadable")}
-	g, reader := newTestAssetCacheGC(t, fake, 1000)
+func TestPassSkipsWhenSizingFails(t *testing.T) {
+	fake := &fakeStore{sizeErr: errors.New("unreadable")}
+	g, reader := newTestGC(t, fake, 1000)
 	g.runPass(context.Background())
 	if fake.evictCalls != 0 {
 		t.Errorf("evictCalls = %d, want 0 when the cache cannot be sized", fake.evictCalls)
 	}
 	fake.sizeErr = nil // so the size callback does not fail the collection
-	m := collectMetric(t, reader, sandboxAssetCacheGCPassesMetric)
+	m := collectMetric(t, reader, GCPassesMetric)
 	if m == nil {
 		t.Fatal("skipped pass not recorded")
 	}
-	if got := sumByOutcome(t, m); got[ateattr.SandboxAssetCacheGCOutcomeSkipped] != 1 || len(got) != 1 {
+	if got := sumByOutcome(t, m); got[ateattr.FileCacheGCOutcomeSkipped] != 1 || len(got) != 1 {
 		t.Errorf("passes by outcome = %v, want one skipped", got)
 	}
 }
 
-func TestSandboxAssetCacheGCPassEvictsDownToTheLowWater(t *testing.T) {
-	fake := &fakeAssetGCStore{size: 1500, stats: filecache.EvictStats{Retired: 3, FreedBytes: 600}}
-	g, reader := newTestAssetCacheGC(t, fake, 1000)
+func TestPassEvictsDownToTheLowWater(t *testing.T) {
+	fake := &fakeStore{size: 1500, stats: filecache.EvictStats{Retired: 3, FreedBytes: 600}}
+	g, reader := newTestGC(t, fake, 1000)
 	g.runPass(context.Background())
 	if fake.evictCalls != 1 || fake.gotTarget != 600 || fake.gotDryRun {
 		t.Errorf("evict call: calls=%d target=%d dryRun=%v, want 1/600/false", fake.evictCalls, fake.gotTarget, fake.gotDryRun)
 	}
-	passes := collectMetric(t, reader, sandboxAssetCacheGCPassesMetric)
+	passes := collectMetric(t, reader, GCPassesMetric)
 	if passes == nil {
 		t.Fatal("pass not recorded")
 	}
-	if got := sumByOutcome(t, passes); got[ateattr.SandboxAssetCacheGCOutcomeComplete] != 1 || len(got) != 1 {
+	if got := sumByOutcome(t, passes); got[ateattr.FileCacheGCOutcomeComplete] != 1 || len(got) != 1 {
 		t.Errorf("passes by outcome = %v, want one complete", got)
 	}
-	evictions := collectMetric(t, reader, sandboxAssetCacheEvictionsMetric)
+	evictions := collectMetric(t, reader, EvictionsMetric)
 	if evictions == nil {
 		t.Fatal("evictions not recorded")
 	}
-	if sum, ok := evictions.Data.(metricdata.Sum[int64]); !ok || len(sum.DataPoints) != 1 || sum.DataPoints[0].Value != 3 || sum.DataPoints[0].Attributes.Len() != 0 {
-		t.Errorf("evictions = %+v, want a single unlabeled datapoint of 3", evictions.Data)
+	sum, ok := evictions.Data.(metricdata.Sum[int64])
+	if !ok || len(sum.DataPoints) != 1 || sum.DataPoints[0].Value != 3 {
+		t.Fatalf("evictions = %+v, want a single datapoint of 3", evictions.Data)
+	}
+	if name, ok := sum.DataPoints[0].Attributes.Value(ateattr.FileCacheNameKey); !ok || name.AsString() != testCache || sum.DataPoints[0].Attributes.Len() != 1 {
+		t.Errorf("evictions labels = %v, want the cache's name only", sum.DataPoints[0].Attributes.ToSlice())
 	}
 	if evictions.Unit != "{entry}" || passes.Unit != "{pass}" {
 		t.Errorf("units = %q / %q, want {entry} / {pass}", evictions.Unit, passes.Unit)
 	}
 }
 
-// TestSandboxAssetCacheGCDryRunCountsNoEvictions pins the dry run's metrics:
-// the pass is recorded with its outcome, since it ran and decided, but the
-// entries it would have taken are not evictions, because none was removed.
-func TestSandboxAssetCacheGCDryRunCountsNoEvictions(t *testing.T) {
-	fake := &fakeAssetGCStore{size: 1500, stats: filecache.EvictStats{Retired: 3, FreedBytes: 600}}
-	g, reader := newTestAssetCacheGC(t, fake, 1000)
+// TestDryRunCountsNoEvictions pins the dry run's metrics: the pass is
+// recorded with its outcome, since it ran and decided, but the entries it
+// would have taken are not evictions, because none was removed.
+func TestDryRunCountsNoEvictions(t *testing.T) {
+	fake := &fakeStore{size: 1500, stats: filecache.EvictStats{Retired: 3, FreedBytes: 600}}
+	g, reader := newTestGC(t, fake, 1000)
 	g.dryRun = true
 	g.runPass(context.Background())
 	if fake.evictCalls != 1 || !fake.gotDryRun {
 		t.Errorf("evict call: calls=%d dryRun=%v, want 1/true", fake.evictCalls, fake.gotDryRun)
 	}
-	passes := collectMetric(t, reader, sandboxAssetCacheGCPassesMetric)
+	passes := collectMetric(t, reader, GCPassesMetric)
 	if passes == nil {
 		t.Fatal("pass not recorded")
 	}
-	if got := sumByOutcome(t, passes); got[ateattr.SandboxAssetCacheGCOutcomeComplete] != 1 || len(got) != 1 {
+	if got := sumByOutcome(t, passes); got[ateattr.FileCacheGCOutcomeComplete] != 1 || len(got) != 1 {
 		t.Errorf("passes by outcome = %v, want one complete", got)
 	}
-	if evictions := collectMetric(t, reader, sandboxAssetCacheEvictionsMetric); evictions != nil {
+	if evictions := collectMetric(t, reader, EvictionsMetric); evictions != nil {
 		t.Errorf("evictions = %+v after a dry run, want none recorded", evictions.Data)
 	}
 }
 
-func TestSandboxAssetCacheGCPassShortfall(t *testing.T) {
+func TestPassShortfall(t *testing.T) {
 	// Everything left is linked: the pass frees less than asked.
-	fake := &fakeAssetGCStore{size: 1500, stats: filecache.EvictStats{Retired: 1, FreedBytes: 100, SkippedLinked: 4}}
-	g, reader := newTestAssetCacheGC(t, fake, 1000)
+	fake := &fakeStore{size: 1500, stats: filecache.EvictStats{Retired: 1, FreedBytes: 100, SkippedLinked: 4}}
+	g, reader := newTestGC(t, fake, 1000)
 	for range 3 {
 		g.runPass(context.Background())
 	}
 	if g.consecutiveShortfalls != 3 {
 		t.Errorf("consecutiveShortfalls = %d, want 3", g.consecutiveShortfalls)
 	}
-	if got := sumByOutcome(t, collectMetric(t, reader, sandboxAssetCacheGCPassesMetric)); got[ateattr.SandboxAssetCacheGCOutcomeShortfall] != 3 {
+	if got := sumByOutcome(t, collectMetric(t, reader, GCPassesMetric)); got[ateattr.FileCacheGCOutcomeShortfall] != 3 {
 		t.Errorf("passes by outcome = %v, want three shortfalls", got)
 	}
 	// A pass that meets the budget resets the streak.
@@ -247,30 +259,61 @@ func TestSandboxAssetCacheGCPassShortfall(t *testing.T) {
 	}
 }
 
-func TestSandboxAssetCacheSizeIsObserved(t *testing.T) {
-	fake := &fakeAssetGCStore{size: 4096}
-	_, reader := newTestAssetCacheGC(t, fake, 0)
-	m := collectMetric(t, reader, sandboxAssetCacheSizeMetric)
+// TestSizeIsObservedPerCache pins the size instrument: one series per cache
+// name, read from each store on collection.
+func TestSizeIsObservedPerCache(t *testing.T) {
+	fake := &fakeStore{size: 4096}
+	_, reader := newTestGC(t, fake, 0)
+	m := collectMetric(t, reader, SizeMetric)
 	if m == nil {
 		t.Fatal("size not observed")
 	}
 	sum, ok := m.Data.(metricdata.Sum[int64])
 	if !ok || sum.IsMonotonic || len(sum.DataPoints) != 1 || sum.DataPoints[0].Value != 4096 {
-		t.Errorf("size = %+v, want a non-monotonic int64 sum of 4096", m.Data)
+		t.Fatalf("size = %+v, want a non-monotonic int64 sum of 4096", m.Data)
 	}
 	if m.Unit != "By" {
 		t.Errorf("size unit = %q, want By", m.Unit)
 	}
-	if sum.DataPoints[0].Attributes.Len() != 0 {
-		t.Errorf("size carries labels %v, want none", sum.DataPoints[0].Attributes.ToSlice())
+	if name, ok := sum.DataPoints[0].Attributes.Value(ateattr.FileCacheNameKey); !ok || name.AsString() != testCache || sum.DataPoints[0].Attributes.Len() != 1 {
+		t.Errorf("size labels = %v, want the cache's name only", sum.DataPoints[0].Attributes.ToSlice())
 	}
 }
 
-func TestSandboxAssetCacheGCRunFirstPassIsImmediate(t *testing.T) {
+// TestTwoCachesShareTheInstruments pins that a second cache on the same
+// instruments gets its own series under its own name.
+func TestTwoCachesShareTheInstruments(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	inst, err := NewInstruments(mp.Meter("atelet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := &fakeStore{size: 1}, &fakeStore{size: 2}
+	for name, store := range map[string]*fakeStore{"a": a, "b": b} {
+		if err := inst.Observe(name, store); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := collectMetric(t, reader, SizeMetric)
+	if m == nil {
+		t.Fatal("size not observed")
+	}
+	got := map[string]int64{}
+	for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+		name, _ := dp.Attributes.Value(ateattr.FileCacheNameKey)
+		got[name.AsString()] = dp.Value
+	}
+	if got["a"] != 1 || got["b"] != 2 || len(got) != 2 {
+		t.Errorf("size by cache = %v, want a=1 b=2", got)
+	}
+}
+
+func TestRunFirstPassIsImmediate(t *testing.T) {
 	// A cancelled context and an hour-long period: the single call can
 	// only be the immediate first pass, never a tick.
-	fake := &fakeAssetGCStore{size: 1500}
-	g, _ := newTestAssetCacheGC(t, fake, 1000)
+	fake := &fakeStore{size: 1500}
+	g, _ := newTestGC(t, fake, 1000)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	g.Run(ctx)
@@ -279,9 +322,9 @@ func TestSandboxAssetCacheGCRunFirstPassIsImmediate(t *testing.T) {
 	}
 }
 
-func TestSandboxAssetCacheGCRunTicks(t *testing.T) {
-	fake := &fakeAssetGCStore{size: 1500}
-	g, _ := newTestAssetCacheGC(t, fake, 1000)
+func TestRunTicks(t *testing.T) {
+	fake := &fakeStore{size: 1500}
+	g, _ := newTestGC(t, fake, 1000)
 	g.period = 10 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
@@ -291,7 +334,7 @@ func TestSandboxAssetCacheGCRunTicks(t *testing.T) {
 	}
 }
 
-func TestSandboxAssetCacheGCPassRecoversPanic(t *testing.T) {
-	g, _ := newTestAssetCacheGC(t, &fakeAssetGCStore{size: 1500, panicOnEvict: true}, 1000)
+func TestPassRecoversPanic(t *testing.T) {
+	g, _ := newTestGC(t, &fakeStore{size: 1500, panicOnEvict: true}, 1000)
 	g.runPass(context.Background()) // must not propagate the panic
 }
