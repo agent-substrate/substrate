@@ -1600,6 +1600,19 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	return &ateletpb.RestoreResponse{}, nil
 }
 
+// DetachActor makes the actor's latest local snapshot durable, then deletes the
+// actor's local snapshots on this node.
+func (s *Atelet) DetachActor(ctx context.Context, req *ateletpb.DetachActorRequest) (*ateletpb.DetachActorResponse, error) {
+	if errs := apivalidation.ValidateDetachActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
+	}
+	state, err := s.snapshots.Detach(ctx, req.GetActorUid())
+	if err != nil {
+		return nil, err
+	}
+	return &ateletpb.DetachActorResponse{State: state}, nil
+}
+
 // Terminate terminates any running workload on worker, unmounts external volumes,
 // and resets actor directories on the node.
 func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {

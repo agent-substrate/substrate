@@ -1595,6 +1595,75 @@ func TestRestoreAfterDetachReadsUpload(t *testing.T) {
 	}
 }
 
+func detachActorRequest() *ateletpb.DetachActorRequest {
+	return &ateletpb.DetachActorRequest{Atespace: "ate-demo", ActorName: "counter", ActorUid: pluginActorUID}
+}
+
+// TestDetachActorDetachesPausedActor detaches a paused actor through the RPC:
+// atelet uploads its local snapshot, deletes the local copy, and returns the
+// new state.
+func TestDetachActorDetachesPausedActor(t *testing.T) {
+	a := runPluginActor(t)
+	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+	if _, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint (pause): %v", err)
+	}
+	localDir := ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1")
+	if _, err := os.Stat(localDir); err != nil {
+		t.Fatalf("local snapshot dir after the pause: %v", err)
+	}
+	resp, err := a.s.DetachActor(t.Context(), detachActorRequest())
+	if err != nil {
+		t.Fatalf("DetachActor: %v", err)
+	}
+	if st := resp.GetState(); st.GetLatestLocal() != nil || st.GetLatestDurable().GetSnapshot().GetSnapshotUuid() != "pause-snap-1" {
+		t.Errorf("state = %v, want pause-snap-1 durable and nothing local", st)
+	}
+	if _, err := os.Stat(localDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("local snapshot dir after DetachActor: stat err = %v, want not exist", err)
+	}
+}
+
+// TestDetachActorWithoutLocalSnapshot detaches an actor atelet holds no local
+// snapshot for: DetachActor does nothing and returns an empty state.
+func TestDetachActorWithoutLocalSnapshot(t *testing.T) {
+	a := runPluginActor(t)
+	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+	resp, err := a.s.DetachActor(t.Context(), detachActorRequest())
+	if err != nil {
+		t.Fatalf("DetachActor: %v", err)
+	}
+	if !proto.Equal(resp.GetState(), &ateletpb.ActorSnapshotState{}) {
+		t.Errorf("state = %v, want empty", resp.GetState())
+	}
+}
+
+// TestDetachActorRejectsRestoredActor detaches an actor restored from its
+// local snapshot: DetachActor fails with Aborted.
+func TestDetachActorRejectsRestoredActor(t *testing.T) {
+	a := runPluginActor(t)
+	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+	if _, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint (pause): %v", err)
+	}
+	a.restoreLocal(t, "pause-snap-1", 1)
+	if _, err := a.s.DetachActor(t.Context(), detachActorRequest()); apierror.Code(err) != codes.Aborted {
+		t.Errorf("DetachActor of the restored actor = %v, want Aborted", err)
+	}
+}
+
+// TestDetachActorValidatesRequest sends a DetachActor request without an
+// actor UID: atelet rejects it with InvalidArgument.
+func TestDetachActorValidatesRequest(t *testing.T) {
+	a := runPluginActor(t)
+	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+	req := detachActorRequest()
+	req.ActorUid = ""
+	if _, err := a.s.DetachActor(t.Context(), req); apierror.Code(err) != codes.InvalidArgument {
+		t.Errorf("DetachActor without actor_uid = %v, want InvalidArgument", err)
+	}
+}
+
 // TestInvalidRunKeepsDetachScheduled runs an actor with a request that
 // names no sandbox runtime: Run fails before it begins the start, so the
 // actor's detach stays scheduled.
