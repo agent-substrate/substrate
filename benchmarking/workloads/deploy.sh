@@ -82,7 +82,12 @@ ATE_ENV_IMAGE="${ATE_ENV_IMAGE:-us-docker.pkg.dev/gke-substrate-release/benchmar
 OTLP_ENDPOINT=""
 # The timeout, in whole seconds, for waiting for the worker pods to be
 # ready.
-WAIT_TIMEOUT_SECS=300
+if [[ -z "${WAIT_TIMEOUT_SECS:-}" ]]; then
+  case "${ATE_INSTALL_CLUSTER_SIZE:-}" in
+    size10|size100) WAIT_TIMEOUT_SECS=900 ;;
+    *)              WAIT_TIMEOUT_SECS=300 ;;
+  esac
+fi
 # fake-atelet's tuning on the fake data plane, as FAKE_ATELET_<FLAG>=VALUE
 # entries for the fake-atelet-tuning ConfigMap; --fake-atelet-env adds one.
 FAKE_ATELET_ENV=()
@@ -127,8 +132,13 @@ resolve_otlp_endpoint() {
   if [[ -n "${OTLP_ENDPOINT}" ]]; then
     return 0
   fi
-  OTLP_ENDPOINT="$(kubectl get configmap ate-otel-config --namespace=ate-system \
-    -o jsonpath='{.data.OTEL_EXPORTER_OTLP_ENDPOINT}' 2>/dev/null || true)"
+  for _retry in 1 2 3 4 5; do
+    OTLP_ENDPOINT="$(kubectl get configmap ate-otel-config --namespace=ate-system \
+      --request-timeout=60s \
+      -o jsonpath='{.data.OTEL_EXPORTER_OTLP_ENDPOINT}' 2>/dev/null || true)"
+    [[ -n "${OTLP_ENDPOINT}" ]] && break
+    sleep 5
+  done
   if [[ -z "${OTLP_ENDPOINT}" ]]; then
     echo "Error: cannot read OTEL_EXPORTER_OTLP_ENDPOINT from the ate-otel-config" >&2
     echo "ConfigMap in ate-system. Deploy ate-system first, or give --otlp-endpoint." >&2
@@ -194,17 +204,22 @@ substitute() {
   if [[ -n "${WORKER_MEMORY}" ]]; then
     worker_resources="resources: {requests: {memory: \"${WORKER_MEMORY}\"}, limits: {memory: \"${WORKER_MEMORY}\"}}"
   fi
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-      -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
-      -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
-      -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
-      -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
-      -e "s|\${ACTOR_MEMORY_BYTES}|${ACTOR_MEMORY_BYTES}|g" \
-      -e "s|\${ACTOR_CPU_MILLICORES}|${ACTOR_CPU_MILLICORES}|g" \
-      -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
-      -e "s|\${ATE_ENV_IMAGE}|${ATE_ENV_IMAGE:-}|g" \
-      -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
-      "${manifest}"
+  local content
+  content="$(<"${manifest}")"
+  # Disable bash 5.2+ patsub_replacement so '&' in replacement values is literal,
+  # and use pure bash substitution so values containing pipes work cleanly across BSD/GNU userlands.
+  shopt -u patsub_replacement 2>/dev/null || true
+  content="${content//\$\{BUCKET_NAME\}/${BUCKET_NAME}}"
+  content="${content//\$\{WORKER_COUNT\}/${WORKER_COUNT}}"
+  content="${content//\$\{SANDBOX_CLASS\}/${SANDBOX_CLASS}}"
+  content="${content//\$\{OTLP_ENDPOINT\}/${OTLP_ENDPOINT}}"
+  content="${content//\$\{ACTOR_MEMORY\}/${ACTOR_MEMORY}}"
+  content="${content//\$\{ACTOR_MEMORY_BYTES\}/${ACTOR_MEMORY_BYTES}}"
+  content="${content//\$\{ACTOR_CPU_MILLICORES\}/${ACTOR_CPU_MILLICORES}}"
+  content="${content//\$\{WORKER_RESOURCES\}/${worker_resources}}"
+  content="${content//\$\{ATE_ENV_IMAGE\}/${ATE_ENV_IMAGE:-}}"
+  content="${content//\$\{STORAGE_CLASS_NAME\}/${STORAGE_CLASS_NAME}}"
+  printf '%s\n' "${content}"
 }
 
 # wait_actortemplate_ready polls a substrate ActorTemplate resource until its
@@ -340,13 +355,23 @@ deploy() {
   # automation deletes the actors between the tests; it also removes the old
   # golden actor and snapshot server-side.
   for template in "${TEMPLATES[@]}"; do
-    run_kubectl_ate delete actor-template "${template}" -a benchmark-workloads \
-      >/dev/null 2>&1 || true
-    # ko resolve builds the ko:// image references and replaces them with
-    # pushed digests before the manifest reaches kubectl-ate.
-    substitute "$(template_manifest "${template}")" \
-      | hack/run-tool.sh ko resolve -f - \
-      | run_kubectl_ate create actor-template -f -
+    for _tmpl_try in 1 2 3; do
+      run_kubectl_ate delete actor-template "${template}" -a benchmark-workloads \
+        >/dev/null 2>&1 || true
+      # ko resolve builds the ko:// image references and replaces them with
+      # pushed digests before the manifest reaches kubectl-ate.
+      if substitute "$(template_manifest "${template}")" \
+        | hack/run-tool.sh ko resolve -f - \
+        | run_kubectl_ate create actor-template -f -; then
+        break
+      fi
+      if [[ "${_tmpl_try}" -eq 3 ]]; then
+        echo "Failed to create actor-template ${template} after 3 attempts" >&2
+        exit 1
+      fi
+      echo "[WARN] create actor-template ${template} attempt ${_tmpl_try} failed; retrying in 15s..." >&2
+      sleep 15
+    done
   done
 
   wait_templates_ready
