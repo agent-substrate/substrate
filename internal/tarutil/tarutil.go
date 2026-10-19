@@ -146,11 +146,10 @@ func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeR
 	if err := bw.Flush(); err != nil {
 		return fmt.Errorf("flushing tar %q: %w", tarPath, err)
 	}
-	// Durable-dir tars are handed to atelet for upload as soon as we return, so
-	// flush to disk rather than trusting the page cache to outlive us.
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("syncing tar %q: %w", tarPath, err)
-	}
+	// No fsync: local-only snapshots aren't guaranteed to survive a node
+	// restart, and restore falls back to object storage if the local
+	// checkpoint is missing (#2658). fsync here also waits behind other
+	// actors' writes in the shared ext4 journal. See #1954.
 	return nil
 }
 
