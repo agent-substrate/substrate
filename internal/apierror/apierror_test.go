@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"testing"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -35,6 +36,7 @@ func TestConstructors(t *testing.T) {
 		{name: "AlreadyExists", err: AlreadyExists("tier %d", 1), wantCode: codes.AlreadyExists},
 		{name: "FailedPrecondition", err: FailedPrecondition("tier %d", 1), wantCode: codes.FailedPrecondition},
 		{name: "Aborted", err: Aborted("tier %d", 1), wantCode: codes.Aborted},
+		{name: "AbortedWithReason", err: AbortedWithReason("TIER_GONE", "tier %d", 1), wantCode: codes.Aborted},
 		{name: "PermissionDenied", err: PermissionDenied("tier %d", 1), wantCode: codes.PermissionDenied},
 		{name: "Unauthenticated", err: Unauthenticated("tier %d", 1), wantCode: codes.Unauthenticated},
 		{name: "ResourceExhausted", err: ResourceExhausted("tier %d", 1), wantCode: codes.ResourceExhausted},
@@ -207,5 +209,61 @@ func TestNotAGRPCStatus(t *testing.T) {
 	err := fmt.Errorf("while reading tier 1: %w", NotFound("tier 1 not found"))
 	if s, ok := status.FromError(err); ok || s.Code() != codes.Unknown {
 		t.Errorf("status.FromError() = %v, %v, want Unknown, false", s.Code(), ok)
+	}
+}
+
+func TestFromErrorAttachesReason(t *testing.T) {
+	s, ok := FromError(fmt.Errorf("while reading tier 1: %w", AbortedWithReason("TIER_GONE", "tier %d moved", 1)))
+	if !ok || s.Code() != codes.Aborted || s.Message() != "tier 1 moved" {
+		t.Fatalf("FromError() = %v, %v, want Aborted %q, true", s, ok, "tier 1 moved")
+	}
+	var infos []*errdetails.ErrorInfo
+	for _, d := range s.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok {
+			infos = append(infos, info)
+		}
+	}
+	if len(infos) != 1 || infos[0].GetDomain() != ReasonDomain || infos[0].GetReason() != "TIER_GONE" {
+		t.Errorf("FromError() ErrorInfo details = %v, want one with domain %q and reason TIER_GONE", infos, ReasonDomain)
+	}
+
+	// An apierror without a reason sends no details.
+	if s, _ := FromError(Aborted("tier 1 moved")); len(s.Details()) != 0 {
+		t.Errorf("FromError(Aborted) details = %v, want none", s.Details())
+	}
+}
+
+func TestReason(t *testing.T) {
+	withInfo := func(domain, reason string) error {
+		s, err := status.New(codes.Aborted, "tier 1 moved").WithDetails(&errdetails.ErrorInfo{Domain: domain, Reason: reason})
+		if err != nil {
+			t.Fatalf("WithDetails: %v", err)
+		}
+		return s.Err()
+	}
+	sent, _ := FromError(AbortedWithReason("TIER_GONE", "tier 1 moved"))
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, ""},
+		{"apierror with reason", AbortedWithReason("TIER_GONE", "tier 1 moved"), "TIER_GONE"},
+		{"wrapped apierror with reason", fmt.Errorf("while reading: %w", AbortedWithReason("TIER_GONE", "tier 1 moved")), "TIER_GONE"},
+		{"apierror without reason", Aborted("tier 1 moved"), ""},
+		{"received from FromError", sent.Err(), "TIER_GONE"},
+		{"received and wrapped", fmt.Errorf("while calling: %w", sent.Err()), "TIER_GONE"},
+		{"received without details", status.Error(codes.Aborted, "tier 1 moved"), ""},
+		{"received in another domain", withInfo("example.com", "TIER_GONE"), ""},
+		// The outermost apierror decides, as it does for Code.
+		{"apierror wrapping a received reason", Aborted("while calling: %w", sent.Err()), ""},
+		{"plain error", errors.New("tier 1 moved"), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Reason(tt.err); got != tt.want {
+				t.Errorf("Reason(%v) = %q, want %q", tt.err, got, tt.want)
+			}
+		})
 	}
 }

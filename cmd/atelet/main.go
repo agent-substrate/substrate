@@ -53,6 +53,7 @@ import (
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atelet"
 	"go.ate.dev/substrate/internal/bootid"
+	"go.ate.dev/substrate/internal/checkpointabort"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/imagecache"
@@ -1123,6 +1124,11 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {
+		// The worker gave up without changing the actor, and so has atelet:
+		// pass the abort on so the control plane leaves the actor as it was.
+		if checkpointabort.Is(err) {
+			return nil, checkpointabort.Errorf("while calling worker CheckpointWorkload: %s", status.Convert(err).Message())
+		}
 		// TODO(#3046): Worker should classify checkpoint failures that left
 		// the workload intact as retriable.
 		return nil, workerCallError("CheckpointWorkload", err)
