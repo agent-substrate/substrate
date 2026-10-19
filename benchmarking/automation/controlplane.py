@@ -113,6 +113,12 @@ QUANTITY_PATTERN = re.compile(
 )
 
 
+# TODO: guard against drift in the manifests these patches assume, so a
+# change fails the run instead of quietly skewing its numbers. Tests that
+# read manifests/ate-install and check the ate-api-server container, the
+# Postgres base args postgres_args restates, the socket volume, and the env
+# ConfigMap name and key; and a check after shape() that the running pods
+# carry the requested resources and Postgres the requested settings.
 def shape(cfg: dict[str, Any]) -> None:
     """Shape the control plane for the run: Postgres statistics, the pool
     size, then ateapi's resources, whose rollout picks up the pool size. No
