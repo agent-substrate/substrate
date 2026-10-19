@@ -61,10 +61,10 @@ anywhere.
   version                            layout version marker ("2")
   layers/sha256/<diffid-hex>/
       fs/                            the unpacked layer tree (for consumers
-                                     asking Form{}), or
+                                     asking Form{}), and/or
       layer.erofs                    the layer as an EROFS image (for consumers
-                                     asking Form{EROFS: true}); a node holds
-                                     one form per layer
+                                     asking Form{EROFS: true}); a layer holds
+                                     the forms its consumers asked for
       layer.erofs.sha256             its digest, for a consumer to pin
       whiteouts.json                 whiteout and implicit-dir metadata
                                      recorded at unpack time
@@ -136,14 +136,13 @@ needs no privilege. atelet only uses images it built itself, never one from
 an image, template or request. `Image.EROFS` and `OverlaySpec.EROFS` report
 the form delivered.
 
-A node's consumers use one form: micro-VM nodes pull EROFS, gVisor nodes pull
-`fs/`. The pool holds a layer in the form it was first pulled in, and a pull
-asking for the other form fails naming both; converting a node between forms
-means wiping its cache. Keep the two classes on separate node pools: taint
-micro-VM pools `ate.dev/sandboxClass=microvm:NoSchedule` (worker pools
-tolerate their own class, see `applySandboxClassToleration` in atecontroller).
-Two actors of different classes on one node fail on the first layer their
-images share.
+A layer is stored in the form it was first pulled in. A pull in the other
+form downloads the layer blob again and builds the missing form in the same
+layer directory, under the same per-layer flight (`addLayerEROFS`,
+`addLayerFS`). The second form needs the blob because the unprivileged
+`fs/` unpack drops ownership, setuid bits, mtimes and xattrs that the image
+keeps. Adding `fs/` to an EROFS layer rewrites `whiteouts.json`, since the
+image build records only implicit directories.
 
 The bytes of `layer.erofs` are part of a snapshot's contract. A restored
 guest maps the image by offset (DAX), so a consumer that keeps a memory
