@@ -223,6 +223,11 @@ type Config struct {
 	// IngressAuthStaticMTLS.
 	IngressAuthMode string
 
+	// IngressAllowedSPIFFEIDs are the SPIFFE IDs the ingress router lets
+	// reach actors over its TLS listeners (ATE_INGRESS_ALLOWED_SPIFFE_IDS).
+	// See RequireIngressAllowedSPIFFEIDs.
+	IngressAllowedSPIFFEIDs []string
+
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
 
@@ -277,6 +282,18 @@ func (c *Config) Resolved() *Resolved {
 		c.resolved = defaultsOnly()
 	}
 	return c.resolved
+}
+
+// RequireIngressAllowedSPIFFEIDs fails when the install would deploy the
+// Envoy ingress router without an allowlist. That router authenticates
+// clients on its TLS listeners, and refuses to start with no SPIFFE ID to
+// match them against. The agentgateway router is configured statically and
+// takes none.
+func (c *Config) RequireIngressAllowedSPIFFEIDs() error {
+	if c.Router == RouterAgentgateway || len(c.IngressAllowedSPIFFEIDs) > 0 {
+		return nil
+	}
+	return c.Resolved().Require("ingressAllowedSPIFFEIDs")
 }
 
 // SetResolved attaches resolved settings to a Config built directly. Load
@@ -483,6 +500,10 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INGRESS_AUTH_MODE")
 	if c.IngressAuthMode != "" && c.IngressAuthMode != IngressAuthDeprecatedInsecure {
 		merged["ATE_INGRESS_AUTH_MODE"] = c.IngressAuthMode
+	}
+	delete(merged, "ATE_INGRESS_ALLOWED_SPIFFE_IDS")
+	if len(c.IngressAllowedSPIFFEIDs) > 0 {
+		merged["ATE_INGRESS_ALLOWED_SPIFFE_IDS"] = strings.Join(c.IngressAllowedSPIFFEIDs, ",")
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService

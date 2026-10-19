@@ -68,6 +68,10 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return err
 	}
+	// Likewise a router that would refuse to start without an allowlist.
+	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
+		return err
+	}
 	// Likewise the CSI request, even though it is only acted on partway
 	// through: a driver this cluster cannot run is worth knowing before the
 	// control plane goes up, not after.
@@ -525,6 +529,9 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 
 	provider, err := e.Cfg.CredentialProvider()
 	if err != nil {
+		return err
+	}
+	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
 		return err
 	}
 	if err := e.EnsureCRDs(ctx); err != nil {

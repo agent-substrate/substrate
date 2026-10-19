@@ -92,6 +92,8 @@ func valueFor(key string) string {
 		return ClusterSizeSize0
 	case "ingressAuthMode":
 		return IngressAuthStaticMTLS
+	case "ingressAllowedSPIFFEIDs":
+		return "spiffe://cluster.local/ns/a/sa/b"
 	case "ateapi.postgres.cloudsql.ipType":
 		return CloudSQLIPTypePSC
 	case "atenet.egress.additionalExtprocService":

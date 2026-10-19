@@ -76,11 +76,7 @@ func IngressAuthModeSet() bool { return os.Getenv(IngressAuthModeEnv) != "" }
 // and so whether RouterClient dials its TLS listeners as RouterClientIdentity.
 func IngressMTLS() bool { return IngressAuthMode() == IngressAuthStaticMTLS }
 
-// The router client's identity. The router's base manifest
-// (manifests/ate-install/atenet-router.yaml) allowlists
-// RouterClientServiceAccount's SPIFFE ID, so the two must change together. The
-// namespace is fixed rather than per-test because the allowlist is fixed at
-// install time.
+// The router client's identity.
 const (
 	RouterClientNamespace      = "ate-e2e-router-client"
 	RouterClientServiceAccount = "router-client"

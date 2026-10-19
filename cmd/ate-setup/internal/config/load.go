@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/spf13/pflag"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/internal/actoridjwt"
@@ -275,6 +276,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		CordonControlPlane:             r.Bool("cordonControlPlane"),
 		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
 		IngressAuthMode:                r.String("ingressAuthMode"),
+		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
@@ -420,6 +422,15 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		}
 	default:
 		return &InvalidError{Value: authMode, Want: IngressAuthDeprecatedInsecure + " or " + IngressAuthStaticMTLS}
+	}
+
+	// The router rejects a malformed ID at startup; catch it before the
+	// rollout does.
+	for _, id := range cfg.IngressAllowedSPIFFEIDs {
+		if _, err := spiffeid.FromString(id); err != nil {
+			ids, _ := r.Value("ingressAllowedSPIFFEIDs")
+			return &InvalidError{Value: ids, Want: fmt.Sprintf("a comma-separated list of SPIFFE IDs (%q: %v)", id, err)}
+		}
 	}
 
 	switch cfg.APILogLevel {

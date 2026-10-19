@@ -35,7 +35,9 @@ const routerStaticMTLSComponentPath = "../../../../manifests/ate-install/compone
 // resulting flags. The component appends to an argument list it does not own,
 // and the base manifest's TLS listeners need the client auth settings, so a
 // new listener in the manifest, or a new startup check here, would otherwise
-// surface only as a router that refuses to start in the e2e cluster.
+// surface only as a router that refuses to start in the e2e cluster. The
+// manifest carries no allowlist, so the test appends one as ate-setup does
+// (TestRenderRouterAllowedSPIFFEIDs pins that ate-setup appends it).
 func TestRouterIngressAuthManifestsAreValid(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -46,7 +48,8 @@ func TestRouterIngressAuthManifestsAreValid(t *testing.T) {
 		{name: "router-static-mtls", componentPath: routerStaticMTLSComponentPath, wantMode: IngressAuthStaticMTLS},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			args := renderedRouterArgs(t, tc.componentPath)
+			args := append(renderedRouterArgs(t, tc.componentPath),
+				"--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/test/sa/client")
 
 			var cfg routerConfig
 			fs := pflag.NewFlagSet("router", pflag.ContinueOnError)
