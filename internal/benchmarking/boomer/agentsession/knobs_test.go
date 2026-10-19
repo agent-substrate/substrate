@@ -15,6 +15,7 @@ package agentsession
 
 import (
 	"testing"
+	"time"
 
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 )
@@ -23,30 +24,36 @@ import (
 // the values it cannot run on.
 func TestKnobsCodec(t *testing.T) {
 	h := dynconfig.NewHolder(knobsCodec)
-	if got := dynconfig.Get[knobs](h); got != (knobs{}) {
-		t.Fatalf("fresh holder = %+v, want the zero defaults", got)
+	if got := dynconfig.Get[knobs](h); got != knobsCodec.Defaults || got.ResumeRetryBudget.Duration() != defaultResumeRetryBudget {
+		t.Fatalf("fresh holder = %+v, want the defaults with a %v retry budget", got, defaultResumeRetryBudget)
 	}
 	if _, _, err := h.Apply([]byte(`{
 		"resume_mode": "explicit", "lifecycle_mode": "pause",
 		"agentsession_script": "coding-session",
 		"agentsession_script_file": "/etc/agentsession/script.yaml",
 		"agentsession_think_scale": 0.5,
-		"agentsession_snapshot_steps": "3,10,20,30,40,50,61"
+		"agentsession_snapshot_steps": "3,10,20,30,40,50,61",
+		"agentsession_phase_in": 300,
+		"agentsession_resume_retry_budget": 45.5
 	}`)); err != nil {
 		t.Fatalf("Apply(valid): %v", err)
 	}
 	want := knobs{
-		Lifecycle:     dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModePause},
-		Script:        "coding-session",
-		ScriptFile:    "/etc/agentsession/script.yaml",
-		ThinkScale:    0.5,
-		SnapshotSteps: "3,10,20,30,40,50,61",
+		Lifecycle:         dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModePause},
+		Script:            "coding-session",
+		ScriptFile:        "/etc/agentsession/script.yaml",
+		ThinkScale:        0.5,
+		SnapshotSteps:     "3,10,20,30,40,50,61",
+		PhaseIn:           dynconfig.Seconds(5 * time.Minute),
+		ResumeRetryBudget: dynconfig.Seconds(45500 * time.Millisecond),
 	}
 	if got := dynconfig.Get[knobs](h); got != want {
 		t.Errorf("decoded =\n %+v, want\n %+v", got, want)
 	}
 	for name, payload := range map[string]string{
 		"negative think scale":                    `{"agentsession_think_scale": -1}`,
+		"negative phase-in":                       `{"agentsession_phase_in": -1}`,
+		"negative resume retry budget":            `{"agentsession_resume_retry_budget": -1}`,
 		"invalid resume mode":                     `{"resume_mode": "invalid_mode"}`,
 		"invalid snapshot steps entry":            `{"agentsession_snapshot_steps": "3,zero,10"}`,
 		"non-positive snapshot steps entry":       `{"agentsession_snapshot_steps": "0,10"}`,

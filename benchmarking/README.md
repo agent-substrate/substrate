@@ -348,6 +348,20 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
 * `--agentsession-snapshot-steps` — comma-separated 1-based step numbers after
   which the actor is hibernated (for example, `3,10,20,30,40,50,61`); between
   all other steps the actor stays resident.
+* `--agentsession-phase-in` — seconds over which session starts are spread:
+  each user waits a uniform random share of it before creating its actor
+  (default 0, every session starts at once). Locust's ramp spreads the fleet
+  over seconds and every session begins at step 1, so without it the
+  sessions reach each later step together; a step that dwells longer than
+  the ramp then asks every worker for more slots at once than it has. Set
+  it to a few think gaps for density runs.
+* `--agentsession-resume-retry-budget` — seconds a step keeps retrying a
+  wake the fleet had no room for (ResumeActor `ResourceExhausted` or
+  `Unavailable`, router 503/504/429) with 50ms-to-1s backoff before giving
+  the step up until its next think gap (default 60; `0` gives the wake one
+  attempt). Each attempt is its own
+  `ResumeActor` or `WakeFirstTouch` sample; the whole wait lands in
+  `TimeToWake`.
 
 #### Writing an agent-session script
 
@@ -445,6 +459,12 @@ To go back to a built-in variant, redeploy without the flag.
 * `WakeFirstTouch`: latency of a dedicated ping sent before each step's ops —
   in implicit mode that ping is what triggers the parked wake, so this row
   **is** the user-visible wake latency, unpolluted by the step's own work.
+* `TimeToWake`: the whole wake of a parked actor, from the first
+  `ResumeActor` attempt (in implicit mode, the first wake ping) to the ping
+  that found the actor serving, including every retry while the fleet had no
+  room. Equal to `WakeFirstTouch` plus `ResumeActor` when the first attempt
+  went through; a failed row is a step given up after
+  `--agentsession-resume-retry-budget`.
 * `Step_<name>` (e.g. `Step_06_first_build`): wall time of that step's ops,
   think gap excluded.
 * `SuspendActor` / `ResumeActor` / `CreateActor` / `DeleteActor`: control-plane
