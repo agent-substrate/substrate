@@ -4335,6 +4335,245 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 	}
 }
 
+// TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback verifies the
+// refusal the pause-upload fallback must not leak past: while the newest pause
+// checkpoint's own durable copy is still PENDING, an older generation's
+// COMPLETED snapshot neither authorizes relaxing the runtime constraint nor
+// substitutes for the checkpoint at restore. With no compatible worker, the
+// resume fails ResourceExhausted without reaching atelet, and the actor keeps
+// both generations as they were.
+func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
+	ns := namespaceForTest("ns-paused-pending-refusal")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+	createTemplate(t, tc, ns)
+
+	rtA := &ateapipb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+				{Key: "sandbox_bundle_hash", Value: "hash-a"},
+			},
+		},
+	}
+	rtB := &ateapipb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+				{Key: "sandbox_bundle_hash", Value: "hash-b"},
+			},
+		},
+	}
+
+	workerPod := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	reportWorkerRuntime(t, tc, workerPod, rtA)
+
+	const name = "actor-1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	// The first generation completes its upload, so an older COMPLETED durable
+	// snapshot exists beside the pause checkpoint that follows it.
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}); err != nil {
+		t.Fatalf("sync SuspendActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerPod)
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor from the durable snapshot failed: %v", err)
+	}
+	pauseResp, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("pause SuspendActor failed: %v", err)
+	}
+	paused := localSnapshot(pauseResp.GetActor().GetStatus())
+	if paused == nil {
+		t.Fatalf("pause left no local snapshot: %v", pauseResp.GetActor().GetStatus())
+	}
+	if got := paused.GetDurableSnapshot().GetStatus(); got != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
+		t.Fatalf("pause checkpoint durable status = %v, want PENDING (not yet uploaded)", got)
+	}
+	durable := durableSnapshot(pauseResp.GetActor().GetStatus())
+	if durable == nil || durable.GetGeneration() >= paused.GetGeneration() {
+		t.Fatalf("want an older COMPLETED durable snapshot beside the pause checkpoint, got %v", pauseResp.GetActor().GetStatus().GetSnapshots())
+	}
+	waitForWorkerAvailable(t, tc, workerPod)
+
+	// The only worker stops running the checkpoint's runtime. Its upload is
+	// still PENDING, so the older durable generation must not loosen anything.
+	reportWorkerRuntime(t, tc, workerPod, rtB)
+	tc.fakeAtelet.Reset()
+
+	_, err = tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
+
+	if restore := tc.fakeAtelet.lastRestoreRequest(); restore != nil {
+		t.Errorf("ResumeActor sent a Restore request: %v, want none (neither the checkpoint nor the older generation)", restore)
+	}
+	after, err := tc.persistence.GetActor(ctx, resources.ActorRefFromActor(pauseResp.GetActor()))
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got := after.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state after the refused resume = %v, want SUSPENDED", got)
+	}
+	if got := after.GetStatus().GetWorkerAssignment(); got != nil {
+		t.Errorf("WorkerAssignment after the refused resume = %v, want none", got)
+	}
+	stillLocal := localSnapshot(after.GetStatus())
+	if stillLocal == nil || stillLocal.GetUuid() != paused.GetUuid() ||
+		stillLocal.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
+		t.Errorf("pause checkpoint after the refused resume = %v, want %v still PENDING", stillLocal, paused)
+	}
+	if got := durableSnapshotURI(after.GetStatus()); got != durable.GetDurableSnapshot().GetObject().GetSnapshotUri() {
+		t.Errorf("older durable snapshot = %q, want it untouched at %q", got, durable.GetDurableSnapshot().GetObject().GetSnapshotUri())
+	}
+}
+
+// TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot verifies the
+// RESUMING re-entry of a relaxed pause resume: the first attempt binds the
+// node's incompatible worker at VOLUMES and fails at the atelet call, and the
+// retry must revalidate and keep that assignment rather than crashing the
+// actor, restoring the same pause checkpoint under the same worker.
+func TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot(t *testing.T) {
+	ns := namespaceForTest("ns-paused-relaxed-retry")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+	createTemplate(t, tc, ns)
+
+	rtA := &ateapipb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+				{Key: "sandbox_bundle_hash", Value: "hash-a"},
+			},
+		},
+	}
+	rtB := &ateapipb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+				{Key: "sandbox_bundle_hash", Value: "hash-b"},
+			},
+		},
+	}
+
+	workerPod := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	reportWorkerRuntime(t, tc, workerPod, rtA)
+
+	const name = "actor-1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	pauseResp, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	paused := localSnapshot(pauseResp.GetActor().GetStatus())
+	if paused == nil {
+		t.Fatalf("pause left no local snapshot: %v", pauseResp.GetActor().GetStatus())
+	}
+	waitForWorkerAvailable(t, tc, workerPod)
+
+	// The checkpoint is uploaded while still held locally, then the node's only
+	// worker stops running the checkpoint's runtime: the same setup whose
+	// relaxed first resume TestResumeActor_PausedLocalSnapshotRuntimeFallback
+	// covers.
+	upload := &ateapipb.SnapshotReport{
+		Uuid:       paused.GetUuid(),
+		Generation: paused.GetGeneration(),
+		Fidelity:   paused.GetFidelity(),
+		Object:     paused.GetDurableSnapshot().GetObject(),
+	}
+	if err := tc.service.ApplyActorSnapshotState(ctx, resources.ActorRefFromActor(pauseResp.GetActor()), pauseResp.GetActor().GetMetadata().GetUid(), "node1", &ateapipb.ActorSnapshotState{
+		LatestLocal:   upload,
+		LatestDurable: upload,
+	}); err != nil {
+		t.Fatalf("ApplyActorSnapshotState(upload) failed: %v", err)
+	}
+	reportWorkerRuntime(t, tc, workerPod, rtB)
+
+	// The first relaxed attempt binds the incompatible worker and dies at the
+	// Restore call, leaving the actor RESUMING with that assignment.
+	tc.fakeAtelet.Reset()
+	tc.fakeAtelet.FailRestore = status.Error(codes.Unavailable, "restore reply lost")
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("first ResumeActor status code = %v, want Unavailable (err: %v)", status.Code(err), err)
+	}
+	interrupted, err := tc.persistence.GetActor(ctx, resources.ActorRefFromActor(pauseResp.GetActor()))
+	if err != nil {
+		t.Fatalf("GetActor after the interrupted resume: %v", err)
+	}
+	if got := interrupted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+		t.Fatalf("state after the interrupted resume = %v, want RESUMING", got)
+	}
+	if got := interrupted.GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-1" {
+		t.Fatalf("assigned worker after the interrupted resume = %q, want worker-1", got)
+	}
+	if crash := interrupted.GetStatus().GetCrash(); crash != nil {
+		t.Fatalf("crash recorded after the interrupted resume: %v", crash)
+	}
+
+	// The retry revalidates the persisted assignment — the checkpoint's own
+	// durable copy is COMPLETED, so the relaxed assignment still applies — and
+	// restores the same checkpoint on the same worker.
+	tc.fakeAtelet.FailRestore = nil
+	resumed, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("retried ResumeActor failed: %v", err)
+	}
+	if got := resumed.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state after the retry = %v, want RUNNING", got)
+	}
+	if got := resumed.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-1" {
+		t.Errorf("retried resume moved to worker %q, want the kept assignment on worker-1", got)
+	}
+	restoreReq := tc.fakeAtelet.lastRestoreRequest()
+	if got := restoreReq.GetSnapshot().GetSnapshotUuid(); got != paused.GetUuid() {
+		t.Errorf("RestoreRequest.SnapshotUuid = %q, want the pause checkpoint's %q", got, paused.GetUuid())
+	}
+	if got := restoreReq.GetSnapshot().GetObject().GetSnapshotUri(); got != paused.GetDurableSnapshot().GetObject().GetSnapshotUri() {
+		t.Errorf("RestoreRequest.SnapshotUri = %q, want the pause checkpoint's upload %q", got, paused.GetDurableSnapshot().GetObject().GetSnapshotUri())
+	}
+	if got := restoreReq.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		t.Errorf("RestoreRequest.Fidelity = %v, want VOLUMES (assigned worker cannot run the checkpoint's runtime)", got)
+	}
+}
+
 // TestSuspendActorAsynchronous tests the full workflow of suspending a running
 // actor asynchronously.
 // Workflow:

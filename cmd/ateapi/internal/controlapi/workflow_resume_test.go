@@ -2807,6 +2807,52 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 			t.Errorf("validated worker = %q, want %q", got, "arm-pod")
 		}
 	})
+
+	t.Run("accepts fallback worker on re-entry for an uploaded pause snapshot", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		arm64RT := testRuntime("arm64", "")
+		seedRuntimeWorker(t, ctx, st, "arm-pod", "node-arm", arm64RT)
+		seedAssignment(t, st, testWorkerUID("arm-pod"), &ateapipb.ActorAssignment{
+			Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "id1"},
+			ActorUid: "own-actor-uid",
+		})
+
+		// A previous attempt bound the actor relaxed, under the worker's
+		// default: its pause checkpoint is uploaded (the durable copy of the
+		// checkpoint itself is COMPLETED), so the fallback was allowed even
+		// though the checkpoint was captured under another runtime.
+		local := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-arm")
+		local.SandboxRuntime = testSandboxRuntime()
+		local.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		resumingActor := &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1", Uid: "own-actor-uid"},
+			Status: &ateapipb.ActorStatus{
+				State:                  ateapipb.ActorState_ACTOR_STATE_RESUMING,
+				AssignedNode:           "node-arm",
+				LastAssignedGeneration: 1,
+				Snapshots:              []*ateapipb.Snapshot{local},
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					Worker:          &ateapipb.ObjectRef{Name: testWorkerUID("arm-pod")},
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "arm-pod",
+					WorkerPodUid:    testWorkerUID("arm-pod"),
+					NodeName:        "node-arm",
+					SandboxRuntime:  arm64RT,
+				},
+			},
+		}
+
+		w := &ActorWorkflow{store: st, scheduler: scheduling.New(nil)}
+		worker, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, resumingActor, &ateapipb.ActorTemplate{})
+		if err != nil {
+			t.Fatalf("validateAssignedWorker: %v", err)
+		}
+		if got := worker.GetWorkerPod(); got != "arm-pod" {
+			t.Errorf("validated worker = %q, want %q", got, "arm-pod")
+		}
+	})
 }
 
 // TestRequiredSnapshotRuntime pins which snapshot a resume takes its runtime
