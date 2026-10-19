@@ -89,7 +89,6 @@ impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for FilterConfig {
       learn_key: None,
       actor_key: None,
       was_cache_hit: false,
-      is_idempotent: false,
       has_request_body: false,
     })
   }

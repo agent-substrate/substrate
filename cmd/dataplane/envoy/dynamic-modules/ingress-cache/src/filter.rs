@@ -69,14 +69,6 @@ pub const UPSTREAM_FAILURE_RESPONSE_FLAGS: i64 =
 /// making replay safe for bodiless requests.
 pub const ZERO_BYTE_FAILURE_RESPONSE_FLAGS: i64 = RESPONSE_FLAG_UF | RESPONSE_FLAG_UH;
 
-/// Reports whether the HTTP method is idempotent according to RFC 9110 (Section 9.2.2).
-/// Idempotent methods can be safely retried even if a prior attempt was partially transmitted.
-pub fn is_idempotent_method(method: &str) -> bool {
-  matches!(
-    method.to_ascii_uppercase().as_str(),
-    "GET" | "HEAD" | "PUT" | "DELETE" | "OPTIONS" | "TRACE"
-  )
-}
 
 /// Creates a new HTTP filter configuration for the `ingress-cache` dynamic module.
 pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
@@ -127,7 +119,6 @@ pub struct CacheFilter {
   pub learn_key: Option<String>,
   pub actor_key: Option<String>,
   pub was_cache_hit: bool,
-  pub is_idempotent: bool,
   pub has_request_body: bool,
 }
 
@@ -143,7 +134,6 @@ impl CacheFilter {
       learn_key: None,
       actor_key: None,
       was_cache_hit: false,
-      is_idempotent: false,
       has_request_body: false,
     }
   }
@@ -227,8 +217,6 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
     envoy_filter: &mut EHF,
     end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
-    let method = request_header_str(envoy_filter, ":method");
-    self.is_idempotent = method.as_deref().map_or(false, is_idempotent_method);
     let content_length = request_header_str(envoy_filter, "content-length");
     let is_zero_content_length = content_length.as_deref().map(str::trim) == Some("0");
     self.has_request_body = !end_of_stream && !is_zero_content_length;
@@ -850,7 +838,7 @@ mod tests {
   }
 
   #[test]
-  fn test_upstream_503_with_uc_does_not_replay_non_idempotent_post() {
+  fn test_upstream_503_with_uc_does_not_replay_when_request_has_body() {
     let config = Config::default();
     cache().insert(
       "team-j/actor-13".to_string(),
@@ -864,7 +852,6 @@ mod tests {
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-13".to_string());
     filter.was_cache_hit = true;
-    filter.is_idempotent = false;
     filter.has_request_body = true;
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -906,7 +893,6 @@ mod tests {
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-14".to_string());
     filter.was_cache_hit = true;
-    filter.is_idempotent = true;
     filter.has_request_body = false;
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -945,7 +931,6 @@ mod tests {
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-14-ur".to_string());
     filter.was_cache_hit = true;
-    filter.is_idempotent = true;
     filter.has_request_body = false;
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -984,7 +969,6 @@ mod tests {
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-15".to_string());
     filter.was_cache_hit = true;
-    filter.is_idempotent = false;
     filter.has_request_body = true; // Request had body (e.g. POST)
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -1046,39 +1030,12 @@ mod tests {
   }
 
   #[test]
-  fn test_is_idempotent_method() {
-    for method in &["GET", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE"] {
-      assert!(
-        is_idempotent_method(method),
-        "expected {} to be idempotent",
-        method
-      );
-      assert!(
-        is_idempotent_method(&method.to_lowercase()),
-        "expected lowercase {} to be idempotent",
-        method
-      );
-    }
-    for non_idempotent in &["POST", "PATCH", "CONNECT", "CUSTOM", "post", "patch"] {
-      assert!(
-        !is_idempotent_method(non_idempotent),
-        "expected {} to not be idempotent",
-        non_idempotent
-      );
-    }
-  }
-
-  #[test]
-  fn test_on_request_headers_tracks_idempotency_and_body() {
+  fn test_on_request_headers_tracks_request_body() {
     let config = Config::default();
 
-    // 1. GET with end_of_stream: true (no body, idempotent)
+    // 1. Request with end_of_stream: true (no body)
     let mut filter = CacheFilter::new_test_filter(config.clone());
     let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
     mock
       .expect_get_request_header_value()
       .withf(|key| key == "content-length")
@@ -1088,16 +1045,11 @@ mod tests {
       .expect_get_request_header_values()
       .returning(|_| vec![]);
     filter.on_request_headers(&mut mock, true);
-    assert!(filter.is_idempotent);
     assert!(!filter.has_request_body);
 
-    // 2. POST with end_of_stream: false, content-length: 100 (has body, non-idempotent)
+    // 2. Request with end_of_stream: false, content-length: 100 (has body)
     let mut filter = CacheFilter::new_test_filter(config.clone());
     let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
     mock
       .expect_get_request_header_value()
       .withf(|key| key == "content-length")
@@ -1107,16 +1059,11 @@ mod tests {
       .expect_get_request_header_values()
       .returning(|_| vec![]);
     filter.on_request_headers(&mut mock, false);
-    assert!(!filter.is_idempotent);
     assert!(filter.has_request_body);
 
-    // 3. POST with end_of_stream: false, content-length: 0 (empty body)
-    let mut filter = CacheFilter::new_test_filter(config.clone());
+    // 3. Request with end_of_stream: false, content-length: 0 (empty body)
+    let mut filter = CacheFilter::new_test_filter(config);
     let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
     mock
       .expect_get_request_header_value()
       .withf(|key| key == "content-length")
@@ -1126,27 +1073,7 @@ mod tests {
       .expect_get_request_header_values()
       .returning(|_| vec![]);
     filter.on_request_headers(&mut mock, false);
-    assert!(!filter.is_idempotent);
     assert!(!filter.has_request_body);
-
-    // 4. PUT with end_of_stream: false, content-length: 50 (idempotent with body)
-    let mut filter = CacheFilter::new_test_filter(config);
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"PUT")));
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == "content-length")
-      .returning(|_| Some(EnvoyBuffer::new(b"50")));
-    mock.expect_get_filter_state_bytes().returning(|_| None);
-    mock
-      .expect_get_request_header_values()
-      .returning(|_| vec![]);
-    filter.on_request_headers(&mut mock, false);
-    assert!(filter.is_idempotent);
-    assert!(filter.has_request_body);
   }
 
   #[test]
