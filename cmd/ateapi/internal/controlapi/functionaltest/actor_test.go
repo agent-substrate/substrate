@@ -5337,14 +5337,13 @@ func TestResumeActor_RelocatesAfterDetach(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ResumeActor(%s) failed: %v", relocated, err)
 	}
-	createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
-	setupAteletOnNode(t, tc, "atelet-node2", "node2")
-
-	// Capacity exhaustion is ResourceExhausted.
+	// With no room on any node, the resume fails with ResourceExhausted.
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
 	})
 	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
+	createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+	setupAteletOnNode(t, tc, "atelet-node2", "node2")
 
 	// node1's atelet reports the paused snapshot uploaded and detached: a report
 	// with only latest_durable.
@@ -5388,6 +5387,79 @@ func TestResumeActor_RelocatesAfterDetach(t *testing.T) {
 	}
 	if got := worker.GetNodeName(); got != "node2" {
 		t.Errorf("worker-2 node = %q, want node2", got)
+	}
+}
+
+// TestResumeActor_DetachesFromFullNode resumes a paused actor whose node is
+// full while another has room: it is detached and restored on the other node.
+func TestResumeActor_DetachesFromFullNode(t *testing.T) {
+	ns := namespaceForTest("ns-resume-detach")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	const pinned, squatter = "actor-pinned", "actor-squatter"
+	for _, name := range []string{pinned, squatter} {
+		if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		}}); err != nil {
+			t.Fatalf("CreateActor(%s) failed: %v", name, err)
+		}
+	}
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+	}); err != nil {
+		t.Fatalf("ResumeActor(%s) failed: %v", pinned, err)
+	}
+	if _, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor:   &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	}); err != nil {
+		t.Fatalf("SuspendActor(%s) failed: %v", pinned, err)
+	}
+	paused, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+	})
+	if err != nil {
+		t.Fatalf("GetActor(%s) failed: %v", pinned, err)
+	}
+	ls := localSnapshot(paused.GetStatus())
+	if ls == nil || paused.GetStatus().GetAssignedNode() != "node1" {
+		t.Fatalf("paused actor = %v, want a local snapshot on node1", paused.GetStatus())
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: squatter},
+	}); err != nil {
+		t.Fatalf("ResumeActor(%s) failed: %v", squatter, err)
+	}
+	createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+	setupAteletOnNode(t, tc, "atelet-node2", "node2")
+
+	resumed, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor(%s) on a full node failed: %v", pinned, err)
+	}
+	if got := resumed.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-2" {
+		t.Errorf("resumed onto worker %q, want worker-2 (the worker on node2)", got)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	detach := proto.CloneOf(tc.fakeAtelet.DetachRequest)
+	tc.fakeAtelet.Lock.Unlock()
+	if got := detach.GetActorUid(); got != paused.GetMetadata().GetUid() {
+		t.Errorf("DetachActor actor_uid = %q, want %q", got, paused.GetMetadata().GetUid())
+	}
+	restore := tc.fakeAtelet.lastRestoreRequest()
+	if got := restore.GetSnapshot().GetSnapshotUuid(); got != ls.GetUuid() {
+		t.Errorf("Restore snapshot = %q, want the detached snapshot %q", got, ls.GetUuid())
+	}
+	if got := restore.GetSnapshot().GetObject().GetSnapshotUri(); got != ls.GetDurableSnapshot().GetObject().GetSnapshotUri() {
+		t.Errorf("Restore snapshot URI = %q, want %q", got, ls.GetDurableSnapshot().GetObject().GetSnapshotUri())
 	}
 }
 

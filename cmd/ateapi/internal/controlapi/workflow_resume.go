@@ -122,7 +122,20 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	actor = created
 	var worker *ateapipb.Worker
 	var assigned *ateapipb.Actor
-	if assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate); err != nil {
+	assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate)
+	if err != nil && shouldDetachFromNode(actor, err) {
+		var detached *ateapipb.Actor
+		if detached, err = w.detachFromFullNode(leaseCtx, actorRef, actor, actorTemplate, err); err != nil {
+			return nil, false, err
+		}
+		actor = detached
+		// Resolve the restore source again, from the uploaded snapshot.
+		if src, err = resolveResumeSource(actorRef, actor, actorTemplate); err != nil {
+			return nil, false, err
+		}
+		assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate)
+	}
+	if err != nil {
 		return nil, false, err
 	}
 	actor = assigned
@@ -167,11 +180,21 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if err != nil {
 		return nil, nil, src, err
 	}
+	if src, err = resolveResumeSource(actorRef, actor, actorTemplate); err != nil {
+		return nil, nil, src, err
+	}
+	return actor, actorTemplate, src, nil
+}
+
+// resolveResumeSource resolves the boot source for the actor's pending restore.
+func resolveResumeSource(actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (resumeSnapshotSource, error) {
+	var src resumeSnapshotSource
+	var err error
 	src.RequiredRuntime = requiredSnapshotRuntime(actor, actorTemplate)
 	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
 		st := snap.GetDurableSnapshot()
 		if src.SnapshotURI, err = resources.ParseSnapshotURI(st.GetObject().GetSnapshotUri()); err != nil {
-			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
+			return src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
 		}
 		src.SnapshotUUID = snap.GetUuid()
 		src.Generation = snap.GetGeneration()
@@ -183,11 +206,10 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	// does not parse fails here too, before a worker is claimed.
 	if local := findLatestLocalSnapshot(actor.GetStatus()); local != nil {
 		if _, err = resources.ParseSnapshotURI(local.GetDurableSnapshot().GetObject().GetSnapshotUri()); err != nil {
-			return nil, nil, src, apierror.DataLoss("Actor %s local snapshot: %v", actorRef, err)
+			return src, apierror.DataLoss("Actor %s local snapshot: %v", actorRef, err)
 		}
 	}
-
-	return actor, actorTemplate, src, nil
+	return src, nil
 }
 
 // ensureVolumesCreated provisions any actor volumes that have no storage
@@ -501,7 +523,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
 				outcome = ateattr.SchedulerOutcomeNoCapacity
-				return nil, nil, apierror.ResourceExhausted("no worker has room for the actor")
+				return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
 			}
 			return nil, nil, err
 		}
@@ -584,6 +606,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	return storedActor, bound, nil
 }
 
+// errNoWorkerRoom reports that no worker has room for the Actor under its
+// constraints.
+var errNoWorkerRoom = errors.New("no worker has room for the actor")
+
 // errWorkerFilledUp reports that the Worker the scheduler picked would not take
 // the Actor once the store asked under its row lock. Retryable: the next
 // attempt re-runs scheduling.
@@ -650,10 +676,8 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		return scheduling.Constraints{}, fmt.Errorf("invalid template resource limits: %w", err)
 	}
 	var requiredNodes []string
-	// A paused Actor stays pinned to its node until atelet detaches the local
-	// snapshot, so it cannot resume while that node is full.
-	// TODO: when the node has no room, detach the Actor there and resume it on
-	// another node from the durable snapshot.
+	// A suspended Actor with a local snapshot stays pinned to its node until
+	// atelet detaches it. When the node is full, ResumeActor detaches it.
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}

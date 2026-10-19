@@ -1096,6 +1096,14 @@ type capturingAtelet struct {
 	promoteState *ateletpb.ActorSnapshotState
 	// promoteErr, when set, fails PromoteSnapshot after it is recorded.
 	promoteErr error
+	// detach is the last DetachActor request, and detachState the snapshot
+	// state DetachActor returns. detachErr, when set, fails DetachActor after
+	// it is recorded.
+	detach      *ateletpb.DetachActorRequest
+	detachState *ateletpb.ActorSnapshotState
+	detachErr   error
+	// onDetach, when set, runs before DetachActor returns.
+	onDetach func()
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1137,6 +1145,28 @@ func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.Pro
 		return nil, f.promoteErr
 	}
 	return &ateletpb.PromoteSnapshotResponse{State: proto.CloneOf(f.promoteState)}, nil
+}
+
+func (f *capturingAtelet) DetachActor(ctx context.Context, req *ateletpb.DetachActorRequest) (*ateletpb.DetachActorResponse, error) {
+	f.mu.Lock()
+	hook := f.onDetach
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.detach = proto.CloneOf(req)
+	if f.detachErr != nil {
+		return nil, f.detachErr
+	}
+	return &ateletpb.DetachActorResponse{State: proto.CloneOf(f.detachState)}, nil
+}
+
+func (f *capturingAtelet) detachRequest() *ateletpb.DetachActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return proto.CloneOf(f.detach)
 }
 
 // calls returns how many Checkpoint and PromoteSnapshot RPCs were received.
