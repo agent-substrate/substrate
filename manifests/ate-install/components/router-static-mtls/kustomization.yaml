@@ -24,9 +24,9 @@
 # two listeners cannot authenticate a client, and the router refuses to start
 # in static-mtls mode while either is enabled.
 #
-# The client CA bundle and the allowed SPIFFE IDs come from the base manifest
-# (atenet-router.yaml), where the TLS listeners already check any certificate a
-# client presents.
+# The client CA bundle comes from the base manifest (atenet-router.yaml), where
+# the TLS listeners already check any certificate a client presents, and the
+# allowed SPIFFE IDs from ate-setup's --ingress-allowed-spiffe-ids.
 
 # TODO(ahmedtd): All of this code (and atenet ingress's support for plaintext
 # listeners) should be removed when the deprecated-insecure mode is removed.

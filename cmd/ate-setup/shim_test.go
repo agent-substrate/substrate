@@ -215,6 +215,13 @@ func TestShimTranslatesFlags(t *testing.T) {
 		args: []string{"--deploy-ate-system", "--cluster-size", "size10", "--cordon-control-plane"},
 		want: []string{"--cluster-size=size10 --cordon-control-plane deploy ate-system --setup-csi=none"},
 	}, {
+		name: "--ingress-allowed-spiffe-ids is forwarded in either value form",
+		args: []string{"--deploy-ate-system", "--ingress-allowed-spiffe-ids", "spiffe://cluster.local/ns/a/sa/a", "--deploy-atenet", "--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/b/sa/b"},
+		want: []string{
+			"--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/a/sa/a --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/b/sa/b deploy ate-system --setup-csi=none",
+			"--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/a/sa/a --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/b/sa/b deploy atenet",
+		},
+	}, {
 		name: "--fake-data-plane is forwarded to every action",
 		args: []string{"--deploy-ate-system", "--fake-data-plane", "--deploy-atelet"},
 		want: []string{
