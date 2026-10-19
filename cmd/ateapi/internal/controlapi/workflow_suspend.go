@@ -402,10 +402,12 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		switch mode {
 		case suspendSync:
 			snap.GetDurableSnapshot().Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-			// Remove all local snapshots since they are superseded by the new durable snapshot.
-			// TODO: This will change when an async suspend uploads its snapshot
-			// and both local and durable snapshots are kept.
-			pruneSnapshots(toUpdate.Status, nil)
+			// Record only the cache atelet reports. It does not pin placement.
+			snap.Locality = ""
+			if ateletKeptLocal(ateletState, snap) {
+				snap.Locality = toUpdate.GetStatus().GetAssignedNode()
+			}
+			pruneSnapshots(toUpdate.Status, snap)
 			toUpdate.Status.AssignedNode = ""
 		case suspendAsync:
 			// Record the node locality of the local checkpoint and clear older local checkpoints.
@@ -432,6 +434,20 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	w.releaseDroppedSnapshots(ctx, latestActor, storedActor)
 	dReleaseSnapshot = time.Since(t)
 	return storedActor, nil
+}
+
+// ateletKeptLocal reports whether atelet kept the recorded snapshot locally.
+// A successful upload does not guarantee a local copy was kept.
+func ateletKeptLocal(state *ateletpb.ActorSnapshotState, snap *ateapipb.Snapshot) bool {
+	if state == nil || snap == nil {
+		return false
+	}
+	local := state.GetLatestLocal().GetSnapshot()
+	uri := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
+	return local != nil && uri != "" &&
+		local.GetSnapshotUuid() == snap.GetUuid() &&
+		local.GetGeneration() == snap.GetGeneration() &&
+		local.GetObject().GetSnapshotUri() == uri
 }
 
 // releaseDroppedSnapshots releases each external snapshot that before records
