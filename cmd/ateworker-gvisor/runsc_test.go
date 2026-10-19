@@ -209,6 +209,29 @@ func TestBuildArgs(t *testing.T) {
 	}
 }
 
+func TestBuildArgsEnableCoreTags(t *testing.T) {
+	r := &runsc{
+		path:           "/usr/bin/runsc",
+		actorUID:       "test-actor-123",
+		actorDirs:      testActorDirs,
+		flags:          mustFlagStore(t),
+		enableCoreTags: true,
+	}
+
+	got := r.buildArgs("wait", "my-container")
+	want := []string{
+		"-global1",
+		"-global2",
+		"--enable-core-tags",
+		"-root", "/node/actors/test-actor-123/runsc-state",
+		"wait",
+		"my-container",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("buildArgs(\"wait\", \"my-container\") = %v, want %v", got, want)
+	}
+}
+
 func TestCheckpointArgs(t *testing.T) {
 	r := &runsc{
 		path:      "/usr/bin/runsc",

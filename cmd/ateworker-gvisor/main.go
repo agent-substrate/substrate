@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/spf13/pflag"
@@ -64,10 +65,32 @@ import (
 	"go.ate.dev/substrate/internal/wakeupprobe"
 	"go.ate.dev/substrate/internal/workerstats"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+func checkCoreTagsSupported() bool {
+	var cookie uint64
+	_, _, errno := unix.Syscall6(
+		unix.SYS_PRCTL,
+		unix.PR_SCHED_CORE,
+		unix.PR_SCHED_CORE_GET,
+		0,
+		unix.PR_SCHED_CORE_SCOPE_THREAD,
+		uintptr(unsafe.Pointer(&cookie)),
+		0,
+	)
+	switch errno {
+	case 0:
+		return true
+	case unix.EINVAL, unix.ENOSYS, unix.ENODEV:
+		return false
+	default:
+		panic(fmt.Sprintf("prctl(PR_SCHED_CORE_GET) failed: %v", errno))
+	}
+}
 
 func flagsConfigPath() string {
 	path := "internal_flags.json"
@@ -397,6 +420,9 @@ type AteWorkerService struct {
 	// which memoryReservedBytes budgets for.
 	checkpointWrites chan struct{}
 	borrow           *memborrow.Ledger
+
+	// enableCoreTags indicates whether the host kernel supports core tagging.
+	enableCoreTags bool
 }
 
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
@@ -414,6 +440,7 @@ func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxAc
 		flags:            flags,
 		checkpointWrites: make(chan struct{}, checkpointWriteSlots),
 		bootID:           bootID,
+		enableCoreTags:   checkCoreTagsSupported(),
 	}
 	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
 	return s
@@ -686,6 +713,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
 		flags:          s.flags,
+		enableCoreTags: s.enableCoreTags,
 	}
 	var containersToDelete []string
 	defer func() {
@@ -838,10 +866,11 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	// Checkpoint only saves state; no sizing is applied, so size is left zero.
 	rcmd := &runsc{
-		path:      req.GetRunscPath(),
-		actorUID:  req.GetActorUid(),
-		actorDirs: req.GetActorDirs(),
-		flags:     s.flags,
+		path:           req.GetRunscPath(),
+		actorUID:       req.GetActorUid(),
+		actorDirs:      req.GetActorDirs(),
+		flags:          s.flags,
+		enableCoreTags: s.enableCoreTags,
 	}
 
 	checkpointPath := req.GetActorDirs().GetCheckpointDir()
@@ -1163,6 +1192,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
 		flags:          s.flags,
+		enableCoreTags: s.enableCoreTags,
 	}
 	var containersToDelete []string
 	defer func() {
@@ -1350,10 +1380,11 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	}
 
 	rcmd := &runsc{
-		path:      runscPath,
-		actorUID:  actorUID,
-		actorDirs: actorDirs,
-		flags:     s.flags,
+		path:           runscPath,
+		actorUID:       actorUID,
+		actorDirs:      actorDirs,
+		flags:          s.flags,
+		enableCoreTags: s.enableCoreTags,
 	}
 
 	// Detached from the caller: a deadline mid-`runsc delete` would leave the
