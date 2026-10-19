@@ -65,6 +65,7 @@ pub const RESPONSE_FLAG_UC: i64 = 1 << 6;
 pub const UPSTREAM_FAILURE_RESPONSE_FLAGS: i64 =
   RESPONSE_FLAG_UF | RESPONSE_FLAG_UH | RESPONSE_FLAG_UC | RESPONSE_FLAG_UR;
 
+
 /// Mask of response flags that guarantee zero bytes reached the actor,
 /// making replay safe for bodiless requests.
 pub const ZERO_BYTE_FAILURE_RESPONSE_FLAGS: i64 = RESPONSE_FLAG_UF | RESPONSE_FLAG_UH;
@@ -181,8 +182,9 @@ fn is_stale_rejection<EHF: EnvoyHttpFilter>(
 /// Replay is safe if:
 /// 1. The request has no body (`!filter.has_request_body`). We do not buffer request
 ///    bodies in Envoy, so replaying a request with a body would drop or corrupt the payload.
-/// 2. For 503 errors, response flags guarantee zero bytes reached the actor (`UF` or `UH`).
-///    Mid-stream disconnections (`UC` or `UR`) are never replayed to prevent duplicate execution.
+/// 2. For 503 errors, response flags guarantee zero bytes reached the upstream worker (`UF` or `UH`).
+///    Mid-stream disconnections (`UC`) or resets (`UR`) are never replayed to err on the side
+///    of caution against unintended client side effects.
 /// 3. For 421 errors (with stale header), atunnel rejected the request before forwarding to
 ///    the actor, so bodiless requests are safe to replay.
 fn is_replay_safe(filter: &CacheFilter, status: Option<&str>, response_flags: i64) -> bool {
@@ -223,15 +225,49 @@ fn read_learned_binding<EHF: EnvoyHttpFilter>(
   Some((ip, spiffe_id))
 }
 
+/// Reports whether the current HTTP request has (or may have) a request body.
+///
+/// Under RFC 9110 and RFC 9112:
+/// - If `end_of_stream` is true (e.g. HTTP/2 HEADERS frame with END_STREAM set),
+///   there is definitely no body.
+/// - If `content-length` is present, `0` indicates no body, while `> 0` indicates a body.
+/// - If `content-length` is not present:
+///   - For standard safe/read-only methods (`GET`, `HEAD`), RFC 9110 specifies no body
+///     by default. On HTTP/1.1 keep-alive connections, Envoy can deliver `end_of_stream = false`
+///     on request headers even though no body will ever follow. Treating these as bodiless
+///     is essential for safe replay.
+///   - For other methods (`POST`, `PUT`, `PATCH`, etc.), unknown methods, or HTTP/2 streams
+///     without END_STREAM, a body may follow via subsequent data chunks, so they are
+///     conservatively treated as having a body.
+fn request_has_body<EHF: EnvoyHttpFilter>(envoy_filter: &EHF, end_of_stream: bool) -> bool {
+  if end_of_stream {
+    return false;
+  }
+
+  if let Some(cl_str) = request_header_str(envoy_filter, "content-length") {
+    return cl_str.trim().parse::<u64>().map_or(true, |len| len > 0);
+  }
+
+  // Method may be available via request header :method or via Envoy's RequestMethod attribute
+  // (which directly queries Envoy's inline Method() header).
+  let method = request_header_str(envoy_filter, ":method").or_else(|| {
+    envoy_filter
+      .get_attribute_string(envoy_dynamic_module_type_attribute_id::RequestMethod)
+      .and_then(|buf| std::str::from_utf8(buf.as_slice()).ok().map(str::to_string))
+  });
+  match method.as_deref().map(str::to_ascii_uppercase).as_deref() {
+    Some("GET") | Some("HEAD") => false,
+    _ => true,
+  }
+}
+
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
   fn on_request_headers(
     &mut self,
     envoy_filter: &mut EHF,
     end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
-    let content_length = request_header_str(envoy_filter, "content-length");
-    let is_zero_content_length = content_length.as_deref().map(str::trim) == Some("0");
-    self.has_request_body = !end_of_stream && !is_zero_content_length;
+    self.has_request_body = request_has_body(envoy_filter, end_of_stream);
 
     let Some(actor) = self.config.resolve_actor_ref(envoy_filter) else {
       return envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
@@ -294,7 +330,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
 
       self.handle_eviction(envoy_filter);
 
-      // Only stale HTTP rejections (421 or 503 UF/UH) are replayed; gRPC UNAVAILABLE
+      // Only stale HTTP rejections (421 or 503 UF/UH/UC/UR) are replayed; gRPC UNAVAILABLE
       // is returned directly to the client since gRPC clients handle retries.
       if should_replay {
         if let Some(key) = &self.actor_key {
@@ -790,7 +826,7 @@ mod tests {
   }
 
   #[test]
-  fn test_upstream_503_with_uh_recreates_stream() {
+  fn test_upstream_503_with_uh_recreates_stream_for_bodiless_get() {
     let config = Config::default();
     cache().insert(
       "team-j/actor-12".to_string(),
@@ -804,13 +840,14 @@ mod tests {
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-12".to_string());
     filter.was_cache_hit = true;
+    filter.has_request_body = false;
 
     let mut mock = MockEnvoyHttpFilter::default();
     mock
       .expect_get_response_header_value()
       .withf(|key| key == ":status")
       .returning(|_| Some(EnvoyBuffer::new(b"503")));
-    // No healthy upstream (UH) flag set by Envoy.
+    // No healthy upstream (UH) flag set by Envoy. Zero bytes were sent.
     mock
       .expect_get_attribute_int()
       .returning(|_| Some(RESPONSE_FLAG_UH));
@@ -830,6 +867,41 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_response_headers_status::StopIteration
     );
     assert!(cache().get("team-j/actor-12").is_none());
+    assert!(!filter.was_cache_hit);
+  }
+
+  #[test]
+  fn test_upstream_503_with_uh_does_not_replay_when_request_has_body() {
+    let config = Config::default();
+    cache().insert(
+      "team-j/actor-12-body".to_string(),
+      Binding {
+        worker_ip: "10.244.6.22".to_string(),
+        worker_spiffe_id: None,
+        expires_at: Instant::now() + Duration::from_secs(5),
+      },
+    );
+
+    let mut filter = CacheFilter::new_test_filter(config);
+    filter.actor_key = Some("team-j/actor-12-body".to_string());
+    filter.was_cache_hit = true;
+    filter.has_request_body = true;
+
+    let mut mock = MockEnvoyHttpFilter::default();
+    mock
+      .expect_get_response_header_value()
+      .withf(|key| key == ":status")
+      .returning(|_| Some(EnvoyBuffer::new(b"503")));
+    mock
+      .expect_get_attribute_int()
+      .returning(|_| Some(RESPONSE_FLAG_UH));
+
+    let resp_status = filter.on_response_headers(&mut mock, false);
+    assert_eq!(
+      resp_status,
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+    assert!(cache().get("team-j/actor-12-body").is_none());
     assert!(!filter.was_cache_hit);
   }
 
@@ -863,7 +935,7 @@ mod tests {
       .expect_get_buffered_request_body_size()
       .returning(|| 128);
 
-    // Because UC indicates mid-flight disconnection, recreate_stream must NOT be called under Option A.
+    // Because the request has a body (and bodies are not buffered in memory), recreate_stream must NOT be called.
     // However, the dead worker binding must still be evicted!
     let resp_status = filter.on_response_headers(&mut mock, false);
     assert_eq!(
@@ -901,8 +973,8 @@ mod tests {
       .expect_get_attribute_int()
       .returning(|_| Some(RESPONSE_FLAG_UC));
 
-    // Under Option A, mid-flight disconnections (UC) are never replayed out of caution.
-    // Cache entry is evicted and 503 is returned to client.
+    // UC cannot be safely replayed because an upstream termination could have occurred
+    // after the worker executed side effects. It is evicted, but not replayed.
     let resp_status = filter.on_response_headers(&mut mock, false);
     assert_eq!(
       resp_status,
@@ -939,8 +1011,7 @@ mod tests {
       .expect_get_attribute_int()
       .returning(|_| Some(RESPONSE_FLAG_UR));
 
-    // Under Option A, UR resets are never replayed.
-    // Cache entry is evicted and 503 is returned to client.
+    // UR is evicted but not replayed.
     let resp_status = filter.on_response_headers(&mut mock, false);
     assert_eq!(
       resp_status,
@@ -1032,10 +1103,6 @@ mod tests {
     // 1. Request with end_of_stream: true (no body)
     let mut filter = CacheFilter::new_test_filter(config.clone());
     let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == "content-length")
-      .returning(|_| None);
     mock.expect_get_filter_state_bytes().returning(|_| None);
     mock
       .expect_get_request_header_values()
@@ -1058,7 +1125,7 @@ mod tests {
     assert!(filter.has_request_body);
 
     // 3. Request with end_of_stream: false, content-length: 0 (empty body)
-    let mut filter = CacheFilter::new_test_filter(config);
+    let mut filter = CacheFilter::new_test_filter(config.clone());
     let mut mock = MockEnvoyHttpFilter::default();
     mock
       .expect_get_request_header_value()
@@ -1070,6 +1137,104 @@ mod tests {
       .returning(|_| vec![]);
     filter.on_request_headers(&mut mock, false);
     assert!(!filter.has_request_body);
+
+    // 4. Request with end_of_stream: false, no content-length, method: GET (RFC 9110 bodiless)
+    let mut filter = CacheFilter::new_test_filter(config.clone());
+    let mut mock = MockEnvoyHttpFilter::default();
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == "content-length")
+      .returning(|_| None);
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == ":method")
+      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
+    mock.expect_get_filter_state_bytes().returning(|_| None);
+    mock
+      .expect_get_request_header_values()
+      .returning(|_| vec![]);
+    filter.on_request_headers(&mut mock, false);
+    assert!(!filter.has_request_body);
+
+    // 5. Request with end_of_stream: false, no content-length, method: HEAD (RFC 9110 bodiless)
+    let mut filter = CacheFilter::new_test_filter(config.clone());
+    let mut mock = MockEnvoyHttpFilter::default();
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == "content-length")
+      .returning(|_| None);
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == ":method")
+      .returning(|_| Some(EnvoyBuffer::new(b"HEAD")));
+    mock.expect_get_filter_state_bytes().returning(|_| None);
+    mock
+      .expect_get_request_header_values()
+      .returning(|_| vec![]);
+    filter.on_request_headers(&mut mock, false);
+    assert!(!filter.has_request_body);
+
+    // 6. Request with end_of_stream: false, no content-length, method: POST (payload may follow)
+    let mut filter = CacheFilter::new_test_filter(config.clone());
+    let mut mock = MockEnvoyHttpFilter::default();
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == "content-length")
+      .returning(|_| None);
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == ":method")
+      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
+    mock.expect_get_filter_state_bytes().returning(|_| None);
+    mock
+      .expect_get_request_header_values()
+      .returning(|_| vec![]);
+    filter.on_request_headers(&mut mock, false);
+    assert!(filter.has_request_body);
+
+    // 7. Request with end_of_stream: false, no content-length, :method absent, but RequestMethod attribute is GET
+    let mut filter = CacheFilter::new_test_filter(config.clone());
+    let mut mock = MockEnvoyHttpFilter::default();
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == "content-length")
+      .returning(|_| None);
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == ":method")
+      .returning(|_| None);
+    mock
+      .expect_get_attribute_string()
+      .withf(|id| *id == envoy_dynamic_module_type_attribute_id::RequestMethod)
+      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
+    mock.expect_get_filter_state_bytes().returning(|_| None);
+    mock
+      .expect_get_request_header_values()
+      .returning(|_| vec![]);
+    filter.on_request_headers(&mut mock, false);
+    assert!(!filter.has_request_body);
+
+    // 8. Request with end_of_stream: false, no content-length, :method absent, and RequestMethod attribute is POST
+    let mut filter = CacheFilter::new_test_filter(config);
+    let mut mock = MockEnvoyHttpFilter::default();
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == "content-length")
+      .returning(|_| None);
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == ":method")
+      .returning(|_| None);
+    mock
+      .expect_get_attribute_string()
+      .withf(|id| *id == envoy_dynamic_module_type_attribute_id::RequestMethod)
+      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
+    mock.expect_get_filter_state_bytes().returning(|_| None);
+    mock
+      .expect_get_request_header_values()
+      .returning(|_| vec![]);
+    filter.on_request_headers(&mut mock, false);
+    assert!(filter.has_request_body);
   }
 
   #[test]
