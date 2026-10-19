@@ -50,7 +50,8 @@ var (
 	testGrants = []actorscope.Grant{rwGrant, roGrant}
 )
 
-// fakeSTS records the last exchange request and answers with a token.
+// fakeSTS records the last exchange request and answers with a token that
+// differs on every call.
 type fakeSTS struct {
 	t       *testing.T
 	calls   int
@@ -74,7 +75,7 @@ func (f *fakeSTS) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	body := f.body
 	if body == "" {
-		body = `{"access_token":"downscoped-` + strings.Repeat("x", 8) + `","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}`
+		body = fmt.Sprintf(`{"access_token":"downscoped-%d","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}`, f.calls)
 	}
 	_, _ = w.Write([]byte(body))
 }
@@ -115,7 +116,7 @@ func TestIssue_ExchangesWithTheBoundary(t *testing.T) {
 	sts := &fakeSTS{t: t}
 	i := newTestIssuer(t, sts, staticSource(expiry), func() time.Time { return now })
 
-	tok, err := i.Issue(t.Context(), "9f1e", testGrants, false)
+	tok, err := i.Issue(t.Context(), "9f1e", "node-1", testGrants, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -158,18 +159,18 @@ func TestIssue_CachesPerActorUntilNearExpiry(t *testing.T) {
 	sts := &fakeSTS{t: t}
 	i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return clock })
 
-	first, err := i.Issue(t.Context(), "9f1e", testGrants, false)
+	first, err := i.Issue(t.Context(), "9f1e", "node-1", testGrants, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := i.Issue(t.Context(), "9f1e", testGrants, false)
+	second, err := i.Issue(t.Context(), "9f1e", "node-1", testGrants, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sts.calls != 1 || second != first {
 		t.Fatalf("second Issue made %d STS calls in total and returned a different token", sts.calls)
 	}
-	if _, err := i.Issue(t.Context(), "other", testGrants, false); err != nil {
+	if _, err := i.Issue(t.Context(), "other", "node-1", testGrants, false); err != nil {
 		t.Fatal(err)
 	}
 	if sts.calls != 2 {
@@ -177,11 +178,53 @@ func TestIssue_CachesPerActorUntilNearExpiry(t *testing.T) {
 	}
 	// With less than minServeLifetime left the cached token is not served.
 	clock = now.Add(time.Hour - minServeLifetime + time.Second)
-	if _, err := i.Issue(t.Context(), "9f1e", testGrants, false); err != nil {
+	if _, err := i.Issue(t.Context(), "9f1e", "node-1", testGrants, false); err != nil {
 		t.Fatal(err)
 	}
 	if sts.calls != 3 {
 		t.Fatalf("a token with under %v left should be re-minted, STS calls = %d", minServeLifetime, sts.calls)
+	}
+}
+
+func TestIssue_CachesPerNode(t *testing.T) {
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	sts := &fakeSTS{t: t}
+	i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return now })
+	issue := func(node string) string {
+		t.Helper()
+		tok, err := i.Issue(t.Context(), "9f1e", node, testGrants, false)
+		if err != nil {
+			t.Fatalf("Issue on %s: %v", node, err)
+		}
+		return tok.AccessToken
+	}
+
+	onNode1 := issue("node-1")
+	if again := issue("node-1"); again != onNode1 || sts.calls != 1 {
+		t.Fatalf("same node: got %q after %q with %d STS calls, want the cached token and 1 call", again, onNode1, sts.calls)
+	}
+	// The actor moved: node-2 must not be handed the token node-1 holds.
+	onNode2 := issue("node-2")
+	if onNode2 == onNode1 || sts.calls != 2 {
+		t.Fatalf("other node: got %q (node-1 holds %q) with %d STS calls, want a fresh token and 2 calls", onNode2, onNode1, sts.calls)
+	}
+	if again := issue("node-2"); again != onNode2 || sts.calls != 2 {
+		t.Fatalf("node-2 again: got %q after %q with %d STS calls, want the cached token and 2 calls", again, onNode2, sts.calls)
+	}
+	if again := issue("node-1"); again != onNode1 || sts.calls != 2 {
+		t.Fatalf("node-1 again: got %q, want its own cached %q, with %d STS calls", again, onNode1, sts.calls)
+	}
+}
+
+func TestIssue_RefusesAnEmptyNode(t *testing.T) {
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	sts := &fakeSTS{t: t}
+	i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return now })
+	if _, err := i.Issue(t.Context(), "9f1e", "", testGrants, false); status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v (%v), want Internal", status.Code(err), err)
+	}
+	if sts.calls != 0 || i.cache.Len() != 0 {
+		t.Fatalf("STS calls = %d, cache len = %d, want 0 and 0", sts.calls, i.cache.Len())
 	}
 }
 
@@ -190,7 +233,7 @@ func TestIssue_ForceBypassesTheCache(t *testing.T) {
 	sts := &fakeSTS{t: t}
 	i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return now })
 	for _, force := range []bool{false, true} {
-		if _, err := i.Issue(t.Context(), "9f1e", testGrants, force); err != nil {
+		if _, err := i.Issue(t.Context(), "9f1e", "node-1", testGrants, force); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -204,7 +247,7 @@ func TestIssue_CacheIsBounded(t *testing.T) {
 	sts := &fakeSTS{t: t}
 	i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return now })
 	for _, uid := range []string{"a", "b", "c", "a"} {
-		if _, err := i.Issue(t.Context(), uid, testGrants, false); err != nil {
+		if _, err := i.Issue(t.Context(), uid, "node-1", testGrants, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -234,7 +277,7 @@ func TestIssue_ServesTheCachedTokenWhenItCoversTheGrants(t *testing.T) {
 			sts := &fakeSTS{t: t}
 			i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return now })
 			for _, grants := range [][]actorscope.Grant{tc.first, tc.second} {
-				if _, err := i.Issue(t.Context(), "9f1e", grants, false); err != nil {
+				if _, err := i.Issue(t.Context(), "9f1e", "node-1", grants, false); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -251,10 +294,10 @@ func TestIssue_RefusesEmptyGrantsEvenWhenCached(t *testing.T) {
 	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
 	sts := &fakeSTS{t: t}
 	i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return now })
-	if _, err := i.Issue(t.Context(), "9f1e", testGrants, false); err != nil {
+	if _, err := i.Issue(t.Context(), "9f1e", "node-1", testGrants, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := i.Issue(t.Context(), "9f1e", nil, false); err == nil {
+	if _, err := i.Issue(t.Context(), "9f1e", "node-1", nil, false); err == nil {
 		t.Fatal("Issue with no grants served the cached token")
 	}
 	if sts.calls != 1 {
@@ -282,7 +325,7 @@ func TestIssue_StopsWhenTheCallerGivesUp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, err := i.Issue(ctx, "9f1e", testGrants, false); err == nil {
+	if _, err := i.Issue(ctx, "9f1e", "node-1", testGrants, false); err == nil {
 		t.Fatal("Issue succeeded against a hanging STS")
 	}
 	if took := time.Since(start); took > 2*time.Second {
@@ -301,7 +344,7 @@ func TestWithCacheSize_ZeroIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, uid := range []string{"a", "b"} {
-		if _, err := i.Issue(t.Context(), uid, testGrants, false); err != nil {
+		if _, err := i.Issue(t.Context(), uid, "node-1", testGrants, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -317,7 +360,7 @@ func TestIssue_DoesNotCacheAShortLivedToken(t *testing.T) {
 	sts := &fakeSTS{t: t}
 	i := newTestIssuer(t, sts, staticSource(now.Add(minServeLifetime-time.Minute)), func() time.Time { return now })
 	for range 2 {
-		tok, err := i.Issue(t.Context(), "9f1e", testGrants, false)
+		tok, err := i.Issue(t.Context(), "9f1e", "node-1", testGrants, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -351,7 +394,7 @@ func TestIssue_Errors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			i := newTestIssuer(t, tc.sts, tc.source, clock)
-			_, err := i.Issue(t.Context(), "9f1e", tc.grants, false)
+			_, err := i.Issue(t.Context(), "9f1e", "node-1", tc.grants, false)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want it to mention %q", err, tc.want)
 			}
