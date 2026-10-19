@@ -101,7 +101,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). The pool decides the sandbox class, so this is also how a template pins one: if your cluster has pools of more than one sandbox class and the workload needs a particular class, make sure the selector points only at pools of that class. An actor booting with no snapshot and no selector may land on any class, and keeps it from its first checkpoint on. |
 | `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
-| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
+| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `external` CSI volume source (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpu` and `memory` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
 The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary and `pauseImage`, or a micro-VM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-compute-foundation) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the worker's active `SandboxRuntime` is stamped onto the actor's assignment and snapshots so subsequent resumes prefer runtime-compatible workers.
@@ -257,6 +257,42 @@ Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, 
 - **Ambient capabilities are not supported** ([gvisor#3166](https://github.com/google/gvisor/issues/3166)).
 
 The sandbox — gVisor or micro-VM — remains the isolation boundary; capabilities constrain the workload *inside* it.
+
+### Volume mount views
+
+Each `volumeMounts` entry accepts `subPath` (`sub_path` in protobuf) and
+`readOnly` (`read_only`). The caller chooses a concrete sub-path; placeholders
+such as `${SESSION_ID}` are not expanded. Empty `subPath` selects the volume
+root. Otherwise it must be a clean relative Unix path of at most 16 segments,
+with no empty, `.` or `..` segment and no NUL. Symlinks in the selected path are
+rejected by the workers.
+
+The same volume can appear at several distinct, non-nested `mountPath` values:
+
+```yaml
+volumeMounts:
+  - name: data
+    mountPath: /workspace
+    subPath: sessions/018f2c
+  - name: data
+    mountPath: /skills
+    subPath: skills
+    readOnly: true
+```
+
+A missing final directory is created only for a writable, non-empty sub-path;
+its parent must already exist. A read-only mount of a missing directory fails
+without creating it. Both workers use the same confined bind preparation and
+per-mount flags on start and restore. `readOnly` changes only this view, not the
+volume or another mount's permissions. Image and system-info sources remain
+read-only even when `readOnly` is false. Leaving both fields unset preserves
+the existing root mount behavior. CSI publish/unpublish and the whole-volume
+resource are unchanged.
+
+Currently, gVisor rejects non-empty sub-paths on `durableDir` volumes: its
+shared in-sandbox tmpfs cannot expose a selected subdirectory through the
+existing mount hints. Root mounts, including read-only views, retain their
+existing snapshot behavior.
 
 ### Per-container limits
 

@@ -558,6 +558,10 @@ message WorkloadSpec {
 message DurableDirVolumeSource {
 }
 
+// EmptyDirVolumeSource is an empty host directory at the external volume path.
+message EmptyDirVolumeSource {
+}
+
 message ExternalVolumeSource {
   // Required, unlike the actor status counterpart: the control plane only
   // sends volumes that finished provisioning.
@@ -689,7 +693,7 @@ message Volume {
   // +k8s:format=k8s-short-name
   string name = 1;
 
-  // Exactly one of durable_dir / external / system_info / image must be set.
+  // Exactly one of durable_dir / external / system_info / image / empty_dir must be set.
   //
   // +k8s:optional
   // +k8s:unionMember
@@ -706,6 +710,10 @@ message Volume {
   // +k8s:optional
   // +k8s:unionMember
   ImageVolumeSource image = 5;
+
+  // +k8s:optional
+  // +k8s:unionMember
+  EmptyDirVolumeSource empty_dir = 6;
 }
 
 message VolumeMount {
@@ -721,6 +729,15 @@ message VolumeMount {
   // +k8s:maxLength=4096
   // +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
   string mount_path = 2;
+
+  // read_only makes this bind read-only; it never grants source write access.
+  // +k8s:optional
+  bool read_only = 3;
+
+  // sub_path is a caller-chosen directory inside the volume. Empty selects its root.
+  // +k8s:optional
+  // +k8s:customValidation # projected-path rule shared through internal/volumepath
+  string sub_path = 4;
 }
 
 message Container {

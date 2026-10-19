@@ -259,3 +259,54 @@ func TestBuild_ResourcesApplied(t *testing.T) {
 		t.Errorf("Memory.Limit = %d, want 67108864", *spec.Linux.Resources.Memory.Limit)
 	}
 }
+
+func TestBuild_PerMountOptions(t *testing.T) {
+	o := Options{ActorDirs: &ateworkerpb.ActorDirs{OciBundleDir: "/bundles", DurableDirVolumeMountsDir: "/durable", ExternalVolumeMountsDir: "/volumes", SystemInfoVolumeRootsDir: "/sysinfo"}, Container: &ateworkerpb.Container{
+		Name: "app", ExternalVolumeMounts: []*ateworkerpb.VolumeMount{
+			{Name: "data", MountPath: "/workspace", SubPath: "sessions/018f2c"},
+			{Name: "data", MountPath: "/skills", SubPath: "skills", ReadOnly: true},
+			{Name: "data", MountPath: "/root"},
+		}, SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "info", MountPath: "/info"}},
+	}}
+	for _, runtime := range []string{"gvisor", "microvm"} {
+		t.Run(runtime, func(t *testing.T) {
+			spec := Build(o)
+			prefix := "/bundles/app/subpaths/"
+			root := "/volumes/data"
+			if runtime == "microvm" {
+				if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: o.ActorDirs, ContainerID: "app"}); err != nil {
+					t.Fatal(err)
+				}
+				prefix = GuestSharedDir + "/app/subpaths/"
+				root = GuestSharedDir + "/csi/data"
+			} else {
+				ShapeGVisor(spec, GVisorOptions{ActorDirs: o.ActorDirs, ContainerName: "app"})
+			}
+			for _, tc := range []struct{ dest, source, mode string }{
+				{"/workspace", prefix + "0", "rw"}, {"/skills", prefix + "1", "ro"}, {"/root", root, "rw"},
+			} {
+				m := mountFor(t, spec, tc.dest)
+				if m.Source != tc.source || !slices.Contains(m.Options, tc.mode) {
+					t.Errorf("mount %s = %+v", tc.dest, m)
+				}
+			}
+			if !slices.Contains(mountFor(t, spec, "/info").Options, "ro") {
+				t.Fatal("source read-only lost")
+			}
+		})
+	}
+}
+
+func TestWholeVolumeNames(t *testing.T) {
+	containers := []*ateworkerpb.Container{
+		{ExternalVolumeMounts: []*ateworkerpb.VolumeMount{
+			{Name: "private", SubPath: "session"}, {Name: "shared", SubPath: "skills", ReadOnly: true},
+			{Name: "whole"}, {Name: "whole", ReadOnly: true},
+		}},
+		{ExternalVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "shared"}}},
+	}
+	got := WholeVolumeNames(containers, (*ateworkerpb.Container).GetExternalVolumeMounts)
+	if !slices.Equal(got, []string{"shared", "whole"}) {
+		t.Fatalf("whole roots = %v; sub-path-only volume must stay private", got)
+	}
+}

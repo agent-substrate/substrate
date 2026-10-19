@@ -88,14 +88,12 @@ func durableVolumeNames(containers []*ateworkerpb.Container) []string {
 	return slices.Compact(names)
 }
 
-// stageDurableVolumes bind-mounts src, the actor's host durable-dir directory,
-// into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/durable.
-func (s *AteWorkerService) stageDurableVolumes(ctx context.Context, actorUID, src string) error {
-	if _, err := os.Stat(src); err != nil {
-		return fmt.Errorf("while checking durable-dir volumes dir %q: %w", src, err)
-	}
-	if err := kata.BindIntoShare(ctx, src, actorUID, ocispec.ShareDurable); err != nil {
-		return fmt.Errorf("while binding durable-dir volumes into the shared tree: %w", err)
+// stageDurableVolumes exposes only explicitly requested whole-volume roots.
+func (s *AteWorkerService) stageDurableVolumes(ctx context.Context, actorUID, src string, names []string) error {
+	for _, name := range names {
+		if err := kata.BindIntoShare(ctx, filepath.Join(src, name), actorUID, filepath.Join(ocispec.ShareDurable, name)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -313,3 +313,10 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteSpecRejectsDurableSubPath(t *testing.T) {
+	r := &runsc{containers: []*ateworkerpb.Container{{Name: "app", DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "data", MountPath: "/data", SubPath: "selected"}}}}}
+	if err := r.writeSpec("app"); err == nil || !strings.Contains(err.Error(), "shared tmpfs") {
+		t.Fatalf("writeSpec = %v, want unsupported durable sub-path", err)
+	}
+}

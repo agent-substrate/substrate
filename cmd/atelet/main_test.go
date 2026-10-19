@@ -883,22 +883,24 @@ func TestBuildWorkerWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 			{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 			{Name: "cache", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 			{Name: "scratch", External: &ateletpb.ExternalVolumeSource{}},
+			{Name: "empty", EmptyDir: &ateletpb.EmptyDirVolumeSource{}},
 			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolumeSource{}},
 		},
 		Containers: []*ateletpb.Container{
 			{
 				Name: "main",
 				VolumeMounts: []*ateletpb.VolumeMount{
-					{Name: "data", MountPath: "/home/counter"},
+					{Name: "data", MountPath: "/home/counter", SubPath: "sessions/018f2c"},
 					{Name: "cache", MountPath: "/var/cache"},
-					{Name: "scratch", MountPath: "/scratch"},
-					{Name: "system-info", MountPath: "/run/ate"},
+					{Name: "scratch", MountPath: "/scratch", SubPath: "cache", ReadOnly: true},
+					{Name: "empty", MountPath: "/empty"},
+					{Name: "system-info", MountPath: "/run/ate", SubPath: "info", ReadOnly: true},
 				},
 			},
 			{
 				Name: "sidecar",
 				VolumeMounts: []*ateletpb.VolumeMount{
-					{Name: "data", MountPath: "/shared"},
+					{Name: "data", MountPath: "/shared", SubPath: "skills", ReadOnly: true},
 				},
 			},
 			{Name: "no-volumes"},
@@ -911,20 +913,21 @@ func TestBuildWorkerWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 			{
 				Name: "main",
 				DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
-					{Name: "data", MountPath: "/home/counter"},
+					{Name: "data", MountPath: "/home/counter", SubPath: "sessions/018f2c"},
 					{Name: "cache", MountPath: "/var/cache"},
 				},
 				ExternalVolumeMounts: []*ateworkerpb.VolumeMount{
-					{Name: "scratch", MountPath: "/scratch"},
+					{Name: "scratch", MountPath: "/scratch", SubPath: "cache", ReadOnly: true},
+					{Name: "empty", MountPath: "/empty"},
 				},
 				SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{
-					{Name: "system-info", MountPath: "/run/ate"},
+					{Name: "system-info", MountPath: "/run/ate", SubPath: "info", ReadOnly: true},
 				},
 			},
 			{
 				Name: "sidecar",
 				DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
-					{Name: "data", MountPath: "/shared"},
+					{Name: "data", MountPath: "/shared", SubPath: "skills", ReadOnly: true},
 				},
 			},
 			{Name: "no-volumes"},
@@ -1274,7 +1277,7 @@ func TestBuildWorkerWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 		Containers: []*ateletpb.Container{{
 			Name: "app",
 			VolumeMounts: []*ateletpb.VolumeMount{
-				{Name: "agent", MountPath: "/ate"},
+				{Name: "agent", MountPath: "/ate", SubPath: "bin", ReadOnly: true},
 				{Name: "data", MountPath: "/var/data"},
 				{Name: "ext", MountPath: "/mnt/ext"},
 			},
@@ -1295,6 +1298,9 @@ func TestBuildWorkerWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 	}
 	if name, path := ctr.GetImageVolumeMounts()[0].GetName(), ctr.GetImageVolumeMounts()[0].GetMountPath(); name != "agent" || path != "/ate" {
 		t.Errorf("image volume mount = (%q, %q), want (agent, /ate)", name, path)
+	}
+	if m := ctr.GetImageVolumeMounts()[0]; m.GetSubPath() != "bin" || !m.GetReadOnly() {
+		t.Errorf("image mount options lost: %v", m)
 	}
 	if len(ctr.GetDurableDirVolumeMounts()) != 1 || ctr.GetDurableDirVolumeMounts()[0].GetName() != "data" {
 		t.Errorf("durable mounts = %v, want just data", ctr.GetDurableDirVolumeMounts())

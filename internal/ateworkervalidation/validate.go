@@ -152,3 +152,8 @@ func createOp() operation.Operation {
 func ateDeepEqual[T any](a, b T) bool {
 	return resources.DeepEqual(a, b)
 }
+
+// ValidateCustom_VolumeMount_SubPath permits the volume root or a projected path.
+func ValidateCustom_VolumeMount_SubPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateProjectedPath(fldPath, *value)
+}

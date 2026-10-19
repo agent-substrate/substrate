@@ -43,14 +43,11 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"path/filepath"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
-	"golang.org/x/sys/unix"
 )
 
 // hasSystemInfoVolumes reports whether any container mounts a system-info
@@ -64,25 +61,15 @@ func hasSystemInfoVolumes(containers []*ateworkerpb.Container) bool {
 	return false
 }
 
-// stageSystemInfoVolumes bind-mounts src, the actor's host system-info
-// directory, into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/system-info,
-// then remounts the bind read-only: atelet is the only writer, and it writes
-// the host source directly, never through the share.
-func (s *AteWorkerService) stageSystemInfoVolumes(ctx context.Context, actorUID, src string) error {
-	if _, err := os.Stat(src); err != nil {
-		return fmt.Errorf("while checking system-info volumes dir %q: %w", src, err)
-	}
-	dst := filepath.Join(kata.SharedDir(actorUID), ocispec.ShareSystemInfo)
-	// Drop any stale mount first (lazy if busy), then ensure clean mountpoint.
-	kata.Unmount(dst)
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return fmt.Errorf("creating %q: %w", dst, err)
-	}
-	if err := unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
-		return fmt.Errorf("bind-mounting system-info volumes at %q: %w", dst, err)
-	}
-	if err := kata.RemountReadOnly(dst); err != nil {
-		return fmt.Errorf("remounting system-info volumes read-only %q: %w", dst, err)
+// stageSystemInfoVolumes exposes only explicitly requested whole-volume roots.
+func (s *AteWorkerService) stageSystemInfoVolumes(ctx context.Context, actorUID, src string, names []string) error {
+	for _, name := range names {
+		if err := kata.BindIntoShare(ctx, filepath.Join(src, name), actorUID, filepath.Join(ocispec.ShareSystemInfo, name)); err != nil {
+			return err
+		}
+		if err := kata.RemountReadOnly(filepath.Join(kata.SharedDir(actorUID), ocispec.ShareSystemInfo, name)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -194,3 +194,8 @@ func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, f
 func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return resources.ValidateCapabilities(fldPath, value, true)
 }
+
+// ValidateCustom_VolumeMount_SubPath permits the volume root or a projected path.
+func ValidateCustom_VolumeMount_SubPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateProjectedPath(fldPath, *value)
+}

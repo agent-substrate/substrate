@@ -130,6 +130,31 @@ service Control {
     option (method).resource = "Tag";
   }
 
+  // Create a SharedVolume, provisioning it or registering an existing volume.
+  rpc CreateSharedVolume(CreateSharedVolumeRequest) returns (SharedVolume) {
+    option (method).resource = "SharedVolume";
+  }
+
+  // Get a SharedVolume.
+  rpc GetSharedVolume(GetSharedVolumeRequest) returns (SharedVolume) {
+    option (method).resource = "SharedVolume";
+  }
+
+  // List ExternalVolumes.
+  rpc ListSharedVolumes(ListSharedVolumesRequest) returns (ListSharedVolumesResponse) {
+    option (method).resource = "SharedVolume";
+  }
+
+  // Update a SharedVolume's delete trigger.
+  rpc UpdateSharedVolume(UpdateSharedVolumeRequest) returns (SharedVolume) {
+    option (method).resource = "SharedVolume";
+  }
+
+  // Delete a SharedVolume and its storage. Rejected while any Actor references it.
+  rpc DeleteSharedVolume(DeleteSharedVolumeRequest) returns (SharedVolume) {
+    option (method).resource = "SharedVolume";
+  }
+
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
     option (method).resource = "Worker";
@@ -523,6 +548,15 @@ message ExternalVolume {
   // +k8s:optional
   // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
   map<string, string> volume_context = 5;
+
+  // shared_volume_name names the SharedVolume this mount references, in the
+  // actor's atespace. Empty when the actor owns the volume itself.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  string shared_volume_name = 6;
 }
 
 message Actor {
@@ -566,6 +600,17 @@ message Actor {
   //
   // +k8s:optional
   ActorStatus status = 7;
+
+  // shared_volume_bindings maps each unnamed external.shared_volume in the
+  // template, by volume name, to the SharedVolume this actor mounts. Every
+  // unnamed ref must be bound; a named ref cannot be rebound. Set at creation.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:format=k8s-short-name
+  // +k8s:eachVal=+k8s:format=k8s-short-name
+  // +k8s:immutable
+  map<string, string> shared_volume_bindings = 8;
 }
 
 // EgressPolicy is an egress policy resource nested under an Actor. An Actor has
@@ -1075,6 +1120,162 @@ message Tag {
   ObjectRef source_actor = 4;
 }
 
+// DeleteTrigger is what removes a SharedVolume and its storage.
+// TODO: add an ATESPACE trigger that removes the volume with its atespace.
+enum DeleteTrigger {
+  DELETE_TRIGGER_UNSPECIFIED = 0;
+  // Only an explicit DeleteSharedVolume removes the volume.
+  DELETE_TRIGGER_MANUAL = 1;
+  // The volume is removed when the last actor referencing it is deleted.
+  DELETE_TRIGGER_LAST_ACTOR = 2;
+}
+
+// AccessMode is how many resumed actors may hold the volume at once.
+enum AccessMode {
+  ACCESS_MODE_UNSPECIFIED = 0;
+  // At most one resumed actor holds the volume.
+  ACCESS_MODE_READ_WRITE_ONCE = 1;
+  // Any number of resumed actors hold the volume, on any node.
+  ACCESS_MODE_READ_WRITE_MANY = 2;
+}
+
+// SharedVolumeState is where a SharedVolume is in its own lifecycle.
+enum SharedVolumeState {
+  SHARED_VOLUME_STATE_UNSPECIFIED = 0;
+  // The name is reserved but no volume handle is known yet.
+  SHARED_VOLUME_STATE_PENDING = 1;
+  // The volume has a handle and can be referenced.
+  SHARED_VOLUME_STATE_READY = 2;
+}
+
+// SharedVolume is an atespace-scoped CSI volume whose lifetime is independent
+// of any actor. Identity is (atespace, name); the storage-level ID is derived
+// from the record's UID.
+message SharedVolume {
+  option (resource) = {
+    scope : SCOPE_ATESPACE
+    plural : "SharedVolumes"
+  };
+
+  // Common resource metadata: atespace, name, uid, version, timestamps.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ResourceMetadata metadata = 1;
+
+  // delete_trigger decides what removes the volume. Defaults to LAST_ACTOR when
+  // provisioned and MANUAL when registered.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the DeleteTrigger enum
+  // +k8s:mutable
+  DeleteTrigger delete_trigger = 2;
+
+  // storage_class_name names the StorageClass to provision from, or documents
+  // the class of a registered volume.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-long-name
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  string storage_class_name = 3;
+
+  // volume_id is the storage system's volume ID. Supplied to register an
+  // existing volume, otherwise stamped once provisioning completes. Bounded and
+  // checked for control characters only.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation # no control characters
+  string volume_id = 4;
+
+  // volume_type is the CSI driver name. Required alongside volume_id when no
+  // StorageClass is named; otherwise taken from the class's provisioner.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=253
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation
+  string volume_type = 5;
+
+  // volume_context is driver metadata needed by the node plugin for mounting.
+  // Attachment metadata is per-node and deliberately not recorded here.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:maxLength=128
+  // +k8s:eachVal=+k8s:maxLength=256
+  map<string, string> volume_context = 6;
+
+  // status is set by the control plane; it is ignored on write.
+  //
+  // +k8s:optional
+  SharedVolumeStatus status = 7;
+
+  // capacity to provision, as a Kubernetes resource.Quantity string (e.g.
+  // "10Gi"). Required when provisioning, forbidden alongside volume_id.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=64
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation # must parse as a resource.Quantity
+  string capacity = 8;
+
+  // access_mode is fixed at create and defaults to READ_WRITE_ONCE.
+  // TODO: accept READ_WRITE_MANY once concurrent holders are supported.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the AccessMode enum
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  AccessMode access_mode = 9;
+}
+
+// SharedVolumeStatus is the part of a SharedVolume the control plane owns.
+message SharedVolumeStatus {
+  // state is where the volume is in its lifecycle.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SharedVolumeState enum
+  SharedVolumeState state = 1;
+
+  // refs are the actors referencing the volume, resumed or not.
+  // TODO: move references to their own table before lifting the bound.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=256
+  // +k8s:listType=map
+  // +k8s:listMapKey=actor_uid
+  repeated ActorRef refs = 2;
+}
+
+// ActorRef is one actor's reference to a SharedVolume.
+message ActorRef {
+  // actor_uid identifies the actor, so a recreated namesake does not inherit it.
+  //
+  // +k8s:required
+  // +k8s:maxLength=253
+  string actor_uid = 1;
+
+  // actor_name is the actor's name, for readers.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+
+  // active is true while the actor is resumed and holds the volume mounted.
+  //
+  // +k8s:optional
+  bool active = 3;
+}
+
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
 // metadata.atespace is always empty; the atespace's identity is metadata.name.
 message Atespace {
@@ -1429,18 +1630,20 @@ message Volume {
   // +k8s:format=k8s-short-name
   string name = 1;
 
-  // Exactly one of durable_dir / external_volume_template / image /
-  // system_info must be set.
+  // Exactly one of durable_dir / external / image / system_info must be
+  // set.
   //
   // +k8s:optional
   // +k8s:unionMember
   DurableDirVolumeSource durable_dir = 2;
 
+  // external is a CSI volume: provisioned for this actor from a template.
+  //
   // +ate:preview=ExternalVolumes
   // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
   // +k8s:optional
   // +k8s:unionMember
-  ExternalVolumeTemplate external_volume_template = 3;
+  ExternalVolumeSource external = 7;
 
   // +k8s:optional
   // +k8s:unionMember
@@ -1451,6 +1654,22 @@ message Volume {
   // +k8s:optional
   // +k8s:unionMember
   ImageVolumeSource image = 6;
+}
+
+// ExternalVolumeSource is a CSI volume provisioned for the actor from a template.
+message ExternalVolumeSource {
+  // template provisions a volume for this actor alone; it is deleted with the
+  // actor.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  ExternalVolumeTemplate template = 1;
+
+  // shared_volume mounts a SharedVolume that already exists.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  SharedVolumeRef shared_volume = 2;
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The
@@ -1487,6 +1706,21 @@ message ExternalVolumeTemplate {
   // +k8s:required
   // +k8s:format=k8s-long-name
   string storage_class_name = 2;
+}
+
+// SharedVolumeRef mounts a SharedVolume in the actor's atespace. The
+// volume outlives the actor, so several actors can mount it in turn.
+//
+// Actors created from a template with a SharedVolumeRef do not start from
+// the template's golden snapshot: the first resume boots from the image, and
+// later resumes restore the actor's own snapshot.
+message SharedVolumeRef {
+  // name of the SharedVolume. Left empty, the actor names it at creation in
+  // Actor.shared_volume_bindings.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  string name = 1;
 }
 
 // SystemInfoVolumeSource is a read-only volume of substrate-generated
@@ -1608,6 +1842,15 @@ message VolumeMount {
   // +k8s:maxLength=4096
   // +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
   string mount_path = 2;
+
+  // read_only makes this bind read-only; it never grants source write access.
+  // +k8s:optional
+  bool read_only = 3;
+
+  // sub_path is a caller-chosen directory inside the volume. Empty selects its root.
+  // +k8s:optional
+  // +k8s:customValidation # projected-path rule shared through internal/volumepath
+  string sub_path = 4;
 }
 
 message CreateAtespaceRequest {
@@ -2034,6 +2277,75 @@ message DeleteTagRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef tag = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
+}
+
+// Request to create a SharedVolume.
+//
+// +k8s:customValidation # exactly one of storage_class_name and volume_id
+message CreateSharedVolumeRequest {
+  // The volume to create. Name a storage class to provision a new volume, or
+  // supply a volume ID to register one that already exists. status is ignored.
+  //
+  // +k8s:required
+  SharedVolume shared_volume = 1;
+}
+
+// GetSharedVolumeRequest identifies one SharedVolume.
+message GetSharedVolumeRequest {
+  // The volume to get.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef shared_volume = 1;
+}
+
+// ListSharedVolumesRequest selects a page of ExternalVolumes.
+message ListSharedVolumesRequest {
+  // The atespace to list from. Empty lists across all atespaces.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  string atespace = 1;
+
+  // options selects the page size and continuation token.
+  //
+  // +k8s:optional
+  ListOptions options = 2;
+}
+
+// ListSharedVolumesResponse is one page of ExternalVolumes.
+message ListSharedVolumesResponse {
+  // The volumes in this page.
+  repeated SharedVolume shared_volumes = 1;
+
+  // Pagination token for the next page. Empty on the last page.
+  string next_page_token = 2;
+}
+
+// Request to update the mutable fields of a SharedVolume.
+message UpdateSharedVolumeRequest {
+  // The volume to update. metadata.atespace and metadata.name identify it;
+  // metadata.version and metadata.uid are required preconditions.
+  //
+  // +k8s:required
+  // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:subfield(metadata)=+k8s:required
+  // +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
+  SharedVolume shared_volume = 1;
+}
+
+// DeleteSharedVolumeRequest identifies one SharedVolume to delete.
+message DeleteSharedVolumeRequest {
+  // The volume to delete.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef shared_volume = 1;
 
   // Optional per-delete preconditions.
   //

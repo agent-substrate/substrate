@@ -159,6 +159,26 @@ type Interface interface {
 	// tag the caller observed.
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions) (*ateapipb.Tag, error)
 
+	// Stores a new external volume and returns it with server-assigned metadata.
+	// Returns ErrAlreadyExists if the name is taken, or ErrFailedPrecondition if
+	// the atespace does not exist.
+	CreateSharedVolume(ctx context.Context, volume *ateapipb.SharedVolume) (*ateapipb.SharedVolume, error)
+
+	// Fetches an external volume by reference. Returns ErrNotFound if missing.
+	GetSharedVolume(ctx context.Context, volumeRef resources.SharedVolumeRef) (*ateapipb.SharedVolume, error)
+
+	// Lists external volumes in one atespace, or all atespaces when empty.
+	ListSharedVolumes(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.SharedVolume], error)
+
+	// UpdateSharedVolume performs a guarded read-modify-write like UpdateTag.
+	// Everything naming the storage, and access_mode, is set-once and returns
+	// ErrImmutableField when changed.
+	UpdateSharedVolume(ctx context.Context, volumeRef resources.SharedVolumeRef, precondition Precondition, mutate func(toUpdate *ateapipb.SharedVolume) error) (*ateapipb.SharedVolume, error)
+
+	// Deletes and returns an external volume record; the storage is the caller's
+	// job.
+	DeleteSharedVolume(ctx context.Context, volumeRef resources.SharedVolumeRef, precondition DeletePreconditions) (*ateapipb.SharedVolume, error)
+
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns
 	// ErrAlreadyExists if the name is taken.
