@@ -13,8 +13,9 @@
 # limitations under the License.
 
 # Pushing a vX.Y.Z[-PRERELEASE] tag publishes the release images and then
-# creates a DRAFT release with generated notes (.github/release.yml). A
-# maintainer edits and publishes it; see docs/dev/releasing.md.
+# creates a DRAFT release with generated notes (.github/release.yml), with the
+# kubectl-ate binaries attached. A maintainer edits and publishes it; see
+# docs/dev/releasing.md.
 #
 # Images are published only from agent-substrate/substrate, to
 # ghcr.io/agent-substrate/substrate. In any other repository (a fork) the
@@ -154,8 +155,32 @@ jobs:
         # previous release tag.
         fetch-depth: 0
         persist-credentials: false
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: 'go.mod'
+    # Built before the draft exists, so a build failure leaves no draft, as an
+    # images failure does.
+    - name: Build kubectl-ate
+      env:
+        VERSION: ${{ inputs.tag || github.ref_name }}
+      run: go run ./cmd/ate-setup publish release-binaries --out dist
     - name: Draft release
       env:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ inputs.tag || github.ref_name }}
       run: hack/release/draft-release.sh "${TAG}"
+    # Only agent-substrate/substrate attaches binaries; a fork's draft gets
+    # none. Assets are replaced only while the release is a draft, so a rerun
+    # never changes the files of a published release.
+    - name: Attach kubectl-ate
+      if: github.repository == 'agent-substrate/substrate'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ inputs.tag || github.ref_name }}
+      run: |
+        if [[ "$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" != true ]]; then
+          echo "${TAG} is published; its binaries are left unchanged."
+          exit 0
+        fi
+        gh release upload "${TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber

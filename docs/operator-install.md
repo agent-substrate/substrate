@@ -15,7 +15,7 @@ namespace: ate-system
 atenet:
   dataplane: envoy
 images:
-  repo: ghcr.io/agent-substrate/substrate
+  repo: registry.example.com/substrate
   tag: v0.4.1
 ```
 
@@ -315,6 +315,7 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `otlpEndpoint`                               | `ATE_OTLP_ENDPOINT`                             | `--otlp-endpoint`                                  | —                     | (global)                                 |
 | `podcert.workersPerSigner`                   | `ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER`        | `--podcert-workers-per-signer`                     | `0`                   | (global)                                 |
 | `preview`                                    | `ATE_PREVIEW`                                   | `--preview`                                        | —                     | (global)                                 |
+| `publish.binariesDir`                        | `ATE_PUBLISH_BINARIES_DIR`                      | `--out`                                            | `dist`                | `publish release-binaries`               |
 | `publish.overwrite`                          | `ATE_PUBLISH_OVERWRITE`                         | `--overwrite`                                      | `false`               | `publish release-images`                 |
 | `record.dir`                                 | `ATE_RECORD_DIR`                                | `--record-dir`                                     | —                     | (global)                                 |
 | `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |

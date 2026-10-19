@@ -180,7 +180,39 @@ func (r *Runner) args(subcommand string, target ...string) []string {
 
 // ldflags returns the version stamp ko should bake into binaries.
 func (r *Runner) ldflags() []string {
-	return []string{fmt.Sprintf("-X=%s.Version=%s", versionPkg, BuildVersion(r.Root))}
+	return Ldflags(r.Root)
+}
+
+// Ldflags returns the -X flags that stamp a binary built from root with
+// internal/version's Version, and with Commit and BuildDate when root has a
+// commit checked out. internal/version replaces a stamped Version with the
+// module's build info unless Commit is stamped too, so the commit is part of
+// the version stamp, not decoration. BuildDate is the commit's time rather than
+// the build's, so rebuilding one commit gives the same binary.
+func Ldflags(root string) []string {
+	flags := []string{fmt.Sprintf("-X=%s.Version=%s", versionPkg, BuildVersion(root))}
+	if commit, date, ok := CommitStamp(root); ok {
+		flags = append(flags,
+			fmt.Sprintf("-X=%s.Commit=%s", versionPkg, commit),
+			fmt.Sprintf("-X=%s.BuildDate=%s", versionPkg, date))
+	}
+	return flags
+}
+
+// CommitStamp returns the commit checked out at root and its committer date in
+// RFC 3339 form. ok is false when root has no commit, as in a source tarball.
+func CommitStamp(root string) (commit, date string, ok bool) {
+	cmd := exec.Command("git", "show", "-s", "--format=%H %cI", "HEAD")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", false
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 2 {
+		return "", "", false
+	}
+	return fields[0], fields[1], true
 }
 
 // BuildVersion is the VERSION environment variable, else `git describe`, or

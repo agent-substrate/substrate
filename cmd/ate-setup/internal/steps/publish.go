@@ -16,13 +16,104 @@ package steps
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/ko"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
+
+// releaseBinary is the binary a release attaches, and releaseBinaryPlatforms
+// the GOOS/GOARCH pairs it is built for. Windows is not among them.
+const releaseBinary = "kubectl-ate"
+
+var releaseBinaryPlatforms = []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
+
+// releaseBinaryName is the file name of the release binary for platform, e.g.
+// kubectl-ate-linux-amd64.
+func releaseBinaryName(platform string) string {
+	return releaseBinary + "-" + strings.ReplaceAll(platform, "/", "-")
+}
+
+// PublishReleaseBinaries builds kubectl-ate for every releaseBinaryPlatforms
+// entry into outDir, statically (CGO_ENABLED=0) and stamped with the release
+// version, commit, and commit time, and writes beside each binary a .sha256
+// file that `shasum -a 256 -c` checks. It writes the paths it produced to w.
+// The version has to be a release tag, and the checkout has to have a commit,
+// since a binary without one reports the wrong version.
+func (e *Env) PublishReleaseBinaries(ctx context.Context, w io.Writer, outDir string) error {
+	version := e.SubstrateVersion()
+	if err := images.CheckReleaseVersion(version); err != nil {
+		return fmt.Errorf("the build version: %w; set VERSION to the release tag", err)
+	}
+	if _, _, ok := ko.CommitStamp(e.Cfg.Root); !ok {
+		return fmt.Errorf("release binaries are stamped with the commit they were built from, and %s has none checked out", e.Cfg.Root)
+	}
+	log.Stepf("publish_release_binaries (%s)", version)
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return fmt.Errorf("while creating %s: %w", outDir, err)
+	}
+	ldflags := strings.Join(ko.Ldflags(e.Cfg.Root), " ")
+	var written []string
+	for _, platform := range releaseBinaryPlatforms {
+		goos, goarch, _ := strings.Cut(platform, "/")
+		out, err := filepath.Abs(filepath.Join(outDir, releaseBinaryName(platform)))
+		if err != nil {
+			return err
+		}
+		build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags="+ldflags, "-o", out, "./cmd/"+releaseBinary)
+		build.Dir = e.Cfg.Root
+		build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS="+goos, "GOARCH="+goarch)
+		build.Stdout = os.Stderr
+		build.Stderr = os.Stderr
+		if err := build.Run(); err != nil {
+			return fmt.Errorf("while building %s for %s: %w", releaseBinary, platform, err)
+		}
+		sum, err := writeChecksum(out)
+		if err != nil {
+			return err
+		}
+		written = append(written, out, sum)
+	}
+	if _, err := fmt.Fprintf(w, "\nRelease binaries for %s:\n", version); err != nil {
+		return err
+	}
+	for _, path := range written {
+		if _, err := fmt.Fprintln(w, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeChecksum writes path's SHA-256 to path.sha256 in the "<hex>  <name>"
+// form `shasum -a 256 -c` and `sha256sum -c` read, naming the file without
+// its directory so the check runs wherever both are downloaded. It returns
+// the checksum file's path.
+func writeChecksum(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("while hashing %s: %w", path, err)
+	}
+	sum := path + ".sha256"
+	line := hex.EncodeToString(h.Sum(nil)) + "  " + filepath.Base(path) + "\n"
+	if err := os.WriteFile(sum, []byte(line), 0o644); err != nil {
+		return "", fmt.Errorf("while writing %s: %w", sum, err)
+	}
+	return sum, nil
+}
 
 // workerImages are the worker images a WorkerPool points at through
 // workerImage, one per sandbox class. No manifest references them, so the

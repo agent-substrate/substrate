@@ -21,13 +21,16 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 )
 
-const publishReleaseImagesPath = "publish release-images"
+const (
+	publishReleaseImagesPath   = "publish release-images"
+	publishReleaseBinariesPath = "publish release-binaries"
+)
 
 var publishCmd = &cobra.Command{
 	Use:   "publish",
-	Short: "Build and push images that no manifest references",
-	// Publishing builds and pushes images and never contacts a cluster, so it
-	// runs where there is no kubeconfig, such as a release job.
+	Short: "Build release images and binaries, and images that no manifest references",
+	// Publishing builds images and binaries and never contacts a cluster, so
+	// it runs where there is no kubeconfig, such as a release job.
 	Annotations: map[string]string{clusterAnnotation: "no"},
 }
 
@@ -67,10 +70,37 @@ every platform, and a missing one fails the command.`,
 	},
 }
 
+var publishReleaseBinariesCmd = &cobra.Command{
+	Use:   "release-binaries",
+	Short: "Build the kubectl-ate release binaries and their checksums into a directory",
+	Long: `Build kubectl-ate for linux and darwin on amd64 and arm64, statically and
+stamped with the build version (VERSION, else git describe), the commit, and
+the commit time, into --out. Beside each kubectl-ate-<os>-<arch> binary it
+writes a .sha256 file that "shasum -a 256 -c" checks.
+
+  VERSION=TAG ate-setup publish release-binaries --out dist
+
+The version has to be a release tag. Nothing is uploaded; the release
+workflow attaches the files to the draft release.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return env.PublishReleaseBinaries(cmd.Context(), cmd.OutOrStdout(), env.Cfg.Resolved().String("publish.binariesDir"))
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(publishCmd)
 	publishCmd.AddCommand(publishWorkerImagesCmd)
 	publishCmd.AddCommand(publishReleaseImagesCmd)
+	publishCmd.AddCommand(publishReleaseBinariesCmd)
+
+	config.RegisterCommand(config.Setting{
+		Key: "publish.binariesDir", Env: "ATE_PUBLISH_BINARIES_DIR", Flag: "out",
+		Kind: config.KindString, Default: "dist",
+		Commands: []string{publishReleaseBinariesPath},
+		Usage:    "Directory the release binaries and their checksums are written to",
+	})
+	config.BindCommandFlags(publishReleaseBinariesPath, publishReleaseBinariesCmd.Flags())
 
 	config.RegisterCommand(config.Setting{
 		Key: "publish.overwrite", Env: "ATE_PUBLISH_OVERWRITE", Flag: "overwrite",

@@ -16,6 +16,7 @@ package ko
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -75,6 +76,47 @@ func TestBuildVersionFallsBackToDev(t *testing.T) {
 	t.Setenv("VERSION", "")
 	if got := BuildVersion(t.TempDir()); got != "dev" {
 		t.Errorf("BuildVersion() = %q, want dev", got)
+	}
+}
+
+// internal/version discards a stamped Version unless Commit is stamped too, so
+// a checkout with a commit stamps the commit and its time beside the version.
+// Without a commit only the version can be stamped.
+func TestLdflagsStampTheCommit(t *testing.T) {
+	t.Setenv("VERSION", "v1.2.3")
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "test"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	commit, date, ok := CommitStamp(dir)
+	if !ok || len(commit) != 40 || date == "" {
+		t.Fatalf("CommitStamp() = %q, %q, %v; want a commit and its date", commit, date, ok)
+	}
+
+	want := []string{
+		"-X=go.ate.dev/substrate/internal/version.Version=v1.2.3",
+		"-X=go.ate.dev/substrate/internal/version.Commit=" + commit,
+		"-X=go.ate.dev/substrate/internal/version.BuildDate=" + date,
+	}
+	if got := Ldflags(dir); !slices.Equal(got, want) {
+		t.Errorf("Ldflags() = %v, want %v", got, want)
+	}
+	// ko splits --ldflags on commas, so no stamp may contain one.
+	for _, flag := range want {
+		if strings.Contains(flag, ",") {
+			t.Errorf("%s contains a comma, which ko would split", flag)
+		}
+	}
+
+	if got := Ldflags(t.TempDir()); len(got) != 1 {
+		t.Errorf("Ldflags() without a commit = %v, want only the version", got)
 	}
 }
 

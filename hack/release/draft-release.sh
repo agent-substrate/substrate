@@ -147,16 +147,24 @@ if ! notes="$(api "generating notes" "repos/${REPO}/releases/generate-notes" \
 fi
 
 # Only the upstream release workflow publishes images (see
-# .github/workflows/release.yaml), so only its notes say where they are.
-# Releases do not publish the Kubernetes Secrets credential provider, so the
-# command turns egress credential injection off; ate-setup requires a choice.
+# .github/workflows/release.yaml), so only its notes say where they are. The
+# images are not a complete install: releases leave out the storage plugin and
+# envoy-dataplane, among others, so the notes give no install command. The list
+# lives in docs/dev/releasing.md, so it is not kept in two places.
 if [[ "${REPO}" == "${UPSTREAM_REPO}" ]]; then
-  notes+=$'\n\n## Install\n\n'
-  notes+="Container images for this release are published to \`${RELEASE_IMAGE_REPO}\`."
-  notes+=$' From a checkout of the tag:\n\n```sh\n'
-  notes+="ate-setup deploy ate-system --credential-provider='{\"enabled\":false}'"
-  notes+=" --image-repo ${RELEASE_IMAGE_REPO} --image-tag ${tag}"
-  notes+=$'\n```'
+  notes+=$'\n\n## Images\n\n'
+  notes+="Container images for this release are published as \`${RELEASE_IMAGE_REPO}/<image>:${tag}\`"
+  notes+=" for \`linux/amd64\` and \`linux/arm64\`. The images a release publishes are listed in"
+  notes+=" [Release images](https://github.com/${REPO}/blob/${tag}/docs/dev/releasing.md#release-images)."
+  # The workflow attaches these after creating the draft; see the
+  # "Attach kubectl-ate" step in .github/workflows/release.yaml.
+  notes+=$'\n\n## kubectl-ate\n\n'
+  notes+="\`kubectl-ate\` is attached for Linux and macOS on amd64 and arm64."
+  notes+=" Download the binary for your platform and its \`.sha256\` file, check it, and put it on your \`PATH\` as \`kubectl-ate\`:"
+  notes+=$'\n\n```sh\n'
+  notes+=$'shasum -a 256 -c kubectl-ate-linux-amd64.sha256\n'
+  notes+=$'install -m 0755 kubectl-ate-linux-amd64 ~/.local/bin/kubectl-ate\n'
+  notes+='```'
 fi
 
 # GitHub only lists first-time contributors; list everyone, as v0.1.0 did.

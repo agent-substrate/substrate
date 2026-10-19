@@ -11,30 +11,31 @@ go build -o bin/ate-setup ./cmd/ate-setup
 that existing command lines and CI jobs keep working; it holds no install logic
 of its own.
 
-## Installing a release
+## Installing pre-built images
 
 By default every image is built from the checkout with `ko`, which is what a
-developer wants and what the shell installer always did. To install published
-images instead, name the registry they were pushed to. Each release publishes
-its images to `ghcr.io/agent-substrate/substrate`, readable without
-credentials:
+developer wants and what the shell installer always did. To install images
+that are already published instead, name the registry that holds them and the
+tag they share:
 
 ```
 ate-setup deploy ate-system \
-  --credential-provider='{"enabled":false}' \
-  --image-repo ghcr.io/agent-substrate/substrate \
+  --credential-provider='{"name":"k8s.io"}' \
+  --image-repo registry.example.com/substrate \
   --image-tag vX.Y.Z
 ```
 
-Releases publish the control plane, the node and worker images, and
-`envoy-dataplane`. The demos, the benchmarking fakes, and the Kubernetes Secrets
-credential provider are not published, so a pre-built install turns egress
-credential injection off, and anything that needs one of those images has to
-be built from source. A registry you published to yourself with
-`ate-setup publish release-images` works the same way. Nothing is built and no registry is pushed to; the
-manifests still come from the checkout, which should be the tag being
-installed. Each reference is pinned to the digest its tag names, so the
-registry has to be readable from here as well as from the cluster.
+The registry has to hold every image the install deploys. The images a release
+publishes to `ghcr.io/agent-substrate/substrate` are not enough on their own:
+releases leave out the object storage plugin, `envoy-dataplane`, the Kubernetes
+Secrets credential provider, the demos, and the benchmarking fakes (see
+[`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images)). An
+install that needs an image the registry lacks fails naming it.
+
+Nothing is built and no registry is pushed to; the manifests still come from
+the checkout, which should be the tag being installed. Each reference is pinned
+to the digest its tag names, so the registry has to be readable from here as
+well as from the cluster.
 
 - [`commands.md`](commands.md) — every command with its `hack/install-ate.sh`
   equivalent.

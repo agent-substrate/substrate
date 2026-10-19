@@ -42,9 +42,11 @@ atenet:
 
 # Prebuilt images. Both halves are required together: a tag with no repository
 # would be dropped, leaving a build from source that looks like the release the
-# tag names.
+# tag names. The repository has to hold every image the install deploys; the
+# release images in ghcr.io/agent-substrate/substrate are not a complete set
+# (see docs/dev/releasing.md).
 images:
-  repo: ghcr.io/agent-substrate/substrate
+  repo: registry.example.com/substrate
   tag: v0.4.1
 
 # Snapshot storage.

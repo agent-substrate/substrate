@@ -15,9 +15,15 @@
 package steps
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"log"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -31,6 +37,7 @@ import (
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/ko"
 )
 
 // TestKoRunnerPrebuilt covers the one resolver that cannot build. A pre-built
@@ -133,5 +140,87 @@ func TestReleaseImageRefs(t *testing.T) {
 		if slices.Contains(refs, unwanted) {
 			t.Errorf("releaseImageRefs() = %v, want no %s", refs, unwanted)
 		}
+	}
+}
+
+// The release names each binary for its platform, and publishes no Windows
+// build.
+func TestReleaseBinaryNames(t *testing.T) {
+	var got []string
+	for _, platform := range releaseBinaryPlatforms {
+		got = append(got, releaseBinaryName(platform))
+	}
+	want := []string{"kubectl-ate-darwin-amd64", "kubectl-ate-darwin-arm64", "kubectl-ate-linux-amd64", "kubectl-ate-linux-arm64"}
+	if !slices.Equal(got, want) {
+		t.Errorf("release binaries = %v, want %v", got, want)
+	}
+}
+
+// The checksum file names the binary without its directory, in the form
+// `shasum -a 256 -c` reads, so the check works wherever both are downloaded.
+func TestWriteChecksum(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kubectl-ate-linux-amd64")
+	if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sum, err := writeChecksum(path)
+	if err != nil {
+		t.Fatalf("writeChecksum() error = %v", err)
+	}
+	if sum != path+".sha256" {
+		t.Errorf("writeChecksum() = %q, want %q", sum, path+".sha256")
+	}
+	got, err := os.ReadFile(sum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("binary"))
+	if want := hex.EncodeToString(digest[:]) + "  kubectl-ate-linux-amd64\n"; string(got) != want {
+		t.Errorf("checksum file = %q, want %q", got, want)
+	}
+}
+
+// A binary for a version that is not a release tag is never built.
+func TestPublishReleaseBinariesRejectsANonReleaseTag(t *testing.T) {
+	t.Setenv("VERSION", "dev")
+	e := &Env{Cfg: &config.Config{Root: t.TempDir()}}
+	err := e.PublishReleaseBinaries(t.Context(), io.Discard, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "not a release tag") {
+		t.Errorf("PublishReleaseBinaries() error = %v, want one saying dev is not a release tag", err)
+	}
+}
+
+// A release binary reports the release version and the commit it was built
+// from. internal/version discards a stamped Version without a stamped Commit,
+// which is what this guards. Only the host platform is built, to keep the test
+// to one compile.
+func TestPublishReleaseBinaries(t *testing.T) {
+	root := repoRoot(t)
+	commit, _, ok := ko.CommitStamp(root)
+	if !ok {
+		t.Fatalf("%s has no commit checked out", root)
+	}
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	saved := releaseBinaryPlatforms
+	releaseBinaryPlatforms = []string{platform}
+	t.Cleanup(func() { releaseBinaryPlatforms = saved })
+	t.Setenv("VERSION", "v1.2.3")
+
+	out := t.TempDir()
+	e := &Env{Cfg: &config.Config{Root: root}}
+	if err := e.PublishReleaseBinaries(t.Context(), io.Discard, out); err != nil {
+		t.Fatalf("PublishReleaseBinaries() error = %v", err)
+	}
+
+	binary := filepath.Join(out, releaseBinaryName(platform))
+	if _, err := os.Stat(binary + ".sha256"); err != nil {
+		t.Errorf("no checksum beside the binary: %v", err)
+	}
+	version, err := exec.Command(binary, "--version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s --version: %v\n%s", binary, err, version)
+	}
+	if want := "version v1.2.3 commit=" + commit; !strings.Contains(string(version), want) {
+		t.Errorf("%s --version = %q, want it to contain %q", binary, version, want)
 	}
 }

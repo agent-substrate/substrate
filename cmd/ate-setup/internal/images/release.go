@@ -58,13 +58,21 @@ func Revision(ctx context.Context, rootDir string) (string, error) {
 // vMAJOR.MINOR.PATCH-PRERELEASE. hack/release/draft-release.sh accepts the same.
 var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
 
+// CheckReleaseVersion returns an error unless version is a release tag.
+func CheckReleaseVersion(version string) error {
+	if !releaseTag.MatchString(version) {
+		return fmt.Errorf("%q is not a release tag (vMAJOR.MINOR.PATCH[-PRERELEASE])", version)
+	}
+	return nil
+}
+
 // CheckReleaseTag returns an error unless tag is a release tag that makes a
 // valid image reference under repo. It runs before anything is built, so a
 // stray tag or a value ko would split, such as "v1.2.3,latest", publishes
 // nothing.
 func CheckReleaseTag(repo, tag string) error {
-	if !releaseTag.MatchString(tag) {
-		return fmt.Errorf("%q is not a release tag (vMAJOR.MINOR.PATCH[-PRERELEASE])", tag)
+	if err := CheckReleaseVersion(tag); err != nil {
+		return err
 	}
 	if _, err := name.NewTag(strings.TrimSuffix(repo, "/")+"/image:"+tag, name.StrictValidation); err != nil {
 		return fmt.Errorf("%s with tag %s is not a valid image reference: %w", repo, tag, err)
