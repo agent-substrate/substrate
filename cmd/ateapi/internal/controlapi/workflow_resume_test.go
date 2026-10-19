@@ -1293,6 +1293,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	localSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
 		return newPausedSnapshot(t, 1, fidelity, "", name, "node-1")
 	}
+	stampedLocalSnap := func(name string, fidelity ateapipb.SnapshotFidelity, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
+		snap := localSnap(name, fidelity)
+		snap.SandboxRuntime = rt
+		return snap
+	}
 	// pauseUploadURI is where atelet uploads the pause snapshot.
 	pauseUploadURI := someActorSnapshotURI(t, testStorageLocation, "team-a", localSnapshotName)
 	uploadedLocalSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
@@ -1318,11 +1323,15 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		localSnapshot *ateapipb.Snapshot
 		// externalSnapshot seeds a completed durable snapshot.
 		externalSnapshot *ateapipb.Snapshot
-		// tmplUID seeds the template UID the snapshot's guest state was built
-		// on, stamped onto externalSnapshot: "current" stands for the created
-		// template's store-assigned UID (unknown until runtime), "" leaves the
-		// field unset, anything else mismatches (a repointed actor).
+		// tmplUID seeds the template UID the durable snapshot's guest state was
+		// built on, stamped onto externalSnapshot: "current" stands for the
+		// created template's store-assigned UID (unknown until runtime), ""
+		// leaves the field unset, anything else mismatches (a repointed actor).
 		tmplUID string
+		// localTmplUID stamps the local snapshot's provenance the same way;
+		// the two sources are set independently, since a newer pause checkpoint
+		// can be captured under the template an older durable snapshot predates.
+		localTmplUID string
 		// sourceTag seeds Actor.SourceTag when testing explicit tag clones.
 		sourceTag *ateapipb.ObjectRef
 		// assignedRuntime seeds WorkerAssignment.SandboxRuntime.
@@ -1526,7 +1535,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			name: "14 local snapshot built on the current template stays Full",
 			actor: actorSeed{
 				localSnapshot: localSnap(localSnapshotName, fullScope),
-				tmplUID:       "current",
+				localTmplUID:  "current",
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
@@ -1609,11 +1618,28 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				}(),
 				externalSnapshot: extSnap(actorURI, fullScope),
 				tmplUID:          "mismatch",
+				localTmplUID:     "current",
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			},
+		},
+		{
+			// The pause checkpoint itself was captured under a template the
+			// actor no longer points at: its guest state belongs to that old
+			// template's image, so the local restore keeps the checkpoint's
+			// identity but restores the volumes alone.
+			name: "18a local snapshot from a replaced template drops to Data",
+			actor: actorSeed{
+				localSnapshot: localSnap(localSnapshotName, fullScope),
+				localTmplUID:  "mismatch",
+			},
+			want: restoreWant{
+				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -1698,6 +1724,35 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
+			// A local restore runs under the assigned worker's runtime too: a
+			// worker that cannot run the checkpoint's runtime restores rootfs
+			// and volumes, keeping the checkpoint's own identity and upload.
+			name: "24a stamped local snapshot on incompatible worker drops to Rootfs",
+			actor: actorSeed{
+				localSnapshot:   stampedLocalSnap(localSnapshotName, fullScope, amd64RT),
+				localTmplUID:    "current",
+				assignedRuntime: arm64RT,
+			},
+			want: restoreWant{
+				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+		},
+		{
+			name: "24b stamped local snapshot on matching worker restores in Full",
+			actor: actorSeed{
+				localSnapshot:   stampedLocalSnap(localSnapshotName, fullScope, amd64RT),
+				localTmplUID:    "current",
+				assignedRuntime: amd64RT,
+			},
+			want: restoreWant{
+				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			},
+		},
+		{
 			// A recorded upload changes nothing: a local restore names the
 			// pause snapshot's upload whether or not it is COMPLETED.
 			name: "25 uploaded pause snapshot restores locally and sends its upload",
@@ -1772,9 +1827,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				a.SourceTag = tt.actor.sourceTag
 				a.Status.WorkerAssignment = wireTestAssignment()
 				a.Status.WorkerAssignment.SandboxRuntime = proto.CloneOf(tt.actor.assignedRuntime)
-				uid := tt.actor.tmplUID
-				if uid == "current" {
-					uid = createdTmpl.GetMetadata().GetUid()
+				resolve := func(uid string) string {
+					if uid == "current" {
+						return createdTmpl.GetMetadata().GetUid()
+					}
+					return uid
 				}
 				var gen int32
 				if tt.actor.externalSnapshot != nil {
@@ -1783,7 +1840,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					ext := proto.CloneOf(tt.actor.externalSnapshot)
 					ext.Generation = gen
 					if ext.ActorTemplateUid == "" {
-						ext.ActorTemplateUid = uid
+						ext.ActorTemplateUid = resolve(tt.actor.tmplUID)
 					}
 					a.Status.Snapshots = append(a.Status.Snapshots, ext)
 				}
@@ -1794,7 +1851,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					loc := proto.CloneOf(tt.actor.localSnapshot)
 					loc.Generation = gen
 					if loc.ActorTemplateUid == "" {
-						loc.ActorTemplateUid = uid
+						loc.ActorTemplateUid = resolve(tt.actor.localTmplUID)
 					} else if loc.ActorTemplateUid == "current" {
 						loc.ActorTemplateUid = createdTmpl.GetMetadata().GetUid()
 					}
@@ -2770,8 +2827,8 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 		snap.SandboxRuntime = rt
 		return snap
 	}
-	local := func(gen int32, fidelity ateapipb.SnapshotFidelity, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
-		snap := newPausedSnapshot(t, gen, fidelity, tmplUID, "local", "node-1")
+	local := func(gen int32, fidelity ateapipb.SnapshotFidelity, capturedUnder string, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
+		snap := newPausedSnapshot(t, gen, fidelity, capturedUnder, "local", "node-1")
 		snap.SandboxRuntime = rt
 		return snap
 	}
@@ -2814,18 +2871,17 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 		},
 		{
 			name:      "local checkpoint requires its runtime",
-			snapshots: []*ateapipb.Snapshot{local(1, memory, localRT)},
+			snapshots: []*ateapipb.Snapshot{local(1, memory, tmplUID, localRT)},
 			want:      localRT,
 		},
 		{
-			name: "local checkpoint captured under a replaced template imposes no constraint",
-			snapshots: []*ateapipb.Snapshot{
-				func() *ateapipb.Snapshot {
-					s := newPausedSnapshot(t, 1, memory, "old-tmpl-uid", "local", "node-1")
-					s.SandboxRuntime = localRT
-					return s
-				}(),
-			},
+			name:      "local checkpoint with no template uid keeps its runtime",
+			snapshots: []*ateapipb.Snapshot{local(1, memory, "", localRT)},
+			want:      localRT,
+		},
+		{
+			name:      "local checkpoint captured under a replaced template is not restored",
+			snapshots: []*ateapipb.Snapshot{local(1, memory, "old-tmpl-uid", localRT)},
 		},
 		{
 			// ensureAteletRestored restores a local checkpoint before any
@@ -2833,7 +2889,7 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			// which is newer.
 			name: "local checkpoint takes precedence over a newer durable snapshot",
 			snapshots: []*ateapipb.Snapshot{
-				local(1, memory, localRT),
+				local(1, memory, tmplUID, localRT),
 				durable(2, memory, tmplUID, completed, durableRT),
 			},
 			want: localRT,
@@ -2848,9 +2904,19 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 		{
 			name: "VOLUMES local checkpoint imposes no constraint beside a stamped durable snapshot",
 			snapshots: []*ateapipb.Snapshot{
-				local(2, volumes, localRT),
+				local(2, volumes, tmplUID, localRT),
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
+		},
+		{
+			// The older durable's replaced template must not drop the newer
+			// local checkpoint's runtime: the restore reads the local one.
+			name: "local checkpoint ignores an older durable snapshot's replaced template",
+			snapshots: []*ateapipb.Snapshot{
+				durable(1, memory, "old-tmpl-uid", completed, durableRT),
+				local(2, memory, tmplUID, localRT),
+			},
+			want: localRT,
 		},
 	}
 	for _, tc := range tests {

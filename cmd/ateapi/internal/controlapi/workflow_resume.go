@@ -845,9 +845,17 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
+		// The local snapshot's own provenance decides the effective fidelity:
+		// src describes the latest durable snapshot, which may be an older
+		// generation captured under another template. Identity always stays
+		// the local snapshot's.
 		fidelity := fidelityToAtelet(localSnap.GetFidelity())
-		if templateReplaced(localSnap, actorTemplate) {
+		switch {
+		case templateReplaced(localSnap, actorTemplate):
 			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		case runtimeIncompatible:
+			logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime)
+			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 		}
 		req := &ateletpb.RestoreRequest{
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
