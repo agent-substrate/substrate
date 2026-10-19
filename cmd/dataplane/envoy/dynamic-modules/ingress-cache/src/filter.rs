@@ -123,6 +123,18 @@ pub struct CacheFilter {
 }
 
 impl CacheFilter {
+  /// Evicts the cached binding for the target actor, and if this stream was a cache hit,
+  /// increments the eviction counter and clears the cache hit flag.
+  fn handle_eviction<EHF: EnvoyHttpFilter>(&mut self, envoy_filter: &mut EHF) {
+    if let Some(key) = &self.actor_key {
+      cache().remove(key);
+    }
+    if self.was_cache_hit {
+      increment_counter(envoy_filter, self.cache_eviction);
+      self.was_cache_hit = false;
+    }
+  }
+
   #[cfg(test)]
   pub(crate) fn new_test_filter(config: Config) -> Self {
     Self {
@@ -275,14 +287,16 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
         .as_deref()
         .is_some_and(is_grpc_unavailable);
 
-    if stale_rejection && self.was_cache_hit {
-      if let Some(key) = &self.actor_key {
-        cache().remove(key);
-        increment_counter(envoy_filter, self.cache_eviction);
-      }
-      self.was_cache_hit = false;
+    if stale_rejection || grpc_unavailable {
+      let should_replay = self.was_cache_hit
+        && stale_rejection
+        && is_replay_safe(self, status_str.as_deref(), response_flags);
 
-      if is_replay_safe(self, status_str.as_deref(), response_flags) {
+      self.handle_eviction(envoy_filter);
+
+      // Only stale HTTP rejections (421 or 503 UF/UH) are replayed; gRPC UNAVAILABLE
+      // is returned directly to the client since gRPC clients handle retries.
+      if should_replay {
         if let Some(key) = &self.actor_key {
           // Upstream route mutations strip TARGET_ACTOR_HEADER before forwarding to
           // the actor tunnel. Re-inject it so the recreated stream passes the valid
@@ -295,15 +309,6 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
           return envoy_dynamic_module_type_on_http_filter_response_headers_status::StopIteration;
         }
       }
-    } else if grpc_unavailable && self.was_cache_hit {
-      // Option A: For gRPC errors (grpc-status: 14 UNAVAILABLE in response headers),
-      // evict the stale cache entry but do not replay (standard gRPC clients handle
-      // retries automatically).
-      if let Some(key) = &self.actor_key {
-        cache().remove(key);
-        increment_counter(envoy_filter, self.cache_eviction);
-      }
-      self.was_cache_hit = false;
     }
 
     // On a cache miss that succeeded upstream, learn from the metadata ext_proc published.
@@ -330,20 +335,11 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
     &mut self,
     envoy_filter: &mut EHF,
   ) -> envoy_dynamic_module_type_on_http_filter_response_trailers_status {
-    let grpc_unavailable = response_trailer_str(envoy_filter, GRPC_STATUS_HEADER)
+    if response_trailer_str(envoy_filter, GRPC_STATUS_HEADER)
       .as_deref()
-      .is_some_and(is_grpc_unavailable);
-
-    if grpc_unavailable {
-      if self.was_cache_hit {
-        if let Some(key) = &self.actor_key {
-          cache().remove(key);
-          increment_counter(envoy_filter, self.cache_eviction);
-        }
-        self.was_cache_hit = false;
-      } else if let Some(key) = &self.actor_key {
-        cache().remove(key);
-      }
+      .is_some_and(is_grpc_unavailable)
+    {
+      self.handle_eviction(envoy_filter);
     }
 
     envoy_dynamic_module_type_on_http_filter_response_trailers_status::Continue
