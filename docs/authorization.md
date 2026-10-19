@@ -146,7 +146,7 @@ through their pod certificates. `ate-api-server`'s `--controller-spiffe-id`,
 | `controller` | `ate-controller` | Create, get, list, update, delete and drain workers |
 | `egress_gateway` | `atenet-egress` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs and certificates |
 | `ingress_router` | `atenet-router` | Resume actors; list actors across all atespaces |
-| `atelet` | `atelet` | Get actors' egress policies, for the worker that enforces them |
+| `atelet` | `atelet` | Get the egress policies of actors on its node |
 | `api_server_sidecar` | the `ate-api-server` pod identity, which its sidecars share, today the objectstore control plugin | Get actors, to derive the snapshot prefixes a per-actor storage credential may cover |
 
 Only `egress_gateway` can mint actor credentials: not even a global owner can,
@@ -193,7 +193,7 @@ The access policy RPCs are checked even with authorization off.
 | `ListActors` | `can_list_actors`, the atespace, or global if none is given | Atespace viewer; for all atespaces, global viewer, `atenet-router` or `atenet-egress` |
 | `SuspendActor`, `RevertActor` | `can_suspend` / `can_revert`, the actor | Editor of its atespace |
 | `ResumeActor` | `can_resume`, the actor | Editor of its atespace; `atenet-router` |
-| `GetActorEgressPolicy` | `can_get_egress_policy`, the actor | Viewer of its atespace; `atenet-egress`; `atelet` |
+| `GetActorEgressPolicy` | `can_get_egress_policy`, the actor | Viewer of its atespace; `atenet-egress`; `atelet` on the node hosting the actor |
 | `CreateActorEgressPolicy`, `UpdateActorEgressPolicy`, `DeleteActorEgressPolicy` | `can_create_egress_policy` / `can_update_egress_policy` / `can_delete_egress_policy`, the actor | Editor of its atespace |
 | `MintActorJwt`, `MintActorCertificate` | `can_mint_actor_jwt` / `can_mint_actor_certificate`, the actor | `atenet-egress` only |
 
@@ -343,6 +343,3 @@ For a shared cluster, beyond replacing the default bootstrap owner:
   System roles are unaffected: they need the component's pod certificate.
 - **The atespace is the only boundary.** There are no per-actor or
   per-template grants.
-- **Any atelet can read any actor's egress policy.** Every node's atelet
-  shares one identity, so the `atelet` role isn't limited to actors on its
-  node ([#1564](https://github.com/agent-substrate/substrate/issues/1564)).
