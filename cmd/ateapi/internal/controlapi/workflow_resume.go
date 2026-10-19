@@ -896,6 +896,7 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 
 // finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
 // stamped with workerEpoch, the epoch of the worker process that ran it.
+// The actor must still be RESUMING; out-of-band transitions are preserved.
 //
 // The worker process registered that epoch, with its pod IPs, before it took
 // the workload. If it is still the Worker's registered epoch, the Actor is
@@ -910,6 +911,9 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	latestActor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, err
+	}
+	if got := latestActor.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RESUMING {
+		return nil, apierror.FailedPrecondition("FinalizeRunning prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapi.ActorState_ACTOR_STATE_RESUMING)
 	}
 
 	workerName := latestActor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
