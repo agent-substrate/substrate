@@ -101,6 +101,83 @@ func newReseedNonce() ([]byte, error) {
 	return nonce, nil
 }
 
+// isDeltaSnapshot reports whether dir contains a golden-base differential memory snapshot.
+func isDeltaSnapshot(dir string) bool {
+	_, err1 := os.Stat(filepath.Join(dir, memoryRangesDiffMetaFile))
+	_, err2 := os.Stat(filepath.Join(dir, goldenDeltaMarkerFile))
+	return err1 == nil || err2 == nil
+}
+
+// reconstructDeltaIfNeeded rebuilds a complete memory-ranges file from the cached golden base
+// when restoreDir holds a differential snapshot, or caches the golden base on a non-delta restore.
+func (s *AteWorkerService) reconstructDeltaIfNeeded(ctx context.Context, actorUID, baseID, restoreDir string, actorDirs *ateworkerpb.ActorDirs, preserveRestoreDir bool) (vmmRestoreDir string, vmmPreserveRestoreDir bool, err error) {
+	if !isDeltaSnapshot(restoreDir) {
+		if cerr := ensureGoldenBaseCached(ctx, baseID, filepath.Join(restoreDir, "memory-ranges")); cerr != nil {
+			slog.WarnContext(ctx, "Failed to cache golden base memory-ranges on restore",
+				slog.String("id", actorUID), slog.String("base_id", baseID), slog.Any("err", cerr))
+		}
+		return restoreDir, preserveRestoreDir, nil
+	}
+	if !validBaseID(baseID) {
+		return "", false, fmt.Errorf("invalid base ID %q for differential restore of %s", baseID, actorUID)
+	}
+	goldenBaseMemPath := goldenBaseMemoryRangesPath(baseID)
+	if _, serr := os.Stat(goldenBaseMemPath); serr != nil {
+		return "", false, fmt.Errorf("golden base %s missing for differential restore of %s: %w", goldenBaseMemPath, actorUID, serr)
+	}
+	targetDir := restoreDir
+	if preserveRestoreDir {
+		targetDir = deltaRestoreStagingDir(actorDirs)
+		_ = os.RemoveAll(targetDir)
+		if err := os.MkdirAll(targetDir, 0o700); err != nil {
+			return "", false, fmt.Errorf("preparing delta staging dir %s: %w", targetDir, err)
+		}
+		for _, name := range []string{"config.json", "state.json", baseIDFile} {
+			srcFile, dstFile := filepath.Join(restoreDir, name), filepath.Join(targetDir, name)
+			if _, serr := os.Stat(srcFile); serr != nil {
+				if name == baseIDFile {
+					continue
+				}
+				return "", false, fmt.Errorf("missing %s in preserved delta snapshot %s: %w", name, restoreDir, serr)
+			}
+			if os.Link(srcFile, dstFile) != nil {
+				b, rerr := os.ReadFile(srcFile)
+				if rerr != nil {
+					return "", false, rerr
+				}
+				if werr := os.WriteFile(dstFile, b, 0o600); werr != nil {
+					return "", false, werr
+				}
+			}
+		}
+	}
+
+	tMerge := time.Now()
+	outMemPath := filepath.Join(targetDir, "memory-ranges")
+	metaPath := filepath.Join(restoreDir, memoryRangesDiffMetaFile)
+	dataPath := filepath.Join(restoreDir, memoryRangesDiffDataFile)
+	if _, merr := os.Stat(metaPath); merr == nil {
+		if err := ch.RestoreFromDelta(ctx, goldenBaseMemPath, metaPath, dataPath, outMemPath); err != nil {
+			return "", false, fmt.Errorf("while reconstructing compact delta against golden base: %w", err)
+		}
+		if !preserveRestoreDir {
+			_ = os.Remove(metaPath)
+			_ = os.Remove(dataPath)
+			_ = os.Remove(filepath.Join(restoreDir, goldenDeltaMarkerFile))
+		}
+	} else {
+		if err := ch.MergeSparseOverlay(ctx, goldenBaseMemPath, filepath.Join(restoreDir, "memory-ranges"), outMemPath); err != nil {
+			return "", false, fmt.Errorf("while overlaying golden delta onto base: %w", err)
+		}
+		if !preserveRestoreDir {
+			_ = os.Remove(filepath.Join(restoreDir, goldenDeltaMarkerFile))
+		}
+	}
+	slog.InfoContext(ctx, "Reconstructed memory-ranges from golden base and delta",
+		slog.String("id", actorUID), slog.String("base_id", baseID), slog.Duration("merge", time.Since(tMerge)))
+	return targetDir, false, nil
+}
+
 // RestoreWorkload brings the actor back from a snapshot, on a possibly different
 // pod. What that means depends on the fidelity the snapshot was taken with:
 //
@@ -262,14 +339,25 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// Repoint the snapshot's per-actor paths to this actor's: its VMDir
 	// sockets and files, and the kernel and guest image atelet staged under
 	// this actor's own directory.
-	if err := rewriteSnapshotPaths(restoreDir, actorUID, kernel, image); err != nil {
-		return fmt.Errorf("while rewriting snapshot paths: %w", err)
-	}
 	srcID := actorUID
 	if b, rerr := os.ReadFile(filepath.Join(restoreDir, baseIDFile)); rerr == nil {
 		if v := strings.TrimSpace(string(b)); v != "" {
 			srcID = v
 		}
+	}
+	vmmRestoreDir, vmmPreserveRestoreDir, err := s.reconstructDeltaIfNeeded(ctx, actorUID, srcID, restoreDir, p.actorDirs, preserveRestoreDir)
+	if err != nil {
+		return err
+	}
+	if vmmRestoreDir != restoreDir {
+		defer func() {
+			if retErr != nil {
+				_ = os.RemoveAll(vmmRestoreDir)
+			}
+		}()
+	}
+	if err := rewriteSnapshotPaths(vmmRestoreDir, actorUID, kernel, image); err != nil {
+		return fmt.Errorf("while rewriting snapshot paths: %w", err)
 	}
 	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
 		return fmt.Errorf("while creating VM dir: %w", err)
@@ -406,7 +494,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	memMode := restoreMemMode(ctx, client.Info())
 	slog.InfoContext(ctx, "restoring guest memory",
 		slog.String("mode", memMode), slog.String("vmm_version", client.Info().Version))
-	if err := client.RestoreWithNetFDs(ctx, restoreDir, restoredNets, memMode); err != nil {
+	if err := client.RestoreWithNetFDs(ctx, vmmRestoreDir, restoredNets, memMode); err != nil {
 		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	tVMRestore := time.Now()
@@ -417,8 +505,11 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	//
 	// When the restore dir is not preserved, dropping ahead of Resume means a
 	// failure after this point costs a re-download of the snapshot on retry.
-	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
-	dropActorSnapshotCacheAsync(restoreDir, memMode == ch.MemRestoreEager)
+	maybeDropStagedMemoryImage(ctx, vmmRestoreDir, memMode, vmmPreserveRestoreDir)
+	dropActorSnapshotCacheAsync(vmmRestoreDir, memMode == ch.MemRestoreEager)
+	if vmmRestoreDir != restoreDir {
+		dropActorSnapshotCacheAsync(restoreDir, false)
+	}
 	if err := client.Resume(ctx); err != nil {
 		return fmt.Errorf("while resuming restored guest: %w", err)
 	}
@@ -503,8 +594,8 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 
 	ra := &runningActor{
 		chProc: chProc, vfsdProc: vfsdProc,
-		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
-		preserveRestoreSource:   preserveRestoreDir,
+		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: vmmRestoreDir,
+		preserveRestoreSource:   vmmPreserveRestoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
 		// Signaling an id the agent does not know fails the whole graceful
 		// shutdown with InvalidContainerId, so these must be what the guest runs.

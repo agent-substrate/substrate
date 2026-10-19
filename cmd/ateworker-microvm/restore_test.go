@@ -19,6 +19,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
@@ -630,6 +631,170 @@ func TestRestoreMemoryFidelityRequiresKernelAndImage(t *testing.T) {
 			err := s.restoreMemoryFidelity(t.Context(), p, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, t.TempDir(), false, time.Now())
 			if err == nil || !strings.Contains(err.Error(), assetKernel) || !strings.Contains(err.Error(), assetImage) {
 				t.Fatalf("restoreMemoryFidelity with %s = %v, want an error naming %q and %q", name, err, assetKernel, assetImage)
+			}
+		})
+	}
+}
+
+func TestDifferentialSnapshotCheckpointAndRestoreRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		sparseDelta        bool
+		preserveRestoreDir bool
+	}{
+		{name: "compact_extent_in_place", sparseDelta: false, preserveRestoreDir: false},
+		{name: "compact_extent_preserved_dir", sparseDelta: false, preserveRestoreDir: true},
+		{name: "sparse_hole_punch_in_place", sparseDelta: true, preserveRestoreDir: false},
+		{name: "sparse_hole_punch_preserved_dir", sparseDelta: true, preserveRestoreDir: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			tmpRoot := t.TempDir()
+			origActorsDir := nodepath.ActorsDir
+			nodepath.ActorsDir = filepath.Join(tmpRoot, "actors")
+			t.Cleanup(func() { nodepath.ActorsDir = origActorsDir })
+
+			s := &AteWorkerService{}
+			const (
+				baseID   = "golden-base-1"
+				actorUID = "warm-actor-1"
+				size     = 64 * 1024
+				pageSize = 4096
+			)
+			actorDirs := &ateworkerpb.ActorDirs{RootDir: filepath.Join(nodepath.ActorsDir, actorUID)}
+			deflateDir := func(dir string) error {
+				if tc.sparseDelta {
+					if _, _, err := ch.DeflateAgainstBase(ctx, goldenBaseMemoryRangesPath(baseID), filepath.Join(dir, "memory-ranges")); err != nil {
+						return err
+					}
+					return writeGoldenDeltaMarker(dir)
+				}
+				return s.maybeDeflateCheckpointAgainstGoldenBase(ctx, baseID, actorUID, dir)
+			}
+
+			// 1. Cold restore populates the node-local golden base cache without hard-linking the source.
+			coldRestoreDir := filepath.Join(tmpRoot, "cold-restore")
+			if err := os.MkdirAll(coldRestoreDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			baseBytes := make([]byte, size)
+			for i := range baseBytes {
+				baseBytes[i] = byte((i/pageSize + 1) * 7)
+			}
+			coldMemPath := filepath.Join(coldRestoreDir, "memory-ranges")
+			if err := os.WriteFile(coldMemPath, baseBytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := s.reconstructDeltaIfNeeded(ctx, actorUID, baseID, coldRestoreDir, actorDirs, false); err != nil {
+				t.Fatalf("cold reconstructDeltaIfNeeded: %v", err)
+			}
+			if fi, err := os.Stat(coldMemPath); err != nil || fi.Sys().(*syscall.Stat_t).Nlink != 1 {
+				t.Fatalf("coldMemPath Nlink = %d (err=%v), want 1 so restore source does not share inode with golden cache", fi.Sys().(*syscall.Stat_t).Nlink, err)
+			}
+
+			// 2. Warm checkpoint modifies 2 pages and deflates against the cached golden base.
+			checkpointDir := filepath.Join(tmpRoot, "warm-checkpoint")
+			if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"config.json", "state.json"} {
+				if err := os.WriteFile(filepath.Join(checkpointDir, name), []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(checkpointDir, baseIDFile), []byte(baseID), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			modifiedBytes := append([]byte(nil), baseBytes...)
+			for i := pageSize; i < 2*pageSize; i++ {
+				modifiedBytes[i] = 0xAA
+			}
+			for i := 5 * pageSize; i < 6*pageSize; i++ {
+				modifiedBytes[i] = 0xBB
+			}
+			wantHash := sha256.Sum256(modifiedBytes)
+			if err := os.WriteFile(filepath.Join(checkpointDir, "memory-ranges"), modifiedBytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := deflateDir(checkpointDir); err != nil {
+				t.Fatalf("deflateDir: %v", err)
+			}
+			if !isDeltaSnapshot(checkpointDir) {
+				t.Fatal("expected checkpointDir to be marked as delta snapshot")
+			}
+
+			// 3. Warm restore reconstructs byte-for-byte identical memory-ranges.
+			vmmDir, vmmPreserve, err := s.reconstructDeltaIfNeeded(ctx, actorUID, baseID, checkpointDir, actorDirs, tc.preserveRestoreDir)
+			if err != nil {
+				t.Fatalf("warm reconstructDeltaIfNeeded: %v", err)
+			}
+			if vmmPreserve {
+				t.Fatal("expected vmmPreserve=false after delta reconstruction")
+			}
+			if tc.preserveRestoreDir {
+				if vmmDir != deltaRestoreStagingDir(actorDirs) {
+					t.Fatalf("vmmDir = %q, want %q", vmmDir, deltaRestoreStagingDir(actorDirs))
+				}
+				if !isDeltaSnapshot(checkpointDir) {
+					t.Fatal("expected preserved delta snapshot directory to retain delta markers")
+				}
+			}
+
+			gotBytes, err := os.ReadFile(filepath.Join(vmmDir, "memory-ranges"))
+			if err != nil {
+				t.Fatalf("reading reconstructed memory-ranges: %v", err)
+			}
+			if gotHash := sha256.Sum256(gotBytes); gotHash != wantHash {
+				t.Fatalf("reconstructed SHA256 = %x, want %x", gotHash, wantHash)
+			}
+
+			// 4. Subsequent OnDemand checkpoint merges against vmmDir (not the raw delta checkpointDir)
+			// and deflates cleanly against the golden base.
+			secondCheckpointDir := filepath.Join(tmpRoot, "second-checkpoint")
+			if err := os.MkdirAll(secondCheckpointDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"config.json", "state.json"} {
+				if err := os.WriteFile(filepath.Join(secondCheckpointDir, name), []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			secondDeltaPath := filepath.Join(secondCheckpointDir, "memory-ranges")
+			f, err := os.OpenFile(secondDeltaPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Truncate(size); err != nil {
+				f.Close()
+				t.Fatal(err)
+			}
+			page7 := bytes.Repeat([]byte{0xCC}, pageSize)
+			if _, err := f.WriteAt(page7, 7*pageSize); err != nil {
+				f.Close()
+				t.Fatal(err)
+			}
+			f.Close()
+
+			wantSecondBytes := append([]byte(nil), modifiedBytes...)
+			copy(wantSecondBytes[7*pageSize:8*pageSize], page7)
+			wantSecondHash := sha256.Sum256(wantSecondBytes)
+
+			if err := mergeOnDemandDelta(ctx, vmmDir, secondCheckpointDir, vmmPreserve); err != nil {
+				t.Fatalf("second OnDemand mergeOnDemandDelta: %v", err)
+			}
+			if err := deflateDir(secondCheckpointDir); err != nil {
+				t.Fatalf("second deflateDir: %v", err)
+			}
+			vmmDir2, _, err := s.reconstructDeltaIfNeeded(ctx, actorUID, baseID, secondCheckpointDir, actorDirs, tc.preserveRestoreDir)
+			if err != nil {
+				t.Fatalf("second warm reconstructDeltaIfNeeded: %v", err)
+			}
+			gotSecondBytes, err := os.ReadFile(filepath.Join(vmmDir2, "memory-ranges"))
+			if err != nil {
+				t.Fatalf("reading second reconstructed memory-ranges: %v", err)
+			}
+			if gotSecondHash := sha256.Sum256(gotSecondBytes); gotSecondHash != wantSecondHash {
+				t.Fatalf("second reconstructed SHA256 = %x, want %x", gotSecondHash, wantSecondHash)
 			}
 		})
 	}
