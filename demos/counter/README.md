@@ -136,6 +136,7 @@ ordinary application metadata.
 1. Send an HTTP POST request to increment the counter:
 <details>
 <summary>Send to MicroVM</summary>
+
 ```bash
 curl -X POST \
   -H "ate-target-actor: ate-demo-counter-microvm/my-counter-microvm-1" \
@@ -145,6 +146,7 @@ curl -X POST \
 
 <details>
 <summary>Send to GVisor</summary>
+
 ```bash
 curl -X POST \
   -H "ate-target-actor: ate-demo-counter/my-counter-1" \
@@ -155,6 +157,7 @@ curl -X POST \
 2. Verify that the actor is now in a `RUNNING` state and assigned to a worker pod:
 <details>
 <summary>Verify on MicroVM</summary>
+
 ```bash
 kubectl ate get actor my-counter-microvm-1 -a ate-demo-counter-microvm
 ```
@@ -162,6 +165,7 @@ kubectl ate get actor my-counter-microvm-1 -a ate-demo-counter-microvm
 
 <details>
 <summary>Verify on GVisor</summary>
+
 ```bash
 kubectl ate get actor my-counter-1 -a ate-demo-counter
 ```
@@ -170,6 +174,7 @@ kubectl ate get actor my-counter-1 -a ate-demo-counter
 3. When finished, you can manually suspend the actor:
 <details>
 <summary>Suspend on MicroVM</summary>
+
 ```bash
 kubectl ate suspend actor my-counter-microvm-1 -a ate-demo-counter-microvm
 ```
@@ -177,6 +182,7 @@ kubectl ate suspend actor my-counter-microvm-1 -a ate-demo-counter-microvm
 
 <details>
 <summary>Suspend on GVisor</summary>
+
 ```bash
 kubectl ate suspend actor my-counter-1 -a ate-demo-counter
 ```
@@ -193,6 +199,7 @@ memory, the file counter from the durable volume.
 4. To permanently delete the suspended actor:
 <details>
 <summary>Delete from MicroVM</summary>
+
 ```bash
 kubectl ate delete actor my-counter-microvm-1 -a ate-demo-counter-microvm
 ```
@@ -200,6 +207,7 @@ kubectl ate delete actor my-counter-microvm-1 -a ate-demo-counter-microvm
 
 <details>
 <summary>Delete from GVisor</summary>
+
 ```bash
 kubectl ate delete actor my-counter-1 -a ate-demo-counter
 ```
@@ -220,6 +228,7 @@ proxy behavior wouldn't do:
 
 <details>
 <summary>Non standard port with MicroVM</summary>
+
 ```bash
 curl -p -x http://localhost:8001 \
   --proxy-header "ate-target-actor: ate-demo-counter-microvm/my-counter-microvm-1" \
@@ -229,6 +238,7 @@ curl -p -x http://localhost:8001 \
 
 <details>
 <summary>Non standard port with GVisor</summary>
+
 ```bash
 curl -p -x http://localhost:8001 \
   --proxy-header "ate-target-actor: ate-demo-counter/my-counter-1" \
@@ -264,6 +274,7 @@ To remove the counter demo resources from your cluster, run:
 
 <details>
 <summary>Delete from MicroVM</summary>
+
 ```bash
 ./hack/install-ate.sh --delete-demo-counter
 ```
@@ -271,6 +282,7 @@ To remove the counter demo resources from your cluster, run:
 
 <details>
 <summary>Delete from GVisor</summary>
+
 ```bash
 ./hack/install-ate.sh --delete-demo-counter-microvm
 ```
