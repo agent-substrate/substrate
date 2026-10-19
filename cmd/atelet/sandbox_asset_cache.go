@@ -36,7 +36,7 @@ var (
 	sandboxAssetCacheMinAge = pflag.Duration("sandbox-asset-cache-min-age", time.Hour, "Cached sandbox assets younger than this are never evicted. A running actor's assets, and the default runtime of every local worker, are protected by their links regardless; this covers an asset between its fetch and its first link.")
 	// sandboxAssetCacheGCFlags are --sandbox-asset-cache-gc-period,
 	// --sandbox-asset-cache-max-bytes and --sandbox-asset-cache-gc-dry-run.
-	sandboxAssetCacheGCFlags = filecachegc.NewFlags("sandbox-asset-cache", "sandbox asset cache")
+	sandboxAssetCacheGCFlags = filecachegc.NewFlags(pflag.CommandLine, "sandbox-asset-cache", "sandbox asset cache")
 	sandboxAssetFetchTimeout = pflag.Duration("sandbox-asset-fetch-timeout", 5*time.Minute, "Bound on one sandbox asset download (and, for a gVisor release, its extraction). Downloads run detached from the requests waiting on them, so this is the only bound on how long one can run; a Run arriving while a download hangs waits on it until then. Sized for multi-hundred-MiB micro-VM guest images on a busy node.")
 )
 

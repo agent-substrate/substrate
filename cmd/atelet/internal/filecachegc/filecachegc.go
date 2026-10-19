@@ -72,13 +72,13 @@ type Flags struct {
 
 // NewFlags registers the eviction flags of the cache called what, for
 // example "sandbox asset cache", under prefix, for example
-// "sandbox-asset-cache", on the command line.
-func NewFlags(prefix, what string) *Flags {
+// "sandbox-asset-cache", on fs.
+func NewFlags(fs *pflag.FlagSet, prefix, what string) *Flags {
 	return &Flags{
 		prefix:   prefix,
-		Period:   pflag.Duration(prefix+"-gc-period", 5*time.Minute, fmt.Sprintf("How often to run the %s eviction pass. 0 disables it.", what)),
-		MaxBytes: pflag.Int64(prefix+"-max-bytes", 0, fmt.Sprintf("Budget for the %s, in bytes of disk the cached files occupy. A pass that finds the cache over it evicts least recently used entries that nothing links, down to %d%% of it. 0 means no budget: the cache only grows.", what, int(LowWater*100))),
-		DryRun:   pflag.Bool(prefix+"-gc-dry-run", false, fmt.Sprintf("Compute and log eviction decisions for the %s without deleting anything.", what)),
+		Period:   fs.Duration(prefix+"-gc-period", 5*time.Minute, fmt.Sprintf("How often to run the %s eviction pass. 0 disables it.", what)),
+		MaxBytes: fs.Int64(prefix+"-max-bytes", 0, fmt.Sprintf("Budget for the %s, in bytes of disk the cached files occupy. A pass that finds the cache over it evicts least recently used entries that nothing links, down to %d%% of it. 0 means no budget: the cache only grows.", what, int(LowWater*100))),
+		DryRun:   fs.Bool(prefix+"-gc-dry-run", false, fmt.Sprintf("Compute and log eviction decisions for the %s without deleting anything.", what)),
 	}
 }
 

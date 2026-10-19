@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -50,7 +51,7 @@ func TestTarget(t *testing.T) {
 }
 
 func TestFlagsValidate(t *testing.T) {
-	f := NewFlags("test-cache", "test cache")
+	f := NewFlags(pflag.NewFlagSet("test", pflag.ContinueOnError), "test-cache", "test cache")
 	for _, tc := range []struct {
 		name     string
 		period   time.Duration
