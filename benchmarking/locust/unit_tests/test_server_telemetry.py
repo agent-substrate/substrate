@@ -30,6 +30,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+try:
+    import kubernetes  # noqa: F401
+except ModuleNotFoundError:
+    for _mod in ("kubernetes", "kubernetes.client", "kubernetes.config", "kubernetes.utils"):
+        sys.modules.setdefault(_mod, mock.MagicMock())
+
 import runner
 import server_telemetry
 
@@ -59,7 +65,7 @@ def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=()):
         if "ate_actor_stats_memory_working_set_bytes" in query:
             return list(actor_ws)
         # Before the PSI branch: the node working set query has container="node".
-        if "container_memory_working_set_bytes" in query:
+        if query in server_telemetry.WORKING_SET_QUERIES.values():
             return list(ws)
         if 'container="node"' in query:
             return list(node) if worker_nodes in query and pod_slice in query else []
@@ -807,6 +813,103 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(calls, ["telemetry", ("ladder", "unit-run_logs.txt", "http://x:9090")])
         self.assertIn("Failed to summarize ladder steps: prometheus down", out.getvalue())
         self.assertTrue(upload.called)
+
+    def test_psi_query_uses_2m_rate_window(self):
+        q = server_telemetry._psi_query("cpu")
+        self.assertIn("[2m]", q)
+        self.assertNotIn("[1m]", q)
+        nq = server_telemetry._node_psi_query("memory")
+        self.assertIn("[2m]", nq)
+
+    @mock.patch("server_telemetry.query_prometheus_range")
+    @mock.patch("server_telemetry.query_prometheus_instant")
+    def test_extended_telemetry(
+        self, mock_instant, mock_range
+    ):
+        mock_range.return_value = []
+
+        def fake_instant(_url, query, time_ts=None):
+            if (
+                'ate_actor_lifecycle_operation_duration_seconds_count{ate_actor_operation_name="resume", error_type=""}'
+                in query
+            ):
+                if "- (sum(" in query:
+                    return [{"value": [time_ts, "250.0"]}]
+                return [{"value": [time_ts, "300.0"]}]
+            if (
+                'ate_actor_lifecycle_operation_duration_seconds_bucket{ate_actor_operation_name="resume"}'
+                in query
+            ):
+                if query.startswith("histogram_quantile"):
+                    return [{"value": [time_ts, "18.5"]}]
+            if (
+                'ate_scheduler_assignment_duration_seconds_count{ate_scheduler_outcome="assigned"}'
+                in query
+            ):
+                if "- (sum(" in query:
+                    return [{"value": [time_ts, "120.0"]}]
+                return [{"value": [time_ts, "150.0"]}]
+            if (
+                'ate_scheduler_assignment_duration_seconds_bucket{ate_scheduler_outcome="assigned"}'
+                in query
+            ):
+                if query.startswith("histogram_quantile"):
+                    return [{"value": [time_ts, "4.2"]}]
+            if (
+                'ate_actor_restore_duration_seconds_count{ate_snapshot_phase="total", ate_snapshot_kind="local"}'
+                in query
+            ):
+                if "- (sum(" in query:
+                    return [{"value": [time_ts, "95.0"]}]
+                return [{"value": [time_ts, "110.0"]}]
+            if (
+                'ate_actor_restore_duration_seconds_bucket{ate_snapshot_phase="total", ate_snapshot_kind="local"}'
+                in query
+            ):
+                if query.startswith("histogram_quantile"):
+                    return [{"value": [time_ts, "12.0"]}]
+            if 'ate_imagecache_requests_total{ate_imagecache_outcome="hit"}' in query:
+                if "- (sum(" in query:
+                    return [{"value": [time_ts, "80.0"]}]
+                return [{"value": [time_ts, "90.0"]}]
+            return []
+
+        mock_instant.side_effect = fake_instant
+
+        with tempfile.TemporaryDirectory() as td:
+            out_json = Path(td) / "server_summary.json"
+            out_jsonl = Path(td) / "stats.jsonl"
+            with contextlib.redirect_stdout(io.StringIO()), \
+                 mock.patch("time.time", return_value=200), \
+                 mock.patch("time.sleep"):
+                server_telemetry.extract_and_record_server_telemetry(
+                    prom_url="http://localhost:9090",
+                    start_ts=100,
+                    end_ts=105,
+                    stats_history_csv=Path(td) / "missing.csv",
+                    output_json_path=out_json,
+                    jsonl_path=out_jsonl,
+                    data_ts="2026-01-01",
+                    tag="unit",
+                    test_name="unit-run",
+                )
+            summary = json.loads(out_json.read_text())
+            row = json.loads(out_jsonl.read_text().splitlines()[0])
+
+        self.assertIn("extended", summary)
+        ext = summary["extended"]
+        self.assertEqual(ext["ate_api_resume_ok_delta"], 250.0)
+        self.assertEqual(ext["ate_api_resume_p99_ms"], 18.5)
+        self.assertEqual(ext["scheduler_assigned_delta"], 120.0)
+        self.assertEqual(ext["scheduler_assigned_p99_ms"], 4.2)
+        self.assertEqual(ext["restore_local_count"], 95.0)
+        self.assertEqual(ext["restore_local_p99_ms"], 12.0)
+        self.assertEqual(ext["imagecache_hits_delta"], 80.0)
+        m = row["measurements"]
+        self.assertEqual(m["ext_ate_api_resume_ok_delta"], "250.0")
+        self.assertEqual(m["ext_scheduler_assigned_p99_ms"], "4.2")
+        self.assertEqual(m["ext_restore_local_count"], "95.0")
+        self.assertEqual(m["ext_imagecache_hits_delta"], "80.0")
 
 
 if __name__ == "__main__":

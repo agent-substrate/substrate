@@ -166,19 +166,31 @@ def gcloud_setup_for_target_cluster() -> None:
             "--quiet",
         ]
     )
-    run(
-        [
-            "gcloud",
-            "container",
-            "clusters",
-            "get-credentials",
-            os.environ["CLUSTER_NAME"],
-            "--location",
-            os.environ["CLUSTER_LOCATION"],
-            "--project",
-            os.environ["PROJECT_ID"],
-        ]
-    )
+    cmd = [
+        "gcloud",
+        "container",
+        "clusters",
+        "get-credentials",
+        os.environ["CLUSTER_NAME"],
+        "--location",
+        os.environ["CLUSTER_LOCATION"],
+        "--project",
+        os.environ["PROJECT_ID"],
+    ]
+    delays = (5, 10, 20, 30, 45)
+    for attempt in range(1, len(delays) + 2):
+        res = subprocess.run(cmd, check=False)
+        if res.returncode == 0:
+            return
+        if attempt > len(delays):
+            raise subprocess.CalledProcessError(res.returncode, cmd)
+        delay = delays[attempt - 1]
+        print(
+            f"[WARN] gcloud get-credentials attempt {attempt} failed "
+            f"(exit {res.returncode}); retrying in {delay}s...",
+            flush=True,
+        )
+        time.sleep(delay)
 
 
 def test_type(test: dict[str, Any]) -> str:
@@ -407,11 +419,29 @@ CLIENT_PRINCIPAL = "system:serviceaccount:ate-system:ate-client"
 
 
 def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
+    """Deploy the ATE control-plane and data-plane via hack/install-ate.sh.
+
+    Grants bootstrap ownership to both the kubectl-ate client and the
+    benchmark runner service account, and retries up to 3 times on
+    transient webhook or image-pull failures.
+    """
     env = {
         **os.environ,
         "ATE_API_AUTHZ_BOOTSTRAP_OWNERS": f"{CLIENT_PRINCIPAL},{BENCHMARK_RUNNER_PRINCIPAL}",
     }
-    run(["hack/install-ate.sh", "deploy", "ate-system", *(str(a) for a in ate_args)], env=env)
+    cmd = ["hack/install-ate.sh", "deploy", "ate-system", *(str(a) for a in ate_args)]
+    for attempt in range(1, 4):
+        try:
+            run(cmd, env=env)
+            return
+        except subprocess.CalledProcessError:
+            if attempt == 3:
+                raise
+            print(
+                f"[WARN] deploy_substrate attempt {attempt}/3 failed; retrying in 15s...",
+                flush=True,
+            )
+            time.sleep(15)
 
 
 def teardown_substrate() -> None:
@@ -484,6 +514,8 @@ def run_test(
     commit: str,
     manifests_dir: str = MANIFESTS_DIR,
 ) -> str:
+    """Render and submit a benchmark runner Job, wait for completion, tail
+    its logs, and delete the Job resource."""
     name = test["name"]
     job = job_name(name, commit)
     subs = {
@@ -506,9 +538,23 @@ def run_test(
     manifest = render_template(tmpl, subs, flags)
     wait_for_no_active_runners()
     print(f"Submitting Job {job}", flush=True)
-    subprocess.run(
-        ["kubectl", "apply", "-f", "-"], input=manifest, text=True, check=True
-    )
+    for _apply_try, _delay in enumerate((5, 10, 15, 20, 30), 1):
+        _res = subprocess.run(
+            ["kubectl", "apply", "--request-timeout=60s", "-f", "-"],
+            input=manifest,
+            text=True,
+            check=False,
+        )
+        if _res.returncode == 0:
+            break
+        if _apply_try == 5:
+            raise subprocess.CalledProcessError(_res.returncode, _res.args)
+        print(
+            f"[WARN] kubectl apply Job {job} attempt {_apply_try} failed; "
+            f"retrying in {_delay}s...",
+            flush=True,
+        )
+        time.sleep(_delay)
     timeout = parse_duration_seconds(test["duration"]) + 1800
     result = wait_for_job(job, timeout)
     print(f"Job {job} result: {result}", flush=True)
