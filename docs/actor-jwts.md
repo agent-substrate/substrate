@@ -160,7 +160,8 @@ one, put an Ingress or load balancer with a publicly trusted certificate on a
 host you own, route `/.well-known/openid-configuration` and `/openid/v1/jwks`
 to the `idp` Service over HTTPS, and set the issuer to `https://<that host>`.
 The installer does not create the Ingress, the DNS record, or the
-certificate.
+certificate. [actor-jwt-federation.md](actor-jwt-federation.md) walks through
+it, and through setting up Google Cloud to trust the issuer.
 
 ## Signing keys and rotation
 
@@ -186,3 +187,6 @@ Rotate with the `kubectl ate admin` commands, against the pool Secret
 
 `list-jwt-keys` shows each key's ID and algorithm and marks the one that
 signs. `add-jwt-key` takes `--alg` and `--key-id` like `make-jwt-pool`.
+
+[actor-jwt-key-rotation.md](actor-jwt-key-rotation.md) gives the timings for
+each step and what to do about a compromised key.

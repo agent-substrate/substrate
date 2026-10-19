@@ -254,6 +254,8 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
 * [Authentication Guide](docs/authentication.md): Configure trusted JWT providers and human credentials.
 * [Actor JWTs](docs/actor-jwts.md): What an actor JWT contains, how relying parties verify it, and how to rotate the signing key.
+* [Federating actor JWTs with Google Cloud](docs/actor-jwt-federation.md): Serve the actor JWT issuer publicly and set up Google Cloud Workload Identity Federation to trust it.
+* [Rotating the actor JWT signing key](docs/actor-jwt-key-rotation.md): The rotation steps, how long to wait between them, and replacing a compromised key.
 * [Egress Traffic](docs/egress-traffic.md): Which protocols an Actor may reach the outside world with and which are blocked.
 * [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
