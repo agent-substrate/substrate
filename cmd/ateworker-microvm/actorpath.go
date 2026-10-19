@@ -56,6 +56,21 @@ func goldenBaseMemoryRangesPath(baseID string) string {
 	return filepath.Join(filepath.Dir(filepath.Clean(nodepath.ActorsDir)), "golden-base-cache", baseID, "memory-ranges")
 }
 
+// goldenBaseMemoryRangesPathForDir resolves the golden base memory-ranges cache path relative to snapshotDir when under an actors directory, falling back to goldenBaseMemoryRangesPath.
+func goldenBaseMemoryRangesPathForDir(snapshotDir, baseID string) string {
+	if !validBaseID(baseID) {
+		return ""
+	}
+	actorsDir := filepath.Dir(filepath.Dir(filepath.Clean(snapshotDir)))
+	if filepath.Base(actorsDir) == "actors" {
+		candidate := filepath.Join(filepath.Dir(actorsDir), "golden-base-cache", baseID, "memory-ranges")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return goldenBaseMemoryRangesPath(baseID)
+}
+
 // ociBundlePath is the container's OCI bundle.
 func ociBundlePath(actorDirs *ateworkerpb.ActorDirs, containerName string) string {
 	return filepath.Join(actorDirs.GetOciBundleDir(), containerName)
@@ -75,6 +90,7 @@ func ensureGoldenBaseCached(ctx context.Context, baseID, srcMemPath string) erro
 	}
 	dstPath := goldenBaseMemoryRangesPath(baseID)
 	if fi, err := os.Stat(dstPath); err == nil && fi.Mode().IsRegular() && fi.Size() > 0 {
+		maybePrewarmGoldenSlots(dstPath)
 		return nil
 	}
 	srcFi, err := os.Stat(srcMemPath)
@@ -98,5 +114,9 @@ func ensureGoldenBaseCached(ctx context.Context, baseID, srcMemPath string) erro
 	if err := ch.CopySparseFileFast(ctx, srcMemPath, tmpPath); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, dstPath)
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		return err
+	}
+	maybePrewarmGoldenSlots(dstPath)
+	return nil
 }
