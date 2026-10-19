@@ -161,10 +161,14 @@ const (
 	SnapshotFidelityKey    = attribute.Key("ate.snapshot.fidelity")
 	SnapshotPhaseKey       = attribute.Key("ate.snapshot.phase")
 	ImageCacheOutcomeKey   = attribute.Key("ate.imagecache.outcome")
-	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
-	RouterResumeKey        = attribute.Key("ate.router.resume")
-	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
-	StatsSourceKey         = attribute.Key("ate.stats.source")
+	// SandboxAssetCacheGCOutcomeKey is the result of one eviction pass over
+	// the node's sandbox asset cache. Rooted at the subsystem, like the
+	// image cache's keys: one cache serves every actor on the node.
+	SandboxAssetCacheGCOutcomeKey = attribute.Key("ate.sandboxassetcache.gc.outcome")
+	SchedulerOutcomeKey           = attribute.Key("ate.scheduler.outcome")
+	RouterResumeKey               = attribute.Key("ate.router.resume")
+	RouterOutcomeKey              = attribute.Key("ate.router.outcome")
+	StatsSourceKey                = attribute.Key("ate.stats.source")
 )
 
 // Keys of the actor usage record. Logs only: the measurements are unbounded and
@@ -235,6 +239,14 @@ const (
 	ImageCacheOutcomeError     = "error"
 	ImageCacheOutcomeCancelled = "cancelled"
 	ImageCacheOutcomeTimeout   = "timeout"
+)
+
+// Values for SandboxAssetCacheGCOutcomeKey. A pass is quiet when the cache
+// is within its budget and nothing is asked of it; those are not recorded.
+const (
+	SandboxAssetCacheGCOutcomeComplete  = "complete"  // the pass freed what the budget asked
+	SandboxAssetCacheGCOutcomeShortfall = "shortfall" // it freed what it could, less than asked
+	SandboxAssetCacheGCOutcomeSkipped   = "skipped"   // it could not size the cache and did nothing
 )
 
 // Values for RouterOutcomeKey. RouterOutcomeNoCapacity means that no worker

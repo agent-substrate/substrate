@@ -32,7 +32,7 @@ import (
 )
 
 // DeleteActor executes the workflow to delete an actor. Idempotent.
-func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, anyState bool, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	ctx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
@@ -52,7 +52,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	}
 
-	if actor, err = w.ensureMarkedDeleting(ctx, actorRef, actor, anyState); err != nil {
+	if actor, err = w.ensureMarkedDeleting(ctx, actorRef, actor); err != nil {
 		return nil, err
 	}
 
@@ -321,26 +321,13 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 // ensureMarkedDeleting transitions the actor to DELETING and persists the
 // change, returning the stored copy. Skips when a previous attempt already
 // marked the actor.
-func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, anyState bool) (updated *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor) (updated *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkDeleting")
 	defer func() { err = done(err) }()
 
-	st := actor.GetStatus().GetState()
-	if st == ateapipb.ActorState_ACTOR_STATE_DELETING {
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_DELETING {
 		markSkipped(ctx, "actor already DELETING")
 		return actor, nil
-	}
-	shouldDelete := false
-	switch st {
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		ateapipb.ActorState_ACTOR_STATE_CRASHED:
-		shouldDelete = true
-	default:
-		// This allows deletion for any state
-		shouldDelete = anyState
-	}
-	if !shouldDelete {
-		return nil, apierror.FailedPrecondition("Actor %s is not in a deletable state (state: %v)", actorRef, st)
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {

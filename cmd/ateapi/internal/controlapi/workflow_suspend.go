@@ -29,6 +29,8 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -267,6 +269,10 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 
 	resp, err := client.Checkpoint(ctx, req)
 	if err != nil {
+		// A snapshot conflict leaves the actor and its assignment intact for a retry.
+		if ctx.Err() == nil && status.Code(err) == codes.Aborted {
+			return wireFidelity, nil, apierror.Aborted("while calling atelet Checkpoint: %w", err)
+		}
 		return wireFidelity, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireFidelity, resp.GetState(), nil

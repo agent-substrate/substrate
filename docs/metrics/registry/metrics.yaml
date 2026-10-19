@@ -569,6 +569,36 @@ groups:
               value: timeout
               brief: The time limit of the caller ended.
 
+  - id: registry.ate.sandboxassetcache
+    type: attribute_group
+    brief: >
+      The labels of the sandbox asset cache on the node: the runsc binaries,
+      the kernels and the guest images the workers run actors with. Each actor
+      on the node links its assets from this one cache.
+    attributes:
+      - id: ate.sandboxassetcache.gc.outcome
+        stability: development
+        brief: >
+          The result of one eviction pass that had work to do. A pass that
+          finds the cache within its budget records nothing.
+        type:
+          members:
+            - id: complete
+              stability: development
+              value: complete
+              brief: The pass freed what the budget asked.
+            - id: shortfall
+              stability: development
+              value: shortfall
+              brief: >
+                The pass freed less than the budget asked. What remains is
+                linked by an actor or by a worker for its default runtime,
+                younger than the min age, or busy. The cache cannot free it.
+            - id: skipped
+              stability: development
+              value: skipped
+              brief: The pass could not size the cache and removed nothing. It retries on the next tick.
+
   - id: registry.ate.stats
     type: attribute_group
     brief: The labels of the resource measurements of the actors.
@@ -1296,6 +1326,70 @@ groups:
             The outcome is error. The key holds the HTTP status of the registry.
             The permitted values are 401, 403, 404, 429, 500, 502, 503 and 504.
             Each other status, and each failure with no status, reports _OTHER.
+
+  - id: metric.ate.sandboxassetcache.size
+    type: metric
+    metric_name: ate.sandboxassetcache.size
+    instrument: updowncounter
+    unit: By
+    stability: development
+    brief: The bytes of disk that the sandbox asset cache on the node occupies.
+    note: >
+      atelet reads the value on each collection as the sum of the allocated
+      size of each entry in the cache. Compare it with the budget that
+      --sandbox-asset-cache-max-bytes sets. A value that stays over the budget
+      with shortfall passes means that the actors and the workers' default
+      runtimes hold more than the budget. The budget is too small, or the node
+      hosts too many runtimes.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/sandbox_asset_gc.go
+        cuj: The disk of a worker node fills. Is it the sandbox asset cache?
+
+  - id: metric.ate.sandboxassetcache.evictions
+    type: metric
+    metric_name: ate.sandboxassetcache.evictions
+    instrument: counter
+    unit: "{entry}"
+    stability: development
+    brief: The number of entries that the eviction passes removed from the sandbox asset cache on the node.
+    note: >
+      An entry is one asset: a file or a tree, such as a runsc binary or a
+      micro-VM kernel. A pass removes only an entry that no actor and no worker
+      links, oldest first. A rate that stays above zero with a size at the
+      budget means that the cache thrashes: a runtime leaves and returns on
+      each pass, and each return pays for a download.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/sandbox_asset_gc.go
+        cuj: Actors download their runtime again and again on one node. Does the cache evict it?
+
+  - id: metric.ate.sandboxassetcache.gc.passes
+    type: metric
+    metric_name: ate.sandboxassetcache.gc.passes
+    instrument: counter
+    unit: "{pass}"
+    stability: development
+    brief: The number of eviction passes over the sandbox asset cache on the node that had work to do, by outcome.
+    note: >
+      A pass that finds the cache within its budget is not counted. Thus a
+      series that grows means that the cache is over its budget. Read the
+      outcome: complete means that the passes keep up; shortfall means that
+      what remains is not the cache's to free; skipped means that atelet
+      cannot read the cache directory.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation, errors]
+        code_anchor: cmd/atelet/sandbox_asset_gc.go
+        cuj: The sandbox asset cache stays over its budget. Does the collector run, and what stops it?
+    attributes:
+      - ref: ate.sandboxassetcache.gc.outcome
+        requirement_level: required
 
   # ---------------------------------------------------------------------------
   # Metrics. atecontroller

@@ -352,8 +352,6 @@ service Atelet {
   // actor is in progress or the actor runs on this node, and
   // FAILED_PRECONDITION when atelet cannot make the latest local snapshot
   // durable, such as when it has no `snapshot.object`.
-  //
-  // TODO: Temporarily, atelet returns UNIMPLEMENTED.
   rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,

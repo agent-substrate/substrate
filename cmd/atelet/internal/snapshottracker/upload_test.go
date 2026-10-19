@@ -676,8 +676,8 @@ func TestTrackerBeginPromote(t *testing.T) {
 		tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
 		store.release <- nil
 		waitClosed(t, done, "the upload")
-		if err := <-errCh; apierror.Code(err) != codes.FailedPrecondition {
-			t.Errorf("BeginPromote = %v, want FailedPrecondition", err)
+		if err := <-errCh; apierror.Code(err) != codes.Aborted {
+			t.Errorf("BeginPromote = %v, want Aborted", err)
 		}
 	})
 

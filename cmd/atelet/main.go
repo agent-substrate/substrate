@@ -208,7 +208,7 @@ func main() {
 	// directly for its whole life, so the socket should exist before any worker
 	// pod on this node boots.
 	if relay, err := otlprelay.NewServer(ctx, *otlpRelaySocket); err != nil {
-		slog.ErrorContext(ctx, "Failed to create the OTLP relay; workers will export directly", slog.Any("err", err))
+		slog.ErrorContext(ctx, "Failed to create the OTLP relay; workers fall back to their own OTLP endpoint", slog.Any("err", err))
 	} else if relay != nil {
 		// Deferred rather than tied to the drain: the relay carries other
 		// processes' telemetry, so it should outlive atelet's own RPC serving
@@ -217,7 +217,7 @@ func main() {
 		go func() {
 			if err := relay.Serve(ctx); err != nil {
 				// Not fatal: atelet's actual job does not depend on the relay,
-				// and the workers fall back to exporting directly.
+				// and the workers fall back to their own OTLP endpoint.
 				slog.ErrorContext(ctx, "OTLP relay stopped", slog.Any("err", err))
 			}
 		}()
@@ -262,9 +262,21 @@ func main() {
 	if err := validateSandboxAssetCacheFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid sandbox asset cache flags", err)
 	}
-	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout)
+	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout, nodepath.ActorsDir, nodepath.WorkersDir())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open sandbox asset cache", err)
+	}
+	if err := validateSandboxAssetCacheGCFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid sandbox asset cache GC flags", err)
+	}
+	sandboxAssetCacheInstruments, err := newSandboxAssetCacheInstruments(otel.Meter("atelet"), sandboxAssetCache)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create sandbox asset cache metrics", err)
+	}
+	if *sandboxAssetCacheMaxBytes == 0 {
+		slog.WarnContext(ctx, "Sandbox asset cache has no budget; it only grows", slog.String("flag", "--sandbox-asset-cache-max-bytes"))
+	} else if *sandboxAssetCacheGCPeriod > 0 {
+		go newSandboxAssetCacheGC(sandboxAssetCache, sandboxAssetCacheInstruments).Run(ctx)
 	}
 
 	// Sandbox assets go through the object-store plugin; a gs:// asset it
@@ -444,7 +456,7 @@ func main() {
 		ateFactory.Api().V1alpha1().WorkerPools(),
 		ateFactory.Api().V1alpha1().SandboxConfigs(),
 		wmService,
-		nodepath.WorkersDir(), runtimes, prewarmer.enqueue)
+		nodepath.WorkersDir(), runtimes, prewarmer)
 	if err != nil {
 		// Without the syncer no runtime is ever indexed, so no actor could run.
 		serverboot.Fatal(ctx, "Failed to start the worker sandbox runtimes syncer", err)
@@ -1586,6 +1598,19 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	}
 
 	return &ateletpb.RestoreResponse{}, nil
+}
+
+// DetachActor makes the actor's latest local snapshot durable, then deletes the
+// actor's local snapshots on this node.
+func (s *Atelet) DetachActor(ctx context.Context, req *ateletpb.DetachActorRequest) (*ateletpb.DetachActorResponse, error) {
+	if errs := apivalidation.ValidateDetachActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
+	}
+	state, err := s.snapshots.Detach(ctx, req.GetActorUid())
+	if err != nil {
+		return nil, err
+	}
+	return &ateletpb.DetachActorResponse{State: state}, nil
 }
 
 // Terminate terminates any running workload on worker, unmounts external volumes,

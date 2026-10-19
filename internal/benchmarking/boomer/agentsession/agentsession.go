@@ -906,7 +906,7 @@ func (u *sessionUser) suspendAndDelete(ctx context.Context) {
 	_, _ = u.cfg.APIStub.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{Actor: u.ref()})
 	cancel()
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{Actor: u.ref(), AnyState: true}, grpc.Trailer(tr))
+		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
 		return err
 	})
 	bmetrics.UpdateUsers(agentSessionUserClass, -1)

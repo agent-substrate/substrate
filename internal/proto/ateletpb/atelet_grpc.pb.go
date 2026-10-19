@@ -348,8 +348,6 @@ type AteletClient interface {
 	// actor is in progress or the actor runs on this node, and
 	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
 	// durable, such as when it has no `snapshot.object`.
-	//
-	// TODO: Temporarily, atelet returns UNIMPLEMENTED.
 	DetachActor(ctx context.Context, in *DetachActorRequest, opts ...grpc.CallOption) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
@@ -467,8 +465,6 @@ type AteletServer interface {
 	// actor is in progress or the actor runs on this node, and
 	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
 	// durable, such as when it has no `snapshot.object`.
-	//
-	// TODO: Temporarily, atelet returns UNIMPLEMENTED.
 	DetachActor(context.Context, *DetachActorRequest) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.

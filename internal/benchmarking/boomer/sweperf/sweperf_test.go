@@ -108,8 +108,6 @@ type fakeControlClient struct {
 	// Make ResumeActor take time and report a smaller server-side elapsed.
 	resumeDelay     time.Duration
 	resumeElapsedUs string
-	// AnyState carried by the most recent DeleteActor request.
-	deleteAnyState bool
 	// beforeDelete, if set, runs at the start of each DeleteActor, outside mu.
 	beforeDelete func()
 }
@@ -175,7 +173,6 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "DeleteActor")
-	f.deleteAnyState = in.GetAnyState()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -846,10 +843,6 @@ func TestShutdownDeletesWithoutSuspend(t *testing.T) {
 
 	if got, want := fakeCtrl.recordedCalls(), []string{"DeleteActor"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("recordedCalls = %v, want %v", got, want)
-	}
-	// Without AnyState the server refuses to delete an actor caught mid-cycle.
-	if !fakeCtrl.deleteAnyState {
-		t.Error("DeleteActor sent AnyState=false; an actor not yet SUSPENDED would leak its worker")
 	}
 }
 

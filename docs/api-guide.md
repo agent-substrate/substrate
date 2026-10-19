@@ -387,8 +387,8 @@ a `Snapshot` with the following fields:
   has one, and the tag can seed actors only once it is `COMPLETED`.
 - `sandboxRuntime`: The sandbox runtime and hardware compatibility attributes the
   guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
-  when the checkpoint is taken. A resume that restores memory or rootfs state
-  (`SNAPSHOT_FIDELITY_MEMORY` or `SNAPSHOT_FIDELITY_ROOTFS`) first schedules onto
+  when the checkpoint is taken. A resume that restores memory state
+  (`SNAPSHOT_FIDELITY_MEMORY`) first schedules onto
   an eligible worker whose `defaultRuntime` or `restorableRuntimes` is compatible
   with `sandboxRuntime` (same sandbox class, same schema version, and every
   attribute recorded on the snapshot present on the worker with the same
@@ -398,17 +398,19 @@ a `Snapshot` with the following fields:
   capacity:
   - A durable snapshot — the actor's own, a `sourceTag` clone, or the
     template's golden snapshot a new actor starts from — falls back to any eligible
-    worker and downgrades the restore to `SNAPSHOT_FIDELITY_VOLUMES`, preserving
-    the snapshot's volume data while booting the guest fresh under the new
-    worker's `defaultRuntime`.
+    worker and downgrades the restore to `SNAPSHOT_FIDELITY_ROOTFS`, preserving
+    the snapshot's rootfs and volume data while booting the guest fresh under the
+    new worker's `defaultRuntime`.
   - A local pause checkpoint (with `locality`) is not relaxed; the resume
     returns `RESOURCE_EXHAUSTED` and the actor stays paused on its node until a
     compatible worker there has room, or until atelet detaches it. A detach
     uploads the checkpoint, deletes the local files, and lifts the node pin,
     after which the next resume may fall back like a durable snapshot.
 
-  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_VOLUMES` imposes
-  no runtime placement constraint.
+  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
+  `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime placement constraint. Because a
+  `ROOTFS` restore reuses the container's rootfs upper layer over the template's
+  image, pools selected by an `ActorTemplate` must share a CPU architecture.
 
 An `ActorTemplate` references its golden tag with the `ObjectRef` in
 `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned
@@ -541,7 +543,8 @@ its Golden tag and any unfinished Golden actor.
 
 Golden capture follows `preferredFidelity`. MEMORY preserves processes and memory;
 VOLUMES preserves startup data in mounted volumes and starts new processes on
-restore. ROOTFS preserves a micro-VM's filesystem and also starts new processes.
+restore. ROOTFS preserves the sandbox's root filesystem writes and also starts new
+processes.
 
 `CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field.
 
@@ -621,6 +624,7 @@ Hibernate a running actor, capturing its current RAM and disk state into a snaps
     *   `options.mode`: (Optional) `DURABILITY_MODE_SYNCHRONOUS` returns once the snapshot is `COMPLETED` in object storage. `DURABILITY_MODE_ASYNCHRONOUS` (a pause) returns once the snapshot is captured on the worker's node, and atelet uploads it in the background. Unset runs an asynchronous suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.snapshots`.
 *   Called on an actor that is already `ACTOR_STATE_SUSPENDED`, it returns the actor as it is, in either mode. atelet uploads a paused actor's node-local snapshot in the background, so `status.snapshots` may still show it with `locality` and a `PENDING` `durableSnapshot`.
+*   A snapshot generation conflict returns `ABORTED` without crashing the actor. The actor can remain `ACTOR_STATE_SUSPENDING`, with its worker assignment and previous completed snapshot kept for recovery. Read the actor's latest state before retrying; repeating a stale request cannot resolve a persistent disagreement with atelet.
 *   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended. After an asynchronous suspend, `CreateTag` first has atelet upload the snapshot if it has not already, so the call can take as long as that upload. If the upload fails, so does `CreateTag`, and the actor is left as it was.
 
 #### Snapshot lifetime
@@ -647,11 +651,10 @@ Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE
 *   External volumes are not reverted. Their contents are never part of a snapshot, so a reverted actor comes back with its memory and root filesystem rewound but its volumes exactly as the discarded execution left them.
 
 #### `DeleteActor`
-Removes an actor from the registry and cleans up associated resources.
+Removes an actor in any state from the registry and cleans up associated resources, terminating active workloads, detaching volumes, and releasing worker allocations.
 *   **Request:** `DeleteActorRequest`
     *   `actor`: `ObjectRef` of the actor to delete.
     *   `options`: (Optional) `DeleteOptions`. `uid` and `version` are preconditions checked against the actor as the caller last read it: a mismatch returns `ABORTED`, an omitted guard is skipped. They are checked before the workflow starts, so a guarded delete that fails part-way leaves the actor `ACTOR_STATE_DELETING` at a higher version. Retry it with the `uid` guard alone, or re-read first.
-    *   `any_state`: (Optional) If `true`, allows deleting the actor from any state (e.g. `RUNNING`), terminating active workloads, detaching volumes, and releasing worker allocations. By default (`false`), only actors in `ACTOR_STATE_SUSPENDED` (paused ones included) or `ACTOR_STATE_CRASHED` (or already `ACTOR_STATE_DELETING`) can be deleted.
 *   **Response:** the deleted `Actor`, as it was immediately before removal.
 *   Deleting an actor also deletes the external snapshot it owns, along with one an interrupted suspend left behind. Snapshots it only borrows from a tag are left alone, and its tags are unaffected — they hold their own copies.
 

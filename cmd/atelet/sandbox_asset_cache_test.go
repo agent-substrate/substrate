@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/nodepath"
 )
 
 func TestValidateSandboxAssetCacheFlags(t *testing.T) {
@@ -62,7 +63,7 @@ func TestOpenSandboxAssetCacheResetsScratch(t *testing.T) {
 	}
 
 	dir := filepath.Join(t.TempDir(), "cache")
-	store, err := openSandboxAssetCache(t.Context(), dir, time.Hour, 5*time.Minute)
+	store, err := openSandboxAssetCache(t.Context(), dir, time.Hour, 5*time.Minute, nodepath.ActorsDir, filepath.Join(t.TempDir(), "workers"))
 	if err != nil {
 		t.Fatalf("openSandboxAssetCache: %v", err)
 	}

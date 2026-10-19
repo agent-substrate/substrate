@@ -36,6 +36,110 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+// TestSuspendActor_CheckpointError exercises checkpoint error policy through
+// the suspend workflow, including retrying the persisted snapshot.
+func TestSuspendActor_CheckpointError(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		cancel    bool
+		wantCode  codes.Code
+		wantState ateapipb.ActorState
+	}{
+		{"snapshot conflict", apierror.Aborted("checkpoint rejected"), false, codes.Aborted, ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+		{"failed precondition", apierror.FailedPrecondition("checkpoint rejected"), false, codes.Internal, ateapipb.ActorState_ACTOR_STATE_CRASHED},
+		{"caller cancellation", apierror.Aborted("checkpoint rejected"), true, codes.Canceled, ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+	}
+	for _, tt := range tests {
+		for _, mode := range suspendModes {
+			t.Run(tt.name+"/"+mode.name, func(t *testing.T) {
+				ctx := context.Background()
+				persistence := newTestPersistence(t)
+				seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY})
+				w, atelet := newWireCaptureWorkflow(t, persistence)
+				actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+				actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+					Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+					ActorTemplate: suspendTestTemplateRef(),
+					Status: &ateapipb.ActorStatus{
+						State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+						AssignedNode:     wireTestAssignment().GetNodeName(),
+						WorkerAssignment: wireTestAssignment(),
+					},
+				})
+				seedWireWorker(t, ctx, persistence, assignmentOf(actor))
+				callCtx, cancel := context.WithCancel(ctx)
+				defer cancel()
+				atelet.onCheckpoint = func(context.Context) error {
+					if tt.cancel {
+						cancel()
+					}
+					return tt.err
+				}
+				_, err := w.SuspendActor(callCtx, actorRef, mode.suspendMode)
+				if got := apierror.Code(err); got != tt.wantCode {
+					t.Fatalf("SuspendActor error = %v (code %v), want %v", err, got, tt.wantCode)
+				}
+				if tt.cancel && !errors.Is(err, context.Canceled) {
+					t.Errorf("SuspendActor error does not wrap context.Canceled: %v", err)
+				}
+				if checkpoints, _ := atelet.calls(); checkpoints != 1 {
+					t.Fatalf("Checkpoint calls = %d, want 1", checkpoints)
+				}
+				stored := mustReadActor(t, ctx, persistence, actorRef)
+				st := stored.GetStatus()
+				if st.GetState() != tt.wantState {
+					t.Fatalf("actor state = %v, want %v", st.GetState(), tt.wantState)
+				}
+				worker, err := persistence.GetWorker(ctx, wireTestAssignment().GetWorker().GetName())
+				if err != nil {
+					t.Fatalf("GetWorker: %v", err)
+				}
+				if tt.wantState == ateapipb.ActorState_ACTOR_STATE_CRASHED {
+					if st.GetCrash() == nil || st.GetWorkerAssignment() != nil || worker.GetStatus().GetAllocated().GetActors() != 0 {
+						t.Errorf("checkpoint failure did not crash the actor and release its worker: actor %v, worker %v", st, worker.GetStatus())
+					}
+					return
+				}
+				if st.GetCrash() != nil || !proto.Equal(st.GetWorkerAssignment(), actor.GetStatus().GetWorkerAssignment()) {
+					t.Errorf("checkpoint error changed the worker assignment or crashed the actor: %v", st)
+				}
+				if got := worker.GetStatus().GetAllocated().GetActors(); got != 1 {
+					t.Errorf("worker allocated actors = %d, want 1", got)
+				}
+				pending := snapshotAtLatestGeneration(st)
+				if pending.GetUuid() == "" || pending.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
+					t.Fatalf("snapshot = %v, want a persisted pending snapshot", pending)
+				}
+				first := atelet.checkpointRequest().GetSnapshot()
+				if first.GetSnapshotUuid() != pending.GetUuid() || first.GetGeneration() != pending.GetGeneration() {
+					t.Fatalf("Checkpoint snapshot = %v, want pending snapshot %v", first, pending)
+				}
+				atelet.mu.Lock()
+				atelet.onCheckpoint = nil
+				atelet.mu.Unlock()
+				finished, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
+				if err != nil {
+					t.Fatalf("SuspendActor retry: %v", err)
+				}
+				if checkpoints, _ := atelet.calls(); checkpoints != 2 {
+					t.Errorf("Checkpoint calls after retry = %d, want 2", checkpoints)
+				}
+				if diff := cmp.Diff(first, atelet.checkpointRequest().GetSnapshot(), protocmp.Transform()); diff != "" {
+					t.Errorf("retry changed the snapshot (-first +retry):\n%s", diff)
+				}
+				if finished.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || finished.GetStatus().GetWorkerAssignment() != nil {
+					t.Errorf("retry did not suspend the actor and clear its assignment: %v", finished.GetStatus())
+				}
+				latest := snapshotAtLatestGeneration(finished.GetStatus())
+				if latest.GetUuid() != pending.GetUuid() || latest.GetGeneration() != pending.GetGeneration() {
+					t.Errorf("retry finalized a different snapshot: %v, want %v", latest, pending)
+				}
+			})
+		}
+	}
+}
+
 func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)

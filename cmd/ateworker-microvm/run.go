@@ -166,23 +166,22 @@ const minGuestMemMiB = 128
 // workloads to signal and wait on, and it must name what the guest actually
 // runs: a container the agent does not know is rejected with InvalidContainerId,
 // and graceful shutdown then gives up without ever reaching the workload.
-//
-// Containers run under their bare name.
 func workloadIDs(ctrs []actorContainer) []string {
 	ids := make([]string, 0, len(ctrs))
 	for _, c := range ctrs {
-		ids = append(ids, c.name)
+		ids = append(ids, c.id)
 	}
 	return ids
 }
 
 // actorContainer is one of the actor's containers prepared for the shared micro-VM:
-// its name (also the kata containerID + the merged rootfs's find-paths subdir), its
+// its name, its kata container ID (also the merged rootfs's find-paths subdir), its
 // host OCI bundle and the bundle rootfs that backs the overlay lower, and its OCI
 // spec. The writable upper is a host directory (see rootfsupper.go); the host kernel
 // merges the two.
 type actorContainer struct {
 	name         string
+	id           string // see ocispec.GuestContainerID
 	bundle       string
 	bundleRootfs string
 	// spec is the container's OCI spec shaped for micro-VM execution.
@@ -608,14 +607,13 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	s.setRunningVM(actorUID, ra)
 
 	// Forward each container's stdout/stderr into the pod logs, keyed by the
-	// container id (== the name; see StartRootfsContainer). The goroutines read
-	// over ac for the actor's lifetime and exit (io.EOF) when teardownActor
-	// closes ac.
+	// container id (see StartRootfsContainer). The goroutines read over ac for
+	// the actor's lifetime and exit (io.EOF) when teardownActor closes ac.
 	workloadIDs := make([]string, 0, len(ctrs))
 	attribution := p.actorAttribution()
 	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, attribution, c.name, c.name)
-		workloadIDs = append(workloadIDs, c.name)
+		s.startActorLogForwarding(ac, attribution, c.id, c.name)
+		workloadIDs = append(workloadIDs, c.id)
 	}
 
 	// Publish the guest to GetWorkloadStats, past every error return above: a
@@ -644,7 +642,7 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		cn := c.GetName()
 		bundle := ociBundlePath(actorDirs, cn)
 		spec := ocispec.Build(ocispec.Options{ActorUID: actorUID, ActorDirs: actorDirs, Container: c})
-		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerID: cn}); err != nil {
+		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerName: cn}); err != nil {
 			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an
@@ -663,6 +661,7 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		}
 		ctrs[i] = actorContainer{
 			name:         cn,
+			id:           ocispec.GuestContainerID(cn),
 			bundle:       bundle,
 			bundleRootfs: bundleRootfs,
 			spec:         spec,
@@ -684,12 +683,12 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
 	upperBase := rootfsUpperDir(actorDirs)
 	for _, c := range ctrs {
-		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, id, c.name); err != nil {
+		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, c.name, id, c.id); err != nil {
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
 			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetName())
-			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetName()); err != nil {
+			if err := kata.StageImageVolume(ctx, src, id, c.id, vm.GetName()); err != nil {
 				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetName(), c.name, err)
 			}
 		}
@@ -892,19 +891,19 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 }
 
 // startRootfsContainer brings up one container on its host-merged rootfs (the
-// stock kata flow: create + start against shared/<name>/rootfs). On failure it
+// stock kata flow: create + start against shared/<id>/rootfs). On failure it
 // dumps the guest's view of the shared tree.
 //
 // Its spec binds every declared volume at its mount path.
 func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := ac.StartRootfsContainer(cCtx, c.name, c.spec)
+	err := ac.StartRootfsContainer(cCtx, c.id, c.spec)
 	cancel()
 	if err != nil {
 		if s.guestDebug {
 			dump := kata.DebugConsoleDump(ctx, vsockPath,
 				"echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40; "+
-					"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.name+"/rootfs/ 2>&1 | head; "+
+					"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.id+"/rootfs/ 2>&1 | head; "+
 					"echo '== mounts =='; grep -E 'kata|virtiofs' /proc/mounts 2>&1")
 			slog.ErrorContext(ctx, "rootfs container failed; dump", slog.String("container", c.name), slog.String("dump", dump))
 		}

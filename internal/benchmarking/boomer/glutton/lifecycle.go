@@ -503,8 +503,7 @@ func (u *gluttonActor) suspend(ctx context.Context) error {
 func (u *gluttonActor) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			Actor:    u.ref(),
-			AnyState: true,
+			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})

@@ -370,6 +370,12 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 			wantCode:    codes.Unavailable,
 		},
 		{
+			name:        "the snapshot conflicts with atelet's newer state",
+			promoteErr:  apierror.Aborted("stale snapshot generation"),
+			wantPromote: true,
+			wantCode:    codes.Aborted,
+		},
+		{
 			name:        "the paused snapshot is gone and was never uploaded",
 			promoteErr:  apierror.NotFound("local snapshot is gone and no uploaded copy exists: %w", status.Error(codes.NotFound, "manifest not found")),
 			wantPromote: true,

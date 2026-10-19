@@ -181,12 +181,12 @@ func TestDeleteActorTemplate(t *testing.T) {
 			tagURI := mustReservedTagSnapshotURI(t, tag)
 			objects.PutSnapshot(t, tagURI, "manifest.json")
 			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
-			// The handler must request AnyState to clean up an active golden actor.
+			// The handler must clean up an active golden actor.
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			})
 			if tt.actorDeleted {
-				if _, err := workflow.DeleteActor(ctx, goldenRef, true, store.DeletePreconditions{}); err != nil {
+				if _, err := workflow.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}); err != nil {
 					t.Fatal(err)
 				}
 			}
