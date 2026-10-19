@@ -172,6 +172,11 @@ type actorSnapshotsRecord struct {
 	// atelet never detaches a snapshot that no detach can make durable (see
 	// detachTarget).
 	DetachAt time.Time `json:"detachAt,omitzero"`
+	// Started is set when a Run or Restore of the actor begins on this node
+	// (markStarted), and cleared when a Checkpoint commits a snapshot
+	// (CommitLocal or CommitDurable). While it is unset, the actor's
+	// directories and volumes are still that Checkpoint's to clean up.
+	Started bool `json:"started,omitempty"`
 	// ReportDueSince is when the latest background change atelet owes a
 	// report of (a new LatestDurable, or local snapshots cleared by a
 	// detach) finished. Zero once no report is due: the control plane
@@ -181,7 +186,8 @@ type actorSnapshotsRecord struct {
 }
 
 // holdKind is the kind of RPC in progress on an actor, or holdNone. Callers
-// serialize lifecycle RPCs per actor, so at most one holds an actor at once.
+// serialize lifecycle RPCs per actor, so at most one RPC holds an actor at
+// once; a retried immediate Checkpoint promotes inside its checkpoint hold.
 type holdKind int
 
 const (
@@ -230,6 +236,25 @@ type actorSnapshots struct {
 	// entry because writing the file failed. The entry stays in memory while
 	// unsaved is set.
 	unsaved bool
+}
+
+// checkpointCommitted reports whether a Checkpoint of snap has committed it
+// already: LatestLocal or LatestDurable is snap. It fails with
+// FailedPrecondition when one of them has snap's UUID but a different
+// generation, fidelity, or URI: the control plane named one snapshot two
+// ways, so refuse rather than guess which is right.
+func (a *actorSnapshots) checkpointCommitted(snap *ateletpb.Snapshot) (bool, error) {
+	for _, r := range []*SnapshotRef{a.LatestLocal, a.LatestDurable} {
+		if r == nil || r.uuid() != snap.GetSnapshotUuid() {
+			continue
+		}
+		if r.generation() != snap.GetGeneration() || r.Snapshot.GetFidelity() != snap.GetFidelity() || r.uri() != snap.GetObject().GetSnapshotUri() {
+			return false, apierror.FailedPrecondition("snapshot %s is committed as generation %d with fidelity %s at %q, but requested as generation %d with fidelity %s at %q",
+				r.uuid(), r.generation(), r.Snapshot.GetFidelity(), r.uri(), snap.GetGeneration(), snap.GetFidelity(), snap.GetObject().GetSnapshotUri())
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // localNeeded reports whether CommitLocal should record snap as LatestLocal:
@@ -499,13 +524,15 @@ func (a *actorSnapshots) clearLatestLocal() {
 	a.DetachAt = time.Time{}
 }
 
-// markStarted unschedules the actor's detach as a Run or Restore of the actor
-// begins on this node: atelet does not detach the actor again until its next
-// checkpoint schedules a detach. It reports whether a detach was scheduled.
+// markStarted records that a Run or Restore of the actor begins on this node:
+// it sets Started and unschedules the actor's detach, so atelet does not
+// detach the actor again until its next checkpoint schedules a detach. It
+// reports whether either changed.
 func (a *actorSnapshots) markStarted() bool {
-	if a.DetachAt.IsZero() {
+	if a.Started && a.DetachAt.IsZero() {
 		return false
 	}
+	a.Started = true
 	a.DetachAt = time.Time{}
 	return true
 }

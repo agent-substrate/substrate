@@ -366,6 +366,11 @@ service Atelet {
   // atelet deletes the actor's older local snapshots, except one still being
   // uploaded, which it deletes after that upload ends. A Checkpoint that fails
   // before then leaves the actor's previous local snapshot in place.
+  //
+  // A Checkpoint of a snapshot already committed, as a retry's is, returns the
+  // actor's state without checkpointing the workload again; under
+  // UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+  // yet.
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
 
   // Restore restores a workload from a snapshot onto a worker.

@@ -184,7 +184,7 @@ func TestTrackerUploadRunsDuringCheckpointHoldWhileDetachWaits(t *testing.T) {
 	t0 := tr.clock.Now()
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
 
-	endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s2", 2, time.Time{}).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+	_, endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s2", 2, time.Time{}).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 	if err != nil {
 		t.Fatalf("BeginCheckpoint: %v", err)
 	}

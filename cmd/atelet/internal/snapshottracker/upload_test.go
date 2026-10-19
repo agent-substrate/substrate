@@ -176,7 +176,7 @@ func TestTrackerImmediateCheckpointDuringUpload(t *testing.T) {
 			startUpload(t, tr, store)
 
 			s2 := testRef("s2", 2, t0.Add(time.Minute))
-			endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s2.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+			_, endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s2.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
 			if err != nil {
 				t.Fatalf("BeginCheckpoint: %v", err)
 			}
@@ -594,7 +594,8 @@ func TestTrackerStartAndCheckpointDoNotWaitForUpload(t *testing.T) {
 
 	beginCheckpoint := func(mode ateletpb.UploadMode) func(context.Context, string) (func(), error) {
 		return func(ctx context.Context, uid string) (func(), error) {
-			return tr.BeginCheckpoint(ctx, uid, testRef("s2", 2, time.Time{}).Snapshot, mode)
+			_, end, err := tr.BeginCheckpoint(ctx, uid, testRef("s2", 2, time.Time{}).Snapshot, mode)
+			return end, err
 		}
 	}
 	for _, tc := range []struct {
@@ -628,7 +629,7 @@ func TestTrackerUploadRunsWhileActorHeld(t *testing.T) {
 	t0 := tr.clock.Now()
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
 
-	end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s2", 2, t0).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+	_, end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s2", 2, t0).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 	if err != nil {
 		t.Fatalf("BeginCheckpoint: %v", err)
 	}
@@ -1377,7 +1378,7 @@ func TestTrackerUploadWaitsForImmediateCheckpoint(t *testing.T) {
 			tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
 
 			s2 := testRef("s2", 2, tr.clock.Now())
-			endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s2.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+			_, endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s2.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
 			if err != nil {
 				t.Fatalf("BeginCheckpoint: %v", err)
 			}
