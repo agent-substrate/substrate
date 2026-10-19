@@ -683,3 +683,121 @@ func TestSchedulePowerOfTwoChoicesShiftedSecondSample(t *testing.T) {
 		t.Fatalf("Schedule() = %q, want %q", got.GetWorkerPod(), "w-2")
 	}
 }
+
+type indexedFleet struct {
+	workers     []*ateapipb.Worker
+	byNode      map[string][]*ateapipb.Worker
+	workersCall int
+	lookupErr   error
+}
+
+func newIndexedFleet(f fleet) *indexedFleet {
+	byNode := make(map[string][]*ateapipb.Worker, len(f))
+	for _, w := range f {
+		if node := w.GetNodeName(); node != "" {
+			byNode[node] = append(byNode[node], w)
+		}
+	}
+	return &indexedFleet{workers: f, byNode: byNode}
+}
+
+func (f *indexedFleet) Workers() ([]*ateapipb.Worker, error) {
+	f.workersCall++
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+	out := make([]*ateapipb.Worker, len(f.workers))
+	copy(out, f.workers)
+	return out, nil
+}
+
+func (f *indexedFleet) WorkersByNode(node string) ([]*ateapipb.Worker, error) {
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+	return f.byNode[node], nil
+}
+
+func TestScheduleRequiredNodesUsesNodeLookup(t *testing.T) {
+	t.Run("picks eligible worker on RequiredNodes without scanning full fleet", func(t *testing.T) {
+		f := fleet{
+			worker("w-other", "gvisor", "node-a", nil, withMaxActors(4)),
+			worker("w-busy", "gvisor", "node-b", nil, withMaxActors(4), assigned("demo", "a"), assigned("demo", "b")),
+			worker("w-idle", "gvisor", "node-b", nil, withMaxActors(4)),
+		}
+		idx := newIndexedFleet(f)
+		got, err := New(idx, WithIntn(firstIntn)).Schedule(context.Background(), Constraints{
+			SandboxClass:  "gvisor",
+			RequiredNodes: []string{"node-b"},
+		})
+		if err != nil {
+			t.Fatalf("Schedule() error = %v", err)
+		}
+		if got.GetWorkerPod() != "w-idle" {
+			t.Errorf("Schedule() = %q, want less-loaded worker w-idle on node-b", got.GetWorkerPod())
+		}
+		if idx.workersCall != 0 {
+			t.Errorf("Workers() called %d times, want 0 when RequiredNodes uses WorkersByNode", idx.workersCall)
+		}
+	})
+
+	t.Run("returns ErrNoCapacity without scanning full fleet when RequiredNodes are full", func(t *testing.T) {
+		f := fleet{
+			worker("w-remote-free", "gvisor", "node-a", nil, withMaxActors(4)),
+			worker("w-pinned-full", "gvisor", "node-b", nil, withMaxActors(1), assigned("demo", "a")),
+		}
+		idx := newIndexedFleet(f)
+		_, err := New(idx, WithIntn(firstIntn)).Schedule(context.Background(), Constraints{
+			SandboxClass:  "gvisor",
+			RequiredNodes: []string{"node-b"},
+		})
+		if !errors.Is(err, ErrNoCapacity) {
+			t.Fatalf("Schedule() error = %v, want ErrNoCapacity", err)
+		}
+		if idx.workersCall != 0 {
+			t.Errorf("Workers() called %d times, want 0 when RequiredNodes uses WorkersByNode", idx.workersCall)
+		}
+	})
+
+	t.Run("deduplicates repeated RequiredNodes entries", func(t *testing.T) {
+		f := fleet{
+			worker("w-only", "gvisor", "node-b", nil, withMaxActors(4)),
+		}
+		idx := newIndexedFleet(f)
+		intnCalls := 0
+		got, err := New(idx, WithIntn(func(int) int {
+			intnCalls++
+			return 0
+		})).Schedule(context.Background(), Constraints{
+			SandboxClass:  "gvisor",
+			RequiredNodes: []string{"node-b", "node-b"},
+		})
+		if err != nil {
+			t.Fatalf("Schedule() error = %v", err)
+		}
+		if got.GetWorkerPod() != "w-only" {
+			t.Errorf("Schedule() = %q, want w-only", got.GetWorkerPod())
+		}
+		if intnCalls != 0 {
+			t.Errorf("intn called %d times for a single unique candidate, want 0", intnCalls)
+		}
+	})
+
+	t.Run("propagates error when WorkersByNode fails", func(t *testing.T) {
+		idx := newIndexedFleet(fleet{
+			worker("w-b", "gvisor", "node-b", nil),
+		})
+		wantErr := errors.New("worker cache not ready")
+		idx.lookupErr = wantErr
+		_, err := New(idx).Schedule(context.Background(), Constraints{
+			SandboxClass:  "gvisor",
+			RequiredNodes: []string{"node-b"},
+		})
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("Schedule() error = %v, want error wrapping %v", err, wantErr)
+		}
+		if errors.Is(err, ErrNoCapacity) {
+			t.Fatalf("Schedule() error = %v, must not be ErrNoCapacity when cache is not ready", err)
+		}
+	})
+}

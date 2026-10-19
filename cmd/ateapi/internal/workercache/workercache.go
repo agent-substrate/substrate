@@ -44,6 +44,7 @@ type Cache struct {
 
 	mu       sync.RWMutex
 	workers  map[string]*ateapipb.Worker
+	byNode   map[string][]*ateapipb.Worker
 	handlers []func(*ateapipb.Worker)
 
 	ready atomic.Bool
@@ -84,6 +85,7 @@ func New(store workerListWatcher, relistInterval time.Duration) *Cache {
 		store:          store,
 		relistInterval: relistInterval,
 		workers:        make(map[string]*ateapipb.Worker),
+		byNode:         make(map[string][]*ateapipb.Worker),
 	}
 }
 
@@ -138,6 +140,28 @@ func (c *Cache) Worker(name string) (*ateapipb.Worker, error) {
 	return worker, nil
 }
 
+// WorkersByNode returns a snapshot of all currently known workers running on
+// node. The returned slice and its elements must not be modified by the caller.
+// Returns an error if the cache is not ready (brief window during reconnect);
+// callers are expected to retry.
+func (c *Cache) WorkersByNode(node string) ([]*ateapipb.Worker, error) {
+	if !c.ready.Load() {
+		return nil, fmt.Errorf("worker cache not ready")
+	}
+	if node == "" {
+		return nil, nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	src := c.byNode[node]
+	if len(src) == 0 {
+		return nil, nil
+	}
+	out := make([]*ateapipb.Worker, len(src))
+	copy(out, src)
+	return out, nil
+}
+
 // Forget removes a worker that a store write proved no longer exists. The
 // normal delete watch remains authoritative, but this closes the short race in
 // which scheduling selected a worker just after its row was deleted and before
@@ -145,7 +169,52 @@ func (c *Cache) Worker(name string) (*ateapipb.Worker, error) {
 func (c *Cache) Forget(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.workers, name)
+	if old, ok := c.workers[name]; ok {
+		c.removeFromNodeLocked(name, old.GetNodeName())
+		delete(c.workers, name)
+	}
+}
+
+// removeFromNodeLocked removes the worker with the given key from node's entry
+// in c.byNode. Caller must hold c.mu.
+func (c *Cache) removeFromNodeLocked(key, node string) {
+	if node == "" {
+		return
+	}
+	list := c.byNode[node]
+	for i, w := range list {
+		if workerKey(w) == key {
+			list[i] = list[len(list)-1]
+			list[len(list)-1] = nil
+			list = list[:len(list)-1]
+			if len(list) == 0 {
+				delete(c.byNode, node)
+			} else {
+				c.byNode[node] = list
+			}
+			return
+		}
+	}
+}
+
+// putByNodeLocked inserts or updates w under its node name in c.byNode.
+// Caller must hold c.mu.
+func (c *Cache) putByNodeLocked(key string, w *ateapipb.Worker) {
+	if w == nil {
+		return
+	}
+	node := w.GetNodeName()
+	if node == "" {
+		return
+	}
+	list := c.byNode[node]
+	for i, existing := range list {
+		if workerKey(existing) == key {
+			list[i] = w
+			return
+		}
+	}
+	c.byNode[node] = append(list, w)
 }
 
 func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
@@ -178,6 +247,12 @@ func (c *Cache) relist(ctx context.Context) error {
 	for _, w := range workers {
 		newMap[workerKey(w)] = w
 	}
+	newByNode := make(map[string][]*ateapipb.Worker)
+	for _, w := range newMap {
+		if node := w.GetNodeName(); node != "" {
+			newByNode[node] = append(newByNode[node], w)
+		}
+	}
 	c.mu.Lock()
 	var changed []*ateapipb.Worker
 	for key, w := range newMap {
@@ -187,6 +262,7 @@ func (c *Cache) relist(ctx context.Context) error {
 		}
 	}
 	c.workers = newMap
+	c.byNode = newByNode
 	handlers := c.handlers
 	c.mu.Unlock()
 	slog.InfoContext(ctx, "worker cache synced", slog.Int("count", len(newMap)), slog.Int("changed", len(changed)))
@@ -253,11 +329,18 @@ func (c *Cache) applyEvent(event store.WorkerEvent) {
 	var handlers []func(*ateapipb.Worker)
 	switch event.Type {
 	case store.WorkerEventDeleted:
-		delete(c.workers, key)
+		if existing, ok := c.workers[key]; ok {
+			c.removeFromNodeLocked(key, existing.GetNodeName())
+			delete(c.workers, key)
+		}
 	case store.WorkerEventCreated, store.WorkerEventUpdated:
 		existing, ok := c.workers[key]
 		if !ok || event.Worker.GetMetadata().GetVersion() >= existing.GetMetadata().GetVersion() {
+			if ok && existing.GetNodeName() != event.Worker.GetNodeName() {
+				c.removeFromNodeLocked(key, existing.GetNodeName())
+			}
 			c.workers[key] = event.Worker
+			c.putByNodeLocked(key, event.Worker)
 			handlers = c.handlers
 		}
 	}
