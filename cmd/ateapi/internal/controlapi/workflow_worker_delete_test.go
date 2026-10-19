@@ -277,6 +277,65 @@ func TestDeleteWorkerWorkflow_AssignedToAbsentActorDeletesAnyway(t *testing.T) {
 	}
 }
 
+// A resume holds its Actor's lease for the whole workflow, in particular in
+// the window between binding to the worker and committing its Actor update.
+// There the Actor still reads as SUSPENDED with no assignment, so both skip
+// branches in the release would fire and the worker-row cascade delete would
+// destroy the claim the resume is about to point at. The lease makes the
+// sweep report the assignment as busy and fail the pass instead, so the
+// delete retries once the operation has landed.
+func TestDeleteWorkerWorkflow_BusyActorFailsTheSweepForARetry(t *testing.T) {
+	ctx := context.Background()
+	wf, persistence := newWorkerDeleteWorkflow(t)
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	// The mid-resume shape: the assignment row exists, the Actor does not
+	// point here yet.
+	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
+		a.Status.WorkerAssignment = nil
+	})
+	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+
+	lease, err := persistence.AcquireLease(ctx, actorLeaseKey(apiActorRef))
+	if err != nil {
+		t.Fatalf("AcquireLease() failed: %v", err)
+	}
+	defer lease.Close()
+
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); !errors.Is(err, errActorBusy) {
+		t.Fatalf("DeleteWorker() = %v, want the busy assignment reported", err)
+	}
+	got, err := persistence.GetActor(ctx, apiActorRef)
+	if err != nil {
+		t.Fatalf("GetActor() failed: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("actor state = %v, want SUSPENDED: a busy Actor is not touched", got.GetStatus().GetState())
+	}
+	if worker, err := persistence.GetWorker(ctx, apiWorkerName); err != nil {
+		t.Fatalf("GetWorker() failed: %v", err)
+	} else if worker.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("worker state = %v, want DRAINING: the record stays for the retry", worker.GetStatus().GetState())
+	}
+	if firstAssignment(t, persistence, apiWorkerName) == nil {
+		t.Error("assignment was cascade-deleted while its Actor's operation was in flight")
+	}
+
+	// The retry, with the operation landed and its lease gone, reads the
+	// settled Actor and completes the delete.
+	lease.Close()
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker() after the lease was released failed: %v", err)
+	}
+	if got, err := persistence.GetActor(ctx, apiActorRef); err != nil {
+		t.Fatalf("GetActor() failed: %v", err)
+	} else if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("actor state = %v, want SUSPENDED: a suspended Actor stays resumable", got.GetStatus().GetState())
+	}
+	if firstAssignment(t, persistence, apiWorkerName) != nil {
+		t.Error("assignment after the retry = still present, want none")
+	}
+}
+
 // A release that fails must leave the Worker in place: the delete is what
 // erases the Actor's pointer at it, so the record has to stay findable for the
 // caller to rediscover and retry.

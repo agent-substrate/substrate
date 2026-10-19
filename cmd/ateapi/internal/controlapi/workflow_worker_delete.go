@@ -165,7 +165,7 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 		token = page.NextPageToken
 	}
 	if busy > 0 {
-		return apierror.Aborted("%d actors on worker %s have an operation in progress; left for a retry", busy, worker.GetMetadata().GetName())
+		return fmt.Errorf("%d assignments on worker %s left for a retry: %w", busy, worker.GetMetadata().GetName(), errActorBusy)
 	}
 	if released == 0 {
 		markSkipped(ctx, "worker has no actors assigned")
