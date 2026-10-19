@@ -22,7 +22,6 @@ ate-api-server and Postgres (see controlplane.py); without it pre_test
 leaves the cluster as installed.
 """
 
-import json
 import os
 from typing import Any
 
@@ -47,7 +46,7 @@ def validate(test: dict[str, Any]) -> None:
     if "ateapi" not in test:
         return
     try:
-        controlplane.validate(test["ateapi"], test.get("ateArgs", []))
+        controlplane.validate(test["ateapi"])
     except ValueError as e:
         raise ValueError(f"locust test {name!r}: {e}") from None
 
@@ -66,7 +65,7 @@ def pre_test(test: dict[str, Any]) -> None:
     cfg = ateapi_config(test)
     if cfg is None:
         return
-    controlplane.shape(cfg, test.get("runnerCpu", DEFAULT_RUNNER_CPU))
+    controlplane.shape(cfg)
 
 
 def job_tmpl(manifests_dir: str) -> str:
@@ -82,14 +81,10 @@ DEFAULT_RUNNER_MEMORY = "512Mi"
 
 
 def job_subs(test: dict[str, Any]) -> dict[str, Any]:
-    cfg = ateapi_config(test)
-    pinned = cfg is not None and cfg["pinNodes"]
     return {
         "TEST_FILE": test["file"],
         "DURATION": test["duration"],
         "USERS": test["users"],
         "RUNNER_CPU": test.get("runnerCpu", DEFAULT_RUNNER_CPU),
         "RUNNER_MEMORY": test.get("runnerMemory", DEFAULT_RUNNER_MEMORY),
-        # JSON is YAML flow syntax, thus it drops into `affinity:` as is.
-        "RUNNER_AFFINITY": json.dumps(controlplane.role_affinity("runner") if pinned else {}),
     }

@@ -15,13 +15,13 @@
 """Shapes the control plane, ate-api-server and Postgres, for a capacity
 run, as a test entry's `ateapi:` block asks (see ATEAPI_DEFAULTS).
 
-A test type validates the block with validate(), calls shape() from its
-pre_test, and pins its runner with role_affinity("runner").
+A test type validates the block with validate() and calls shape() from its
+pre_test. Isolation from the load is the install's: --cordon-control-plane
+in ateArgs keeps ate-api-server and Postgres on their own tainted pools.
 """
 
 import json
 import re
-import subprocess
 from typing import Any
 
 from util import run, run_no_check
@@ -45,10 +45,6 @@ ATEAPI_DEFAULTS = {
     # Postgres settings as name=value, passed to the server as -c flags in
     # the restart pgStats makes, over postgresql.conf.
     "postgresArgs": [],
-    # Label one node for ateapi, which holds every replica, and another for
-    # the runner, away from the Postgres node, and pin each there. The runner
-    # prefers the node pool reserved for load generators.
-    "pinNodes": True,
 }
 
 
@@ -57,9 +53,8 @@ def config(block: dict[str, Any]) -> dict[str, Any]:
     return {**ATEAPI_DEFAULTS, **block}
 
 
-def validate(block: Any, ate_args: list[str]) -> None:
-    """Raise ValueError unless block is a valid `ateapi:` block for an
-    install with ate_args."""
+def validate(block: Any) -> None:
+    """Raise ValueError unless block is a valid `ateapi:` block."""
     if not isinstance(block, dict):
         raise ValueError("ateapi must be a mapping")
     allowed = set(ATEAPI_DEFAULTS) | {"cpu"}
@@ -77,9 +72,8 @@ def validate(block: Any, ate_args: list[str]) -> None:
         raise ValueError("ateapi.replicas must be an int >= 1")
     if cfg["poolMaxConns"] is not None and not _is_positive_int(cfg["poolMaxConns"]):
         raise ValueError("ateapi.poolMaxConns must be an int >= 1")
-    for knob in ("pgStats", "pinNodes"):
-        if not isinstance(cfg[knob], bool):
-            raise ValueError(f"ateapi.{knob} must be a bool")
+    if not isinstance(cfg["pgStats"], bool):
+        raise ValueError("ateapi.pgStats must be a bool")
     args = cfg["postgresArgs"]
     if not isinstance(args, list) or not all(
         isinstance(a, str) and POSTGRES_ARG_PATTERN.fullmatch(a) for a in args
@@ -91,15 +85,6 @@ def validate(block: Any, ate_args: list[str]) -> None:
     if args and not cfg["pgStats"]:
         raise ValueError(
             "ateapi.postgresArgs needs pgStats: true, whose Postgres restart applies them"
-        )
-    # The cordoned install keeps ate-api-server on the tainted control-plane
-    # pool, and pinNodes gives it only an untainted node: no node is both.
-    if cfg["pinNodes"] and any(
-        a in ("--cordon-control-plane", "--cordon-control-plane=true") for a in ate_args
-    ):
-        raise ValueError(
-            "ateapi.pinNodes cannot place ate-api-server on a "
-            "--cordon-control-plane install; set pinNodes: false"
         )
 
 
@@ -128,185 +113,21 @@ QUANTITY_PATTERN = re.compile(
 )
 
 
-def shape(cfg: dict[str, Any], runner_cpu: Any) -> None:
-    """Shape the control plane for the run: Postgres statistics, node roles
-    (the runner's node must fit runner_cpu), the pool size, then the ateapi
-    pin. No unpatch: every test redeploys substrate."""
-    # Postgres first: enabling statistics restarts it, and the restarted pod
-    # may land on another node, which the roles must then avoid.
+def shape(cfg: dict[str, Any]) -> None:
+    """Shape the control plane for the run: Postgres statistics, the pool
+    size, then ateapi's resources, whose rollout picks up the pool size. No
+    unpatch: every test redeploys substrate."""
     if cfg["pgStats"]:
         enable_postgres_stats(cfg["postgresArgs"])
-    if cfg["pinNodes"]:
-        label_nodes(cfg, runner_cpu)
     if cfg["poolMaxConns"] is not None:
         set_pool_max_conns(cfg["poolMaxConns"])
-    pin_ateapi(cfg)
+    resize_ateapi(cfg)
     # The placement of the run, for comparing runs: a step compares across
-    # runs only when ateapi, Postgres, and the runner sat on the same nodes.
+    # runs only when ateapi and Postgres sat on the same nodes.
     run_no_check(
         ["kubectl", "-n", NAMESPACE, "get", "pods", "-o", "wide",
          "-l", "app in (ate-api-server,postgres)"]
     )
-    run_no_check(["kubectl", "get", "nodes", "-L", ROLE_LABEL])
-
-
-# Node label that gives ate-api-server and the runner a node each, so the
-# load generator is never ateapi's neighbor. Both pods require it through a
-# node affinity.
-ROLE_LABEL = "ate.dev/benchmark-role"
-
-
-# The taint of the node pool reserved for load generators. The runner Job
-# tolerates it (manifests/runner-job.yaml.tmpl), so the runner may take a node
-# there; ate-api-server does not, so it may not.
-LOADGEN_TAINT = {"key": "ate.dev/benchmarking", "value": "true", "effect": "NoSchedule"}
-
-
-def _repelling_taints(node: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        {k: t.get(k) for k in ("key", "value", "effect")}
-        for t in node.get("spec", {}).get("taints", [])
-        if t.get("effect") in ("NoSchedule", "NoExecute")
-    ]
-
-
-def _cpu_millis(q: Any) -> int:
-    """A CPU quantity, as tests.yaml or a node's allocatable spells it, in
-    millicores."""
-    if isinstance(q, (int, float)):
-        return round(q * 1000)
-    m = QUANTITY_PATTERN.fullmatch(q)
-    if not m:
-        raise ValueError(f"not a quantity: {q!r}")
-    number, suffix = float(m.group(1)), m.group(3) or ""
-    if suffix.startswith(("e", "E")):
-        return round(number * 10 ** int(suffix[1:]) * 1000)
-    scale = {"": 1, "m": 1e-3, "k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15, "E": 1e18,
-             "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40, "Pi": 2**50, "Ei": 2**60}[suffix]
-    return round(number * scale * 1000)
-
-
-def _allocatable_millis(node: dict[str, Any]) -> int:
-    return _cpu_millis(node.get("status", {}).get("allocatable", {}).get("cpu", "0"))
-
-
-def _pod_cpu_millis(pod: dict[str, Any]) -> int:
-    """The CPU the scheduler reserves for a pod, as Kubernetes computes it:
-    its containers' and sidecars' requests, or the largest init container's
-    with the sidecars started before it if that is more, plus the
-    RuntimeClass overhead."""
-    def cpu(c: dict[str, Any]) -> int:
-        return _cpu_millis(c.get("resources", {}).get("requests", {}).get("cpu", 0))
-
-    spec = pod.get("spec", {})
-    running = sum(cpu(c) for c in spec.get("containers", []))
-    sidecars = init_max = 0
-    for c in spec.get("initContainers", []):
-        if c.get("restartPolicy") == "Always":
-            running += cpu(c)
-            sidecars += cpu(c)
-            init_max = max(init_max, sidecars)
-        else:
-            init_max = max(init_max, cpu(c) + sidecars)
-    overhead = _cpu_millis(spec.get("overhead", {}).get("cpu", 0))
-    return max(running, init_max) + overhead
-
-
-def requested_millis(pods: list[dict[str, Any]]) -> dict[str, int]:
-    """CPU already requested on each node by the pods that hold it, but not
-    by ate-api-server's, which pin_ateapi replaces."""
-    out: dict[str, int] = {}
-    for pod in pods:
-        node = pod.get("spec", {}).get("nodeName")
-        if not node or pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
-            continue
-        meta = pod.get("metadata", {})
-        if meta.get("namespace") == NAMESPACE and meta.get("labels", {}).get("app") == "ate-api-server":
-            continue
-        out[node] = out.get(node, 0) + _pod_cpu_millis(pod)
-    return out
-
-
-def pick_role_nodes(nodes: list[dict[str, Any]], postgres_node: str,
-                    ateapi_millis: int = 0, runner_millis: int = 0,
-                    requested: dict[str, int] | None = None) -> tuple[str, str]:
-    """Return (ateapi node, runner node), never the Postgres node: Postgres on
-    size10 requests nearly a whole node. Each node must have free the CPU its
-    role asks for, its allocatable less what requested says pods already
-    hold there: ateapi_millis for every ateapi replica, which all share the
-    node, and runner_millis for the runner. ateapi takes the first such
-    untainted schedulable node by name. The runner takes the first such node
-    of the load-generator pool, the one it is meant for, or else the next
-    such untainted node. Pods scheduled after the pick, such as the
-    benchmark workloads, can still take the runner's CPU."""
-    requested = requested or {}
-
-    def free(n: dict[str, Any]) -> int:
-        return _allocatable_millis(n) - requested.get(n["metadata"]["name"], 0)
-
-    schedulable = sorted(
-        (n for n in nodes
-         if n["metadata"]["name"] != postgres_node
-         and not n.get("spec", {}).get("unschedulable")),
-        key=lambda n: n["metadata"]["name"],
-    )
-    untainted = [n for n in schedulable if not _repelling_taints(n)]
-    loadgen = [n for n in schedulable if _repelling_taints(n) == [LOADGEN_TAINT]]
-    ateapi = next((n for n in untainted if free(n) >= ateapi_millis), None)
-    if ateapi is None:
-        raise RuntimeError(
-            f"pinNodes needs an untainted node besides the Postgres node {postgres_node!r} "
-            f"with {ateapi_millis}m CPU free for ateapi; found (node, free millicores) "
-            f"{[(n['metadata']['name'], free(n)) for n in untainted]}"
-        )
-    runner = next(
-        (n for n in loadgen + untainted
-         if n is not ateapi and free(n) >= runner_millis),
-        None,
-    )
-    if runner is None:
-        raise RuntimeError(
-            f"pinNodes needs a node besides the Postgres node {postgres_node!r} and the "
-            f"ateapi node with {runner_millis}m CPU free for the runner; found (node, free "
-            f"millicores) load-generator pool {[(n['metadata']['name'], free(n)) for n in loadgen]}, "
-            f"untainted {[(n['metadata']['name'], free(n)) for n in untainted if n is not ateapi]}"
-        )
-    return ateapi["metadata"]["name"], runner["metadata"]["name"]
-
-
-def label_nodes(cfg: dict[str, Any], runner_cpu: Any) -> None:
-    postgres_node = _kubectl_out(
-        ["-n", NAMESPACE, "get", "pod", "postgres-0", "-o", "jsonpath={.spec.nodeName}"]
-    )
-    nodes = json.loads(_kubectl_out(["get", "nodes", "-o", "json"]))["items"]
-    pods = json.loads(_kubectl_out(["get", "pods", "--all-namespaces", "-o", "json"]))["items"]
-    ateapi_node, runner_node = pick_role_nodes(
-        nodes, postgres_node,
-        ateapi_millis=cfg["replicas"] * _cpu_millis(cfg["cpu"]),
-        runner_millis=_cpu_millis(runner_cpu),
-        requested=requested_millis(pods),
-    )
-    # A label left by an earlier run on another node would give a role two
-    # nodes.
-    run_no_check(["kubectl", "label", "nodes", "--all", f"{ROLE_LABEL}-"])
-    run(["kubectl", "label", "node", ateapi_node, f"{ROLE_LABEL}=ateapi", "--overwrite"])
-    run(["kubectl", "label", "node", runner_node, f"{ROLE_LABEL}=runner", "--overwrite"])
-
-
-def role_affinity(role: str) -> dict[str, Any]:
-    return {
-        "nodeAffinity": {
-            "requiredDuringSchedulingIgnoredDuringExecution": {
-                "nodeSelectorTerms": [
-                    {
-                        "matchExpressions": [
-                            {"key": ROLE_LABEL, "operator": "In", "values": [role]}
-                        ]
-                    }
-                ]
-            }
-        }
-    }
 
 
 POSTGRES_EXPORTER_IMAGE = "quay.io/prometheuscommunity/postgres-exporter:v0.17.1"
@@ -382,7 +203,7 @@ def pool_max_conns_patch(n: int) -> dict[str, Any]:
 
 
 def set_pool_max_conns(n: int) -> None:
-    """Set the read/write pool size ateapi reads at start; the pin_ateapi
+    """Set the read/write pool size ateapi reads at start; the resize_ateapi
     rollout that follows picks it up. The owner and watch pools stay at 2
     and 3 connections per replica."""
     run(
@@ -392,7 +213,7 @@ def set_pool_max_conns(n: int) -> None:
 
 
 def ateapi_patch(cfg: dict[str, Any]) -> dict[str, Any]:
-    pod_spec: dict[str, Any] = {
+    pod_spec = {
         "containers": [
             {
                 "name": "ate-api-server",
@@ -403,12 +224,10 @@ def ateapi_patch(cfg: dict[str, Any]) -> dict[str, Any]:
             }
         ]
     }
-    if cfg["pinNodes"]:
-        pod_spec["affinity"] = role_affinity("ateapi")
     return {"spec": {"replicas": cfg["replicas"], "template": {"spec": pod_spec}}}
 
 
-def pin_ateapi(cfg: dict[str, Any]) -> None:
+def resize_ateapi(cfg: dict[str, Any]) -> None:
     _patch_and_wait("deployment", "ate-api-server", ateapi_patch(cfg))
 
 
@@ -422,8 +241,3 @@ def _patch_and_wait(kind: str, name: str, patch: dict[str, Any]) -> None:
          "--timeout=600s"]
     )
 
-
-def _kubectl_out(args: list[str]) -> str:
-    return subprocess.run(
-        ["kubectl", *args], capture_output=True, text=True, check=True
-    ).stdout

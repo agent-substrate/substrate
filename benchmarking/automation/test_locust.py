@@ -15,7 +15,6 @@
 """Unit tests for testtypes/locust.py:
 python3 benchmarking/automation/test_locust.py"""
 
-import json
 import os
 import unittest
 from unittest import mock
@@ -51,8 +50,6 @@ class ValidateTest(unittest.TestCase):
     def test_invalid_ateapi_names_the_test(self):
         with self.assertRaisesRegex(ValueError, "locust test 't': needs ateapi.cpu"):
             locust.validate(entry(ateapi={}))
-        with self.assertRaisesRegex(ValueError, "cordon"):
-            locust.validate(entry(ateapi={"cpu": 2}, ateArgs=["--cordon-control-plane"]))
 
     def test_missing_required(self):
         test = entry()
@@ -64,7 +61,7 @@ class ValidateTest(unittest.TestCase):
 class PreTestTest(unittest.TestCase):
     def shaped(self, test):
         calls = []
-        patcher = mock.patch.object(controlplane, "shape", lambda cfg, cpu: calls.append((cfg, cpu)))
+        patcher = mock.patch.object(controlplane, "shape", calls.append)
         patcher.start()
         self.addCleanup(patcher.stop)
         locust.pre_test(test)
@@ -73,12 +70,8 @@ class PreTestTest(unittest.TestCase):
     def test_without_ateapi_leaves_the_cluster(self):
         self.assertEqual(self.shaped(entry()), [])
 
-    def test_shapes_for_the_runner(self):
-        self.assertEqual(
-            self.shaped(entry(ateapi={"cpu": 2})),
-            [(controlplane.config({"cpu": 2}), locust.DEFAULT_RUNNER_CPU)],
-        )
-        self.assertEqual(self.shaped(entry(runnerCpu="8", ateapi={"cpu": 2}))[0][1], "8")
+    def test_shapes_the_control_plane(self):
+        self.assertEqual(self.shaped(entry(ateapi={"cpu": 2})), [controlplane.config({"cpu": 2})])
 
 
 class JobTest(unittest.TestCase):
@@ -97,7 +90,7 @@ class JobTest(unittest.TestCase):
     def test_defaults_render(self):
         test = entry()
         pod = self.render(test)
-        self.assertEqual(pod["affinity"], {})
+        self.assertNotIn("affinity", pod)
         self.assertEqual(
             pod["containers"][0]["resources"],
             {"requests": {"cpu": "500m", "memory": "512Mi"}},
@@ -108,20 +101,15 @@ class JobTest(unittest.TestCase):
             pod["containers"][0]["ports"],
         )
 
-    def test_pinned_runner_renders(self):
+    def test_sized_runner_renders(self):
         test = entry(runnerCpu="8", runnerMemory="2Gi", ateapi={"cpu": 2},
                      flags=["--actors", "200"])
         pod = self.render(test)
-        self.assertEqual(pod["affinity"], controlplane.role_affinity("runner"))
         self.assertEqual(
             pod["containers"][0]["resources"]["requests"],
             {"cpu": "8", "memory": "2Gi"},
         )
         self.assertEqual(pod["containers"][0]["args"][-2:], ["--actors", "200"])
-
-    def test_unpinned_runner_has_no_affinity(self):
-        subs = locust.job_subs(entry(ateapi={"cpu": 2, "pinNodes": False}))
-        self.assertEqual(json.loads(subs["RUNNER_AFFINITY"]), {})
 
 
 class TestsYamlTest(unittest.TestCase):

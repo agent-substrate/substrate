@@ -123,13 +123,9 @@
 #                  value.
 #   pgStats        Optional (default true). Load pg_stat_statements and add
 #                  a postgres_exporter sidecar, scraped by monitoring.yaml.
-#   pinNodes       Optional (default true). Label one node for ateapi and
-#                  another for the runner, away from the Postgres node, and
-#                  pin each there. Every ateapi replica shares its node,
-#                  which must have the CPU for all of them; fake-atelet may
-#                  run there too. The runner takes a node of the pool
-#                  reserved for load generators when there is one. Not with
-#                  --cordon-control-plane in ateArgs.
+# The block leaves placement to the install. A capacity run sets
+# --cordon-control-plane in ateArgs, which keeps ate-api-server and Postgres
+# off the nodes that run the load, on the tainted pools that flag expects.
 #
 # ---- type: nighthawk-ingress --------------------------------------------------------
 #
@@ -702,6 +698,8 @@ tests:
     runnerMemory: "2Gi"
     isolate:
       delay: 150ms
+    ateArgs:
+      - "--cordon-control-plane"
     ateapi:
       cpu: 2
       memory: 4Gi
@@ -725,6 +723,8 @@ tests:
     workerCount: 2
     isolate:
       delay: 150ms
+    ateArgs:
+      - "--cordon-control-plane"
     ateapi:
       cpu: 2
       memory: 4Gi
