@@ -232,7 +232,7 @@ message RunWorkloadRequest {
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  optional EgressGateway egress_gateway = 10;
+  optional EgressGateway egress_gateway = 9;
 
   // The actor's declared size, from the ActorTemplate's resource limits. The worker
   // sizes the sandbox to these (cgroup caps via the OCI spec, and for the
@@ -242,12 +242,12 @@ message RunWorkloadRequest {
   // +k8s:optional
   // +k8s:minimum=1
   // +k8s:maximum=999999 # matches atelet.RunRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 11; // CPU limit in millicores (1000 = one core).
+  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
   // +k8s:optional
   // +k8s:minimum=1
-  int64 memory_bytes = 12; // Memory limit in bytes.
+  int64 memory_bytes = 11; // Memory limit in bytes.
   // +k8s:required
-  ActorDirs actor_dirs = 13;
+  ActorDirs actor_dirs = 12;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -459,9 +459,9 @@ message CheckpointWorkloadRequest {
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  SnapshotFidelity fidelity = 10;
+  SnapshotFidelity fidelity = 8;
   // +k8s:required
-  ActorDirs actor_dirs = 11;
+  ActorDirs actor_dirs = 9;
 }
 
 message CheckpointWorkloadResponse {
@@ -509,19 +509,19 @@ message RestoreWorkloadRequest {
   // +k8s:maxProperties=16
   // +k8s:eachKey=+k8s:maxLength=64
   // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
-  map<string, string> runtime_asset_paths = 9;
+  map<string, string> runtime_asset_paths = 8;
 
   // Fidelity to restore from the snapshot.
   //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  SnapshotFidelity fidelity = 10;
+  SnapshotFidelity fidelity = 9;
 
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  optional EgressGateway egress_gateway = 12;
+  optional EgressGateway egress_gateway = 10;
 
   // The actor's declared size, from the ActorTemplate's resource limits. Used to
   // (re)size the sandbox on a VOLUMES restore (fresh guest container). On a
@@ -531,18 +531,18 @@ message RestoreWorkloadRequest {
   // +k8s:optional
   // +k8s:minimum=1
   // +k8s:maximum=999999 # matches atelet.RestoreRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
+  int64 cpu_milli = 11; // CPU limit in millicores (1000 = one core).
   // +k8s:optional
   // +k8s:minimum=1
-  int64 memory_bytes = 15; // Memory limit in bytes.
+  int64 memory_bytes = 12; // Memory limit in bytes.
   // +k8s:required
-  ActorDirs actor_dirs = 16;
+  ActorDirs actor_dirs = 13;
 
   // actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
   // the worker must not delete or modify files in it.
   //
   // +k8s:optional
-  bool preserve_restore_dir = 17;
+  bool preserve_restore_dir = 14;
 }
 
 message RestoreWorkloadResponse {

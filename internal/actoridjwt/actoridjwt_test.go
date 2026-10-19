@@ -68,6 +68,26 @@ func TestClaimsToWire_ClaimNamePerKind(t *testing.T) {
 	}
 }
 
+func TestClaimsToWire_NodeOnWorkerTokensOnly(t *testing.T) {
+	claims := Claims{
+		Kind:      KindWorkerForActor,
+		Subject:   "x",
+		Audiences: []string{"a"},
+		Substrate: SubstrateClaims{Atespace: "team-a", ActorName: "my-actor", ActorUID: "u", Node: "node-1"},
+	}
+	wire, err := ClaimsToWire(&claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wire.WorkerForActor.Node; got != "node-1" {
+		t.Errorf("worker-for-actor node = %q, want node-1", got)
+	}
+	claims.Kind = KindActor
+	if _, err := ClaimsToWire(&claims); err == nil {
+		t.Error("ClaimsToWire accepted a node on an actor's own token")
+	}
+}
+
 func TestClaimsToWire_RejectsUnspecifiedKind(t *testing.T) {
 	for _, kind := range []Kind{KindUnspecified, Kind(99)} {
 		if _, err := ClaimsToWire(&Claims{Kind: kind, Subject: "x", Audiences: []string{"a"}}); err == nil {

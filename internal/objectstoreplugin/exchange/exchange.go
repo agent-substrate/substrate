@@ -25,6 +25,7 @@ package exchange
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -37,6 +38,7 @@ import (
 	"go.ate.dev/substrate/internal/objectstoreplugin/credential"
 	"go.ate.dev/substrate/internal/oidcjwt"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
+	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -95,8 +97,8 @@ func (s *Server) ExchangeActorJwt(ctx context.Context, req *exchangepb.ExchangeA
 	if claims.Kind != actoridjwt.KindWorkerForActor {
 		return nil, status.Error(codes.PermissionDenied, "only a worker-for-actor token may be exchanged")
 	}
-	if sub := claims.Substrate; sub == nil || sub.Atespace == "" || sub.ActorName == "" || sub.ActorUID == "" {
-		return nil, status.Error(codes.Unauthenticated, "actor_jwt must carry the actor's atespace, name and UID, and one of them is empty")
+	if sub := claims.Substrate; sub == nil || sub.Atespace == "" || sub.ActorName == "" || sub.ActorUID == "" || sub.Node == "" {
+		return nil, status.Error(codes.Unauthenticated, "actor_jwt must carry the actor's atespace, name and UID and the minting node, and one of them is empty")
 	}
 	actor, err := s.lookup.Actor(ctx, claims.Substrate)
 	switch {
@@ -113,6 +115,9 @@ func (s *Server) ExchangeActorJwt(ctx context.Context, req *exchangepb.ExchangeA
 		return nil, err
 	case err != nil:
 		return nil, status.Errorf(codes.Unavailable, "while looking up the actor: %v", err)
+	}
+	if err := actorStillOnNode(actor, claims.Substrate.Node); err != nil {
+		return nil, err
 	}
 	grants, err := actorscope.FromActor(actor)
 	if err != nil {
@@ -141,4 +146,24 @@ func issueCode(err error) codes.Code {
 		return codes.Unavailable
 	}
 	return status.Code(err)
+}
+
+// actorStillOnNode refuses a token minted for a node the actor has since
+// left, or for an actor in a state with no transfer. ate-api-server checked
+// the node when it minted, and the token outlives that check by up to an
+// hour. status.assigned_node names the node holding the actor: a resume sets
+// it to the worker's node, it stays set while the actor is SUSPENDED and its
+// local snapshot remains on that node, and it is cleared when the node
+// detaches the actor, by a revert and by a delete, or replaced by a resume
+// onto another node. So a token from a node the actor moved away from, or
+// one kept past the actor's last transfer there, no longer matches.
+func actorStillOnNode(actor *ateapipb.Actor, node string) error {
+	st := actor.GetStatus()
+	if !slices.Contains(resources.TransferStates, st.GetState()) {
+		return status.Errorf(codes.PermissionDenied, "actor is %s, no transfer is due", st.GetState())
+	}
+	if st.GetAssignedNode() != node {
+		return status.Error(codes.PermissionDenied, "actor is no longer on the token's node")
+	}
+	return nil
 }

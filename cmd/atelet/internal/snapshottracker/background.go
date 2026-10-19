@@ -221,7 +221,7 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 	switch kind {
 	case opDetach:
 		if due, ok := t.detachDueLocked(a); ok && !due.After(now) {
-			if a.holds > 0 {
+			if a.hold != holdNone {
 				// A Run, Restore, Checkpoint, or PromoteSnapshot of the actor
 				// is in progress, and queues the actor again when it ends
 				// (see holdLocked).
@@ -234,7 +234,7 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 		}
 	case opUpload:
 		if due, ok := t.uploadDueLocked(a); ok && !due.After(now) {
-			if a.promotes > 0 {
+			if a.hold == holdPromote {
 				// A PromoteSnapshot of the actor is in progress, and queues
 				// the actor again when it ends (see holdLocked).
 				return nil
@@ -287,7 +287,7 @@ func (t *Tracker) requeueLocked(a *actorSnapshots) {
 	if due, ok := t.detachDueLocked(a); ok {
 		t.queues[opDetach].AddAfter(a.actorUID, due.Sub(now))
 	}
-	if !supersededUploading && a.op == nil && a.holds == 0 && a.retryAt.IsZero() && !a.uploadingFailed && !a.unsaved {
+	if !supersededUploading && a.op == nil && a.hold == holdNone && a.retryAt.IsZero() && !a.uploadingFailed && !a.unsaved {
 		t.dropLocked(a.actorUID)
 	}
 }
@@ -386,16 +386,10 @@ func (t *Tracker) endOp(actorUID string, op *actorOp, opErr error) (*ateletpb.Ac
 // operation in progress (whether started by a background worker or an atelet
 // RPC), and returns the actor's entry, which may be nil. It releases the
 // actor's lock while it waits, so the actor can change meanwhile, and holds
-// it again when it returns. check, if not nil, vets the entry on every pass:
-// an error from it is returned at once, without waiting further.
-func (t *Tracker) waitIdleLocked(ctx context.Context, actorUID string, check func(*actorSnapshots) error) (*actorSnapshots, error) {
+// it again when it returns.
+func (t *Tracker) waitIdleLocked(ctx context.Context, actorUID string) (*actorSnapshots, error) {
 	for {
 		a := t.findLocked(actorUID)
-		if a != nil && check != nil {
-			if err := check(a); err != nil {
-				return nil, err
-			}
-		}
 		if a == nil || a.op == nil {
 			return a, nil
 		}

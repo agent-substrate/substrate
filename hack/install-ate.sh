@@ -135,7 +135,7 @@ usage() {
   echo "Infrastructure components:"
   echo ""
   echo "  --deploy-atelet                        Deploy atelet only"
-  echo "  --deploy-ate-apiserver                 Deploy ate-api-server only"
+  echo "  --deploy-ate-apiserver                 Deploy ate-api-server and ate-idp-server"
   echo "  --deploy-atenet                        Deploy atenet only"
   echo "  --delete-atenet                        Delete atenet only"
   echo ""

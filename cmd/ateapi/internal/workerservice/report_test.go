@@ -48,17 +48,17 @@ func reportRequest() *ateapipb.ReportActorSnapshotStateRequest {
 // A report reaches the control plane with the node from the caller's
 // certificate. The handler reads nothing from the store.
 func TestReportActorSnapshotState(t *testing.T) {
-	suspender := &fakeSuspender{}
-	s := New(nil, suspender, testAteletSPIFFEID, nil, "", nil)
+	control := &fakeControl{}
+	s := New(nil, control, testAteletSPIFFEID, nil, "", nil)
 
 	req := reportRequest()
 	if _, err := s.ReportActorSnapshotState(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), req); err != nil {
 		t.Fatalf("ReportActorSnapshotState() failed: %v", err)
 	}
-	if len(suspender.reports) != 1 {
-		t.Fatalf("got %d applied reports, want 1", len(suspender.reports))
+	if len(control.reports) != 1 {
+		t.Fatalf("got %d applied reports, want 1", len(control.reports))
 	}
-	got := suspender.reports[0]
+	got := control.reports[0]
 	if want := (resources.ActorRef{Atespace: suspendAtespace, Name: suspendActor}); got.actorRef != want {
 		t.Errorf("actorRef = %v, want %v", got.actorRef, want)
 	}
@@ -92,13 +92,13 @@ func TestReportActorSnapshotState_Refused(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			suspender := &fakeSuspender{reportErr: tt.controlErr}
-			s := New(nil, suspender, testAteletSPIFFEID, nil, "", nil)
+			control := &fakeControl{reportErr: tt.controlErr}
+			s := New(nil, control, testAteletSPIFFEID, nil, "", nil)
 			_, err := s.ReportActorSnapshotState(tt.ctx, tt.req)
 			if got := apierror.Code(err); got != tt.want {
 				t.Fatalf("ReportActorSnapshotState() error = %v, want code %v", err, tt.want)
 			}
-			if applied := len(suspender.reports) > 0; applied != tt.wantApplied {
+			if applied := len(control.reports) > 0; applied != tt.wantApplied {
 				t.Errorf("report reached the control plane = %v, want %v", applied, tt.wantApplied)
 			}
 		})

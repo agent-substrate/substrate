@@ -16,12 +16,10 @@ package snapshottracker
 
 import (
 	"context"
-	"slices"
 	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"google.golang.org/protobuf/proto"
 )
 
 // CommitLocal records snap, just stored in the actor's local checkpoint
@@ -127,8 +125,7 @@ func (t *Tracker) CommitPromoted(actorUID string, snap SnapshotRef) *ateletpb.Ac
 	defer t.unlock(actorUID)
 	a := t.findOrAddLocked(actorUID)
 	// Skip when snap is already LatestDurable (so a retried promote keeps the
-	// original CommitTime and UploadTime) or older than LatestDurable (a
-	// newer checkpoint became durable while PromoteSnapshot ran).
+	// original CommitTime and UploadTime) or older than LatestDurable.
 	if !a.uploadNeeded(snap) {
 		if a.LatestLocal != nil && a.reportDue() {
 			t.clearReportDueLocked(a)
@@ -156,15 +153,15 @@ func (t *Tracker) CommitPromoted(actorUID string, snap SnapshotRef) *ateletpb.Ac
 }
 
 // BeginStart records that a Run or Restore is starting the actor on this node,
-// once any detach in progress has finished, and returns the func to call when
-// the start ends, whether or not it succeeded. It first unschedules the
-// actor's detach (see markStarted) and saves that, so atelet does not detach
-// the actor while a workload restored from its local snapshot may use it, even
-// if atelet restarts or the start fails partway. A failed Run or Restore
-// leaves the detach unscheduled, since atelet cannot tell whether the workload
-// is running on the worker; the local snapshot stays until the next checkpoint
-// or Terminate on this node. When it cannot save that, it fails with
-// Unavailable, and the caller must not start the actor.
+// once any background detach of the actor in progress has finished, and
+// returns the func to call when the start ends, whether or not it succeeded.
+// It first unschedules the actor's detach (see markStarted) and saves that, so
+// atelet does not detach the actor while a workload restored from its local
+// snapshot may use it, even if atelet restarts or the start fails partway. A
+// failed Run or Restore leaves the detach unscheduled, since atelet cannot
+// tell whether the workload is running on the worker; the local snapshot stays
+// until the next checkpoint or Terminate on this node. When it cannot save
+// that, it fails with Unavailable, and the caller must not start the actor.
 func (t *Tracker) BeginStart(ctx context.Context, actorUID string) (end func(), err error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
@@ -189,22 +186,20 @@ func (t *Tracker) BeginStart(ctx context.Context, actorUID string) (end func(), 
 			t.resetBackoffLocked(a)
 		}
 	}
-	return t.holdLocked(actorUID, a, nil, false), nil
+	return t.holdLocked(actorUID, a, holdStart), nil
 }
 
 // BeginCheckpoint records that a Checkpoint of snap is in progress on this
-// node, once any detach in progress has finished, and returns the func to call
-// when the checkpoint ends, whether or not it succeeded. It fails with
-// Aborted when snap has a stale generation for the actor: below the
+// node, once any background detach in progress has finished, and returns the
+// func to call when the checkpoint ends, whether or not it succeeded. It fails
+// with Aborted when snap has a stale generation for the actor: below the
 // actor's newest snapshot on this node, or equal to it under another
 // snapshot_uuid. atelet does not detach the actor in between, so a detach
 // cannot delete the local snapshot the checkpoint writes.
 func (t *Tracker) BeginCheckpoint(ctx context.Context, actorUID string, snap *ateletpb.Snapshot) (end func(), err error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
-	a, err := t.waitForDetachLocked(ctx, actorUID, func(a *actorSnapshots) error {
-		return a.checkGeneration(snap)
-	})
+	a, err := t.waitForDetachLocked(ctx, actorUID, func(a *actorSnapshots) error { return a.checkGeneration(snap) })
 	if err != nil {
 		return nil, err
 	}
@@ -212,16 +207,16 @@ func (t *Tracker) BeginCheckpoint(ctx context.Context, actorUID string, snap *at
 	// zero, because the actor's Run or Restore on this node unscheduled the
 	// detach, or this is a retry of a Checkpoint that already committed its
 	// snapshot, whose detach stays scheduled.
-	return t.holdLocked(actorUID, a, &SnapshotRef{Snapshot: proto.CloneOf(snap)}, false), nil
+	return t.holdLocked(actorUID, a, holdCheckpoint), nil
 }
 
 // BeginPromote records that a PromoteSnapshot of snap is in progress on this
-// node, once any detach in progress and any background upload of snap have
-// finished. A stale generation fails with Aborted. A conflicting description
-// of LatestDurable fails with FailedPrecondition. It reports whether snap is
-// already the actor's latest durable snapshot, and returns the func to call
-// when the promote ends. atelet does not start a detach or a background upload
-// of the actor in between.
+// node, once any background detach in progress and any background upload of
+// snap have finished. A stale generation fails with Aborted. A conflicting
+// description of LatestDurable fails with FailedPrecondition. It reports
+// whether snap is already the actor's latest durable snapshot, and returns the
+// func to call when the promote ends. atelet does not start a detach or a
+// background upload of the actor in between.
 func (t *Tracker) BeginPromote(ctx context.Context, actorUID string, snap SnapshotRef) (alreadyDurable bool, end func(), err error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
@@ -235,45 +230,26 @@ func (t *Tracker) BeginPromote(ctx context.Context, actorUID string, snap Snapsh
 			return false, nil, err
 		}
 	}
-	return alreadyDurable, t.holdLocked(actorUID, a, snap.clone(), true), nil
+	return alreadyDurable, t.holdLocked(actorUID, a, holdPromote), nil
 }
 
-// holdLocked counts a Run, Restore, Checkpoint, or PromoteSnapshot of the
+// holdLocked records a Run, Restore, Checkpoint, or PromoteSnapshot of the
 // actor in progress on its entry a, which holds detaches and state reports of
-// the actor off (and background uploads when promote is true), and returns the
-// func that ends it and queues the actor again. When snap is non-nil
-// (Checkpoint and PromoteSnapshot), it stays in a.inFlight until end runs, so
-// newest includes it. An actor atelet tracks nothing of yet (a nil a) is held
-// too, so no detach or report can begin on a snapshot its first Checkpoint
-// commits before it ends.
-func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots, snap *SnapshotRef, promote bool) (end func()) {
+// the actor off (and background uploads during a promote), and returns the
+// func that ends it and queues the actor again. An actor atelet tracks nothing
+// of yet (a nil a) is held too, so no detach or report can begin on a snapshot
+// its first Checkpoint commits before it ends.
+func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots, kind holdKind) (end func()) {
 	if a == nil {
 		a = &actorSnapshots{actorUID: actorUID}
 	}
 	t.addLocked(a)
-	a.holds++
-	if snap != nil {
-		a.inFlight = append(a.inFlight, snap)
-	}
-	if promote {
-		a.promotes++
-	}
+	a.hold = kind
 	return func() {
 		t.lock(actorUID)
 		defer t.unlock(actorUID)
-		a.holds--
-		if snap != nil {
-			a.inFlight = slices.DeleteFunc(a.inFlight, func(r *SnapshotRef) bool { return r == snap })
-		}
-		if promote {
-			a.promotes--
-		}
-		if !t.tracksLocked(a) {
-			// Forget (via Terminate) dropped the actor while the Run, Restore,
-			// Checkpoint, or PromoteSnapshot was in progress.
-			return
-		}
-		if a.holds == 0 && a.reportDeferred {
+		a.hold = holdNone
+		if a.reportDeferred {
 			t.queueReportLocked(a)
 		}
 		t.requeueLocked(a)

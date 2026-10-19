@@ -41,34 +41,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 
 	workerName := req.GetWorker().GetName()
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-
-	// Use authoritative state to authorize the request, never the request
-	// itself: the caller proves which node it is on, and nothing else.
-	worker, err := s.store.GetWorker(ctx, workerName)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Worker %s not found", workerName)
-		}
-		return nil, fmt.Errorf("while fetching worker %s: %w", workerName, err)
-	}
-	if worker.GetNodeName() != caller.NodeName {
-		// Do not disclose Workers on other nodes.
-		slog.WarnContext(ctx, "Refusing a suspend request for a worker on another node",
-			slog.String("worker", workerName),
-			slog.String("worker_node", worker.GetNodeName()),
-			slog.String("caller_node", caller.NodeName),
-			slog.String("caller_pod", caller.PodName))
-		return nil, apierror.NotFound("Worker %s not found", workerName)
-	}
-
-	actor, err := s.store.GetActor(ctx, actorRef)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, fmt.Errorf("while fetching actor %s: %w", actorRef, err)
-	}
-	if err := checkActorHostedBy(ctx, actor, workerName, req.GetActorUid()); err != nil {
+	if err := s.authorizeHostedActor(ctx, caller, workerName, actorRef, req.GetActorUid()); err != nil {
 		return nil, err
 	}
 
@@ -82,7 +55,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 	// the workflow to acquire the lease, the Actor can be resumed onto another
 	// Worker, or deleted and recreated under the same name, and the workflow
 	// suspends whatever the reference resolves to by then. See #1773.
-	resp, err := s.suspender.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: req.GetActor()})
+	resp, err := s.control.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: req.GetActor()})
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +65,38 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 		slog.String("actor_uid", req.GetActorUid()),
 		slog.String("node", caller.NodeName))
 	return &ateapipb.RequestActorSuspendResponse{Actor: resp.GetActor()}, nil
+}
+
+// authorizeHostedActor checks that the calling atelet may speak for actorRef:
+// workerName must be on the caller's node, and the actor must be assigned to it.
+func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Caller, workerName string, actorRef resources.ActorRef, actorUID string) error {
+	// Use authoritative state to authorize the request, never the request
+	// itself: the caller proves which node it is on, and nothing else.
+	worker, err := s.store.GetWorker(ctx, workerName)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return apierror.NotFound("Worker %s not found", workerName)
+		}
+		return fmt.Errorf("while fetching worker %s: %w", workerName, err)
+	}
+	if worker.GetNodeName() != caller.NodeName {
+		// Do not disclose Workers on other nodes.
+		slog.WarnContext(ctx, "Refusing a request for a worker on another node",
+			slog.String("worker", workerName),
+			slog.String("worker_node", worker.GetNodeName()),
+			slog.String("caller_node", caller.NodeName),
+			slog.String("caller_pod", caller.PodName))
+		return apierror.NotFound("Worker %s not found", workerName)
+	}
+
+	actor, err := s.store.GetActor(ctx, actorRef)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return apierror.NotFound("Actor %s not found", actorRef)
+		}
+		return fmt.Errorf("while fetching actor %s: %w", actorRef, err)
+	}
+	return checkActorHostedBy(ctx, actor, workerName, actorUID)
 }
 
 // checkActorHostedBy reports whether the Worker may speak for this Actor: the
@@ -104,9 +109,9 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 func checkActorHostedBy(ctx context.Context, actor *ateapipb.Actor, workerName, actorUID string) error {
 	actorRef := resources.ActorRefFromActor(actor)
 	if got := actor.GetMetadata().GetUid(); got != actorUID {
-		// The named Actor was deleted and recreated. Suspending the recreation
-		// would checkpoint a workload the caller never hosted.
-		slog.WarnContext(ctx, "Refusing a suspend request naming a stale actor incarnation",
+		// The named Actor was deleted and recreated, and the caller never
+		// hosted the recreation.
+		slog.WarnContext(ctx, "Refusing a request naming a stale actor incarnation",
 			slog.String("worker", workerName),
 			slog.String("actor", actorRef.String()),
 			slog.String("requested_uid", actorUID),
@@ -116,7 +121,7 @@ func checkActorHostedBy(ctx context.Context, actor *ateapipb.Actor, workerName, 
 	// An Actor with no assignment has no worker to speak for it: it is
 	// SUSPENDED (paused or not) or CRASHED, and nothing hosts it.
 	if assigned := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); assigned != workerName {
-		slog.WarnContext(ctx, "Refusing a suspend request for an actor hosted elsewhere",
+		slog.WarnContext(ctx, "Refusing a request for an actor hosted elsewhere",
 			slog.String("worker", workerName),
 			slog.String("actor", actorRef.String()),
 			slog.String("assigned_worker", assigned))

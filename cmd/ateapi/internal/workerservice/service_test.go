@@ -35,24 +35,26 @@ const (
 // certificates from ateletauthtest carry.
 var testAteletSPIFFEID = installdefaults.SPIFFEID(installdefaults.SystemNamespace, installdefaults.AteletServiceAccount)
 
-// fakeSuspender stands in for the Control service. What it records is the
-// point of most of the suspend tests: whether the request reached the suspend
-// at all.
-type fakeSuspender struct {
+// fakeControl stands in for the Control service. What it records is the
+// point of most of the tests: whether the request reached the operation at
+// all.
+type fakeControl struct {
 	calls []*ateapipb.SuspendActorRequest
 	resp  *ateapipb.SuspendActorResponse
 	err   error
 
-	reports   []appliedReport
-	reportErr error
+	reports    []appliedReport
+	reportErr  error
+	crashCalls []crashCall
+	crashResp  *ateapipb.Actor
 }
 
-func (f *fakeSuspender) SuspendActor(_ context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
+func (f *fakeControl) SuspendActor(_ context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
 	f.calls = append(f.calls, req)
 	return f.resp, f.err
 }
 
-func (f *fakeSuspender) ApplyActorSnapshotState(_ context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error {
+func (f *fakeControl) ApplyActorSnapshotState(_ context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error {
 	f.reports = append(f.reports, appliedReport{actorRef: actorRef, actorUID: actorUID, node: node, state: state})
 	return f.reportErr
 }
@@ -63,6 +65,17 @@ type appliedReport struct {
 	actorUID string
 	node     string
 	state    *ateapipb.ActorSnapshotState
+}
+
+// crashCall is one CrashActorReportedByWorker call.
+type crashCall struct {
+	ActorRef                      resources.ActorRef
+	ActorUID, WorkerName, Message string
+}
+
+func (f *fakeControl) CrashActorReportedByWorker(_ context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapipb.Actor, error) {
+	f.crashCalls = append(f.crashCalls, crashCall{actorRef, actorUID, workerName, message})
+	return f.crashResp, f.err
 }
 
 // seedReportedWorker registers a Worker on nodeName that has already reported

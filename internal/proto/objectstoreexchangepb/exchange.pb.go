@@ -39,7 +39,8 @@ const (
 type ExchangeActorJwtRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// A worker-for-actor JWT minted by ate-api-server for the audience the
-	// plugin requires.
+	// plugin requires. It names the node it was minted for, and is good only
+	// while the actor is on that node.
 	ActorJwt string `protobuf:"bytes,1,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
 	// force skips the control plugin's token cache and mints a fresh credential
 	// from the actor's current state. The node plugin sets it after storage

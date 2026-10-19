@@ -1187,6 +1187,114 @@ func TestImmediateCheckpointWithoutLocalCopy(t *testing.T) {
 	}
 }
 
+// TestTerminateWaitsForInFlightRPC checks that Terminate waits on the
+// per-actor lock while Checkpoint or PromoteSnapshot is in flight, then cleans
+// up the actor's tracked state and local files once that RPC returns.
+func TestTerminateWaitsForInFlightRPC(t *testing.T) {
+	waitTerminateBehind := func(t *testing.T, a *pluginActor) (block func(), finish func()) {
+		t.Helper()
+		var once sync.Once
+		started := make(chan struct{})
+		release := make(chan struct{})
+		block = func() {
+			once.Do(func() {
+				close(started)
+				<-release
+			})
+		}
+		finish = func() {
+			t.Helper()
+			<-started
+			termDone := make(chan error, 1)
+			go func() {
+				_, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+					Atespace:     "ate-demo",
+					ActorName:    "counter",
+					ActorUid:     pluginActorUID,
+					WorkerPodUid: pluginWorkerPodUID,
+					Spec:         a.spec,
+				})
+				termDone <- err
+			}()
+			select {
+			case err := <-termDone:
+				t.Fatalf("Terminate returned %v while another RPC held the actor lock, want it to wait", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+			close(release)
+			if err := <-termDone; err != nil {
+				t.Fatalf("Terminate: %v", err)
+			}
+		}
+		return block, finish
+	}
+
+	assertCleanedUp := func(t *testing.T, a *pluginActor) {
+		t.Helper()
+		if st := a.s.snapshots.State(pluginActorUID); !proto.Equal(st, &ateletpb.ActorSnapshotState{}) {
+			t.Errorf("tracked state = %v, want none", st)
+		}
+		if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(pluginActorUID)); !os.IsNotExist(err) {
+			t.Errorf("snapshot state file: stat = %v, want none", err)
+		}
+		if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "snap-1")); !os.IsNotExist(err) {
+			t.Errorf("local snapshot: stat = %v, want none", err)
+		}
+		if _, err := os.Stat(ateletpath.ActorPath(pluginActorUID)); !os.IsNotExist(err) {
+			t.Errorf("actor dir after Terminate: stat = %v, want none", err)
+		}
+	}
+
+	for _, mode := range []ateletpb.UploadMode{
+		ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
+		ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE,
+	} {
+		t.Run(mode.String(), func(t *testing.T) {
+			a := runPluginActor(t)
+			block, finish := waitTerminateBehind(t, a)
+			a.worker.onCheckpoint = block
+			cpDone := make(chan error, 1)
+			go func() {
+				_, err := a.checkpoint(t, a.snapshot("snap-1", 1), mode)
+				cpDone <- err
+			}()
+			finish()
+			if err := <-cpDone; err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			assertCleanedUp(t, a)
+		})
+	}
+
+	t.Run("PromoteSnapshot", func(t *testing.T) {
+		a := runPluginActor(t)
+		snap := a.snapshot("snap-1", 1)
+		if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+
+		block, finish := waitTerminateBehind(t, a)
+		a.store.onPut = block
+		promoteDone := make(chan error, 1)
+		go func() {
+			_, err := a.s.PromoteSnapshot(t.Context(), &ateletpb.PromoteSnapshotRequest{
+				Atespace:              "ate-demo",
+				ActorName:             "counter",
+				ActorUid:              pluginActorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				Snapshot:              snap,
+			})
+			promoteDone <- err
+		}()
+		finish()
+		if err := <-promoteDone; err != nil {
+			t.Fatalf("PromoteSnapshot: %v", err)
+		}
+		assertCleanedUp(t, a)
+	})
+}
+
 // TestFailedCheckpointKeepsLocalSnapshot checkpoints a resumed actor again, and
 // fails before the new snapshot commits: the pause snapshot stays on disk and
 // recorded as the actor's latest local snapshot, so the actor can still be
@@ -1601,6 +1709,60 @@ func TestDetachActorValidatesRequest(t *testing.T) {
 	req.ActorUid = ""
 	if _, err := a.s.DetachActor(t.Context(), req); apierror.Code(err) != codes.InvalidArgument {
 		t.Errorf("DetachActor without actor_uid = %v, want InvalidArgument", err)
+	}
+}
+
+// TestDetachActorWaitsForInFlightCheckpoint checks that DetachActor waits on
+// the per-actor lock while a Checkpoint is in flight, then detaches the
+// snapshot that Checkpoint committed.
+func TestDetachActorWaitsForInFlightCheckpoint(t *testing.T) {
+	a := runPluginActor(t)
+	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	a.worker.onCheckpoint = func() {
+		once.Do(func() {
+			close(started)
+			<-release
+		})
+	}
+	cpErr := make(chan error, 1)
+	go func() {
+		_, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+		cpErr <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the Checkpoint to reach the worker")
+	}
+
+	type detachResult struct {
+		resp *ateletpb.DetachActorResponse
+		err  error
+	}
+	detached := make(chan detachResult, 1)
+	go func() {
+		resp, err := a.s.DetachActor(t.Context(), detachActorRequest())
+		detached <- detachResult{resp, err}
+	}()
+	select {
+	case r := <-detached:
+		t.Fatalf("DetachActor returned (%v, %v) while a Checkpoint held the actor lock, want it to wait", r.resp, r.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-cpErr; err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	r := <-detached
+	if r.err != nil {
+		t.Fatalf("DetachActor: %v", r.err)
+	}
+	if st := r.resp.GetState(); st.GetLatestLocal() != nil || st.GetLatestDurable().GetSnapshot().GetSnapshotUuid() != "pause-snap-1" {
+		t.Errorf("state = %v, want pause-snap-1 durable and nothing local", st)
 	}
 }
 
@@ -2111,7 +2273,8 @@ func TestPromoteSnapshotRejectsStaleGeneration(t *testing.T) {
 
 // TestCheckpointInFlightRejectsOlderGeneration checks that while Checkpoint is
 // running on the worker for generation 3, an out-of-order Checkpoint or
-// PromoteSnapshot for generation 2 fails with Aborted.
+// PromoteSnapshot for generation 2 waits on the per-actor RPC lock and then
+// fails with Aborted.
 func TestCheckpointInFlightRejectsOlderGeneration(t *testing.T) {
 	a := runPluginActor(t)
 	started := make(chan struct{})
@@ -2136,23 +2299,40 @@ func TestCheckpointInFlightRejectsOlderGeneration(t *testing.T) {
 	}
 
 	stale := a.snapshot("pause-snap-2", 2)
-	if _, err := a.checkpoint(t, stale, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); apierror.Code(err) != codes.Aborted {
-		t.Errorf("Checkpoint(%v) while generation 3 is in flight = %v, want Aborted", stale, err)
-	}
-	if _, err := a.s.PromoteSnapshot(t.Context(), &ateletpb.PromoteSnapshotRequest{
-		Atespace:              "ate-demo",
-		ActorName:             "counter",
-		ActorUid:              pluginActorUID,
-		ActorTemplateAtespace: "default",
-		ActorTemplateName:     "counter",
-		Snapshot:              stale,
-	}); apierror.Code(err) != codes.Aborted {
-		t.Errorf("PromoteSnapshot(%v) while generation 3 is in flight = %v, want Aborted", stale, err)
+	staleCpErr := make(chan error, 1)
+	go func() {
+		_, err := a.checkpoint(t, stale, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+		staleCpErr <- err
+	}()
+	stalePromoteErr := make(chan error, 1)
+	go func() {
+		_, err := a.s.PromoteSnapshot(t.Context(), &ateletpb.PromoteSnapshotRequest{
+			Atespace:              "ate-demo",
+			ActorName:             "counter",
+			ActorUid:              pluginActorUID,
+			ActorTemplateAtespace: "default",
+			ActorTemplateName:     "counter",
+			Snapshot:              stale,
+		})
+		stalePromoteErr <- err
+	}()
+	select {
+	case err := <-staleCpErr:
+		t.Fatalf("Checkpoint(%v) returned %v while generation 3 was in flight, want it to wait", stale, err)
+	case err := <-stalePromoteErr:
+		t.Fatalf("PromoteSnapshot(%v) returned %v while generation 3 was in flight, want it to wait", stale, err)
+	case <-time.After(50 * time.Millisecond):
 	}
 
 	close(release)
 	if err := <-cpErr; err != nil {
 		t.Fatalf("Checkpoint(pause-snap-3): %v", err)
+	}
+	if err := <-staleCpErr; apierror.Code(err) != codes.Aborted {
+		t.Errorf("Checkpoint(%v) after generation 3 committed = %v, want Aborted", stale, err)
+	}
+	if err := <-stalePromoteErr; apierror.Code(err) != codes.Aborted {
+		t.Errorf("PromoteSnapshot(%v) after generation 3 committed = %v, want Aborted", stale, err)
 	}
 	if got := a.s.snapshots.State(pluginActorUID).GetLatestLocal().GetSnapshot().GetSnapshotUuid(); got != "pause-snap-3" {
 		t.Errorf("latest_local = %q, want pause-snap-3", got)

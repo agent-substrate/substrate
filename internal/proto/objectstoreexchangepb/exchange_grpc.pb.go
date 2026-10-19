@@ -50,8 +50,9 @@ type CredentialExchangeClient interface {
 	//   - INVALID_ARGUMENT: actor_jwt is empty.
 	//   - UNAUTHENTICATED: actor_jwt fails signature, audience or expiry, or
 	//     does not name an actor.
-	//   - PERMISSION_DENIED: actor_jwt is not a worker-for-actor token, or the
-	//     actor has no snapshot location.
+	//   - PERMISSION_DENIED: actor_jwt is not a worker-for-actor token, the
+	//     actor has no snapshot location, the actor has left the node the token
+	//     was minted for, or the actor is in a state with no transfer.
 	//   - NOT_FOUND: the actor is gone or was recreated.
 	//   - FAILED_PRECONDITION: the exchange is not allowed to read actors.
 	//   - INTERNAL: the actor's grants cannot be derived or expressed as an
@@ -93,8 +94,9 @@ type CredentialExchangeServer interface {
 	//   - INVALID_ARGUMENT: actor_jwt is empty.
 	//   - UNAUTHENTICATED: actor_jwt fails signature, audience or expiry, or
 	//     does not name an actor.
-	//   - PERMISSION_DENIED: actor_jwt is not a worker-for-actor token, or the
-	//     actor has no snapshot location.
+	//   - PERMISSION_DENIED: actor_jwt is not a worker-for-actor token, the
+	//     actor has no snapshot location, the actor has left the node the token
+	//     was minted for, or the actor is in a state with no transfer.
 	//   - NOT_FOUND: the actor is gone or was recreated.
 	//   - FAILED_PRECONDITION: the exchange is not allowed to read actors.
 	//   - INTERNAL: the actor's grants cannot be derived or expressed as an

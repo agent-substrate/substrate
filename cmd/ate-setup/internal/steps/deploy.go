@@ -284,7 +284,7 @@ func setPodcertWorkersPerSigner(objs []*unstructured.Unstructured, workers int) 
 	return unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers")
 }
 
-// DeployAteAPIServer redeploys only ate-api-server.
+// DeployAteAPIServer redeploys ate-api-server and ate-idp-server.
 func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	log.Step("deploy_ate_apiserver")
 
@@ -328,7 +328,17 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.reconcileCloudSQLProxySidecar(ctx); err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-api-server", e.Cfg.RolloutTimeout)
+	// ate-idp-server shares only the actor JWT pool with ate-api-server. It
+	// comes along so that redeploying an older release rolls it back too.
+	if err := e.deployIDPServer(ctx); err != nil {
+		return err
+	}
+	for _, name := range []string{"ate-api-server", "ate-idp-server"} {
+		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), name, e.Cfg.RolloutTimeout); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // apiServerManifestPath is the ate-api-server manifest for the environment.

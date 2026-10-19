@@ -180,6 +180,17 @@ type actorSnapshotsRecord struct {
 	ReportDueSince time.Time `json:"reportDueSince,omitzero"`
 }
 
+// holdKind is the kind of RPC in progress on an actor, or holdNone. Callers
+// serialize lifecycle RPCs per actor, so at most one holds an actor at once.
+type holdKind int
+
+const (
+	holdNone       holdKind = iota
+	holdStart               // Run or Restore
+	holdCheckpoint          // Checkpoint
+	holdPromote             // PromoteSnapshot
+)
+
 // actorSnapshots is what atelet tracks of one actor's snapshots on this node.
 // Its fields are guarded by the actor's lock in Tracker.locks.
 type actorSnapshots struct {
@@ -193,20 +204,13 @@ type actorSnapshots struct {
 	// A background worker or an RPC call such as Detach runs it; an actor has
 	// at most one. The entry stays in memory while op is set.
 	op *actorOp
-	// holds counts the Runs, Restores, Checkpoints, and PromoteSnapshots of
-	// the actor in progress on this node. While it is nonzero, atelet does not
-	// detach the actor or report its state, and the entry stays in memory.
-	holds int
-	// inFlight holds the snapshots of Checkpoints and PromoteSnapshots of the
-	// actor currently in progress on this node. newest includes them, so an
-	// older generation cannot start while a newer one is in flight.
-	inFlight []*SnapshotRef
-	// promotes counts the PromoteSnapshots of the actor in progress on this
-	// node. While it is nonzero, atelet does not start a background upload of
-	// the actor.
-	promotes int
+	// hold records the Run, Restore, Checkpoint, or PromoteSnapshot of the
+	// actor in progress on this node. While set, atelet does not detach the
+	// actor or report its state (nor start a background upload during a
+	// promote), and the entry stays in memory.
+	hold holdKind
 	// reportDeferred is set when a report of the actor's state is held back
-	// while holds is nonzero, so holdLocked queues it once holds reaches zero.
+	// while hold is set, so holdLocked queues it once the RPC ends.
 	reportDeferred bool
 	// retryAt holds the actor's next background upload or detach back after
 	// one failed. The entry stays in memory while retryAt is set.
@@ -393,8 +397,7 @@ func (a *actorSnapshots) opTarget() *SnapshotRef {
 }
 
 // newest returns the actor's snapshot with the highest generation, or nil
-// when atelet holds no snapshot for the actor. It includes snapshots whose
-// Checkpoint or PromoteSnapshot is in flight.
+// when atelet holds no snapshot for the actor.
 func (a *actorSnapshots) newest() *SnapshotRef {
 	var newest *SnapshotRef
 	consider := func(r *SnapshotRef) {
@@ -406,9 +409,6 @@ func (a *actorSnapshots) newest() *SnapshotRef {
 	consider(a.Uploading)
 	consider(a.LatestDurable)
 	consider(a.opTarget())
-	for _, r := range a.inFlight {
-		consider(r)
-	}
 	return newest
 }
 

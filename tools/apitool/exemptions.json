@@ -363,10 +363,5 @@
     "rule": "documented",
     "subject": "ateapi.WorkerStatus.state",
     "message": "field has no doc comment"
-  },
-  {
-    "rule": "resource-metadata",
-    "subject": "ateapi.ActorAssignment",
-    "message": "\"metadata\" field is number 6, want 1"
   }
 ]

@@ -269,3 +269,32 @@ func (s *workerSupportServer) GetActorEgressPolicy(
 
 	return &ateletpb.GetActorEgressPolicyResponse{EgressPolicy: toAteletEgressPolicy(policy)}, nil
 }
+
+// ReportActorCrashed forwards a worker's report that the sandbox of an actor
+// it hosts died on its own. Authorized like RequestActorSuspend.
+func (s *workerSupportServer) ReportActorCrashed(ctx context.Context, req *ateletpb.ReportActorCrashedRequest) (*ateletpb.ReportActorCrashedResponse, error) {
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if errs := apivalidation.ValidateReportActorCrashedRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
+	}
+	if _, err := s.workers.ReportActorCrashed(ctx, &ateapipb.ReportActorCrashedRequest{
+		Worker: &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
+		Actor: &ateapipb.ObjectRef{
+			Atespace: req.GetActorAtespace(),
+			Name:     req.GetActorName(),
+		},
+		ActorUid: req.GetActorUid(),
+		Message:  req.GetMessage(),
+	}); err != nil {
+		return nil, err
+	}
+	slog.InfoContext(ctx, "Forwarded an actor crash report",
+		slog.String("pod_uid", workerIdentity.PodUID),
+		slog.String("actor_atespace", req.GetActorAtespace()),
+		slog.String("actor_name", req.GetActorName()),
+		slog.String("actor_uid", req.GetActorUid()))
+	return &ateletpb.ReportActorCrashedResponse{}, nil
+}

@@ -46,6 +46,13 @@ type hostedActor struct {
 	// ctx is canceled when the actor is replaced or unhosted.
 	ctx    context.Context
 	cancel context.CancelFunc
+	// stopping is set before ateworker itself stops the sandbox, so watchSandbox
+	// can tell that exit from a crash.
+	stopping atomic.Bool
+	// sandbox pins the sandbox process from the moment runsc creates it, so
+	// nothing that waits on it later can be fooled by a reused pid. Nil if it
+	// could not be pinned. Set once, under the actor's lock.
+	sandbox *sandboxProcess
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
@@ -57,6 +64,12 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*
 	if old, ok := s.actors[attribution.UID]; ok {
 		stale = old.network
 		old.cancel()
+		// the old activation's sandbox exiting from here on is not a crash
+		old.stopping.Store(true)
+		if old.sandbox != nil {
+			old.sandbox.Close()
+			old.sandbox = nil
+		}
 	} else if len(s.actors)+s.draining >= s.maxActors {
 		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
@@ -127,6 +140,12 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 		s.actorsMu.Unlock()
 	}()
 
+	s.actorsMu.Lock()
+	if hosted.sandbox != nil {
+		hosted.sandbox.Close()
+		hosted.sandbox = nil
+	}
+	s.actorsMu.Unlock()
 	if hosted.network == nil {
 		return nil
 	}
@@ -135,6 +154,18 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 		return err
 	}
 	return nil
+}
+
+// pinSandbox pins the actor's sandbox, which runsc has just created.
+func (s *AteWorkerService) pinSandbox(ctx context.Context, hosted *hostedActor, actorDirs *ateworkerpb.ActorDirs) {
+	sandbox, err := openSandboxProcess(actorDirs)
+	if err != nil {
+		slog.WarnContext(ctx, "Cannot pin the sandbox process", slog.String("actorUID", hosted.attribution.UID), slog.Any("err", err))
+		return
+	}
+	s.actorsMu.Lock()
+	hosted.sandbox = sandbox
+	s.actorsMu.Unlock()
 }
 
 // lookupActor returns the actor or nil without taking its lifecycle lock.

@@ -51,6 +51,11 @@ service WorkerSupport {
   // Control.GetActorEgressPolicy. An error is the control plane's, passed
   // through as it was given.
   rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (GetActorEgressPolicyResponse) {}
+
+  // ReportActorCrashed reports that the sandbox of the actor this worker
+  // hosts died on its own, for atelet to forward to the control plane's
+  // WorkerService, which this mirrors.
+  rpc ReportActorCrashed(ReportActorCrashedRequest) returns (ReportActorCrashedResponse) {}
 }
 
 message RegisterWorkerRequest {
@@ -213,6 +218,31 @@ message RequestActorSuspendRequest {
 message RequestActorSuspendResponse {
 }
 
+message ReportActorCrashedRequest {
+  // The actor the calling worker is hosting, as for RequestActorSuspend.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 3;
+
+  // What the worker saw, e.g. how the sandbox exited.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096
+  string message = 4;
+}
+
+message ReportActorCrashedResponse {
+}
+
 message GetActorEgressPolicyRequest {
   // The actor the calling worker is hosting. atelet reads its policy from the
   // control plane by name.
@@ -283,25 +313,25 @@ message MintActorCertificateRequest {
   //
   // +k8s:required
   // +k8s:format=k8s-short-name
-  string actor_atespace = 3;
+  string actor_atespace = 1;
 
   // +k8s:required
   // +k8s:format=k8s-short-name
-  string actor_name = 4;
+  string actor_name = 2;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
-  string actor_uid = 5;
+  string actor_uid = 3;
 
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
   //
   // +k8s:required
   // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
-  bytes certificate_signing_request = 1;
+  bytes certificate_signing_request = 4;
 }
 
 message MintActorCertificateResponse {
@@ -313,6 +343,10 @@ message MintActorCertificateResponse {
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
+//
+// atelet runs at most one Run, Restore, Checkpoint, PromoteSnapshot,
+// DetachActor, or Terminate of an actor at a time. A call waits for the one in
+// progress, up to the call's deadline.
 service Atelet {
   // Run tells atelet to create a new containerized workload from scratch on a
   // worker.
@@ -348,8 +382,7 @@ service Atelet {
   // report a DetachActor call, whose caller reads the state from the response.
   // Waits for an operation already in progress on the actor, such as an
   // upload or a detach. Does nothing when atelet holds no local snapshot for
-  // the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-  // actor is in progress or the actor runs on this node, and
+  // the actor. Returns ABORTED when the actor runs on this node, and
   // FAILED_PRECONDITION when atelet cannot make the latest local snapshot
   // durable, such as when it has no `snapshot.object`.
   rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
@@ -584,9 +617,7 @@ message TrustBundleDataSource {
   // +k8s:listType=set
   // +k8s:eachVal=+k8s:minLength=1
   // +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
-  repeated string names = 3;
-  reserved 2;
-  reserved "name";
+  repeated string names = 2;
 }
 
 // SystemInfoDataSource selects exactly one projection to place in the
@@ -1052,7 +1083,7 @@ message RestoreRequest {
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  optional EgressGateway egress_gateway = 13;
+  optional EgressGateway egress_gateway = 9;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For
   // gVisor and micro-VM VOLUMES restores the sandbox is (re)sized to these;
@@ -1062,11 +1093,11 @@ message RestoreRequest {
   // +k8s:optional
   // +k8s:minimum=0
   // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
+  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
 
   // +k8s:optional
   // +k8s:minimum=0
-  int64 memory_bytes = 15; // Memory limit in bytes.
+  int64 memory_bytes = 11; // Memory limit in bytes.
 
   // The runtime the assigned worker restores this actor under, from
   // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
@@ -1075,7 +1106,7 @@ message RestoreRequest {
   // this activation, not what the restored snapshot was taken under.
   //
   // +k8s:required
-  SandboxRuntime sandbox_runtime = 17;
+  SandboxRuntime sandbox_runtime = 12;
 }
 
 message RestoreResponse {

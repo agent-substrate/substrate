@@ -1395,8 +1395,7 @@ func assertRequestNamesLatestSnapshot(t *testing.T, atelet *capturingAtelet, tmp
 
 // TestSuspendActor_AppliesCheckpointState verifies finalize applies the
 // snapshot state atelet returns from Checkpoint, with the report rules. A state
-// that conflicts with the record fails the suspend, and leaves the actor
-// SUSPENDING with its worker.
+// that conflicts with the record crashes the actor.
 func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 	const node = "node-1"
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
@@ -1474,7 +1473,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 		},
 		wantSnapshots: []snapshotOutcome{{generation: 1, fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, durable: completed}},
 	}, {
-		name: "sync: a state that conflicts with the record fails the suspend",
+		name: "sync: a state that conflicts with the record crashes the actor",
 		mode: suspendSync,
 		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
 			snap := proto.CloneOf(req.GetSnapshot())
@@ -1482,9 +1481,9 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 			snap.Object = &ateletpb.ObjectStorage{SnapshotUri: uriOf(9)}
 			return &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: snap}}
 		},
-		wantCode: codes.InvalidArgument,
+		wantCode: codes.FailedPrecondition,
 	}, {
-		name:   "async: a state that conflicts with the record fails the suspend",
+		name:   "async: a state that conflicts with the record crashes the actor",
 		mode:   suspendAsync,
 		status: &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, pending)}},
 		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
@@ -1493,7 +1492,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 				LatestDurable: report(1, uriOf(9), ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 			}
 		},
-		wantCode: codes.InvalidArgument,
+		wantCode: codes.FailedPrecondition,
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1529,11 +1528,11 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 				if got := apierror.Code(err); got != tt.wantCode {
 					t.Fatalf("suspend = %v, want code %v", err, tt.wantCode)
 				}
-				if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
-					t.Errorf("state = %v, want SUSPENDING", got)
+				if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+					t.Errorf("state = %v, want CRASHED", got)
 				}
-				if firstAssignment(t, persistence, wireTestAssignment().GetWorker().GetName()) == nil {
-					t.Error("worker released, want it still holding the actor so a retry can call atelet")
+				if got, want := stored.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageSnapshotStateConflict; got != want {
+					t.Errorf("crash message = %q, want %q", got, want)
 				}
 				return
 			}

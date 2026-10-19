@@ -491,7 +491,7 @@ type RunWorkloadRequest struct {
 	// When absent the actor has no egress: its TCP is captured and refused.
 	//
 	// +k8s:optional
-	EgressGateway *EgressGateway `protobuf:"bytes,10,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
+	EgressGateway *EgressGateway `protobuf:"bytes,9,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. The worker
 	// sizes the sandbox to these (cgroup caps via the OCI spec, and for the
 	// micro-VM the VM's vCPU count and memory). Zero means "unset": keep the
@@ -500,12 +500,12 @@ type RunWorkloadRequest struct {
 	// +k8s:optional
 	// +k8s:minimum=1
 	// +k8s:maximum=999999 # matches atelet.RunRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
-	CpuMilli int64 `protobuf:"varint,11,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
+	CpuMilli int64 `protobuf:"varint,10,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
 	// +k8s:optional
 	// +k8s:minimum=1
-	MemoryBytes int64 `protobuf:"varint,12,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	MemoryBytes int64 `protobuf:"varint,11,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// +k8s:required
-	ActorDirs     *ActorDirs `protobuf:"bytes,13,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	ActorDirs     *ActorDirs `protobuf:"bytes,12,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1248,9 +1248,9 @@ type CheckpointWorkloadRequest struct {
 	// +k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-	Fidelity SnapshotFidelity `protobuf:"varint,10,opt,name=fidelity,proto3,enum=ateworker.SnapshotFidelity" json:"fidelity,omitempty"`
+	Fidelity SnapshotFidelity `protobuf:"varint,8,opt,name=fidelity,proto3,enum=ateworker.SnapshotFidelity" json:"fidelity,omitempty"`
 	// +k8s:required
-	ActorDirs     *ActorDirs `protobuf:"bytes,11,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	ActorDirs     *ActorDirs `protobuf:"bytes,9,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1437,17 +1437,17 @@ type RestoreWorkloadRequest struct {
 	// +k8s:maxProperties=16
 	// +k8s:eachKey=+k8s:maxLength=64
 	// +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
-	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	RuntimeAssetPaths map[string]string `protobuf:"bytes,8,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Fidelity to restore from the snapshot.
 	//
 	// +k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-	Fidelity SnapshotFidelity `protobuf:"varint,10,opt,name=fidelity,proto3,enum=ateworker.SnapshotFidelity" json:"fidelity,omitempty"`
+	Fidelity SnapshotFidelity `protobuf:"varint,9,opt,name=fidelity,proto3,enum=ateworker.SnapshotFidelity" json:"fidelity,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	//
 	// +k8s:optional
-	EgressGateway *EgressGateway `protobuf:"bytes,12,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
+	EgressGateway *EgressGateway `protobuf:"bytes,10,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. Used to
 	// (re)size the sandbox on a VOLUMES restore (fresh guest container). On a
 	// MEMORY micro-VM restore the size baked into the snapshot is authoritative and
@@ -1456,17 +1456,17 @@ type RestoreWorkloadRequest struct {
 	// +k8s:optional
 	// +k8s:minimum=1
 	// +k8s:maximum=999999 # matches atelet.RestoreRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
-	CpuMilli int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
+	CpuMilli int64 `protobuf:"varint,11,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
 	// +k8s:optional
 	// +k8s:minimum=1
-	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	MemoryBytes int64 `protobuf:"varint,12,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// +k8s:required
-	ActorDirs *ActorDirs `protobuf:"bytes,16,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	ActorDirs *ActorDirs `protobuf:"bytes,13,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	// actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
 	// the worker must not delete or modify files in it.
 	//
 	// +k8s:optional
-	PreserveRestoreDir bool `protobuf:"varint,17,opt,name=preserve_restore_dir,json=preserveRestoreDir,proto3" json:"preserve_restore_dir,omitempty"`
+	PreserveRestoreDir bool `protobuf:"varint,14,opt,name=preserve_restore_dir,json=preserveRestoreDir,proto3" json:"preserve_restore_dir,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -2031,12 +2031,12 @@ const file_ateworker_proto_rawDesc = "" +
 	"runsc_path\x18\x06 \x01(\tR\trunscPath\x12+\n" +
 	"\x04spec\x18\a \x01(\v2\x17.ateworker.WorkloadSpecR\x04spec\x12d\n" +
 	"\x13runtime_asset_paths\x18\b \x03(\v24.ateworker.RunWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12D\n" +
-	"\x0eegress_gateway\x18\n" +
-	" \x01(\v2\x18.ateworker.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
-	"\tcpu_milli\x18\v \x01(\x03R\bcpuMilli\x12!\n" +
-	"\fmemory_bytes\x18\f \x01(\x03R\vmemoryBytes\x123\n" +
+	"\x0eegress_gateway\x18\t \x01(\v2\x18.ateworker.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
+	"\tcpu_milli\x18\n" +
+	" \x01(\x03R\bcpuMilli\x12!\n" +
+	"\fmemory_bytes\x18\v \x01(\x03R\vmemoryBytes\x123\n" +
 	"\n" +
-	"actor_dirs\x18\r \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x1aD\n" +
+	"actor_dirs\x18\f \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
@@ -2085,10 +2085,9 @@ const file_ateworker_proto_rawDesc = "" +
 	"\n" +
 	"runsc_path\x18\x06 \x01(\tR\trunscPath\x12+\n" +
 	"\x04spec\x18\a \x01(\v2\x17.ateworker.WorkloadSpecR\x04spec\x127\n" +
-	"\bfidelity\x18\n" +
-	" \x01(\x0e2\x1b.ateworker.SnapshotFidelityR\bfidelity\x123\n" +
+	"\bfidelity\x18\b \x01(\x0e2\x1b.ateworker.SnapshotFidelityR\bfidelity\x123\n" +
 	"\n" +
-	"actor_dirs\x18\v \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\"s\n" +
+	"actor_dirs\x18\t \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\"s\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
 	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x8d\x06\n" +
@@ -2102,15 +2101,15 @@ const file_ateworker_proto_rawDesc = "" +
 	"\n" +
 	"runsc_path\x18\x06 \x01(\tR\trunscPath\x12+\n" +
 	"\x04spec\x18\a \x01(\v2\x17.ateworker.WorkloadSpecR\x04spec\x12h\n" +
-	"\x13runtime_asset_paths\x18\t \x03(\v28.ateworker.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x127\n" +
-	"\bfidelity\x18\n" +
-	" \x01(\x0e2\x1b.ateworker.SnapshotFidelityR\bfidelity\x12D\n" +
-	"\x0eegress_gateway\x18\f \x01(\v2\x18.ateworker.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
-	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
-	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x123\n" +
+	"\x13runtime_asset_paths\x18\b \x03(\v28.ateworker.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x127\n" +
+	"\bfidelity\x18\t \x01(\x0e2\x1b.ateworker.SnapshotFidelityR\bfidelity\x12D\n" +
+	"\x0eegress_gateway\x18\n" +
+	" \x01(\v2\x18.ateworker.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
+	"\tcpu_milli\x18\v \x01(\x03R\bcpuMilli\x12!\n" +
+	"\fmemory_bytes\x18\f \x01(\x03R\vmemoryBytes\x123\n" +
 	"\n" +
-	"actor_dirs\x18\x10 \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x120\n" +
-	"\x14preserve_restore_dir\x18\x11 \x01(\bR\x12preserveRestoreDir\x1aD\n" +
+	"actor_dirs\x18\r \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x120\n" +
+	"\x14preserve_restore_dir\x18\x0e \x01(\bR\x12preserveRestoreDir\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +

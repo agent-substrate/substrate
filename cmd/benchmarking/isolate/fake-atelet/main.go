@@ -45,6 +45,7 @@ import (
 	"go.ate.dev/substrate/internal/atelet"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
@@ -76,6 +77,7 @@ var (
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
 func main() {
@@ -89,6 +91,9 @@ func main() {
 	defer stop()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	if err := preview.Init(*previewFlags...); err != nil {
+		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
 	if err := applyTuningEnv(pflag.CommandLine, os.LookupEnv); err != nil {
 		serverboot.Fatal(ctx, "Invalid tuning environment", err)

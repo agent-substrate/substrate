@@ -1307,6 +1307,7 @@ type recordingObjectStorage struct {
 	mu      sync.Mutex
 	objects map[string][]byte
 	putErr  error
+	onPut   func()
 }
 
 func (r *recordingObjectStorage) GetObject(_ context.Context, bucket, object string) (io.ReadCloser, error) {
@@ -1320,6 +1321,9 @@ func (r *recordingObjectStorage) GetObject(_ context.Context, bucket, object str
 }
 
 func (r *recordingObjectStorage) PutObject(_ context.Context, bucket, object string, reader io.Reader) error {
+	if r.onPut != nil {
+		r.onPut()
+	}
 	if r.putErr != nil {
 		return r.putErr
 	}

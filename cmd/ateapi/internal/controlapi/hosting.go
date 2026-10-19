@@ -18,8 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -42,6 +44,11 @@ import (
 // actor it does not hold.
 func HostingNode(ctx context.Context, st store.Interface, actor *ateapipb.Actor) (string, error) {
 	status := actor.GetStatus()
+	// The branches below pick the field to trust within the states a node
+	// transfers in.
+	if !slices.Contains(resources.TransferStates, status.GetState()) {
+		return "", nil
+	}
 	assignment := status.GetWorkerAssignment()
 	if assignment == nil {
 		if status.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {

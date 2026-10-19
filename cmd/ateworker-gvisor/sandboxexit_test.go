@@ -82,3 +82,27 @@ func TestSandboxWaitGoneTimesOutWhileRunning(t *testing.T) {
 		t.Fatalf("waitGone = %v, want a still present error", err)
 	}
 }
+
+func TestSandboxExited(t *testing.T) {
+	cmd, p := startFakeSandbox(t)
+	exited, err := p.exited()
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-exited:
+		t.Fatal("closed while the sandbox runs")
+	case <-time.After(100 * time.Millisecond):
+	}
+	_ = cmd.Process.Kill()
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("not closed after the sandbox exited")
+	}
+	// the watch uses its own copy, so the sandbox's pidfd still works
+	go func() { _, _ = cmd.Process.Wait() }()
+	if err := p.waitGone(5 * time.Second); err != nil {
+		t.Fatalf("waitGone after the watch = %v", err)
+	}
+}

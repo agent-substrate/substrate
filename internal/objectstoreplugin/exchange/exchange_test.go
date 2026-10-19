@@ -55,6 +55,8 @@ const (
 type signer struct {
 	pool *localjwtauthority.ConcretePool
 	now  time.Time
+	// node is the node the signed tokens are minted for.
+	node string
 }
 
 func newSigner(t *testing.T) (*signer, *oidcjwt.Verifier) {
@@ -73,11 +75,16 @@ func newSigner(t *testing.T) (*signer, *oidcjwt.Verifier) {
 		t.Fatal(err)
 	}
 	v := oidcjwt.NewVerifier(issuer, []string{ActorJWTAudience}, oidcjwt.FileKeySource(path), oidcjwt.WithSubstrateClaims())
-	return &signer{pool: pool, now: time.Now()}, v
+	return &signer{pool: pool, now: time.Now(), node: "node-1"}, v
 }
 
 func (s *signer) jwt(t *testing.T, kind actoridjwt.Kind, audience string, actorUID string) string {
 	t.Helper()
+	substrate := actoridjwt.SubstrateClaims{Atespace: atespace, ActorName: name, ActorUID: actorUID}
+	if kind == actoridjwt.KindWorkerForActor {
+		// Only a worker-for-actor token is tied to a node.
+		substrate.Node = s.node
+	}
 	jwt, err := s.pool.SignJWT(&actoridjwt.Claims{
 		Kind:       kind,
 		Issuer:     issuer,
@@ -86,7 +93,7 @@ func (s *signer) jwt(t *testing.T, kind actoridjwt.Kind, audience string, actorU
 		Expiration: s.now.Add(time.Hour),
 		NotBefore:  s.now.Add(-time.Minute),
 		IssuedAt:   s.now,
-		Substrate:  actoridjwt.SubstrateClaims{Atespace: atespace, ActorName: name, ActorUID: actorUID},
+		Substrate:  substrate,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +163,7 @@ func (s *signer) rawJWT(t *testing.T, claims map[string]any) string {
 
 // rawClaims is a valid worker-for-actor claim set, for rawJWT to vary.
 func (s *signer) rawClaims() map[string]any {
-	substrate := map[string]string{"atespace": atespace, "actorName": name, "actorUID": uid}
+	substrate := map[string]string{"atespace": atespace, "actorName": name, "actorUID": uid, "node": s.node}
 	return map[string]any{
 		"iss": issuer, "sub": "worker-for-actor/" + atespace + "/" + name, "aud": ActorJWTAudience,
 		"exp": s.now.Add(time.Hour).Unix(), "nbf": s.now.Add(-time.Minute).Unix(), "iat": s.now.Unix(),
@@ -164,10 +171,12 @@ func (s *signer) rawClaims() map[string]any {
 	}
 }
 
+// actorWithTag is a running actor on node-1 that still carries the tag
+// generation it was created from.
 func actorWithTag() *ateapipb.Actor {
 	return &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name, Uid: uid},
-		Status: &ateapipb.ActorStatus{Snapshots: []*ateapipb.Snapshot{{
+		Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: "node-1", Snapshots: []*ateapipb.Snapshot{{
 			Generation: 1, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
 			DurableSnapshot: &ateapipb.SnapshotStorage{
 				Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
@@ -177,11 +186,66 @@ func actorWithTag() *ateapipb.Actor {
 	}
 }
 
+// actorLocalOnly is a paused actor whose only snapshot is on node-1.
 func actorLocalOnly() *ateapipb.Actor {
 	return &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name, Uid: uid},
-		Status:   &ateapipb.ActorStatus{Snapshots: []*ateapipb.Snapshot{{Generation: 1, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, Locality: "node-1"}}},
+		Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, AssignedNode: "node-1",
+			Snapshots: []*ateapipb.Snapshot{{Generation: 1, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, Locality: "node-1"}}},
 	}
+}
+
+// actorIn returns actorWithTag in the given state on the given node.
+func actorIn(state ateapipb.ActorState, node string) *ateapipb.Actor {
+	a := actorWithTag()
+	a.Status.State, a.Status.AssignedNode = state, node
+	return a
+}
+
+// TestExchangeActorJwt_NodeBinding pins which actor states and placements a
+// token minted on node-1 is good for.
+func TestExchangeActorJwt_NodeBinding(t *testing.T) {
+	s, v := newSigner(t)
+	for _, tc := range []struct {
+		name  string
+		actor *ateapipb.Actor
+		want  codes.Code
+	}{
+		{"resuming on the token's node", actorIn(ateapipb.ActorState_ACTOR_STATE_RESUMING, "node-1"), codes.OK},
+		{"running on the token's node", actorIn(ateapipb.ActorState_ACTOR_STATE_RUNNING, "node-1"), codes.OK},
+		{"suspending on the token's node", actorIn(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1"), codes.OK},
+		{"suspended with its snapshot on the token's node", actorIn(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), codes.OK},
+		{"resumed on another node", actorIn(ateapipb.ActorState_ACTOR_STATE_RUNNING, "node-2"), codes.PermissionDenied},
+		{"detached from the node", actorIn(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ""), codes.PermissionDenied},
+		{"crashed on the token's node", actorIn(ateapipb.ActorState_ACTOR_STATE_CRASHED, "node-1"), codes.PermissionDenied},
+		{"deleting on the token's node", actorIn(ateapipb.ActorState_ACTOR_STATE_DELETING, "node-1"), codes.PermissionDenied},
+		{"reverting on the token's node", actorIn(ateapipb.ActorState_ACTOR_STATE_REVERTING, "node-1"), codes.PermissionDenied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			issuer := &fakeIssuer{expiry: s.now.Add(time.Hour)}
+			srv := New(v, &fakeLookup{actor: tc.actor}, issuer)
+			srv.now = func() time.Time { return s.now }
+			_, err := srv.ExchangeActorJwt(t.Context(), &exchangepb.ExchangeActorJwtRequest{ActorJwt: s.jwt(t, actoridjwt.KindWorkerForActor, ActorJWTAudience, uid)})
+			if status.Code(err) != tc.want {
+				t.Fatalf("code = %v (%v), want %v", status.Code(err), err, tc.want)
+			}
+			if wantCalls := map[bool]int{true: 1, false: 0}[tc.want == codes.OK]; issuer.calls != wantCalls {
+				t.Errorf("issuer was called %d times, want %d", issuer.calls, wantCalls)
+			}
+		})
+	}
+	t.Run("token without a node", func(t *testing.T) {
+		// Refused before the lookup: a lookup that would answer NotFound must
+		// not be reached.
+		s.node = ""
+		defer func() { s.node = "node-1" }()
+		srv := New(v, &fakeLookup{err: status.Error(codes.NotFound, "no such actor")}, &fakeIssuer{})
+		srv.now = func() time.Time { return s.now }
+		_, err := srv.ExchangeActorJwt(t.Context(), &exchangepb.ExchangeActorJwtRequest{ActorJwt: s.jwt(t, actoridjwt.KindWorkerForActor, ActorJWTAudience, uid)})
+		if status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("code = %v (%v), want Unauthenticated", status.Code(err), err)
+		}
+	})
 }
 
 func TestExchangeActorJwt(t *testing.T) {
