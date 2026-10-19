@@ -634,3 +634,193 @@ func TestRestoreMemoryFidelityRequiresKernelAndImage(t *testing.T) {
 		})
 	}
 }
+
+func TestReadaheadSparseMemoryRanges(t *testing.T) {
+	// Missing file should be a safe no-op.
+	readaheadSparseMemoryRanges(t.Context(), filepath.Join(t.TempDir(), "nonexistent"))
+
+	memPath := filepath.Join(t.TempDir(), "memory-ranges")
+	f, err := os.Create(memPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 512 * 1024
+	if err := f.Truncate(size); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt(bytes.Repeat([]byte{0x42}, 64*1024), 64*1024); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt(bytes.Repeat([]byte{0x24}, 192*1024), 256*1024); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readaheadSparseMemoryRanges(t.Context(), memPath)
+}
+
+func TestRestoreMemoryFidelityParallelPrepCleanupOnError(t *testing.T) {
+	dir := writeSnapshotConfig(t, []map[string]any{
+		{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
+	})
+	s := &AteWorkerService{}
+	p := actorBootParams{
+		actorUID: "actor-parallel-err",
+		actorDirs: &ateworkerpb.ActorDirs{
+			RestoreDir:   dir,
+			OciBundleDir: t.TempDir(),
+		},
+		assetPaths: map[string]string{
+			assetKernel: "/var/lib/ate/actors/actor-parallel-err/sandbox-assets/kata-kernel",
+			assetImage:  "/var/lib/ate/actors/actor-parallel-err/sandbox-assets/kata-image",
+			assetCH:     "/bin/false",
+		},
+		containers: []*ateworkerpb.Container{{Name: "missing-bundle"}},
+	}
+	err := s.restoreMemoryFidelity(t.Context(), p, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, dir, false, time.Now())
+	if err == nil {
+		t.Fatal("restoreMemoryFidelity succeeded with missing bundle, want error")
+	}
+}
+
+func BenchmarkRestorePrep_ParallelVsSequential(b *testing.B) {
+	ids := [2]string{"bench-actor-a", "bench-actor-b"}
+	kernels := [2]string{
+		"/var/lib/ate/actors/bench-actor-a/sandbox-assets/kata-kernel",
+		"/var/lib/ate/actors/bench-actor-b/sandbox-assets/kata-kernel",
+	}
+	images := [2]string{
+		"/var/lib/ate/actors/bench-actor-a/sandbox-assets/kata-image",
+		"/var/lib/ate/actors/bench-actor-b/sandbox-assets/kata-image",
+	}
+	containers := []*ateworkerpb.Container{{Name: "app"}}
+	containerList := []string{"app"}
+	svc := &AteWorkerService{}
+
+	setupFixture := func(b *testing.B) (restoreDir, upperDir, memPath string, actorDirs *ateworkerpb.ActorDirs) {
+		b.Helper()
+		restoreDir = b.TempDir()
+		cfg := map[string]any{
+			"vsock":   map[string]any{"cid": 3, "socket": "/run/vc/vm/golden/clh.sock"},
+			"console": map[string]any{"mode": "File", "file": "/run/vc/vm/golden/console.log"},
+			"serial":  map[string]any{"mode": "File", "file": "/run/vc/vm/golden/serial.log"},
+			"fs":      []map[string]any{{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"}},
+			"payload": map[string]any{"kernel": "/var/lib/ate/actors/golden/sandbox-assets/kata-kernel", "cmdline": "console=hvc0"},
+			"pmem":    []map[string]any{{"id": guestImagePmemID, "file": "/var/lib/ate/actors/golden/sandbox-assets/kata-image", "discard_writes": true}},
+			"net":     []map[string]any{{"id": "_net1", "num_queues": 2, "mac": "de:ad:be:ef:00:01"}},
+		}
+		raw, err := json.Marshal(cfg)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(restoreDir, "config.json"), raw, 0o600); err != nil {
+			b.Fatal(err)
+		}
+
+		memPath = filepath.Join(restoreDir, "memory-ranges")
+		f, err := os.Create(memPath)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := f.Truncate(4 * 1024 * 1024); err != nil {
+			f.Close()
+			b.Fatal(err)
+		}
+		chunk := bytes.Repeat([]byte{0x5A}, 128*1024)
+		for _, off := range []int64{0, 512 * 1024, 1536 * 1024, 3072 * 1024} {
+			if _, err := f.WriteAt(chunk, off); err != nil {
+				f.Close()
+				b.Fatal(err)
+			}
+		}
+		if err := f.Close(); err != nil {
+			b.Fatal(err)
+		}
+
+		srcUpper := b.TempDir()
+		appUpper, _, err := kata.MkdirUpperWorkDirs(srcUpper, "app")
+		if err != nil {
+			b.Fatal(err)
+		}
+		payload := bytes.Repeat([]byte("state"), 4096)
+		for _, name := range []string{"a.dat", "b.dat", "c.dat", "d.dat"} {
+			if err := os.WriteFile(filepath.Join(appUpper, name), payload, 0o600); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := tarRootfsUpper(b.Context(), srcUpper, restoreDir, containerList); err != nil {
+			b.Fatal(err)
+		}
+
+		bundleBase := b.TempDir()
+		if err := os.MkdirAll(filepath.Join(bundleBase, "app", "rootfs", "etc"), 0o755); err != nil {
+			b.Fatal(err)
+		}
+		actorDirs = &ateworkerpb.ActorDirs{
+			RestoreDir:   restoreDir,
+			OciBundleDir: bundleBase,
+		}
+		upperDir = filepath.Join(b.TempDir(), "rootfs-upper")
+		return restoreDir, upperDir, memPath, actorDirs
+	}
+
+	b.Run("SequentialPrep", func(b *testing.B) {
+		restoreDir, upperDir, memPath, actorDirs := setupFixture(b)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := range b.N {
+			idx := i & 1
+			if err := rewriteSnapshotPaths(restoreDir, ids[idx], kernels[idx], images[idx]); err != nil {
+				b.Fatal(err)
+			}
+			readaheadSparseMemoryRanges(b.Context(), memPath)
+			if err := untarRootfsUpper(upperDir, restoreDir, containerList); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := svc.buildActorContainers(ids[idx], actorDirs, containers); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := ch.SnapshotNetDevices(restoreDir); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("ParallelPrep", func(b *testing.B) {
+		restoreDir, upperDir, memPath, actorDirs := setupFixture(b)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := range b.N {
+			idx := i & 1
+			prepDone := make(chan error, 1)
+			go func() {
+				if err := rewriteSnapshotPaths(restoreDir, ids[idx], kernels[idx], images[idx]); err != nil {
+					prepDone <- err
+					return
+				}
+				readaheadSparseMemoryRanges(b.Context(), memPath)
+				prepDone <- nil
+			}()
+			untarDone := make(chan error, 1)
+			go func() {
+				untarDone <- untarRootfsUpper(upperDir, restoreDir, containerList)
+			}()
+			if _, err := svc.buildActorContainers(ids[idx], actorDirs, containers); err != nil {
+				b.Fatal(err)
+			}
+			if err := <-untarDone; err != nil {
+				b.Fatal(err)
+			}
+			if err := <-prepDone; err != nil {
+				b.Fatal(err)
+			}
+			if _, err := ch.SnapshotNetDevices(restoreDir); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
