@@ -114,9 +114,9 @@ func LoadNamespaceAuthorizer(path string) (*NamespaceAuthorizer, error) {
 		return nil, fmt.Errorf("reading namespace policy file %q: %w", path, err)
 	}
 	var file namespacePolicyFile
-	// Strict: a typo like matchLabel, or an unsupported field like
-	// matchExpressions, must fail rather than silently parse as an empty
-	// selector, which would grant every Secret in the namespace.
+	// Strict: a typo like matchLabel, or a field secretSelector does not
+	// support like matchExpressions, must fail rather than silently parse as
+	// an empty selector, which would grant every Secret in the namespace.
 	if err := yaml.UnmarshalStrict(data, &file); err != nil {
 		return nil, fmt.Errorf("parsing namespace policy file %q: %w", path, err)
 	}
@@ -227,20 +227,20 @@ func (a *NamespaceAuthorizer) WatchNamespaces(ctx context.Context, client kubern
 // ownNamespaceSelector policies it matches now. The cache holds the labels of
 // its last watch event: while it cannot watch, a label change is not seen.
 func (a *NamespaceAuthorizer) grantsFor(atespace, namespace string) []grant {
-	if a == nil {
-		return nil
-	}
+	// Clipped so the append below allocates instead of writing into the
+	// policy's own slice, which concurrent requests share.
 	grants := slices.Clip(a.allowed[atespace][namespace])
 	if atespace == namespace {
-		grants = append(grants, a.matching(namespace, a.ownNamespace)...)
+		grants = append(grants, a.matching(namespace)...)
 	}
 	return grants
 }
 
-// matching returns the grants of those selectors the namespace's labels match
-// now. A namespace the cache does not hold matches none.
-func (a *NamespaceAuthorizer) matching(namespace string, selectors []selectorGrant) []grant {
-	if a.namespaces == nil || len(selectors) == 0 {
+// matching returns the grants of the ownNamespaceSelector policies the
+// namespace's labels match now. A namespace the cache does not hold matches
+// none.
+func (a *NamespaceAuthorizer) matching(namespace string) []grant {
+	if a.namespaces == nil || len(a.ownNamespace) == 0 {
 		return nil
 	}
 	ns, err := a.namespaces.Get(namespace)
@@ -249,7 +249,7 @@ func (a *NamespaceAuthorizer) matching(namespace string, selectors []selectorGra
 	}
 	set := labels.Set(ns.GetLabels())
 	var grants []grant
-	for _, sg := range selectors {
+	for _, sg := range a.ownNamespace {
 		if sg.selector.Matches(set) {
 			grants = append(grants, sg.grant)
 		}
@@ -278,7 +278,7 @@ func (a *NamespaceAuthorizer) Grants() map[string][]string {
 	if a.namespaces != nil {
 		all, _ := a.namespaces.List(labels.Everything())
 		for _, ns := range all {
-			if len(a.matching(ns.Name, a.ownNamespace)) > 0 {
+			if len(a.matching(ns.Name)) > 0 {
 				add(ns.Name, ns.Name)
 			}
 		}

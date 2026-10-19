@@ -92,9 +92,13 @@ func loadPolicy(t *testing.T, policy string) *NamespaceAuthorizer {
 	return authz
 }
 
-func fetch(srv *Server, atespace, ns string) (string, codes.Code) {
-	resp, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
-		Uri:           "ate-secret://k8s.io/default/" + ns + "/model-key/token",
+func fetch(t *testing.T, srv *Server, atespace, ns string) (string, codes.Code) {
+	return fetchNamed(t, srv, atespace, ns, "model-key")
+}
+
+func fetchNamed(t *testing.T, srv *Server, atespace, ns, name string) (string, codes.Code) {
+	resp, err := srv.FetchSecret(t.Context(), &credprovider.FetchSecretRequest{
+		Uri:           "ate-secret://k8s.io/default/" + ns + "/" + name + "/token",
 		ActorSpiffeId: "spiffe://substrate-actor.local/actor/" + atespace + "/agent",
 	})
 	return string(resp.GetOpaqueBytes()), status.Code(err)
@@ -131,7 +135,7 @@ func newTenantFixture(t *testing.T, policy string) *tenantFixture {
 
 func (f *tenantFixture) expect(t *testing.T, atespace, ns string, want codes.Code) {
 	t.Helper()
-	value, code := fetch(f.srv, atespace, ns)
+	value, code := fetch(t, f.srv, atespace, ns)
 	if code != want {
 		t.Fatalf("atespace %s reading %s: code %v, want %v", atespace, ns, code, want)
 	}
@@ -143,7 +147,7 @@ func (f *tenantFixture) expect(t *testing.T, atespace, ns string, want codes.Cod
 func (f *tenantFixture) eventually(t *testing.T, atespace, ns string, want codes.Code) {
 	t.Helper()
 	if err := wait.PollUntilContextTimeout(t.Context(), 10*time.Millisecond, 10*time.Second, true, func(context.Context) (bool, error) {
-		_, code := fetch(f.srv, atespace, ns)
+		_, code := fetch(t, f.srv, atespace, ns)
 		return code == want, nil
 	}); err != nil {
 		t.Fatalf("atespace %s reading %s never answered %v: %v", atespace, ns, want, err)
@@ -161,48 +165,46 @@ func (f *tenantFixture) relabel(t *testing.T, name string, labels map[string]str
 // and by no other, and the match follows the namespace's labels after startup.
 func TestFetchSecretOwnNamespaceSelector(t *testing.T) {
 	f := newTenantFixture(t, tenantPolicy)
-	client, authz := f.client, f.authz
-	expect, eventually, relabel := f.expect, f.eventually, f.relabel
 
 	t.Run("a matched namespace reads its own Secrets", func(t *testing.T) {
-		expect(t, "org-a", "org-a", codes.OK)
+		f.expect(t, "org-a", "org-a", codes.OK)
 	})
 	t.Run("a matched namespace cannot read another tenant's", func(t *testing.T) {
-		before := len(client.Actions())
-		expect(t, "org-a", "org-b", codes.PermissionDenied)
-		if slices.ContainsFunc(client.Actions()[before:], func(a k8stesting.Action) bool { return a.GetResource().Resource == "secrets" }) {
+		before := len(f.client.Actions())
+		f.expect(t, "org-a", "org-b", codes.PermissionDenied)
+		if slices.ContainsFunc(f.client.Actions()[before:], func(a k8stesting.Action) bool { return a.GetResource().Resource == "secrets" }) {
 			t.Fatal("a cross-tenant request reached the Secrets API")
 		}
 	})
 	t.Run("a static atespace gains no matched namespace", func(t *testing.T) {
-		expect(t, "platform", "platform", codes.OK)
-		expect(t, "platform", "org-a", codes.PermissionDenied)
+		f.expect(t, "platform", "platform", codes.OK)
+		f.expect(t, "platform", "org-a", codes.PermissionDenied)
 	})
 	t.Run("an unlabeled namespace is not granted", func(t *testing.T) {
-		expect(t, "org-c", "org-c", codes.PermissionDenied)
+		f.expect(t, "org-c", "org-c", codes.PermissionDenied)
 	})
 	t.Run("a namespace labeled after startup is granted", func(t *testing.T) {
-		relabel(t, "org-c", map[string]string{tenantLabel: "c"})
-		eventually(t, "org-c", "org-c", codes.OK)
-		if got := authz.Grants()["org-c"]; !slices.Equal(got, []string{"org-c"}) {
+		f.relabel(t, "org-c", map[string]string{tenantLabel: "c"})
+		f.eventually(t, "org-c", "org-c", codes.OK)
+		if got := f.authz.Grants()["org-c"]; !slices.Equal(got, []string{"org-c"}) {
 			t.Fatalf("Grants()[org-c] = %v, want [org-c]", got)
 		}
 	})
 	t.Run("a namespace created after startup is granted", func(t *testing.T) {
-		if _, err := client.CoreV1().Namespaces().Create(t.Context(), namespace("org-d", map[string]string{tenantLabel: "d"}), metav1.CreateOptions{}); err != nil {
+		if _, err := f.client.CoreV1().Namespaces().Create(t.Context(), namespace("org-d", map[string]string{tenantLabel: "d"}), metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "org-d", "org-d", codes.OK)
+		f.eventually(t, "org-d", "org-d", codes.OK)
 	})
 	t.Run("a namespace whose label is removed is refused", func(t *testing.T) {
-		relabel(t, "org-a", nil)
-		eventually(t, "org-a", "org-a", codes.PermissionDenied)
+		f.relabel(t, "org-a", nil)
+		f.eventually(t, "org-a", "org-a", codes.PermissionDenied)
 	})
 	t.Run("a deleted namespace is refused", func(t *testing.T) {
-		if err := client.CoreV1().Namespaces().Delete(t.Context(), "org-b", metav1.DeleteOptions{}); err != nil {
+		if err := f.client.CoreV1().Namespaces().Delete(t.Context(), "org-b", metav1.DeleteOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "org-b", "org-b", codes.PermissionDenied)
+		f.eventually(t, "org-b", "org-b", codes.PermissionDenied)
 	})
 }
 
@@ -249,31 +251,52 @@ func TestLoadNamespaceAuthorizerNamespaceSelectors(t *testing.T) {
 
 // A secretSelector narrows a selected namespace's grant as it narrows a
 // listed one.
-func TestFetchSecretNamespaceSelectorNarrowsBySecretLabel(t *testing.T) {
-	const narrow = "  secretSelector:\n    matchLabels:\n      example.com/credential: \"true\"\n"
-	for _, tc := range []struct{ name, policy, atespace string }{
-		{"ownNamespaceSelector", tenantPolicy + narrow, "org-a"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			labeled := tokenSecret("org-a")
-			labeled.Labels = map[string]string{"example.com/credential": "true"}
-			other := tokenSecret("org-a")
-			other.Name = "ca-pool"
-			client := fake.NewClientset(namespace("org-a", map[string]string{tenantLabel: "a"}), labeled, other)
-			authz := loadPolicy(t, tc.policy)
-			if err := authz.WatchNamespaces(t.Context(), client); err != nil {
-				t.Fatalf("WatchNamespaces: %v", err)
-			}
-			srv := NewServer(client, authz)
-			if _, code := fetch(srv, tc.atespace, "org-a"); code != codes.OK {
-				t.Fatalf("labeled Secret: code %v, want OK", code)
-			}
-			if _, err := srv.FetchSecret(t.Context(), &credprovider.FetchSecretRequest{
-				Uri:           "ate-secret://k8s.io/default/org-a/ca-pool/token",
-				ActorSpiffeId: "spiffe://substrate-actor.local/actor/" + tc.atespace + "/agent",
-			}); status.Code(err) != codes.PermissionDenied {
-				t.Fatalf("unlabeled Secret: %v, want PermissionDenied", err)
+func TestFetchSecretOwnNamespaceSelectorNarrowsBySecretLabel(t *testing.T) {
+	labeled := tokenSecret("org-a")
+	labeled.Labels = map[string]string{"example.com/credential": "true"}
+	other := tokenSecret("org-a")
+	other.Name = "ca-pool"
+	client := fake.NewClientset(namespace("org-a", map[string]string{tenantLabel: "a"}), labeled, other)
+	authz := loadPolicy(t, tenantPolicy+"  secretSelector:\n    matchLabels:\n      example.com/credential: \"true\"\n")
+	if err := authz.WatchNamespaces(t.Context(), client); err != nil {
+		t.Fatalf("WatchNamespaces: %v", err)
+	}
+	srv := NewServer(client, authz)
+	if _, code := fetch(t, srv, "org-a", "org-a"); code != codes.OK {
+		t.Fatalf("labeled Secret: code %v, want OK", code)
+	}
+	if _, code := fetchNamed(t, srv, "org-a", "org-a", "ca-pool"); code != codes.PermissionDenied {
+		t.Fatalf("unlabeled Secret: code %v, want PermissionDenied", code)
+	}
+}
+
+// Static grants and a selector grant on the same atespace and namespace are
+// combined per request without writing into the policy's slice, whose spare
+// capacity three appends leave, so concurrent requests do not race.
+func TestFetchSecretStaticAndSelectorGrantsConcurrently(t *testing.T) {
+	labeled := tokenSecret("org-a")
+	labeled.Labels = map[string]string{"example.com/credential": "true"}
+	client := fake.NewClientset(namespace("org-a", map[string]string{tenantLabel: "a"}), labeled)
+	authz := loadPolicy(t, "policies:\n"+
+		"- atespace: org-a\n  allowedNamespaces: [org-a]\n  secretSelector: {matchLabels: {example.com/credential: \"true\"}}\n"+
+		"- atespace: org-a\n  allowedNamespaces: [org-a]\n  secretSelector: {matchLabels: {example.com/other: \"true\"}}\n"+
+		"- atespace: org-a\n  allowedNamespaces: [org-a]\n  secretSelector: {matchLabels: {example.com/another: \"true\"}}\n"+
+		"- ownNamespaceSelector: {matchExpressions: [{key: example.com/tenant, operator: Exists}]}\n"+
+		"  secretSelector: {matchLabels: {example.com/third: \"true\"}}\n")
+	if err := authz.WatchNamespaces(t.Context(), client); err != nil {
+		t.Fatalf("WatchNamespaces: %v", err)
+	}
+	srv := NewServer(client, authz)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			if _, code := fetch(t, srv, "org-a", "org-a"); code != codes.OK {
+				t.Errorf("code %v, want OK", code)
 			}
 		})
+	}
+	wg.Wait()
+	if got := authz.allowed["org-a"]["org-a"]; len(got) != 3 {
+		t.Fatalf("static grants for org-a/org-a = %d, want 3", len(got))
 	}
 }
