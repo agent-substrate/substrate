@@ -114,6 +114,27 @@ func (s *AteWorkerService) actorLeaf(actorUID string, size sizing.SandboxSize) (
 	return cgroup.OpenActorLeaf(actorUID, size.MilliCPU)
 }
 
+// lowerActorWeightToSteady lowers the actor's cgroup cpu.weight to
+// DefaultCPUWeight once the wakeup probe succeeds.
+func (s *AteWorkerService) lowerActorWeightToSteady(ctx context.Context, leaf *cgroup.ActorLeaf) {
+	if err := leaf.SetCPUWeight(cgroup.DefaultCPUWeight); err != nil {
+		slog.WarnContext(ctx, "Could not set steady cpu.weight on actor cgroup", slog.Any("err", err))
+	}
+}
+
+// raiseActorWeightForTransition raises the actor's cgroup cpu.weight to
+// MaxCPUWeight before snapshotting or tearing down the VM, so CH is not
+// starved by steady-state actors while writing snapshots or shutting down.
+func (s *AteWorkerService) raiseActorWeightForTransition(ctx context.Context, actorUID string) {
+	if !s.actorCgroups {
+		return
+	}
+	if err := cgroup.SetActorLeafCPUWeight(actorUID, cgroup.MaxCPUWeight); err != nil {
+		slog.WarnContext(ctx, "Could not raise actor cpu.weight for transition",
+			slog.String("actorUID", actorUID), slog.Any("err", err))
+	}
+}
+
 // cleanupSandboxState kills what is left of the actor's host processes and
 // clears its sandbox directories.
 func (s *AteWorkerService) cleanupSandboxState(ctx context.Context, actorUID string) {

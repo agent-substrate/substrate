@@ -157,6 +157,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	tPause := time.Now()
 	dPrep = tPause.Sub(tStart)
+	s.raiseActorWeightForTransition(ctx, actorUID)
 	pauseErr := client.Pause(ctx)
 	dPause = time.Since(tPause)
 	if pauseErr != nil {
@@ -345,6 +346,7 @@ func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDi
 	if ra != nil {
 		ra.stopping.Store(true)
 	}
+	s.raiseActorWeightForTransition(ctx, id)
 
 	var errs []error
 	if ra != nil {

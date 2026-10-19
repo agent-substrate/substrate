@@ -101,7 +101,107 @@ func TestNilActorLeaf(t *testing.T) {
 	if leaf.SysProcAttr() != nil {
 		t.Error("a nil leaf set SysProcAttr")
 	}
+	if err := leaf.SetCPUWeight(1000); err != nil {
+		t.Error(err)
+	}
 	if err := leaf.Close(); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestActorLeafSetCPUWeight(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "uid-a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	weightPath := filepath.Join(root, "uid-a", "cpu.weight")
+	if err := os.WriteFile(weightPath, []byte("100"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := openActorLeaf(root, "uid-a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leaf.Close()
+
+	// openActorLeaf starts the leaf at MaxCPUWeight for startup.
+	if got, _ := os.ReadFile(weightPath); string(got) != "10000" {
+		t.Fatalf("initial cpu.weight = %q, want \"10000\"", got)
+	}
+
+	// Steady priority (100), then transition priority (10000).
+	for _, tc := range []struct {
+		w    int
+		want string
+	}{
+		{DefaultCPUWeight, "100"},
+		{MaxCPUWeight, "10000"},
+		{DefaultCPUWeight, "100"},
+	} {
+		if err := leaf.SetCPUWeight(tc.w); err != nil {
+			t.Fatalf("SetCPUWeight(%d): %v", tc.w, err)
+		}
+		if got, _ := os.ReadFile(weightPath); string(got) != tc.want {
+			t.Errorf("after SetCPUWeight(%d), cpu.weight = %q, want %q", tc.w, got, tc.want)
+		}
+	}
+
+	// Out-of-range weights are rejected without touching the file.
+	for _, bad := range []int{-1, 0, 10001} {
+		if err := leaf.SetCPUWeight(bad); err == nil {
+			t.Errorf("SetCPUWeight(%d) succeeded, want an error", bad)
+		}
+	}
+
+	// SetActorLeafCPUWeightUnder updates the leaf by name without an open handle
+	// (used on checkpoint/teardown to raise a running actor's weight).
+	if err := SetActorLeafCPUWeightUnder(root, "uid-a", MaxCPUWeight); err != nil {
+		t.Fatalf("SetActorLeafCPUWeightUnder(10000): %v", err)
+	}
+	if got, _ := os.ReadFile(weightPath); string(got) != "10000" {
+		t.Errorf("after SetActorLeafCPUWeightUnder(10000), cpu.weight = %q, want \"10000\"", got)
+	}
+	// Missing leaf is a no-op.
+	if err := SetActorLeafCPUWeightUnder(root, "no-such-actor", MaxCPUWeight); err != nil {
+		t.Errorf("SetActorLeafCPUWeightUnder on missing leaf: %v", err)
+	}
+	// Unsafe name is rejected.
+	if err := SetActorLeafCPUWeightUnder(root, "../escape", DefaultCPUWeight); err == nil {
+		t.Error("SetActorLeafCPUWeightUnder(../escape) succeeded, want an error")
+	}
+
+	// Missing cpu.weight (no cpu controller) is a no-op.
+	if err := os.Remove(weightPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := leaf.SetCPUWeight(500); err != nil {
+		t.Errorf("SetCPUWeight without cpu.weight: %v", err)
+	}
+}
+
+func BenchmarkActorLeafCPUWeightTransition(b *testing.B) {
+	root := b.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "uid-bench"), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	weightPath := filepath.Join(root, "uid-bench", "cpu.weight")
+	if err := os.WriteFile(weightPath, []byte("100"), 0o644); err != nil {
+		b.Fatal(err)
+	}
+	leaf, err := openActorLeaf(root, "uid-bench", 0)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer leaf.Close()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := leaf.SetCPUWeight(10000); err != nil {
+			b.Fatal(err)
+		}
+		if err := leaf.SetCPUWeight(100); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

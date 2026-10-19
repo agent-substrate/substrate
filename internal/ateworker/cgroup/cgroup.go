@@ -104,6 +104,9 @@ func Delegate(ctx context.Context) (bool, error) {
 		}
 		enabled = append(enabled, c)
 	}
+	if err := setCPUWeight(leaf, MaxCPUWeight); err != nil {
+		slog.WarnContext(ctx, "could not set cpu.weight on worker cgroup", slog.Any("err", err))
+	}
 	slog.InfoContext(ctx, "cgroup delegation ready", slog.Any("controllers", enabled))
 	return true, nil
 }
