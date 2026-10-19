@@ -277,63 +277,166 @@ func TestDeleteWorkerWorkflow_AssignedToAbsentActorDeletesAnyway(t *testing.T) {
 	}
 }
 
-// A resume holds its Actor's lease for the whole workflow, in particular in
-// the window between binding to the worker and committing its Actor update.
-// There the Actor still reads as SUSPENDED with no assignment, so both skip
-// branches in the release would fire and the worker-row cascade delete would
-// destroy the claim the resume is about to point at. The lease makes the
-// sweep report the assignment as busy and fail the pass instead, so the
-// delete retries once the operation has landed.
+// A bound claim must survive until the resume holding its Actor lease settles.
 func TestDeleteWorkerWorkflow_BusyActorFailsTheSweepForARetry(t *testing.T) {
-	ctx := context.Background()
-	wf, persistence := newWorkerDeleteWorkflow(t)
-	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-	// The mid-resume shape: the assignment row exists, the Actor does not
-	// point here yet.
-	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
-		a.Status.WorkerAssignment = nil
-	})
-	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+	for _, tc := range []struct {
+		name         string
+		settledState ateapi.ActorState
+		wantState    ateapi.ActorState
+	}{
+		{"resume failed before committing", ateapi.ActorState_ACTOR_STATE_SUSPENDED, ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+		{"resume committed its assignment", ateapi.ActorState_ACTOR_STATE_RESUMING, ateapi.ActorState_ACTOR_STATE_CRASHED},
+		{"resume reached running", ateapi.ActorState_ACTOR_STATE_RUNNING, ateapi.ActorState_ACTOR_STATE_CRASHED},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			wf, persistence := newWorkerDeleteWorkflow(t)
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+			var resumeAssignment *ateapi.WorkerAssignment
+			actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
+				resumeAssignment = a.Status.WorkerAssignment
+				a.Status.WorkerAssignment = nil
+			})
+			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	lease, err := persistence.AcquireLease(ctx, actorLeaseKey(apiActorRef))
-	if err != nil {
-		t.Fatalf("AcquireLease() failed: %v", err)
-	}
-	defer lease.Close()
+			lease, err := persistence.AcquireLease(ctx, actorLeaseKey(apiActorRef))
+			if err != nil {
+				t.Fatalf("AcquireLease() failed: %v", err)
+			}
+			t.Cleanup(lease.Close)
 
-	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); !errors.Is(err, errActorBusy) {
-		t.Fatalf("DeleteWorker() = %v, want the busy assignment reported", err)
-	}
-	got, err := persistence.GetActor(ctx, apiActorRef)
-	if err != nil {
-		t.Fatalf("GetActor() failed: %v", err)
-	}
-	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Errorf("actor state = %v, want SUSPENDED: a busy Actor is not touched", got.GetStatus().GetState())
-	}
-	if worker, err := persistence.GetWorker(ctx, apiWorkerName); err != nil {
-		t.Fatalf("GetWorker() failed: %v", err)
-	} else if worker.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
-		t.Errorf("worker state = %v, want DRAINING: the record stays for the retry", worker.GetStatus().GetState())
-	}
-	if firstAssignment(t, persistence, apiWorkerName) == nil {
-		t.Error("assignment was cascade-deleted while its Actor's operation was in flight")
-	}
+			_, err = wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
+			if !errors.Is(err, errActorBusy) {
+				t.Fatalf("DeleteWorker() = %v, want the busy assignment reported", err)
+			}
+			if got := apierror.Code(err); got != codes.Aborted {
+				t.Errorf("DeleteWorker() code = %v, want Aborted for a busy Actor", got)
+			}
+			got := mustReadActor(t, ctx, persistence, apiActorRef)
+			if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED || got.GetStatus().GetWorkerAssignment() != nil {
+				t.Errorf("busy actor status = %v, want SUSPENDED without an assignment", got.GetStatus())
+			}
+			if worker, err := persistence.GetWorker(ctx, apiWorkerName); err != nil {
+				t.Fatalf("GetWorker() failed: %v", err)
+			} else if worker.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
+				t.Errorf("worker state = %v, want DRAINING", worker.GetStatus().GetState())
+			}
+			if _, err := persistence.GetWorkerAssignment(ctx, apiWorkerName, actor.GetMetadata().GetUid()); err != nil {
+				t.Fatalf("busy actor claim was lost: %v", err)
+			}
 
-	// The retry, with the operation landed and its lease gone, reads the
-	// settled Actor and completes the delete.
-	lease.Close()
-	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
-		t.Fatalf("DeleteWorker() after the lease was released failed: %v", err)
+			if tc.settledState != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+				if _, err := persistence.UpdateActor(lease.Context(), apiActorRef, store.PreconditionFrom(got), func(a *ateapi.Actor) error {
+					a.Status.State = tc.settledState
+					a.Status.WorkerAssignment = resumeAssignment
+					return nil
+				}); err != nil {
+					t.Fatalf("committing the resumed actor: %v", err)
+				}
+			}
+			lease.Close()
+
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker() after the lease was released: %v", err)
+			}
+			got = mustReadActor(t, ctx, persistence, apiActorRef)
+			if got.GetStatus().GetState() != tc.wantState || got.GetStatus().GetWorkerAssignment() != nil {
+				t.Errorf("settled actor status = %v, want %v without an assignment", got.GetStatus(), tc.wantState)
+			}
+			if _, err := persistence.GetWorker(ctx, apiWorkerName); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("worker after retry: %v, want NotFound", err)
+			}
+			if _, err := persistence.GetWorkerAssignment(ctx, apiWorkerName, actor.GetMetadata().GetUid()); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("claim after retry: %v, want NotFound", err)
+			}
+		})
 	}
-	if got, err := persistence.GetActor(ctx, apiActorRef); err != nil {
-		t.Fatalf("GetActor() failed: %v", err)
-	} else if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Errorf("actor state = %v, want SUSPENDED: a suspended Actor stays resumable", got.GetStatus().GetState())
+}
+
+func TestDeleteWorkerWorkflow_BusyActorDoesNotBlockLaterAssignments(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pageSize int32
+	}{
+		{"same page", store.DefaultPageSize},
+		{"next page", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			_, persistence := newWorkerDeleteWorkflow(t)
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+			for _, name := range []string{"actor-1", "actor-2"} {
+				actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING, func(a *ateapi.Actor) {
+					a.Metadata.Name = name
+				})
+				assignment := newAPIAssignment(actor.GetMetadata().GetUid())
+				assignment.Actor.Name = name
+				if err := persistence.BindActorToWorker(ctx, apiWorkerName, assignment, nil); err != nil {
+					t.Fatalf("BindActorToWorker(): %v", err)
+				}
+			}
+			page, err := persistence.ListWorkerAssignments(ctx, apiWorkerName, store.ListOptions{})
+			if err != nil || len(page.Items) != 2 {
+				t.Fatalf("ListWorkerAssignments() = %v, %v, want two assignments", page, err)
+			}
+			busy, ready := page.Items[0], page.Items[1]
+			busyRef := resources.ActorRefFromObjectRef(busy.GetActor())
+			readyRef := resources.ActorRefFromObjectRef(ready.GetActor())
+			lease, err := persistence.AcquireLease(ctx, actorLeaseKey(busyRef))
+			if err != nil {
+				t.Fatalf("AcquireLease(): %v", err)
+			}
+			t.Cleanup(lease.Close)
+			wf := NewWorkerWorkflow(workerAssignmentPageStore{Interface: persistence, pageSize: tc.pageSize}, newNodeAteletDialer(t, &capturingTerminator{}))
+
+			_, err = wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
+			if !errors.Is(err, errActorBusy) || apierror.Code(err) != codes.Aborted {
+				t.Errorf("DeleteWorker() = %v, want Aborted retaining the busy cause", err)
+			}
+			gotBusy := mustReadActor(t, ctx, persistence, busyRef)
+			if gotBusy.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING || gotBusy.GetStatus().GetWorkerAssignment() == nil {
+				t.Errorf("busy actor was modified: %v", gotBusy.GetStatus())
+			}
+			gotReady := mustReadActor(t, ctx, persistence, readyRef)
+			if gotReady.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED || gotReady.GetStatus().GetWorkerAssignment() != nil {
+				t.Errorf("later actor was not released: %v", gotReady.GetStatus())
+			}
+			if _, err := persistence.GetWorker(ctx, apiWorkerName); err != nil {
+				t.Fatalf("worker was removed after partial progress: %v", err)
+			}
+			if _, err := persistence.GetWorkerAssignment(ctx, apiWorkerName, busy.GetActorUid()); err != nil {
+				t.Fatalf("busy claim was removed after partial progress: %v", err)
+			}
+
+			lease.Close()
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker() retry: %v", err)
+			}
+			gotBusy = mustReadActor(t, ctx, persistence, busyRef)
+			if gotBusy.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED || gotBusy.GetStatus().GetWorkerAssignment() != nil {
+				t.Errorf("retried actor was not released: %v", gotBusy.GetStatus())
+			}
+			if _, err := persistence.GetWorker(ctx, apiWorkerName); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("worker after retry: %v, want NotFound", err)
+			}
+			for _, assignment := range page.Items {
+				if _, err := persistence.GetWorkerAssignment(ctx, apiWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("claim after retry: %v, want NotFound", err)
+				}
+			}
+		})
 	}
-	if firstAssignment(t, persistence, apiWorkerName) != nil {
-		t.Error("assignment after the retry = still present, want none")
-	}
+}
+
+// workerAssignmentPageStore uses the real store with a smaller page size.
+type workerAssignmentPageStore struct {
+	store.Interface
+	pageSize int32
+}
+
+func (s workerAssignmentPageStore) ListWorkerAssignments(ctx context.Context, name string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorAssignment], error) {
+	opts.PageSize = s.pageSize
+	return s.Interface.ListWorkerAssignments(ctx, name, opts)
 }
 
 // A release that fails must leave the Worker in place: the delete is what
