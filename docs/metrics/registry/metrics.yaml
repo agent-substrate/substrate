@@ -1360,7 +1360,7 @@ groups:
       substrate:
         emitted_by: [atelet]
         golden_signals: [saturation]
-        code_anchor: cmd/atelet/internal/filecachegc/cachegc.go
+        code_anchor: cmd/atelet/internal/filecachegc/filecachegc.go
         cuj: The disk of a worker node fills. Is it one of the file caches?
     attributes:
       - ref: ate.filecache.name
@@ -1383,7 +1383,7 @@ groups:
       substrate:
         emitted_by: [atelet]
         golden_signals: [saturation]
-        code_anchor: cmd/atelet/internal/filecachegc/cachegc.go
+        code_anchor: cmd/atelet/internal/filecachegc/filecachegc.go
         cuj: Actors download their runtime again and again on one node. Does the cache evict it?
     attributes:
       - ref: ate.filecache.name
@@ -1406,7 +1406,7 @@ groups:
       substrate:
         emitted_by: [atelet]
         golden_signals: [saturation, errors]
-        code_anchor: cmd/atelet/internal/filecachegc/cachegc.go
+        code_anchor: cmd/atelet/internal/filecachegc/filecachegc.go
         cuj: A file cache stays over its budget. Does the collector run, and what stops it?
     attributes:
       - ref: ate.filecache.name
