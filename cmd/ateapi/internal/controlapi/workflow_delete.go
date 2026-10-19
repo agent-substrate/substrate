@@ -160,8 +160,8 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			return fmt.Errorf("while connecting to atelet on node %q: %w (and while checking the node: %w)", nodeName, err, nodeErr)
 		}
 		if gone {
-			// The node left the cluster, and its workload went with it. Waiting
-			// for its atelet would block revert and delete forever.
+			// A deleted Node object counts as the node being gone for good. If the
+			// machine still runs, whatever atelet holds for the actor stays there.
 			slog.WarnContext(ctx, "assigned node no longer exists, skipping atelet terminate request",
 				slog.String("node", nodeName), slog.Any("actor", actorRef))
 			return nil
