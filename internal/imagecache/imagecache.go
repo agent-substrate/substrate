@@ -554,8 +554,9 @@ func (s *Store) cachedImage(digest v1.Hash) (*Image, error) {
 // so an interrupted pull's record is just resumable progress.
 func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Hash) (*Image, error) {
 	// Re-check under the flight lock: a racing EnsureImage may have completed
-	// the pull between our cache miss and winning the singleflight slot.
-	if img, err := s.cachedImage(digest); err != nil {
+	// the pull between our cache miss and winning the singleflight slot. As
+	// a hit, so the record is touched and its layers are kept past min-age.
+	if img, err := s.cachedImageHit(digest); err != nil {
 		return nil, err
 	} else if img != nil {
 		return img, nil
@@ -594,13 +595,15 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 		return nil, fmt.Errorf("image %s config lists %d diffIDs but manifest has %d layers", digest, len(cfgFile.RootFS.DiffIDs), len(layers))
 	}
 	diffIDs := make([]string, len(layers))
+	hexes := make([]string, len(layers))
 	for i, d := range cfgFile.RootFS.DiffIDs {
 		diffIDs[i] = d.String()
-		// Pinned until this pull returns: eviction never retires a pinned
-		// layer, so nothing this pull has unpacked or reused can be taken
-		// out from under it, whatever happens to its record meanwhile.
-		defer s.pinLayer(d.Hex)()
+		hexes[i] = d.Hex
 	}
+	// Pinned until this pull returns: eviction never retires a pinned
+	// layer, so nothing this pull has unpacked or reused can be taken out
+	// from under it, whatever happens to its record meanwhile.
+	defer s.pinLayers(hexes)()
 
 	// The full diffID list is known from the config before any unpack; make
 	// every layer of this pull referenced before it can exist.
@@ -683,25 +686,23 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 	return &Image{Digest: digest, Config: cfgFile.Config, LayerDirs: layerDirs}, nil
 }
 
-// pinLayer marks the layer as in use by an in-flight pull and returns the
-// matching unpin, which releases only this pin however often it is called.
-// Taken by each pull for each of its layers before any ensureLayer call —
-// outside the layer flight, so a pull that joins another pull's flight is
-// protected by its own pin once the leader's lapses.
-func (s *Store) pinLayer(hex string) (unpin func()) {
+// pinLayers marks the layers as in use by an in-flight pull and returns the
+// matching unpin. Taken by each pull for all of its layers before any
+// ensureLayer call, outside the layer flight, so a pull that joins another
+// pull's flight is protected by its own pin once the leader's lapses.
+func (s *Store) pinLayers(hexes []string) (unpin func()) {
 	s.pinMu.Lock()
-	s.pins[hex]++
+	for _, hex := range hexes {
+		s.pins[hex]++
+	}
 	s.pinMu.Unlock()
-	released := false
 	return func() {
 		s.pinMu.Lock()
 		defer s.pinMu.Unlock()
-		if released {
-			return
-		}
-		released = true
-		if s.pins[hex]--; s.pins[hex] == 0 {
-			delete(s.pins, hex)
+		for _, hex := range hexes {
+			if s.pins[hex]--; s.pins[hex] == 0 {
+				delete(s.pins, hex)
+			}
 		}
 	}
 }
@@ -717,7 +718,7 @@ func (s *Store) pinned(hex string) bool {
 // ensureLayer makes the unpacked tree for diffID present in the pool,
 // collapsing concurrent requests for the same layer across images.
 //
-// The caller must hold a pin on the layer (see pinLayer) from before this
+// The caller must hold a pin on the layer (see pinLayers) from before this
 // call until it no longer relies on the returned dir. The pin, not the
 // flight, is what keeps eviction from retiring the layer meanwhile.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {

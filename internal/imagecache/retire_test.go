@@ -194,7 +194,7 @@ func TestRetireLayerVsEnsureImageRace(t *testing.T) {
 }
 
 // A pinned layer is never retired, however old; the veto lifts with the
-// last unpin, and an unpin called twice releases only its own pin.
+// last unpin.
 func TestRetireLayerVetoedWhilePinned(t *testing.T) {
 	store := newTestStore(t)
 	hex := strings.Repeat("ab", 32)
@@ -204,9 +204,8 @@ func TestRetireLayerVetoedWhilePinned(t *testing.T) {
 	}
 	backdate(t, dir, 3*time.Hour)
 
-	unpinA, unpinB := store.pinLayer(hex), store.pinLayer(hex)
+	unpinA, unpinB := store.pinLayers([]string{hex}), store.pinLayers([]string{hex})
 	unpinA()
-	unpinA() // must not release B's pin
 	if _, st, err := store.retireLayer(hex, time.Now()); err != nil || st != retireVetoed {
 		t.Fatalf("retireLayer(pinned) = %v, %v; want retireVetoed, nil", st, err)
 	}
@@ -232,11 +231,7 @@ func TestPullPinsLayersAgainstEviction(t *testing.T) {
 	reg := newGatedRegistry(t)
 	free, gated, _ := gatedTestLayers(t)
 	ref := reg.host + "/test/pinned:latest"
-	pushed := pushImage(t, ref, v1.Config{}, free, gated)
-	digest, err := pushed.Digest()
-	if err != nil {
-		t.Fatal(err)
-	}
+	pushImage(t, ref, v1.Config{}, free, gated)
 	store := newTestStore(t)
 	release := reg.gate(t, gated)
 
@@ -248,35 +243,34 @@ func TestPullPinsLayersAgainstEviction(t *testing.T) {
 		done <- err
 	}()
 	freeDir := layerDirOf(t, store, free)
-	recPath := store.recordPath(digest)
-	// The pull touches the record after the free layer lands. Wait for
-	// that touch, or the backdate below races it and the record is
-	// skipped as fresh without the pin ever being tested.
-	waitFor(t, "free layer to land and touch the record", func() bool {
-		dir, err := os.Stat(filepath.Join(freeDir, layerFSDirName))
-		if err != nil {
-			return false
-		}
-		rec, err := os.Stat(recPath)
-		return err == nil && !rec.ModTime().Before(dir.ModTime())
+	waitFor(t, "free layer to land", func() bool {
+		_, err := os.Stat(filepath.Join(freeDir, layerFSDirName))
+		return err == nil
 	})
 
-	// Age everything past min-age: this pass removes the record as wedged
-	// and would retire the free layer as unreferenced.
-	backdateStore(t, store, 3*time.Hour)
-	dry, err := store.EvictUnused(context.Background(), math.MaxInt64, true)
-	if err != nil {
-		t.Fatalf("EvictUnused(dry run): %v", err)
-	}
+	// Age everything past min-age, so the pass removes the record as
+	// wedged and would retire the free layer as unreferenced. The pull
+	// touches the record once after the free layer lands, with nothing to
+	// observe the touch by, so a backdate can race it and leave the record
+	// fresh. A pass that skipped the record as fresh changed nothing, so
+	// repeat until both passes reach retirement.
+	var dry, stats EvictStats
+	waitFor(t, "the aged record to reach retirement", func() bool {
+		var err error
+		backdateStore(t, store, 3*time.Hour)
+		if dry, err = store.EvictUnused(context.Background(), math.MaxInt64, true); err != nil {
+			t.Fatalf("EvictUnused(dry run): %v", err)
+		}
+		if stats, err = store.EvictUnused(context.Background(), math.MaxInt64, false); err != nil {
+			t.Fatalf("EvictUnused: %v", err)
+		}
+		return dry.SkippedFresh == 0 && stats.SkippedFresh == 0
+	})
 	if dry.FreedBytes != 0 || dry.EvictedLayers != 0 {
 		t.Errorf("dry run counted the pinned layer as reclaimable: freed=%d layers=%d", dry.FreedBytes, dry.EvictedLayers)
 	}
-	stats, err := store.EvictUnused(context.Background(), math.MaxInt64, false)
-	if err != nil {
-		t.Fatalf("EvictUnused: %v", err)
-	}
-	if stats.Candidates != 1 || stats.SkippedFresh != 0 {
-		t.Fatalf("candidates=%d skipped_fresh=%d; the record must reach retirement for this test to mean anything", stats.Candidates, stats.SkippedFresh)
+	if stats.Candidates != 1 {
+		t.Fatalf("candidates=%d; the record must reach retirement for this test to mean anything", stats.Candidates)
 	}
 	if _, err := os.Stat(filepath.Join(freeDir, layerFSDirName)); err != nil {
 		t.Fatalf("pinned layer was retired mid-pull: %v", err)

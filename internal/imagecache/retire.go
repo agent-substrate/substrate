@@ -81,48 +81,60 @@ func isLayerDirName(name string) bool {
 // pinned by an in-flight pull, or with an mtime after cutoff, is vetoed
 // and left in place.
 //
-// pinMu is the lock every pull takes to pin, so a missing or fresh layer
-// is ruled out before taking it. Under it, the pin check, a re-stat and
-// the rename run as one unit: either a pin lands first and the retirement
-// is vetoed, or the rename lands first and the pull finds the dir missing
-// and unpacks it again.
+// A missing or fresh layer is ruled out before taking pinMu, which every
+// pull takes to pin, and the logging happens outside it.
 func (s *Store) retireLayer(hex string, cutoff time.Time) (string, retireStatus, error) {
 	if !isLayerDirName(hex) {
 		return "", retireVetoed, fmt.Errorf("not a layer dir name: %q", hex)
 	}
 	dir := filepath.Join(s.layersDir(), hex)
-	if st, err := retirable(dir, hex, cutoff); st != retireRetired {
+	if st, mtime, err := retirable(dir, cutoff); st != retireRetired {
+		if st == retireVetoed && err == nil {
+			slog.Info(logMsgLayerRetireVetoed, slog.String("diffid", hex), slog.Time("last_used", mtime))
+		}
 		return "", st, err
 	}
+	dst, st, pins, err := s.renameAsideUnlessPinned(dir, hex, cutoff)
+	if pins > 0 {
+		slog.Info(logMsgLayerRetirePinned, slog.String("diffid", hex), slog.Int("pulls", pins))
+	}
+	return dst, st, err
+}
 
+// renameAsideUnlessPinned is retireLayer's critical section. Under pinMu
+// the pin check, a re-stat and the rename run as one unit: either a pin
+// lands first and the retirement is vetoed, or the rename lands first and
+// the pull finds the dir missing and unpacks it again. Every pull waits on
+// this lock, so it does only syscalls; a layer refreshed since the
+// caller's preflight is vetoed without a log.
+func (s *Store) renameAsideUnlessPinned(dir, hex string, cutoff time.Time) (dst string, st retireStatus, pins int, err error) {
 	s.pinMu.Lock()
 	defer s.pinMu.Unlock()
-	if n := s.pins[hex]; n > 0 {
-		slog.Info(logMsgLayerRetirePinned, slog.String("diffid", hex), slog.Int("pulls", n))
-		return "", retireVetoed, nil
+	if pins = s.pins[hex]; pins > 0 {
+		return "", retireVetoed, pins, nil
 	}
-	if st, err := retirable(dir, hex, cutoff); st != retireRetired {
-		return "", st, err
+	if st, _, err := retirable(dir, cutoff); st != retireRetired {
+		return "", st, 0, err
 	}
-	dst := filepath.Join(s.layersDir(), fmt.Sprintf("%s%s-%d", retiredPrefix, hex[:12], time.Now().UnixNano()))
+	dst = filepath.Join(s.layersDir(), fmt.Sprintf("%s%s-%d", retiredPrefix, hex[:12], time.Now().UnixNano()))
 	if err := os.Rename(dir, dst); err != nil {
-		return "", retireVetoed, fmt.Errorf("while retiring layer %s: %w", hex, err)
+		return "", retireVetoed, 0, fmt.Errorf("while retiring layer %s: %w", hex, err)
 	}
-	return dst, retireRetired, nil
+	return dst, retireRetired, 0, nil
 }
 
 // retirable reports retireRetired when dir exists and is older than cutoff,
-// retireGone when it is missing, and retireVetoed otherwise.
-func retirable(dir, hex string, cutoff time.Time) (retireStatus, error) {
+// retireGone when it is missing, and retireVetoed otherwise, with the dir's
+// mtime when it was read.
+func retirable(dir string, cutoff time.Time) (retireStatus, time.Time, error) {
 	fi, err := os.Stat(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return retireGone, nil
+		return retireGone, time.Time{}, nil
 	} else if err != nil {
-		return retireVetoed, err
+		return retireVetoed, time.Time{}, err
 	}
 	if fi.ModTime().After(cutoff) {
-		slog.Info(logMsgLayerRetireVetoed, slog.String("diffid", hex), slog.Time("last_used", fi.ModTime()))
-		return retireVetoed, nil
+		return retireVetoed, fi.ModTime(), nil
 	}
-	return retireRetired, nil
+	return retireRetired, fi.ModTime(), nil
 }

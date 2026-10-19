@@ -590,16 +590,12 @@ func (s *Store) sweepOrphanLayers(ctx context.Context, roots RootSet, refcount m
 // Sizing is read-only: even a size-file backfill would break dry-run's
 // mutate-nothing contract.
 func (s *Store) dryRunRetire(hex string, cutoff time.Time) (int64, retireStatus) {
+	dir := filepath.Join(s.layersDir(), hex)
+	if st, _, _ := retirable(dir, cutoff); st != retireRetired {
+		return 0, st
+	}
 	// A pinned layer is not reclaimable, so a dry run must not count it.
 	if s.pinned(hex) {
-		return 0, retireVetoed
-	}
-	dir := filepath.Join(s.layersDir(), hex)
-	fi, err := os.Stat(dir)
-	if err != nil {
-		return 0, retireGone
-	}
-	if fi.ModTime().After(cutoff) {
 		return 0, retireVetoed
 	}
 	size, err := s.layerSizeReadOnly(dir)
