@@ -91,6 +91,12 @@ type WorkerSource interface {
 	Workers() ([]*ateapi.Worker, error)
 }
 
+// workerNodeLookup is an optional fast path implemented by caches that index
+// workers by node name.
+type workerNodeLookup interface {
+	WorkersByNode(node string) ([]*ateapi.Worker, error)
+}
+
 type scheduler struct {
 	source WorkerSource
 	// intn returns a uniformly distributed random value in [0,n).
@@ -121,7 +127,7 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 // the higher of actor-slot and compute-resource utilization. Spreading across
 // the warm pool avoids hotspots until autoscaling reclaims idle workers.
 func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error) {
-	workers, err := s.source.Workers()
+	workers, err := s.workersForSchedule(constraints)
 	if err != nil {
 		return nil, fmt.Errorf("while listing workers: %w", err)
 	}
@@ -156,6 +162,32 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		return candidates[j].worker, nil
 	}
 	return candidates[i].worker, nil
+}
+
+// workersForSchedule returns the workers to consider for constraints, using a
+// node-indexed lookup when every required node is named and the source supports
+// it, or falling back to a full fleet listing.
+func (s *scheduler) workersForSchedule(constraints Constraints) ([]*ateapi.Worker, error) {
+	if len(constraints.RequiredNodes) > 0 && !slices.Contains(constraints.RequiredNodes, "") {
+		if nodeLookup, ok := s.source.(workerNodeLookup); ok {
+			if len(constraints.RequiredNodes) == 1 {
+				return nodeLookup.WorkersByNode(constraints.RequiredNodes[0])
+			}
+			var workers []*ateapi.Worker
+			for i, node := range constraints.RequiredNodes {
+				if slices.Contains(constraints.RequiredNodes[:i], node) {
+					continue
+				}
+				nodeWorkers, err := nodeLookup.WorkersByNode(node)
+				if err != nil {
+					return nil, err
+				}
+				workers = append(workers, nodeWorkers...)
+			}
+			return workers, nil
+		}
+	}
+	return s.source.Workers()
 }
 
 // candidate pairs an eligible worker with its cached compute utilization.
