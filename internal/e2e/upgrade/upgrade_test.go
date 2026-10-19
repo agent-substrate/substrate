@@ -59,10 +59,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/portforward"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/portforward"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -98,7 +98,9 @@ const podcertNamespace = "podcertificate-controller-system"
 var counterResponse = regexp.MustCompile(`preserved memory count: (\d+) \| preserved file counter: (\d+)`)
 
 // startState is how seedActor leaves an actor ahead of the upgrade. A paused
-// actor is SUSPENDED with a node-local snapshot.
+// actor is suspended asynchronously: SUSPENDED, with its snapshot on the node
+// until atelet uploads it in the background. A suspended one waits for the
+// upload.
 type startState string
 
 const (
@@ -201,13 +203,13 @@ func TestRollingUpgrade(t *testing.T) {
 	runStep(ctx, t, api, harness, actors, pool, stepAPIServer)
 	templates := workerTemplates(ctx, t, k8s, pool)
 	runStep(ctx, t, api, harness, actors, pool, stepController)
-	// A new ate-controller rolls the pool again only if it renders a different
-	// pod template, which the runbook allows. Wait that out, then put the actor
-	// back on a worker for the steps that follow.
+	// The worker pod template stays the same within a major, so the new
+	// ate-controller must not roll the pool. It would start only once the
+	// controller reconciles, so give it a minute.
 	waitForPoolRoll(ctx, t, api.get(), fixture.PoolNamespace, fixture.PoolName, newImage, time.Minute)
-	controllerRolled := workerTemplates(ctx, t, k8s, pool) != templates
-	t.Logf("%s rolled the pool: %t", stepController, controllerRolled)
-	resumeActor(ctx, t, api, router, actors[0])
+	if got := workerTemplates(ctx, t, k8s, pool); got != templates {
+		t.Fatalf("%s rolled the pool: pod templates %s, then %s", stepController, templates, got)
+	}
 	runStep(ctx, t, api, harness, actors, pool, stepAtenet)
 	runStep(ctx, t, api, harness, actors, pool, stepSandboxConfig)
 	runStep(ctx, t, api, harness, actors, pool, stepSystem)
@@ -222,13 +224,8 @@ func TestRollingUpgrade(t *testing.T) {
 				want = []string{stepPoolRoll}
 			}
 		}
-		// Only the pool roll may evict an actor, and ate-controller if it
-		// rolled the pool.
-		got := evictions
-		if controllerRolled {
-			got = slices.DeleteFunc(slices.Clone(evictions), func(step string) bool { return step == stepController })
-		}
-		if strings.Join(got, ",") != strings.Join(want, ",") {
+		// Only the pool roll may evict an actor.
+		if strings.Join(evictions, ",") != strings.Join(want, ",") {
 			t.Errorf("actor %q was evicted during %q, want %q", a.name, evictions, want)
 		}
 	}
@@ -245,8 +242,9 @@ func TestRollingUpgrade(t *testing.T) {
 	verifyActor(ctx, t, api, router, k8s, actors[1], newImage)
 }
 
-// runStep runs one ate-setup step and checks the actors afterwards. No step
-// but ate-controller may roll the workers; its caller checks that one.
+// runStep runs one ate-setup step and checks the actors afterwards. No step may
+// roll the workers. ate-controller would roll them only once it reconciles, so
+// its caller checks that step.
 func runStep(ctx context.Context, t *testing.T, api *api, h *harness, actors []*actor, pool types.NamespacedName, step string) {
 	t.Helper()
 	ok := t.Run(step, func(t *testing.T) {
@@ -302,7 +300,7 @@ func createActor(ctx context.Context, t *testing.T, api *api, fixture e2e.Substr
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		_, _ = api.get().SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: a.ref(), AnyState: true})
+		_, _ = api.get().SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: a.ref()})
 	})
 	waitForState(ctx, t, api, a, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, stateTimeout)
 }
@@ -315,12 +313,9 @@ func seedActor(ctx context.Context, t *testing.T, api *api, router *e2e.RouterCl
 	switch a.before {
 	case startRunning:
 	case startPaused:
-		if _, err := api.get().SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: a.ref()}); err != nil {
-			t.Fatalf("failed to pause Actor %q: %v", a.name, err)
-		}
-		waitForState(ctx, t, api, a, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, stateTimeout)
+		suspendActor(ctx, t, api, a, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS)
 	case startSuspended:
-		suspendActor(ctx, t, api, a)
+		suspendActor(ctx, t, api, a, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
 	default:
 		t.Fatalf("actor %q: unsupported starting state %v", a.name, a.before)
 	}
@@ -340,7 +335,7 @@ func verifyActor(ctx context.Context, t *testing.T, api *api, router *e2e.Router
 		t.Errorf("actor %q resumed on worker pod %s, which does not run %s", a.name, pod.Name, image)
 	}
 	callCounter(ctx, t, router, a, "after upgrade")
-	suspendActor(ctx, t, api, a)
+	suspendActor(ctx, t, api, a, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
 }
 
 // resumeActor brings a to RUNNING, or returns it as is when it already is.
@@ -361,10 +356,11 @@ func resumeActor(ctx context.Context, t *testing.T, api *api, router *e2e.Router
 	return act
 }
 
-func suspendActor(ctx context.Context, t *testing.T, api *api, a *actor) {
+func suspendActor(ctx context.Context, t *testing.T, api *api, a *actor, mode ateapipb.DurabilityMode) {
 	t.Helper()
-	t.Logf("Suspending Actor %q...", a.name)
-	if _, err := api.get().SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: a.ref()}); err != nil {
+	t.Logf("Suspending Actor %q (%v)...", a.name, mode)
+	req := &ateapipb.SuspendActorRequest{Actor: a.ref(), Options: &ateapipb.SuspendOptions{Mode: mode}}
+	if _, err := api.get().SubstrateAPI.SuspendActor(ctx, req); err != nil {
 		t.Fatalf("failed to suspend Actor %q: %v", a.name, err)
 	}
 	waitForState(ctx, t, api, a, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, stateTimeout)
