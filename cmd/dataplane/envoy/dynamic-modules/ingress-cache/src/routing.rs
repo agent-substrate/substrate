@@ -49,6 +49,12 @@ pub const ROUTE_RESOLVED_HEADER: &str = "ate-endpoint-cached";
 /// hosted on that worker.
 pub const STALE_ASSIGNMENT_HEADER: &str = "x-ate-assignment-stale";
 
+/// Response header or trailer carrying the gRPC status code.
+pub const GRPC_STATUS_HEADER: &str = "grpc-status";
+
+/// gRPC status code indicating UNAVAILABLE (`14`).
+pub const GRPC_STATUS_UNAVAILABLE: &str = "14";
+
 /// An actor reference parsed from a request's routing metadata or headers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActorRef {
@@ -84,7 +90,10 @@ fn filter_state_str<EHF: EnvoyHttpFilter>(envoy_filter: &EHF, key: &[u8]) -> Opt
 }
 
 /// Reads a single request header value as a UTF-8 `String`.
-fn request_header_str<EHF: EnvoyHttpFilter>(envoy_filter: &EHF, key: &str) -> Option<String> {
+pub(crate) fn request_header_str<EHF: EnvoyHttpFilter>(
+  envoy_filter: &EHF,
+  key: &str,
+) -> Option<String> {
   let buf = envoy_filter.get_request_header_value(key)?;
   std::str::from_utf8(buf.as_slice()).ok().map(str::to_string)
 }
@@ -96,6 +105,20 @@ pub(crate) fn response_header_str<EHF: EnvoyHttpFilter>(
 ) -> Option<String> {
   let buf = envoy_filter.get_response_header_value(key)?;
   std::str::from_utf8(buf.as_slice()).ok().map(str::to_string)
+}
+
+/// Reads a single response trailer value as a UTF-8 `String`.
+pub(crate) fn response_trailer_str<EHF: EnvoyHttpFilter>(
+  envoy_filter: &EHF,
+  key: &str,
+) -> Option<String> {
+  let buf = envoy_filter.get_response_trailer_value(key)?;
+  std::str::from_utf8(buf.as_slice()).ok().map(str::to_string)
+}
+
+/// Reports whether the given `grpc-status` value corresponds to `UNAVAILABLE` (14).
+pub fn is_grpc_unavailable(status: &str) -> bool {
+  status.trim() == GRPC_STATUS_UNAVAILABLE
 }
 
 impl Config {
@@ -271,5 +294,19 @@ mod tests {
     // Even if an inner header were present, target_actor_value must return None
     // when dev.ate.connect.authority is set without dev.ate.target.actor.
     assert!(config.resolve_actor_ref(&mock).is_none());
+  }
+
+  #[test]
+  fn test_is_grpc_unavailable() {
+    assert!(is_grpc_unavailable("14"));
+    assert!(is_grpc_unavailable(" 14 "));
+    assert!(is_grpc_unavailable("14\r\n"));
+
+    assert!(!is_grpc_unavailable("0"));
+    assert!(!is_grpc_unavailable("1"));
+    assert!(!is_grpc_unavailable("3"));
+    assert!(!is_grpc_unavailable("5"));
+    assert!(!is_grpc_unavailable(""));
+    assert!(!is_grpc_unavailable("unavailable"));
   }
 }
