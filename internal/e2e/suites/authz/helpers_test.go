@@ -283,17 +283,7 @@ func deployFixture(t *testing.T, ctx context.Context, bucket string) *fixture {
 	atespace, _ := e2e.DeployProbe(t, bucket, "authz")
 	actor := &ateapipb.ObjectRef{Atespace: atespace, Name: actorName}
 	template := &ateapipb.ObjectRef{Atespace: atespace, Name: e2e.ProbeName}
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: actorName},
-		ActorTemplate: template,
-	}}); err != nil {
-		t.Fatalf("CreateActor %s/%s: %v", atespace, actorName, err)
-	}
-	t.Cleanup(func() {
-		if _, err := clients.SubstrateAPI.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actor}); err != nil {
-			t.Logf("cleanup: DeleteActor %s/%s: %v", atespace, actorName, err)
-		}
-	})
+	e2e.CreateActor(t, ctx, clients, actor, template)
 	return &fixture{
 		clients:   clients,
 		bootstrap: &principal{name: "bootstrap-owner", api: clients.SubstrateAPI},
@@ -301,20 +291,6 @@ func deployFixture(t *testing.T, ctx context.Context, bucket string) *fixture {
 		template:  template,
 		actor:     actor,
 	}
-}
-
-// waitForActorState polls actor, as the bootstrap owner, until it is in want.
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actor *ateapipb.ObjectRef, want ateapipb.ActorState) {
-	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actor})
-		if err == nil && resp.GetStatus().GetState() == want {
-			return
-		}
-		time.Sleep(time.Second)
-	}
-	t.Fatalf("timed out waiting for actor %s/%s to reach %v", actor.GetAtespace(), actor.GetName(), want)
 }
 
 // The requests the tests make, shared so that each test pairs callers on

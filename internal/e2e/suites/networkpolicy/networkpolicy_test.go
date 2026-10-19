@@ -31,11 +31,8 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 
-	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/e2e"
-	"go.ate.dev/substrate/internal/portforward"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -156,28 +153,14 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 	// Create and Resume Actor
 	actorName := "netpol-dataplane-" + nsObj.Name
 	t.Logf("Creating Actor %q in Atespace %q...", actorName, nsObj.Name)
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: nsObj.Name, Name: actorName},
-		ActorTemplate: e2e.TemplateRef(at),
-	}}); err != nil {
-		t.Fatalf("failed to create Actor: %v", err)
-	}
-	defer func() {
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
-		})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
-		})
-	}()
+	actorRef := &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName}
+	e2e.CreateActor(t, ctx, clients, actorRef, e2e.TemplateRef(at))
 
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
-	}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorRunning(ctx, t, clients, nsObj.Name, actorName)
+	e2e.WaitForActorState(t, ctx, clients, actorRef, ateapipb.ActorState_ACTOR_STATE_RUNNING, time.Minute)
 
 	// === Positive Data Plane Verification (Authorized Ingress) ===
 	t.Log("=== Verifying authorized ingress via atenet-router ===")
@@ -305,15 +288,7 @@ type probeClient struct {
 
 func newProbeClient(t *testing.T, ctx context.Context, probe e2e.Server) *probeClient {
 	t.Helper()
-	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
-	if err != nil {
-		t.Fatalf("loading kubeconfig: %v", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		t.Fatalf("creating k8s client for port-forward: %v", err)
-	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, probe.Namespace, probe.Name, testserverPort)
+	localPort, stop, err := e2e.ServicePortForward(ctx, probe.Namespace, probe.Name, testserverPort)
 	if err != nil {
 		t.Fatalf("port-forwarding %s/%s: %v", probe.Namespace, probe.Name, err)
 	}
@@ -366,20 +341,4 @@ func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Cl
 		Labels:       map[string]string{"netpol-test": ns},
 	})
 	return poolName, at
-}
-
-func waitForActorRunning(ctx context.Context, t *testing.T, clients *e2e.Clients, atespace, actorName string) {
-	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
-		})
-		if err == nil && resp.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
-			t.Logf("Actor %q reached RUNNING state", actorName)
-			return
-		}
-		time.Sleep(1 * time.Second)
-	}
-	t.Fatalf("timed out waiting for actor %q to reach RUNNING state", actorName)
 }

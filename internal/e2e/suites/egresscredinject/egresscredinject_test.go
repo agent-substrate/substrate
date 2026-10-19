@@ -113,7 +113,7 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 
 	const id = "probe-credinject"
 	createAndResumeActor(t, ctx, clients, id, echoHost)
-	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	e2e.WaitForActorState(t, ctx, clients, &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}, ateapipb.ActorState_ACTOR_STATE_RUNNING, 60*time.Second)
 
 	rc, err := e2e.NewRouterClient(ctx)
 	if err != nil {
@@ -307,20 +307,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil && status.Code(err) != codes.NotFound {
 		t.Logf("removing leftover actor %q: DeleteActor: %v", id, err)
 	}
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
-	}}); err != nil {
-		t.Fatalf("CreateActor %q: %v", id, err)
-	}
-	t.Cleanup(func() {
-		if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
-			t.Logf("cleanup: SuspendActor %q: %v", id, err)
-		}
-		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
-			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
-		}
-	})
+	e2e.CreateActor(t, ctx, clients, ref, &ateapipb.ObjectRef{Atespace: probeNamespace, Name: probeTemplate})
 	// Exercise each credential outcome on both HTTP and HTTPS: the echo
 	// origin's credential resolves, and each fail-closed host's cannot.
 	rules := []*ateapipb.EgressRule{
@@ -345,19 +332,4 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
-}
-
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actorName string, want ateapipb.ActorState) {
-	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: actorName},
-		})
-		if err == nil && resp.GetStatus().GetState() == want {
-			return
-		}
-		time.Sleep(1 * time.Second)
-	}
-	t.Fatalf("timed out waiting for actor %q to reach state %v", actorName, want)
 }

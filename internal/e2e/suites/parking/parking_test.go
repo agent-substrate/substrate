@@ -55,7 +55,7 @@ func TestRequestParking(t *testing.T) {
 	actorA := "parked-a"
 	actorB := "parked-b"
 	for _, name := range []string{actorA, actorB} {
-		createActor(ctx, t, clients, at, name)
+		e2e.CreateActor(t, ctx, clients, &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name}, e2e.TemplateRef(at))
 	}
 
 	router, err := e2e.NewRouterClient(ctx)
@@ -210,28 +210,6 @@ func deployParkingFixture(t *testing.T, ctx context.Context, clients *e2e.Client
 	return templates[0]
 }
 
-func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, at *ateapipb.ActorTemplate, name string) {
-	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: parkingAtespace, Name: name},
-		ActorTemplate: e2e.TemplateRef(at),
-	}}); err != nil {
-		t.Fatalf("failed to create actor %q: %v", name, err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		// Deletion requires the actor to be suspended first; both are
-		// best-effort so one failed cleanup doesn't mask the test result.
-		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name},
-		})
-		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name},
-		})
-	})
-}
-
 func resumeActor(ctx context.Context, t *testing.T, clients *e2e.Clients, name string) {
 	t.Helper()
 	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
@@ -252,17 +230,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, name 
 
 func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, name string, want ateapipb.ActorState) {
 	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name},
-		})
-		if err == nil && resp.GetStatus().GetState() == want {
-			return
-		}
-		time.Sleep(1 * time.Second)
-	}
-	t.Fatalf("timed out waiting for actor %q to reach %v", name, want)
+	e2e.WaitForActorState(t, ctx, clients, &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name}, want, time.Minute)
 }
 
 // waitForParkedCount polls the dataplane's active-parking gauge until cond holds.

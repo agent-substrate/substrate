@@ -17,6 +17,7 @@ package authz
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -71,7 +72,7 @@ func testBasicFlow(t *testing.T, ctx context.Context, f *fixture) {
 	if _, err := alice.api.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("SuspendActor as alice: %v", err)
 	}
-	waitForActorState(t, ctx, f.clients, actor, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	e2e.WaitForActorState(t, ctx, f.clients, actor, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, time.Minute)
 	if _, err := alice.api.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("DeleteActor as alice: %v", err)
 	}

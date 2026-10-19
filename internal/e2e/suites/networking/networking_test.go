@@ -40,8 +40,6 @@ import (
 
 const networkingAtespace = "networking-e2e"
 
-// egressFixture returns the unified egress demo deployed by the E2E workflow.
-func egressFixture() e2e.Fixture { return e2e.EgressFixture() }
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
 	_, actorName, actor := createAndResumeSubstrateActor(t, ctx, "direct", e2e.SubstrateCounterFixture())
@@ -290,11 +288,7 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 // the status and body it echoes back.
 func fetchThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, url string) (int, []byte) {
 	t.Helper()
-	payload, err := json.Marshal(map[string]string{"url": url})
-	if err != nil {
-		t.Fatalf("marshaling the fetch request for %s: %v", url, err)
-	}
-	return postThroughEgressActor(t, ctx, router, actorRef, "/", payload)
+	return fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, reached)
 }
 
 // egressFetchResponse is the egress demo's answer to a fetch.
@@ -323,9 +317,7 @@ func decodeEgressFetch(t *testing.T, body []byte) egressFetchResponse {
 // the Actor reports as a 502.
 func postThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, path string, payload []byte) (int, []byte) {
 	t.Helper()
-	return postThroughEgressActorUntil(t, ctx, router, actorRef, path, payload, func(status int, _ []byte) bool {
-		return status == http.StatusOK
-	})
+	return postThroughEgressActorUntil(t, ctx, router, actorRef, path, payload, reached)
 }
 
 // postThroughEgressActorUntil is postThroughEgressActor with the caller
@@ -477,8 +469,8 @@ func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix st
 	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith, rules)
 }
 
-// createAndResumeSubstrateActor is createAndResumeActor for a substrate
-// ActorTemplate fixture, referenced by atespace/name instead of the CRD pair.
+// createAndResumeSubstrateActor is createAndResumeActorWithEgress for a
+// SubstrateFixture, with an allow-all EgressPolicy.
 func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture) (string, string, *ateapipb.Actor) {
 	t.Helper()
 	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Atespace, Name: template.Name}}
@@ -913,7 +905,7 @@ func prepareProtocolActor(t *testing.T, ctx context.Context, prefix string) (str
 	https8443 := e2e.EgressAllowHTTPS("*")
 	https8443.Https.Ports = &ateapipb.Ports{Numbers: []int32{8443}}
 	rules := append(e2e.EgressAllowAll(), https8443)
-	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, prefix, egressFixture(), rules...)
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, prefix, e2e.EgressFixture(), rules...)
 	router := mustRouterClient(t, ctx)
 	t.Cleanup(func() { router.Close() })
 	ref := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}

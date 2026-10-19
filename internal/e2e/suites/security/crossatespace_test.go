@@ -28,9 +28,6 @@ package security
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -135,7 +132,7 @@ func TestCrossAtespaceIsolation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SuspendActor %s/%s: %v", ns.b, victim, err)
 	}
-	waitForActorState(t, ctx, clients, ns.b, victim, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	e2e.WaitForActorState(t, ctx, clients, &ateapipb.ObjectRef{Atespace: ns.b, Name: victim}, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, time.Minute)
 
 	// Attacker: the actor in atespace A takes the freed worker.
 	const attacker = "attacker"
@@ -296,7 +293,7 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: cloneRef}); err != nil {
 		t.Fatalf("control: ResumeActor %s/%s: %v", ns.a, clone, err)
 	}
-	waitForActorState(t, ctx, clients, ns.a, clone, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	e2e.WaitForActorState(t, ctx, clients, &ateapipb.ObjectRef{Atespace: ns.a, Name: clone}, ateapipb.ActorState_ACTOR_STATE_RUNNING, time.Minute)
 	if got := readFile(t, ctx, rc, resources.ActorRef{Atespace: ns.a, Name: clone}, markerA); got.Content != writtenByProbe {
 		t.Fatalf("control: actor %s/%s restored from tag %s reads %s = %q (error %q), want %q — the tag carries no durable data, so the cross-atespace rejection above proves nothing",
 			ns.a, clone, tagRef.GetName(), markerA, got.Content, got.Error, writtenByProbe)
@@ -375,39 +372,12 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	// SUSPENDED or CRASHED, hence the suspend; both are best-effort.
 	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
 	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: templateName},
-	}}); err != nil {
-		t.Fatalf("CreateActor %s/%s: %v", atespace, name, err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx := context.Background()
-		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: ref})
-		if _, err := clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
-			t.Logf("cleanup: DeleteActor %s/%s failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", atespace, name, name, atespace, err)
-		}
-	})
+	e2e.CreateActor(t, ctx, clients, ref, &ateapipb.ObjectRef{Atespace: atespace, Name: templateName})
 
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %s/%s: %v", atespace, name, err)
 	}
-	waitForActorState(t, ctx, clients, atespace, name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
-}
-
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string, want ateapipb.ActorState) {
-	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: name},
-		})
-		if err == nil && resp.GetStatus().GetState() == want {
-			return
-		}
-		time.Sleep(time.Second)
-	}
-	t.Fatalf("timed out waiting for actor %s/%s to reach state %v", atespace, name, want)
+	e2e.WaitForActorState(t, ctx, clients, ref, ateapipb.ActorState_ACTOR_STATE_RUNNING, time.Minute)
 }
 
 // writeFile writes the probe's fixed body at path and fails the test if the
@@ -437,18 +407,9 @@ func readFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor res
 // which is not the same as the actor being denied.
 func probeFileOp(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor resources.ActorRef, endpoint, path string) fileResponse {
 	t.Helper()
-	resp, err := rc.Get(ctx, actor, endpoint+"?path="+url.QueryEscape(path))
-	if err != nil {
-		t.Fatalf("GET %s for %s: %v", endpoint, actor, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET %s for %s: status %d, body %q", endpoint, actor, resp.StatusCode, body)
-	}
 	var out fileResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decoding %s for %s: %v", endpoint, actor, err)
+	if err := rc.GetJSON(ctx, actor, endpoint+"?path="+url.QueryEscape(path), &out); err != nil {
+		t.Fatal(err)
 	}
 	return out
 }
