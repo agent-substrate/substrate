@@ -17,9 +17,13 @@ It also runs the cross-proto rules in `lint.CrossProto` against `ateapi.proto`,
 which checks that a tag commented `# matches <field>` has the same value as that
 field's tag. See [Bounds copied from another proto](../../docs/api-validation.md#bounds-copied-from-another-proto).
 
+Cross-proto findings cannot be exempted. An exempted mismatch between protos is
+the drift these rules exist to catch, so every one fails until the proto is
+fixed.
+
 ### Exemptions
 
-Findings can be exempted via `exemptions.json`. To regenerate `exemptions.json`
+API shape findings can be exempted via `exemptions.json`. To regenerate `exemptions.json`
 so it matches every current finding exactly (e.g. after fixing some findings, or
 before adding new ones you plan to exempt), run:
 
