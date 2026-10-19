@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/kubernetes"
@@ -77,7 +77,7 @@ func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, api
 		clientset:       clientset,
 		apiClient:       apiClient,
 		cfg:             cfg,
-		dataplaneClient: &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
+		dataplaneClient: &http.Client{Transport: otelhttp.NewTransport(newLoopbackTransport())},
 	}
 }
 

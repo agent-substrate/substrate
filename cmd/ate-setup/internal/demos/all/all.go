@@ -21,14 +21,14 @@
 package all
 
 import (
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/autoscaledworkerpool"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/claudemultiplex"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/counter"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/countermicrovm"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/egress"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/egressmicrovm"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/jupyter"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/multitemplate"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/parking"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/sandbox"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/autoscaledworkerpool"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/claudemultiplex"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/counter"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/countermicrovm"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/egress"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/egressmicrovm"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/jupyter"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/multitemplate"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/parking"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/sandbox"
 )

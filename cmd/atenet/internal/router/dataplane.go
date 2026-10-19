@@ -24,8 +24,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/credbundle"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/internal/credbundle"
 )
 
 type dataplaneHealthCheck struct {
@@ -40,8 +40,9 @@ type dataplaneHealthCheck struct {
 func (r atenetRouter) healthCheck() dataplaneHealthCheck {
 	switch r {
 	case atenetRouterEnvoy:
-		// localhost, not 127.0.0.1: the admin socket binds `::`, so the dial
-		// has to be able to fall through to the IPv6 loopback.
+		// Use `localhost` because we must try both IPv6 and IPv4.
+		//
+		// TODO: Shouldn't this work for the agentgateway case as well?
 		return dataplaneHealthCheck{url: "http://localhost:9901/ready", expectedBody: "LIVE"}
 	case atenetRouterAgentgateway:
 		return dataplaneHealthCheck{url: "http://127.0.0.1:15021/healthz/ready", expectedBody: "ready"}
@@ -122,7 +123,7 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 	if s.cfg.IngressAuth.mode() == IngressAuthDeprecatedInsecure {
 		slog.WarnContext(ctx, "Ingress client authentication is optional: any client that presents no certificate, or uses a plaintext listener, can reach any actor. Set --ingress-auth-mode=static-mtls to require mTLS")
 	}
-	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath, s.cfg.UpstreamSpiffePrefix)
+	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath)
 	xdsSrv.SetUpstreamConnect(s.cfg.UpstreamConnect)
 
 	// The snapshot is a pure function of the configuration applied above, so it

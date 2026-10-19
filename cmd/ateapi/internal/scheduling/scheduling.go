@@ -22,22 +22,27 @@ import (
 	"math/rand"
 	"slices"
 
-	"github.com/agent-substrate/substrate/internal/hardware"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
 // Constraints describes what a worker must satisfy to host an actor.
 type Constraints struct {
-	// SandboxClass must equal the worker's sandbox class. Snapshots are not
-	// portable across sandbox classes, so this is never relaxed.
+	// SandboxClass, when set, is the sandbox class of the snapshot the actor
+	// restores from, and the worker's must equal it. A snapshot's files, its
+	// durable volumes included, are written by one class's worker and read
+	// back by the same, so unlike RequiredRuntime this holds for every
+	// fidelity and is never relaxed. Empty for an actor with no snapshot,
+	// which boots on whichever class its selectors pick.
 	SandboxClass string
 
-	// RequiredRuntime, when non-nil, restricts placement to workers whose
-	// DefaultRuntime or RestorableRuntimes can restore a snapshot stamped with
-	// this runtime.
-	RequiredRuntime *ateapipb.SandboxRuntime
+	// RequiredRuntime, when it names a runtime, restricts placement to
+	// workers whose DefaultRuntime or RestorableRuntimes can restore a
+	// snapshot stamped with it. Prepared once per Schedule, since Applies
+	// asks it of every candidate.
+	RequiredRuntime hardware.Requirement
 
 	// TemplateSelector and ActorSelector must both match the worker's labels.
 	TemplateSelector labels.Selector
@@ -220,7 +225,10 @@ func quantitiesUtilization(capQ, usedQ resources.Quantities) float64 {
 }
 
 func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bool {
-	if worker.GetSandboxClass() != constraints.SandboxClass {
+	if worker.GetSandboxClass() == "" {
+		return false
+	}
+	if constraints.SandboxClass != "" && worker.GetSandboxClass() != constraints.SandboxClass {
 		return false
 	}
 
@@ -232,7 +240,7 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 		return false
 	}
 
-	if !hardware.WorkerMatches(worker.GetStatus(), constraints.RequiredRuntime) {
+	if !constraints.RequiredRuntime.WorkerMatches(worker.GetStatus()) {
 		return false
 	}
 

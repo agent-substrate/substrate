@@ -27,10 +27,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/volumepath"
 	"github.com/distribution/reference"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/volumepath"
+	"go.ate.dev/substrate/pkg/sandboxclass"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -43,15 +45,18 @@ import (
 // ToGRPCStatusError turns validation errors into the InvalidArgument error an
 // RPC handler responds with. Callers check len(errs) > 0 first.
 //
-// TODO: Delete once atelet's AteomSupport server returns apierrors, and use
+// TODO: Delete once atelet's WorkerSupport server returns apierrors, and use
 // ToAPIError instead.
 func ToGRPCStatusError(errs field.ErrorList) error {
 	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 }
 
 // ToAPIError turns validation errors into the InvalidArgument error an RPC
-// handler responds with. Callers check len(errs) > 0 first.
+// handler responds with, or nil if errs is empty.
 func ToAPIError(errs field.ErrorList) error {
+	if len(errs) == 0 {
+		return nil
+	}
 	return apierror.InvalidArgument("%v", errs.ToAggregate())
 }
 
@@ -95,7 +100,7 @@ func IsValidResourceName(name string) bool {
 }
 
 // ValidateWorkerPodUID rejects a worker pod UID that could escape the host
-// path built from it: the ateom control socket (.../ateoms/<uid>/ateom.sock).
+// path built from it: the worker control socket (.../workers/<uid>/worker.sock).
 // Kubernetes pod UIDs are UUIDs, which are valid DNS-1123 labels, so a label
 // check accepts every legitimate value while rejecting separators and "..".
 func ValidateWorkerPodUID(workerPodUID string) error {
@@ -105,11 +110,12 @@ func ValidateWorkerPodUID(workerPodUID string) error {
 	return nil
 }
 
-// ValidateActorDirs checks that every directory atelet passes to ateom is
-// set, absolute and clean.
-func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.ErrorList {
+// ValidateActorDirs checks that every directory atelet passes to the worker
+// is absolute and clean. Presence is enforced by the tags on the message; it
+// backs the ateworkerpb.ActorDirs custom validation hook.
+func ValidateActorDirs(actorDirs *ateworkerpb.ActorDirs, fldPath *field.Path) field.ErrorList {
 	if actorDirs == nil {
-		return field.ErrorList{field.Required(fldPath, "")}
+		return nil
 	}
 	var errs field.ErrorList
 	for _, actorDir := range []struct{ name, path string }{
@@ -119,7 +125,8 @@ func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.
 		{"restore_dir", actorDirs.GetRestoreDir()},
 		{"durable_dir_volume_mounts_dir", actorDirs.GetDurableDirVolumeMountsDir()},
 		{"system_info_volume_roots_dir", actorDirs.GetSystemInfoVolumeRootsDir()},
-		{"volumes_dir", actorDirs.GetVolumesDir()},
+		{"external_volume_mounts_dir", actorDirs.GetExternalVolumeMountsDir()},
+		{"sandbox_assets_dir", actorDirs.GetSandboxAssetsDir()},
 	} {
 		errs = append(errs, validateAbsDir(actorDir.path, fldPath.Child(actorDir.name))...)
 	}
@@ -130,8 +137,8 @@ func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.
 // fidelity the calling sandbox runtime cannot serve. Each runtime passes the
 // levels it implements; anything else, including an unset fidelity, is
 // refused before the request touches the guest.
-func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ateompb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
-	if fidelity == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+func ValidateSnapshotFidelity(fidelity ateworkerpb.SnapshotFidelity, supported []ateworkerpb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
+	if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		return field.ErrorList{field.Required(fldPath, "")}
 	}
 	names := make([]string, 0, len(supported))
@@ -144,9 +151,18 @@ func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ate
 	return field.ErrorList{field.NotSupported(fldPath, fidelity, names)}
 }
 
+// ValidateSandboxClass requires one of the sandboxclass values. An empty value
+// is left to the required tag.
+func ValidateSandboxClass(fldPath *field.Path, value string) field.ErrorList {
+	if value == "" || sandboxclass.Valid(value) {
+		return nil
+	}
+	return field.ErrorList{field.NotSupported(fldPath, value, sandboxclass.All())}
+}
+
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 	if dir == "" {
-		return field.ErrorList{field.Required(fldPath, "")}
+		return nil // required is enforced by tags
 	}
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 		return field.ErrorList{field.Invalid(fldPath, dir, "must be an absolute, clean path")}
@@ -155,7 +171,7 @@ func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 }
 
 // ValidateRuntimeAssetPath ensures p is a regular file under root, with no symlinks
-// ateom runs these as root, so they must be assets atelet fetched into root
+// worker runs these as root, so they must be assets atelet fetched into root
 func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorList {
 	if p == "" {
 		return field.ErrorList{field.Required(fldPath, "")}
@@ -179,12 +195,24 @@ func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorLi
 	return nil
 }
 
+// ValidateSandboxAssetsDir requires dir, the sandbox_assets_dir a request
+// names, to be the actor's own, nodepath.ActorSandboxAssetsDir(actorUID), so
+// a request cannot point a worker at binaries staged for another actor or
+// anywhere else on the node. The actor UID is checked first: it becomes a
+// path element, and must be a plain label rather than a traversal.
+func ValidateSandboxAssetsDir(actorUID, dir string, fldPath *field.Path) field.ErrorList {
+	if errs := content.IsDNS1123Label(actorUID); len(errs) > 0 {
+		return field.ErrorList{field.Invalid(fldPath, dir, fmt.Sprintf("actor_uid %q is not a valid label: %s", actorUID, strings.Join(errs, "; ")))}
+	}
+	if want := nodepath.ActorSandboxAssetsDir(actorUID); dir != want {
+		return field.ErrorList{field.Invalid(fldPath, dir, fmt.Sprintf("must be the actor's own sandbox assets dir %s", want))}
+	}
+	return nil
+}
+
 // ValidateAssetHash ensures a sandbox asset's SHA-256 hash is exactly 64 hex
-// characters before it is used to build the on-disk asset path
-// (static-files/asset-<hash>) and, on a cache hit, returned for ateom to
-// execute. Without this, a hash containing path separators or ".." could
-// point the cache-hit early return (and the download target) at an arbitrary
-// binary outside the static-files dir.
+// characters before it becomes the asset's cache key, so a malformed hash is
+// rejected as the request's fault rather than failing deep inside the cache.
 func ValidateAssetHash(sha256Hash string) error {
 	if len(sha256Hash) != 64 {
 		return fmt.Errorf("invalid asset sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
@@ -401,6 +429,12 @@ func ValidateMountPath(fldPath *field.Path, p string) field.ErrorList {
 // fldPath[i].mount_path. Identical paths are left to the list-key uniqueness
 // check.
 func ValidateNestedMountPaths(fldPath *field.Path, paths []string) field.ErrorList {
+	return ValidateNestedMountPathsAt(paths, func(i int) *field.Path { return fldPath.Index(i).Child("mount_path") })
+}
+
+// ValidateNestedMountPathsAt is ValidateNestedMountPaths for paths gathered
+// from more than one list: at(i) is where paths[i] is reported.
+func ValidateNestedMountPathsAt(paths []string, at func(i int) *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	for i, path := range paths {
 		if path == "" {
@@ -411,7 +445,7 @@ func ValidateNestedMountPaths(fldPath *field.Path, paths []string) field.ErrorLi
 				continue
 			}
 			if strings.HasPrefix(path, prior+"/") || strings.HasPrefix(prior, path+"/") {
-				errs = append(errs, field.Invalid(fldPath.Index(i).Child("mount_path"), path,
+				errs = append(errs, field.Invalid(at(i), path,
 					fmt.Sprintf("must not nest under or over another mount (%q)", prior)))
 			}
 		}

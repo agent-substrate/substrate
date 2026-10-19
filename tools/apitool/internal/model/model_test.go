@@ -21,8 +21,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 func buildAPI(t *testing.T, protoBody string) *model.API {

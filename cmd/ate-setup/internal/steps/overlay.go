@@ -24,9 +24,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 const (
@@ -47,6 +47,29 @@ const cordonControlPlaneComponent = installDir + "/components/cordon-control-pla
 // atelet's DaemonSet and fake-workersync in place of ate-controller, layered
 // over the atelet and ate-controller applies under --fake-data-plane.
 const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
+
+// routerStaticMTLSComponent is the kustomize component that switches the
+// ingress router to --ingress-auth-mode=static-mtls, layered over every
+// control plane apply under --ingress-auth-mode=static-mtls.
+const routerStaticMTLSComponent = installDir + "/components/router-static-mtls"
+
+// components lists the kustomize components every control plane apply is
+// composed with. Each patch targets its workloads by name, and kustomize leaves
+// a stream alone when nothing in it matches, so composing a manifest that
+// carries none of them is harmless.
+func (e *Env) components() []string {
+	var components []string
+	if e.Cfg.FakeDataPlane {
+		components = append(components, e.Cfg.Path(fakeDataPlaneComponent))
+	}
+	if e.Cfg.IngressAuthMode == config.IngressAuthStaticMTLS {
+		components = append(components, e.Cfg.Path(routerStaticMTLSComponent))
+	}
+	if e.Cfg.CordonControlPlane {
+		components = append(components, e.Cfg.Path(cordonControlPlaneComponent))
+	}
+	return components
+}
 
 // SystemOverlay picks the kustomization for a full control plane install.
 //
@@ -70,19 +93,11 @@ func SystemOverlay(cfg *config.Config) string {
 	}
 }
 
-// render emits the manifests at path, an absolute manifest file or
-// kustomization directory, before image resolution, composed with the given
-// component directories. Under --cordon-control-plane it adds the
-// cordon-control-plane component, so the same node pinning reaches every
-// control plane workload whichever apply path delivers it. The component's
-// patch has a name-regex target and kustomize leaves a stream alone when
-// nothing in it matches, so wrapping a manifest that carries none of those
-// workloads is harmless.
-func (e *Env) render(path string, components ...string) ([]byte, error) {
-	if e.Cfg.CordonControlPlane {
-		components = append(components, e.Cfg.Path(cordonControlPlaneComponent))
-	}
-	if len(components) > 0 {
+// kustomization directory, before image resolution. It composes path with the
+// selected components (see components), so the same patches reach every
+// control plane workload whichever apply path delivers it.
+func (e *Env) render(path string) ([]byte, error) {
+	if components := e.components(); len(components) > 0 {
 		return kustomize.Compose(path, components...)
 	}
 	info, err := os.Stat(path)
@@ -101,21 +116,10 @@ func (e *Env) render(path string, components ...string) ([]byte, error) {
 
 // renderBytes is render for a manifest already held in memory.
 func (e *Env) renderBytes(manifest []byte) ([]byte, error) {
-	if e.Cfg.CordonControlPlane {
-		return kustomize.ComposeBytes(manifest, e.Cfg.Path(cordonControlPlaneComponent))
+	if components := e.components(); len(components) > 0 {
+		return kustomize.ComposeBytes(manifest, components...)
 	}
 	return manifest, nil
-}
-
-// renderDataPlane is render for the manifests that carry atelet or
-// ate-controller. Under --fake-data-plane it composes them with the
-// fake-data-plane component, whose patches leave a manifest without their
-// target alone.
-func (e *Env) renderDataPlane(path string) ([]byte, error) {
-	if !e.Cfg.FakeDataPlane {
-		return e.render(path)
-	}
-	return e.render(path, e.Cfg.Path(fakeDataPlaneComponent))
 }
 
 // renderResolve renders path and resolves its image references.
@@ -139,9 +143,19 @@ func (e *Env) renderResolveApply(ctx context.Context, path string) error {
 // renderSystemManifests produces the full control plane manifest with all
 // image references resolved.
 func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
-	manifest, err := e.renderDataPlane(e.Cfg.Path(SystemOverlay(e.Cfg)))
+	manifest, err := e.render(e.Cfg.Path(SystemOverlay(e.Cfg)))
 	if err != nil {
 		return nil, err
+	}
+	if manifest, err = setIDPServerIssuer(manifest, e.Cfg.ActorJWTIssuer); err != nil {
+		return nil, err
+	}
+	if e.Cfg.Router != config.RouterAgentgateway {
+		imageReference, err := e.dockerfileImage(ctx, envoyDataplaneImage, envoyDataplaneDockefile)
+		if err != nil {
+			return nil, err
+		}
+		manifest = e.patchEnvoyDataplaneImage(manifest, imageReference)
 	}
 	return e.ResolveManifestBytes(ctx, manifest)
 }
@@ -152,7 +166,16 @@ func (e *Env) renderAtenetRouterManifest(ctx context.Context) ([]byte, error) {
 	if e.Cfg.Router == config.RouterAgentgateway {
 		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-router"))
 	}
-	return e.renderResolve(ctx, e.Cfg.Manifest("atenet-router.yaml"))
+	manifest, err := e.render(e.Cfg.Manifest("atenet-router.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	imageReference, err := e.dockerfileImage(ctx, envoyDataplaneImage, envoyDataplaneDockefile)
+	if err != nil {
+		return nil, err
+	}
+	manifest = e.patchEnvoyDataplaneImage(manifest, imageReference)
+	return e.ResolveManifestBytes(ctx, manifest)
 }
 
 // atenetEgressManifestPath returns the envoy egress gateway manifest.
@@ -511,7 +534,7 @@ const otelEndpointKey = "OTEL_EXPORTER_OTLP_ENDPOINT"
 
 // otelOverrideDeployments are the control plane Deployments that read
 // ate-otel-config. ate-controller additionally copies the values onto the
-// ateom worker pods it creates, so one patch reaches the whole system.
+// worker pods it creates, so one patch reaches the whole system.
 var otelOverrideDeployments = []string{"ate-api-server", "ate-controller", "atenet-router"}
 
 // applyOtelEndpointOverride points all control plane telemetry at a different

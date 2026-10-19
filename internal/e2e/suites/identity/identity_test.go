@@ -17,15 +17,18 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"slices"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const probeTemplate = "probe"
@@ -149,6 +152,14 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 			t.Errorf("actor %q and %q both report uid %q — actors are not distinct", id, other, got.UID)
 		}
 		seenUIDs[got.UID] = id
+
+		// Resolved from the /etc/hosts the runtime writes, not DNS: images
+		// commonly ship an empty one.
+		for host, want := range map[string]string{"localhost": "127.0.0.1", got.Hostname: "169.254.17.2"} {
+			if addrs, err := lookup(ctx, rc, id, host); err != nil || !slices.Contains(addrs, want) {
+				t.Errorf("actor %q: lookup %q = %v, %v; want %s", id, host, addrs, err, want)
+			}
+		}
 	}
 
 	// Live refresh: rotate the pool while both actors run and wait until each
@@ -170,6 +181,14 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	rotatedTrust := e2e.AddEgressCA(t, ctx, clients, "ate-e2e-probe-trust-rotated")
 	id := ids[0]
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
+	// The actor may edit its /etc files, as under Docker or kubelet, and the
+	// edits outlive the suspend like any other rootfs write.
+	etcFiles := []string{"/etc/hosts", "/etc/resolv.conf"}
+	for _, path := range etcFiles {
+		if out, err := probeFile(ctx, rc, id, "/writefile", path); err != nil || out["error"] != "" {
+			t.Fatalf("actor %q: editing %s: %v %v", id, path, err, out["error"])
+		}
+	}
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("SuspendActor %q: %v", id, err)
 	}
@@ -191,6 +210,11 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	}
 	if wantUID := seenUIDFor(t, seenUIDs, id); got.UID != wantUID {
 		t.Errorf("after suspend/resume: /run/ate/actor-uid = %q, want %q (probe read error: %q)", got.UID, wantUID, got.Error)
+	}
+	for _, path := range etcFiles {
+		if out, err := probeFile(ctx, rc, id, "/readfile", path); err != nil || out["content"] != "written by probe" {
+			t.Errorf("after suspend/resume: %s = %q, %v %v; want the actor's edit", path, out["content"], err, out["error"])
+		}
 	}
 	waitForTrust(t, ctx, rc, id, rotatedTrust, 10*time.Second)
 
@@ -282,6 +306,40 @@ func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) 
 		t.Fatal(err)
 	}
 	return out
+}
+
+// lookup asks the probe to resolve host from inside the actor.
+func lookup(ctx context.Context, rc *e2e.RouterClient, id, host string) ([]string, error) {
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: probeNamespace, Name: id}, "/lookup?host="+url.QueryEscape(host))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Addrs []string `json:"addrs"`
+		Error string   `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decoding /lookup: %w", err)
+	}
+	if out.Error != "" {
+		return nil, errors.New(out.Error)
+	}
+	return out.Addrs, nil
+}
+
+// probeFile runs the probe's /readfile or /writefile on path.
+func probeFile(ctx context.Context, rc *e2e.RouterClient, id, op, path string) (map[string]string, error) {
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: probeNamespace, Name: id}, op+"?path="+url.QueryEscape(path))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decoding %s: %w", op, err)
+	}
+	return out, nil
 }
 
 // tryWhoami is whoami returning the error instead of failing the test.

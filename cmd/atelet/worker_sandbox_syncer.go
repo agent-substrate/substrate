@@ -21,20 +21,23 @@ package main
 //     random delay when a pool or config change reaches every node at once
 //   - process: for each UID, sync the pod, or remove its worker directory
 //     once the pod is gone
-//   - finish: forget the UID, or retry it with backoff up to
-//     syncMaxRetries times
+//   - finish: forget the UID, or retry it with backoff, capped at
+//     syncMaxRetries while the pool's SandboxConfig is unresolved
 //
-// worker_sandbox_versions.go builds the sandbox config version file for each
+// worker_sandbox_versions.go builds the sandbox runtimes file for each
 // worker pod.
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -44,9 +47,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	informersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/api/v1alpha1"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	informersv1alpha1 "go.ate.dev/substrate/pkg/client/informers/externalversions/api/v1alpha1"
 )
 
 // podUIDIndex indexes this node's worker pods by UID, the syncer's queue key.
@@ -56,7 +61,7 @@ import (
 const podUIDIndex = "uid"
 
 // orphanMinAge is how old a worker directory found on disk at startup must be
-// before the syncer looks at it. The grace covers an ateom that made its own
+// before the syncer looks at it. The grace covers a worker that made its own
 // directory before its pod reached atelet's cache.
 const orphanMinAge = time.Minute
 
@@ -67,55 +72,160 @@ const orphanMinAge = time.Minute
 // applied as the enqueue delay, so duplicate events inside the window
 // collapse into one queue entry. A pod bound to this node is
 // enqueued without it, since only this atelet acts on it and its worker waits
-// for the file.
+// for the file. Only the file waits: the changed config's runtimes are
+// registered in the index at once (see enqueuePool), so an actor the
+// control plane places for the new default inside the window resolves.
 const syncMaxJitter = 30 * time.Second
 
-// syncMaxRetries bounds how often one pod's failed sync is retried before it
-// is dropped. The pod is synced again only when its pool switches to another
-// SandboxConfig, the config's spec changes, or atelet restarts. The backoff
-// doubles from one second, so this covers a few minutes of informer lag or an
-// unresolved pool without retrying forever.
+// syncMaxRetries bounds how often one pod's errUnresolved sync is retried
+// before it is dropped. The backoff doubles from one second, so this covers a
+// few minutes of informer lag or an unresolved pool without retrying forever;
+// the informer events that end those also enqueue the pod again. Every other
+// failure is exempt and keeps retrying at the rate limiter's longest backoff:
+// an asset fetch or probe that fails for the default version, one that leaves
+// a restorable version out (errIncomplete), or a write to the worker
+// directory, since nothing enqueues the pod when those recover.
 const syncMaxRetries = 8
 
-// workerSandboxSyncer keeps a sandbox versions file in each local worker's
-// directory under ateomsDir: the runtimes of the enabled versions of the
+// syncWorkers is how many goroutines drain the sync queue in run. More than
+// one keeps a slow asset fetch on one pod from blocking directory cleanup and
+// cached syncs for other pods on the node.
+const syncWorkers = 2
+
+// workerSandboxSyncer keeps a sandbox runtimes file in each local worker's
+// directory under workersDir: the runtimes of the enabled versions of the
 // SandboxConfig the worker's pool uses. It creates a worker's directory once
 // it writes the pod's file and removes it when the pod is gone.
 type workerSandboxSyncer struct {
 	resolver *workerSandboxResolver
+	// index is told each pod's runtimes before its file is written, and
+	// what the pod advertises once it is.
+	index *runtimeIndex
+	// prewarm, if set, is handed each default runtime a pod's file
+	// advertises, with a directory under the pod's to link the assets into,
+	// so they are fetched before an actor asks for them and stay cached
+	// while none runs them.
+	prewarm runtimePrewarm
 	// pods holds this node's worker pods, indexed by podUIDIndex.
-	pods cache.Indexer
-	// queue carries pod UIDs. One worker drains it, so a pod's file is never
-	// written and its directory removed at the same time.
-	queue     workqueue.TypedRateLimitingInterface[string]
-	ateomsDir string // nodepath.AteomsDir(); a temp dir in tests
-	minAge    time.Duration
-	maxJitter time.Duration
+	pods   cache.Indexer
+	assets sandboxAssetFetcher
+	// scratchDir is where the runsc probe stages the binary it runs, read
+	// from ateletpath once here so a test can point a syncer elsewhere.
+	scratchDir string
+	// queue carries pod UIDs. A workqueue never hands the same key to two
+	// workers at once, so a pod's file is never written and its directory
+	// removed at the same time.
+	queue      workqueue.TypedRateLimitingInterface[string]
+	workersDir string // nodepath.WorkersDir(); a temp dir in tests
+	minAge     time.Duration
+	maxJitter  time.Duration
+
+	// probeCPUIdentity is hardware.ProbeCPUIdentity. Overridable in tests.
+	probeCPUIdentity func() (vendor, model string, err error)
+	// runCPUFeatures is runRunscCPUFeatures. Overridable in tests.
+	runCPUFeatures func(ctx context.Context, runscPath string) ([]string, error)
+	// mu guards hostCPU and cpuFeatures across the syncWorkers in run:
+	// hostCPU is the probed host CPU identity, nil until a probe succeeds,
+	// and cpuFeatures the encoded cpu_features of each runsc binary by its
+	// gVisor asset's SHA256 digest. A binary is fetched and run once per
+	// digest, except that two workers meeting a digest before either has
+	// memoized it both probe it; the duplicate costs a fetch from the asset
+	// cache and a run of runsc, and both store the same mask.
+	mu          sync.Mutex
+	hostCPU     *cpuIdentity
+	cpuFeatures map[string]string
 }
 
-func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, ateomsDir string) *workerSandboxSyncer {
+func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) *workerSandboxSyncer {
 	return &workerSandboxSyncer{
-		resolver: resolver,
-		pods:     pods,
-		// Failures are informer lag and unresolved pools, both on the scale
-		// of seconds to minutes.
+		resolver:   resolver,
+		pods:       pods,
+		assets:     assets,
+		scratchDir: ateletpath.SandboxAssetScratchDir,
+		index:      index,
+		prewarm:    prewarm,
+		// Backoff doubles from 1s for informer lag and unresolved pools, and
+		// caps at 5m where uncapped retries for transient asset fetch or probe
+		// failures stay until they recover.
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)),
-		ateomsDir: ateomsDir,
-		minAge:    orphanMinAge,
-		maxJitter: syncMaxJitter,
+		workersDir:       workersDir,
+		minAge:           orphanMinAge,
+		maxJitter:        syncMaxJitter,
+		probeCPUIdentity: hardware.ProbeCPUIdentity,
+		runCPUFeatures:   runRunscCPUFeatures,
+		cpuFeatures:      make(map[string]string),
 	}
+}
+
+// runtimePrewarm is what the syncer asks of the runtime prewarmer: fetch a
+// default runtime and link its assets into the given directory.
+type runtimePrewarm interface {
+	enqueue(hash, dir string)
+}
+
+// defaultRuntimeDirsName is the directory under a worker's own that holds
+// one directory per default runtime the worker advertises, by bundle hash,
+// one per sandbox class, which the prewarmer links the runtime's assets
+// into. The links are what keeps the assets cached while no actor runs
+// them: the cache never evicts a linked entry. The syncer makes a runtime's
+// directory when the worker's file first advertises it as a default and
+// removes it when the file stops; they all go with the worker's directory.
+const defaultRuntimeDirsName = "default-runtime"
+
+// defaultRuntimeDir is the directory for the default runtime hash of the
+// worker pod.
+func (s *workerSandboxSyncer) defaultRuntimeDir(uid, hash string) string {
+	return filepath.Join(s.podDir(uid), defaultRuntimeDirsName, strings.ReplaceAll(hash, ":", "-"))
+}
+
+// syncDefaultRuntimeDirs makes the worker pod's default-runtime directory
+// hold one directory per hash in defaults and nothing else: the others are
+// removed, which unlinks the runtimes the worker no longer advertises, and
+// the missing ones are created empty for the prewarmer to fill. Called
+// once the pod's file advertises defaults, so nothing it removes is a
+// runtime the worker still names.
+func (s *workerSandboxSyncer) syncDefaultRuntimeDirs(uid string, defaults []string) error {
+	parent := filepath.Join(s.podDir(uid), defaultRuntimeDirsName)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return fmt.Errorf("while creating the worker's default runtime dir: %w", err)
+	}
+	want := make(map[string]bool, len(defaults))
+	for _, hash := range defaults {
+		want[filepath.Base(s.defaultRuntimeDir(uid, hash))] = true
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return fmt.Errorf("while listing the worker's default runtime dir: %w", err)
+	}
+	for _, e := range entries {
+		if !want[e.Name()] {
+			if err := os.RemoveAll(filepath.Join(parent, e.Name())); err != nil {
+				return fmt.Errorf("while removing a retired default runtime dir: %w", err)
+			}
+		}
+	}
+	for name := range want {
+		if err := os.Mkdir(filepath.Join(parent, name), 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("while creating a default runtime dir: %w", err)
+		}
+	}
+	return nil
 }
 
 // startWorkerSandboxSyncer wires a syncer to the given informers, which the
 // caller starts, and runs it until ctx ends. pods must hold only this node's
 // worker pods and must not have started yet. Worker directories live under
-// ateomsDir.
+// workersDir.
 //
-// The syncer never holds up atelet startup: until the informers sync, or
-// while a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
-// binary), files wait and existing ones stay as they are.
-func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, ateomsDir string) (*workerSandboxSyncer, error) {
+// A syncer that cannot start is fatal to atelet: without it no runtime is
+// ever indexed, so no actor could run. A syncer that cannot sync does not
+// hold up serving: every runtime a worker registered before a restart was
+// loaded from disk with the index, so while the informers have not synced,
+// or a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
+// binary), existing files and index entries stay as they are and only
+// changes wait.
+func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok {
@@ -129,7 +239,7 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 		workerPools: workerPools.Lister(),
 		configs:     configs.Lister(),
 	}
-	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), ateomsDir)
+	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), assets, workersDir, index, prewarm)
 	if err := watch(ctx, "worker pod", pods.Informer(), s.podHandler()); err != nil {
 		return nil, err
 	}
@@ -140,14 +250,14 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 		return nil, err
 	}
 	go s.run(ctx, pods.Informer().HasSynced, workerPools.Informer().HasSynced, configs.Informer().HasSynced)
-	slog.InfoContext(ctx, "Worker sandbox versions syncer started")
+	slog.InfoContext(ctx, "Worker sandbox runtimes syncer started")
 	return s, nil
 }
 
 // watch registers handler on inf and logs inf's list/watch failures.
 func watch(ctx context.Context, kind string, inf cache.SharedIndexInformer, handler cache.ResourceEventHandler) error {
 	if err := inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
-		slog.WarnContext(ctx, kind+" list/watch failed; workers on this node cannot update their sandbox versions until it recovers", slog.Any("err", err))
+		slog.WarnContext(ctx, kind+" list/watch failed; workers on this node cannot update their sandbox runtimes until it recovers", slog.Any("err", err))
 	}); err != nil {
 		// Fails only on an already-started informer, where the default
 		// reflector logging applies.
@@ -226,10 +336,19 @@ func (s *workerSandboxSyncer) sandboxConfigHandler() cache.ResourceEventHandler 
 
 // enqueuePool enqueues every local worker pod of pool, each after a random
 // delay below maxDelay when it is not zero.
+//
+// A delayed pool has its runtimes registered first, so the index knows a
+// config's runtimes as soon as the listers do rather than once the files
+// are rewritten. A request for a runtime the index does not know fails the
+// actor, and the registration costs no IO.
 func (s *workerSandboxSyncer) enqueuePool(pool *v1alpha1.WorkerPool, maxDelay time.Duration) {
 	pods, err := corelisters.NewPodLister(s.pods).Pods(pool.Namespace).List(labels.SelectorFromSet(labels.Set{workerPoolLabel: pool.Name}))
-	if err != nil {
+	if err != nil || len(pods) == 0 {
 		return
+	}
+	if maxDelay > 0 {
+		// Once per pool: every pod of it plans the same config.
+		s.registerAhead(pool)
 	}
 	for _, pod := range pods {
 		if maxDelay > 0 {
@@ -240,14 +359,34 @@ func (s *workerSandboxSyncer) enqueuePool(pool *v1alpha1.WorkerPool, maxDelay ti
 	}
 }
 
+// registerAhead makes the runtimes of pool's current plan resolvable before
+// its pods' syncs run. Planning and hashing read the listers only, so this
+// is cheap enough for an event handler. Only the hashes are registered; what
+// a pod advertises changes when its sync writes the file. A pool that does
+// not plan is left to the syncs, which report and retry it.
+func (s *workerSandboxSyncer) registerAhead(pool *v1alpha1.WorkerPool) {
+	plan, err := s.resolver.planPool(pool)
+	if err != nil {
+		return
+	}
+	hashed, err := hashVersions(context.Background(), plan)
+	if err != nil {
+		return
+	}
+	if err := s.index.registerRuntimes(plan.config, hashed); err != nil {
+		// The syncs write it again, and report it if it keeps failing.
+		slog.Warn("Could not index a changed pool's runtimes ahead of its sync", slog.String("pool", pool.Name), slog.Any("err", err))
+	}
+}
+
 // enqueueExistingDirs enqueues the UID of every worker directory on disk, so
 // one left by a pod that went away while atelet was down is removed. A
 // directory younger than minAge is enqueued once it reaches that age.
 func (s *workerSandboxSyncer) enqueueExistingDirs(ctx context.Context) {
-	entries, err := os.ReadDir(s.ateomsDir)
+	entries, err := os.ReadDir(s.workersDir)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			slog.WarnContext(ctx, "Could not list worker directories", slog.String("dir", s.ateomsDir), slog.Any("err", err))
+			slog.WarnContext(ctx, "Could not list worker directories", slog.String("dir", s.workersDir), slog.Any("err", err))
 		}
 		return
 	}
@@ -282,13 +421,21 @@ func (s *workerSandboxSyncer) run(ctx context.Context, synced ...cache.InformerS
 		return
 	}
 	s.enqueueExistingDirs(ctx)
-	for {
-		uid, shutdown := s.queue.Get()
-		if shutdown {
-			return
-		}
-		s.process(ctx, uid)
+	var wg sync.WaitGroup
+	for range syncWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				uid, shutdown := s.queue.Get()
+				if shutdown {
+					return
+				}
+				s.process(ctx, uid)
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // process brings the directory of the pod with the given UID up to date:
@@ -326,30 +473,35 @@ func (s *workerSandboxSyncer) podByUID(uid string) (*corev1.Pod, error) {
 	return pod, nil
 }
 
-// finish forgets uid on success or errPermanent, and otherwise retries it with
-// backoff up to syncMaxRetries times. A sync that fails before it writes
-// leaves the existing file in place.
+// finish forgets uid on success or errPermanent, caps errUnresolved retries at
+// syncMaxRetries, and otherwise requeues with backoff without a retry cap. A
+// sync that fails before it writes leaves the existing file in place.
 func (s *workerSandboxSyncer) finish(ctx context.Context, uid string, err error) {
 	switch {
 	case err == nil:
 		s.queue.Forget(uid)
 	case errors.Is(err, errPermanent):
-		slog.WarnContext(ctx, "Cannot sync worker sandbox versions; not retrying until the pool's SandboxConfig changes or atelet restarts", slog.String("pod_uid", uid), slog.Any("err", err))
+		slog.WarnContext(ctx, "Cannot sync worker sandbox runtimes; not retrying until the pool's SandboxConfig changes or atelet restarts", slog.String("pod_uid", uid), slog.Any("err", err))
 		s.queue.Forget(uid)
 	case ctx.Err() != nil:
 		// Shutting down, not a sync failure.
-	case s.queue.NumRequeues(uid) < syncMaxRetries:
-		slog.WarnContext(ctx, "Could not sync worker sandbox versions; will retry",
+	case errors.Is(err, errIncomplete):
+		slog.WarnContext(ctx, "Worker sandbox runtimes file is missing a restorable version; will retry",
+			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
+		s.queue.AddRateLimited(uid)
+	case s.queue.NumRequeues(uid) < syncMaxRetries || !errors.Is(err, errUnresolved):
+		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; will retry",
 			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
 		s.queue.AddRateLimited(uid)
 	default:
-		slog.WarnContext(ctx, "Could not sync worker sandbox versions; giving up until the pool's SandboxConfig changes or atelet restarts",
+		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; giving up until the pool's SandboxConfig changes or atelet restarts",
 			slog.String("pod_uid", uid), slog.Int("retries", syncMaxRetries), slog.Any("err", err))
 		s.queue.Forget(uid)
 	}
 }
 
 func (s *workerSandboxSyncer) removeDir(ctx context.Context, uid string) error {
+	s.index.forget(uid)
 	if err := os.RemoveAll(s.podDir(uid)); err != nil {
 		return fmt.Errorf("while removing worker directory: %w", err)
 	}
@@ -358,5 +510,5 @@ func (s *workerSandboxSyncer) removeDir(ctx context.Context, uid string) error {
 }
 
 func (s *workerSandboxSyncer) podDir(uid string) string {
-	return filepath.Join(s.ateomsDir, uid)
+	return filepath.Join(s.workersDir, uid)
 }

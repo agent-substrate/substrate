@@ -19,18 +19,23 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
+
+// injectionTimeout caps resolving a request's credentials, under the ext_proc
+// message_timeout so a slow provider is a retryable 503 instead of an Envoy 504
+const injectionTimeout = 4 * time.Second
 
 // mapCredentialProviderError converts a FetchSecret failure into a
 // client-facing ext_proc denial, mirroring mapEgressIdentityError: a credential
@@ -85,6 +90,8 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 		return nil, nil
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, injectionTimeout)
+	defer cancel()
 	setHeaders := make([]*corev3.HeaderValueOption, 0, len(injections))
 	for _, inj := range injections {
 		if err := validateInjectHeader(inj.GetHeader()); err != nil {
@@ -157,7 +164,7 @@ func (h *Handler) providerCredential(ctx context.Context, ref resources.ActorRef
 		}
 	}
 
-	// Atunnel connected to us with an ateom-for-actor SPIFFE ID; translate it
+	// Atunnel connected to us with a worker-for-actor SPIFFE ID; translate it
 	// to a pure actor SPIFFE ID for plugins to make decisions on.
 	resp, err := h.provider.FetchSecret(ctx, &credproviderpb.FetchSecretRequest{
 		Uri:           uri,

@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"sigs.k8s.io/yaml"
 )
 
@@ -122,15 +122,15 @@ func memoryLimit(tmpl *ateapipb.ActorTemplate) string {
 }
 
 // TestRenderSubstrateFixtures_GVisor pins the default rendering: every
-// micro-VM block is gone, no placeholder survives, and the templates name the
-// cluster-wide gvisor-default SandboxConfig.
+// micro-VM block is gone, no placeholder survives, and the templates select
+// their fixture's pool.
 func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 	t.Setenv(sandboxClassEnv, "")
 	for _, fixture := range substrateFixtures {
 		t.Run(fixture.manifests.Pool, func(t *testing.T) {
 			pool := renderPool(t, fixture.manifests.Pool)
-			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-gvisor") {
-				t.Errorf("WorkerPool workerImage = %q, want the gVisor ateom", pool.Spec.WorkerImage)
+			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateworker-gvisor") {
+				t.Errorf("WorkerPool workerImage = %q, want the gVisor worker", pool.Spec.WorkerImage)
 			}
 			if pool.Spec.DefaultSandboxClass() != v1alpha1.SandboxClassGvisor {
 				t.Errorf("WorkerPool runtime = class %q, want gvisor", pool.Spec.DefaultSandboxClass())
@@ -142,14 +142,6 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 			}
 			for _, tmpl := range templates {
 				name := tmpl.GetMetadata().GetName()
-				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR {
-					t.Errorf("template %s sandboxClass = %v, want GVISOR", name, got)
-				}
-				// The templates name the cluster-wide gvisor-default
-				// SandboxConfig explicitly: config_name is required.
-				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "gvisor-default" {
-					t.Errorf("template %s configName = %q, want gvisor-default", name, got)
-				}
 				// An inline placeholder with an empty value must substitute, not
 				// delete its line: the location is what the golden snapshot needs.
 				location := tmpl.GetSnapshotConfig().GetStorageLocation()
@@ -171,15 +163,14 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 }
 
 // TestRenderSubstrateFixtures_MicroVM pins the micro-VM rendering: the
-// templates name the cluster-wide SandboxConfig and match the pool's class
-// and carry limits, and the snapshots land under their own prefix.
+// templates carry limits and the snapshots land under their own prefix.
 func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 	t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
 	for _, fixture := range substrateFixtures {
 		t.Run(fixture.manifests.Pool, func(t *testing.T) {
 			pool := renderPool(t, fixture.manifests.Pool)
-			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-microvm") {
-				t.Errorf("WorkerPool workerImage = %q, want the micro-VM ateom", pool.Spec.WorkerImage)
+			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateworker-microvm") {
+				t.Errorf("WorkerPool workerImage = %q, want the micro-VM worker", pool.Spec.WorkerImage)
 			}
 			if pool.Spec.DefaultSandboxClass() != SandboxClassMicroVM {
 				t.Errorf("WorkerPool runtime = class %q, want microvm", pool.Spec.DefaultSandboxClass())
@@ -191,19 +182,9 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 			}
 			for _, tmpl := range templates {
 				name := tmpl.GetMetadata().GetName()
-				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
-					t.Errorf("template %s sandboxClass = %v, want MICROVM — it must match the pool's or no worker is eligible", name, got)
-				}
-				// Named explicitly (see fixture.go), so a missing or stale
-				// microvm install fails loudly.
-				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "microvm" {
-					t.Errorf("template %s configName = %q, want microvm", name, got)
-				}
-				// Undeclared limits boot the guest at ateom's default size
-				// (2GiB), which does not fit beside the demo pools on one kind
-				// node.
+				// The API rejects a template without limits.
 				if memoryLimit(tmpl) == "" {
-					t.Errorf("template %s declares no memory limit, so the guest would boot at the kata default", name)
+					t.Errorf("template %s declares no memory limit", name)
 				}
 				location := tmpl.GetSnapshotConfig().GetStorageLocation()
 				if want := "-microvm-render/"; !strings.HasSuffix(location, want) {

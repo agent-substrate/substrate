@@ -16,36 +16,35 @@ package ocispec
 
 import (
 	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/sizing"
 )
 
 const testActorUID = "actor_uid"
 
-var parityActorDirs = &ateompb.ActorDirs{
+var parityActorDirs = &ateworkerpb.ActorDirs{
 	RootDir:                   "/node/actors/a",
 	OciBundleDir:              "/node/actors/a/bundles",
 	DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
 	SystemInfoVolumeRootsDir:  "/node/actors/a/system-info",
-	VolumesDir:                "/node/actors/a/volumes",
+	ExternalVolumeMountsDir:   "/node/actors/a/volumes",
 }
 
 // parityOptions mounts one volume of every kind.
 var parityOptions = Options{
 	ActorUID:  testActorUID,
 	ActorDirs: parityActorDirs,
-	Container: &ateompb.Container{
+	Container: &ateworkerpb.Container{
 		Name:                   "app",
-		ContainerSpec:          &ateompb.ContainerSpec{Args: []string{"/app"}},
-		DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/var/data"}},
-		SystemInfoVolumeMounts: []*ateompb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/run/ate"}},
-		CsiVolumeMounts:        []*ateompb.VolumeMount{{VolumeName: "csi", MountPath: "/mnt/csi"}},
-		ImageVolumeMounts:      []*ateompb.ImageVolumeMount{{VolumeName: "agent", MountPath: "/ate"}},
+		ContainerSpec:          &ateworkerpb.ContainerSpec{Args: []string{"/app"}},
+		DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "data", MountPath: "/var/data"}},
+		SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "sysinfo", MountPath: "/run/ate"}},
+		ExternalVolumeMounts:   []*ateworkerpb.VolumeMount{{Name: "csi", MountPath: "/mnt/csi"}},
+		ImageVolumeMounts:      []*ateworkerpb.VolumeMount{{Name: "agent", MountPath: "/ate"}},
 	},
 }
 
@@ -131,22 +130,10 @@ func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 
 // ShapeMicroVM errors on a bind that is not staged into the share.
 func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
-	spec := Build(Options{Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app"}}}})
+	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
 	spec.Mounts = append(spec.Mounts, specs.Mount{Destination: "/mnt/new", Type: "bind", Source: "/var/lib/ate/new-kind/x"})
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err == nil {
 		t.Fatal("ShapeMicroVM() = nil, want an error for a bind that is not staged into the share")
-	}
-}
-
-// ShapeGVisor inserts resolv.conf ahead of the volume bind mounts.
-func TestShapeGVisor_ResolvConfPrecedesVolumes(t *testing.T) {
-	spec := Build(parityOptions)
-	ShapeGVisor(spec, GVisorOptions{ActorUID: testActorUID, ContainerName: "app", Size: paritySize})
-	at := func(dest string) int {
-		return slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == dest })
-	}
-	if got, want := at(resolvConf), at("/var/data"); got > want {
-		t.Errorf("%s is at index %d, after the first volume bind at %d", resolvConf, got, want)
 	}
 }
 

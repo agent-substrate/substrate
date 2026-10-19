@@ -26,10 +26,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
-	"github.com/agent-substrate/substrate/pkg/postgressetup"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/pkg/postgressetup"
 )
 
 // bundledPostgresHost is where ate-api-server reaches the bundled PostgreSQL.
@@ -342,9 +342,6 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 	log.Step("deploy_postgres")
 
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
-		return err
-	}
-	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
 		return err
 	}
 

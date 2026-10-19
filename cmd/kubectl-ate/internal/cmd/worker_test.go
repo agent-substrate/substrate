@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
@@ -352,7 +352,7 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			},
 			Containers: []metricsv1beta1.ContainerMetrics{
 				{
-					Name: "ateom",
+					Name: "worker",
 					Usage: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("342m"),
 						corev1.ResourceMemory: resource.MustParse("412Mi"),
@@ -367,7 +367,7 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			},
 			Containers: []metricsv1beta1.ContainerMetrics{
 				{
-					Name: "ateom",
+					Name: "worker",
 					Usage: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("2m"),
 						corev1.ResourceMemory: resource.MustParse("64Mi"),

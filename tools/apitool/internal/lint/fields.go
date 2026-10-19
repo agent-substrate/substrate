@@ -21,7 +21,7 @@ import (
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // typeMatcher reports whether a field has the wanted type, including

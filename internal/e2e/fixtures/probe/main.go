@@ -224,6 +224,19 @@ func writefile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// lookup resolves ?host= with the Go resolver, which reads /etc/hosts before
+// asking DNS, so a test can assert on the names the sandbox resolves locally.
+func lookup(w http.ResponseWriter, r *http.Request) {
+	host := r.URL.Query().Get("host")
+	resp := map[string]any{"host": host}
+	if addrs, err := net.DefaultResolver.LookupHost(r.Context(), host); err == nil {
+		resp["addrs"] = addrs
+	} else {
+		resp["error"] = err.Error()
+	}
+	writeJSON(w, resp)
+}
+
 // readAllAt reads f's full contents from offset 0 without moving its offset,
 // so concurrent requests do not interleave seeks on the shared fd.
 func readAllAt(f *os.File) ([]byte, error) {
@@ -474,6 +487,7 @@ func main() {
 	mux.HandleFunc("/fetch", fetch)
 	mux.HandleFunc("/readfile", readfile)
 	mux.HandleFunc("/writefile", writefile)
+	mux.HandleFunc("/lookup", lookup)
 	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/capabilities", capabilities)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })

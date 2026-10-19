@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -105,6 +105,71 @@ func TestBuildCreateActorRequest(t *testing.T) {
 				t.Errorf("request mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestBuildSuspendActorRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		mode ateapipb.DurabilityMode
+	}{
+		{name: "async", mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		{name: "sync", mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := buildSuspendActorRequest(resources.ActorRef{Atespace: "demo", Name: "my-counter"}, test.mode)
+			want := &ateapipb.SuspendActorRequest{
+				Actor:   &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"},
+				Options: &ateapipb.SuspendOptions{Mode: test.mode},
+			}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("request mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestParseSuspendMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		want    ateapipb.DurabilityMode
+		wantErr string
+	}{
+		{name: "async", mode: "async", want: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		{name: "sync", mode: "sync", want: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		{name: "empty", mode: "", wantErr: `invalid --mode "": must be one of async, sync`},
+		{name: "unknown", mode: "durable", wantErr: `invalid --mode "durable": must be one of async, sync`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseSuspendMode(test.mode)
+			if test.wantErr != "" {
+				if err == nil || err.Error() != test.wantErr {
+					t.Fatalf("got err %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != test.want {
+				t.Errorf("got %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSuspendActorModeFlagDefault(t *testing.T) {
+	flag := suspendActorCmd.Flags().Lookup("mode")
+	if flag == nil {
+		t.Fatal("suspend actor has no --mode flag")
+	}
+	if got, want := flag.DefValue, suspendModeAsync; got != want {
+		t.Errorf("--mode default = %q, want %q", got, want)
 	}
 }
 
@@ -217,7 +282,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
 		},
 		{
-			// ateom drops these at the producer; the CLI strips the whole reserved
+			// worker drops these at the producer; the CLI strips the whole reserved
 			// namespace too, so a label that reached the stream some other way is
 			// never printed as platform attribution.
 			name:        "matching actor, label in substrate's reserved namespace is stripped",

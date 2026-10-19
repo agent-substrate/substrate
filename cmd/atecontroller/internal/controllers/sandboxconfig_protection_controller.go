@@ -25,7 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // workerPoolSandboxConfigIndex names the cache index from a SandboxConfig's

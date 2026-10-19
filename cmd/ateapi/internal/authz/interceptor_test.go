@@ -19,9 +19,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/principal"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/principal"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
@@ -261,6 +261,50 @@ func TestUnaryServerInterceptor_EnforcementDisabled(t *testing.T) {
 	}
 }
 
+// An RPC with no rule is denied when enforcement is on and passes through when
+// it is off; an RPC its handler authorizes passes through either way. Neither
+// reaches OpenFGA, so the authorizer is nil.
+func TestUnaryServerInterceptor_UnregisteredAndHandlerAuthorizedRPCs(t *testing.T) {
+	const unregistered = "/ateapi.Control/NotARealMethod"
+	aliceCtx := principal.InjectContext(context.Background(), principal.PrincipalInfo{
+		ID:   "alice@example.com",
+		Kind: principal.KindJWT,
+	})
+
+	tests := []struct {
+		name       string
+		enforce    bool
+		ctx        context.Context
+		fullMethod string
+		wantCode   codes.Code
+	}{
+		{"unregistered RPC is denied with enforcement on", true, aliceCtx, unregistered, codes.PermissionDenied},
+		{"unregistered RPC is denied without a principal", true, context.Background(), unregistered, codes.PermissionDenied},
+		{"unregistered RPC passes with enforcement off", false, aliceCtx, unregistered, codes.OK},
+		{"RegisterWorker passes with enforcement on", true, context.Background(), ateapipb.WorkerService_RegisterWorker_FullMethodName, codes.OK},
+		{"RequestActorSuspend passes with enforcement on", true, context.Background(), ateapipb.WorkerService_RequestActorSuspend_FullMethodName, codes.OK},
+		{"MintWorkerActorCertificate passes with enforcement on", true, context.Background(), ateapipb.WorkerService_MintWorkerActorCertificate_FullMethodName, codes.OK},
+		{"MintWorkerActorJwt passes with enforcement on", true, context.Background(), ateapipb.WorkerService_MintWorkerActorJwt_FullMethodName, codes.OK},
+		{"RegisterWorker passes with enforcement off", false, context.Background(), ateapipb.WorkerService_RegisterWorker_FullMethodName, codes.OK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			interceptor := UnaryServerInterceptor(nil, tc.enforce)
+			handlerCalled := false
+			_, err := interceptor(tc.ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: tc.fullMethod}, func(context.Context, any) (any, error) {
+				handlerCalled = true
+				return "ok", nil
+			})
+			if apierror.Code(err) != tc.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", apierror.Code(err), tc.wantCode, err)
+			}
+			if wantHandler := tc.wantCode == codes.OK; handlerCalled != wantHandler {
+				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, wantHandler)
+			}
+		})
+	}
+}
+
 // TestAccessPolicyRPCsAlwaysEnforced guards against an AccessPolicy RPC being
 // added without a governance rule, which would leave it unchecked while
 // enforcement is disabled.
@@ -435,7 +479,7 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 	}
 }
 
-func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
+func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgres(t)
 	fgaServer, err := NewOpenFGAServer(pool)
@@ -455,6 +499,8 @@ func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
 		{"editor", "editor", AtespaceObject("team-a")},
 		{"viewer", "viewer", AtespaceObject("team-a")},
 		{"outsider", "editor", AtespaceObject("team-b")},
+		{"outsider-with-viewer", "editor", AtespaceObject("team-b")},
+		{"outsider-with-viewer", "viewer", AtespaceObject("team-a")},
 	} {
 		writeTestTuple(t, ctx, pool, policyManager, g.user, g.role, g.object)
 	}
@@ -465,7 +511,6 @@ func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
 	}
 	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "runner"}
 	worker := &ateapipb.ObjectRef{Name: "w-1"}
-	pause := rpcCall{ateapipb.Control_PauseActor_FullMethodName, &ateapipb.PauseActorRequest{Actor: actor}}
 	resume := rpcCall{ateapipb.Control_ResumeActor_FullMethodName, &ateapipb.ResumeActorRequest{Actor: actor}}
 	suspend := rpcCall{ateapipb.Control_SuspendActor_FullMethodName, &ateapipb.SuspendActorRequest{Actor: actor}}
 	revert := rpcCall{ateapipb.Control_RevertActor_FullMethodName, &ateapipb.RevertActorRequest{Actor: actor}}
@@ -484,6 +529,37 @@ func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
 	markAvailable := rpcCall{ateapipb.Control_MarkWorkerAvailable_FullMethodName, &ateapipb.MarkWorkerAvailableRequest{Worker: worker}}
 	markUnavailable := rpcCall{ateapipb.Control_MarkWorkerUnavailable_FullMethodName, &ateapipb.MarkWorkerUnavailableRequest{Worker: worker}}
 	listAssignments := rpcCall{ateapipb.Control_ListWorkerActorAssignments_FullMethodName, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: worker}}
+	tag := &ateapipb.ObjectRef{Atespace: "team-a", Name: "v1"}
+	createTag := rpcCall{ateapipb.Control_CreateTag_FullMethodName, &ateapipb.CreateTagRequest{Tag: &ateapipb.Tag{
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "v1"},
+		SourceActor: actor,
+	}}}
+	// A tag in team-b of an actor in team-a.
+	createCrossTag := rpcCall{ateapipb.Control_CreateTag_FullMethodName, &ateapipb.CreateTagRequest{Tag: &ateapipb.Tag{
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: "team-b", Name: "v1"},
+		SourceActor: actor,
+	}}}
+	getTag := rpcCall{ateapipb.Control_GetTag_FullMethodName, &ateapipb.GetTagRequest{Tag: tag}}
+	listTags := rpcCall{ateapipb.Control_ListTags_FullMethodName, &ateapipb.ListTagsRequest{Atespace: "team-a"}}
+	listAllTags := rpcCall{ateapipb.Control_ListTags_FullMethodName, &ateapipb.ListTagsRequest{}}
+	updateTag := rpcCall{ateapipb.Control_UpdateTag_FullMethodName, &ateapipb.UpdateTagRequest{Tag: &ateapipb.Tag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "v1"},
+	}}}
+	deleteTag := rpcCall{ateapipb.Control_DeleteTag_FullMethodName, &ateapipb.DeleteTagRequest{Tag: tag}}
+	mintJWT := rpcCall{ateapipb.Control_MintActorJwt_FullMethodName, &ateapipb.MintActorJwtRequest{Actor: actor}}
+	mintCert := rpcCall{ateapipb.Control_MintActorCertificate_FullMethodName, &ateapipb.MintActorCertificateRequest{Actor: actor}}
+	// cloneTag creates an actor in atespace from team-a's tag v1, with a
+	// template in that same atespace so only the tag check can differ.
+	cloneTag := func(atespace string, sourceTag *ateapipb.ObjectRef) rpcCall {
+		return rpcCall{ateapipb.Control_CreateActor_FullMethodName, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: "clone"},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: "tmpl"},
+			SourceTag:     sourceTag,
+		}}}
+	}
+	cloneInTeamA := cloneTag("team-a", tag)
+	cloneInTeamB := cloneTag("team-b", tag)
+	createWithoutTag := cloneTag("team-a", nil)
 
 	tests := []struct {
 		name     string
@@ -492,17 +568,15 @@ func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
 		wantCode codes.Code
 	}{
 		// Lifecycle operations need editor on the actor's atespace.
-		{"editor pauses actor", "editor", pause, codes.OK},
 		{"editor resumes actor", "editor", resume, codes.OK},
 		{"editor suspends actor", "editor", suspend, codes.OK},
 		{"editor reverts actor", "editor", revert, codes.OK},
-		{"viewer cannot pause actor", "viewer", pause, codes.PermissionDenied},
 		{"viewer cannot resume actor", "viewer", resume, codes.PermissionDenied},
 		{"viewer cannot suspend actor", "viewer", suspend, codes.PermissionDenied},
 		{"viewer cannot revert actor", "viewer", revert, codes.PermissionDenied},
 		{"editor of another atespace cannot resume actor", "outsider", resume, codes.PermissionDenied},
 		{"global viewer cannot suspend actor", "global-viewer", suspend, codes.PermissionDenied},
-		{"global owner pauses actor", "global-owner", pause, codes.OK},
+		{"global owner suspends actor", "global-owner", suspend, codes.OK},
 		{"bootstrap owner resumes actor", "bootstrap-owner", resume, codes.OK},
 
 		// Egress policies: viewers read, editors write.
@@ -541,6 +615,41 @@ func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
 		{"global viewer cannot mark worker available", "global-viewer", markAvailable, codes.PermissionDenied},
 		{"global viewer cannot mark worker unavailable", "global-viewer", markUnavailable, codes.PermissionDenied},
 		{"atespace editor cannot mark worker available", "editor", markAvailable, codes.PermissionDenied},
+
+		// Tags: viewers read, editors write, all within the owning atespace.
+		{"editor creates tag", "editor", createTag, codes.OK},
+		{"viewer cannot create tag", "viewer", createTag, codes.PermissionDenied},
+		{"outsider cannot create tag in another atespace", "outsider", createTag, codes.PermissionDenied},
+		{"outsider cannot tag another atespace's actor", "outsider", createCrossTag, codes.PermissionDenied},
+		{"global owner creates tag", "global-owner", createTag, codes.OK},
+		{"viewer gets tag", "viewer", getTag, codes.OK},
+		{"global viewer gets tag", "global-viewer", getTag, codes.OK},
+		{"outsider cannot get tag", "outsider", getTag, codes.PermissionDenied},
+		{"viewer lists tags", "viewer", listTags, codes.OK},
+		{"outsider cannot list tags", "outsider", listTags, codes.PermissionDenied},
+		{"global viewer lists all tags", "global-viewer", listAllTags, codes.OK},
+		{"atespace editor cannot list all tags", "editor", listAllTags, codes.PermissionDenied},
+		{"editor updates tag", "editor", updateTag, codes.OK},
+		{"editor deletes tag", "editor", deleteTag, codes.OK},
+		{"viewer cannot update tag", "viewer", updateTag, codes.PermissionDenied},
+		{"viewer cannot delete tag", "viewer", deleteTag, codes.PermissionDenied},
+		{"outsider cannot delete tag", "outsider", deleteTag, codes.PermissionDenied},
+		{"bootstrap owner deletes tag", "bootstrap-owner", deleteTag, codes.OK},
+
+		// Cloning from a tag needs editor on the tag's atespace, whatever its
+		// scope. An actor created without an explicit tag only needs its template.
+		{"editor clones tag", "editor", cloneInTeamA, codes.OK},
+		{"viewer cannot clone tag", "viewer", cloneInTeamA, codes.PermissionDenied},
+		{"editor of another atespace cannot clone tag", "outsider", cloneInTeamB, codes.PermissionDenied},
+		{"viewer of tag's atespace cannot clone tag into another atespace", "outsider-with-viewer", cloneInTeamB, codes.PermissionDenied},
+		{"global owner clones tag into another atespace", "global-owner", cloneInTeamB, codes.OK},
+		{"bootstrap owner clones tag", "bootstrap-owner", cloneInTeamA, codes.OK},
+		{"editor creates actor without a tag", "editor", createWithoutTag, codes.OK},
+
+		// Only the egress gateway mints actor credentials; not even owners.
+		{"editor cannot mint actor JWT", "editor", mintJWT, codes.PermissionDenied},
+		{"global owner cannot mint actor JWT", "global-owner", mintJWT, codes.PermissionDenied},
+		{"bootstrap owner cannot mint actor certificate", "bootstrap-owner", mintCert, codes.PermissionDenied},
 	}
 
 	interceptor := UnaryServerInterceptor(authorizer, true)
@@ -574,12 +683,16 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		controllerID = "spiffe://cluster.local/ns/ate-system/sa/ate-controller"
 		egressID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
 		routerID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
+		ateletID     = "spiffe://cluster.local/ns/ate-system/sa/atelet"
+		pluginID     = "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
 		otherID      = "spiffe://cluster.local/ns/ate-system/sa/other"
 	)
 	authorizer, _, err := New(ctx, pool, fgaServer, nil, SystemPrincipals{
-		ControllerSPIFFEID:    controllerID,
-		EgressGatewaySPIFFEID: egressID,
-		IngressRouterSPIFFEID: routerID,
+		ControllerSPIFFEID:       controllerID,
+		EgressGatewaySPIFFEID:    egressID,
+		IngressRouterSPIFFEID:    routerID,
+		AteletSPIFFEID:           ateletID,
+		APIServerSidecarSPIFFEID: pluginID,
 	})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
@@ -595,7 +708,6 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 	deleteActor := rpcCall{ateapipb.Control_DeleteActor_FullMethodName, &ateapipb.DeleteActorRequest{Actor: actor}}
 	listAllActors := rpcCall{ateapipb.Control_ListActors_FullMethodName, &ateapipb.ListActorsRequest{}}
 	listAtespaces := rpcCall{ateapipb.Control_ListAtespaces_FullMethodName, &ateapipb.ListAtespacesRequest{}}
-	pause := rpcCall{ateapipb.Control_PauseActor_FullMethodName, &ateapipb.PauseActorRequest{Actor: actor}}
 	resume := rpcCall{ateapipb.Control_ResumeActor_FullMethodName, &ateapipb.ResumeActorRequest{Actor: actor}}
 	suspend := rpcCall{ateapipb.Control_SuspendActor_FullMethodName, &ateapipb.SuspendActorRequest{Actor: actor}}
 	getEgress := rpcCall{ateapipb.Control_GetActorEgressPolicy_FullMethodName, &ateapipb.GetActorEgressPolicyRequest{Actor: actor}}
@@ -611,6 +723,8 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 	markAvailable := rpcCall{ateapipb.Control_MarkWorkerAvailable_FullMethodName, &ateapipb.MarkWorkerAvailableRequest{Worker: worker}}
 	markUnavailable := rpcCall{ateapipb.Control_MarkWorkerUnavailable_FullMethodName, &ateapipb.MarkWorkerUnavailableRequest{Worker: worker}}
 	listAssignments := rpcCall{ateapipb.Control_ListWorkerActorAssignments_FullMethodName, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: worker}}
+	mintJWT := rpcCall{ateapipb.Control_MintActorJwt_FullMethodName, &ateapipb.MintActorJwtRequest{Actor: actor}}
+	mintCert := rpcCall{ateapipb.Control_MintActorCertificate_FullMethodName, &ateapipb.MintActorCertificateRequest{Actor: actor}}
 
 	mtls := func(id string) principal.PrincipalInfo {
 		return principal.PrincipalInfo{ID: id, Kind: principal.KindMTLS}
@@ -647,22 +761,47 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"egress gateway cannot resume actor", mtls(egressID), resume, codes.PermissionDenied},
 		{"egress gateway lists actors", mtls(egressID), listAllActors, codes.OK},
 		{"egress gateway cannot get worker", mtls(egressID), getWorker, codes.PermissionDenied},
+		{"egress gateway mints actor JWT", mtls(egressID), mintJWT, codes.OK},
+		{"egress gateway mints actor certificate", mtls(egressID), mintCert, codes.OK},
 
 		// atenet-router resumes actors. Both it and atenet-egress list actors
 		// as their ateapi health check.
 		{"ingress router resumes actor", mtls(routerID), resume, codes.OK},
 		{"ingress router lists actors", mtls(routerID), listAllActors, codes.OK},
 		{"ingress router cannot get actor", mtls(routerID), getActor, codes.PermissionDenied},
-		{"ingress router cannot pause actor", mtls(routerID), pause, codes.PermissionDenied},
 		{"ingress router cannot suspend actor", mtls(routerID), suspend, codes.PermissionDenied},
 		{"ingress router cannot delete actor", mtls(routerID), deleteActor, codes.PermissionDenied},
 		{"ingress router cannot get egress policy", mtls(routerID), getEgress, codes.PermissionDenied},
 		{"ingress router cannot create worker", mtls(routerID), createWorker, codes.PermissionDenied},
+		{"ingress router cannot mint actor JWT", mtls(routerID), mintJWT, codes.PermissionDenied},
+		{"controller cannot mint actor certificate", mtls(controllerID), mintCert, codes.PermissionDenied},
+
+		// atelet reads egress policies for the worker that enforces them, and
+		// nothing else.
+		{"atelet gets egress policy", mtls(ateletID), getEgress, codes.OK},
+		{"atelet cannot update egress policy", mtls(ateletID), updateEgress, codes.PermissionDenied},
+		{"atelet cannot get actor", mtls(ateletID), getActor, codes.PermissionDenied},
+		{"atelet cannot list actors", mtls(ateletID), listAllActors, codes.PermissionDenied},
+		{"atelet cannot resume actor", mtls(ateletID), resume, codes.PermissionDenied},
+		{"atelet cannot mint actor JWT", mtls(ateletID), mintJWT, codes.PermissionDenied},
+		{"atelet cannot get worker", mtls(ateletID), getWorker, codes.PermissionDenied},
+		// The objectstore control plugin reads actors to scope their storage
+		// credentials, and nothing else.
+		{"api server sidecar gets actor", mtls(pluginID), getActor, codes.OK},
+		{"api server sidecar cannot delete actor", mtls(pluginID), deleteActor, codes.PermissionDenied},
+		{"api server sidecar cannot list actors", mtls(pluginID), listAllActors, codes.PermissionDenied},
+		{"api server sidecar cannot get egress policy", mtls(pluginID), getEgress, codes.PermissionDenied},
+		{"api server sidecar cannot resume actor", mtls(pluginID), resume, codes.PermissionDenied},
+		{"api server sidecar cannot mint actor JWT", mtls(pluginID), mintJWT, codes.PermissionDenied},
+		{"api server sidecar cannot get worker", mtls(pluginID), getWorker, codes.PermissionDenied},
 
 		// A bearer token whose subject is a granted SPIFFE ID gets nothing.
 		{"jwt with controller ID cannot create worker", jwt(controllerID), createWorker, codes.PermissionDenied},
 		{"jwt with egress ID cannot get actor", jwt(egressID), getActor, codes.PermissionDenied},
+		{"jwt with egress ID cannot mint actor JWT", jwt(egressID), mintJWT, codes.PermissionDenied},
 		{"jwt with router ID cannot resume actor", jwt(routerID), resume, codes.PermissionDenied},
+		{"jwt with atelet ID cannot get egress policy", jwt(ateletID), getEgress, codes.PermissionDenied},
+		{"jwt with api server sidecar ID cannot get actor", jwt(pluginID), getActor, codes.PermissionDenied},
 
 		// Other SPIFFE IDs get nothing.
 		{"other mTLS identity cannot resume actor", mtls(otherID), resume, codes.PermissionDenied},

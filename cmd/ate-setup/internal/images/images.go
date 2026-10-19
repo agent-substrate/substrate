@@ -28,7 +28,7 @@ import (
 
 // ModulePath is this repository's module path. A ko:// reference is it joined
 // with a component's package.
-const ModulePath = "github.com/agent-substrate/substrate"
+const ModulePath = "go.ate.dev/substrate"
 
 // Components is every package the installer can deploy a published image for,
 // as an import path within the module.
@@ -40,12 +40,13 @@ const ModulePath = "github.com/agent-substrate/substrate"
 // under the same repository and tag as the rest before a pre-built install can
 // use it.
 var Components = []string{
+	"cmd/ate-idp-server",
 	"cmd/ateapi",
 	"cmd/atecontroller",
 	"cmd/atelet",
 	"cmd/atenet",
-	"cmd/ateom-gvisor",
-	"cmd/ateom-microvm",
+	"cmd/ateworker-gvisor",
+	"cmd/ateworker-microvm",
 	"cmd/benchmarking/isolate/fake-atelet",
 	"cmd/benchmarking/isolate/fake-workersync",
 	"cmd/credential-provider/kubernetes-secrets",

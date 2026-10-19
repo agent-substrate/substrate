@@ -17,8 +17,8 @@ package apivalidation
 import (
 	"context"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -26,19 +26,19 @@ import (
 
 func ValidateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_CreateActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetActorRequest(ctx context.Context, req *ateapipb.GetActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_GetActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListActorsRequest(ctx context.Context, req *ateapipb.ListActorsRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_ListActorsRequest(ctx, op, nil, req, nil)
 }
 
@@ -48,65 +48,59 @@ func ValidateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRe
 	// the existence of a "current" value, which we do not have yet.  This is
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_UpdateActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteActorRequest(ctx context.Context, req *ateapipb.DeleteActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_DeleteActorRequest(ctx, op, nil, req, nil)
-}
-
-func ValidatePauseActorRequest(ctx context.Context, req *ateapipb.PauseActorRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_PauseActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateResumeActorRequest(ctx context.Context, req *ateapipb.ResumeActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_ResumeActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateSuspendActorRequest(ctx context.Context, req *ateapipb.SuspendActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_SuspendActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateRevertActorRequest(ctx context.Context, req *ateapipb.RevertActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_RevertActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateMintActorJWTRequest(ctx context.Context, req *ateapipb.MintActorJwtRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_MintActorJwtRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateMintActorCertificateRequest(ctx context.Context, req *ateapipb.MintActorCertificateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_MintActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateMintAteomActorCertificateRequest(ctx context.Context, req *ateapipb.MintAteomActorCertificateRequest) field.ErrorList {
-	op := operation.Operation{Type: operation.Create}
-	return Validate_MintAteomActorCertificateRequest(ctx, op, nil, req, nil)
+func ValidateMintWorkerActorCertificateRequest(ctx context.Context, req *ateapipb.MintWorkerActorCertificateRequest) field.ErrorList {
+	op := MakeCreateOp(ctx)
+	return Validate_MintWorkerActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateMintAteomActorJwtRequest(ctx context.Context, req *ateapipb.MintAteomActorJwtRequest) field.ErrorList {
+func ValidateMintWorkerActorJwtRequest(ctx context.Context, req *ateapipb.MintWorkerActorJwtRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
-	return Validate_MintAteomActorJwtRequest(ctx, op, nil, req, nil)
+	return Validate_MintWorkerActorJwtRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
+	op := MakeUpdateOp(ctx)
 	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
 	if requireStatus {
 		// Status is optional in the schema, but is actually required to be set
@@ -136,6 +130,11 @@ func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.O
 // This is needed because DV doesn't have a standard format for IP addresses yet.
 func ValidateCustom_WorkerAssignment_WorkerPodIps(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return validateDualStackIPs(fldPath, value)
+}
+
+// This is needed because DV doesn't have a format for SPIFFE IDs.
+func ValidateCustom_WorkerAssignment_WorkerSpiffeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSPIFFEID(fldPath, *value)
 }
 
 func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

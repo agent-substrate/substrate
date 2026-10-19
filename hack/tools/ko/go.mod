@@ -1,4 +1,4 @@
-module github.com/agent-substrate/substrate/hack/tools/ko
+module go.ate.dev/substrate/hack/tools/ko
 
 go 1.27.0
 

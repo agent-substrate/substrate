@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -147,7 +147,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 				{ateattr.SnapshotPhaseSandboxAssets, 10 * time.Millisecond},
 				{ateattr.SnapshotPhaseDownload, 310 * time.Millisecond},
 				{ateattr.SnapshotPhaseOCIUnpack, 50 * time.Millisecond},
-				{ateattr.SnapshotPhaseAteomRestore, 60 * time.Millisecond},
+				{ateattr.SnapshotPhaseWorkerRestore, 60 * time.Millisecond},
 				{ateattr.SnapshotPhaseTotal, 420 * time.Millisecond},
 			},
 			wantStrings: map[string]string{

@@ -34,9 +34,9 @@ import (
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/atenet"
+	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
 )
 
 // upstreamConnectSnapshot also enables the CONNECT listener, so main_internal
@@ -46,7 +46,7 @@ func upstreamConnectSnapshot(t *testing.T) *cachev3.Snapshot {
 	server := NewXdsServer(18000)
 	server.SetConfig(8085, 50053, "127.0.0.1")
 	server.SetConnectPorts(8081, 0)
-	server.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem", "spiffe://cluster.local/")
+	server.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem")
 	server.SetUpstreamConnect(true)
 	if err := server.UpdateSnapshot(); err != nil {
 		t.Fatalf("UpdateSnapshot failed: %v", err)
@@ -173,7 +173,8 @@ func TestXdsServer_UpstreamConnectResources(t *testing.T) {
 	}
 
 	// The tunnel filter copies ext_proc's decision, and the router picks a
-	// tunnel by it.
+	// tunnel by it. The worker identity filter follows it (see
+	// TestXdsServer_WorkerIdentityFilter).
 	for _, name := range []string{IngressHTTPListener, MainInternalName} {
 		hcm := &hcmv3.HttpConnectionManager{}
 		if err := listeners[name].(*listenerv3.Listener).GetFilterChains()[0].GetFilters()[0].GetTypedConfig().UnmarshalTo(hcm); err != nil {
@@ -185,11 +186,11 @@ func TestXdsServer_UpstreamConnectResources(t *testing.T) {
 			names = append(names, f.GetName())
 		}
 		n := len(filters)
-		if n < 3 || names[n-3] != httpExtProcFilterName || names[n-2] != "envoy.filters.http.set_filter_state" || names[n-1] != "envoy.filters.http.router" {
-			t.Fatalf("listener %s HTTP filters = %v, want them to end with ext_proc, set_filter_state, router", name, names)
+		if n < 4 || names[n-4] != httpExtProcFilterName || names[n-3] != "envoy.filters.http.set_filter_state" || names[n-1] != "envoy.filters.http.router" {
+			t.Fatalf("listener %s HTTP filters = %v, want them to end with ext_proc, the tunnel set_filter_state, the worker identity filter, router", name, names)
 		}
 		config := &setfilterstatev3.Config{}
-		if err := filters[n-2].GetTypedConfig().UnmarshalTo(config); err != nil {
+		if err := filters[n-3].GetTypedConfig().UnmarshalTo(config); err != nil {
 			t.Fatalf("listener %s: unmarshal set_filter_state: %v", name, err)
 		}
 		if got := config.GetOnRequestHeaders()[0].GetObjectKey(); got != tunnelKeyFilterStateKey {
@@ -387,7 +388,7 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 	}
 
 	x := NewXdsServer(0)
-	x.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem", "spiffe://cluster.local/")
+	x.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem")
 	c := x.buildActorConnectCluster()
 	if c.GetType() != clusterv3.Cluster_ORIGINAL_DST {
 		t.Errorf("actor_connect type = %v, want ORIGINAL_DST", c.GetType())
@@ -396,8 +397,8 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 	if lb.GetMetadataKey() != nil {
 		t.Error("actor_connect reads a metadata key; the worker address comes from filter state")
 	}
-	if got := lb.GetUpstreamPortOverride().GetValue(); got != atunnel.DefaultConnectPort {
-		t.Errorf("actor_connect port = %d, want atunnel's CONNECT port %d", got, atunnel.DefaultConnectPort)
+	if got := lb.GetUpstreamPortOverride().GetValue(); got != atunnelingress.DefaultConnectPort {
+		t.Errorf("actor_connect port = %d, want atunnel's CONNECT port %d", got, atunnelingress.DefaultConnectPort)
 	}
 	upstreamTLS := &tlsv3.UpstreamTlsContext{}
 	if err := c.GetTransportSocket().GetTypedConfig().UnmarshalTo(upstreamTLS); err != nil {

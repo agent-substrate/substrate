@@ -24,11 +24,11 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/sandboxclass"
 )
 
 // Dotted ate.* matches the metric-instrument naming (atenet.*, atelet.*), not the
@@ -161,10 +161,14 @@ const (
 	SnapshotFidelityKey    = attribute.Key("ate.snapshot.fidelity")
 	SnapshotPhaseKey       = attribute.Key("ate.snapshot.phase")
 	ImageCacheOutcomeKey   = attribute.Key("ate.imagecache.outcome")
-	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
-	RouterResumeKey        = attribute.Key("ate.router.resume")
-	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
-	StatsSourceKey         = attribute.Key("ate.stats.source")
+	// SandboxAssetCacheGCOutcomeKey is the result of one eviction pass over
+	// the node's sandbox asset cache. Rooted at the subsystem, like the
+	// image cache's keys: one cache serves every actor on the node.
+	SandboxAssetCacheGCOutcomeKey = attribute.Key("ate.sandboxassetcache.gc.outcome")
+	SchedulerOutcomeKey           = attribute.Key("ate.scheduler.outcome")
+	RouterResumeKey               = attribute.Key("ate.router.resume")
+	RouterOutcomeKey              = attribute.Key("ate.router.outcome")
+	StatsSourceKey                = attribute.Key("ate.stats.source")
 )
 
 // Keys of the actor usage record. Logs only: the measurements are unbounded and
@@ -186,7 +190,7 @@ const (
 )
 
 // SandboxOOMKillsKey is memory.events' oom_kill for the sandbox cgroup leaf, on
-// the record ateom-gvisor writes when a hosted actor's sandbox has no process
+// the record ateworker-gvisor writes when a hosted actor's sandbox has no process
 // left. Logs only: it is only ever recorded beside actor identity.
 const SandboxOOMKillsKey = attribute.Key("ate.sandbox.oom_kills")
 
@@ -198,7 +202,7 @@ const (
 	StatsKindFinal    = "final"
 )
 
-// Values for StatsSourceKey, mirroring ateompb.StatsSource. The two sources do
+// Values for StatsSourceKey, mirroring ateworkerpb.StatsSource. The two sources do
 // not measure the same thing (the cgroup source charges the sandbox runtime's
 // overhead along with the workload, the guest-agent source sees only the
 // workload's containers), so rollups must group by this key rather than sum
@@ -235,6 +239,14 @@ const (
 	ImageCacheOutcomeError     = "error"
 	ImageCacheOutcomeCancelled = "cancelled"
 	ImageCacheOutcomeTimeout   = "timeout"
+)
+
+// Values for SandboxAssetCacheGCOutcomeKey. A pass is quiet when the cache
+// is within its budget and nothing is asked of it; those are not recorded.
+const (
+	SandboxAssetCacheGCOutcomeComplete  = "complete"  // the pass freed what the budget asked
+	SandboxAssetCacheGCOutcomeShortfall = "shortfall" // it freed what it could, less than asked
+	SandboxAssetCacheGCOutcomeSkipped   = "skipped"   // it could not size the cache and did nothing
 )
 
 // Values for RouterOutcomeKey. RouterOutcomeNoCapacity means that no worker
@@ -276,7 +288,6 @@ const (
 	OperationCreate  = "create"
 	OperationResume  = "resume"
 	OperationSuspend = "suspend"
-	OperationPause   = "pause"
 	OperationDelete  = "delete"
 	OperationRevert  = "revert"
 	OperationUnknown = "unknown"
@@ -287,7 +298,6 @@ var AllOperations = []string{
 	OperationCreate,
 	OperationResume,
 	OperationSuspend,
-	OperationPause,
 	OperationDelete,
 	OperationRevert,
 }
@@ -312,12 +322,11 @@ const (
 
 // Values for SnapshotKindKey, set by ateapi from its own resume branching, so
 // the label is bounded at the producer: Local restores an in-node snapshot,
-// Latest pulls the actor's durable snapshot from object storage, Golden pulls the
-// template's golden image, Boot is a from-scratch start (not a restore).
+// Latest pulls a durable snapshot from object storage (including a template's
+// golden snapshot), Boot is a from-scratch start (not a restore).
 // atelet derives the same values for its own histograms, where the kind is the
 // snapshot a restore reads or a checkpoint writes; Boot never appears there.
 const (
-	SnapshotKindGolden = "golden"
 	SnapshotKindLatest = "latest"
 	SnapshotKindLocal  = "local"
 	SnapshotKindBoot   = "boot"
@@ -329,6 +338,18 @@ const (
 	SnapshotFidelityRootfs  = "rootfs"
 	SnapshotFidelityMemory  = "memory"
 	SnapshotFidelityUnknown = "unknown"
+)
+
+// SnapshotUploadOverdueBandKey buckets how long past the upload delay an
+// actor's undurable local snapshot has been waiting on atelet.
+const SnapshotUploadOverdueBandKey = attribute.Key("ate.snapshot.upload_overdue_band")
+
+// Values for SnapshotUploadOverdueBandKey.
+const (
+	SnapshotUploadOverdueBandUnder1m = "under_1m"
+	SnapshotUploadOverdueBand1mTo5m  = "1m_to_5m"
+	SnapshotUploadOverdueBand5mTo15m = "5m_to_15m"
+	SnapshotUploadOverdueBandOver15m = "over_15m"
 )
 
 // SnapshotFidelityValue maps the wire enum onto its label value, shared so
@@ -352,16 +373,17 @@ func SnapshotFidelityValue(fidelity ateletpb.SnapshotFidelity) string {
 // with the asset fetch and OCI unpack), so they are independent observations,
 // not a partition of Total: summing across them is meaningless.
 const (
-	SnapshotPhaseVolumeMount     = "volume_mount"
-	SnapshotPhaseManifestFetch   = "manifest_fetch"
-	SnapshotPhaseSandboxAssets   = "sandbox_assets"
-	SnapshotPhaseDownload        = "download"
-	SnapshotPhaseOCIUnpack       = "oci_unpack"
-	SnapshotPhaseAteomRestore    = "ateom_restore"
-	SnapshotPhaseAteomCheckpoint = "ateom_checkpoint"
+	SnapshotPhaseVolumeMount      = "volume_mount"
+	SnapshotPhaseManifestFetch    = "manifest_fetch"
+	SnapshotPhaseSandboxAssets    = "sandbox_assets"
+	SnapshotPhaseDownload         = "download"
+	SnapshotPhaseOCIUnpack        = "oci_unpack"
+	SnapshotPhaseWorkerRestore    = "worker_restore"
+	SnapshotPhaseWorkerCheckpoint = "worker_checkpoint"
 	// Persist is one step with two destinations (upload for external, rename
 	// for local); SnapshotKindKey already says which.
 	SnapshotPhasePersist = "persist"
+	SnapshotPhaseCleanup = "cleanup"
 	SnapshotPhaseTotal   = "total"
 )
 
@@ -373,12 +395,10 @@ const SandboxClassUnknown = "unknown"
 // Empty reports as unknown rather than the gvisor default, so a manifest
 // problem stays visible.
 func NormalizeSandboxClass(class string) string {
-	switch atev1alpha1.SandboxClass(class) {
-	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM:
+	if sandboxclass.Valid(class) {
 		return class
-	default:
-		return SandboxClassUnknown
 	}
+	return SandboxClassUnknown
 }
 
 // SandboxClassAttribute sets ate.sandbox.class. No source of the class is
@@ -386,7 +406,8 @@ func NormalizeSandboxClass(class string) string {
 // helper and not through SandboxClassKey.
 //
 // To omit the attribute while the class is unknown is a different choice, and
-// two emitters make it: recordSchedulerAssignment and snapshotOp.attrs.
+// three emitters make it: lifecycleOpAttrs, recordSchedulerAssignment and
+// snapshotOp.attrs.
 func SandboxClassAttribute(class string) attribute.KeyValue {
 	return SandboxClassKey.String(NormalizeSandboxClass(class))
 }

@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -41,7 +41,7 @@ workerSelector:
     workload: counter
 containers:
 - name: counter
-  image: ko://github.com/agent-substrate/substrate/demos/counter
+  image: ko://go.ate.dev/substrate/demos/counter
   command: ["/ko-app/counter", "--extra-port=9090"]
   wakeupProbe:
     httpGet:
@@ -59,9 +59,6 @@ resources:
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://ate-snapshots/ate-demo-counter/
-sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_GVISOR
-  configName: gvisor-default
 volumes:
 - name: data
   durableDir: {}
@@ -78,7 +75,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"workload": "counter"}},
 		Containers: []*ateapipb.Container{{
 			Name:    "counter",
-			Image:   "ko://github.com/agent-substrate/substrate/demos/counter",
+			Image:   "ko://go.ate.dev/substrate/demos/counter",
 			Command: []string{"/ko-app/counter", "--extra-port=9090"},
 			WakeupProbe: &ateapipb.WakeupProbe{
 				HttpGet: &ateapipb.HttpGetAction{Path: "/readyz", Port: 80},
@@ -92,10 +89,6 @@ func TestActorTemplateFromManifest(t *testing.T) {
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			StorageLocation:   "gs://ate-snapshots/ate-demo-counter/",
-		},
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
-			ConfigName:   "gvisor-default",
 		},
 		Volumes: []*ateapipb.Volume{{
 			Name:       "data",
@@ -114,9 +107,6 @@ func TestActorTemplateFromManifest_SnakeCase(t *testing.T) {
   name: counter
 snapshot_config:
   storage_location: gs://ate-snapshots/ate-demo-counter/
-sandbox_config:
-  sandbox_class: SANDBOX_CLASS_MICROVM
-  config_name: microvm
 `
 	got, err := actorTemplateFromManifest([]byte(manifest))
 	if err != nil {
@@ -124,9 +114,6 @@ sandbox_config:
 	}
 	if got.GetSnapshotConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
 		t.Errorf("storage_location = %q", got.GetSnapshotConfig().GetStorageLocation())
-	}
-	if got.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
-		t.Errorf("sandbox_class = %v", got.GetSandboxConfig().GetSandboxClass())
 	}
 }
 
@@ -137,7 +124,7 @@ func TestActorTemplateFromManifest_Errors(t *testing.T) {
 	}{
 		{name: "empty", manifest: ""},
 		{name: "unknown field", manifest: "metadata: {atespace: a, name: n}\nsandboxClass: gvisor\n"},
-		{name: "bad enum", manifest: "sandboxConfig: {sandboxClass: gvisor}\n"},
+		{name: "bad enum", manifest: "snapshotConfig: {preferredFidelity: memory}\n"},
 		{name: "crd shape", manifest: "apiVersion: ate.dev/v1alpha1\nkind: ActorTemplate\nmetadata: {name: counter}\n"},
 		{name: "not yaml", manifest: "\t{"},
 	}
@@ -157,19 +144,16 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 		manifest string
 		atespace string
 		name     string
-		class    ateapipb.SandboxClass
 	}{
 		{
 			manifest: "counter-template.yaml.tmpl",
 			atespace: "ate-demo-counter",
 			name:     "counter",
-			class:    ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
 		},
 		{
 			manifest: "counter-microvm-template.yaml.tmpl",
 			atespace: "ate-demo-counter-microvm",
 			name:     "counter-microvm",
-			class:    ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
 		},
 	}
 	for _, test := range tests {
@@ -197,9 +181,6 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 			if got.GetMetadata().GetAtespace() != test.atespace || got.GetMetadata().GetName() != test.name {
 				t.Errorf("metadata = %s/%s, want %s/%s",
 					got.GetMetadata().GetAtespace(), got.GetMetadata().GetName(), test.atespace, test.name)
-			}
-			if got.GetSandboxConfig().GetSandboxClass() != test.class {
-				t.Errorf("sandbox class = %v, want %v", got.GetSandboxConfig().GetSandboxClass(), test.class)
 			}
 			if len(got.GetContainers()) == 0 || got.GetSnapshotConfig().GetStorageLocation() == "" {
 				t.Errorf("missing required fields: %v", got)

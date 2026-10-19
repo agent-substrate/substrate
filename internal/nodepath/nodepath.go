@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package nodepath holds the node-level paths more than one component needs:
-// the host directory atelet and the ateoms both mount, the sockets and netns
+// the host directory atelet and the workers both mount, the sockets and netns
 // they find each other by, the per-actor parent directory, and where atelet
 // stages runtime binaries.
 package nodepath
@@ -21,29 +21,34 @@ package nodepath
 import "path/filepath"
 
 // BasePath is the root shared folder on the host filesystem, mounted at the
-// same path into the atelet and ateom containers.
+// same path into the atelet and worker containers.
 const BasePath = "/var/lib/ate"
 
 // ActorsDir is the parent of the per-actor directories atelet prepares.
 var ActorsDir = filepath.Join(BasePath, "actors")
 
-// StaticFilesDir holds things like runsc binaries.
-var StaticFilesDir = filepath.Join(BasePath, "static-files")
+// ActorSandboxAssetsDir is where atelet stages an actor's sandbox runtime
+// assets, hard-linked from its asset cache, and the only location a worker
+// runs a sandbox binary from. Both sides derive it from the actor UID, so a
+// worker can check that the directory a request names is the actor's own.
+func ActorSandboxAssetsDir(actorUID string) string {
+	return filepath.Join(ActorsDir, actorUID, "sandbox-assets")
+}
 
-// AteomSupportSocket is the node-local atelet socket used by atunnel
+// WorkerSupportSocket is the node-local atelet socket used by atunnel
 // to request credentials for the worker's current actor assignment.
-var AteomSupportSocket = filepath.Join(BasePath, "ateom-support.sock")
+var WorkerSupportSocket = filepath.Join(BasePath, "worker-support.sock")
 
 // AteletOTLPSocketPath is the node-scoped unix socket atelet serves the OTLP
 // relay on (see internal/otlprelay). It is node-scoped rather than per-pod
-// because every ateom on the node pushes into the same relay: atelet is a
+// because every worker on the node pushes into the same relay: atelet is a
 // DaemonSet, so one socket collapses N per-pod collector connections into one
 // per-node connection.
 //
 // It sits directly under BasePath, which is the host directory already mounted
-// at the same path into atelet and into every ateom pod, so no new volume is
-// needed for ateom to reach it. Note that BasePath is mounted writable
-// (workerpool_apply.go) and shared with AteomSupportSocket and the image
+// at the same path into atelet and into every worker pod, so no new volume is
+// needed for worker to reach it. Note that BasePath is mounted writable
+// (workerpool_apply.go) and shared with WorkerSupportSocket and the image
 // cache, so a worker pod can unlink or replace this socket. Confining
 // atelet-owned sockets to a subdirectory mounted read-only would be an
 // improvement, but it is a property of the whole BasePath mount rather than of
@@ -56,35 +61,44 @@ func AteletOTLPSocketPath() string {
 	)
 }
 
-// AteomsDir is the parent of every per-ateom directory, so listing it is how
-// a scraper with no prior knowledge discovers the node's ateoms. atelet
-// creates AteomPath(podUID) once it writes the pod's sandbox versions file and
-// removes it when the pod is deleted; the ateom also MkdirAlls it at boot. A
-// directory may exist before its ateom listens on its socket.
-func AteomsDir() string {
-	return filepath.Join(BasePath, "ateoms")
+// WorkersDir is the parent of every per-worker directory, so listing it is how
+// a scraper with no prior knowledge discovers the node's workers. atelet
+// creates WorkerPath(podUID) once it writes the pod's sandbox runtimes file and
+// removes it when the pod is deleted; the worker also MkdirAlls it at boot. A
+// directory may exist before its worker listens on its socket.
+func WorkersDir() string {
+	return filepath.Join(BasePath, "workers")
 }
 
-func AteomPath(podUID string) string {
-	return filepath.Join(AteomsDir(), podUID)
+func WorkerPath(podUID string) string {
+	return filepath.Join(WorkersDir(), podUID)
 }
 
-func AteomSocketPath(podUID string) string {
+func WorkerSocketPath(podUID string) string {
 	return filepath.Join(
-		AteomPath(podUID),
-		"ateom.sock",
+		WorkerPath(podUID),
+		"worker.sock",
 	)
 }
 
-// SandboxVersionsFileName is the base name of the file in AteomPath(podUID)
-// where atelet keeps the sandbox versions of a worker's pool, a
-// sandboxversions.File. A runtime it lists may not have its assets on the
+// SandboxRuntimesFileName is the base name of the file in WorkerPath(podUID)
+// where atelet keeps the sandbox runtimes of a worker's pool, a
+// sandboxruntimes.File. A runtime it lists may not have its assets on the
 // node yet.
-const SandboxVersionsFileName = "sandbox-versions.json"
+const SandboxRuntimesFileName = "sandbox-runtimes.json"
+
+// WorkerSandboxRuntimesPath is the path of the sandbox runtimes file atelet
+// writes for the worker pod with the given UID.
+func WorkerSandboxRuntimesPath(podUID string) string {
+	return filepath.Join(
+		WorkerPath(podUID),
+		SandboxRuntimesFileName,
+	)
+}
 
 // ActorNetNSName names an actor's sandbox network namespace.
 func ActorNetNSName(actorUID string) string {
-	return "ateom-actor:" + actorUID
+	return "worker-actor:" + actorUID
 }
 
 // ActorNetNSPath is the mount path of the actor's named namespace.

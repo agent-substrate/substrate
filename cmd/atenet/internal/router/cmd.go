@@ -22,9 +22,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/egress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 func NewRouterCmd() *cobra.Command {
@@ -84,7 +84,6 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 
 	fs.StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80) and needs --upstream-connect=false.")
 	fs.StringVar(&cfg.UpstreamTrustBundlePath, "upstream-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to validate the actor's atunnel ingress server certificate.")
-	fs.StringVar(&cfg.UpstreamSpiffePrefix, "upstream-spiffe-prefix", "spiffe://cluster.local/", "SPIFFE URI SAN prefix (trust domain) the actor's atunnel server cert must match. Empty falls back to default SAN check against the dialed pod IP (which SPIFFE-only certs never match).")
 	fs.BoolVar(&cfg.UpstreamConnect, "upstream-connect", true, "Reach atunnel through mTLS CONNECT tunnels on port 8443; false reaches it over HTTPS on 443 instead (Envoy dataplane only). Requires --upstream-credential-bundle")
 
 	fs.StringVar(&cfg.ActorIdentityCAFile, "actor-identity-ca-file", "", "PEM trust bundle for the actor-identity CA, used to verify the actor client certificates presented on egress CONNECTs. Required by the egress gateway's ext_proc sidecar; empty (the default) leaves egress authentication unconfigured and every egress CONNECT is denied.")
@@ -123,6 +122,6 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	// must propagate to the Service endpoints before the drain starts.
 	fs.DurationVar(&cfg.DrainDelay, "drain-delay", 13*time.Second, "How long to keep serving after SIGTERM before starting the drain, covering readiness-probe detection and Service endpoint propagation")
 	fs.DurationVar(&cfg.DrainTimeout, "drain-timeout", 0, "Deadline for the ext_proc drain on shutdown; streams still open past it (parked requests included) are forcefully cancelled. 0 (the default) derives --parked-request-budget + the drain route budget + margin so parked requests always finish normally. It does not follow --route-timeout. Explicit values must be >= --parked-request-budget")
-	fs.StringVar(&cfg.EnvoyAdminAddr, "envoy-admin-address", "localhost:9901", "Envoy admin interface the shutdown sequence drives to drain the sidecar (healthcheck/fail, drain_listeners, stats polling). Ignored with --atenet-dataplane=agentgateway")
+	fs.StringVar(&cfg.EnvoyAdminAddr, "envoy-admin-address", "localhost:9901", "Envoy admin interface the shutdown sequence drives to drain the sidecar (healthcheck/fail, drain_listeners, stats polling). A localhost host tries both 127.0.0.1 and ::1, whatever the host's resolver says. Ignored with --atenet-dataplane=agentgateway")
 	fs.StringVar(&cfg.DrainCompleteFile, "drain-complete-file", defaultDrainCompleteFile, "Marker file created (on a pod-shared emptyDir) once the shutdown drain completes; the dataplane container's preStop hook polls for it so the proxy exits as soon as — and no sooner than — the drain is done. Removed at startup to defuse stale markers. Empty disables the handshake")
 }

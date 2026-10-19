@@ -13,42 +13,49 @@
 // limitations under the License.
 
 // Package ateletpath is atelet's on-node layout: the per-actor directories
-// it passes to ateom as ActorDirs, and the directories only atelet uses.
+// it passes to worker as ActorDirs, and the directories only atelet uses.
 package ateletpath
 
 import (
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 var (
 	// ImageCacheDir is the node-local OCI image layer cache (see
 	// internal/imagecache). It lives under BasePath so the cached layer
 	// directories are visible at the same path in atelet (which writes them)
-	// and in every ateom pod (which mounts them as overlay lowerdirs).
+	// and in every worker pod (which mounts them as overlay lowerdirs).
 	ImageCacheDir = filepath.Join(nodepath.BasePath, "image-cache")
 
 	// SnapshotScratchDir holds short-lived directories for snapshot manifests
 	// moved through the object-store plugin. It lives under BasePath, which the
 	// node plugin shares with atelet.
 	SnapshotScratchDir = filepath.Join(nodepath.BasePath, "snapshot-scratch")
+
+	// SandboxAssetCacheDir is the node-local sandbox asset cache (see
+	// cmd/atelet/internal/filecache): runsc releases, micro-VM kernels, VMMs
+	// and guest images, content-addressed. It lives under BasePath, on the
+	// same mount as ActorsDir, because an actor's assets are hard links from
+	// here into its SandboxAssetsDir.
+	SandboxAssetCacheDir = filepath.Join(nodepath.BasePath, "sandbox-asset-cache")
+
+	// SandboxAssetScratchDir holds short-lived destination directories for
+	// asset fetches that have no actor, such as prewarming a SandboxConfig's
+	// default version. Wiped at startup. Under BasePath so the links the
+	// cache serves into it are on the cache's mount.
+	SandboxAssetScratchDir = filepath.Join(nodepath.BasePath, "sandbox-asset-scratch")
+
+	// SandboxRuntimeIndexFile holds every sandbox runtime a worker on this
+	// node has advertised, by the runtime's hash, with the asset record the
+	// hash was computed from. atelet rewrites it before a worker's own file
+	// can let the worker register a new hash, and loads it at startup, so a
+	// runtime registered before a restart resolves the moment atelet serves
+	// again.
+	SandboxRuntimeIndexFile = filepath.Join(nodepath.BasePath, "sandbox-runtime-index.json")
 )
-
-// AssetPath returns the cache path for a single-file sandbox asset
-func AssetPath(sha256 string) string {
-	return filepath.Join(nodepath.StaticFilesDir, "asset-"+sha256)
-}
-
-// GVisorReleaseDir is the directory a gVisor release tarball (gvisor.tar.bz2,
-// containing runsc plus its gvisor-bin/ helper binaries) is extracted into,
-// content-addressed by the tarball's sha256. runsc requires the gvisor-bin/
-// subdirectory to sit next to it, so the whole release is kept together under
-// one directory rather than as loose files in StaticFilesDir.
-func GVisorReleaseDir(sha256 string) string {
-	return filepath.Join(nodepath.StaticFilesDir, "gvisor-"+sha256)
-}
 
 func ActorPath(actorUID string) string {
 	return filepath.Join(
@@ -67,6 +74,36 @@ func ActorSandboxAssetsFile(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
 		"sandbox-assets.json",
+	)
+}
+
+// ActorSnapshotStateFile is the per-actor file where atelet keeps what it
+// tracks of the actor's snapshots: its latest local and durable snapshots, so
+// a restarted atelet still knows them. Like ActorSandboxAssetsFile it lives
+// directly under ActorPath, outside the subdirs resetActorDirs wipes.
+func ActorSnapshotStateFile(actorUID string) string {
+	return filepath.Join(
+		ActorPath(actorUID),
+		"snapshot-state.json",
+	)
+}
+
+// SandboxAssetsDir holds the actor's sandbox runtime assets, one entry per
+// asset name, each a hard link (or a directory of hard links, for a gVisor
+// release) from SandboxAssetCacheDir. The worker runs binaries from here
+// only, and derives the same path itself to check a request against.
+func SandboxAssetsDir(actorUID string) string {
+	return nodepath.ActorSandboxAssetsDir(actorUID)
+}
+
+// SandboxAssetsStagingDir is where Run stages an activation's assets before
+// moving them into SandboxAssetsDir, so a failed fetch leaves whatever a
+// live activation has there untouched. Not among the directories
+// resetActorDirs empties.
+func SandboxAssetsStagingDir(actorUID string) string {
+	return filepath.Join(
+		ActorPath(actorUID),
+		"sandbox-assets.staging",
 	)
 }
 
@@ -127,7 +164,7 @@ func DurableDirVolumeMountPoint(actorUID, volumeName string) string {
 // Run/Restore; each sandbox class excludes them differently:
 //
 //   - micro-VM captures by location: its checkpoint tars all of
-//     DurableDirVolumeMountsDir (see ateom-microvm's tarDurableVolumes), so
+//     DurableDirVolumeMountsDir (see ateworker-microvm's tarDurableVolumes), so
 //     system-info roots are excluded by living in this separate directory.
 //   - gVisor captures by declaration: durable mounts are registered with
 //     the sandbox (mount-hint annotations for MEMORY checkpoints, the
@@ -170,30 +207,31 @@ func RestoreStateDir(actorUID string) string {
 	)
 }
 
-func VolumesDir(actorUID string) string {
+func ExternalVolumeMountsDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
 		"volumes",
 	)
 }
 
-func VolumeHostPath(actorUID, volumeName string) string {
+func ExternalVolumeHostPath(actorUID, volumeName string) string {
 	return filepath.Join(
-		VolumesDir(actorUID),
+		ExternalVolumeMountsDir(actorUID),
 		volumeName,
 	)
 }
 
-// ActorDirs is the directory set atelet passes to ateom for an actor. ateom
+// ActorDirs is the directory set atelet passes to worker for an actor. worker
 // takes these from the request rather than deriving them from the actor UID.
-func ActorDirs(actorUID string) *ateompb.ActorDirs {
-	return &ateompb.ActorDirs{
+func ActorDirs(actorUID string) *ateworkerpb.ActorDirs {
+	return &ateworkerpb.ActorDirs{
 		RootDir:                   ActorPath(actorUID),
 		OciBundleDir:              OCIBundleDir(actorUID),
 		CheckpointDir:             CheckpointStateDir(actorUID),
 		RestoreDir:                RestoreStateDir(actorUID),
 		DurableDirVolumeMountsDir: DurableDirVolumeMountsDir(actorUID),
 		SystemInfoVolumeRootsDir:  SystemInfoVolumeRootsDir(actorUID),
-		VolumesDir:                VolumesDir(actorUID),
+		ExternalVolumeMountsDir:   ExternalVolumeMountsDir(actorUID),
+		SandboxAssetsDir:          SandboxAssetsDir(actorUID),
 	}
 }

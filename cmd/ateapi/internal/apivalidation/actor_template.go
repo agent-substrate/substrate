@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -28,48 +28,39 @@ import (
 
 func ValidateCreateActorTemplateRequest(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_CreateActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetActorTemplateRequest(ctx context.Context, req *ateapipb.GetActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_GetActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListActorTemplatesRequest(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_ListActorTemplatesRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteActorTemplateRequest(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_DeleteActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.ActorTemplate) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
+	op := MakeUpdateOp(ctx)
 	return Validate_ActorTemplate(ctx, op, fldPath, newVal, oldVal)
 }
 
 // ValidateCustom_CreateActorTemplateRequest_ActorTemplate holds the rules
 // that span more than one field of a template: container volume mounts must
-// reference volumes the template declares, and a ROOTFS preferred fidelity
-// needs a sandbox class that can capture rootfs changes without memory, which
-// today is the micro-VM class alone.
+// reference volumes the template declares.
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
 	var errs field.ErrorList
-	if value.GetSnapshotConfig().GetPreferredFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS &&
-		value.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
-		errs = append(errs, field.Invalid(
-			fldPath.Child("snapshot_config", "preferred_fidelity"),
-			value.GetSnapshotConfig().GetPreferredFidelity().String(),
-			"ROOTFS fidelity requires sandbox_config.sandbox_class SANDBOX_CLASS_MICROVM"))
-	}
 	declared := make(map[string]bool, len(value.GetVolumes()))
 	for _, vol := range value.GetVolumes() {
 		declared[vol.GetName()] = true
@@ -85,6 +76,22 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
 					name, "must reference a volume declared in the template"))
 			}
+		}
+	}
+	return errs
+}
+
+// ValidateCustom_ActorTemplate_Resources requires both a cpu and a memory
+// limit, which the scheduler books against worker capacity.
+func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Resources) field.ErrorList {
+	set := sets.New[string]()
+	for _, l := range value.GetLimits() {
+		set.Insert(l.GetName())
+	}
+	var errs field.ErrorList
+	for _, name := range []string{resources.ResourceCPU, resources.ResourceMemory} {
+		if !set.Has(name) {
+			errs = append(errs, field.Required(fldPath.Child("limits"), "must set a "+name+" limit"))
 		}
 	}
 	return errs

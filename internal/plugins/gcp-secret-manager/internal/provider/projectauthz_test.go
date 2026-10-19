@@ -123,7 +123,7 @@ func TestActorAtespace(t *testing.T) {
 		{id: "spiffe://substrate-actor.local/actor/team-a/agent-1", want: "team-a"},
 		{id: "", wantErr: true},
 		{id: "spiffe://cluster.local/actor/team-a/agent-1", wantErr: true},
-		{id: "spiffe://substrate-actor.local/ateom-for-actor/team-a/agent-1", wantErr: true},
+		{id: "spiffe://substrate-actor.local/worker-for-actor/team-a/agent-1", wantErr: true},
 		{id: "spiffe://substrate-actor.local/actor/team-a", wantErr: true},
 		{id: "spiffe://substrate-actor.local/actor/team-a/agent-1/extra", wantErr: true},
 		{id: "spiffe://substrate-actor.local/actor/Team_A/agent-1", wantErr: true},

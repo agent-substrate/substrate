@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package serverboot collects the startup boilerplate shared by the
-// long-running substrate server binaries (ateapi, atelet, ateom-gvisor,
-// ateom-microvm): slog wiring, OTel tracer + meter providers, a Prometheus
+// long-running substrate server binaries (ateapi, atelet, ateworker-gvisor,
+// ateworker-microvm): slog wiring, OTel tracer + meter providers, a Prometheus
 // /metrics server, a /readyz and /healthz server for the kubelet probes, and a
 // couple of small helpers for startup fail-fast.
 package serverboot
@@ -32,11 +32,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/google/uuid"
 	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/contextlogging"
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -47,6 +47,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
@@ -61,7 +62,7 @@ func InitLogger() {
 
 // InitLoggerWithWriter is InitLogger with an explicit destination. Use it to share
 // one synchronized writer between the runtime logger and a separate writer (e.g.
-// ateom's actor-log forwarder) so their lines don't interleave.
+// worker's actor-log forwarder) so their lines don't interleave.
 func InitLoggerWithWriter(w io.Writer) {
 	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: &logLevel}))))
 }
@@ -116,7 +117,7 @@ func newResource(ctx context.Context, serviceName string, extraAttrs ...attribut
 // gets no attribute at all; true means it did, and conn says whether it got it.
 //
 // The distinction matters because a nil conn on a relay-capable component is
-// exactly the degraded case worth alerting on: the ateom asked for the relay,
+// exactly the degraded case worth alerting on: the worker asked for the relay,
 // could not dial it, and is now exporting over the worker pod's own network.
 // Collapsing that into the same "no attribute" bucket as atecontroller would
 // hide it.
@@ -140,7 +141,7 @@ type TracingOptions struct {
 	// default.
 	Sampling TraceSampling
 	// ExporterConn, when non-nil, is the connection the OTLP exporter sends
-	// over, instead of dialing OTEL_EXPORTER_OTLP_ENDPOINT itself. ateom passes
+	// over, instead of dialing OTEL_EXPORTER_OTLP_ENDPOINT itself. worker passes
 	// the unix socket to atelet's relay (internal/otlprelay) so a worker pod
 	// exports without a network path of its own; nil keeps the direct dial.
 	//
@@ -148,9 +149,9 @@ type TracingOptions struct {
 	// connection it did not create.
 	ExporterConn *grpc.ClientConn
 	// RelayCapable marks a component that is meant to export through the relay,
-	// whether or not it managed to (see relayAttrs). Only the ateoms set it. It
+	// whether or not it managed to (see relayAttrs). Only the workers set it. It
 	// is separate from ExporterConn because a nil conn on its own cannot tell
-	// "the ateom tried and fell back" from "this component never had a relay".
+	// "the worker tried and fell back" from "this component never had a relay".
 	RelayCapable bool
 }
 
@@ -262,10 +263,11 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 // InitMetricsBridged is for a binary whose scraped endpoint serves a registry
 // it does not own (atecontroller: controller-runtime's), so every metric
 // reaches the backend exactly once on whichever path is active. With the OTLP
-// export, reg is bridged onto the push and the OTel instruments stay off it,
-// since the bridge would otherwise push them a second time. With prometheus
-// alone, nothing is pushed and the OTel instruments register on reg, so its
-// endpoint serves both.
+// export, reg is bridged onto the push and the OTel instruments are pushed
+// natively. With the scraped endpoint on too, the instruments also register on
+// reg, and the bridge skips them so the push does not carry them twice. With
+// prometheus alone, nothing is pushed and the instruments register on reg, so
+// its endpoint serves both.
 //
 // servePull reports whether OTEL_METRICS_EXPORTER leaves the scraped endpoint
 // on, which the caller must then serve from reg: unset, prometheus, or a list
@@ -282,32 +284,78 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 	}
 	exporters := metricsExporters(ctx, true)
 	servePull = exporters.Has(exporterPrometheus)
-	switch {
-	case exporters.Has(ExporterOTLP):
-		producer := prombridge.NewMetricProducer(prombridge.WithGatherer(reg))
-		if wrapProducer != nil {
-			producer = wrapProducer(producer)
+	push := exporters.Has(ExporterOTLP)
+
+	var producers []sdkmetric.Producer
+	var readers []sdkmetric.Reader
+	var bridge sdkmetric.Producer
+	if push {
+		bridge = prombridge.NewMetricProducer(prombridge.WithGatherer(reg))
+	}
+	if servePull {
+		registerer := promclient.Registerer(reg)
+		var own *promclient.Registry
+		if push {
+			// own holds only the instruments, so the bridge can tell which of
+			// reg's families are not its to push. reg serves own as well.
+			own = promclient.NewRegistry()
+			registerer = own
 		}
-		mp, err = newMeterProvider(ctx, serviceName, true, false, nil, []sdkmetric.Producer{producer})
-	case servePull:
-		var promReader *prometheus.Exporter
-		if promReader, err = prometheus.New(prometheus.WithRegisterer(reg)); err != nil {
+		promReader, err := prometheus.New(prometheus.WithRegisterer(registerer))
+		if err != nil {
 			return nil, false, fmt.Errorf("create Prometheus metric exporter: %w", err)
 		}
-		mp, err = newMeterProvider(ctx, serviceName, false, false, nil, nil, promReader)
-	default:
-		mp, err = newMeterProvider(ctx, serviceName, false, false, nil, nil)
+		if own != nil {
+			if err := reg.Register(own); err != nil {
+				return nil, false, fmt.Errorf("serve the OTel instruments from the registry: %w", err)
+			}
+			bridge = skipFamilies{inner: bridge, skip: own}
+		}
+		readers = append(readers, promReader)
 	}
+	if push {
+		if wrapProducer != nil {
+			bridge = wrapProducer(bridge)
+		}
+		producers = append(producers, bridge)
+	}
+	mp, err = newMeterProvider(ctx, serviceName, push, false, nil, producers, readers...)
 	if err != nil {
 		return nil, false, err
 	}
 	return mp, servePull, nil
 }
 
+// skipFamilies drops the metrics of inner named like a family skip gathers. A
+// failed gather drops inner's batch rather than risk pushing a metric twice,
+// and goes to the OTel error handler so the other metrics still push.
+type skipFamilies struct {
+	inner sdkmetric.Producer
+	skip  promclient.Gatherer
+}
+
+func (p skipFamilies) Produce(ctx context.Context) ([]metricdata.ScopeMetrics, error) {
+	scopes, err := p.inner.Produce(ctx)
+	// Gathered after inner, so skip covers every family inner saw.
+	families, gerr := p.skip.Gather()
+	if gerr != nil {
+		otel.Handle(fmt.Errorf("gather the families to skip: %w", gerr))
+		return nil, err
+	}
+	skip := make(map[string]bool, len(families))
+	for _, f := range families {
+		skip[f.GetName()] = true
+	}
+	for i := range scopes {
+		scopes[i].Metrics = slices.DeleteFunc(scopes[i].Metrics, func(m metricdata.Metrics) bool { return skip[m.Name] })
+	}
+	return scopes, err
+}
+
 // InitMetricsPushOnlyVia is InitMetrics without the Prometheus reader, for a
-// binary that runs no metrics HTTP server of its own (ateom): a pull reader
+// binary that runs no metrics HTTP server of its own (worker): a pull reader
 // would collect into a registry nothing serves. conn is the metrics counterpart
-// of TracingOptions.ExporterConn: ateom passes atelet's relay socket
+// of TracingOptions.ExporterConn: worker passes atelet's relay socket
 // (internal/otlprelay) so the worker pod needs no network path of its own; a
 // nil conn keeps the direct dial to OTEL_EXPORTER_OTLP_ENDPOINT.
 //
@@ -362,7 +410,7 @@ func newMeterProvider(ctx context.Context, serviceName string, push, relayCapabl
 
 // dropRPCServerAddress removes server.address from the otelgrpc instruments.
 // otelgrpc reads it from the remote address of the client connection: the
-// socket path atelet dials holds the ateom pod UID, and a TCP address is the IP
+// socket path atelet dials holds the worker pod UID, and a TCP address is the IP
 // of one server pod. Either way the key has one value per pod. server.port stays,
 // because it has one value per service.
 var dropRPCServerAddress = sdkmetric.NewView(

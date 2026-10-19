@@ -22,12 +22,12 @@ import (
 	"log/slog"
 	"slices"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
+	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -109,7 +109,7 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 
 // validateRuntimeClasses rejects a runtime of a class other than the Worker's
 // own. The class is fixed when the pool creates the Worker and names the
-// sandbox its ateom runs, so a runtime of another class contradicts the
+// sandbox its worker runs, so a runtime of another class contradicts the
 // recorded Worker state. A Worker recorded without a class has nothing for a
 // report to contradict.
 func validateRuntimeClasses(class string, req *ateapipb.RegisterWorkerRequest) error {

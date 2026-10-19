@@ -15,7 +15,7 @@
 package main
 
 import (
-	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/cmd"
+	"go.ate.dev/substrate/cmd/kubectl-ate/internal/cmd"
 )
 
 func main() {

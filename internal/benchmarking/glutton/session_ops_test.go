@@ -26,7 +26,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 )
 
 // newTestService builds a Service rooted in a per-test temp dir.

@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/protoredact"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/protoredact"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -171,9 +171,9 @@ func TestInternalServerUnaryInterceptorCodes(t *testing.T) {
 		},
 		{
 			name:       "upstream status becomes Internal without its details",
-			handlerErr: fmt.Errorf("while calling ateom: %w", statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil)),
+			handlerErr: fmt.Errorf("while calling worker: %w", statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil)),
 			wantCode:   codes.Internal,
-			wantMsg:    "while calling ateom: rpc error: code = DataLoss desc = boom",
+			wantMsg:    "while calling worker: rpc error: code = DataLoss desc = boom",
 		},
 		{
 			name:       "wrapped upstream status becomes Internal",
@@ -359,7 +359,7 @@ func TestServerUnaryInterceptorRequestLogMasksEnvValues(t *testing.T) {
 			Containers: []*ateletpb.Container{
 				{
 					Name: "main",
-					Env: []*ateletpb.EnvEntry{
+					Env: []*ateletpb.EnvVar{
 						{Name: "API_KEY", Value: "sk-secret"},
 						{Name: "PLAIN", Value: "not-a-secret"},
 					},
@@ -368,7 +368,7 @@ func TestServerUnaryInterceptorRequestLogMasksEnvValues(t *testing.T) {
 		},
 	}
 
-	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.AteomHerder/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.Atelet/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return &ateletpb.RunResponse{}, nil
 	})
 	if err != nil {

@@ -19,10 +19,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
 
@@ -30,6 +31,7 @@ import (
 // golden actor and tag go first and the row last, so a failed attempt leaves
 // the row for a retry to rediscover them by.
 func (w *ActorWorkflow) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	// Serializes against the reconciler, which creates the golden actor and
 	// tag under the same lease.
 	ctx, lease, err := acquireLease(ctx, w.store, "lease:actortemplate:"+templateRef.Atespace+":"+templateRef.Name, "ActorTemplate "+templateRef.String())
@@ -51,12 +53,12 @@ func (w *ActorWorkflow) DeleteActorTemplate(ctx context.Context, templateRef res
 		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	}
 
-	// Both are named after the template's uid, in the reserved atespace.
+	// Both are named after the template's UID, in the template's atespace.
 	goldenName := tmpl.GetMetadata().GetUid()
-	if err := w.ensureGoldenActorDeleted(ctx, resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: goldenName}); err != nil {
+	if err := w.ensureGoldenActorDeleted(ctx, resources.ActorRef{Atespace: templateRef.Atespace, Name: goldenName}); err != nil {
 		return nil, err
 	}
-	if err := w.ensureGoldenTagDeleted(ctx, resources.TagRef{Atespace: resources.GoldenActorAtespace, Name: goldenName}); err != nil {
+	if err := w.ensureGoldenTagDeleted(ctx, resources.TagRef{Atespace: templateRef.Atespace, Name: goldenName}); err != nil {
 		return nil, err
 	}
 	return w.finalizeTemplateDeleted(ctx, templateRef, precondition)

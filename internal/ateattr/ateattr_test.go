@@ -21,11 +21,11 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func toMap(kvs []attribute.KeyValue) map[attribute.Key]attribute.Value {
@@ -377,8 +377,8 @@ func TestMetricLabelValues(t *testing.T) {
 		{OperationCreate, "create"},
 		{OperationResume, "resume"},
 		{OperationSuspend, "suspend"},
-		{OperationPause, "pause"},
 		{OperationDelete, "delete"},
+		{OperationRevert, "revert"},
 		{OperationUnknown, "unknown"},
 
 		{ImageCacheOutcomeHit, "hit"},
@@ -391,7 +391,6 @@ func TestMetricLabelValues(t *testing.T) {
 		{SchedulerOutcomeNoCapacity, "no_capacity"},
 		{SchedulerOutcomeError, "error"},
 
-		{SnapshotKindGolden, "golden"},
 		{SnapshotKindLatest, "latest"},
 		{SnapshotKindLocal, "local"},
 		{SnapshotKindBoot, "boot"},
@@ -406,9 +405,10 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotPhaseSandboxAssets, "sandbox_assets"},
 		{SnapshotPhaseDownload, "download"},
 		{SnapshotPhaseOCIUnpack, "oci_unpack"},
-		{SnapshotPhaseAteomRestore, "ateom_restore"},
-		{SnapshotPhaseAteomCheckpoint, "ateom_checkpoint"},
+		{SnapshotPhaseWorkerRestore, "worker_restore"},
+		{SnapshotPhaseWorkerCheckpoint, "worker_checkpoint"},
 		{SnapshotPhasePersist, "persist"},
+		{SnapshotPhaseCleanup, "cleanup"},
 		{SnapshotPhaseTotal, "total"},
 
 		{SandboxClassUnknown, "unknown"},
@@ -721,8 +721,9 @@ func TestNormalizeOperationName(t *testing.T) {
 		{OperationCreate, OperationCreate},
 		{OperationResume, OperationResume},
 		{OperationSuspend, OperationSuspend},
-		{OperationPause, OperationPause},
+		{"pause", OperationUnknown},
 		{OperationDelete, OperationDelete},
+		{OperationRevert, OperationRevert},
 		{"", OperationUnknown},
 		{"invalid", OperationUnknown},
 		{"crash", OperationUnknown},

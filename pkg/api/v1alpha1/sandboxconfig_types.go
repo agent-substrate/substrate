@@ -16,6 +16,8 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"go.ate.dev/substrate/pkg/sandboxclass"
 )
 
 // SandboxClass selects the sandbox runtime family. It is shared by WorkerPool
@@ -23,17 +25,17 @@ import (
 type SandboxClass string
 
 const (
-	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateom-gvisor). Default.
-	SandboxClassGvisor SandboxClass = "gvisor"
-	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateom-microvm); needs
+	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateworker-gvisor). Default.
+	SandboxClassGvisor SandboxClass = sandboxclass.GVisor
+	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateworker-microvm); needs
 	// /dev/kvm and vhost devices.
-	SandboxClassMicroVM SandboxClass = "microvm"
+	SandboxClassMicroVM SandboxClass = sandboxclass.MicroVM
 )
 
 // AssetFile is one content-addressed file that atelet fetches for a sandbox
 // runtime (e.g. the gVisor runsc binary, or a micro-VM kernel/firmware/config).
 type AssetFile struct {
-	// URL is where to download the asset from (e.g. a gs:// URL). atelet
+	// url is where to download the asset from (e.g. a gs:// URL). atelet
 	// fetches every URL through the node's object-store plugin, with the
 	// plugin's credentials. The plugin refuses URLs under a snapshot location.
 	// The in-tree plugin serves only its storage backend's scheme: gs:// on
@@ -46,7 +48,7 @@ type AssetFile struct {
 	// +kubebuilder:validation:MaxLength=2048
 	URL string `json:"url"`
 
-	// SHA256 is the lower-case hex SHA256 of the asset. It both names the cached
+	// sha256 is the lower-case hex SHA256 of the asset. It both names the cached
 	// file (preventing collisions) and verifies the download's integrity.
 	//
 	// +required
@@ -116,7 +118,7 @@ type SandboxVersionConfig struct {
 	// TODO: drop PauseImage once gVisor can run without a pause container:
 	// https://github.com/google/gvisor/pull/13981
 
-	// PauseImage is the container image used as the root sandbox container.
+	// pauseImage is the container image used as the root sandbox container.
 	// It holds the sandbox's namespaces and runs no workload code, so it is an
 	// implementation detail of the sandbox rather than something actor authors
 	// choose. Required for gvisor; not allowed for microvm, which runs no pause
@@ -135,15 +137,14 @@ type SandboxVersionConfig struct {
 	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must include a digest"
 	PauseImage string `json:"pauseImage,omitempty"`
 
-	// Assets is the set of files atelet fetches for this runtime, keyed first by
+	// assets is the set of files atelet fetches for this runtime, keyed first by
 	// architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
 	// asset names are interpreted by the sandbox backend: gVisor expects a
 	// "gvisor" asset (the release's gvisor.tar.zstd, which atelet extracts so
-	// the gvisor-bin/ helpers sit next to runsc; a legacy bare-binary "runsc"
-	// asset is still accepted); a micro-VM backend expects several (e.g.
-	// "cloud-hypervisor", "kata-kernel", "kata-image"). The schema is
-	// intentionally generic; per-class requirements are enforced by a
-	// ValidatingAdmissionPolicy.
+	// the gvisor-bin/ helpers sit next to runsc); a micro-VM backend expects
+	// several (e.g. "cloud-hypervisor", "kata-kernel", "kata-image"). The
+	// schema is intentionally generic; per-class requirements are enforced by
+	// a ValidatingAdmissionPolicy.
 	//
 	// +optional
 	Assets map[string]map[string]AssetFile `json:"assets,omitempty"`
@@ -155,14 +156,14 @@ type SandboxVersionConfig struct {
 // +kubebuilder:validation:XValidation:rule="!self.versions.exists(v, v.name == self.defaultVersion && has(v.state) && v.state == 'Disabled')",message="the version named by defaultVersion must not be Disabled"
 // +kubebuilder:validation:XValidation:rule="self.sandboxClass == 'gvisor' ? self.versions.all(v, has(v.pauseImage) && size(v.pauseImage) > 0) : self.versions.all(v, !has(v.pauseImage) || size(v.pauseImage) == 0)",message="pauseImage is required on every version for gvisor and not allowed for other sandbox classes"
 type SandboxConfigSpec struct {
-	// SandboxClass is the sandbox runtime family this config applies to. An
-	// ActorTemplate only uses SandboxConfigs whose SandboxClass matches its
-	// sandbox_config.sandbox_class.
+	// sandboxClass is the sandbox runtime family this config applies to. A
+	// WorkerPool only uses SandboxConfigs whose sandboxClass matches the entry
+	// in its spec.sandboxClasses.
 	//
-	// +required
+	// +optional
 	// +kubebuilder:validation:Enum=gvisor;microvm
 	// +kubebuilder:default=gvisor
-	SandboxClass SandboxClass `json:"sandboxClass"`
+	SandboxClass SandboxClass `json:"sandboxClass,omitempty"`
 
 	// defaultVersion names the entry in versions that new sandboxes boot with.
 	// It must name an existing, non-Disabled version.
@@ -200,8 +201,9 @@ func (s *SandboxConfigSpec) DefaultVersionConfig() (*SandboxVersionConfig, bool)
 }
 
 // SandboxConfig is cluster-scoped configuration describing the versions of the
-// sandbox binaries for a sandbox runtime family. It is referenced by an
-// ActorTemplate's sandbox_config.config_name (required) and decouples sandbox
+// sandbox binaries for a sandbox runtime family. It is referenced by a
+// WorkerPool's spec.sandboxClasses[].configRef (or resolved via the
+// sandboxconfig.ate.dev/is-class-default annotation) and decouples sandbox
 // binary selection from the workload definition.
 //
 // +genclient

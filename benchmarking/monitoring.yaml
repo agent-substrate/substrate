@@ -188,10 +188,10 @@ data:
           # cAdvisor sends a very large number of metrics. Keep only the
           # metrics that the benchmarks read: kernel pressure stall (PSI),
           # container network bandwidth, disk I/O, memory RSS/working-set,
-          # CPU utilization, and CFS throttling.
+          # CPU utilization, CFS throttling, and OOM kill events.
           - source_labels: [__name__]
             action: keep
-            regex: container_((.*pressure.*)|network_(receive|transmit)_bytes_total|fs_(reads|writes)_bytes_total|memory_rss|memory_working_set_bytes|cpu_usage_seconds_total|cpu_cfs_.*|spec_memory_limit_bytes)
+            regex: container_((.*pressure.*)|network_(receive|transmit)_bytes_total|fs_(reads|writes)_bytes_total|memory_rss|memory_working_set_bytes|cpu_usage_seconds_total|cpu_cfs_.*|spec_memory_limit_bytes|oom_events_total)
           # Drop the series that have an empty container label only for cumulative
           # memory working set and CPU usage. cAdvisor gives a rollup for the whole
           # pod cgroup next to the series for each container; keeping both counts
@@ -438,32 +438,32 @@ data:
           }
         },
         {
-          "title": "PauseActor QPS",
+          "title": "SuspendActorAsync QPS",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
           "targets": [
-            { "expr": "sum(rate(locust_requests_total_total{name=\"PauseActor\"}[1m])) or sum(rate(locust_requests_total{name=\"PauseActor\"}[1m]))", "refId": "A", "legendFormat": "Total" },
-            { "expr": "sum(rate(locust_requests_total_total{name=\"PauseActor\"}[1m])) by (status) or sum(rate(locust_requests_total{name=\"PauseActor\"}[1m])) by (status)", "refId": "B", "legendFormat": "{{status}}" }
+            { "expr": "sum(rate(locust_requests_total_total{name=\"SuspendActorAsync\"}[1m])) or sum(rate(locust_requests_total{name=\"SuspendActorAsync\"}[1m]))", "refId": "A", "legendFormat": "Total" },
+            { "expr": "sum(rate(locust_requests_total_total{name=\"SuspendActorAsync\"}[1m])) by (status) or sum(rate(locust_requests_total{name=\"SuspendActorAsync\"}[1m])) by (status)", "refId": "B", "legendFormat": "{{status}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "req/sec" } }
         },
         {
-          "title": "PauseActor Latency 99th Pct",
+          "title": "SuspendActorAsync Latency 99th Pct",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
           "targets": [
-            { "expr": "histogram_quantile(0.99, sum(rate(locust_request_duration_milliseconds_bucket{name=\"PauseActor\"}[1m])) by (le))", "refId": "A", "legendFormat": "Total" },
-            { "expr": "histogram_quantile(0.99, sum(rate(locust_request_duration_milliseconds_bucket{name=\"PauseActor\"}[1m])) by (le, status))", "refId": "B", "legendFormat": "{{status}}" }
+            { "expr": "histogram_quantile(0.99, sum(rate(locust_request_duration_milliseconds_bucket{name=\"SuspendActorAsync\"}[1m])) by (le))", "refId": "A", "legendFormat": "Total" },
+            { "expr": "histogram_quantile(0.99, sum(rate(locust_request_duration_milliseconds_bucket{name=\"SuspendActorAsync\"}[1m])) by (le, status))", "refId": "B", "legendFormat": "{{status}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" } }
         },
         {
-          "title": "PauseActor Latency Heatmap",
+          "title": "SuspendActorAsync Latency Heatmap",
           "type": "heatmap",
           "gridPos": { "h": 8, "w": 24, "x": 0, "y": 56 },
           "targets": [
             {
-              "expr": "sum(rate(locust_request_duration_milliseconds_bucket{name=\"PauseActor\"}[1m])) by (le)",
+              "expr": "sum(rate(locust_request_duration_milliseconds_bucket{name=\"SuspendActorAsync\"}[1m])) by (le)",
               "refId": "A"
             }
           ],
@@ -483,13 +483,13 @@ data:
           }
         },
         {
-          "title": "Hibernate Latency (Pause vs Suspend)",
+          "title": "Hibernate Latency (Async vs Sync Suspend)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 24, "x": 0, "y": 64 },
           "targets": [
-            { "expr": "histogram_quantile(0.99, sum(rate(locust_request_duration_milliseconds_bucket{name=\"PauseActor\"}[1m])) by (le))", "refId": "A", "legendFormat": "PauseActor p99" },
+            { "expr": "histogram_quantile(0.99, sum(rate(locust_request_duration_milliseconds_bucket{name=\"SuspendActorAsync\"}[1m])) by (le))", "refId": "A", "legendFormat": "SuspendActorAsync p99" },
             { "expr": "histogram_quantile(0.99, sum(rate(locust_request_duration_milliseconds_bucket{name=\"SuspendActor\"}[1m])) by (le))", "refId": "B", "legendFormat": "SuspendActor p99" },
-            { "expr": "histogram_quantile(0.50, sum(rate(locust_request_duration_milliseconds_bucket{name=\"PauseActor\"}[1m])) by (le))", "refId": "C", "legendFormat": "PauseActor p50" },
+            { "expr": "histogram_quantile(0.50, sum(rate(locust_request_duration_milliseconds_bucket{name=\"SuspendActorAsync\"}[1m])) by (le))", "refId": "C", "legendFormat": "SuspendActorAsync p50" },
             { "expr": "histogram_quantile(0.50, sum(rate(locust_request_duration_milliseconds_bucket{name=\"SuspendActor\"}[1m])) by (le))", "refId": "D", "legendFormat": "SuspendActor p50" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" } }

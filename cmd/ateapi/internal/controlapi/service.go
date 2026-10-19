@@ -18,16 +18,16 @@ import (
 	"context"
 	"sync"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/volume"
-	"github.com/agent-substrate/substrate/internal/volume/csi"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/volume"
+	"go.ate.dev/substrate/internal/volume/csi"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -42,7 +42,6 @@ type RPCService struct {
 	persistence           serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
-	sandboxConfigLister   listersv1alpha1.SandboxConfigLister
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	actorWorkflow         *ActorWorkflow
 	workerWorkflow        *WorkerWorkflow
@@ -76,6 +75,7 @@ type VolumePluginRegistry interface {
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
+	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
@@ -93,7 +93,6 @@ func NewRPCService(
 		impl:                  impl,
 		persistence:           persistence,
 		workerCache:           workerCache,
-		sandboxConfigLister:   sandboxConfigLister,
 		csiDriverConfigLister: csiDriverConfigLister,
 		dialer:                dialer,
 		instruments:           instruments,
@@ -103,7 +102,7 @@ func NewRPCService(
 		actorIDJWTPool:        actorIDJWTPool,
 		actorIDCAPool:         actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }

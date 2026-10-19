@@ -20,7 +20,7 @@ import (
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 )
 
 type atenetRouter string
@@ -171,9 +171,6 @@ type routerConfig struct {
 	// validate that server. Empty UpstreamCredentialBundlePath disables upstream mTLS.
 	UpstreamCredentialBundlePath string
 	UpstreamTrustBundlePath      string
-	// UpstreamSpiffePrefix validates the actor's atunnel server cert by its
-	// SPIFFE URI SAN prefix (trust domain) instead of the dialed pod IP.
-	UpstreamSpiffePrefix string
 	// UpstreamConnect tunnels actor traffic to atunnel's CONNECT listener.
 	UpstreamConnect bool
 

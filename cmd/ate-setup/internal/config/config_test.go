@@ -19,11 +19,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"github.com/spf13/pflag"
+
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 // loadEnv isolates Load from the ambient environment.
@@ -42,6 +46,9 @@ func loadEnv(t *testing.T) {
 		"ACTOR_JWT_ISSUER",
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
+		"ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
+		"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ",
+		"ATE_API_LOG_LEVEL",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
 		"ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
 		"ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
@@ -56,6 +63,7 @@ func loadEnv(t *testing.T) {
 		"ATE_CREDENTIAL_PROVIDER",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
+		"ATE_INGRESS_AUTH_MODE",
 		"ATE_INSTALL_CLUSTER_SIZE",
 		"ATE_INSTALL_CORDON_CONTROL_PLANE",
 		"ATE_INSTALL_FAKE_DATA_PLANE",
@@ -63,6 +71,7 @@ func loadEnv(t *testing.T) {
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		"ATE_INSTALL_ROLLOUT_TIMEOUT",
 		"ATE_OTLP_ENDPOINT",
+		"ATE_PREVIEW",
 		"BENCHMARK_ACTOR_MEMORY",
 		"BUCKET_NAME",
 		"CLUSTER_LOCATION",
@@ -120,6 +129,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.CordonControlPlane {
 		t.Error("CordonControlPlane = true, want false")
+	}
+	if cfg.IngressAuthMode != IngressAuthDeprecatedInsecure {
+		t.Errorf("IngressAuthMode = %q, want %q", cfg.IngressAuthMode, IngressAuthDeprecatedInsecure)
 	}
 }
 
@@ -236,6 +248,39 @@ func TestLoadFakeDataPlane(t *testing.T) {
 		})
 	}
 }
+func TestLoadIngressAuthMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		opts       Options
+		env        string
+		want       string
+		wantExport bool
+	}{
+		{name: "flag static-mtls", opts: Options{IngressAuthMode: IngressAuthStaticMTLS}, want: IngressAuthStaticMTLS, wantExport: true},
+		{name: "environment static-mtls", env: IngressAuthStaticMTLS, want: IngressAuthStaticMTLS, wantExport: true},
+		{name: "environment deprecated-insecure", env: IngressAuthDeprecatedInsecure, want: IngressAuthDeprecatedInsecure},
+		{name: "flag outranks environment", opts: Options{IngressAuthMode: IngressAuthDeprecatedInsecure}, env: IngressAuthStaticMTLS, want: IngressAuthDeprecatedInsecure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			if tc.env != "" {
+				t.Setenv("ATE_INGRESS_AUTH_MODE", tc.env)
+			}
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.IngressAuthMode != tc.want {
+				t.Errorf("IngressAuthMode = %q, want %q", cfg.IngressAuthMode, tc.want)
+			}
+			got, exported := scriptEnvMap(t, cfg)["ATE_INGRESS_AUTH_MODE"]
+			if exported != tc.wantExport || (exported && got != tc.want) {
+				t.Errorf("ScriptEnv() ATE_INGRESS_AUTH_MODE = %q (exported %v), want %q (exported %v)", got, exported, tc.want, tc.wantExport)
+
+			}
+		})
+	}
+}
 
 func TestLoadDockerBuildFlags(t *testing.T) {
 	loadEnv(t)
@@ -247,6 +292,94 @@ func TestLoadDockerBuildFlags(t *testing.T) {
 	want := []string{"--cache-from", "type=gha", "--cache-to", "type=gha,mode=max"}
 	if !slices.Equal(cfg.DockerBuildFlags, want) {
 		t.Errorf("DockerBuildFlags = %q, want %q", cfg.DockerBuildFlags, want)
+	}
+}
+
+// The preview gates arrive from any channel as one comma-separated value. An
+// explicitly empty one turns every gate off, even over a lower channel's.
+func TestLoadPreviewGates(t *testing.T) {
+	preview.InitForTestFake(t, []preview.Gate{"A", "B"})
+
+	// nil leaves the channel out; a pointer to "" supplies it, empty.
+	val := func(s string) *string { return &s }
+	for _, tc := range []struct {
+		name            string
+		flag, file, env *string
+		want            []string
+	}{
+		{name: "default"},
+		{name: "flag all", flag: val("ALL"), want: []string{"ALL"}},
+		{name: "flag list", flag: val("A,B"), want: []string{"A", "B"}},
+		{name: "file", file: val("A, B"), want: []string{"A", "B"}},
+		{name: "environment", env: val("ALL"), want: []string{"ALL"}},
+		{name: "empty items dropped", env: val(",A,,"), want: []string{"A"}},
+		{name: "file beats environment", file: val("A"), env: val("ALL"), want: []string{"A"}},
+		{name: "flag beats file", flag: val("B"), file: val("A"), want: []string{"B"}},
+		{name: "empty flag beats environment", flag: val(""), env: val("ALL")},
+		{name: "empty file beats environment", file: val(""), env: val("ALL")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			if tc.env != nil {
+				t.Setenv("ATE_PREVIEW", *tc.env)
+			}
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			BindFlags(fs)
+			if tc.flag != nil {
+				if err := fs.Set("preview", *tc.flag); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var lo LoadOptions
+			if tc.file != nil {
+				lo.ConfigPath = filepath.Join(t.TempDir(), "install.yaml")
+				body := "apiVersion: " + FileAPIVersion + "\nkind: " + FileKind + "\n" +
+					"preview: " + strconv.Quote(*tc.file) + "\n"
+				if err := os.WriteFile(lo.ConfigPath, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := LoadFlags(fs, lo)
+			if err != nil {
+				t.Fatalf("LoadFlags() error = %v", err)
+			}
+			if !slices.Equal(cfg.PreviewGates, tc.want) {
+				t.Errorf("PreviewGates = %q, want %q", cfg.PreviewGates, tc.want)
+			}
+			got, exported := scriptEnvMap(t, cfg)["ATE_PREVIEW"]
+			if want := strings.Join(tc.want, ","); got != want || exported != (want != "") {
+				t.Errorf("ScriptEnv() ATE_PREVIEW = %q (exported %v), want %q", got, exported, want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnknownPreviewGates(t *testing.T) {
+	preview.InitForTestFake(t, []preview.Gate{"Fake"})
+	for _, tc := range []struct {
+		name    string
+		env     string
+		wantErr string
+	}{
+		{name: "all", env: "ALL"},
+		{name: "known gate", env: "Fake"},
+		{name: "unknown gate", env: "NoSuchGate", wantErr: "ATE_PREVIEW"},
+		{name: "unknown among known", env: "ALL,NoSuchGate", wantErr: "ATE_PREVIEW"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_PREVIEW", tc.env)
+			_, err := Load(Options{})
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Load() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) || !strings.Contains(err.Error(), "NoSuchGate") {
+				t.Fatalf("Load() error = %v, want one naming NoSuchGate and %s", err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -427,6 +560,111 @@ func TestLoadExpectedJWTIssuer(t *testing.T) {
 	}
 }
 
+// An unset level stays empty, so that a deploy keeps the level an existing
+// install has rather than resetting it to the default.
+func TestLoadAPILogLevel(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		env     string
+		flag    string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset", want: ""},
+		{name: "environment", env: "debug", want: "debug"},
+		{name: "flag beats environment", env: "debug", flag: "warn", want: "warn"},
+		{name: "unsupported", env: "verbose", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_API_LOG_LEVEL", tt.env)
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			BindFlags(fs)
+			if tt.flag != "" {
+				if err := fs.Set("ateapi-log-level", tt.flag); err != nil {
+					t.Fatalf("Set(--ateapi-log-level) error = %v", err)
+				}
+			}
+
+			cfg, err := LoadFlags(fs, LoadOptions{NoDevEnv: true})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("LoadFlags() with ATE_API_LOG_LEVEL=%q returned nil error", tt.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFlags() error = %v", err)
+			}
+			if cfg.APILogLevel != tt.want {
+				t.Errorf("APILogLevel = %q, want %q", cfg.APILogLevel, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadAPIAuthz(t *testing.T) {
+	const (
+		clientOwner = "system:serviceaccount:ate-system:ate-client"
+		owners      = "alice@example.com,bob@example.com"
+	)
+	for _, tc := range []struct {
+		name        string
+		env         map[string]string
+		wantEnabled bool
+		wantOwners  string
+		wantErr     bool
+	}{
+		{
+			name:        "on by default, owned by the client ServiceAccount",
+			wantEnabled: true,
+			wantOwners:  clientOwner,
+		},
+		{
+			name:        "default owner follows the namespace",
+			env:         map[string]string{"ATE_NAMESPACE": "custom"},
+			wantEnabled: true,
+			wantOwners:  "system:serviceaccount:custom:ate-client",
+		},
+		{
+			name:        "explicit owners replace the default",
+			env:         map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": owners},
+			wantEnabled: true,
+			wantOwners:  owners,
+		},
+		{
+			name:       "turned off",
+			env:        map[string]string{"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ": "false"},
+			wantOwners: clientOwner,
+		},
+		{
+			name:    "enabled with only separators",
+			env:     map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": " , "},
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for name, value := range tc.env {
+				t.Setenv(name, value)
+			}
+			cfg, err := Load(Options{})
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "bootstrap owner") {
+					t.Fatalf("Load() error = %v, want the missing bootstrap owner error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.APIExperimentalEnableAuthz != tc.wantEnabled || cfg.APIAuthzBootstrapOwners != tc.wantOwners {
+				t.Errorf("authz = %v, %q, want %v, %q", cfg.APIExperimentalEnableAuthz, cfg.APIAuthzBootstrapOwners, tc.wantEnabled, tc.wantOwners)
+			}
+		})
+	}
+}
+
 func TestLoadActorJWTAlgorithm(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -476,8 +714,9 @@ func TestLoadActorJWTIssuer(t *testing.T) {
 	}{
 		{name: "unset", want: "https://idp.ate-system.svc"},
 		{name: "unset in a relocated install", namespace: "team-a", want: "https://idp.team-a.svc"},
-		{name: "set is used as given", env: "https://idp.example.com/prod/", want: "https://idp.example.com/prod/"},
+		{name: "set is used as given", env: "https://idp.example.com", want: "https://idp.example.com"},
 		{name: "not https", env: "http://idp.example.com", wantErr: true},
+		{name: "path", env: "https://idp.example.com/prod", wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			loadEnv(t)
@@ -696,6 +935,9 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"kubernetes address without a port", Options{CredentialProvider: `{"name":"k8s.io","address":"secrets.ate-system.svc"}`}},
 		{"other provider without an address", Options{CredentialProvider: `{"name":"vault.example.com"}`}},
 		{"other provider address without a port", Options{CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc"}`}},
+		{"ingress auth mode", Options{IngressAuthMode: "mtls"}},
+		{"old insecure ingress auth mode", Options{IngressAuthMode: "insecure"}},
+		{"static-mtls agentgateway", Options{Router: RouterAgentgateway, IngressAuthMode: IngressAuthStaticMTLS}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {

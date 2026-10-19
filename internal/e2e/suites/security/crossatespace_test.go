@@ -37,10 +37,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -220,7 +220,8 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 	t.Helper()
 
 	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: ns.a, Name: source},
+		Actor:   &ateapipb.ObjectRef{Atespace: ns.a, Name: source},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	})
 	if err != nil {
 		t.Fatalf("SuspendActor %s/%s: %v", ns.a, source, err)

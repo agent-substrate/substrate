@@ -44,9 +44,11 @@ const (
 	RoleEditor = "editor"
 	RoleViewer = "viewer"
 
-	RoleController    = "controller"
-	RoleEgressGateway = "egress_gateway"
-	RoleIngressRouter = "ingress_router"
+	RoleController       = "controller"
+	RoleEgressGateway    = "egress_gateway"
+	RoleIngressRouter    = "ingress_router"
+	RoleAtelet           = "atelet"
+	RoleAPIServerSidecar = "api_server_sidecar"
 
 	RelationCanCreateAtespace       = "can_create_atespace"
 	RelationCanListAtespaces        = "can_list_atespaces"
@@ -60,7 +62,6 @@ const (
 	RelationCanUseTemplate          = "can_use_template"
 	RelationCanUpdate               = "can_update"
 	RelationCanDelete               = "can_delete"
-	RelationCanPause                = "can_pause"
 	RelationCanResume               = "can_resume"
 	RelationCanSuspend              = "can_suspend"
 	RelationCanRevert               = "can_revert"
@@ -74,6 +75,11 @@ const (
 	RelationCanGetEgressPolicy      = "can_get_egress_policy"
 	RelationCanUpdateEgressPolicy   = "can_update_egress_policy"
 	RelationCanDeleteEgressPolicy   = "can_delete_egress_policy"
+	RelationCanCreateTag            = "can_create_tag"
+	RelationCanListTags             = "can_list_tags"
+	RelationCanUseTag               = "can_use_tag"
+	RelationCanMintActorJWT         = "can_mint_actor_jwt"
+	RelationCanMintActorCertificate = "can_mint_actor_certificate"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
@@ -131,6 +137,11 @@ func ActorObject(atespace, name string) string {
 // ActorTemplateObject formats an actor template as an OpenFGA object string.
 func ActorTemplateObject(atespace, name string) string {
 	return "actor_template:" + atespacedID(atespace, name)
+}
+
+// TagObject formats a tag as an OpenFGA object string.
+func TagObject(atespace, name string) string {
+	return "tag:" + atespacedID(atespace, name)
 }
 
 // atespacedID formats the object ID of an atespaced resource as
@@ -221,9 +232,11 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 // The Authorizer grants each one its system component role on global:root on
 // every check, independent of any stored AccessPolicy.
 type SystemPrincipals struct {
-	ControllerSPIFFEID    string
-	EgressGatewaySPIFFEID string
-	IngressRouterSPIFFEID string
+	ControllerSPIFFEID       string
+	EgressGatewaySPIFFEID    string
+	IngressRouterSPIFFEID    string
+	AteletSPIFFEID           string
+	APIServerSidecarSPIFFEID string
 }
 
 // New provisions the default OpenFGA store and authorization model via
@@ -283,6 +296,8 @@ func parseSystemPrincipals(system SystemPrincipals) (map[string][]string, error)
 		{role: RoleController, spiffeID: system.ControllerSPIFFEID},
 		{role: RoleEgressGateway, spiffeID: system.EgressGatewaySPIFFEID},
 		{role: RoleIngressRouter, spiffeID: system.IngressRouterSPIFFEID},
+		{role: RoleAtelet, spiffeID: system.AteletSPIFFEID},
+		{role: RoleAPIServerSidecar, spiffeID: system.APIServerSidecarSPIFFEID},
 	}
 	out := make(map[string][]string, len(bindings))
 	for _, b := range bindings {

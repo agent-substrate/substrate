@@ -33,8 +33,8 @@ func TestClaimsToWire_ClaimNamePerKind(t *testing.T) {
 		wantClaim  string
 		otherClaim string
 	}{
-		{KindActor, "actor.ate.dev", "ateom-for-actor.ate.dev"},
-		{KindAteomForActor, "ateom-for-actor.ate.dev", "actor.ate.dev"},
+		{KindActor, "actor.ate.dev", "worker-for-actor.ate.dev"},
+		{KindWorkerForActor, "worker-for-actor.ate.dev", "actor.ate.dev"},
 	} {
 		claims := base
 		claims.Kind = tc.kind
@@ -78,7 +78,7 @@ func TestClaimsToWire_RejectsUnspecifiedKind(t *testing.T) {
 
 func TestWireClaims_Substrate(t *testing.T) {
 	actor := &WireSubstrateClaims{Atespace: "a", ActorName: "n", ActorUID: "u"}
-	ateom := &WireSubstrateClaims{Atespace: "a2", ActorName: "n2", ActorUID: "u2"}
+	worker := &WireSubstrateClaims{Atespace: "a2", ActorName: "n2", ActorUID: "u2"}
 	for _, tc := range []struct {
 		name       string
 		wire       WireClaims
@@ -87,9 +87,9 @@ func TestWireClaims_Substrate(t *testing.T) {
 		wantClaims *WireSubstrateClaims
 	}{
 		{name: "neither claim", wire: WireClaims{}},
-		{name: "both claims", wire: WireClaims{Actor: actor, AteomForActor: ateom}},
+		{name: "both claims", wire: WireClaims{Actor: actor, WorkerForActor: worker}},
 		{name: "actor", wire: WireClaims{Actor: actor}, wantOK: true, wantKind: KindActor, wantClaims: actor},
-		{name: "ateom-for-actor", wire: WireClaims{AteomForActor: ateom}, wantOK: true, wantKind: KindAteomForActor, wantClaims: ateom},
+		{name: "worker-for-actor", wire: WireClaims{WorkerForActor: worker}, wantOK: true, wantKind: KindWorkerForActor, wantClaims: worker},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			kind, claims, ok := tc.wire.Substrate()
@@ -116,7 +116,7 @@ func TestKind_Names(t *testing.T) {
 	}{
 		{KindUnspecified, "", ""},
 		{KindActor, "actor", "actor.ate.dev"},
-		{KindAteomForActor, "ateom-for-actor", "ateom-for-actor.ate.dev"},
+		{KindWorkerForActor, "worker-for-actor", "worker-for-actor.ate.dev"},
 	} {
 		if got := tc.kind.SubjectPrefix(); got != tc.prefix {
 			t.Errorf("Kind(%d).SubjectPrefix() = %q, want %q", tc.kind, got, tc.prefix)

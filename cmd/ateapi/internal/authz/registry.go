@@ -17,9 +17,9 @@ package authz
 import (
 	"slices"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -116,6 +116,22 @@ func onActorTemplate(relation string, ref resourceRef, fldPath *field.Path) ([]c
 	return []check{{relation: relation, object: ActorTemplateObject(ref.GetAtespace(), ref.GetName())}}, nil
 }
 
+func onTag(relation string, ref resourceRef, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateRef(ref, fldPath); len(errs) > 0 {
+		return nil, errs
+	}
+	return []check{{relation: relation, object: TagObject(ref.GetAtespace(), ref.GetName())}}, nil
+}
+
+// onSourceTag checks can_use_tag on the tag an actor is created from, if the
+// request names one.
+func onSourceTag(ref *ateapipb.ObjectRef, fldPath *field.Path) ([]check, field.ErrorList) {
+	if ref == nil {
+		return nil, nil
+	}
+	return onTag(RelationCanUseTag, ref, fldPath)
+}
+
 // both requires the checks from a and b, reporting the validation errors of
 // both.
 func both(aChecks []check, aErrs field.ErrorList, bChecks []check, bErrs field.ErrorList) ([]check, field.ErrorList) {
@@ -132,6 +148,9 @@ type rpcRule struct {
 	// disabled. AccessPolicy RPCs set it so that nobody can grant themselves
 	// access while enforcement is off and keep that grant once it is turned on.
 	alwaysEnforce bool
+	// authorizedInHandler, when set, says how the RPC's handler authorizes
+	// the caller; the interceptor passes such RPCs through unchecked.
+	authorizedInHandler string
 }
 
 func rule(extract checkExtractor) rpcRule {
@@ -142,8 +161,15 @@ func governance(extract checkExtractor) rpcRule {
 	return rpcRule{extract: extract, alwaysEnforce: true}
 }
 
-// defaultRPCPermissions is the declarative registry mapping gRPC full method names
-// to their permission rules.
+// inHandler registers an RPC whose handler authorizes the caller, as how
+// describes.
+func inHandler(how string) rpcRule {
+	return rpcRule{authorizedInHandler: how}
+}
+
+// defaultRPCPermissions is the declarative registry mapping gRPC full method
+// names to their permission rules. With enforcement on, the interceptor denies
+// any RPC missing from it.
 var defaultRPCPermissions = map[string]rpcRule{
 	// Atespaces.
 	ateapipb.Control_CreateAtespace_FullMethodName: rule(checksOf(func(*ateapipb.CreateAtespaceRequest) ([]check, field.ErrorList) {
@@ -197,11 +223,15 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 
 	// Actors. Creating or updating an actor also requires can_use_template on
-	// the actor template it runs, which may live in another atespace.
+	// the actor template it runs, which may live in another atespace. Creating
+	// one from an explicit source tag also requires can_use_tag on that tag;
+	// the handler checks the tag's scope, completion and template.
 	ateapipb.Control_CreateActor_FullMethodName: rule(checksOf(func(r *ateapipb.CreateActorRequest) ([]check, field.ErrorList) {
 		actorChecks, actorErrs := onAtespace(RelationCanCreateActor, r.GetActor().GetMetadata().GetAtespace(), field.NewPath("actor", "metadata", "atespace"))
 		templateChecks, templateErrs := onActorTemplate(RelationCanUseTemplate, r.GetActor().GetActorTemplate(), field.NewPath("actor", "actor_template"))
-		return both(actorChecks, actorErrs, templateChecks, templateErrs)
+		checks, errs := both(actorChecks, actorErrs, templateChecks, templateErrs)
+		tagChecks, tagErrs := onSourceTag(r.GetActor().GetSourceTag(), field.NewPath("actor", "source_tag"))
+		return both(checks, errs, tagChecks, tagErrs)
 	})),
 	ateapipb.Control_GetActor_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanGet, r.GetActor(), field.NewPath("actor"))
@@ -219,9 +249,6 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 
 	// Actor lifecycle.
-	ateapipb.Control_PauseActor_FullMethodName: rule(checksOf(func(r *ateapipb.PauseActorRequest) ([]check, field.ErrorList) {
-		return onActor(RelationCanPause, r.GetActor(), field.NewPath("actor"))
-	})),
 	ateapipb.Control_ResumeActor_FullMethodName: rule(checksOf(func(r *ateapipb.ResumeActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanResume, r.GetActor(), field.NewPath("actor"))
 	})),
@@ -274,4 +301,44 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapipb.Control_ListWorkerActorAssignments_FullMethodName: rule(checksOf(func(r *ateapipb.ListWorkerActorAssignmentsRequest) ([]check, field.ErrorList) {
 		return onWorker(RelationCanListActorAssignments, r.GetWorker().GetName(), field.NewPath("worker", "name"))
 	})),
+
+	// Actor identity credentials.
+	ateapipb.Control_MintActorJwt_FullMethodName: rule(checksOf(func(r *ateapipb.MintActorJwtRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanMintActorJWT, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_MintActorCertificate_FullMethodName: rule(checksOf(func(r *ateapipb.MintActorCertificateRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanMintActorCertificate, r.GetActor(), field.NewPath("actor"))
+	})),
+
+	// Tags. CreateTag stores the tag in its source actor's atespace, so that is
+	// the atespace checked. Validation also requires metadata.atespace to
+	// match, but it runs after this interceptor.
+	//
+	// TODO: Creating and publishing tags expose an actor's data; see the TODO
+	// on type tag in model.fga.
+	ateapipb.Control_CreateTag_FullMethodName: rule(checksOf(func(r *ateapipb.CreateTagRequest) ([]check, field.ErrorList) {
+		return onAtespace(RelationCanCreateTag, r.GetTag().GetSourceActor().GetAtespace(), field.NewPath("tag", "source_actor", "atespace"))
+	})),
+	ateapipb.Control_GetTag_FullMethodName: rule(checksOf(func(r *ateapipb.GetTagRequest) ([]check, field.ErrorList) {
+		return onTag(RelationCanGet, r.GetTag(), field.NewPath("tag"))
+	})),
+	ateapipb.Control_ListTags_FullMethodName: rule(checksOf(func(r *ateapipb.ListTagsRequest) ([]check, field.ErrorList) {
+		return onAtespaceOrGlobal(RelationCanListTags, r.GetAtespace(), field.NewPath("atespace"))
+	})),
+	ateapipb.Control_UpdateTag_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateTagRequest) ([]check, field.ErrorList) {
+		return onTag(RelationCanUpdate, r.GetTag().GetMetadata(), field.NewPath("tag", "metadata"))
+	})),
+	ateapipb.Control_DeleteTag_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteTagRequest) ([]check, field.ErrorList) {
+		return onTag(RelationCanDelete, r.GetTag(), field.NewPath("tag"))
+	})),
+
+	// WorkerService is served only to atelet, which each handler
+	// authenticates by its mTLS SPIFFE ID.
+	ateapipb.WorkerService_RegisterWorker_FullMethodName:             inHandler("ateletauth: caller is atelet on the Worker's node"),
+	ateapipb.WorkerService_RequestActorSuspend_FullMethodName:        inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
+	ateapipb.WorkerService_MintWorkerActorCertificate_FullMethodName: inHandler("ateletauth: caller is atelet on the node of the Worker the Actor is assigned to"),
+	ateapipb.WorkerService_MintWorkerActorJwt_FullMethodName:         inHandler("ateletauth: caller is atelet on the node hosting the Actor"),
+	// TODO(#2570): not served yet; the handler must authenticate atelet on the
+	// node of the Worker hosting the Actor when it lands.
+	ateapipb.WorkerService_ReportActorSnapshotState_FullMethodName: inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
 }

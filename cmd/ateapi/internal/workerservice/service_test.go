@@ -18,9 +18,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // The Worker every test in this package calls about, and the node its atelet
@@ -41,11 +42,27 @@ type fakeSuspender struct {
 	calls []*ateapipb.SuspendActorRequest
 	resp  *ateapipb.SuspendActorResponse
 	err   error
+
+	reports   []appliedReport
+	reportErr error
 }
 
 func (f *fakeSuspender) SuspendActor(_ context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
 	f.calls = append(f.calls, req)
 	return f.resp, f.err
+}
+
+func (f *fakeSuspender) ApplyActorSnapshotState(_ context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error {
+	f.reports = append(f.reports, appliedReport{actorRef: actorRef, actorUID: actorUID, node: node, state: state})
+	return f.reportErr
+}
+
+// appliedReport is one ApplyActorSnapshotState call.
+type appliedReport struct {
+	actorRef resources.ActorRef
+	actorUID string
+	node     string
+	state    *ateapipb.ActorSnapshotState
 }
 
 // seedReportedWorker registers a Worker on nodeName that has already reported

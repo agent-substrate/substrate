@@ -20,15 +20,17 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/testenv"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/atelet"
+	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/testenv"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
@@ -85,12 +87,13 @@ func TestMain(m *testing.M) {
 		log.Fatalf("%v", err)
 	}
 
-	// Start Fake Atelet Server on port 8085
+	// Start Fake Atelet Server on the port ateapi dials.
 	ateletGrpcServer := grpc.NewServer()
-	ateletpb.RegisterAteomHerderServer(ateletGrpcServer, fakeAtelet)
-	ateletLis, err := net.Listen("tcp", "127.0.0.1:8085")
+	ateletpb.RegisterAteletServer(ateletGrpcServer, fakeAtelet)
+	ateletAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(atelet.DefaultPort))
+	ateletLis, err := net.Listen("tcp", ateletAddr)
 	if err != nil {
-		log.Fatalf("listen on 127.0.0.1:8085: %v", err)
+		log.Fatalf("listen on %s: %v", ateletAddr, err)
 	}
 	go func() {
 		if err := ateletGrpcServer.Serve(ateletLis); err != nil {
@@ -111,7 +114,7 @@ func TestMain(m *testing.M) {
 
 // FakeAteletServer implements ateletpb.WorkersServer
 type FakeAteletServer struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnimplementedAteletServer
 
 	Lock sync.Mutex
 
@@ -203,7 +206,12 @@ func (f *FakeAteletServer) PromoteSnapshot(ctx context.Context, req *ateletpb.Pr
 	if err := f.writeSnapshot(req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	return &ateletpb.PromoteSnapshotResponse{}, nil
+	// Like atelet, report the snapshot durable and still kept on the node.
+	report := &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(req.GetSnapshot())}
+	return &ateletpb.PromoteSnapshotResponse{State: &ateletpb.ActorSnapshotState{
+		LatestLocal:   report,
+		LatestDurable: proto.CloneOf(report),
+	}}, nil
 }
 
 func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
@@ -274,4 +282,13 @@ func (f *FakeAteletServer) lastRestoreRequest() *ateletpb.RestoreRequest {
 		return nil
 	}
 	return proto.Clone(f.RestoreRequest).(*ateletpb.RestoreRequest)
+}
+
+func (f *FakeAteletServer) lastRestoreVolumePublishContext(volumeName string) map[string]string {
+	for _, v := range f.lastRestoreRequest().GetSpec().GetVolumes() {
+		if v.GetName() == volumeName {
+			return v.GetExternal().GetPublishContext()
+		}
+	}
+	return nil
 }

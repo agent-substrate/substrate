@@ -29,28 +29,31 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/atelet"
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/atelet"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/pkg/objectstorage"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -76,6 +79,87 @@ func TestPortFlagDefault(t *testing.T) {
 	}
 	if want := strconv.Itoa(atelet.DefaultPort); f.DefValue != want {
 		t.Errorf("--port default = %q, want %q", f.DefValue, want)
+	}
+}
+
+// The snapshot delay flags must be positive, and the upload delay must not
+// exceed the detach delay, which the defaults satisfy too.
+func TestValidateSnapshotDelayFlags(t *testing.T) {
+	setFlags := func(upload, detach, giveUp time.Duration) {
+		*snapshotUploadDelay, *snapshotDetachDelay, *snapshotReportGiveUpAfter = upload, detach, giveUp
+	}
+	t.Cleanup(func() {
+		setFlags(snapshottracker.DefaultUploadDelay, snapshottracker.DefaultDetachDelay, snapshottracker.DefaultReportGiveUpAfter)
+	})
+
+	for _, tc := range []struct {
+		name                   string
+		upload, detach, giveUp time.Duration
+		wantErr                bool
+	}{
+		{"defaults", snapshottracker.DefaultUploadDelay, snapshottracker.DefaultDetachDelay, snapshottracker.DefaultReportGiveUpAfter, false},
+		{"upload sooner than detach", time.Minute, time.Hour, time.Minute, false},
+		{"upload as late as detach", time.Hour, time.Hour, time.Minute, false},
+		{"upload later than detach", time.Hour, time.Minute, time.Minute, true},
+		{"zero upload delay", 0, time.Hour, time.Minute, true},
+		{"negative detach delay", time.Minute, -time.Minute, time.Minute, true},
+		{"zero report give-up delay", time.Minute, time.Hour, 0, true},
+		{"negative report give-up delay", time.Minute, time.Hour, -time.Minute, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setFlags(tc.upload, tc.detach, tc.giveUp)
+			if err := validateSnapshotDelayFlags(); (err != nil) != tc.wantErr {
+				t.Errorf("upload=%v detach=%v giveUp=%v: err = %v, wantErr %v", tc.upload, tc.detach, tc.giveUp, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// Upload and detach worker flags must be at least 1, report workers must be at
+// least 0, and each flag defaults to the tracker's default count.
+func TestValidateSnapshotWorkerFlags(t *testing.T) {
+	setFlags := func(upload, detach, report int) {
+		*snapshotUploadWorkers, *snapshotDetachWorkers, *snapshotReportWorkers = upload, detach, report
+	}
+	t.Cleanup(func() {
+		setFlags(snapshottracker.DefaultUploadWorkers, snapshottracker.DefaultDetachWorkers, snapshottracker.DefaultReportWorkers)
+	})
+
+	for _, tc := range []struct {
+		name                   string
+		upload, detach, report int
+		wantErr                bool
+	}{
+		{"defaults", snapshottracker.DefaultUploadWorkers, snapshottracker.DefaultDetachWorkers, snapshottracker.DefaultReportWorkers, false},
+		{"single worker each", 1, 1, 1, false},
+		{"zero report workers", 2, 2, 0, false},
+		{"zero upload workers", 0, 2, 1, true},
+		{"negative upload workers", -1, 2, 1, true},
+		{"zero detach workers", 2, 0, 1, true},
+		{"negative detach workers", 2, -1, 1, true},
+		{"negative report workers", 2, 2, -1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setFlags(tc.upload, tc.detach, tc.report)
+			if err := validateSnapshotWorkerFlags(); (err != nil) != tc.wantErr {
+				t.Errorf("upload=%d detach=%d report=%d: err = %v, wantErr %v", tc.upload, tc.detach, tc.report, err, tc.wantErr)
+			}
+		})
+	}
+
+	for name, want := range map[string]int{
+		"snapshot-upload-workers": snapshottracker.DefaultUploadWorkers,
+		"snapshot-detach-workers": snapshottracker.DefaultDetachWorkers,
+		"snapshot-report-workers": snapshottracker.DefaultReportWorkers,
+	} {
+		f := pflag.Lookup(name)
+		if f == nil {
+			t.Errorf("no --%s flag registered", name)
+			continue
+		}
+		if f.DefValue != strconv.Itoa(want) {
+			t.Errorf("--%s default = %q, want %d", name, f.DefValue, want)
+		}
 	}
 }
 
@@ -113,7 +197,7 @@ func TestCopyLocalCheckpointLinks(t *testing.T) {
 
 	t.Run("links when it can", func(t *testing.T) {
 		srcDir, dstDir := newDirs(t)
-		s := &AteomHerder{}
+		s := &Atelet{}
 		if err := s.copyLocalCheckpoint(context.Background(), filepath.Dir(srcDir), snapshot, srcDir, dstDir, []string{"memory-ranges"}); err != nil {
 			t.Fatalf("copyLocalCheckpoint: %v", err)
 		}
@@ -134,7 +218,7 @@ func TestCopyLocalCheckpointLinks(t *testing.T) {
 		linkFile = func(*os.Root, string, string) error { return unix.EXDEV }
 		t.Cleanup(func() { linkFile = orig })
 
-		s := &AteomHerder{}
+		s := &Atelet{}
 		if err := s.copyLocalCheckpoint(context.Background(), filepath.Dir(srcDir), snapshot, srcDir, dstDir, []string{"memory-ranges"}); err != nil {
 			t.Fatalf("copyLocalCheckpoint: %v", err)
 		}
@@ -156,7 +240,7 @@ func TestCopyLocalCheckpointLinks(t *testing.T) {
 		if err := os.Link(filepath.Join(srcDir, snapshot, "memory-ranges"), dst); err != nil {
 			t.Fatal(err)
 		}
-		s := &AteomHerder{}
+		s := &Atelet{}
 		// dst already exists, so os.Link fails with EEXIST.
 		if err := s.copyLocalCheckpoint(context.Background(), filepath.Dir(srcDir), snapshot, srcDir, dstDir, []string{"memory-ranges"}); err == nil {
 			t.Fatal("copyLocalCheckpoint accepted a non-EXDEV link failure, want an error")
@@ -258,7 +342,7 @@ func TestPrepareOCIBundlesPause(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			useTempNodeDirs(t)
 			const actorUID = "actor-uid-1"
-			s := &AteomHerder{imageCache: newImageVolumeStore(t)}
+			s := &Atelet{imageCache: newImageVolumeStore(t)}
 			if _, err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec, tc.pauseImage); err != nil {
 				t.Fatalf("prepareOCIBundles: %v", err)
 			}
@@ -286,7 +370,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 			Image:   image,
 			Command: []string{"/bin/app"},
 			Args:    []string{"serve"},
-			Env:     []*ateletpb.EnvEntry{{Name: "GREETING", Value: "hello"}},
+			Env:     []*ateletpb.EnvVar{{Name: "GREETING", Value: "hello"}},
 			SecurityContext: &ateletpb.SecurityContext{
 				Capabilities: &ateletpb.Capabilities{Add: []string{"NET_ADMIN"}, Drop: []string{"KILL"}},
 			},
@@ -294,16 +378,16 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 		}},
 	}
 
-	s := &AteomHerder{imageCache: newImageVolumeStore(t)}
+	s := &Atelet{imageCache: newImageVolumeStore(t)}
 	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec, "")
 	if err != nil {
 		t.Fatalf("prepareOCIBundles: %v", err)
 	}
-	want := []*ateompb.ContainerSpec{{
+	want := []*ateworkerpb.ContainerSpec{{
 		Args:         []string{"/bin/app", "serve"},
 		Env:          []string{"GREETING=hello", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		Capabilities: []string{"CAP_AUDIT_WRITE", "CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE"},
-		Resources:    &ateompb.ResourceLimits{MemoryBytes: 1 << 30, CpuMillis: 500},
+		Resources:    &ateworkerpb.ResourceLimits{MemoryBytes: 1 << 30, CpuMillis: 500},
 	}}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("prepareOCIBundles container specs mismatch (-want +got):\n%s", diff)
@@ -361,7 +445,7 @@ func TestCheckpointSnapshotFiles(t *testing.T) {
 		{name: "manifest name", files: []string{"checkpoint.img", sandboxManifestName}, required: true, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			files, data, err := checkpointSnapshotFiles(&ateompb.CheckpointWorkloadResponse{SnapshotFiles: tc.files, DataSnapshotFiles: tc.data}, tc.required)
+			files, data, err := checkpointSnapshotFiles(&ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: tc.files, DataSnapshotFiles: tc.data}, tc.required)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("checkpointSnapshotFiles() = %v, %v, %v; wantErr %v", files, data, err, tc.wantErr)
 			}
@@ -391,7 +475,7 @@ func TestUploadSnapshotRejectsSymlinkOutsideRoot(t *testing.T) {
 	}
 	store := &recordingObjectStorage{}
 	err = newPluginHerder(t, store).uploadSnapshot(context.Background(), uri, checkpointDir,
-		&sandboxAssetsRecord{SnapshotFiles: []string{"checkpoint.img"}}, "test", "test")
+		&sandboxAssetsRecord{SnapshotFiles: []string{"checkpoint.img"}})
 	if err == nil {
 		t.Fatal("uploadSnapshot() followed a symlink outside the checkpoint directory")
 	}
@@ -451,7 +535,7 @@ func TestCopyLocalCheckpointRejectsSymlinkOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := (&AteomHerder{}).copyLocalCheckpoint(context.Background(), parent, snapshotName,
+	err := (&Atelet{}).copyLocalCheckpoint(context.Background(), parent, snapshotName,
 		filepath.Join(parent, "local-checkpoint"), restoreDir, []string{"checkpoint.img"})
 	if err == nil {
 		t.Fatal("copyLocalCheckpoint() followed a symlink outside the local checkpoint directory")
@@ -489,112 +573,64 @@ func TestCheckLocalSnapshotFilesRejectsSymlink(t *testing.T) {
 	}
 }
 
-func TestWriteFileAtomic(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "actor-id")
-
-	// One shared write over an existing value, as happens on every resume;
-	// each subtest checks one postcondition.
-	if err := os.WriteFile(target, []byte("golden-id"), 0o600); err != nil {
-		t.Fatalf("seeding target: %v", err)
-	}
-	if err := writeFileAtomic(target, []byte("counter-1"), 0o644); err != nil {
-		t.Fatalf("writeFileAtomic: %v", err)
-	}
-
-	t.Run("replaces content", func(t *testing.T) {
-		got, err := os.ReadFile(target)
-		if err != nil {
-			t.Fatalf("reading target: %v", err)
-		}
-		if string(got) != "counter-1" {
-			t.Errorf("content = %q, want %q", got, "counter-1")
-		}
-	})
-
-	t.Run("sets permissions", func(t *testing.T) {
-		info, err := os.Stat(target)
-		if err != nil {
-			t.Fatalf("stat target: %v", err)
-		}
-		if perm := info.Mode().Perm(); perm != 0o644 {
-			t.Errorf("perm = %o, want 644", perm)
-		}
-	})
-
-	t.Run("leaves no temp files", func(t *testing.T) {
-		// The directory is visible inside the actor.
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatalf("reading dir: %v", err)
-		}
-		if len(entries) != 1 {
-			names := make([]string, 0, len(entries))
-			for _, e := range entries {
-				names = append(names, e.Name())
-			}
-			t.Errorf("leftover files in identity dir: %v", names)
-		}
-	})
-}
-
-// Every valid atelet scope must map to its ateom counterpart.
-func TestToAteomFidelity(t *testing.T) {
+// Every valid atelet scope must map to its worker counterpart.
+func TestToWorkerFidelity(t *testing.T) {
 	tests := []struct {
 		in   ateletpb.SnapshotFidelity
-		want ateompb.SnapshotFidelity
+		want ateworkerpb.SnapshotFidelity
 	}{
-		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
-		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
-		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
-		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
-		{ateletpb.SnapshotFidelity(99), ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+		{ateletpb.SnapshotFidelity(99), ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
 	}
 	for _, tc := range tests {
-		if got := toAteomFidelity(tc.in); got != tc.want {
-			t.Errorf("toAteomFidelity(%v) = %v, want %v", tc.in, got, tc.want)
+		if got := toWorkerFidelity(tc.in); got != tc.want {
+			t.Errorf("toWorkerFidelity(%v) = %v, want %v", tc.in, got, tc.want)
 		}
 	}
 }
 
-// TestFetchAssetRejectsBadHash confirms fetchAsset validates the asset hash
-// before the cache-hit os.Stat/early-return, not merely "at some point". To
-// prove the ordering, it plants a real file at the exact path an invalid hash
-// resolves to: a correctly-ordered fetchAsset validates first and returns an
-// error, while a regression that stats first would find this file and return it
-// with a nil error, failing the test. StaticFilesDir is redirected to a temp
-// dir so the planted path is writable and isolated.
-func TestFetchAssetRejectsBadHash(t *testing.T) {
-	orig := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = orig })
-
-	// Invalid (8 chars, not 64) but separator-free, so it resolves to a normal
-	// filename inside the temp StaticFilesDir.
-	const badHash = "deadbeef"
-	if err := os.WriteFile(ateletpath.AssetPath(badHash), []byte("planted"), 0o755); err != nil {
-		t.Fatalf("planting cache file: %v", err)
+// TestStageAssetRejectsBadHash confirms stageAsset validates the asset hash
+// before it looks for an already-staged file, not merely "at some point". To
+// prove the ordering, it plants a file at the destination: a correctly-ordered
+// stageAsset validates first and returns an error, while a regression that
+// checked the destination first would find this file and return it with a
+// nil error, failing the test.
+func TestStageAssetRejectsBadHash(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "asset")
+	if err := os.WriteFile(dst, []byte("planted"), 0o755); err != nil {
+		t.Fatalf("planting staged file: %v", err)
 	}
 
-	s := &AteomHerder{}
-	_, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash})
+	s := &Atelet{sandboxAssetCache: newTestAssetCache(t)}
+	_, err := s.stageAsset(context.Background(), assetEntry{SHA256: "deadbeef"}, dst)
 	if err == nil {
-		t.Fatal("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
+		t.Fatal("stageAsset returned the planted file for an invalid hash; validation must run before the staged check")
 	}
 	// The error must come from the validation step, proving it ran before the
-	// cache-hit stat could return the planted file.
+	// staged check could return the planted file.
 	if !strings.Contains(err.Error(), "while validating asset hash") {
 		t.Errorf("error did not come from hash validation: %v", err)
 	}
 }
 
-// fakeObjectStorage serves fixed bytes for GetObject so fetchAsset can be tested.
+// fakeObjectStorage serves fixed bytes for GetObject so stageAsset can be tested.
 type fakeObjectStorage struct {
 	data []byte
 	err  error
+	// gets, if set, counts GetObject calls.
+	gets *atomic.Int32
+	// delay, if set, holds each GetObject so concurrent callers overlap.
+	delay time.Duration
 }
 
 func (f fakeObjectStorage) GetObject(_ context.Context, _, _ string) (io.ReadCloser, error) {
+	if f.gets != nil {
+		f.gets.Add(1)
+	}
+	time.Sleep(f.delay)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -603,92 +639,123 @@ func (f fakeObjectStorage) GetObject(_ context.Context, _, _ string) (io.ReadClo
 
 func (fakeObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
 
-// TestFetchAssetStreaming covers the streamed download: good asset cached,
-// over-cap rejected, hash mismatch rejected (failures leave no cache file).
-func TestFetchAssetStreaming(t *testing.T) {
-	origDir, origCap := nodepath.StaticFilesDir, maxAssetBytes
-	t.Cleanup(func() { nodepath.StaticFilesDir, maxAssetBytes = origDir, origCap })
+// TestStageAssetStreaming covers the streamed download: good asset cached
+// and staged, over-cap rejected, hash mismatch rejected (failures leave no
+// cache entry).
+func TestStageAssetStreaming(t *testing.T) {
+	origCap := maxAssetBytes
+	t.Cleanup(func() { maxAssetBytes = origCap })
 
 	content := []byte("micro-vm kernel bytes")
 	goodHash := fmt.Sprintf("%x", sha256.Sum256(content))
 	const url = "gs://test-bucket/asset"
 
-	t.Run("good asset is cached", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		path, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+	t.Run("good asset is cached and staged", func(t *testing.T) {
+		root := t.TempDir()
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
+		path, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: goodHash})
 		if err != nil {
-			t.Fatalf("fetchAsset: %v", err)
+			t.Fatalf("stageAsset: %v", err)
 		}
 		got, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("reading cached asset: %v", err)
+			t.Fatalf("reading staged asset: %v", err)
 		}
 		if !bytes.Equal(got, content) {
-			t.Errorf("cached bytes = %q, want %q", got, content)
+			t.Errorf("staged bytes = %q, want %q", got, content)
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o555 {
+			t.Errorf("staged mode = %v, want 0555 (read-only, executable)", fi.Mode().Perm())
+		}
+		if n := cachedAssets(t, root); n != 1 {
+			t.Errorf("cache holds %d assets, want 1", n)
 		}
 	})
 
 	t.Run("over-cap asset rejected, cache not written", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
+		root := t.TempDir()
 		maxAssetBytes = 4 // content is longer than this
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
+		_, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
-			t.Fatal("fetchAsset accepted an over-cap asset")
+			t.Fatal("stageAsset accepted an over-cap asset")
 		}
-		if _, err := os.Stat(ateletpath.AssetPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("over-cap download left a file at the cache path (stat err = %v)", err)
+		if n := cachedAssets(t, root); n != 0 {
+			t.Errorf("over-cap download left %d assets in the cache", n)
 		}
 	})
 
 	t.Run("hash mismatch rejected, cache not written", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
+		root := t.TempDir()
 		maxAssetBytes = origCap
 		wrongHash := strings.Repeat("a", 64) // valid 64-hex format, wrong value
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash})
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
+		_, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: wrongHash})
 		if err == nil {
-			t.Fatal("fetchAsset accepted a hash mismatch")
+			t.Fatal("stageAsset accepted a hash mismatch")
 		}
-		if _, err := os.Stat(ateletpath.AssetPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("mismatched download left a file at the cache path (stat err = %v)", err)
+		if n := cachedAssets(t, root); n != 0 {
+			t.Errorf("mismatched download left %d assets in the cache", n)
 		}
 	})
 
 	t.Run("missing object keeps the client's sentinel", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
+		root := t.TempDir()
 		maxAssetBytes = origCap
 		// The objectstorage clients tag a missing object with ErrObjectNotFound.
 		notFound := fmt.Errorf("%w: no such object", objectstorage.ErrObjectNotFound)
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: notFound}}
-		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{err: notFound}}
+		_, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: goodHash})
 		if !errors.Is(err, objectstorage.ErrObjectNotFound) {
 			t.Errorf("missing-object error lost the client's sentinel: %v", err)
 		}
 	})
 
 	t.Run("malformed url is rejected", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
+		root := t.TempDir()
 		maxAssetBytes = origCap
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
 		// Invalid percent-escape: url.Parse rejects it inside objectstorage.Open.
-		_, err := s.fetchAsset(context.Background(), assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
+		_, err := stageTestAsset(t, s, root, assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
 		if err == nil {
-			t.Fatal("fetchAsset accepted a malformed URL")
+			t.Fatal("stageAsset accepted a malformed URL")
 		}
 	})
 
 	t.Run("network error keeps its context wrap", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
+		root := t.TempDir()
 		maxAssetBytes = origCap
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
-		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
+		_, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
-			t.Fatal("fetchAsset accepted a failing open")
+			t.Fatal("stageAsset accepted a failing open")
 		}
 		if !strings.Contains(err.Error(), "while fetching") {
 			t.Errorf("open failure lost its context wrap: %v", err)
+		}
+	})
+
+	t.Run("already staged asset is kept without a fetch", func(t *testing.T) {
+		root := t.TempDir()
+		maxAssetBytes = origCap
+		var gets atomic.Int32
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content, gets: &gets}}
+		path, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: goodHash})
+		if err != nil {
+			t.Fatalf("stageAsset: %v", err)
+		}
+		// A Checkpoint or Terminate of the same activation finds the link
+		// Run staged and uses it as it is.
+		again, err := s.stageAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash}, path)
+		if err != nil || again != path {
+			t.Fatalf("stageAsset onto a staged path = %q, %v; want %q", again, err, path)
+		}
+		if gets.Load() != 1 {
+			t.Errorf("object fetched %d times, want 1", gets.Load())
 		}
 	})
 }
@@ -699,7 +766,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 // Internal. Guards against a future removal or reordering of the validation
 // call at any boundary.
 func TestRPCBoundariesReject(t *testing.T) {
-	s := &AteomHerder{}
+	s := &Atelet{}
 	ctx := context.Background()
 	badUID := "../escape" // valid actor ref, invalid worker pod UID
 	const okAtespace, okID, okActorUID = "ate-demo", "counter-1", "123e4567-e89b-12d3-a456-426614174000"
@@ -750,7 +817,7 @@ func TestRPCBoundariesReject(t *testing.T) {
 	})
 }
 
-func TestBuildAteomWorkloadSpecForwardsWakeupProbe(t *testing.T) {
+func TestBuildWorkerWorkloadSpecForwardsWakeupProbe(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{
 			{
@@ -766,57 +833,57 @@ func TestBuildAteomWorkloadSpecForwardsWakeupProbe(t *testing.T) {
 			},
 		},
 	}
-	want := &ateompb.WorkloadSpec{
-		Containers: []*ateompb.Container{
+	want := &ateworkerpb.WorkloadSpec{
+		Containers: []*ateworkerpb.Container{
 			{
 				Name: "with-probe",
-				WakeupProbe: &ateompb.WakeupProbe{
-					HttpGet:        &ateompb.HttpGetAction{Path: "/health", Port: 8080},
+				WakeupProbe: &ateworkerpb.WakeupProbe{
+					HttpGet:        &ateworkerpb.HttpGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
 			},
 			{Name: "without-probe"},
 		},
 	}
-	got, err := buildAteomWorkloadSpec(in, nil)
+	got, err := buildWorkerWorkloadSpec(in, nil)
 	if err != nil {
-		t.Fatalf("buildAteomWorkloadSpec failed: %v", err)
+		t.Fatalf("buildWorkerWorkloadSpec failed: %v", err)
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
-		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+		t.Errorf("buildWorkerWorkloadSpec mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func TestBuildAteomWorkloadSpecForwardsContainerSpecs(t *testing.T) {
+func TestBuildWorkerWorkloadSpecForwardsContainerSpecs(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{{Name: "main"}, {Name: "sidecar"}},
 	}
-	containerSpecs := []*ateompb.ContainerSpec{
+	containerSpecs := []*ateworkerpb.ContainerSpec{
 		{Args: []string{"/app", "serve"}},
 		{Args: []string{"/sidecar"}},
 	}
-	want := &ateompb.WorkloadSpec{
-		Containers: []*ateompb.Container{
-			{Name: "main", ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app", "serve"}}},
-			{Name: "sidecar", ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/sidecar"}}},
+	want := &ateworkerpb.WorkloadSpec{
+		Containers: []*ateworkerpb.Container{
+			{Name: "main", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app", "serve"}}},
+			{Name: "sidecar", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/sidecar"}}},
 		},
 	}
-	got, err := buildAteomWorkloadSpec(in, containerSpecs)
+	got, err := buildWorkerWorkloadSpec(in, containerSpecs)
 	if err != nil {
-		t.Fatalf("buildAteomWorkloadSpec failed: %v", err)
+		t.Fatalf("buildWorkerWorkloadSpec failed: %v", err)
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
-		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+		t.Errorf("buildWorkerWorkloadSpec mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
+func TestBuildWorkerWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{
-			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
-			{Name: "cache", DurableDir: &ateletpb.DurableDirVolume{}},
+			{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
+			{Name: "cache", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 			{Name: "scratch", External: &ateletpb.ExternalVolumeSource{}},
-			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolume{}},
+			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolumeSource{}},
 		},
 		Containers: []*ateletpb.Container{
 			{
@@ -837,42 +904,42 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 			{Name: "no-volumes"},
 		},
 	}
-	// ateom needs the volume NAME as well as the path: the name selects the
+	// worker needs the volume NAME as well as the path: the name selects the
 	// per-volume directory on the host, and an actor may have several.
-	want := &ateompb.WorkloadSpec{
-		Containers: []*ateompb.Container{
+	want := &ateworkerpb.WorkloadSpec{
+		Containers: []*ateworkerpb.Container{
 			{
 				Name: "main",
-				DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
-					{VolumeName: "data", MountPath: "/home/counter"},
-					{VolumeName: "cache", MountPath: "/var/cache"},
+				DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "data", MountPath: "/home/counter"},
+					{Name: "cache", MountPath: "/var/cache"},
 				},
-				CsiVolumeMounts: []*ateompb.VolumeMount{
-					{VolumeName: "scratch", MountPath: "/scratch"},
+				ExternalVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "scratch", MountPath: "/scratch"},
 				},
-				SystemInfoVolumeMounts: []*ateompb.SystemInfoVolumeMount{
-					{VolumeName: "system-info", MountPath: "/run/ate"},
+				SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "system-info", MountPath: "/run/ate"},
 				},
 			},
 			{
 				Name: "sidecar",
-				DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
-					{VolumeName: "data", MountPath: "/shared"},
+				DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "data", MountPath: "/shared"},
 				},
 			},
 			{Name: "no-volumes"},
 		},
 	}
-	got, err := buildAteomWorkloadSpec(in, nil)
+	got, err := buildWorkerWorkloadSpec(in, nil)
 	if err != nil {
-		t.Fatalf("buildAteomWorkloadSpec failed: %v", err)
+		t.Fatalf("buildWorkerWorkloadSpec failed: %v", err)
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
-		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+		t.Errorf("buildWorkerWorkloadSpec mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
+func TestBuildWorkerWorkloadSpecValidation(t *testing.T) {
 	tests := []struct {
 		name    string
 		in      *ateletpb.WorkloadSpec
@@ -882,7 +949,7 @@ func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
 			name: "missing volume definition",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+					{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 				},
 				Containers: []*ateletpb.Container{
 					{
@@ -916,7 +983,7 @@ func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
 			name: "duplicate volume names",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+					{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 					{Name: "data", External: &ateletpb.ExternalVolumeSource{}},
 				},
 				Containers: []*ateletpb.Container{
@@ -934,7 +1001,7 @@ func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := buildAteomWorkloadSpec(tc.in, nil)
+			_, err := buildWorkerWorkloadSpec(tc.in, nil)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -945,14 +1012,14 @@ func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
 	}
 }
 
-func TestToAteomEgressGateway(t *testing.T) {
-	if got := toAteomEgressGateway(nil); got != nil {
-		t.Fatalf("toAteomEgressGateway(nil) = %v, want nil", got)
+func TestToWorkerEgressGateway(t *testing.T) {
+	if got := toWorkerEgressGateway(nil); got != nil {
+		t.Fatalf("toWorkerEgressGateway(nil) = %v, want nil", got)
 	}
-	want := &ateompb.EgressGateway{Address: "egress.example:443"}
-	got := toAteomEgressGateway(&ateletpb.EgressGateway{Address: want.Address})
+	want := &ateworkerpb.EgressGateway{Address: "egress.example:443"}
+	got := toWorkerEgressGateway(&ateletpb.EgressGateway{Address: want.Address})
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
-		t.Errorf("toAteomEgressGateway mismatch (-want +got):\n%s", diff)
+		t.Errorf("toWorkerEgressGateway mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -992,7 +1059,7 @@ func TestRemoveActorDirsKeepsPopulatedVolume(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "actor-uid-1"
 
-	stillMounted := filepath.Join(ateletpath.VolumeHostPath(actorUID, "data"), "payload")
+	stillMounted := filepath.Join(ateletpath.ExternalVolumeHostPath(actorUID, "data"), "payload")
 	if err := os.MkdirAll(filepath.Dir(stillMounted), 0o755); err != nil {
 		t.Fatalf("creating volume dir: %v", err)
 	}
@@ -1197,11 +1264,11 @@ func TestDrainOnShutdownForceStopsAfterTimeout(t *testing.T) {
 }
 
 // Image volumes appear on their own ImageVolumeMounts field, separate from durable-dir mounts.
-func TestBuildAteomWorkloadSpec_ImageVolumeMounts(t *testing.T) {
+func TestBuildWorkerWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 	spec := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{
 			{Name: "agent", Image: &ateletpb.ImageVolumeSource{}},
-			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+			{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 			{Name: "ext", External: &ateletpb.ExternalVolumeSource{}},
 		},
 		Containers: []*ateletpb.Container{{
@@ -1214,9 +1281,9 @@ func TestBuildAteomWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 		}},
 	}
 
-	got, err := buildAteomWorkloadSpec(spec, nil)
+	got, err := buildWorkerWorkloadSpec(spec, nil)
 	if err != nil {
-		t.Fatalf("buildAteomWorkloadSpec: %v", err)
+		t.Fatalf("buildWorkerWorkloadSpec: %v", err)
 	}
 	if len(got.GetContainers()) != 1 {
 		t.Fatalf("containers = %d, want 1", len(got.GetContainers()))
@@ -1226,10 +1293,10 @@ func TestBuildAteomWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 	if len(ctr.GetImageVolumeMounts()) != 1 {
 		t.Fatalf("image volume mounts = %v, want 1", ctr.GetImageVolumeMounts())
 	}
-	if name, path := ctr.GetImageVolumeMounts()[0].GetVolumeName(), ctr.GetImageVolumeMounts()[0].GetMountPath(); name != "agent" || path != "/ate" {
+	if name, path := ctr.GetImageVolumeMounts()[0].GetName(), ctr.GetImageVolumeMounts()[0].GetMountPath(); name != "agent" || path != "/ate" {
 		t.Errorf("image volume mount = (%q, %q), want (agent, /ate)", name, path)
 	}
-	if len(ctr.GetDurableDirVolumeMounts()) != 1 || ctr.GetDurableDirVolumeMounts()[0].GetVolumeName() != "data" {
+	if len(ctr.GetDurableDirVolumeMounts()) != 1 || ctr.GetDurableDirVolumeMounts()[0].GetName() != "data" {
 		t.Errorf("durable mounts = %v, want just data", ctr.GetDurableDirVolumeMounts())
 	}
 }
@@ -1307,6 +1374,12 @@ func immediateUploadConfig() *ateletpb.UploadConfig {
 	}
 }
 
+func deferredUploadConfig() *ateletpb.UploadConfig {
+	return &ateletpb.UploadConfig{
+		Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
+	}
+}
+
 func validCheckpointRequest() *ateletpb.CheckpointRequest {
 	return &ateletpb.CheckpointRequest{
 		Atespace:              "ate-demo",
@@ -1318,6 +1391,7 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: "snap-1",
+			Generation:   1,
 			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			Object:       &ateletpb.ObjectStorage{SnapshotUri: testSnapshotURI},
 		},
@@ -1334,6 +1408,7 @@ func validPromoteSnapshotRequest() *ateletpb.PromoteSnapshotRequest {
 		ActorTemplateName:     "counter",
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: "pause-snap-1",
+			Generation:   1,
 			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI},
 		},
@@ -1377,7 +1452,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
 		})
 
-		if _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri); err != nil {
+		if _, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 		want := []string{
@@ -1408,7 +1483,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 		req := validPromoteSnapshotRequest()
 		req.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
-		if _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri); err != nil {
+		if _, _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 		want := []string{
@@ -1448,7 +1523,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 			req := validPromoteSnapshotRequest()
 			req.Snapshot.Fidelity = tc.desired
-			_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
+			_, _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
 			if got := apierror.Code(err); got != codes.FailedPrecondition {
 				t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 			}
@@ -1470,7 +1545,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 		req := validPromoteSnapshotRequest()
 		req.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
+		_, _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition for a scope-less manifest", got, err)
 		}
@@ -1485,17 +1560,20 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}}
 		s := newPluginHerder(t, store)
 
-		if _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri); err != nil {
+		if _, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 	})
 
-	t.Run("gone locally and remotely crashes the actor", func(t *testing.T) {
+	t.Run("gone locally and remotely is NotFound", func(t *testing.T) {
 		s := newPluginHerder(t, &recordingObjectStorage{})
 
-		_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
-		if err == nil {
-			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
+		_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
+		// atelet's server interceptor decides the code ate-api-server sees.
+		_, wireErr := ateinterceptors.InternalServerUnaryInterceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
+			func(context.Context, any) (any, error) { return nil, err })
+		if got := status.Code(wireErr); got != codes.NotFound {
+			t.Fatalf("code = %v (err %v), want NotFound", got, wireErr)
 		}
 		if !strings.Contains(err.Error(), "gone and no uploaded copy exists") {
 			t.Errorf("error = %v, want it to name the unrecoverable local snapshot", err)
@@ -1509,7 +1587,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
 		})
 
-		_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+		_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 		if err == nil {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
 		}
@@ -1542,7 +1620,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "durable", DurableDir: &ateletpb.DurableDirVolume{}},
+						{Name: "durable", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 					},
 				},
 			},
@@ -1566,7 +1644,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "durable", DurableDir: &ateletpb.DurableDirVolume{}},
+						{Name: "durable", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 						{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
 					},
 				},
@@ -1589,5 +1667,19 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				t.Errorf("shouldHaveSnapshots() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestServingCheck pins the readiness contract at startup: /readyz holds
+// 503 until main has opened the gRPC port, whatever else is already up.
+func TestServingCheck(t *testing.T) {
+	served := make(chan struct{})
+	check := servingCheck(served)
+	if err := check(context.Background()); err == nil {
+		t.Error("servingCheck passed before the port was opened")
+	}
+	close(served)
+	if err := check(context.Background()); err != nil {
+		t.Errorf("servingCheck after the port opened = %v, want nil", err)
 	}
 }

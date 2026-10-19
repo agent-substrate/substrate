@@ -22,23 +22,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/volume"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
-	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
+	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/volume"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/client/clientset/versioned"
+	"go.ate.dev/substrate/pkg/client/informers/externalversions"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -86,6 +87,7 @@ var (
 type testContext struct {
 	service             *controlapi.RPCService
 	client              ateapipb.ControlClient
+	noOptInClient       ateapipb.ControlClient // never sends preview.Header
 	k8sClient           kubernetes.Interface
 	substrateClient     versioned.Interface
 	persistence         store.Interface
@@ -108,15 +110,38 @@ type testContext struct {
 // setupTest sets up a fully isolated test environment.
 func setupTest(t *testing.T, ns string) *testContext {
 	t.Helper()
-	return setupTestWithVolumePlugins(t, ns, nil)
+	return setupTestWithOptions(t, ns, testOptions{})
 }
 
-// setupTestWithVolumePlugins is setupTest with the default mock volume plugin
-// replaced by plugins, keyed by driver name. Tests that need a failure-injecting
-// plugin pass it here rather than swapping it into the running RPCService, so each
-// test owns its own plugin set.
+type testOptions struct {
+	allowPreview  bool // enable use of preview features over gRPC
+	volumePlugins map[string]volume.VolumePluginControlPlane
+}
+
+// setupPreviewTest is setupTest with a client that opts in to preview
+// features. It does not enable any gate; call preview.InitForTest for that.
+func setupPreviewTest(t *testing.T, ns string) *testContext {
+	t.Helper()
+	return setupTestWithOptions(t, ns, testOptions{allowPreview: true})
+}
+
+// setupTestWithVolumePlugins is setupPreviewTest with the default mock volume
+// plugin replaced by plugins, keyed by driver name. Tests that need a
+// failure-injecting plugin pass it here rather than swapping it into the
+// running RPCService, so each test owns its own plugin set.
 func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volume.VolumePluginControlPlane) *testContext {
 	t.Helper()
+	return setupTestWithOptions(t, ns, testOptions{volumePlugins: plugins, allowPreview: true})
+}
+
+func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testContext {
+	t.Helper()
+
+	var dialOpts []grpc.DialOption
+	if options.allowPreview {
+		dialOpts = preview.DialOptionsWithOptIn()
+	}
+
 	// 1. Start an isolated PostgreSQL-backed store.
 	persistence, cleanupStore := storetest.SetupTestStore(t)
 
@@ -175,7 +200,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		cleanupStore()
 		t.Fatalf("failed to create metric instruments: %v", err)
 	}
-	volPlugins := plugins
+	volPlugins := options.volumePlugins
 	if volPlugins == nil {
 		mockPlugin := volume.NewMockVolumePlugin()
 		mockDriverName, err := mockPlugin.DriverName(ctx)
@@ -216,6 +241,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	service := controlapi.NewRPCService(
 		persistence,
 		wc,
+		workerPoolLister,
 		sandboxConfigLister,
 		csiDriverConfigLister,
 		scLister,
@@ -233,6 +259,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
 		ateinterceptors.ServerUnaryInterceptor,
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
+		preview.UnaryServerInterceptor,
 	))
 	ateapipb.RegisterControlServer(grpcServer, service)
 
@@ -244,19 +271,28 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		}
 	}()
 
-	conn, err := grpc.NewClient(
-		"passthrough://bufnet",
+	baseDialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
 			return lis.Dial()
 		}),
-	)
+	}
+	conn, err := grpc.NewClient("passthrough://bufnet", append(baseDialOpts, dialOpts...)...)
 	if err != nil {
 		grpcServer.Stop()
 		cancel()
 		cleanupStore()
 		t.Fatalf("failed to connect: %v", err)
 	}
+	noOptInConn, err := grpc.NewClient("passthrough://bufnet", baseDialOpts...)
+	if err != nil {
+		conn.Close()
+		grpcServer.Stop()
+		cancel()
+		cleanupStore()
+		t.Fatalf("failed to connect: %v", err)
+	}
+	t.Cleanup(func() { noOptInConn.Close() })
 
 	client := ateapipb.NewControlClient(conn)
 
@@ -297,6 +333,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	return &testContext{
 		service:             service,
 		client:              client,
+		noOptInClient:       ateapipb.NewControlClient(noOptInConn),
 		k8sClient:           k8sClient,
 		substrateClient:     substrateClient,
 		persistence:         persistence,
@@ -346,7 +383,7 @@ const goldenSnapshotName = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
 // goldenSnapshotURI is the snapshot owned by the test template's golden tag.
 func goldenSnapshotURI(t *testing.T) string {
 	t.Helper()
-	uri, err := resources.NewTagSnapshotURI(testStorageLocation, resources.GoldenActorAtespace, goldenSnapshotName)
+	uri, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, goldenSnapshotName)
 	if err != nil {
 		t.Fatalf("NewTagSnapshotURI: %v", err)
 	}
@@ -435,9 +472,9 @@ func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes
 func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns string, containers []*ateapipb.Container, volumes []*ateapipb.Volume) *ateapipb.ActorTemplate {
 	t.Helper()
 
-	// Sandbox binaries live on a (cluster-scoped) SandboxConfig the template
-	// names. Create the gvisor-default SandboxConfig so a boot-from-spec Run
-	// can resolve its assets.
+	// Sandbox binaries live on the (cluster-scoped) SandboxConfig the
+	// actor's WorkerPool resolves. Create the gvisor-default SandboxConfig so
+	// a boot-from-spec Run can resolve its assets.
 	ensureDefaultGvisorSandboxConfig(t, tc)
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
 
@@ -450,25 +487,21 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
 			},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
-				ConfigName:   "gvisor-default",
-			},
 			Containers: containers,
 			Volumes:    volumes,
 			WorkerSelector: &ateapipb.Selector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
 			},
+			Resources: resources.CPUMemory(1000, 512<<20),
 		},
 	})
 	if err != nil {
 		t.Fatalf("failed to create actor template: %v", err)
 	}
 
-	createAtespace(t, tc, resources.GoldenActorAtespace)
 	tag, err := tc.persistence.CreateTag(context.Background(), &ateapipb.Tag{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
-		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
+		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapipb.TagStatus{
 			Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, created.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
@@ -512,7 +545,14 @@ func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapi
 	}
 }
 
-func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
+// newPausedSnapshot is the snapshot a pause leaves on node locality: its
+// durable copy, under the actor's own prefix, is PENDING until atelet uploads it.
+func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, actorUID, uuid, locality string) *ateapipb.Snapshot {
+	t.Helper()
+	uri, err := resources.NewActorSnapshotURI(testStorageLocation, testAtespace, actorUID, uuid)
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI: %v", err)
+	}
 	return &ateapipb.Snapshot{
 		Uuid:             uuid,
 		Generation:       gen,
@@ -520,6 +560,10 @@ func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID
 		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
 		Locality:         locality,
+		DurableSnapshot: &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri.String()},
+		},
 	}
 }
 
@@ -585,13 +629,13 @@ func ensureGvisorSandboxConfig(t *testing.T, tc *testContext, name string) {
 				Name:       "v1",
 				PauseImage: testPauseImage,
 				Assets: map[string]map[string]atev1alpha1.AssetFile{
-					"amd64": {"runsc": {
-						URL:    "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc",
-						SHA256: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63",
+					"amd64": {"gvisor": {
+						URL:    "gs://gvisor/releases/nightly/2026-10-10/x86_64/gvisor.tar.zstd",
+						SHA256: "4ae7fab988c3647d2a835d6c3c70c6a99021c562db97827592562b6c51c3e88c",
 					}},
-					"arm64": {"runsc": {
-						URL:    "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc",
-						SHA256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9",
+					"arm64": {"gvisor": {
+						URL:    "gs://gvisor/releases/nightly/2026-10-10/aarch64/gvisor.tar.zstd",
+						SHA256: "aaf414f06eea7960238e43165c691f0a36cefc0593fb141e011e96211c7b6f57",
 					}},
 				},
 			}},
@@ -618,26 +662,36 @@ func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, lab
 		},
 		Spec: atev1alpha1.WorkerPoolSpec{
 			Replicas:       1,
-			WorkerImage:    "ateom@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			WorkerImage:    "worker@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 			SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}},
 		},
 	}
-	_, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{})
+	created, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create WorkerPool: %v", err)
+	}
+	// The status the controller would write once it confirmed the pool's
+	// SandboxConfig: resume resolves the sandbox assets through it. Status is
+	// a subresource, so it takes its own write.
+	created.Status.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClassStatus{{
+		Name:      atev1alpha1.SandboxClassGvisor,
+		ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "gvisor-default"},
+	}}
+	if _, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).UpdateStatus(context.Background(), created, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("failed to update WorkerPool status: %v", err)
 	}
 
 	waitForWorkerPoolInInformer(t, tc, ns, name)
 }
 
-// waitForWorkerPoolInInformer blocks until the pool the test just created is
-// visible to the scheduler, which reads it through an informer rather than the
-// API.
+// waitForWorkerPoolInInformer blocks until the pool the test just created,
+// with its resolved SandboxConfig, is visible to the scheduler and the resume
+// workflow, which read it through an informer rather than the API.
 func waitForWorkerPoolInInformer(t *testing.T, tc *testContext, ns, name string) {
 	t.Helper()
 	err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		_, err := tc.workerPoolLister.WorkerPools(ns).Get(name)
-		return err == nil, nil
+		pool, err := tc.workerPoolLister.WorkerPools(ns).Get(name)
+		return err == nil && pool.ResolvedSandboxConfig() != "", nil
 	})
 	if err != nil {
 		t.Fatalf("failed to wait for WorkerPool %s/%s in informer: %v", ns, name, err)
@@ -658,14 +712,11 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
 			},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
-				ConfigName:   "gvisor-default",
-			},
 			Containers: []*ateapipb.Container{
 				{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}},
 			},
 			WorkerSelector: selector,
+			Resources:      resources.CPUMemory(1000, 512<<20),
 		},
 	})
 	if err != nil {
@@ -735,7 +786,7 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			// Capacity is not settable here: a Worker gets it from its own
-			// ateom's report, which the reportWorkerCapacity below stands in
+			// worker's report, which the reportWorkerCapacity below stands in
 			// for. These pods declare no limits, so only the actor ceiling is
 			// reported; see setWorkerActorCapacity for tests needing more.
 		},

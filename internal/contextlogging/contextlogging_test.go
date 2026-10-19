@@ -26,9 +26,9 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/protoredact"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/protoredact"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 

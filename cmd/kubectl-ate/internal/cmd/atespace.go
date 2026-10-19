@@ -17,15 +17,16 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var getAtespacesCmd = &cobra.Command{
-	Use:     "atespace [name ...]",
+	Use:     "atespace [atespace-name ...]",
 	Aliases: []string{"atespaces"},
 	Short:   "List all atespaces or get one or more atespaces",
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -70,9 +71,9 @@ var getAtespacesCmd = &cobra.Command{
 }
 
 var createAtespaceCmd = &cobra.Command{
-	Use:   "atespace [name]",
+	Use:   "atespace <atespace-name>",
 	Short: "Create an atespace",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<atespace-name>"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -97,9 +98,9 @@ var createAtespaceCmd = &cobra.Command{
 }
 
 var deleteAtespaceCmd = &cobra.Command{
-	Use:   "atespace [name]",
+	Use:   "atespace <atespace-name>",
 	Short: "Delete an empty atespace (fails if any actors remain)",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<atespace-name>"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)

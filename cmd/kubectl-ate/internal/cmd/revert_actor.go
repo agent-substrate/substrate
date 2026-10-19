@@ -17,10 +17,10 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var revertAtespaceFlag string
@@ -31,8 +31,10 @@ var revertActorCmd = &cobra.Command{
 	Long: `Revert an actor to SUSPENDED, discarding its current execution.
 
 The actor's external snapshot is left untouched, so a later resume restores
-from it. Only crashed, running, or paused actors can be reverted.`,
-	Args: cobra.ExactArgs(1),
+from it. Only crashed or running actors, or suspended actors with a node-local
+snapshot, can be reverted. A suspended actor without a node-local snapshot is
+already at its durable snapshot, so there is nothing to revert.`,
+	Args: exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -54,7 +56,6 @@ from it. Only crashed, running, or paused actors can be reverted.`,
 }
 
 func init() {
-	revertActorCmd.Flags().StringVarP(&revertAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
-	_ = revertActorCmd.MarkFlagRequired("atespace")
+	revertActorCmd.Flags().StringVarP(&revertAtespaceFlag, "atespace", "a", "", "the actor's atespace")
 	revertCmd.AddCommand(revertActorCmd)
 }

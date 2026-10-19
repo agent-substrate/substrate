@@ -16,11 +16,9 @@ package apivalidation
 
 import (
 	"context"
-	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -66,6 +64,11 @@ func ValidatePromoteSnapshotRequest(ctx context.Context, req *ateletpb.PromoteSn
 	return Validate_PromoteSnapshotRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateDetachActorRequest runs the generated validation for req.
+func ValidateDetachActorRequest(ctx context.Context, req *ateletpb.DetachActorRequest) field.ErrorList {
+	return Validate_DetachActorRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateRegisterWorkerRequest runs the generated validation for req.
 func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWorkerRequest) field.ErrorList {
 	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
@@ -82,16 +85,12 @@ func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operati
 	return resources.ValidateHostPort(fldPath, *value)
 }
 
-// ValidateCustom_SandboxAssets_SandboxClass allows the sandbox classes of the
-// SandboxConfig CRD.
 func ValidateCustom_SandboxAssets_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	switch atev1alpha1.SandboxClass(*value) {
-	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM:
-		return nil
-	}
-	return field.ErrorList{field.NotSupported(fldPath, *value, []string{
-		string(atev1alpha1.SandboxClassGvisor), string(atev1alpha1.SandboxClassMicroVM),
-	})}
+	return resources.ValidateSandboxClass(fldPath, *value)
+}
+
+func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
 func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
@@ -101,25 +100,6 @@ func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Oper
 func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateAssetHash(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
-	}
-	return nil
-}
-
-// ValidateCustom_PromoteSnapshotRequest_Atespace rejects the golden atespace:
-// golden actors are never paused, so a paused checkpoint is never promoted to
-// a golden snapshot.
-func ValidateCustom_PromoteSnapshotRequest_Atespace(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if *value == resources.GoldenActorAtespace {
-		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("atespace %q holds golden actors, which are never paused", *value))}
-	}
-	return nil
-}
-
-// ValidateCustom_CheckpointRequest requires snapshot.object when
-// upload_config.mode is UPLOAD_MODE_IMMEDIATE.
-func ValidateCustom_CheckpointRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.CheckpointRequest) field.ErrorList {
-	if value.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE && value.GetSnapshot() != nil && value.GetSnapshot().GetObject() == nil {
-		return field.ErrorList{field.Required(fldPath.Child("snapshot", "object"), "required when upload_config.mode is UPLOAD_MODE_IMMEDIATE")}
 	}
 	return nil
 }

@@ -20,12 +20,12 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
+	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // RequestActorSuspend suspends an Actor on behalf of the Worker hosting it. The
@@ -37,16 +37,6 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 	}
 	if errs := apivalidation.ValidateRequestActorSuspendRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
-	}
-
-	// A golden actor may be suspended, but only by the template controller:
-	// the suspend is what commits its snapshot, and the controller runs it once
-	// the warmup window it set has elapsed. A golden actor boots and waits, so
-	// it looks idle from the moment it starts, and honoring its own request
-	// would commit the snapshot before that window ends -- leaving every actor
-	// restored from the template to start from a workload that never warmed up.
-	if req.GetActor().GetAtespace() == resources.GoldenActorAtespace {
-		return nil, apierror.FailedPrecondition("actors in atespace %q are golden actors, which cannot request their own suspend", resources.GoldenActorAtespace)
 	}
 
 	workerName := req.GetWorker().GetName()

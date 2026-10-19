@@ -201,7 +201,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
       - name: atenet-router
-        image: ko://github.com/agent-substrate/substrate/cmd/atenet
+        image: ko://go.ate.dev/substrate/cmd/atenet
         args:
         - "router"
         # Serve the ingress direction only: the ingress ext_proc handler, plus
@@ -321,7 +321,8 @@ spec:
         - name: "drain-signal"
           mountPath: "/var/run/atenet"
       - name: envoy
-        image: envoyproxy/envoy:v1.39.4@sha256:74bd4eb5629708d3fadca1a5e6b85d208f338d7bb54e06b69565905c5294cc01
+        # ENVOY_DATAPLANE_IMAGE is substituted for the image URI by ate-setup
+        image: ${ENVOY_DATAPLANE_IMAGE}
         command:
         - "/usr/local/bin/envoy"
         - "-c"
@@ -361,7 +362,8 @@ spec:
         # podidentity credential + trust bundles for actor-facing (upstream)
         # mTLS. Envoy presents this credential bundle as its client cert when
         # opening CONNECT tunnels to the worker's atunnel on :8443, and
-        # validates that server against the trust bundle.
+        # validates that server against the trust bundle and the SPIFFE ID of
+        # the worker pod's namespace and ServiceAccount.
         # The issued SPIFFE identity is
         # spiffe://cluster.local/ns/ate-system/sa/atenet-router, which atunnel's
         # --atunnel-client-identity allows.

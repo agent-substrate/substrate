@@ -20,17 +20,17 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
-	"github.com/agent-substrate/substrate/internal/actorevent"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/pluginsocket"
-	"github.com/agent-substrate/substrate/internal/resources"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
+	"go.ate.dev/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/pluginsocket"
+	"go.ate.dev/substrate/internal/resources"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -100,11 +100,16 @@ func logActorState(ctx context.Context, actor *ateapipb.Actor, opName, state str
 }
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.
+//
+// Workflows act for the system, not the user whose request started them, so
+// each exported method begins with preview.ContextWithOptIn: the request was
+// already validated, and what the workflow writes is the system's own state.
 type ActorWorkflow struct {
 	store                actorWorkflowStore
 	workerCache          *workercache.Cache
 	scheduler            scheduling.Scheduler
 	dialer               *AteletDialer
+	workerPoolLister     listersv1alpha1.WorkerPoolLister
 	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
 	storageClassLister   storagev1listers.StorageClassLister
 	instruments          *Instruments
@@ -122,6 +127,7 @@ func NewActorWorkflow(
 	store actorWorkflowStore,
 	workerCache *workercache.Cache,
 	dialer *AteletDialer,
+	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
 	instruments *Instruments,
@@ -134,6 +140,7 @@ func NewActorWorkflow(
 		workerCache:          workerCache,
 		scheduler:            scheduling.New(workerCache),
 		dialer:               dialer,
+		workerPoolLister:     workerPoolLister,
 		sandboxConfigLister:  sandboxConfigLister,
 		storageClassLister:   storageClassLister,
 		instruments:          instruments,
@@ -181,7 +188,8 @@ type actorWorkflowStore interface {
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
-// WorkerWorkflow handles the multi-step operations on a Worker.
+// WorkerWorkflow handles the multi-step operations on a Worker. Like
+// ActorWorkflow, each exported method begins with preview.ContextWithOptIn.
 //
 // Its steps reach across the Actor↔Worker binding, which an ActorWorkflow step
 // does from the other side: releasing the Actor bound to a Worker stays

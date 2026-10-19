@@ -27,7 +27,7 @@ workerSelector:
     workload: counter
 containers:
 - name: counter
-  image: ko://github.com/agent-substrate/substrate/demos/counter
+  image: ko://go.ate.dev/substrate/demos/counter
   command:
   - /ko-app/counter
   # Exercises atenet-router's arbitrary-port ingress support: a second
@@ -61,9 +61,6 @@ snapshotConfig:
   # parameterized templates, not by this one.
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-counter/
-sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_GVISOR
-  configName: gvisor-default
 volumes:
 - name: data
   durableDir: {}
