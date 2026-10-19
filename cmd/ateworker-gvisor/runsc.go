@@ -26,12 +26,21 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/sizing"
 )
+
+// wakeupLivenessCheckDelay is the grace period before waitForWakeupProbesWithLiveness
+// spawns background `runsc wait` checks on application containers. Probes that
+// succeed within this window return without spawning extra runsc subprocesses,
+// while a container that exits during startup or restore cancels the probe
+// wait after at most this delay instead of waiting for the full probe timeout.
+const wakeupLivenessCheckDelay = 250 * time.Millisecond
 
 type runsc struct {
 	path     string
@@ -335,4 +344,103 @@ func (r *runsc) cmdWaitRestore(ctx context.Context, containerName string) error 
 // `--fs-restore-image-path` completes for the given container.
 func (r *runsc) cmdWaitFSRestore(ctx context.Context, containerName string) error {
 	return r.runWait(ctx, containerName, "-fsrestore")
+}
+
+// containerWaiter is the slice of *runsc used to watch for unexpected
+// container exits while wakeup probes are in flight.
+type containerWaiter interface {
+	cmdWait(ctx context.Context, containerName string) error
+}
+
+// wakeupLivenessMonitor tracks container liveness while HTTP wakeup probes are
+// in flight and cancels the probe context if any application container exits.
+type wakeupLivenessMonitor struct {
+	probeCtx   context.Context
+	cancel     context.CancelFunc
+	waiter     containerWaiter
+	containers []*ateworkerpb.Container
+	exitedOnce sync.Once
+	exitedErr  error
+	wg         sync.WaitGroup
+}
+
+// run launches a background cmdWait for each named container in m.containers
+// and cancels m.probeCtx on the first container that exits or fails cmdWait
+// while m.probeCtx is still active.
+func (m *wakeupLivenessMonitor) run() {
+	defer m.wg.Done()
+	if m.probeCtx.Err() != nil {
+		return
+	}
+	var innerWG sync.WaitGroup
+	for _, ac := range m.containers {
+		name := ac.GetName()
+		if name == "" {
+			continue
+		}
+		innerWG.Add(1)
+		go func(containerName string) {
+			defer innerWG.Done()
+			err := m.waiter.cmdWait(m.probeCtx, containerName)
+			if m.probeCtx.Err() != nil {
+				return
+			}
+			m.exitedOnce.Do(func() {
+				if err != nil {
+					m.exitedErr = fmt.Errorf("application container %q not running during wakeup probe: %w", containerName, err)
+				} else {
+					m.exitedErr = fmt.Errorf("application container %q exited before wakeup probe succeeded", containerName)
+				}
+				m.cancel()
+			})
+		}(name)
+	}
+	innerWG.Wait()
+}
+
+// waitForWakeupProbesWithLiveness runs probeWait while monitoring application
+// containers for early exit. If probeWait is still running after delay, it
+// starts a background cmdWait on each container in containers and cancels
+// probeWait's context as soon as any container exits or fails its wait call,
+// returning the container exit error instead of waiting for probeWait's full
+// timeout. If probeWait completes before delay elapses, the timer is stopped
+// and no cmdWait calls or background goroutines are launched.
+func waitForWakeupProbesWithLiveness(
+	ctx context.Context,
+	waiter containerWaiter,
+	containers []*ateworkerpb.Container,
+	delay time.Duration,
+	probeWait func(context.Context) error,
+) error {
+	if waiter == nil || len(containers) == 0 {
+		return probeWait(ctx)
+	}
+
+	probeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	m := &wakeupLivenessMonitor{
+		probeCtx:   probeCtx,
+		cancel:     cancel,
+		waiter:     waiter,
+		containers: containers,
+	}
+	m.wg.Add(1)
+	var timer *time.Timer
+	if delay > 0 {
+		timer = time.AfterFunc(delay, m.run)
+	} else {
+		go m.run()
+	}
+
+	err := probeWait(probeCtx)
+	stopped := timer != nil && timer.Stop()
+	cancel()
+	if !stopped {
+		m.wg.Wait()
+	}
+	if m.exitedErr != nil {
+		return m.exitedErr
+	}
+	return err
 }
