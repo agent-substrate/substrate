@@ -271,9 +271,6 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open sandbox asset cache", err)
 	}
-	if err := sandboxAssetCacheGCFlags.Validate(); err != nil {
-		serverboot.Fatal(ctx, "Invalid sandbox asset cache GC flags", err)
-	}
 	// One set of instruments for every file cache on the node, by name.
 	fileCacheInstruments, err := filecachegc.NewInstruments(otel.Meter("atelet"))
 	if err != nil {

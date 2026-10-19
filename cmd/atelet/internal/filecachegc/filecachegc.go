@@ -34,10 +34,10 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 )
 
-// LowWater is the fraction of the budget a pass evicts down to once the
+// lowWater is the fraction of the budget a pass evicts down to once the
 // cache is over it, so passes do not fire on every tick while usage hovers
 // at the budget.
-const LowWater = 0.9
+const lowWater = 0.9
 
 const (
 	// shortfallWarnLimit is how many consecutive shortfalls warn before the
@@ -49,9 +49,9 @@ const (
 )
 
 const (
-	SizeMetric      = "ate.filecache.size"
-	EvictionsMetric = "ate.filecache.evictions"
-	GCPassesMetric  = "ate.filecache.gc.passes"
+	sizeMetric      = "ate.filecache.size"
+	evictionsMetric = "ate.filecache.evictions"
+	gcPassesMetric  = "ate.filecache.gc.passes"
 )
 
 // Store is what the loop needs from a *filecache.Store, a seam so a pass's
@@ -77,7 +77,7 @@ func NewFlags(fs *pflag.FlagSet, prefix, what string) *Flags {
 	return &Flags{
 		prefix:   prefix,
 		Period:   fs.Duration(prefix+"-gc-period", 5*time.Minute, fmt.Sprintf("How often to run the %s eviction pass. 0 disables it.", what)),
-		MaxBytes: fs.Int64(prefix+"-max-bytes", 0, fmt.Sprintf("Budget for the %s, in bytes of disk the cached files occupy. A pass that finds the cache over it evicts least recently used entries that nothing links, down to %d%% of it. 0 means no budget: the cache only grows.", what, int(LowWater*100))),
+		MaxBytes: fs.Int64(prefix+"-max-bytes", 0, fmt.Sprintf("Budget for the %s, in bytes of disk the cached files occupy. A pass that finds the cache over it evicts least recently used entries that nothing links, down to %d%% of it. 0 means no budget: the cache only grows.", what, int(lowWater*100))),
 		DryRun:   fs.Bool(prefix+"-gc-dry-run", false, fmt.Sprintf("Compute and log eviction decisions for the %s without deleting anything.", what)),
 	}
 }
@@ -93,14 +93,14 @@ func (f *Flags) Validate() error {
 	return nil
 }
 
-// Target computes the bytes a pass should free: nothing while the cache is
+// target computes the bytes a pass should free: nothing while the cache is
 // within its budget, otherwise enough to bring it down to the low-water
 // fraction of the budget. A zero budget never asks for anything.
-func Target(total, maxBytes int64) int64 {
+func target(total, maxBytes int64) int64 {
 	if maxBytes <= 0 || total <= maxBytes {
 		return 0
 	}
-	target := total - int64(float64(maxBytes)*LowWater)
+	target := total - int64(float64(maxBytes)*lowWater)
 	if target > total {
 		target = total
 	}
@@ -121,37 +121,37 @@ type Instruments struct {
 // NewInstruments creates the instruments on meter, once per process.
 func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	size, err := meter.Int64ObservableUpDownCounter(
-		SizeMetric,
+		sizeMetric,
 		metric.WithUnit("By"),
 		metric.WithDescription("Bytes of disk a node-local file cache occupies, as the sum of its entries' allocated sizes, by cache."),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create %s updowncounter: %w", SizeMetric, err)
+		return nil, fmt.Errorf("create %s updowncounter: %w", sizeMetric, err)
 	}
 	evictions, err := meter.Int64Counter(
-		EvictionsMetric,
+		evictionsMetric,
 		metric.WithUnit("{entry}"),
 		metric.WithDescription("Number of entries eviction passes removed from a node-local file cache, by cache."),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create %s counter: %w", EvictionsMetric, err)
+		return nil, fmt.Errorf("create %s counter: %w", evictionsMetric, err)
 	}
 	passes, err := meter.Int64Counter(
-		GCPassesMetric,
+		gcPassesMetric,
 		metric.WithUnit("{pass}"),
 		metric.WithDescription("Number of eviction passes over a node-local file cache that had work to do, by cache and outcome."),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create %s counter: %w", GCPassesMetric, err)
+		return nil, fmt.Errorf("create %s counter: %w", gcPassesMetric, err)
 	}
 	return &Instruments{meter: meter, size: size, evictions: evictions, passes: passes}, nil
 }
 
-// Observe has the size of store reported under name on every collection.
+// observe has the size of store reported under name on every collection.
 // The callback walks the store's entries; that is a few hundred stats on a
 // full node. Called whether or not the cache has a budget, so the size has
 // a series on every install.
-func (i *Instruments) Observe(name string, store Store) error {
+func (i *Instruments) observe(name string, store Store) error {
 	if i == nil {
 		return nil
 	}
@@ -165,7 +165,7 @@ func (i *Instruments) Observe(name string, store Store) error {
 		return nil
 	}, i.size)
 	if err != nil {
-		return fmt.Errorf("register %s callback for %s: %w", SizeMetric, name, err)
+		return fmt.Errorf("register %s callback for %s: %w", sizeMetric, name, err)
 	}
 	return nil
 }
@@ -182,9 +182,9 @@ func (i *Instruments) recordPass(ctx context.Context, name, outcome string, evic
 	}
 }
 
-// GC is one cache's eviction loop: configuration snapshotted from the flags
+// gc is one cache's eviction loop: configuration snapshotted from the flags
 // at construction, and the shortfall backoff.
-type GC struct {
+type gc struct {
 	name        string
 	store       Store
 	instruments *Instruments
@@ -195,10 +195,10 @@ type GC struct {
 	consecutiveShortfalls int
 }
 
-// New returns the loop for the cache called name, a value of
+// newGC returns the loop for the cache called name, a value of
 // ateattr.FileCacheNameKey.
-func New(name string, store Store, flags *Flags, instruments *Instruments) *GC {
-	return &GC{
+func newGC(name string, store Store, flags *Flags, instruments *Instruments) *gc {
+	return &gc{
 		name:        name,
 		store:       store,
 		instruments: instruments,
@@ -208,26 +208,30 @@ func New(name string, store Store, flags *Flags, instruments *Instruments) *GC {
 	}
 }
 
-// Start reports the cache's size through instruments, and runs its
-// eviction loop in the background when the flags give it a budget and a
-// period. Without a budget it warns once: the cache then only grows.
+// Start validates the cache's flags, reports its size through instruments,
+// and runs its eviction loop in the background when the flags give it a
+// budget and a period. Without a budget it warns once: the cache then only
+// grows.
 func Start(ctx context.Context, name string, store Store, flags *Flags, instruments *Instruments) error {
-	if err := instruments.Observe(name, store); err != nil {
+	if err := flags.Validate(); err != nil {
+		return err
+	}
+	if err := instruments.observe(name, store); err != nil {
 		return err
 	}
 	switch {
 	case *flags.MaxBytes == 0:
 		slog.WarnContext(ctx, "File cache has no budget; it only grows", slog.String("cache", name), slog.String("flag", "--"+flags.prefix+"-max-bytes"))
 	case *flags.Period > 0:
-		go New(name, store, flags, instruments).Run(ctx)
+		go newGC(name, store, flags, instruments).run(ctx)
 	}
 	return nil
 }
 
-// Run executes eviction passes on the configured period until ctx is done,
+// run executes eviction passes on the configured period until ctx is done,
 // the first one immediately so a node booting over budget does not wait a
 // full period. Passes are strictly serialized.
-func (g *GC) Run(ctx context.Context) {
+func (g *gc) run(ctx context.Context) {
 	g.runPass(ctx)
 	ticker := time.NewTicker(g.period)
 	defer ticker.Stop()
@@ -244,7 +248,7 @@ func (g *GC) Run(ctx context.Context) {
 // runPass performs one pass. It recovers from panics: this is a background
 // janitor, and a bug here must not take atelet down with it and strand every
 // actor on the node.
-func (g *GC) runPass(ctx context.Context) {
+func (g *gc) runPass(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.ErrorContext(ctx, "File cache GC pass panicked; skipping this pass",
@@ -259,7 +263,7 @@ func (g *GC) runPass(ctx context.Context) {
 		g.instruments.recordPass(ctx, g.name, ateattr.FileCacheGCOutcomeSkipped, 0)
 		return
 	}
-	target := Target(total, g.maxBytes)
+	target := target(total, g.maxBytes)
 	if target == 0 {
 		// Within budget: nothing to do, nothing to say.
 		g.consecutiveShortfalls = 0

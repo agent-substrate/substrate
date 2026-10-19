@@ -43,7 +43,7 @@ func TestTarget(t *testing.T) {
 		{"far over budget frees down to the low water", 10_000, 1000, 9100},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := Target(tc.total, tc.maxBytes); got != tc.want {
+			if got := target(tc.total, tc.maxBytes); got != tc.want {
 				t.Errorf("Target(%d, %d) = %d, want %d", tc.total, tc.maxBytes, got, tc.want)
 			}
 		})
@@ -103,7 +103,7 @@ func (f *fakeStore) EvictUnused(_ context.Context, target int64, dryRun bool) (f
 
 // newTestGC returns a loop over fake with instruments on a manual reader, so
 // a test can assert what a pass recorded.
-func newTestGC(t *testing.T, fake *fakeStore, maxBytes int64) (*GC, *sdkmetric.ManualReader) {
+func newTestGC(t *testing.T, fake *fakeStore, maxBytes int64) (*gc, *sdkmetric.ManualReader) {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -111,10 +111,10 @@ func newTestGC(t *testing.T, fake *fakeStore, maxBytes int64) (*GC, *sdkmetric.M
 	if err != nil {
 		t.Fatalf("NewInstruments: %v", err)
 	}
-	if err := inst.Observe(testCache, fake); err != nil {
+	if err := inst.observe(testCache, fake); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	return &GC{name: testCache, store: fake, instruments: inst, maxBytes: maxBytes, period: time.Hour}, reader
+	return &gc{name: testCache, store: fake, instruments: inst, maxBytes: maxBytes, period: time.Hour}, reader
 }
 
 // collectMetric returns the named metric from one collection, or nil if it
@@ -164,7 +164,7 @@ func TestPassWithinBudgetDoesNothing(t *testing.T) {
 	if fake.evictCalls != 0 {
 		t.Errorf("evictCalls = %d, want 0 within budget", fake.evictCalls)
 	}
-	if m := collectMetric(t, reader, GCPassesMetric); m != nil {
+	if m := collectMetric(t, reader, gcPassesMetric); m != nil {
 		t.Errorf("a quiet pass recorded %v, want nothing", m)
 	}
 }
@@ -177,7 +177,7 @@ func TestPassSkipsWhenSizingFails(t *testing.T) {
 		t.Errorf("evictCalls = %d, want 0 when the cache cannot be sized", fake.evictCalls)
 	}
 	fake.sizeErr = nil // so the size callback does not fail the collection
-	m := collectMetric(t, reader, GCPassesMetric)
+	m := collectMetric(t, reader, gcPassesMetric)
 	if m == nil {
 		t.Fatal("skipped pass not recorded")
 	}
@@ -193,14 +193,14 @@ func TestPassEvictsDownToTheLowWater(t *testing.T) {
 	if fake.evictCalls != 1 || fake.gotTarget != 600 || fake.gotDryRun {
 		t.Errorf("evict call: calls=%d target=%d dryRun=%v, want 1/600/false", fake.evictCalls, fake.gotTarget, fake.gotDryRun)
 	}
-	passes := collectMetric(t, reader, GCPassesMetric)
+	passes := collectMetric(t, reader, gcPassesMetric)
 	if passes == nil {
 		t.Fatal("pass not recorded")
 	}
 	if got := sumByOutcome(t, passes); got[ateattr.FileCacheGCOutcomeComplete] != 1 || len(got) != 1 {
 		t.Errorf("passes by outcome = %v, want one complete", got)
 	}
-	evictions := collectMetric(t, reader, EvictionsMetric)
+	evictions := collectMetric(t, reader, evictionsMetric)
 	if evictions == nil {
 		t.Fatal("evictions not recorded")
 	}
@@ -227,14 +227,14 @@ func TestDryRunCountsNoEvictions(t *testing.T) {
 	if fake.evictCalls != 1 || !fake.gotDryRun {
 		t.Errorf("evict call: calls=%d dryRun=%v, want 1/true", fake.evictCalls, fake.gotDryRun)
 	}
-	passes := collectMetric(t, reader, GCPassesMetric)
+	passes := collectMetric(t, reader, gcPassesMetric)
 	if passes == nil {
 		t.Fatal("pass not recorded")
 	}
 	if got := sumByOutcome(t, passes); got[ateattr.FileCacheGCOutcomeComplete] != 1 || len(got) != 1 {
 		t.Errorf("passes by outcome = %v, want one complete", got)
 	}
-	if evictions := collectMetric(t, reader, EvictionsMetric); evictions != nil {
+	if evictions := collectMetric(t, reader, evictionsMetric); evictions != nil {
 		t.Errorf("evictions = %+v after a dry run, want none recorded", evictions.Data)
 	}
 }
@@ -249,7 +249,7 @@ func TestPassShortfall(t *testing.T) {
 	if g.consecutiveShortfalls != 3 {
 		t.Errorf("consecutiveShortfalls = %d, want 3", g.consecutiveShortfalls)
 	}
-	if got := sumByOutcome(t, collectMetric(t, reader, GCPassesMetric)); got[ateattr.FileCacheGCOutcomeShortfall] != 3 {
+	if got := sumByOutcome(t, collectMetric(t, reader, gcPassesMetric)); got[ateattr.FileCacheGCOutcomeShortfall] != 3 {
 		t.Errorf("passes by outcome = %v, want three shortfalls", got)
 	}
 	// A pass that meets the budget resets the streak.
@@ -265,7 +265,7 @@ func TestPassShortfall(t *testing.T) {
 func TestSizeIsObservedPerCache(t *testing.T) {
 	fake := &fakeStore{size: 4096}
 	_, reader := newTestGC(t, fake, 0)
-	m := collectMetric(t, reader, SizeMetric)
+	m := collectMetric(t, reader, sizeMetric)
 	if m == nil {
 		t.Fatal("size not observed")
 	}
@@ -292,11 +292,11 @@ func TestTwoCachesShareTheInstruments(t *testing.T) {
 	}
 	a, b := &fakeStore{size: 1}, &fakeStore{size: 2}
 	for name, store := range map[string]*fakeStore{"a": a, "b": b} {
-		if err := inst.Observe(name, store); err != nil {
+		if err := inst.observe(name, store); err != nil {
 			t.Fatal(err)
 		}
 	}
-	m := collectMetric(t, reader, SizeMetric)
+	m := collectMetric(t, reader, sizeMetric)
 	if m == nil {
 		t.Fatal("size not observed")
 	}
@@ -310,6 +310,26 @@ func TestTwoCachesShareTheInstruments(t *testing.T) {
 	}
 }
 
+// TestStartRejectsInvalidFlags pins that Start validates the flags itself,
+// so a caller cannot start a loop on values it would silently ignore: a
+// negative period with a budget would leave the cache unbounded unnoticed.
+func TestStartRejectsInvalidFlags(t *testing.T) {
+	f := NewFlags(pflag.NewFlagSet("test", pflag.ContinueOnError), "test-cache", "test cache")
+	*f.Period, *f.MaxBytes = -time.Second, 1<<30
+	reader := sdkmetric.NewManualReader()
+	inst, err := NewInstruments(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("atelet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeStore{size: 1}
+	if err := Start(context.Background(), testCache, fake, f, inst); err == nil {
+		t.Fatal("Start with a negative period = nil, want an error")
+	}
+	if m := collectMetric(t, reader, sizeMetric); m != nil {
+		t.Error("Start observed the size of a cache whose flags it rejected")
+	}
+}
+
 func TestRunFirstPassIsImmediate(t *testing.T) {
 	// A cancelled context and an hour-long period: the single call can
 	// only be the immediate first pass, never a tick.
@@ -317,7 +337,7 @@ func TestRunFirstPassIsImmediate(t *testing.T) {
 	g, _ := newTestGC(t, fake, 1000)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	g.Run(ctx)
+	g.run(ctx)
 	if fake.evictCalls != 1 {
 		t.Errorf("evictCalls = %d, want exactly 1 (the immediate first pass)", fake.evictCalls)
 	}
@@ -329,7 +349,7 @@ func TestRunTicks(t *testing.T) {
 	g.period = 10 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
-	g.Run(ctx)
+	g.run(ctx)
 	if fake.evictCalls < 2 {
 		t.Errorf("evictCalls = %d, want >= 2 (first pass plus at least one tick)", fake.evictCalls)
 	}
