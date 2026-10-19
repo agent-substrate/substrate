@@ -37,6 +37,11 @@ const (
 	// ClientServiceAccount is the ServiceAccount an out-of-cluster client mints
 	// its ateapi bearer token from.
 	ClientServiceAccount = "ate-client"
+	// APIAuthzEnforced is whether ate-api-server enforces authorization on
+	// every RPC unless told otherwise. ate-setup's ateapi.authz.enabled
+	// setting defaults to it too, so an install gets the same answer whether
+	// or not it goes through ate-setup.
+	APIAuthzEnforced = true
 
 	// AteletTrustDomain and the ServiceAccount constants are the trust-domain
 	// and service-account segments of the SPIFFE IDs that atelet,

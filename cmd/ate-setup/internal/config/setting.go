@@ -175,8 +175,9 @@ var Registry = []Setting{
 	},
 	{
 		Key: "ateapi.authz.enabled", Env: "ATE_API_EXPERIMENTAL_ENABLE_AUTHZ",
-		Flag: "ateapi-experimental-enable-authz", Kind: KindBool, Default: "true",
-		Usage: "Enforce ate-api-server's runtime authorization",
+		Flag: "ateapi-experimental-enable-authz", Kind: KindBool,
+		Default: strconv.FormatBool(installdefaults.APIAuthzEnforced),
+		Usage:   "Enforce ate-api-server's runtime authorization",
 	},
 	{
 		Key: "ateapi.authz.bootstrapOwners", Env: "ATE_API_AUTHZ_BOOTSTRAP_OWNERS",

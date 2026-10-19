@@ -28,7 +28,9 @@ These are `ate-setup` settings, so the environment variable is read by
 `ate-setup`. It passes them to `ate-api-server` as the
 `--experimental-enable-authz` and `--authz-bootstrap-owners` flags on its
 container; an install that doesn't use `ate-setup` sets those flags in its
-manifest. A change rolls `ate-api-server`.
+manifest. `ate-api-server` enforces authorization by default too, and won't
+start without a bootstrap owner unless `--experimental-enable-authz=false`.
+A change rolls `ate-api-server`.
 
 | Setting | Environment variable | Example |
 |---|---|---|
