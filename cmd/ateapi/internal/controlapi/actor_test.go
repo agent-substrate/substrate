@@ -469,8 +469,12 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		template string
 		snapshot func(*testing.T, *ateapipb.Actor) string
 		// pending leaves the snapshot's upload PENDING, as a pause does.
-		pending   bool
-		repointTo string
+		pending bool
+		// lastAssignedGen overrides status.LastAssignedGeneration when > 0
+		// (e.g. after a reverted pause or crashed suspend pruned a higher
+		// pending generation).
+		lastAssignedGen int32
+		repointTo       string
 		// gateOff disables the PerTemplateSnapshotLocation preview gate, so
 		// every template resolves to clusterSnapshotLocation.
 		gateOff                 bool
@@ -519,6 +523,14 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			pending:   true,
 			repointTo: "different-location",
 			wantCode:  codes.FailedPrecondition,
+		},
+		{
+			name:            "owned snapshot after reverted later generation cannot move to another location",
+			template:        "same-location",
+			snapshot:        snapshotOwnedByActor,
+			lastAssignedGen: 2,
+			repointTo:       "different-location",
+			wantCode:        codes.FailedPrecondition,
 		},
 		{
 			name:      "snapshot location repoint is checked even when old template is gone",
@@ -589,6 +601,9 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 				}
 				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 					s.LastAssignedGeneration = 1
+					if tt.lastAssignedGen > 0 {
+						s.LastAssignedGeneration = tt.lastAssignedGen
+					}
 					s.Snapshots = []*ateapipb.Snapshot{
 						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot", uri, storageStatus),
 					}

@@ -295,7 +295,6 @@ classDiagram
     }
 
     ActorTemplate ..> WorkerPool : worker_selector (labels)
-    Actor ..> WorkerPool : worker_selector (labels)
     WorkerPool ..> Deployment : reconciled by atecontroller
     Deployment "1" *-- "*" WorkerPod : manages
     Actor "*" --> "1" ActorTemplate : actor_template
