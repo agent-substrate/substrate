@@ -712,7 +712,8 @@ actually did, independent of what the load generator reported.
   including `/dev/root`, which can read 0 while the disk holding it carries the
   traffic. `node_disk.nodes` is how many nodes were seen. In `stats.jsonl` the
   keys name the device without `/dev/`, as in
-  `node_disk_nvme0n1_write_p99_mb_s`, and a device that was never seen has none.
+  `node_disk_nvme0n1_write_p99_mb_s`. A device's keys are absent when it was
+  never seen, and `null` when it was seen only outside the steady-state window.
 * `snapshots.size_p50_mb` through `size_p99_mb`: actor memory image sizes.
 * `snapshots.size_avg_mb`: mean memory image size.
 * `snapshots.restore_p50_s` through `restore_p99_s`, `restore_mean_s`, and the
