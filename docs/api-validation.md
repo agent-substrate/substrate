@@ -463,7 +463,8 @@ message WorkloadSpec {
 `apitool validate` (see `tools/apitool`) checks every such comment across all
 three protos. It fails if the named field does not exist, or if it lacks a tag
 of the same name with the same value. Free text may follow the field name after
-a space or a comma.
+a space or a comma. These findings cannot be exempted in
+`tools/apitool/exemptions.json`: fix the bound instead.
 
 The check has limits:
 

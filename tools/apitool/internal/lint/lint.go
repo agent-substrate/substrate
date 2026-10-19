@@ -36,8 +36,8 @@ type Rule struct {
 	Check       func(api *model.API) ([]Finding, error)
 }
 
-// All is every rule `apitool validate` runs, in the order their findings
-// are reported.
+// All is every rule `apitool validate` runs against the Control API, in the
+// order their findings are reported.
 var All = []Rule{
 	ResourceMetadata,
 	ListMethodShape,
@@ -57,4 +57,9 @@ var All = []Rule{
 	ResourceStatusFieldShape,
 	NoOneofs,
 	Documented,
+}
+
+// CrossProto is every rule `apitool validate` runs over cross proto validations.
+var CrossProto = []Rule{
+	MatchingDVTags,
 }

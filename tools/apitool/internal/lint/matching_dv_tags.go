@@ -38,11 +38,6 @@ var MatchingDVTags = Rule{
 	Check:       checkMatchingDVTags,
 }
 
-// CrossProto lists the rules that run over every proto apitool loads.
-var CrossProto = []Rule{
-	MatchingDVTags,
-}
-
 func checkMatchingDVTags(api *model.API) ([]Finding, error) {
 	messages := api.MessagesByFullName()
 	var findings []Finding

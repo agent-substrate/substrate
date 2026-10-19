@@ -75,24 +75,21 @@ func Protos(ctx context.Context) (*model.API, error) {
 }
 
 // RuleFindings pairs one rule with the findings it raised against an API,
-// preserving lint.All's order.
+// preserving the order of the rule list it came from (e.g., lint.All or lint.CrossProto)
 type RuleFindings struct {
 	Rule     lint.Rule
 	Findings []lint.Finding
 }
 
-// All runs every rule in lint.All against api, then every rule in
-// lint.CrossProto against protos.
-func All(api, protos *model.API) ([]RuleFindings, error) {
-	out, err := run(lint.All, api)
-	if err != nil {
-		return nil, err
-	}
-	cross, err := run(lint.CrossProto, protos)
-	if err != nil {
-		return nil, err
-	}
-	return append(out, cross...), nil
+// All runs every rule in lint.All against api.
+func All(api *model.API) ([]RuleFindings, error) {
+	return run(lint.All, api)
+}
+
+// CrossProto runs every rule in lint.CrossProto against protos. Its findings
+// cannot be exempted.
+func CrossProto(protos *model.API) ([]RuleFindings, error) {
+	return run(lint.CrossProto, protos)
 }
 
 func run(rules []lint.Rule, api *model.API) ([]RuleFindings, error) {

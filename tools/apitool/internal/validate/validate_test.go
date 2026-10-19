@@ -27,12 +27,7 @@ func TestExemptions(t *testing.T) {
 		t.Fatalf("validate.API() error = %v", err)
 	}
 
-	protos, err := validate.Protos(t.Context())
-	if err != nil {
-		t.Fatalf("validate.Protos() error = %v", err)
-	}
-
-	results, err := validate.All(api, protos)
+	results, err := validate.All(api)
 	if err != nil {
 		t.Fatalf("validate.All() error = %v", err)
 	}
@@ -59,5 +54,21 @@ func TestExemptions(t *testing.T) {
 	}
 	if len(missing) > 0 || len(stale) > 0 {
 		t.Logf("run `apitool validate --update` (from tools/apitool) to regenerate %s", path)
+	}
+}
+
+func TestCrossProto(t *testing.T) {
+	protos, err := validate.Protos(t.Context())
+	if err != nil {
+		t.Fatalf("validate.Protos() error = %v", err)
+	}
+	results, err := validate.CrossProto(protos)
+	if err != nil {
+		t.Fatalf("validate.CrossProto() error = %v", err)
+	}
+	for _, r := range results {
+		for _, f := range r.Findings {
+			t.Errorf("[%s] %s: %s (cross-proto findings cannot be exempted, fix the proto instead)", r.Rule.Name, f.Subject, f.Message)
+		}
 	}
 }
