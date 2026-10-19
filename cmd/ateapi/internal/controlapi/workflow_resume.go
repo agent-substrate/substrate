@@ -743,17 +743,19 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 }
 
 // canRelaxRuntime reports whether a resume may drop its RequiredRuntime
-// constraint and fall back to restoring without memory state when no
-// runtime-compatible worker has capacity. A local pause checkpoint is not
-// relaxed: the resume stays pinned to its node, the local restore has no
-// fidelity downgrade, and nothing invalidates the checkpoint files if the actor
-// boots elsewhere. The pin lifts once atelet uploads the checkpoint and
-// detaches it from the node.
+// constraint when no compatible worker has capacity. A local snapshot permits
+// this fallback only after its own durable copy completes. An older durable
+// snapshot cannot authorize fallback for a newer local one. Node placement
+// constraints are evaluated separately.
 func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
 	if constraints.RequiredRuntime.Runtime() == nil {
 		return false
 	}
-	return findLatestLocalSnapshot(actor.GetStatus()) == nil
+	local := findLatestLocalSnapshot(actor.GetStatus())
+	if local == nil {
+		return true
+	}
+	return local.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 }
 
 // appliesWithFallback reports whether worker satisfies constraints, or — when

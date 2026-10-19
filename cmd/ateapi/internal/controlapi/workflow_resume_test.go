@@ -2864,7 +2864,8 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 }
 
 // TestCanRelaxRuntime pins when a resume may drop its runtime constraint: only
-// when it has one, and never while a local pause checkpoint pins the actor.
+// when it has one, and a local pause checkpoint permits it only once its own
+// durable copy completes.
 func TestCanRelaxRuntime(t *testing.T) {
 	rt := testSandboxRuntime()
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
@@ -2873,6 +2874,16 @@ func TestCanRelaxRuntime(t *testing.T) {
 	}
 	local := func(gen int32) *ateapipb.Snapshot {
 		return newPausedSnapshot(t, gen, memory, "", "local", "node-1")
+	}
+	localDurable := func(gen int32, storageStatus ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
+		snap := local(gen)
+		snap.GetDurableSnapshot().Status = storageStatus
+		return snap
+	}
+	localNoDurable := func(gen int32) *ateapipb.Snapshot {
+		snap := local(gen)
+		snap.DurableSnapshot = nil
+		return snap
 	}
 
 	tests := []struct {
@@ -2899,6 +2910,29 @@ func TestCanRelaxRuntime(t *testing.T) {
 		{
 			name:      "local checkpoint stays pinned beside a durable snapshot",
 			snapshots: []*ateapipb.Snapshot{durable(1), local(2)},
+			required:  rt,
+		},
+		{
+			name:      "local durable completed",
+			snapshots: []*ateapipb.Snapshot{localDurable(2, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)},
+			required:  rt,
+			want:      true,
+		},
+		{
+			name:      "local durable pending",
+			snapshots: []*ateapipb.Snapshot{localDurable(2, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)},
+			required:  rt,
+		},
+		{
+			name:      "local no durable",
+			snapshots: []*ateapipb.Snapshot{localNoDurable(2)},
+			required:  rt,
+		},
+		{
+			// An older generation's durable copy cannot authorize the fallback
+			// for a newer local checkpoint.
+			name:      "older durable only",
+			snapshots: []*ateapipb.Snapshot{durable(1), localNoDurable(2)},
 			required:  rt,
 		},
 	}
