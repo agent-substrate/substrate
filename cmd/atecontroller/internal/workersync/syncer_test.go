@@ -18,8 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"maps"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +30,7 @@ import (
 	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	appsv1 "k8s.io/api/apps/v1"
@@ -1383,6 +1387,78 @@ func TestSyncer_ReconcileErrorsAreClassified(t *testing.T) {
 			}
 			if got := api.names(); len(got) != 0 {
 				t.Errorf("registry holds %v, want nothing written for a rejected create", got)
+			}
+		})
+	}
+}
+
+type benchLatencyControlClient struct {
+	*fakeControl
+	delay time.Duration
+}
+
+func (c *benchLatencyControlClient) CreateWorker(ctx context.Context, in *ateapipb.CreateWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error) {
+	if c.delay > 0 {
+		time.Sleep(c.delay)
+	}
+	return c.fakeControl.CreateWorker(ctx, in, opts...)
+}
+
+func BenchmarkWorkerPoolSyncer_Concurrency(b *testing.B) {
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	b.Cleanup(func() { slog.SetDefault(prevLogger) })
+
+	const (
+		ns       = "ns-bench"
+		poolName = "pool-bench"
+		numPods  = 40
+		rpcDelay = 500 * time.Microsecond
+	)
+
+	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
+	fakeK8s := fake.NewSimpleClientset()
+	_, workerInformer := WorkerPodInformer(fakeK8s)
+	_, _, workerPoolInformer := newWorkerPoolInformer()
+	if err := workerPoolInformer.GetIndexer().Add(workerPool(ns, poolName, nil)); err != nil {
+		b.Fatalf("seeding WorkerPool: %v", err)
+	}
+	keys := make([]workerKey, numPods)
+	for i := range numPods {
+		uid := fmt.Sprintf("00000000-0000-0000-0000-%012d", i+1)
+		name := fmt.Sprintf("worker-%d", i)
+		ip := fmt.Sprintf("10.0.1.%d", i+1)
+		pod := workerPod(ns, name, poolName, uid, ip)
+		if err := workerInformer.GetIndexer().Add(pod); err != nil {
+			b.Fatalf("seeding pod %d: %v", i, err)
+		}
+		keys[i] = workerKey{namespace: ns, name: name, uid: uid}
+	}
+
+	for _, concurrency := range []int{2, 20} {
+		b.Run(fmt.Sprintf("Concurrency=%d", concurrency), func(b *testing.B) {
+			ctx := context.Background()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				api := &benchLatencyControlClient{
+					fakeControl: newFakeControl(),
+					delay:       rpcDelay,
+				}
+				s := NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, concurrency)
+				for _, k := range keys {
+					s.queue.Add(k)
+				}
+				var wg sync.WaitGroup
+				wg.Add(concurrency)
+				for range concurrency {
+					go func() {
+						defer wg.Done()
+						s.runWorker(ctx)
+					}()
+				}
+				s.queue.ShutDownWithDrain()
+				wg.Wait()
 			}
 		})
 	}

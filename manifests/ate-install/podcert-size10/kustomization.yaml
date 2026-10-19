@@ -23,9 +23,8 @@ kind: Kustomization
 resources:
   - ../pod-certificate-controller.yaml
 
-# JSON-patch style so we only append the two new flags rather than restate
-# the whole args list — keeps the overlay from drifting if the base flags
-# change.
+# JSON-patch style so we only append the rate-limit flags and replace
+# WORKERS_PER_SIGNER rather than restate the whole container spec.
 patches:
   - target:
       kind: Deployment
@@ -34,7 +33,10 @@ patches:
     patch: |-
       - op: add
         path: /spec/template/spec/containers/0/args/-
-        value: --kube-api-qps=100
+        value: --kube-api-qps=500
       - op: add
         path: /spec/template/spec/containers/0/args/-
-        value: --kube-api-burst=200
+        value: --kube-api-burst=1000
+      - op: replace
+        path: /spec/template/spec/containers/0/env/3/value
+        value: "50"
