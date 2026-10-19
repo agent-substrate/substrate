@@ -1704,12 +1704,16 @@ func advertiseRuntime(t *testing.T, s *Atelet, rec *sandboxAssetsRecord) {
 	})
 }
 
-// TestRunRejectsUnadvertisedRuntime pins that an actor placed for a runtime
-// no worker on this node advertises is refused before anything is fetched
-// or staged.
-func TestRunRejectsUnadvertisedRuntime(t *testing.T) {
+// TestRunAndRestoreRejectUnadvertisedRuntime pins that an actor placed for a
+// runtime no worker on this node advertises is refused by Run and Restore
+// alike, before anything is fetched or staged, and that either request
+// without a runtime is invalid.
+func TestRunAndRestoreRejectUnadvertisedRuntime(t *testing.T) {
 	useTempNodeDirs(t)
-	const actorUID = "01234567-89ab-cdef-0123-456789abcdef"
+	const (
+		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
+		workerPodUID = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+	)
 	release := newGVisorTestRelease(t)
 	var gets atomic.Int32
 	s := &Atelet{
@@ -1719,30 +1723,50 @@ func TestRunRejectsUnadvertisedRuntime(t *testing.T) {
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 	}
 	rec := testSandboxRecord(release, testPauseImage)
-	_, err := s.Run(t.Context(), &ateletpb.RunRequest{
-		Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
-		SandboxRuntime: runtimeFor(t, rec), Spec: &ateletpb.WorkloadSpec{},
-	})
-	if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "not advertised") {
-		t.Fatalf("Run for an unadvertised runtime = %v (code %s), want %s naming the runtime", err, apierror.Code(err), codes.FailedPrecondition)
-	}
-	if gets.Load() != 0 {
-		t.Errorf("assets fetched %d times for a refused Run, want 0", gets.Load())
-	}
-	if _, err := os.Lstat(ateletpath.ActorPath(actorUID)); !os.IsNotExist(err) {
-		t.Errorf("refused Run created the actor dir (lstat err = %v)", err)
+
+	for _, tc := range []struct {
+		name string
+		call func(t *testing.T, rt *ateletpb.SandboxRuntime) error
+	}{{
+		name: "Run",
+		call: func(t *testing.T, rt *ateletpb.SandboxRuntime) error {
+			_, err := s.Run(t.Context(), &ateletpb.RunRequest{
+				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: workerPodUID,
+				SandboxRuntime: rt, Spec: &ateletpb.WorkloadSpec{},
+			})
+			return err
+		},
+	}, {
+		name: "Restore",
+		call: func(t *testing.T, rt *ateletpb.SandboxRuntime) error {
+			_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
+				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: workerPodUID,
+				SandboxRuntime: rt, Spec: &ateletpb.WorkloadSpec{},
+				Snapshot: lifecycleSnapshot(actorUID, "pause-snap-1", 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
+			})
+			return err
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call(t, runtimeFor(t, rec))
+			if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "not advertised") {
+				t.Fatalf("%s for an unadvertised runtime = %v (code %s), want %s naming the runtime", tc.name, err, apierror.Code(err), codes.FailedPrecondition)
+			}
+			if gets.Load() != 0 {
+				t.Errorf("assets fetched %d times for a refused %s, want 0", gets.Load(), tc.name)
+			}
+			if _, err := os.Lstat(ateletpath.ActorPath(actorUID)); !os.IsNotExist(err) {
+				t.Errorf("refused %s created the actor dir (lstat err = %v)", tc.name, err)
+			}
+
+			// A request that names no runtime is invalid.
+			if err := tc.call(t, nil); apierror.Code(err) != codes.InvalidArgument {
+				t.Errorf("%s without sandbox_runtime = %v (code %s), want %s", tc.name, err, apierror.Code(err), codes.InvalidArgument)
+			}
+		})
 	}
 
-	// A request that names no runtime is invalid.
-	_, err = s.Run(t.Context(), &ateletpb.RunRequest{
-		Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
-		Spec: &ateletpb.WorkloadSpec{},
-	})
-	if apierror.Code(err) != codes.InvalidArgument {
-		t.Errorf("Run without sandbox_runtime = %v (code %s), want %s", err, apierror.Code(err), codes.InvalidArgument)
-	}
-
-	// Once a worker advertises it, the same request resolves.
+	// Once a worker advertises it, the same runtime resolves.
 	advertiseRuntime(t, s, rec)
 	if _, err := s.advertisedRuntime(t.Context(), runtimeFor(t, rec)); err != nil {
 		t.Errorf("advertisedRuntime after advertising: %v", err)

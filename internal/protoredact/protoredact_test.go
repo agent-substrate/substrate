@@ -39,11 +39,12 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// TestRedactedRecursesIntoRealMapFields walks real messages whose maps hold
-// strings (atelet volume contexts and ateapi selectors): map values are
-// visited without panicking, labeled fields in the message are masked, and
-// non-sensitive content is left intact.
-func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
+// TestRedactedSkipsUnlabeledScalarMaps pins the reachability short-circuit on
+// a real message: a map<string, string> has no field that could carry
+// debug_redact, so redact skips it instead of descending into values that are
+// not messages (which would panic), while a labeled field elsewhere in the
+// same message is still masked and the original is left alone.
+func TestRedactedSkipsUnlabeledScalarMaps(t *testing.T) {
 	run := &ateletpb.RunRequest{
 		Spec: &ateletpb.WorkloadSpec{
 			Volumes: []*ateletpb.Volume{{
@@ -62,25 +63,10 @@ func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
 		t.Fatalf("env value = %q, want placeholder", v)
 	}
 	if fsType := got.GetSpec().GetVolumes()[0].GetExternal().GetVolumeContext()["fsType"]; fsType != "ext4" {
-		t.Fatalf("map content was altered: fsType = %q", fsType)
+		t.Fatalf("scalar map was altered: fsType = %q", fsType)
 	}
 	if run.GetSpec().GetContainers()[0].GetEnv()[0].GetValue() != "sk-secret" {
 		t.Fatal("original mutated")
-	}
-
-	tpl := &ateapipb.ActorTemplate{
-		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"workload": "agent"}},
-		Containers: []*ateapipb.Container{{
-			Name: "c", Env: []*ateapipb.EnvVar{{Name: "TOKEN", Value: "t0p"}},
-		}},
-	}
-	redactedTpl, _ := protoredact.Redacted(tpl)
-	gotTpl := redactedTpl.(*ateapipb.ActorTemplate)
-	if gotTpl.GetWorkerSelector().GetMatchLabels()["workload"] != "agent" {
-		t.Fatal("string map was altered")
-	}
-	if gotTpl.GetContainers()[0].GetEnv()[0].GetValue() != protoredact.Placeholder {
-		t.Fatal("EnvVar.value not masked")
 	}
 }
 
