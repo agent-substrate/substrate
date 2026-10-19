@@ -26,6 +26,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -164,6 +165,46 @@ func DeflateAgainstBase(ctx context.Context, baseFile, targetFile string) (punch
 		return nil
 	})
 	return punchedBytes, keptBytes, err
+}
+
+// CreateSparseDeltaAgainstBase writes modified 4 KiB pages from targetFile into a sparse
+// outDeltaFile without mutating baseFile or targetFile.
+func CreateSparseDeltaAgainstBase(ctx context.Context, baseFile, targetFile, outDeltaFile string) (keptBytes int64, err error) {
+	fi, err := os.Stat(targetFile)
+	if err != nil {
+		return 0, err
+	}
+	outF, err := os.CreateTemp(filepath.Dir(outDeltaFile), ".memory-ranges.delta-*")
+	if err != nil {
+		return 0, err
+	}
+	tmpOut := outF.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = outF.Close()
+		}
+		if err != nil {
+			_ = os.Remove(tmpOut)
+		}
+	}()
+	if err = outF.Truncate(fi.Size()); err != nil {
+		return 0, err
+	}
+	_, err = scanTargetPages(ctx, baseFile, targetFile, os.O_RDONLY, func(_ int, off, pLen int64, page []byte, same, flush bool) error {
+		if flush || same {
+			return nil
+		}
+		keptBytes += pLen
+		_, werr := outF.WriteAt(page, off)
+		return werr
+	})
+	closed = true
+	if err = errors.Join(err, outF.Close()); err != nil {
+		return keptBytes, err
+	}
+	err = os.Rename(tmpOut, outDeltaFile)
+	return keptBytes, err
 }
 
 // CreateDeltaAgainstBase writes modified 4 KiB pages into metaFile (ADIF v1) and dataFile.
