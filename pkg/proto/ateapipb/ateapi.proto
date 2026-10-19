@@ -1156,7 +1156,10 @@ message ActorTemplate {
   // +k8s:listMapKey=name
   repeated Volume volumes = 4;
 
-  // +k8s:required
+  // snapshot_config selects what actor snapshots capture and where they are
+  // stored. Optional: when omitted, every field takes its default.
+  //
+  // +k8s:optional
   SnapshotConfig snapshot_config = 5;
 
   // resources is the actor's compute size. Both cpu and memory limits are
@@ -1227,9 +1230,12 @@ message ActorTemplateStatus {
 // stored.
 message SnapshotConfig {
   // storage_location is the base object-storage URI snapshots of actors on
-  // this version are stored under. Required.
+  // this version are stored under. If unset, ate-api-server's
+  // --snapshot-location is used. Requires the PerTemplateSnapshotLocation preview
+  // gate; ignored without it.
   //
-  // +k8s:required
+  // +ate:preview=PerTemplateSnapshotLocation
+  // +k8s:optional
   // +k8s:maxLength=1024
   // +k8s:customValidation # Validate URI
   string storage_location = 1;

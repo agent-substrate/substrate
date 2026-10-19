@@ -33,6 +33,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/substratex509"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -411,7 +412,9 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 // a template storing snapshots under the same location, so deleting the actor
 // still collects everything it wrote. Stored data the check cannot parse is a
 // server fault: the error carries no status, which ServerUnaryInterceptor
-// answers with INTERNAL.
+// answers with INTERNAL. With the PerTemplateSnapshotLocation preview gate off,
+// every template resolves to --snapshot-location, so template locations
+// cannot block a repoint.
 func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
@@ -464,7 +467,11 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		template  string
 		snapshot  func(*testing.T, *ateapipb.Actor) string
 		repointTo string
-		wantCode  codes.Code
+		// gateOff disables the PerTemplateSnapshotLocation preview gate, so
+		// every template resolves to clusterSnapshotLocation.
+		gateOff                 bool
+		clusterSnapshotLocation string
+		wantCode                codes.Code
 	}{
 		{
 			name:      "no external snapshot moves freely",
@@ -514,10 +521,41 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			repointTo: "corrupt",
 			wantCode:  codes.Internal,
 		},
+		{
+			name:                    "gate off: owned snapshot moves between template locations, which are ignored",
+			template:                "same-location",
+			snapshot:                snapshotOwnedByActor,
+			repointTo:               "different-location",
+			gateOff:                 true,
+			clusterSnapshotLocation: sameLocation,
+			wantCode:                codes.OK,
+		},
+		{
+			name:                    "gate off: an invalid template location is ignored",
+			template:                "same-location",
+			snapshot:                snapshotOwnedByActor,
+			repointTo:               "corrupt",
+			gateOff:                 true,
+			clusterSnapshotLocation: sameLocation,
+			wantCode:                codes.OK,
+		},
+		{
+			name:      "gate off without --snapshot-location has no location to check",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			repointTo: "different-location",
+			gateOff:   true,
+			wantCode:  codes.FailedPrecondition,
+		},
 	}
-	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.gateOff {
+				preview.InitForTest(t)
+			}
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
+			svc := &RPCService{impl: impl}
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("actor-%d", i)},
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.template},

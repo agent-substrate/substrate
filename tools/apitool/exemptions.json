@@ -36,11 +36,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorTemplate.snapshot_config",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ActorTemplate.status",
     "message": "field has no doc comment"
   },

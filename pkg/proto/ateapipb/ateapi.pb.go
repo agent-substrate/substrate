@@ -2702,7 +2702,10 @@ type ActorTemplate struct {
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
 	Volumes []*Volume `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
-	// +k8s:required
+	// snapshot_config selects what actor snapshots capture and where they are
+	// stored. Optional: when omitted, every field takes its default.
+	//
+	// +k8s:optional
 	SnapshotConfig *SnapshotConfig `protobuf:"bytes,5,opt,name=snapshot_config,json=snapshotConfig,proto3" json:"snapshot_config,omitempty"`
 	// resources is the actor's compute size. Both cpu and memory limits are
 	// required: the scheduler books them against worker capacity, and a
@@ -3031,9 +3034,12 @@ func (x *ActorTemplateStatus) GetGoldenSnapshotStatus() *GoldenSnapshotStatus {
 type SnapshotConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// storage_location is the base object-storage URI snapshots of actors on
-	// this version are stored under. Required.
+	// this version are stored under. If unset, ate-api-server's
+	// --snapshot-location is used. Requires the PerTemplateSnapshotLocation preview
+	// gate; ignored without it.
 	//
-	// +k8s:required
+	// +ate:preview=PerTemplateSnapshotLocation
+	// +k8s:optional
 	// +k8s:maxLength=1024
 	// +k8s:customValidation # Validate URI
 	StorageLocation string `protobuf:"bytes,1,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`

@@ -74,6 +74,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.CheckCSIDriver(opts.SetupCSI); err != nil {
 		return err
 	}
+	// The snapshot location is only written into ate-api-server's ConfigMap
+	// partway through, so check it before the cluster is touched.
+	if _, err := clusterSnapshotLocation(e.Cfg.SnapshotLocation, e.Cfg.PreviewGates); err != nil {
+		return err
+	}
 	if err := e.requireNoWorkerPods(ctx); err != nil {
 		return err
 	}
@@ -283,6 +288,11 @@ func setPodcertWorkersPerSigner(objs []*unstructured.Unstructured, workers int) 
 func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	log.Step("deploy_ate_apiserver")
 
+	// Checked before the CRDs, namespace and Secrets go in, rather than when
+	// the ConfigMap is written.
+	if _, err := clusterSnapshotLocation(e.Cfg.SnapshotLocation, e.Cfg.PreviewGates); err != nil {
+		return err
+	}
 	if err := e.EnsureCRDs(ctx); err != nil {
 		return err
 	}

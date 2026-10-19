@@ -18,7 +18,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -260,5 +263,87 @@ func TestTagDurableSnapshotURI(t *testing.T) {
 	}
 	if got := tagDurableSnapshotURI(pendingTag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED); got != "gs://b/tag-1" {
 		t.Errorf("tagDurableSnapshotURI(pendingTag, UNSPECIFIED) = %q, want gs://b/tag-1", got)
+	}
+}
+
+func TestResolveSnapshotLocation(t *testing.T) {
+	const (
+		templateLocation = "gs://template-bucket/root"
+		bucketPrefix     = "gs://flag-bucket/prefix/"
+	)
+	tests := []struct {
+		name             string
+		gateEnabled      bool
+		bucketPrefix     string
+		templateLocation string
+		want             string
+		wantErr          bool
+	}{
+		{
+			name:             "gate disabled uses the flag and ignores the template location",
+			bucketPrefix:     bucketPrefix,
+			templateLocation: templateLocation,
+			want:             bucketPrefix,
+		},
+		{
+			name:         "gate disabled uses the flag when the template sets none",
+			bucketPrefix: bucketPrefix,
+			want:         bucketPrefix,
+		},
+		{
+			name:             "gate disabled fails without the flag even with a template location",
+			templateLocation: templateLocation,
+			wantErr:          true,
+		},
+		{
+			name:             "gate enabled prefers the template location",
+			gateEnabled:      true,
+			bucketPrefix:     bucketPrefix,
+			templateLocation: templateLocation,
+			want:             templateLocation,
+		},
+		{
+			name:         "gate enabled falls back to the flag",
+			gateEnabled:  true,
+			bucketPrefix: bucketPrefix,
+			want:         bucketPrefix,
+		},
+		{
+			name:             "gate enabled without the flag uses the template location",
+			gateEnabled:      true,
+			templateLocation: templateLocation,
+			want:             templateLocation,
+		},
+		{
+			name:        "gate enabled with neither fails",
+			gateEnabled: true,
+			wantErr:     true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gates []string
+			if tt.gateEnabled {
+				gates = []string{string(preview.GatePerTemplateSnapshotLocation)}
+			}
+			preview.InitForTest(t, gates...)
+			tmpl := &ateapipb.ActorTemplate{
+				Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl"},
+				SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: tt.templateLocation},
+			}
+			got, err := resolveSnapshotLocation(tt.bucketPrefix, tmpl)
+			if tt.wantErr {
+				if apierror.Code(err) != codes.FailedPrecondition {
+					t.Fatalf("resolveSnapshotLocation() err = %v, want FailedPrecondition", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveSnapshotLocation() err = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("resolveSnapshotLocation() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

@@ -258,7 +258,11 @@ func (w *ActorWorkflow) checkTagCreatable(ctx context.Context, tagRef resources.
 	case !errors.Is(err, store.ErrNotFound):
 		return fmt.Errorf("while getting tag %s: %w", tagRef, err)
 	}
-	if err := resources.ValidateSnapshotLocation(actorTemplate.GetSnapshotConfig().GetStorageLocation()); err != nil {
+	location, err := w.snapshotLocation(actorTemplate)
+	if err != nil {
+		return err
+	}
+	if err := resources.ValidateSnapshotLocation(location); err != nil {
 		return fmt.Errorf("invalid storage location for tag %s: %w", tagRef, err)
 	}
 	return nil
@@ -435,7 +439,11 @@ func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *atea
 	defer func() { err = done(err) }()
 
 	tagRef := resources.TagRefFromTag(tag)
-	dst, err := resources.NewTagSnapshotURI(actorTemplate.GetSnapshotConfig().GetStorageLocation(), tagRef.Atespace, tag.GetMetadata().GetUid())
+	location, err := w.snapshotLocation(actorTemplate)
+	if err != nil {
+		return nil, resources.SnapshotURI{}, err
+	}
+	dst, err := resources.NewTagSnapshotURI(location, tagRef.Atespace, tag.GetMetadata().GetUid())
 	if err != nil {
 		return nil, resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for tag %s: %w", tagRef, err)
 	}

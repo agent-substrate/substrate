@@ -1204,8 +1204,7 @@ func Validate_ActorTemplate(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -7747,8 +7746,7 @@ func Validate_SnapshotConfig(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {

@@ -108,6 +108,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.SnapshotLocation = "gs://ate-snapshots/"
 			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -142,6 +143,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 
 func TestCreateAPIServerEnvVarsRejectsCustomBundledIdentity(t *testing.T) {
 	cfg := config.Config{PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner"}
+	cfg.SnapshotLocation = "gs://ate-snapshots/"
 	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -175,7 +177,8 @@ func TestCreateAPIServerEnvVarsKeepsExternalPostgres(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{
 				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole,
-				CloudSQL: tc.cloudSQL,
+				CloudSQL:         tc.cloudSQL,
+				SnapshotLocation: "gs://ate-snapshots/",
 			}
 			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
@@ -227,7 +230,7 @@ func TestCreateAPIServerEnvVarsKeepsOwnerLogin(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := config.Config{PostgresReadWriteConnectionString: readWrite, PostgresOwnerConnectionString: tc.owner}
+			cfg := config.Config{PostgresReadWriteConnectionString: readWrite, PostgresOwnerConnectionString: tc.owner, SnapshotLocation: "gs://ate-snapshots/"}
 			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -265,6 +268,7 @@ func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
 		PostgresPoolMaxConns:              "20",
 	}
+	cfg.SnapshotLocation = "gs://ate-snapshots/"
 	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -293,6 +297,7 @@ func TestCreateAPIServerEnvVarsActorJWTIssuer(t *testing.T) {
 		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
 		ActorJWTIssuer:                    "https://idp.example.com/prod",
 	}
+	cfg.SnapshotLocation = "gs://ate-snapshots/"
 	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -353,6 +358,7 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.SnapshotLocation = "gs://ate-snapshots/"
 			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{
@@ -530,7 +536,7 @@ func TestAnnotateAPIServerEnvHash(t *testing.T) {
 // Deployment, patches the running one.
 func TestOnlyAStandaloneEnvUpdateRollsTheAPIServer(t *testing.T) {
 	newEnv := func(t *testing.T) *Env {
-		return &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg"},
+		return &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg", SnapshotLocation: "gs://ate-snapshots/"},
 			Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -699,6 +705,7 @@ func TestCreateAPIServerEnvVarsOmitsAuthz(t *testing.T) {
 		PostgresOwnerRole:          config.DefaultPostgresOwnerRole,
 		APIExperimentalEnableAuthz: true,
 		APIAuthzBootstrapOwners:    "system:serviceaccount:ate-system:ate-client",
+		SnapshotLocation:           "gs://ate-snapshots/",
 	}, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 		apiServerEnvVarsConfigMap(map[string]string{}),
@@ -746,6 +753,73 @@ func TestSharedBootstrapOwnerWarning(t *testing.T) {
 						t.Errorf("warning %q does not name %q", got, want)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestCreateAPIServerEnvVarsSnapshotLocation(t *testing.T) {
+	tests := []struct {
+		name     string
+		location string
+		gates    []string
+		want     string
+		wantErr  string
+	}{{
+		name:     "set",
+		location: "gs://ate-snapshots/prefix/",
+		want:     "gs://ate-snapshots/prefix/",
+	}, {
+		name:     "set with the gate on",
+		location: "gs://ate-snapshots/prefix/",
+		gates:    []string{"PerTemplateSnapshotLocation"},
+		want:     "gs://ate-snapshots/prefix/",
+	}, {
+		name:  "unset when the gate is on",
+		gates: []string{"PerTemplateSnapshotLocation"},
+	}, {
+		name:  "unset when every gate is on",
+		gates: []string{"ALL"},
+	}, {
+		name:    "an error when unset and the gate is off",
+		gates:   []string{"ExternalVolumes"},
+		wantErr: "--snapshot-location (SNAPSHOT_LOCATION) must be set unless --preview=PerTemplateSnapshotLocation is enabled",
+	}, {
+		name:     "an error when invalid",
+		location: "gs:///no-bucket",
+		wantErr:  "invalid --snapshot-location",
+	}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{
+				PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
+				SnapshotLocation:                  tc.location,
+				PreviewGates:                      tc.gates,
+			}
+			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
+			)}
+			err := e.CreateAPIServerEnvVars(t.Context())
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("CreateAPIServerEnvVars() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, ok := cm.Data["ATE_API_SNAPSHOT_LOCATION"]
+			if tc.want == "" && ok {
+				t.Errorf("ATE_API_SNAPSHOT_LOCATION = %q, want it unset", got)
+			} else if got != tc.want {
+				t.Errorf("ATE_API_SNAPSHOT_LOCATION = %q, want %q", got, tc.want)
 			}
 		})
 	}

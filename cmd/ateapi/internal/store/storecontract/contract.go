@@ -116,6 +116,12 @@ func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
 				},
 			},
 		}},
+		// Fully defaulted, as the RPC layer stores it, so a read that
+		// backfills defaults returns what was created.
+		SnapshotConfig: &ateapipb.SnapshotConfig{
+			PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		},
 	}
 }
 

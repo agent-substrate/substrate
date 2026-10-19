@@ -16,8 +16,10 @@ package ateinterceptors
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
@@ -26,6 +28,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // ServerElapsedTrailer carries the server's handler duration in microseconds,
@@ -58,7 +61,7 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 	slog.InfoContext(ctx, "Handle RPC",
 		slog.String("method", info.FullMethod),
 		slog.Any("req", req),
-		slog.Any("resp", resp),
+		slog.Any("resp", respForLog(info.FullMethod, resp, err)),
 		slog.Any("err", err),
 		slog.String("elapsed-time", elapsed.String()),
 		slog.Any("principal", pInfo),
@@ -94,7 +97,7 @@ func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.Una
 	slog.InfoContext(ctx, "Handle RPC",
 		slog.String("method", info.FullMethod),
 		slog.Any("req", req),
-		slog.Any("resp", resp),
+		slog.Any("resp", respForLog(info.FullMethod, resp, err)),
 		slog.Any("err", err),
 		slog.String("elapsed-time", time.Since(startTime).String()),
 	)
@@ -105,4 +108,23 @@ func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.Una
 	}
 
 	return resp, err
+}
+
+// respForLog keeps list responses out of the log. A page of a thousand actors
+// is tens of kilobytes per call, and at scale those pages rotate the lifecycle
+// lines out of the container log. A failed call's response is logged as the
+// handler returned it: the generated handlers return a typed nil, which logs
+// as null.
+func respForLog(method string, resp any, err error) any {
+	if err != nil {
+		return resp
+	}
+	name := method[strings.LastIndex(method, "/")+1:]
+	if !strings.HasPrefix(name, "List") {
+		return resp
+	}
+	if m, ok := resp.(proto.Message); ok {
+		return fmt.Sprintf("<%s response elided, %d bytes>", name, proto.Size(m))
+	}
+	return resp
 }

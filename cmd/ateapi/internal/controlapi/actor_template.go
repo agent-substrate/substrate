@@ -70,6 +70,12 @@ func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateap
 		return nil, toGRPCInternalError(errs)
 	}
 
+	// Reject a template whose actors could never be snapshotted, rather than
+	// failing their first suspend or tag.
+	if _, err := resolveSnapshotLocation(s.clusterSnapshotLocation, outTemplate); err != nil {
+		return nil, err
+	}
+
 	return s.store.CreateActorTemplate(ctx, outTemplate)
 }
 

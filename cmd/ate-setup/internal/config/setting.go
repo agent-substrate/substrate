@@ -149,6 +149,10 @@ var Registry = []Setting{
 		Key: "storage.bucketName", Env: "BUCKET_NAME", Flag: "storage-bucket-name", Kind: KindString,
 		Usage: "Snapshot bucket the demos are templated with",
 	},
+	{
+		Key: "storage.snapshotLocation", Env: "SNAPSHOT_LOCATION", Flag: "snapshot-location", Kind: KindString,
+		Usage: "Cluster-wide object-storage URI ate-api-server stores snapshots under, for example gs://BUCKET/PREFIX/ (required if the PerTemplateSnapshotLocation preview gate is not enabled)",
+	},
 
 	{
 		Key: "atenet.dataplane", Env: "ATE_ATENET_DATAPLANE", Flag: "atenet-dataplane", Kind: KindString,

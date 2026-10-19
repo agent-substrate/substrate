@@ -100,7 +100,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). The pool decides the sandbox class, so this is also how a template pins one: if your cluster has pools of more than one sandbox class and the workload needs a particular class, make sure the selector points only at pools of that class. An actor booting with no snapshot and no selector may land on any class, and keeps it from its first checkpoint on. |
-| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `snapshotConfig` | `SnapshotConfig` | Optional; omitted fields take their defaults. The base object-storage location snapshots are written under (a preview field, ignored without the `PerTemplateSnapshotLocation` gate), the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `external` CSI volume source (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpu` and `memory` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
@@ -341,6 +341,13 @@ snapshotConfig:
 <location>/atespaces/<atespace>/actors/<actor uid>/snapshots/<snapshot name>
 <location>/atespaces/<atespace>/tags/<tag uid>
 ```
+
+> [!NOTE]
+> Snapshots are stored under ate-api-server's cluster-wide `--snapshot-location`. `snapshotConfig.storageLocation` is an optional preview field: with the `PerTemplateSnapshotLocation` preview gate (`--preview=PerTemplateSnapshotLocation`), a template that sets it stores its snapshots there instead. Without the gate, the field is ignored. `<location>` above is whichever of the two applies.
+>
+> With the gate enabled, only a client that opts in to preview features (`kubectl ate --preview`, or the `Ate-Preview-Allowed: true` header) may set `storageLocation`. `CreateActorTemplate` fails with `FailedPrecondition` when the template leaves it empty and ate-api-server has no `--snapshot-location`.
+>
+> Changing the flag or toggling the gate moves `<location>` for every template it affects. Snapshots already taken stay where they are and can still be resumed from. An actor's next suspend writes under the new location and releases its previous snapshot from the old one. Until then, the actor cannot change its `actor_template` (see `UpdateActor` below), and deleting it collects its prefix under the old location. If that release fails, the previous snapshot's objects stay under the old location, and deleting the actor later does not collect them.
 
 The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot under `gs://my-bucket/secret-agent/atespaces/team-a/tags/<tag uid>`.
 
@@ -605,7 +612,7 @@ Registers a new logical actor in the system.
 Replaces the mutable fields of an existing actor with the ones in the request.
 *   **Request:** `UpdateActorRequest`
     *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
-    *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same `snapshotConfig.storageLocation`.
+    *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same location: its `snapshotConfig.storageLocation` with the `PerTemplateSnapshotLocation` preview gate, otherwise ate-api-server's `--snapshot-location` (see [Snapshot Storage Layout](#snapshot-storage-layout)).
 *   **Response:** the updated `Actor`.
 *   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `FAILED_PRECONDITION` if a change to `actor_template` breaks one of the rules above; `ABORTED` if either guard no longer matches the stored resource.
 

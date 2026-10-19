@@ -316,7 +316,7 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			if err != nil {
 				return err
 			}
-			if err := validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
+			if err := s.validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
 				return err
 			}
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
@@ -397,7 +397,7 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 // already owns. This is needed to not leak snapshots when the actor is deleted:
 // Deleting an actor collects everything under its external snapshot prefix. If
 // the location prefix ever changes, we risk leaking the snapshots under the old prefix.
-func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
+func (s *ServiceImpl) validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
 	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	currentSnapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if currentSnapshotURI == "" {
@@ -413,7 +413,10 @@ func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateap
 	}
 	// Compared as prefixes, so a newLocation spelled with and without a
 	// trailing slash counts as the same.
-	newLocation := newTemplate.GetSnapshotConfig().GetStorageLocation()
+	newLocation, err := resolveSnapshotLocation(s.clusterSnapshotLocation, newTemplate)
+	if err != nil {
+		return err
+	}
 	// Generate what the new snapshot prefix would look like for this actor.
 	nextSnapshotLocationPrefix, err := currentURI.Owner().Prefix(newLocation)
 	if err != nil {

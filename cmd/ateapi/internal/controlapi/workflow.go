@@ -104,15 +104,16 @@ func logActorState(ctx context.Context, actor *ateapipb.Actor, opName, state str
 // each exported method begins with preview.ContextWithOptIn: the request was
 // already validated, and what the workflow writes is the system's own state.
 type ActorWorkflow struct {
-	store                actorWorkflowStore
-	workerCache          *workercache.Cache
-	scheduler            scheduling.Scheduler
-	dialer               *AteletDialer
-	storageClassLister   storagev1listers.StorageClassLister
-	instruments          *Instruments
-	egressGatewayAddress string
-	pluginRegistry       VolumePluginRegistry
-	objectStorePlugin    objectstorev1.ControlProviderClient
+	store                   actorWorkflowStore
+	workerCache             *workercache.Cache
+	scheduler               scheduling.Scheduler
+	dialer                  *AteletDialer
+	storageClassLister      storagev1listers.StorageClassLister
+	instruments             *Instruments
+	egressGatewayAddress    string
+	pluginRegistry          VolumePluginRegistry
+	objectStorePlugin       objectstorev1.ControlProviderClient
+	clusterSnapshotLocation string
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -141,6 +142,12 @@ func NewActorWorkflow(
 		pluginRegistry:       pluginRegistry,
 		objectStorePlugin:    objectStorePlugin,
 	}
+}
+
+// snapshotLocation returns the base object-storage URI actorTemplate's
+// snapshots are stored under; see resolveSnapshotLocation.
+func (w *ActorWorkflow) snapshotLocation(actorTemplate *ateapipb.ActorTemplate) (string, error) {
+	return resolveSnapshotLocation(w.clusterSnapshotLocation, actorTemplate)
 }
 
 // cleanupSnapshot deletes every object under prefix through the control
