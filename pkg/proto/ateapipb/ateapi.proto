@@ -479,7 +479,21 @@ message ResourceMetadata {
   google.protobuf.Timestamp update_time = 6;
 }
 
-message ExternalVolume {
+// ExternalVolumes is the external volume state recorded on an actor, wrapped
+// so later additions do not reshape ActorStatus.
+message ExternalVolumes {
+  // volumes has one entry per external volume of the template. Each template
+  // volume appears at most once.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
+  repeated ExternalVolumeStatus volumes = 1;
+}
+
+// ExternalVolumeStatus is one actor's view of an external volume it mounts.
+message ExternalVolumeStatus {
   // Name of the volume specified in the actor template. Template volume
   // names are DNS labels.
   //
@@ -874,16 +888,13 @@ message ActorStatus {
   // +k8s:update=NoModify # can be set and cleared, but not changed in place
   WorkerAssignment worker_assignment = 2;
 
-  // Volumes attached to the actor. These volumes only live as long as the actor.
-  // They are deleted when the actor is deleted. Each template volume
-  // appears at most once.
+  // external_volumes is the state of the external volumes attached to the
+  // actor. These volumes only live as long as the actor and are deleted with
+  // it.
   //
   // +ate:preview=ExternalVolumes
   // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's volumes bound
-  // +k8s:listType=map
-  // +k8s:listMapKey=name
-  repeated ExternalVolume external_volumes = 7;
+  ExternalVolumes external_volumes = 7;
 
   // crash records why and when the Actor entered CRASHED. It is set with the
   // CRASHED state and cleared when a revert returns the Actor to SUSPENDED.
@@ -1429,18 +1440,20 @@ message Volume {
   // +k8s:format=k8s-short-name
   string name = 1;
 
-  // Exactly one of durable_dir / external_volume_template / image /
-  // system_info must be set.
+  // Exactly one of durable_dir / external / image / system_info must be
+  // set.
   //
   // +k8s:optional
   // +k8s:unionMember
   DurableDirVolumeSource durable_dir = 2;
 
+  // external is a CSI volume: provisioned for this actor from a template.
+  //
   // +ate:preview=ExternalVolumes
   // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
   // +k8s:optional
   // +k8s:unionMember
-  ExternalVolumeTemplate external_volume_template = 3;
+  ExternalVolumeSource external = 7;
 
   // +k8s:optional
   // +k8s:unionMember
@@ -1451,6 +1464,16 @@ message Volume {
   // +k8s:optional
   // +k8s:unionMember
   ImageVolumeSource image = 6;
+}
+
+// ExternalVolumeSource is a CSI volume provisioned for the actor from a template.
+message ExternalVolumeSource {
+  // template provisions a volume for this actor alone; it is deleted with the
+  // actor.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  ExternalVolumeTemplate template = 1;
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The

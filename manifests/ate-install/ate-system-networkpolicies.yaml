@@ -80,6 +80,15 @@ spec:
     ports:
     - protocol: TCP
       port: 443
+  # The objectstore-plugin sidecar's credential exchange is for the node
+  # plugins beside atelet and nothing else.
+  - from:
+    - podSelector:
+        matchLabels:
+          app: atelet
+    ports:
+    - protocol: TCP
+      port: 8445
 ---
 # The bundled postgres is reached only by ate-api-server. The installer runs
 # psql through `kubectl exec`, and the probes are exec probes, so neither needs

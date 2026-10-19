@@ -453,6 +453,8 @@ func TestSystemNetworkPoliciesLeastPrivilege(t *testing.T) {
 
 			// The API admits the control plane and opted-in namespaces only.
 			api := in.pod(t, "ate-api-server")
+			// The credential exchange beside it is for the node plugins only.
+			requireOnlyFromApps(t, in, api, numberedPort(t, api, 8445), "atelet")
 			for _, rule := range in.admittingRules(t, api, numberedPort(t, api, 443)) {
 				if len(rule.From) == 0 {
 					t.Error("ate-api-server port 443 is admitted from any source")

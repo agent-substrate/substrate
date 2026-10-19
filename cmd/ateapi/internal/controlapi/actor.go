@@ -96,7 +96,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
 		// support cloning from a tag that has external volumes.
 		for _, volume := range template.GetVolumes() {
-			if volume.GetExternalVolumeTemplate() != nil {
+			if volume.GetExternal().GetTemplate() != nil {
 				// TODO: Permit cloning after CSI volume snapshots are supported.
 				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates with external volumes")
 			}
@@ -114,7 +114,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	name := inActor.GetMetadata().GetName()
 
 	// Volume creation is completed asynchronously after the actor is recorded.
-	var initVols []*ateapipb.ExternalVolume
+	var initVols []*ateapipb.ExternalVolumeStatus
 	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
 		return nil, err
 	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
@@ -131,7 +131,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	outActor := proto.CloneOf(inActor)
 	outActor.Status = &ateapipb.ActorStatus{
 		State:           ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		ExternalVolumes: initVols,
+		ExternalVolumes: externalVolumesStatus(initVols),
 	}
 	if sourceTag != nil {
 		// The Actor starts out borrowing the tag's snapshot rather than

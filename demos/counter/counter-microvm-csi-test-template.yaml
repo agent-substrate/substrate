@@ -45,6 +45,7 @@ snapshotConfig:
   storageLocation: gs://ate-snapshots/ate-demo-counter-microvm-csi/
 volumes:
 - name: data
-  externalVolumeTemplate:
-    capacity: 1Gi
-    storageClassName: csi-hostpath-sc
+  external:
+    template:
+      capacity: 1Gi
+      storageClassName: csi-hostpath-sc
