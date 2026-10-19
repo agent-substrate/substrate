@@ -12,29 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Per-step summary of a ladder run of a cold resume test.
+"""Per-step rows for stats.jsonl from a ladder run (shapes/ladder_shape.py).
 
-Reads the ladder's step boundaries from a run's logs.txt, as runner.py
-uploads it, and queries the benchmarking Prometheus for each step's steady
-window: from SETTLE seconds after the step starts, as boomer reads a new
-target rate within 10 s, to TAIL seconds before it ends.
+stats.jsonl's other rows cover the whole run, so they blend every step of a
+ladder. This reads each step's start and end from the runner's log and
+queries Prometheus over the step's steady window: from SETTLE seconds after
+the step starts, as boomer reads a new target rate within 10 s, to TAIL
+seconds before it ends. Each step becomes one `ladder_step_NNN` row.
 
-    kubectl -n benchmarking port-forward svc/prometheus 19090:9090 &
-    python3 analyze_ladder.py <results-dir> [prometheus-url] > steps.jsonl
-
-<results-dir> holds the run's downloaded files (logs.txt at least). Prints
-one JSON object per step. Prometheus must still hold the run's samples.
+Like the server telemetry, this is additive: runner.py logs a failure here
+and keeps the locust measurements.
 """
 
 import json
 import re
-import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
-from typing import Any, Iterable
-
-DEFAULT_PROMETHEUS = "http://localhost:19090"
+from pathlib import Path
+from typing import Any, Iterable, TextIO
 
 # Seconds trimmed from each end of a step.
 SETTLE = 30
@@ -73,8 +69,8 @@ def steps(lines: Iterable[str]) -> list[dict[str, Any]]:
     return out
 
 
-# Seconds a query may take, so a dead port-forward fails the run instead of
-# hanging it.
+# Seconds a query may take, so an unreachable Prometheus fails the summary
+# instead of hanging the runner.
 QUERY_TIMEOUT_S = 30
 
 
@@ -83,8 +79,8 @@ def _get_json(url: str) -> Any:
         return json.load(r)
 
 
-# Not benchmarking/locust/server_telemetry.py's helper, which turns a failed
-# query into an empty result: a summary must fail instead.
+# Not server_telemetry.py's helper, which turns a failed query into an empty
+# result: a step's row must fail instead of carrying a gap.
 def query(prom: str, q: str, t: int) -> list[dict[str, Any]]:
     url = f"{prom.rstrip('/')}/api/v1/query?" + urllib.parse.urlencode({"query": q, "time": t})
     data = _get_json(url)
@@ -138,6 +134,7 @@ def summarize(prom: str, s: dict[str, Any]) -> dict[str, Any]:
         b, "pod")
     out = {
         "step": s["step"],
+        "users": s["users"],
         "target_rps": s["target_rps"],
         "window": [a, b],
         "resume_rps": q(f"sum(increase({req % ('ResumeActorCold', 'success')}[{d}]))/{secs}"),
@@ -198,25 +195,52 @@ def memory(prom: str, d: str, secs: int, b: int) -> dict[str, Any]:
     }
 
 
-def main(argv: list[str]) -> int:
-    if len(argv) not in (2, 3):
-        print(__doc__, file=sys.stderr)
-        return 2
-    run_dir = argv[1]
-    prom = argv[2] if len(argv) == 3 else DEFAULT_PROMETHEUS
-    with open(f"{run_dir}/logs.txt", errors="replace") as logs:
-        ladder = steps(logs)
+def stats_record(summary: dict[str, Any], timestamp: str, tag: str,
+                 test_name: str) -> dict[str, Any]:
+    """A step's summary as a stats.jsonl row, its measurements flattened to
+    scalars like every other row's."""
+    nested = ("step", "window", "failures", "ateapi_cores_per_replica")
+    m = {k: v for k, v in summary.items() if k not in nested}
+    m["window_start"], m["window_end"] = summary["window"]
+    m["ateapi_cores_busiest_replica"] = max(summary["ateapi_cores_per_replica"], default=None)
+    for name, n in summary["failures"].items():
+        m[f"failures_{name}"] = n
+    return {
+        "timestamp": timestamp,
+        "tag": tag,
+        "test_name": test_name,
+        "metric": f"ladder_step_{summary['step']:03d}",
+        "measurements": m,
+    }
+
+
+def append_ladder_steps(jsonl_path: Path, log_path: Path, prom_url: str,
+                        timestamp: str, tag: str, test_name: str,
+                        logs: TextIO) -> int:
+    """Append a row per measurable ladder step in the runner log at
+    log_path to jsonl_path, and return how many. A run that is no ladder
+    has none. Every step is queried before any row is written, so a failed
+    query leaves no partial ladder."""
+    with open(log_path, errors="replace") as f:
+        ladder = steps(f)
+    rows = []
     for s in ladder:
         if s["end"] is None:
-            print(f"step {s['step']} has no end in the log; skipped", file=sys.stderr)
+            _log(logs, f"Ladder step {s['step']} has no end in the log; skipped")
             continue
         if s["end"] - s["start"] <= SETTLE + TAIL:
-            print(f"step {s['step']} lasts {s['end'] - s['start']}s, too short for a "
-                  f"steady window after trimming {SETTLE + TAIL}s; skipped", file=sys.stderr)
+            _log(logs, f"Ladder step {s['step']} lasts {s['end'] - s['start']}s, too short "
+                       f"for a steady window after trimming {SETTLE + TAIL}s; skipped")
             continue
-        print(json.dumps(summarize(prom, s)))
-    return 0
+        rows.append(stats_record(summarize(prom_url, s), timestamp, tag, test_name))
+    if rows:
+        with open(jsonl_path, "a", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+    return len(rows)
 
 
-if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+def _log(logs: TextIO, msg: str) -> None:
+    print(msg, flush=True)
+    logs.write(msg + "\n")
+    logs.flush()
