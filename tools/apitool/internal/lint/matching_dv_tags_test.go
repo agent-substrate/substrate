@@ -69,6 +69,17 @@ func TestMatchingDVTags(t *testing.T) {
 			},
 		},
 		{
+			name: "same value, with a period ending the reference",
+			api:  messagesAPI(upstream, msg("Spec", model.Field{Name: "volumes", Comment: "+k8s:maxItems=32 # matches test.Template.volumes."})),
+		},
+		{
+			name: "different value, with free text after a period",
+			api:  messagesAPI(upstream, msg("Spec", model.Field{Name: "volumes", Comment: "+k8s:maxItems=16 # matches test.Template.volumes. The request this is forwarded to"})),
+			want: []lint.Finding{
+				{Subject: "test.Spec.volumes", Message: "+k8s:maxItems=16 matches test.Template.volumes, which has +k8s:maxItems=32"},
+			},
+		},
+		{
 			name: "different value on a tag applied to each item",
 			api:  messagesAPI(upstream, msg("Spec", model.Field{Name: "volumes", Comment: "+k8s:eachVal=+k8s:maxLength=63 # matches test.Template.volumes"})),
 			want: []lint.Finding{
@@ -120,6 +131,31 @@ func TestMatchingDVTags(t *testing.T) {
 		{
 			name: "note that only starts with the word",
 			api:  messagesAPI(upstream, msg("Spec", model.Field{Name: "volumes", Comment: "+k8s:maxItems=16 # matchesish test.Template.volumes"})),
+		},
+		{
+			name: "capitalized matches note",
+			api:  messagesAPI(upstream, msg("Spec", model.Field{Name: "volumes", Comment: "+k8s:maxItems=16 # Matches test.Template.volumes"})),
+			want: []lint.Finding{
+				{Subject: "test.Spec.volumes", Message: `+k8s:maxItems note "Matches test.Template.volumes" must start with "matches "`},
+			},
+		},
+		{
+			name: "matches note with a colon",
+			api:  messagesAPI(upstream, msg("Spec", model.Field{Name: "volumes", Comment: "+k8s:maxItems=16 # matches: test.Template.volumes"})),
+			want: []lint.Finding{
+				{Subject: "test.Spec.volumes", Message: `+k8s:maxItems note "matches: test.Template.volumes" must start with "matches "`},
+			},
+		},
+		{
+			name: "same value, with free text after a comma and no space",
+			api:  messagesAPI(upstream, msg("Spec", model.Field{Name: "volumes", Comment: "+k8s:maxItems=32 # matches test.Template.volumes,the request this is forwarded to"})),
+		},
+		{
+			name: "different value, with free text after a comma and no space",
+			api:  messagesAPI(upstream, msg("Spec", model.Field{Name: "volumes", Comment: "+k8s:maxItems=16 # matches test.Template.volumes,the request this is forwarded to"})),
+			want: []lint.Finding{
+				{Subject: "test.Spec.volumes", Message: "+k8s:maxItems=16 matches test.Template.volumes, which has +k8s:maxItems=32"},
+			},
 		},
 		{
 			name: "same tag spelled differently",
