@@ -236,6 +236,7 @@ spec:
         # its own --ingress-allowed-spiffe-ids (ATE_INGRESS_ALLOWED_SPIFFE_IDS),
         # and the router refuses to start without it.
         - "--ingress-client-ca-file=/run/podidentity.podcert.ate.dev/trust-bundle.pem"
+        # - "--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client"
         # Client auth to ateapi (mtls): verify the serving cert against the
         # servicedns trust bundle and present the podidentity client cert.
         - "--ateapi-address=k8s:///api.ate-system.svc:443"
