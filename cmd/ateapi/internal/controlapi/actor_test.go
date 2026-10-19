@@ -465,9 +465,11 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		template  string
-		snapshot  func(*testing.T, *ateapipb.Actor) string
+		name     string
+		template string
+		snapshot func(*testing.T, *ateapipb.Actor) string
+		// pending leaves the snapshot's upload PENDING, as a pause does.
+		pending   bool
 		repointTo string
 		// gateOff disables the PerTemplateSnapshotLocation preview gate, so
 		// every template resolves to clusterSnapshotLocation.
@@ -499,6 +501,22 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			name:      "owned snapshot cannot move to another location",
 			template:  "same-location",
 			snapshot:  snapshotOwnedByActor,
+			repointTo: "different-location",
+			wantCode:  codes.FailedPrecondition,
+		},
+		{
+			name:      "pending owned upload moves to the same location",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			pending:   true,
+			repointTo: "same-location-slash",
+			wantCode:  codes.OK,
+		},
+		{
+			name:      "pending owned upload cannot move to another location",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			pending:   true,
 			repointTo: "different-location",
 			wantCode:  codes.FailedPrecondition,
 		},
@@ -565,10 +583,14 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			})
 			if tt.snapshot != nil {
 				uri := tt.snapshot(t, actor)
+				storageStatus := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				if tt.pending {
+					storageStatus = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+				}
 				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 					s.LastAssignedGeneration = 1
 					s.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot", uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot", uri, storageStatus),
 					}
 				})
 			}

@@ -1508,6 +1508,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
@@ -1519,6 +1520,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},

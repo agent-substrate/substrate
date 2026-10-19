@@ -149,15 +149,28 @@ var updateActorCmd = &cobra.Command{
 	Short: "Update an actor",
 	Args:  exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		mutate, err := buildActorUpdateMutation(
-			updateActorAtespaceFlag,
-			cmd.Flags().Changed("template"),
-			updateActorTemplateFlag,
-			cmd.Flags().Changed("worker-selector"),
-			updateActorWorkerSelectorFlag,
-		)
-		if err != nil {
-			return wrapUsageError(err)
+		templateSet := cmd.Flags().Changed("template")
+		workerSelectorSet := cmd.Flags().Changed("worker-selector")
+		if !templateSet && !workerSelectorSet {
+			return usageErrorf("at least one of --template or --worker-selector is required")
+		}
+
+		var templateRef *ateapipb.ObjectRef
+		if templateSet {
+			ref, err := parseAtespacedName(updateActorTemplateFlag, updateActorAtespaceFlag)
+			if err != nil {
+				return wrapUsageError(err)
+			}
+			templateRef = ref
+		}
+
+		var selector *ateapipb.Selector
+		if workerSelectorSet {
+			s, err := parseWorkerSelector(updateActorWorkerSelectorFlag)
+			if err != nil {
+				return wrapUsageError(err)
+			}
+			selector = s
 		}
 
 		ctx := cmd.Context()
@@ -168,7 +181,14 @@ var updateActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		actorRef := resources.ActorRef{Atespace: updateActorAtespaceFlag, Name: args[0]}
-		resp, err := updateActor(ctx, apiClient, actorRef.ToObjectRef(), mutate)
+		resp, err := updateActor(ctx, apiClient, actorRef.ToObjectRef(), func(actor *ateapipb.Actor) {
+			if templateSet {
+				actor.ActorTemplate = templateRef
+			}
+			if workerSelectorSet {
+				actor.WorkerSelector = selector // nil clears the selector
+			}
+		})
 		if err != nil {
 			return err
 		}
@@ -325,39 +345,6 @@ func updateActor(ctx context.Context, client actorUpdater, ref *ateapipb.ObjectR
 		return nil, fmt.Errorf("failed to update actor: %w", err)
 	}
 	return resp, nil
-}
-
-func buildActorUpdateMutation(atespace string, templateSet bool, template string, workerSelectorSet bool, workerSelector string) (func(*ateapipb.Actor), error) {
-	if !templateSet && !workerSelectorSet {
-		return nil, errors.New("at least one of --template or --worker-selector is required")
-	}
-
-	var templateRef *ateapipb.ObjectRef
-	if templateSet {
-		var err error
-		templateRef, err = parseAtespacedName(template, atespace)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	var selector *ateapipb.Selector
-	if workerSelectorSet {
-		var err error
-		selector, err = parseWorkerSelector(workerSelector)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return func(actor *ateapipb.Actor) {
-		if templateSet {
-			actor.ActorTemplate = templateRef
-		}
-		if workerSelectorSet {
-			actor.WorkerSelector = selector
-		}
-	}, nil
 }
 
 // parseWorkerSelector parses a comma-separated key=value label selector into a

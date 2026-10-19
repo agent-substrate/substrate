@@ -391,7 +391,9 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 // Deleting an actor collects everything under its external snapshot prefix. If
 // the location prefix ever changes, we risk leaking the snapshots under the old prefix.
 func (s *ServiceImpl) validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
-	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	snap := latestSnapshot(actor.GetStatus(), func(snapshot *ateapipb.Snapshot) bool {
+		return snapshot.GetDurableSnapshot().GetObject().GetSnapshotUri() != ""
+	})
 	currentSnapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if currentSnapshotURI == "" {
 		return nil

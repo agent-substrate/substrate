@@ -303,64 +303,50 @@ func TestUpdateActor(t *testing.T) {
 	}
 
 	tests := []struct {
-		name              string
-		templateSet       bool
-		template          string
-		workerSelectorSet bool
-		workerSelector    string
-		wantTemplate      *ateapipb.ObjectRef
-		wantSelector      *ateapipb.Selector
+		name         string
+		mutate       func(*ateapipb.Actor)
+		wantTemplate *ateapipb.ObjectRef
+		wantSelector *ateapipb.Selector
 	}{
 		{
-			name:         "repoint template in same atespace keeps worker selector",
-			templateSet:  true,
-			template:     "counter-v2",
-			wantTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v2"},
-			wantSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
-		},
-		{
-			name:         "repoint template in another atespace",
-			templateSet:  true,
-			template:     "shared/counter-v2",
+			name: "repoint template keeps worker selector",
+			mutate: func(a *ateapipb.Actor) {
+				a.ActorTemplate = &ateapipb.ObjectRef{Atespace: "shared", Name: "counter-v2"}
+			},
 			wantTemplate: &ateapipb.ObjectRef{Atespace: "shared", Name: "counter-v2"},
 			wantSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
 		},
 		{
-			name:              "update worker selector keeps template",
-			workerSelectorSet: true,
-			workerSelector:    "tier=paid,env=prod",
-			wantTemplate:      &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v1"},
-			wantSelector:      &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}},
+			name: "update worker selector keeps template",
+			mutate: func(a *ateapipb.Actor) {
+				a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}}
+			},
+			wantTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			wantSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}},
 		},
 		{
-			name:              "empty worker selector clears existing selector",
-			workerSelectorSet: true,
-			workerSelector:    "",
-			wantTemplate:      &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v1"},
-			wantSelector:      nil,
+			name:         "nil worker selector clears existing selector",
+			mutate:       func(a *ateapipb.Actor) { a.WorkerSelector = nil },
+			wantTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			wantSelector: nil,
 		},
 		{
-			name:              "update both template and worker selector",
-			templateSet:       true,
-			template:          "counter-v2",
-			workerSelectorSet: true,
-			workerSelector:    "tier=paid",
-			wantTemplate:      &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v2"},
-			wantSelector:      &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			name: "update both template and worker selector",
+			mutate: func(a *ateapipb.Actor) {
+				a.ActorTemplate = &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v2"}
+				a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+			},
+			wantTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v2"},
+			wantSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mutate, err := buildActorUpdateMutation("demo", tc.templateSet, tc.template, tc.workerSelectorSet, tc.workerSelector)
-			if err != nil {
-				t.Fatalf("buildActorUpdateMutation() unexpected error: %v", err)
-			}
-
 			client := &fakeActorUpdater{actor: baseActor()}
 			ref := &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"}
 
-			got, err := updateActor(context.Background(), client, ref, mutate)
+			got, err := updateActor(context.Background(), client, ref, tc.mutate)
 			if err != nil {
 				t.Fatalf("updateActor() unexpected error: %v", err)
 			}
