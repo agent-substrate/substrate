@@ -106,6 +106,8 @@ type fakeWorker struct {
 	onRestore func()
 	// terminations counts TerminateWorkload calls.
 	terminations atomic.Int32
+	// checkpointErr, when set, fails CheckpointWorkload before it writes anything.
+	checkpointErr error
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
@@ -134,6 +136,9 @@ func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkload
 func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
 	f.recordFidelity("CheckpointWorkload", req.GetFidelity())
+	if f.checkpointErr != nil {
+		return nil, f.checkpointErr
+	}
 	dir := req.GetActorDirs().GetCheckpointDir()
 	names := make([]string, 0, len(f.snapshotFiles))
 	for name, body := range f.snapshotFiles {
@@ -199,7 +204,9 @@ func serveFakeWorker(t *testing.T, f *fakeWorker) {
 	if err != nil {
 		t.Fatalf("listening on %q: %v", sock, err)
 	}
-	srv := grpc.NewServer()
+	// The worker's own interceptor, so a handler's error reaches atelet coded
+	// as the worker would send it.
+	srv := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor))
 	ateworkerpb.RegisterWorkerServer(srv, f)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -1226,7 +1233,7 @@ func TestTerminateReclaimsStateWithoutALiveSandbox(t *testing.T) {
 				}
 				serveFakeWorker(t, &fakeWorker{
 					onTerminate: func() error {
-						return status.Error(codes.Unavailable, "worker shutting down")
+						return apierror.Unavailable("worker shutting down")
 					},
 				})
 			},
@@ -3490,7 +3497,7 @@ func (a *pluginActor) checkpointed(t *testing.T, name string, generation int32) 
 	return snap
 }
 
-var errWorkerGuestNotReady = status.Error(codes.Unavailable, "while reseeding guest CRNG: context deadline exceeded")
+var errWorkerGuestNotReady = apierror.Unavailable("while reseeding guest CRNG: context deadline exceeded")
 
 func TestRestoreStopsRetryingAfterConsecutiveUnavailableFailures(t *testing.T) {
 	a := runPluginActor(t)
