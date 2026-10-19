@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -104,6 +105,11 @@ type runningActor struct {
 	// workloadIDs are the guest container ids of this actor's workloads, for the
 	// SIGTERM the graceful shutdown propagates into the guest (see shutdown.go).
 	workloadIDs []string
+
+	memSlot                string
+	memSlotDev, memSlotIno uint64
+	memSlotBase            string
+	origMemory             json.RawMessage
 }
 
 // baseIDFile is a tiny snapshot file (under the checkpoint/restore dir) holding
