@@ -328,17 +328,100 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 func copyBothWays(a, b net.Conn) {
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(a, b)
+		_, _ = copyConn(a, b)
 		closeWrite(a)
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(b, a)
+		_, _ = copyConn(b, a)
 		closeWrite(b)
 		done <- struct{}{}
 	}()
 	<-done
 	<-done
+}
+
+// copyConn copies src to dst until src reaches EOF. It avoids io.Copy, which
+// holds a 32 KiB buffer for as long as src is idle; tunnels are often idle
+// (connection pools, keep-alive, long polling), so that buffer per direction
+// per tunnel adds up to most of atunnel's memory.
+func copyConn(dst, src net.Conn) (int64, error) {
+	if stream, ok := src.(*h2StreamConn); ok {
+		return stream.WriteTo(dst)
+	}
+	return relay(dst, src)
+}
+
+const (
+	// relayWaitSize is the buffer relay holds while src is idle.
+	relayWaitSize = 512
+	// relayBufSize is the buffer relay borrows while data is arriving.
+	relayBufSize = 32 << 10
+)
+
+var relayBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, relayBufSize)
+		return &buf
+	},
+}
+
+// relay copies src to dst until src reaches EOF, like io.Copy, but waits for
+// data with only a small buffer. When a read fills that buffer, more data is
+// likely queued, so relay borrows a large buffer from a pool and reads with it
+// until a read comes back short, then returns it before waiting again.
+//
+// Data is written as soon as it is read, so nothing waits on the next read.
+// The large buffer is held while src is idle only if src pauses right after a
+// read that filled it, until more data arrives or src is closed.
+func relay(dst io.Writer, src io.Reader) (written int64, err error) {
+	write := func(p []byte) error {
+		if len(p) == 0 {
+			return nil
+		}
+		n, err := dst.Write(p)
+		written += int64(n)
+		if err == nil && n < len(p) {
+			err = io.ErrShortWrite
+		}
+		return err
+	}
+	finish := func(readErr error) (int64, error) {
+		if readErr == io.EOF {
+			return written, nil
+		}
+		return written, readErr
+	}
+
+	wait := make([]byte, relayWaitSize)
+	for {
+		n, readErr := src.Read(wait)
+		if err := write(wait[:n]); err != nil {
+			return written, err
+		}
+		if readErr != nil {
+			return finish(readErr)
+		}
+		if n < len(wait) {
+			continue
+		}
+
+		buf := relayBufPool.Get().(*[]byte)
+		for {
+			n, readErr = src.Read(*buf)
+			err = write((*buf)[:n])
+			if err != nil || readErr != nil || n < len(*buf) {
+				break
+			}
+		}
+		relayBufPool.Put(buf)
+		if err != nil {
+			return written, err
+		}
+		if readErr != nil {
+			return finish(readErr)
+		}
+	}
 }
 
 func closeWrite(conn net.Conn) {

@@ -791,6 +791,61 @@ func (c *h2StreamConn) Read(p []byte) (int, error) {
 	}
 }
 
+// WriteTo copies the stream to w until EOF. Unlike Read, it reads the response
+// body on the calling goroutine with relay, so an idle stream holds no reader
+// goroutine and only a small buffer. Close stops it; a read deadline set after
+// it starts does not, so with a deadline already set it falls back to Read.
+func (c *h2StreamConn) WriteTo(w io.Writer) (int64, error) {
+	c.readMu.Lock()
+	if isClosedChan(c.closedCh) {
+		c.readMu.Unlock()
+		return 0, net.ErrClosed
+	}
+	var written int64
+	if len(c.readPending) > 0 {
+		n, err := w.Write(c.readPending)
+		written += int64(n)
+		c.readPending = c.readPending[n:]
+		if err != nil {
+			c.readMu.Unlock()
+			return written, err
+		}
+	}
+	if err := c.readErr; err != nil {
+		c.readMu.Unlock()
+		if err == io.EOF {
+			return written, nil
+		}
+		return written, err
+	}
+	if c.readInFlight || c.readDeadline.isSet() {
+		c.readMu.Unlock()
+		n, err := relay(w, readOnly{c})
+		return written + n, err
+	}
+	defer c.readMu.Unlock()
+	n, err := relay(w, h2StreamBody{c})
+	return written + n, err
+}
+
+// readOnly hides h2StreamConn's other methods so relay reads through Read.
+type readOnly struct{ io.Reader }
+
+// h2StreamBody reads an h2StreamConn's response body directly. The caller holds
+// readMu.
+type h2StreamBody struct{ c *h2StreamConn }
+
+func (b h2StreamBody) Read(p []byte) (int, error) {
+	n, err := b.c.respBody.Read(p)
+	if err != nil {
+		if isClosedChan(b.c.closedCh) {
+			err = net.ErrClosed
+		}
+		b.c.readErr = err
+	}
+	return n, err
+}
+
 func (c *h2StreamConn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -973,6 +1028,13 @@ func (d *streamDeadline) set(t time.Time) {
 	if !closed {
 		close(d.cancel)
 	}
+}
+
+// isSet reports whether a deadline is pending or has passed.
+func (d *streamDeadline) isSet() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.timer != nil || isClosedChan(d.cancel)
 }
 
 func (d *streamDeadline) wait() chan struct{} {
