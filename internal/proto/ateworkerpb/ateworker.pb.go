@@ -621,7 +621,7 @@ type EgressGateway struct {
 	// DNS name followed by its port.
 	//
 	// +k8s:required
-	// +k8s:maxLength=261 # a bracketed or 253-character host, ':' and a 5-digit port
+	// +k8s:maxLength=261 # matches atelet.EgressGateway.address
 	// +k8s:customValidation # host:port shape
 	Address       string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -987,13 +987,13 @@ type Resources struct {
 	// cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
 	//
 	// +k8s:optional
-	// +k8s:minimum=0
-	// +k8s:maximum=999999 # less than 1000 cores
+	// +k8s:minimum=0 # matches substrate.ateapi.v1.Resources.cpu_millicores
+	// +k8s:maximum=999999 # matches substrate.ateapi.v1.Resources.cpu_millicores
 	CpuMillicores int64 `protobuf:"varint,1,opt,name=cpu_millicores,json=cpuMillicores,proto3" json:"cpu_millicores,omitempty"`
 	// memory_bytes is memory in bytes. 0 means none.
 	//
 	// +k8s:optional
-	// +k8s:minimum=0
+	// +k8s:minimum=0 # matches substrate.ateapi.v1.Resources.memory_bytes
 	MemoryBytes   int64 `protobuf:"varint,2,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1056,7 +1056,7 @@ type VolumeMount struct {
 	// mount_path is where the container sees the volume.
 	//
 	// +k8s:required
-	// +k8s:maxLength=4096
+	// +k8s:maxLength=4096 # matches substrate.ateapi.v1.VolumeMount.mount_path
 	// +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
 	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1116,7 +1116,7 @@ type WakeupProbe struct {
 	// How long to keep polling before giving up and failing the actor start.
 	//
 	// +k8s:required
-	// +k8s:minimum=1
+	// +k8s:minimum=1 # matches substrate.ateapi.v1.WakeupProbe.timeout_seconds
 	// +k8s:maximum=3600 # matches substrate.ateapi.v1.WakeupProbe.timeout_seconds
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -1179,8 +1179,8 @@ type HttpGetAction struct {
 	// TCP port to connect to (1..65535).
 	//
 	// +k8s:required
-	// +k8s:minimum=1
-	// +k8s:maximum=65535
+	// +k8s:minimum=1 # matches substrate.ateapi.v1.HttpGetAction.port
+	// +k8s:maximum=65535 # matches substrate.ateapi.v1.HttpGetAction.port
 	Port          int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

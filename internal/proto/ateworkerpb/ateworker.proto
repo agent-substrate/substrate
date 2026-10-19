@@ -253,7 +253,7 @@ message EgressGateway {
   // DNS name followed by its port.
   //
   // +k8s:required
-  // +k8s:maxLength=261 # a bracketed or 253-character host, ':' and a 5-digit port
+  // +k8s:maxLength=261 # matches atelet.EgressGateway.address
   // +k8s:customValidation # host:port shape
   string address = 1;
 }
@@ -364,14 +364,14 @@ message Resources {
   // cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
   //
   // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # less than 1000 cores
+  // +k8s:minimum=0 # matches substrate.ateapi.v1.Resources.cpu_millicores
+  // +k8s:maximum=999999 # matches substrate.ateapi.v1.Resources.cpu_millicores
   int64 cpu_millicores = 1;
 
   // memory_bytes is memory in bytes. 0 means none.
   //
   // +k8s:optional
-  // +k8s:minimum=0
+  // +k8s:minimum=0 # matches substrate.ateapi.v1.Resources.memory_bytes
   int64 memory_bytes = 2;
 }
 
@@ -387,7 +387,7 @@ message VolumeMount {
   // mount_path is where the container sees the volume.
   //
   // +k8s:required
-  // +k8s:maxLength=4096
+  // +k8s:maxLength=4096 # matches substrate.ateapi.v1.VolumeMount.mount_path
   // +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
   string mount_path = 2;
 }
@@ -401,7 +401,7 @@ message WakeupProbe {
   // How long to keep polling before giving up and failing the actor start.
   //
   // +k8s:required
-  // +k8s:minimum=1
+  // +k8s:minimum=1 # matches substrate.ateapi.v1.WakeupProbe.timeout_seconds
   // +k8s:maximum=3600 # matches substrate.ateapi.v1.WakeupProbe.timeout_seconds
   int32 timeout_seconds = 2;
 }
@@ -418,8 +418,8 @@ message HttpGetAction {
   // TCP port to connect to (1..65535).
   //
   // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=65535
+  // +k8s:minimum=1 # matches substrate.ateapi.v1.HttpGetAction.port
+  // +k8s:maximum=65535 # matches substrate.ateapi.v1.HttpGetAction.port
   int32 port = 2;
 }
 

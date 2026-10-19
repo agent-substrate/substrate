@@ -535,7 +535,7 @@ type WorkerSandboxClass struct {
 	// e.g. "gvisor", "microvm"
 	//
 	// +k8s:required
-	// +k8s:maxLength=63
+	// +k8s:maxLength=63 # matches substrate.ateapi.v1.WorkerSandboxClass.sandbox_class
 	// +k8s:customValidation # gvisor or microvm
 	SandboxClass string `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// Runtime new and cold-booted actors of this class start under. Snapshots
@@ -728,7 +728,7 @@ type VersionedSandboxCompat struct {
 	// hardware attributes are recorded and how they are computed.
 	//
 	// +k8s:required
-	// +k8s:maxLength=64
+	// +k8s:maxLength=64 # matches substrate.ateapi.v1.VersionedSandboxCompat.schema_version
 	SchemaVersion string `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	// Key-value compatibility attributes defined by this schema version, covering
 	// both runtime assets (e.g. "sandbox_bundle_hash") and effective guest
@@ -743,7 +743,7 @@ type VersionedSandboxCompat struct {
 	// before recording them.
 	//
 	// +k8s:required
-	// +k8s:maxItems=32
+	// +k8s:maxItems=32 # matches substrate.ateapi.v1.VersionedSandboxCompat.attributes
 	// +k8s:listType=map
 	// +k8s:listMapKey=key
 	Attributes    []*AttributeEntry `protobuf:"bytes,2,rep,name=attributes,proto3" json:"attributes,omitempty"`
@@ -801,12 +801,12 @@ type AttributeEntry struct {
 	// Attribute name (e.g. "architecture", "cpu_features", "sandbox_bundle_hash").
 	//
 	// +k8s:required
-	// +k8s:maxLength=128
+	// +k8s:maxLength=128 # matches substrate.ateapi.v1.AttributeEntry.key
 	Key string `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	// Attribute value corresponding to key.
 	//
 	// +k8s:required
-	// +k8s:maxLength=256
+	// +k8s:maxLength=256 # matches substrate.ateapi.v1.AttributeEntry.value
 	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -878,7 +878,7 @@ type WorkerResources struct {
 	// resources above.
 	//
 	// +k8s:optional
-	// +k8s:minimum=1
+	// +k8s:minimum=1 # matches substrate.ateapi.v1.WorkerResources.actors
 	Actors        int32 `protobuf:"varint,3,opt,name=actors,proto3" json:"actors,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -989,13 +989,13 @@ type Resources struct {
 	// cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
 	//
 	// +k8s:optional
-	// +k8s:minimum=0
-	// +k8s:maximum=999999 # less than 1000 cores
+	// +k8s:minimum=0 # matches substrate.ateapi.v1.Resources.cpu_millicores
+	// +k8s:maximum=999999 # matches substrate.ateapi.v1.Resources.cpu_millicores
 	CpuMillicores int64 `protobuf:"varint,1,opt,name=cpu_millicores,json=cpuMillicores,proto3" json:"cpu_millicores,omitempty"`
 	// memory_bytes is memory in bytes. 0 means none.
 	//
 	// +k8s:optional
-	// +k8s:minimum=0
+	// +k8s:minimum=0 # matches substrate.ateapi.v1.Resources.memory_bytes
 	MemoryBytes   int64 `protobuf:"varint,2,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2398,8 +2398,8 @@ type ActorMetadataItem struct {
 	// control plane through internal/resources.
 	//
 	// +k8s:required
-	// +k8s:minLength=1
-	// +k8s:maxLength=255
+	// +k8s:minLength=1 # matches substrate.ateapi.v1.ActorMetadataItem.path
+	// +k8s:maxLength=255 # matches substrate.ateapi.v1.ActorMetadataItem.path
 	// +k8s:customValidation # clean relative path
 	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2457,7 +2457,7 @@ type ActorMetadataDataSource struct {
 	// items must not project the same field twice.
 	//
 	// +k8s:required
-	// +k8s:minItems=1
+	// +k8s:minItems=1 # matches substrate.ateapi.v1.ActorMetadataDataSource.items
 	// +k8s:maxItems=8 # matches substrate.ateapi.v1.ActorMetadataDataSource.items
 	// +k8s:listType=atomic
 	// +k8s:unique=map
@@ -2511,15 +2511,15 @@ type TrustBundleDataSource struct {
 	// control plane through internal/resources.
 	//
 	// +k8s:required
-	// +k8s:minLength=1
-	// +k8s:maxLength=255
+	// +k8s:minLength=1 # matches substrate.ateapi.v1.TrustBundleDataSource.path
+	// +k8s:maxLength=255 # matches substrate.ateapi.v1.TrustBundleDataSource.path
 	// +k8s:customValidation # clean relative path
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// +k8s:required
-	// +k8s:minItems=1
+	// +k8s:minItems=1 # matches substrate.ateapi.v1.TrustBundleDataSource.names
 	// +k8s:maxItems=8 # matches substrate.ateapi.v1.TrustBundleDataSource.names
 	// +k8s:listType=set
-	// +k8s:eachVal=+k8s:minLength=1
+	// +k8s:eachVal=+k8s:minLength=1 # matches substrate.ateapi.v1.TrustBundleDataSource.names
 	// +k8s:eachVal=+k8s:maxLength=253 # matches substrate.ateapi.v1.TrustBundleDataSource.names
 	Names         []string `protobuf:"bytes,2,rep,name=names,proto3" json:"names,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2780,7 +2780,7 @@ type VolumeMount struct {
 	// mount_path within the container. Must be a clean absolute Unix path.
 	//
 	// +k8s:required
-	// +k8s:maxLength=4096
+	// +k8s:maxLength=4096 # matches substrate.ateapi.v1.VolumeMount.mount_path
 	// +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
 	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2841,14 +2841,14 @@ type Container struct {
 	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
 	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	// +k8s:optional
-	// +k8s:maxItems=64
+	// +k8s:maxItems=64 # matches substrate.ateapi.v1.Container.command
 	// +k8s:listType=atomic
-	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
+	// +k8s:eachVal=+k8s:maxLength=4096 # matches substrate.ateapi.v1.Container.command
 	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
 	// +k8s:optional
-	// +k8s:maxItems=64
+	// +k8s:maxItems=64 # matches substrate.ateapi.v1.Container.args
 	// +k8s:listType=atomic
-	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
+	// +k8s:eachVal=+k8s:maxLength=4096 # matches substrate.ateapi.v1.Container.args
 	Args []string `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
 	// +k8s:optional
 	// +k8s:maxItems=32 # matches substrate.ateapi.v1.Container.env
@@ -3021,12 +3021,12 @@ func (x *SecurityContext) GetCapabilities() *Capabilities {
 type Capabilities struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:optional
-	// +k8s:maxItems=64
+	// +k8s:maxItems=64 # matches substrate.ateapi.v1.Capabilities.add
 	// +k8s:listType=set
 	// +k8s:customValidation # capability grammar; "ALL" not accepted
 	Add []string `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
 	// +k8s:optional
-	// +k8s:maxItems=64
+	// +k8s:maxItems=64 # matches substrate.ateapi.v1.Capabilities.drop
 	// +k8s:listType=set
 	// +k8s:customValidation # capability grammar
 	Drop          []string `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
@@ -3083,11 +3083,11 @@ type EnvVar struct {
 	// name may be any printable ASCII character except '='.
 	//
 	// +k8s:required
-	// +k8s:maxLength=256 # guardrail
+	// +k8s:maxLength=256 # matches substrate.ateapi.v1.EnvVar.name
 	// +k8s:customValidation # printable ASCII except '='
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// +k8s:optional
-	// +k8s:maxLength=32768 # guardrail
+	// +k8s:maxLength=32768 # matches substrate.ateapi.v1.EnvVar.value
 	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3146,7 +3146,7 @@ type WakeupProbe struct {
 	// How long to keep polling before giving up and failing the actor start.
 	//
 	// +k8s:required
-	// +k8s:minimum=1
+	// +k8s:minimum=1 # matches substrate.ateapi.v1.WakeupProbe.timeout_seconds
 	// +k8s:maximum=3600 # matches substrate.ateapi.v1.WakeupProbe.timeout_seconds
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -3209,8 +3209,8 @@ type HttpGetAction struct {
 	// TCP port to connect to (1..65535).
 	//
 	// +k8s:required
-	// +k8s:minimum=1
-	// +k8s:maximum=65535
+	// +k8s:minimum=1 # matches substrate.ateapi.v1.HttpGetAction.port
+	// +k8s:maximum=65535 # matches substrate.ateapi.v1.HttpGetAction.port
 	Port          int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3312,7 +3312,7 @@ type ObjectStorage struct {
 	// so it addresses the snapshot as a whole rather than any one object.
 	//
 	// +k8s:required
-	// +k8s:maxLength=2048
+	// +k8s:maxLength=2048 # matches substrate.ateapi.v1.ObjectSnapshot.snapshot_uri
 	// +k8s:customValidation # a parseable snapshot URI
 	SnapshotUri string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// How the snapshot at snapshot_uri may be consumed, as the control plane
@@ -3388,7 +3388,7 @@ type Snapshot struct {
 	// caller's view is stale.
 	//
 	// +k8s:required
-	// +k8s:minimum=1
+	// +k8s:minimum=1 # matches substrate.ateapi.v1.Snapshot.generation
 	Generation int32 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
 	// On Checkpoint: the fidelity to capture.
 	// On Restore: the fidelity to restore the actor with.
