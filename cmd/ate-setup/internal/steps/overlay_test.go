@@ -40,6 +40,7 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 // Splicing the provider selection into the real egress manifest replaces the
@@ -755,6 +756,59 @@ func TestRenderFakeDataPlane(t *testing.T) {
 					if pinned[name] != "ate-control-plane" {
 						t.Errorf("under --cordon-control-plane %s is pinned to %q, want ate-control-plane", name, pinned[name])
 					}
+				}
+			}
+		})
+	}
+}
+
+// Under --fake-data-plane, fake-workersync manages Workers in ate-controller's
+// place, so every path that delivers ate-api-server names it as the
+// controller, whose authz role lists, registers and deletes Workers.
+func TestRenderFakeDataPlaneMakesFakeWorkersyncTheController(t *testing.T) {
+	root := repoRoot(t)
+	want := "--controller-spiffe-id=" + installdefaults.SPIFFEID("ate-system", fakeWorkersyncDeployment)
+	for _, tc := range []struct {
+		name string
+		cfg  config.Config
+		path func(e *Env) string
+	}{
+		{
+			name: "base bundle",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+		},
+		{
+			name: "kind bundle",
+			cfg:  config.Config{Router: config.RouterEnvoy, Kind: true},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+		},
+		{
+			name: "api server file",
+			path: func(e *Env) string { return e.Cfg.Manifest("ate-api-server.yaml") },
+		},
+		{
+			name: "api server file under cordon",
+			cfg:  config.Config{CordonControlPlane: true},
+			path: func(e *Env) string { return e.Cfg.Manifest("ate-api-server.yaml") },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, fake := range []bool{true, false} {
+				cfg := tc.cfg
+				cfg.Root = root
+				cfg.FakeDataPlane = fake
+				e := &Env{Cfg: &cfg}
+				rendered, err := e.render(tc.path(e))
+				if err != nil {
+					t.Fatalf("render: %v", err)
+				}
+				args, ok := containerArgs(t, rendered)["substrate:Deployment/ate-api-server/ate-api-server"]
+				if !ok {
+					t.Fatal("rendered manifest has no ate-api-server container")
+				}
+				if got := slices.Contains(args, want); got != fake {
+					t.Errorf("fake data plane %v: ate-api-server args %v carry %s = %v, want %v", fake, args, want, got, fake)
 				}
 			}
 		})

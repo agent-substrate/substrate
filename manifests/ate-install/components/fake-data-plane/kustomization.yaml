@@ -130,6 +130,15 @@ patches:
       - op: add
         path: /spec/ingress/0/from/0/podSelector/matchExpressions/0/values/-
         value: fake-workersync
+  # ...and holds ate-controller's authz role, which lists, registers and
+  # deletes Workers. ate-api-server is the Deployment's first container.
+  - target:
+      kind: Deployment
+      name: ate-api-server
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --controller-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/fake-workersync
   # fake-workersync stands in for ate-controller, which must not run beside
   # it: its WorkerPool controller would make real worker pods for the same
   # pools, and its worker syncer deletes every Worker with no live pod. Its
