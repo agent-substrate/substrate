@@ -151,10 +151,20 @@ message AttributeEntry {
 // WorkerResources is what a worker can supply. It mirrors the control plane's
 // WorkerResources and is validated by the same rules.
 message WorkerResources {
-  // Resources are compared against actors' resources for placement.
+  // cpu_millicores is CPU in millicores (1000 = one core). Compared against
+  // actors' resource limits for placement.
   //
   // +k8s:optional
-  ResourceRequirements resources = 1;
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. Compared against actors' resource
+  // limits for placement.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 
   // A count of Actors. Workers can use this to limit the number of Actors
   // that can be placed on them, constraining costs not captured in the
@@ -162,7 +172,7 @@ message WorkerResources {
   //
   // +k8s:optional
   // +k8s:minimum=1
-  int32 actors = 2;
+  int32 actors = 3;
 }
 
 // ResourceRequirements are the compute resources a workload may use.

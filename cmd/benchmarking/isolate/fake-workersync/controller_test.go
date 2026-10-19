@@ -415,7 +415,7 @@ func poolNames(name string, n int) []string {
 
 func wantCapacity(actors int32, cpu, mem string) *ateapipb.WorkerResources {
 	c, m := resource.MustParse(cpu), resource.MustParse(mem)
-	return &ateapipb.WorkerResources{Actors: actors, Resources: &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: c.MilliValue(), MemoryBytes: m.Value()}}}
+	return &ateapipb.WorkerResources{Actors: actors, CpuMillicores: c.MilliValue(), MemoryBytes: m.Value()}
 }
 
 func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
@@ -1222,7 +1222,7 @@ func TestCapacityFormatsLikeWorker(t *testing.T) {
 	if want := wantCapacity(1000, "500m", "1e9"); !proto.Equal(got, want) {
 		t.Errorf("capacity = %v, want %v", got, want)
 	}
-	if none := capacity(pool("p", 1, nil)); none.GetResources() != nil || none.GetActors() != 1000 {
+	if none := capacity(pool("p", 1, nil)); none.GetCpuMillicores() != 0 || none.GetMemoryBytes() != 0 || none.GetActors() != 1000 {
 		t.Errorf("no limits and no allocatable: %v; want 1000 actors and no resources", none)
 	}
 }

@@ -65,11 +65,9 @@ func FromFiles(actors int) *ateletpb.WorkerResources {
 
 func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 	return &ateletpb.WorkerResources{
-		Actors: int32(actors),
-		Resources: cpuMemory(
-			readLimit(filepath.Join(dir, workercapacity.CPULimitFile)),
-			readLimit(filepath.Join(dir, workercapacity.MemoryLimitFile)),
-		),
+		CpuMillicores: readLimit(filepath.Join(dir, workercapacity.CPULimitFile)),
+		MemoryBytes:   readLimit(filepath.Join(dir, workercapacity.MemoryLimitFile)),
+		Actors:        int32(actors),
 	}
 }
 
@@ -103,15 +101,6 @@ func buildRequest(capacity *ateletpb.WorkerResources, sandboxClass string, f *sa
 		req.RestorableRuntimes = append(req.RestorableRuntimes, buildRuntime(sandboxClass, attrs))
 	}
 	return req
-}
-
-// cpuMemory is the Resources for those two dimensions; nil when both are
-// zero.
-func cpuMemory(cpuMilli, memoryBytes int64) *ateletpb.ResourceRequirements {
-	if cpuMilli == 0 && memoryBytes == 0 {
-		return nil
-	}
-	return &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: cpuMilli, MemoryBytes: memoryBytes}}
 }
 
 func readLimit(path string) int64 {

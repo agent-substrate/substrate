@@ -2489,10 +2489,20 @@ message AttributeEntry {
 
 // WorkerResources represents a set of resources.
 message WorkerResources {
-  // Resources are compared against the Actor's resources for placement.
+  // cpu_millicores is CPU in millicores (1000 = one core). Compared against
+  // the Actor's resource limits for placement.
   //
   // +k8s:optional
-  ResourceRequirements resources = 1;
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. Compared against the Actor's resource
+  // limits for placement.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 
   // A count of Actors.  Workers can use this to limit the number of Actors
   // that can be placed on them, constraining the costs of other things that
@@ -2501,7 +2511,7 @@ message WorkerResources {
   //
   // +k8s:optional
   // +k8s:minimum=1
-  int32 actors = 2;
+  int32 actors = 3;
 }
 
 // ActorAssignment binds an Actor to a Worker.  This is a subresource of the
@@ -2535,7 +2545,7 @@ message ActorAssignment {
   // The resources allocated to the Actor when it was assigned.
   //
   // +k8s:optional
-  ResourceRequirements resources = 4;
+  Resources resources = 4;
 
   // worker_epoch is the Worker's epoch when the Actor was bound.
   //

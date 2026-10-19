@@ -160,10 +160,10 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 			age := formatAge(worker.GetMetadata().GetCreateTime())
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				name, pool, state, workerActorsColumn(worker),
-				workerResourceColumn(worker.GetStatus().GetAllocated().GetResources().GetLimits().GetCpuMillicores(),
-					worker.GetStatus().GetCapacity().GetResources().GetLimits().GetCpuMillicores(), formatInt),
-				workerResourceColumn(worker.GetStatus().GetAllocated().GetResources().GetLimits().GetMemoryBytes(),
-					worker.GetStatus().GetCapacity().GetResources().GetLimits().GetMemoryBytes(), formatBytes),
+				workerResourceColumn(worker.GetStatus().GetAllocated().GetCpuMillicores(),
+					worker.GetStatus().GetCapacity().GetCpuMillicores(), formatInt),
+				workerResourceColumn(worker.GetStatus().GetAllocated().GetMemoryBytes(),
+					worker.GetStatus().GetCapacity().GetMemoryBytes(), formatBytes),
 				pod, age)
 		}
 		return w.Flush()

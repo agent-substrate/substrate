@@ -161,13 +161,13 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 	}, {
 		"missing cpu",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Resources = resources.CPUMemory(0, 512<<20)
+			tmpl.Resources = &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(0, 512<<20)}
 		})},
 		field.ErrorList{field.Required(field.NewPath("actor_template", "resources", "limits", "cpu_millicores"), "")},
 	}, {
 		"missing memory",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Resources = resources.CPUMemory(1000, 0)
+			tmpl.Resources = &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 0)}
 		})},
 		field.ErrorList{field.Required(field.NewPath("actor_template", "resources", "limits", "memory_bytes"), "")},
 	}, {
@@ -862,7 +862,7 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "valid resources",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Resources = resources.CPUMemory(500, 2<<30)
+			tmpl.Containers[0].Resources = &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(500, 2<<30)}
 		},
 	}, {
 		name: "negative cpu",
@@ -915,7 +915,7 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 			StorageLocation:   "gs://my-bucket/snapshots",
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
-		Resources: resources.CPUMemory(1000, 512<<20),
+		Resources: &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 	}
 	for _, m := range mutations {
 		m(template)

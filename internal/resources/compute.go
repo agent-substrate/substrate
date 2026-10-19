@@ -18,7 +18,7 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
-// The same ateapipb.ResourceRequirements is what an Actor asks for, what a Worker
+// The same ateapipb.Resources is what an Actor's limits ask for, what a Worker
 // supplies, and the sum of what a Worker's Actors hold, so they subtract.
 //
 // A zero dimension is none of that resource. A Worker reports every dimension
@@ -26,26 +26,15 @@ import (
 
 // CPUMemory returns the Resources for cpuMilli and memoryBytes, or nil when
 // both are zero, so an emptied total compares equal to an absent one.
-func CPUMemory(cpuMilli, memoryBytes int64) *ateapipb.ResourceRequirements {
+func CPUMemory(cpuMilli, memoryBytes int64) *ateapipb.Resources {
 	if cpuMilli == 0 && memoryBytes == 0 {
 		return nil
 	}
-	return &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: cpuMilli, MemoryBytes: memoryBytes}}
-}
-
-// Add returns a + b, dimension by dimension.
-func Add(a, b *ateapipb.ResourceRequirements) *ateapipb.ResourceRequirements {
-	return CPUMemory(a.GetLimits().GetCpuMillicores()+b.GetLimits().GetCpuMillicores(), a.GetLimits().GetMemoryBytes()+b.GetLimits().GetMemoryBytes())
-}
-
-// Sub returns a - b, dimension by dimension.
-func Sub(a, b *ateapipb.ResourceRequirements) *ateapipb.ResourceRequirements {
-	return CPUMemory(a.GetLimits().GetCpuMillicores()-b.GetLimits().GetCpuMillicores(), a.GetLimits().GetMemoryBytes()-b.GetLimits().GetMemoryBytes())
+	return &ateapipb.Resources{CpuMillicores: cpuMilli, MemoryBytes: memoryBytes}
 }
 
 // Covers reports whether have leaves room for want in every dimension. A
 // dimension want leaves at zero asks for nothing.
-func Covers(have, want *ateapipb.ResourceRequirements) bool {
-	return have.GetLimits().GetCpuMillicores() >= want.GetLimits().GetCpuMillicores() &&
-		have.GetLimits().GetMemoryBytes() >= want.GetLimits().GetMemoryBytes()
+func Covers(have, want *ateapipb.Resources) bool {
+	return have.GetCpuMillicores() >= want.GetCpuMillicores() && have.GetMemoryBytes() >= want.GetMemoryBytes()
 }

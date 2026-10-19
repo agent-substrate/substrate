@@ -438,7 +438,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 
 // admittedResources is what an assignment books against its worker, or nil
 // when the actor declared no limits and so reserves nothing.
-func admittedResources(constraints scheduling.Constraints) *ateapipb.ResourceRequirements {
+func admittedResources(constraints scheduling.Constraints) *ateapipb.Resources {
 	return constraints.Limits
 }
 
@@ -653,7 +653,7 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		RequiredRuntime: hardware.NewRequirement(requiredSnapshotRuntime(actor, tmpl)),
 		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes:   requiredNodes,
-		Limits:          tmpl.GetResources(),
+		Limits:          tmpl.GetResources().GetLimits(),
 	}
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
 		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))

@@ -146,14 +146,11 @@ func toWorkerResources(in *ateletpb.WorkerResources) *ateapipb.WorkerResources {
 	if in == nil {
 		return nil
 	}
-	out := &ateapipb.WorkerResources{Actors: in.GetActors()}
-	if r := in.GetResources(); r != nil {
-		out.Resources = &ateapipb.ResourceRequirements{}
-		if l := r.GetLimits(); l != nil {
-			out.Resources.Limits = &ateapipb.Resources{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}
-		}
+	return &ateapipb.WorkerResources{
+		CpuMillicores: in.GetCpuMillicores(),
+		MemoryBytes:   in.GetMemoryBytes(),
+		Actors:        in.GetActors(),
 	}
-	return out
 }
 
 // toAteAPISandboxRuntime converts atelet's SandboxRuntime to the control

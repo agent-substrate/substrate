@@ -21,18 +21,16 @@ import (
 // AddToAllocated adjusts allocation by an assignment; sign is 1 or -1.
 // It returns nil when allocation reaches zero.
 func AddToAllocated(total *ateapipb.WorkerResources, assignment *ateapipb.ActorAssignment, sign int64) *ateapipb.WorkerResources {
-	var held *ateapipb.ResourceRequirements
-	if sign > 0 {
-		held = Add(total.GetResources(), assignment.GetResources())
-	} else {
-		held = Sub(total.GetResources(), assignment.GetResources())
+	booked := assignment.GetResources()
+	out := &ateapipb.WorkerResources{
+		CpuMillicores: total.GetCpuMillicores() + sign*booked.GetCpuMillicores(),
+		MemoryBytes:   total.GetMemoryBytes() + sign*booked.GetMemoryBytes(),
+		Actors:        total.GetActors() + int32(sign),
 	}
-
-	actors := total.GetActors() + int32(sign)
-	if actors == 0 && held == nil {
+	if out.CpuMillicores == 0 && out.MemoryBytes == 0 && out.Actors == 0 {
 		return nil
 	}
-	return &ateapipb.WorkerResources{Actors: actors, Resources: held}
+	return out
 }
 
 // SumAllocated is what a set of assignments takes from a Worker, or nil for
@@ -42,9 +40,19 @@ func SumAllocated(assignments []*ateapipb.ActorAssignment) *ateapipb.WorkerResou
 	if len(assignments) == 0 {
 		return nil
 	}
-	var total *ateapipb.ResourceRequirements
+	total := &ateapipb.WorkerResources{Actors: int32(len(assignments))}
 	for _, assignment := range assignments {
-		total = Add(total, assignment.GetResources())
+		total.CpuMillicores += assignment.GetResources().GetCpuMillicores()
+		total.MemoryBytes += assignment.GetResources().GetMemoryBytes()
 	}
-	return &ateapipb.WorkerResources{Actors: int32(len(assignments)), Resources: total}
+	return total
+}
+
+// Free is what a Worker has left after what its Actors hold. It goes negative
+// once a Worker is overcommitted.
+func Free(capacity, allocated *ateapipb.WorkerResources) *ateapipb.Resources {
+	return &ateapipb.Resources{
+		CpuMillicores: capacity.GetCpuMillicores() - allocated.GetCpuMillicores(),
+		MemoryBytes:   capacity.GetMemoryBytes() - allocated.GetMemoryBytes(),
+	}
 }

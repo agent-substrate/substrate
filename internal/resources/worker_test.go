@@ -39,13 +39,13 @@ func TestAddToAllocated(t *testing.T) {
 	total = AddToAllocated(total, assignment("a", 1000, 1<<30), +1)
 	total = AddToAllocated(total, assignment("b", 500, 2<<30), +1)
 
-	want := &ateapipb.WorkerResources{Actors: 2, Resources: CPUMemory(1500, 3<<30)}
+	want := &ateapipb.WorkerResources{Actors: 2, CpuMillicores: 1500, MemoryBytes: 3 << 30}
 	if diff := cmp.Diff(want, total, protocmp.Transform()); diff != "" {
 		t.Errorf("allocated mismatch (-want +got):\n%s", diff)
 	}
 
 	total = AddToAllocated(total, assignment("b", 500, 2<<30), -1)
-	want = &ateapipb.WorkerResources{Actors: 1, Resources: CPUMemory(1000, 1<<30)}
+	want = &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 1 << 30}
 	if diff := cmp.Diff(want, total, protocmp.Transform()); diff != "" {
 		t.Errorf("allocated after release mismatch (-want +got):\n%s", diff)
 	}
@@ -72,7 +72,7 @@ func TestSumAllocated(t *testing.T) {
 	}
 
 	got := SumAllocated([]*ateapipb.ActorAssignment{assignment("a", 1000, 1<<30), assignment("b", 500, 0)})
-	want := &ateapipb.WorkerResources{Actors: 2, Resources: CPUMemory(1500, 1<<30)}
+	want := &ateapipb.WorkerResources{Actors: 2, CpuMillicores: 1500, MemoryBytes: 1 << 30}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("SumAllocated() mismatch (-want +got):\n%s", diff)
 	}

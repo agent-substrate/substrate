@@ -18,26 +18,13 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	"google.golang.org/protobuf/proto"
 )
-
-func TestAddAndSub(t *testing.T) {
-	r := Add(nil, CPUMemory(2000, 4<<30))
-	r = Add(r, CPUMemory(1000, 0))
-	if want := CPUMemory(3000, 4<<30); !proto.Equal(r, want) {
-		t.Errorf("after adds = %v, want %v", r, want)
-	}
-	// An emptied total compares equal to one that never held anything.
-	if got := Sub(r, CPUMemory(3000, 4<<30)); got != nil {
-		t.Errorf("Sub() = %v after subtracting everything back out, want nil", got)
-	}
-}
 
 func TestCovers(t *testing.T) {
 	tests := []struct {
 		name string
-		have *ateapipb.ResourceRequirements
-		want *ateapipb.ResourceRequirements
+		have *ateapipb.Resources
+		want *ateapipb.Resources
 		ok   bool
 	}{
 		{

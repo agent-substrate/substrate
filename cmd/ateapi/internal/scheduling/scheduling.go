@@ -55,7 +55,7 @@ type Constraints struct {
 
 	// Limits are the actor's declared resource limits, in the units a Worker
 	// reports its capacity in, so the two subtract.
-	Limits *ateapipb.ResourceRequirements
+	Limits *ateapipb.Resources
 }
 
 // ErrNoCapacity is returned by Schedule when no worker that meets the
@@ -189,17 +189,17 @@ func lessLoaded(a, b *candidate) bool {
 // workerResourceUtilization returns the highest allocated/capacity ratio across
 // compute dimensions, or 1 when capacity is unreported.
 func workerResourceUtilization(w *ateapipb.Worker) float64 {
-	return utilization(w.GetStatus().GetCapacity().GetResources(), w.GetStatus().GetAllocated().GetResources())
+	return utilization(w.GetStatus().GetCapacity(), w.GetStatus().GetAllocated())
 }
 
-func utilization(capacity, used *ateapipb.ResourceRequirements) float64 {
+func utilization(capacity, used *ateapipb.WorkerResources) float64 {
 	var (
 		maxRatio    float64
 		hasPositive bool
 	)
 	for _, d := range [][2]int64{
-		{capacity.GetLimits().GetCpuMillicores(), used.GetLimits().GetCpuMillicores()},
-		{capacity.GetLimits().GetMemoryBytes(), used.GetLimits().GetMemoryBytes()},
+		{capacity.GetCpuMillicores(), used.GetCpuMillicores()},
+		{capacity.GetMemoryBytes(), used.GetMemoryBytes()},
 	} {
 		if d[0] > 0 {
 			hasPositive = true
@@ -255,7 +255,7 @@ func (s *scheduler) HasRoom(worker *ateapipb.Worker, constraints Constraints) bo
 	return ok
 }
 
-func checkRoom(worker *ateapipb.Worker, want *ateapipb.ResourceRequirements) (candidate, bool) {
+func checkRoom(worker *ateapipb.Worker, want *ateapipb.Resources) (candidate, bool) {
 	capacity := worker.GetStatus().GetCapacity()
 	used := worker.GetStatus().GetAllocated()
 
@@ -265,13 +265,12 @@ func checkRoom(worker *ateapipb.Worker, want *ateapipb.ResourceRequirements) (ca
 		return candidate{}, false
 	}
 
-	if want.GetLimits().GetCpuMillicores() == 0 && want.GetLimits().GetMemoryBytes() == 0 {
+	if want.GetCpuMillicores() == 0 && want.GetMemoryBytes() == 0 {
 		return candidate{worker: worker, resUtil: -1}, true
 	}
-	free := resources.Sub(capacity.GetResources(), used.GetResources())
-	if !resources.Covers(free, want) {
+	if !resources.Covers(resources.Free(capacity, used), want) {
 		return candidate{}, false
 	}
-	resUtil := utilization(capacity.GetResources(), used.GetResources())
+	resUtil := utilization(capacity, used)
 	return candidate{worker: worker, resUtil: resUtil}, true
 }

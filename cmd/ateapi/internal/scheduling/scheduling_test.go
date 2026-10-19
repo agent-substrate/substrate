@@ -564,7 +564,7 @@ func assigned(atespace, name string) func(*ateapipb.Worker) {
 // place against what is left rather than against the whole capacity. Only the
 // allocation total, which is all placement reads: the assignments themselves are
 // their own records and never on the worker.
-func assignedFor(atespace, name string, took *ateapipb.ResourceRequirements) func(*ateapipb.Worker) {
+func assignedFor(atespace, name string, took *ateapipb.Resources) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
 		if w.Status == nil {
 			w.Status = &ateapipb.WorkerStatus{}
@@ -591,7 +591,8 @@ func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
 		if w.Status.Capacity == nil {
 			w.Status.Capacity = &ateapipb.WorkerResources{}
 		}
-		w.Status.Capacity.Resources = resources.CPUMemory(cpuMilli, memBytes)
+		w.Status.Capacity.CpuMillicores = cpuMilli
+		w.Status.Capacity.MemoryBytes = memBytes
 	}
 }
 

@@ -30,7 +30,6 @@ import (
 	"github.com/google/uuid"
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
 	"go.ate.dev/substrate/internal/hardware"
-	"go.ate.dev/substrate/internal/resources"
 	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"golang.org/x/sync/errgroup"
@@ -637,7 +636,7 @@ func (t template) capacity(allocatable corev1.ResourceList) *ateapipb.WorkerReso
 	if memory == 0 {
 		memory = allocatable.Memory().Value()
 	}
-	return &ateapipb.WorkerResources{Actors: int32(t.actors), Resources: resources.CPUMemory(cpu, memory)}
+	return &ateapipb.WorkerResources{Actors: int32(t.actors), CpuMillicores: cpu, MemoryBytes: memory}
 }
 
 // fits reports whether w was made from wp's current template, so a real pool
