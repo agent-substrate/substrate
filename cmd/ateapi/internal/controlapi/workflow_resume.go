@@ -612,7 +612,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 	poolNamespace = bound.GetWorkerNamespace()
 	pool = bound.GetWorkerPool()
-	class = bound.GetSandboxClass()
+	class = bound.GetStatus().GetDefaultRuntime().GetSandboxClass()
 	outcome = ateattr.SchedulerOutcomeAssigned
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, bound, nil

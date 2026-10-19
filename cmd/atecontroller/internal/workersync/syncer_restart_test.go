@@ -50,7 +50,7 @@ func TestSyncer_RegistersEpoch(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-epoch", "worker-epoch-1", "pool1"
 
 	api := newFakeControl()
-	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 	key := seedPod(t, pods, withWorkerRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 2))
 
 	mustReconcile(t, ctx, s, key)
@@ -73,7 +73,7 @@ func TestSyncer_RaisesEpochOnWorkerRestart(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeControl()
-			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 			pod := withWorkerRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 0)
 			key := seedPod(t, pods, pod)
 			mustReconcile(t, ctx, s, key)
@@ -173,7 +173,7 @@ func TestSyncer_NoPlacementUnderAnEarlierEpoch(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeControl()
-			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 			key := seedPod(t, pods, withWorkerRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 0))
 			mustReconcile(t, ctx, s, key)
 			if state := api.get(testPodUID).GetStatus().GetState(); state != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
@@ -209,7 +209,7 @@ func TestSyncer_NotReadyPodRegistersAtItsEpoch(t *testing.T) {
 	ns, poolName := "ns-syncer-notready-restart", "pool1"
 
 	api := newFakeControl()
-	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 	pod := withWorkerRestarts(workerPod(ns, "worker-1", poolName, testPodUID, "10.0.0.1"), 3)
 	pod.Status.Conditions = nil
 	key := seedPod(t, pods, pod)
@@ -229,9 +229,8 @@ func TestSyncer_EpochNeverLowered(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-lower", "worker-lower-1", "pool1"
 
 	api := newFakeControl()
-	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 	registered := registeredWorker(ns, poolName, podName, testPodUID, "10.0.0.1")
-	registered.SandboxClass = "gvisor"
 	registered.Epoch = 5
 	api.put(registered)
 	key := seedPod(t, pods, withWorkerRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 0))

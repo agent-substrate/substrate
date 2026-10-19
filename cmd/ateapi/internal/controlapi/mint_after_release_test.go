@@ -70,8 +70,11 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 					WorkerPod:       w.pod,
 					WorkerPodUid:    w.podUID,
 					NodeName:        node,
-					SandboxClass:    "gvisor",
-					Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+					Status: &ateapipb.WorkerStatus{
+						State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+						Capacity:       &ateapipb.WorkerResources{Actors: 1},
+						DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+					},
 				}); err != nil {
 					t.Fatalf("CreateWorker(%s): %v", w.name, err)
 				}

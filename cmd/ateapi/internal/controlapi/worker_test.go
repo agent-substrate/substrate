@@ -47,7 +47,6 @@ func validWorker(name string, mods ...func(*ateapipb.Worker)) *ateapipb.Worker {
 		WorkerPodUid:    name,
 		NodeName:        "node-1",
 		Ips:             []string{"10.1.2.3"},
-		SandboxClass:    "gvisor",
 	}
 	for _, m := range mods {
 		m(w)
@@ -83,7 +82,12 @@ func seedAPIWorker(t *testing.T, ctx context.Context, persistence store.Interfac
 	t.Helper()
 	worker = proto.Clone(worker).(*ateapipb.Worker)
 	if worker.GetStatus() == nil {
-		worker.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+		// A seeded Worker stands in for one that registered: ACTIVE, with the
+		// gvisor default runtime its class is read from.
+		worker.Status = &ateapipb.WorkerStatus{
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			DefaultRuntime: testSandboxRuntime(),
+		}
 	}
 	created, err := persistence.CreateWorker(ctx, worker)
 	if err != nil {
@@ -460,7 +464,6 @@ func TestUpdateWorker_Errors(t *testing.T) {
 		{"ips family added", func(w *ateapipb.Worker) { w.Ips = append(w.Ips, "fd00::1") }, codes.InvalidArgument},
 		{"worker_pod changed", func(w *ateapipb.Worker) { w.WorkerPod = "worker-pod-2" }, codes.InvalidArgument},
 		{"node_name changed", func(w *ateapipb.Worker) { w.NodeName = "node-2" }, codes.InvalidArgument},
-		{"sandbox_class changed", func(w *ateapipb.Worker) { w.SandboxClass = "microvm" }, codes.InvalidArgument},
 		// capacity is deliberately absent here: it may change (the pool's actor
 		// ceiling moves, a pod can be resized, a Worker may report its own).
 		// TestUpdateWorker_CapacityChanges covers that.
@@ -468,7 +471,6 @@ func TestUpdateWorker_Errors(t *testing.T) {
 		// And immutable fields dropped, which a replacement update reads as a
 		// request to clear them. Rejected rather than silently applied.
 		{"ips omitted", func(w *ateapipb.Worker) { w.Ips = nil }, codes.InvalidArgument},
-		{"sandbox_class omitted", func(w *ateapipb.Worker) { w.SandboxClass = "" }, codes.InvalidArgument},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

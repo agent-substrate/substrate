@@ -2314,14 +2314,6 @@ message Worker {
   // +k8s:immutable
   string worker_spiffe_id = 8;
 
-  // sandbox_class mirrors the WorkerPool's default sandbox class
-  //
-  // +k8s:optional
-  // +k8s:maxLength=63
-  // +k8s:customValidation # gvisor or microvm
-  // +k8s:immutable
-  string sandbox_class = 9;
-
   // labels mirror the WorkerPool object's Kubernetes labels, which selectors
   // match against.
   // Kubernetes does not cap an object's label count, so the bound below is
@@ -2331,7 +2323,7 @@ message Worker {
   // +k8s:maxProperties=64
   // +k8s:eachKey=+k8s:format=k8s-label-key
   // +k8s:eachVal=+k8s:format=k8s-label-value
-  map<string, string> labels = 10;
+  map<string, string> labels = 9;
 
   // epoch counts the runs of the worker pod's worker container: 1 for its first
   // run and one more for each restart. 0 means it has not been reported.
@@ -2345,7 +2337,7 @@ message Worker {
   // +k8s:minimum=0
   // +k8s:update=NoUnset
   // +k8s:customValidation
-  int64 epoch = 11;
+  int64 epoch = 10;
 
   // Output-only server-managed state. Absent from Create/Update request
   // payloads; whatever a request carries here is ignored. A client moves
@@ -2353,7 +2345,7 @@ message Worker {
   // MarkWorkerUnavailable, and the assignments are the scheduler's.
   //
   // +k8s:optional
-  WorkerStatus status = 12;
+  WorkerStatus status = 11;
 }
 
 enum WorkerState {
@@ -2404,7 +2396,8 @@ message WorkerStatus {
 
   // Runtime that new and cold-booted actors start under, as reported by the
   // Worker at registration. Snapshots matching default_runtime can also
-  // warm-boot on this worker.
+  // warm-boot on this worker. Its sandbox_class is the Worker's class, fixed
+  // by the first RegisterWorker call.
   //
   // +k8s:optional
   SandboxRuntime default_runtime = 5;
@@ -2658,7 +2651,9 @@ message RegisterWorkerRequest {
 
   // Runtime that new and cold-booted actors start under.
   // Snapshots matching default_runtime can also warm-boot on this worker.
-  // Like capacity, this replaces what is recorded on the Worker.
+  // The first registration fixes the Worker's sandbox_class; later reports
+  // replace version and compatibility attributes, but a different
+  // sandbox_class is refused.
   //
   // +k8s:required
   SandboxRuntime default_runtime = 3;

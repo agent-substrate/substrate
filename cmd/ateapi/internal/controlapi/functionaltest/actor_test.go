@@ -3184,7 +3184,6 @@ func TestResumeActor(t *testing.T) {
 		WorkerPodUid:    podUID,
 		Ips:             []string{"127.0.0.1"},
 		NodeName:        "node1",
-		SandboxClass:    "gvisor",
 		Labels:          map[string]string{poolLabelKey: ns},
 		Status: &ateapipb.WorkerStatus{
 			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,

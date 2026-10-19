@@ -693,7 +693,6 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			WorkerPodUid:    string(createdPod.UID),
 			Ips:             []string{"127.0.0.1"},
 			NodeName:        nodeName,
-			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			// Capacity is not settable here: a Worker gets it from its own
 			// worker's report, which the reportWorkerCapacity below stands in

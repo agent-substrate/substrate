@@ -160,17 +160,6 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 		})),
 		want: field.ErrorList{field.TooLong(field.NewPath("worker", "worker_spiffe_id"), nil, 2048).WithOrigin("maxLength")},
 	}, {
-		name: "sandbox_class too long",
-		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.SandboxClass = strings.Repeat("x", 64) })),
-		want: field.ErrorList{
-			field.TooLong(field.NewPath("worker", "sandbox_class"), nil, 63).WithOrigin("maxLength"),
-			field.NotSupported[string](field.NewPath("worker", "sandbox_class"), nil, nil),
-		},
-	}, {
-		name: "unsupported sandbox_class",
-		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.SandboxClass = "kata" })),
-		want: field.ErrorList{field.NotSupported[string](field.NewPath("worker", "sandbox_class"), nil, nil)},
-	}, {
 		name: "valid labels",
 		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
 			w.Labels = map[string]string{"tier": "batch", "pool.ate.io/zone": "us-west1-c"}
@@ -802,7 +791,6 @@ func validWorker(name string, mods ...func(*ateapipb.Worker)) *ateapipb.Worker {
 		WorkerPodUid:    name,
 		NodeName:        "node-1",
 		Ips:             []string{"10.1.2.3"},
-		SandboxClass:    "gvisor",
 	}
 	for _, m := range mods {
 		m(w)

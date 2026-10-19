@@ -103,80 +103,77 @@ func TestRegisterWorker_Runtimes(t *testing.T) {
 
 	tests := []struct {
 		name string
-		// workerClass is the class the pool created the Worker with; "" is
-		// a Worker recorded without one.
-		workerClass string
-		def         *ateapipb.SandboxRuntime
-		restorable  []*ateapipb.SandboxRuntime
-		wantCode    codes.Code
+		// unreported seeds a Worker with no prior DefaultRuntime instead of
+		// seeded().
+		unreported bool
+		def        *ateapipb.SandboxRuntime
+		restorable []*ateapipb.SandboxRuntime
+		wantCode   codes.Code
 		// wantWrite is whether the report changes the record.
 		wantWrite bool
 	}{{
-		name:        "identical report writes nothing",
-		workerClass: "gvisor",
-		def:         gvisorAMD64,
-		restorable:  []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
+		name:       "identical report writes nothing",
+		def:        gvisorAMD64,
+		restorable: []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
 	}, {
-		name:        "changed default runtime writes",
-		workerClass: "gvisor",
-		def:         gvisorARM64,
-		restorable:  []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
-		wantWrite:   true,
+		name:       "changed default runtime writes",
+		def:        gvisorARM64,
+		restorable: []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
+		wantWrite:  true,
 	}, {
-		name:        "changed restorable runtime writes",
-		workerClass: "gvisor",
-		def:         gvisorAMD64,
-		restorable:  []*ateapipb.SandboxRuntime{gvisorV8, gvisorARM64},
-		wantWrite:   true,
+		name:       "changed restorable runtime writes",
+		def:        gvisorAMD64,
+		restorable: []*ateapipb.SandboxRuntime{gvisorV8, gvisorARM64},
+		wantWrite:  true,
 	}, {
 		// A report is compared as sent: the list is atomic, so a new order
 		// is a new report.
-		name:        "reordered restorable runtimes write",
-		workerClass: "gvisor",
-		def:         gvisorAMD64,
-		restorable:  []*ateapipb.SandboxRuntime{gvisorV9, gvisorV8},
-		wantWrite:   true,
+		name:       "reordered restorable runtimes write",
+		def:        gvisorAMD64,
+		restorable: []*ateapipb.SandboxRuntime{gvisorV9, gvisorV8},
+		wantWrite:  true,
 	}, {
 		// Runtimes are replaced like capacity: a report that lists no
 		// restorable runtimes is a Worker that can restore from none but its
 		// default, as when a version is disabled, and the record must not
 		// keep advertising them.
-		name:        "dropped restorable runtimes write",
-		workerClass: "gvisor",
-		def:         gvisorAMD64,
-		wantWrite:   true,
+		name:      "dropped restorable runtimes write",
+		def:       gvisorAMD64,
+		wantWrite: true,
 	}, {
-		// The class is fixed by the pool that created the Worker. A runtime
-		// of another class is one it cannot run, so the report is refused
-		// rather than recorded for the scheduler to act on.
-		name:        "default runtime of another class is refused",
-		workerClass: "gvisor",
-		def:         microvm,
-		restorable:  []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
-		wantCode:    codes.FailedPrecondition,
-	}, {
-		name:        "restorable runtime of another class is refused",
-		workerClass: "gvisor",
-		def:         gvisorAMD64,
-		restorable:  []*ateapipb.SandboxRuntime{gvisorV8, microvm},
-		wantCode:    codes.FailedPrecondition,
-	}, {
-		// A Worker recorded without a class has nothing for a report to
-		// contradict.
-		name:       "unclassed Worker takes a default runtime of any class",
+		// Once a Worker has registered a sandbox class, a runtime of another
+		// class contradicts its recorded state and is refused.
+		name:       "default runtime of another class is refused",
 		def:        microvm,
 		restorable: []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
-		wantWrite:  true,
+		wantCode:   codes.FailedPrecondition,
 	}, {
-		name:       "unclassed Worker takes restorable runtimes of mixed classes",
+		name:       "restorable runtime of another class is refused",
 		def:        gvisorAMD64,
 		restorable: []*ateapipb.SandboxRuntime{gvisorV8, microvm},
+		wantCode:   codes.FailedPrecondition,
+	}, {
+		// A Worker that has not yet registered a default runtime accepts any
+		// class on its first report, provided restorable_runtimes match it.
+		name:       "unreported Worker takes a default runtime of any class",
+		unreported: true,
+		def:        microvm,
 		wantWrite:  true,
+	}, {
+		name:       "unreported Worker refuses restorable runtimes of mixed classes",
+		unreported: true,
+		def:        gvisorAMD64,
+		restorable: []*ateapipb.SandboxRuntime{gvisorV8, microvm},
+		wantCode:   codes.FailedPrecondition,
 	}}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			name := fmt.Sprintf("1a7e4c83-6d20-4f95-b3c8-%012d", i)
-			before := seedWorker(t, st, name, testNode, tt.workerClass, seeded())
+			initialStatus := seeded()
+			if tt.unreported {
+				initialStatus = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+			}
+			before := seedWorker(t, st, name, testNode, initialStatus)
 
 			got, err := s.RegisterWorker(authed, &ateapipb.RegisterWorkerRequest{
 				Worker:             &ateapipb.ObjectRef{Name: name},

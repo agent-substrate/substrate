@@ -512,10 +512,9 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 		defRuntime = sandboxRuntime(class, "amd64")
 	}
 	w := &ateapipb.Worker{
-		WorkerPod:    pod,
-		SandboxClass: class,
-		NodeName:     node,
-		Labels:       lbls,
+		WorkerPod: pod,
+		NodeName:  node,
+		Labels:    lbls,
 		// A stored Worker always carries a ceiling; CreateWorker reifies one.
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,

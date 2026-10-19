@@ -69,11 +69,11 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 			slog.String("caller_pod", caller.PodName))
 		return nil, apierror.NotFound("Worker %s not found", name)
 	}
-	if err := validateRuntimeClasses(worker.GetSandboxClass(), req); err != nil {
+	status := worker.GetStatus()
+	if err := validateRuntimeClasses(status.GetDefaultRuntime().GetSandboxClass(), req); err != nil {
 		return nil, err
 	}
 
-	status := worker.GetStatus()
 	if proto.Equal(status.GetCapacity(), reported) &&
 		proto.Equal(status.GetDefaultRuntime(), defaultRuntime) &&
 		sameRuntimes(status.GetRestorableRuntimes(), restorable) {
@@ -107,21 +107,18 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 	return &ateapipb.RegisterWorkerResponse{Worker: updated}, nil
 }
 
-// validateRuntimeClasses rejects a runtime of a class other than the Worker's
-// own. The class is fixed when the pool creates the Worker and names the
-// sandbox its worker runs, so a runtime of another class contradicts the
-// recorded Worker state. A Worker recorded without a class has nothing for a
-// report to contradict.
-func validateRuntimeClasses(class string, req *ateapipb.RegisterWorkerRequest) error {
-	if class == "" {
-		return nil
-	}
-	if got := req.GetDefaultRuntime().GetSandboxClass(); got != class {
-		return apierror.FailedPrecondition("default_runtime.sandbox_class %q does not match Worker's sandbox_class %q", got, class)
+// validateRuntimeClasses rejects a runtime whose sandbox class disagrees with
+// default_runtime or with a class already recorded on the Worker. A worker pod
+// runs one sandbox class for its lifetime, so every runtime it reports must
+// share that class.
+func validateRuntimeClasses(existingClass string, req *ateapipb.RegisterWorkerRequest) error {
+	class := req.GetDefaultRuntime().GetSandboxClass()
+	if existingClass != "" && class != existingClass {
+		return apierror.FailedPrecondition("default_runtime.sandbox_class %q does not match Worker's recorded default_runtime.sandbox_class %q", class, existingClass)
 	}
 	for i, rt := range req.GetRestorableRuntimes() {
 		if got := rt.GetSandboxClass(); got != class {
-			return apierror.FailedPrecondition("restorable_runtimes[%d].sandbox_class %q does not match Worker's sandbox_class %q", i, got, class)
+			return apierror.FailedPrecondition("restorable_runtimes[%d].sandbox_class %q does not match default_runtime.sandbox_class %q", i, got, class)
 		}
 	}
 	return nil

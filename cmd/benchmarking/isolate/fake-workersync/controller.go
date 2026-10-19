@@ -96,7 +96,8 @@ type fakeWorker struct {
 	// from before its create, so a create the server commits but the caller
 	// sees fail is still retired, or deleted by --cleanup.
 	created bool
-	// labels and sandboxClass are what the Worker is registered with.
+	// labels is synced onto the Worker record; sandboxClass is reported in
+	// DefaultRuntime via RegisterWorker.
 	labels       map[string]string
 	sandboxClass string
 	// tmpl is the pool template the Worker was made from; nil for a Worker
@@ -208,7 +209,7 @@ func (c *controller) adopt(ctx context.Context) error {
 				index:        index,
 				node:         w.GetNodeName(),
 				labels:       w.GetLabels(),
-				sandboxClass: w.GetSandboxClass(),
+				sandboxClass: w.GetStatus().GetDefaultRuntime().GetSandboxClass(),
 				capacity:     w.GetStatus().GetCapacity(),
 				reported:     w.GetStatus().GetCapacity() != nil,
 				// One never marked available goes back through create, which
@@ -429,6 +430,7 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	}
 	c.mu.Lock()
 	w.reported = true
+	w.sandboxClass = string(d.pool.Spec.DefaultSandboxClass())
 	c.mu.Unlock()
 	return nil
 }
@@ -456,7 +458,6 @@ func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.
 		WorkerPodUid:    name,
 		NodeName:        w.node,
 		Ips:             []string{fakeworker.IP(w.index)},
-		SandboxClass:    string(wp.Spec.DefaultSandboxClass()),
 		Labels:          maps.Clone(wp.GetLabels()),
 	}})
 	if err != nil && status.Code(err) != codes.AlreadyExists {
@@ -641,12 +642,13 @@ func (t template) capacity(allocatable corev1.ResourceList) *ateapipb.WorkerReso
 
 // fits reports whether w was made from wp's current template, so a real pool
 // would keep its pod. A Worker adopted after a restart has only its reported
-// capacity to go by, so it fits when that is what wp would give it on its
-// node now; one whose node's allocatable changed while fake-workersync was
-// down is replaced too. A held pool's Workers fit, since they are left as
-// they are.
+// runtime and capacity to go by, so it fits when those match what wp would
+// give it on its node now (or when it was adopted before its first report,
+// with sandboxClass and capacity still unset, until ensure sends that report);
+// one whose node's allocatable changed while fake-workersync was down is
+// replaced too. A held pool's Workers fit, since they are left as they are.
 func fits(w *fakeWorker, wp *atev1alpha1.WorkerPool, allocatable map[string]corev1.ResourceList) bool {
-	if w.sandboxClass != string(wp.Spec.DefaultSandboxClass()) {
+	if w.sandboxClass != "" && w.sandboxClass != string(wp.Spec.DefaultSandboxClass()) {
 		return false
 	}
 	t, err := templateOf(wp)

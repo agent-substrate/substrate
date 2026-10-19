@@ -7265,13 +7265,6 @@ type Worker struct {
 	// +k8s:customValidation # a SPIFFE ID
 	// +k8s:immutable
 	WorkerSpiffeId string `protobuf:"bytes,8,opt,name=worker_spiffe_id,json=workerSpiffeId,proto3" json:"worker_spiffe_id,omitempty"`
-	// sandbox_class mirrors the WorkerPool's default sandbox class
-	//
-	// +k8s:optional
-	// +k8s:maxLength=63
-	// +k8s:customValidation # gvisor or microvm
-	// +k8s:immutable
-	SandboxClass string `protobuf:"bytes,9,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// labels mirror the WorkerPool object's Kubernetes labels, which selectors
 	// match against.
 	// Kubernetes does not cap an object's label count, so the bound below is
@@ -7281,7 +7274,7 @@ type Worker struct {
 	// +k8s:maxProperties=64
 	// +k8s:eachKey=+k8s:format=k8s-label-key
 	// +k8s:eachVal=+k8s:format=k8s-label-value
-	Labels map[string]string `protobuf:"bytes,10,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Labels map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// epoch counts the runs of the worker pod's worker container: 1 for its first
 	// run and one more for each restart. 0 means it has not been reported.
 	//
@@ -7294,14 +7287,14 @@ type Worker struct {
 	// +k8s:minimum=0
 	// +k8s:update=NoUnset
 	// +k8s:customValidation
-	Epoch int64 `protobuf:"varint,11,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Epoch int64 `protobuf:"varint,10,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	// Output-only server-managed state. Absent from Create/Update request
 	// payloads; whatever a request carries here is ignored. A client moves
 	// state only through DrainWorker, MarkWorkerAvailable and
 	// MarkWorkerUnavailable, and the assignments are the scheduler's.
 	//
 	// +k8s:optional
-	Status        *WorkerStatus `protobuf:"bytes,12,opt,name=status,proto3" json:"status,omitempty"`
+	Status        *WorkerStatus `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7392,13 +7385,6 @@ func (x *Worker) GetWorkerSpiffeId() string {
 	return ""
 }
 
-func (x *Worker) GetSandboxClass() string {
-	if x != nil {
-		return x.SandboxClass
-	}
-	return ""
-}
-
 func (x *Worker) GetLabels() map[string]string {
 	if x != nil {
 		return x.Labels
@@ -7452,7 +7438,8 @@ type WorkerStatus struct {
 	ObservedEpoch int64 `protobuf:"varint,4,opt,name=observed_epoch,json=observedEpoch,proto3" json:"observed_epoch,omitempty"`
 	// Runtime that new and cold-booted actors start under, as reported by the
 	// Worker at registration. Snapshots matching default_runtime can also
-	// warm-boot on this worker.
+	// warm-boot on this worker. Its sandbox_class is the Worker's class, fixed
+	// by the first RegisterWorker call.
 	//
 	// +k8s:optional
 	DefaultRuntime *SandboxRuntime `protobuf:"bytes,5,opt,name=default_runtime,json=defaultRuntime,proto3" json:"default_runtime,omitempty"`
@@ -7935,7 +7922,9 @@ type RegisterWorkerRequest struct {
 	Capacity *WorkerResources `protobuf:"bytes,2,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	// Runtime that new and cold-booted actors start under.
 	// Snapshots matching default_runtime can also warm-boot on this worker.
-	// Like capacity, this replaces what is recorded on the Worker.
+	// The first registration fixes the Worker's sandbox_class; later reports
+	// replace version and compatibility attributes, but a different
+	// sandbox_class is refused.
 	//
 	// +k8s:required
 	DefaultRuntime *SandboxRuntime `protobuf:"bytes,3,opt,name=default_runtime,json=defaultRuntime,proto3" json:"default_runtime,omitempty"`
@@ -9945,7 +9934,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\aoptions\x18\x02 \x01(\v2\x13.ateapi.ListOptionsR\aoptions\"c\n" +
 	"\x12ListActorsResponse\x12%\n" +
 	"\x06actors\x18\x01 \x03(\v2\r.ateapi.ActorR\x06actors\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x91\x04\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xec\x03\n" +
 	"\x06Worker\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12)\n" +
 	"\x10worker_namespace\x18\x02 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -9956,12 +9945,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0eworker_pod_uid\x18\x05 \x01(\tR\fworkerPodUid\x12\x1b\n" +
 	"\tnode_name\x18\x06 \x01(\tR\bnodeName\x12\x10\n" +
 	"\x03ips\x18\a \x03(\tR\x03ips\x12(\n" +
-	"\x10worker_spiffe_id\x18\b \x01(\tR\x0eworkerSpiffeId\x12#\n" +
-	"\rsandbox_class\x18\t \x01(\tR\fsandboxClass\x122\n" +
-	"\x06labels\x18\n" +
-	" \x03(\v2\x1a.ateapi.Worker.LabelsEntryR\x06labels\x12\x14\n" +
-	"\x05epoch\x18\v \x01(\x03R\x05epoch\x12,\n" +
-	"\x06status\x18\f \x01(\v2\x14.ateapi.WorkerStatusR\x06status\x1a9\n" +
+	"\x10worker_spiffe_id\x18\b \x01(\tR\x0eworkerSpiffeId\x122\n" +
+	"\x06labels\x18\t \x03(\v2\x1a.ateapi.Worker.LabelsEntryR\x06labels\x12\x14\n" +
+	"\x05epoch\x18\n" +
+	" \x01(\x03R\x05epoch\x12,\n" +
+	"\x06status\x18\v \x01(\v2\x14.ateapi.WorkerStatusR\x06status\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x0f\x82\xb5\x18\v\x18\x02\"\aWorkers\"\xd6\x02\n" +

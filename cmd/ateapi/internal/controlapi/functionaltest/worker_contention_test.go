@@ -188,7 +188,7 @@ func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int
 			CpuMillicores: int64(actors) * 1000, MemoryBytes: int64(actors) * 512 << 20,
 		}
 		if toUpdate.Status.DefaultRuntime == nil {
-			toUpdate.Status.DefaultRuntime = defaultWorkerRuntime(toUpdate.GetSandboxClass())
+			toUpdate.Status.DefaultRuntime = defaultWorkerRuntime("gvisor")
 		}
 		return nil
 	}); err != nil {

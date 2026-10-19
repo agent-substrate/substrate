@@ -232,7 +232,7 @@ func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Acto
 		return "", nil, fmt.Errorf("while getting worker to release: %w", err)
 	}
 
-	sandboxClass := worker.GetSandboxClass()
+	sandboxClass := worker.GetStatus().GetDefaultRuntime().GetSandboxClass()
 	// Release only this actor's assignment; the worker may be hosting others,
 	// and they are unaffected by this one crashing. A worker that is no longer
 	// hosting it has already been released.

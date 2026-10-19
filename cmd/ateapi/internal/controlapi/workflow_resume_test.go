@@ -206,7 +206,6 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    testWorkerUID("pod-1"),
-		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
@@ -269,7 +268,6 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		WorkerPod:       "stale-pod",
 		WorkerPodUid:    testWorkerUID("stale-pod"),
 		NodeName:        "node-1",
-		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
@@ -283,7 +281,6 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		WorkerPod:       "free-pod",
 		WorkerPodUid:    testWorkerUID("free-pod"),
 		NodeName:        "node-1",
-		SandboxClass:    "gvisor",
 		Labels:          map[string]string{"pool": "b"},
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
@@ -345,7 +342,6 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		WorkerPod:       "contested-pod",
 		WorkerPodUid:    testWorkerUID("contested-pod"),
 		NodeName:        "node-1",
-		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
@@ -359,7 +355,6 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		WorkerPod:       "fallback-pod",
 		WorkerPodUid:    testWorkerUID("fallback-pod"),
 		NodeName:        "node-1",
-		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
@@ -455,7 +450,6 @@ func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Inte
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    testWorkerUID("pod-1"),
 		NodeName:        "node-1",
-		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
@@ -770,15 +764,14 @@ func TestValidateAssignedWorker(t *testing.T) {
 		Capacity:       &ateapipb.WorkerResources{Actors: 1},
 		DefaultRuntime: testSandboxRuntime(),
 	}
-	drainingStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING, Capacity: &ateapipb.WorkerResources{Actors: 1}}
-	unavailableStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE, Capacity: &ateapipb.WorkerResources{Actors: 1}}
+	drainingStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING, Capacity: &ateapipb.WorkerResources{Actors: 1}, DefaultRuntime: testSandboxRuntime()}
+	unavailableStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE, Capacity: &ateapipb.WorkerResources{Actors: 1}, DefaultRuntime: testSandboxRuntime()}
 
 	tests := []struct {
 		name string
 		// workerStatus is the stored worker's status, nil for a worker that
 		// is gone.
 		workerStatus *ateapipb.WorkerStatus
-		sandboxClass string
 		tmplSelector map[string]string
 		assignment   *ateapipb.ActorAssignment
 		// wantCode is codes.OK when validateAssignedWorker must return nil.
@@ -801,7 +794,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 		{
 			name:             "crashes actor and leaves worker untouched when worker is draining",
 			workerStatus:     drainingStatus,
-			sandboxClass:     "gvisor",
 			assignment:       ownAssignment,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
@@ -811,7 +803,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 		{
 			name:           "leaves actor and worker untouched when worker is unavailable",
 			workerStatus:   unavailableStatus,
-			sandboxClass:   "gvisor",
 			assignment:     ownAssignment,
 			wantCode:       codes.Unavailable,
 			wantActorState: ateapipb.ActorState_ACTOR_STATE_RESUMING,
@@ -820,7 +811,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 		{
 			name:             "crashes actor and leaves worker untouched when assigned to another actor",
 			workerStatus:     activeStatus,
-			sandboxClass:     "gvisor",
 			assignment:       otherAssignment,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
@@ -830,7 +820,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 		{
 			name:             "crashes actor and leaves worker untouched when assigned to previous incarnation of same actor",
 			workerStatus:     activeStatus,
-			sandboxClass:     "gvisor",
 			assignment:       staleIncarnationAssignment,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
@@ -840,7 +829,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 		{
 			name:             "crashes actor and leaves worker untouched when assignment is cleared",
 			workerStatus:     activeStatus,
-			sandboxClass:     "gvisor",
 			assignment:       nil,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
@@ -850,7 +838,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 		{
 			name:           "passes for own eligible worker",
 			workerStatus:   activeStatus,
-			sandboxClass:   "gvisor",
 			assignment:     ownAssignment,
 			wantCode:       codes.OK,
 			wantActorState: ateapipb.ActorState_ACTOR_STATE_RESUMING,
@@ -859,7 +846,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 		{
 			name:             "releases own ineligible worker and crashes actor",
 			workerStatus:     activeStatus,
-			sandboxClass:     "gvisor",
 			tmplSelector:     map[string]string{"pool": "other"},
 			assignment:       ownAssignment,
 			wantCode:         codes.Aborted,
@@ -883,7 +869,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 					WorkerPool:      "pool",
 					WorkerPod:       "pod-1",
 					WorkerPodUid:    testWorkerUID("pod-1"),
-					SandboxClass:    tt.sandboxClass,
 					Status:          tt.workerStatus,
 				}); err != nil {
 					t.Fatalf("CreateWorker: %v", err)
@@ -2199,7 +2184,6 @@ func contendedWorker(podName string) *ateapipb.Worker {
 		WorkerPod:       podName,
 		WorkerPodUid:    testWorkerUID(podName),
 		NodeName:        "node-1",
-		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
@@ -2505,7 +2489,6 @@ func seedRuntimeWorker(t *testing.T, ctx context.Context, st store.Interface, po
 		WorkerPool:      "pool",
 		WorkerPod:       pod,
 		WorkerPodUid:    testWorkerUID(pod),
-		SandboxClass:    "gvisor",
 		NodeName:        node,
 		Status: &ateapipb.WorkerStatus{
 			State:              ateapipb.WorkerState_WORKER_STATE_ACTIVE,
@@ -2539,7 +2522,6 @@ func seedMicroVMWorker(t *testing.T, ctx context.Context, st store.Interface, po
 		WorkerPool:      "vm-pool",
 		WorkerPod:       pod,
 		WorkerPodUid:    testWorkerUID(pod),
-		SandboxClass:    "microvm",
 		NodeName:        node,
 		Status: &ateapipb.WorkerStatus{
 			State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
@@ -3004,7 +2986,6 @@ func seedVolumeAssignFixture(t *testing.T, ctx context.Context, persistence stor
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    testWorkerUID("pod-1"),
 		NodeName:        node,
-		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},

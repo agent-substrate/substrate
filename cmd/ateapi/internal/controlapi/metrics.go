@@ -98,11 +98,11 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		}
 		for _, w := range ws {
 			state := workerState(w)
-			// CreateWorker accepts an empty class, as the field is optional.
-			// Report it as unknown, not as the pool's class: the scheduler puts
-			// no actor on a worker that offers no class, thus the pool's series
-			// must not count it as free capacity.
-			class := ateattr.NormalizeSandboxClass(w.GetSandboxClass())
+			// A Worker has no default_runtime until its worker registers with
+			// WorkerService. Report it as unknown, not as the pool's class: the
+			// scheduler puts no actor on a worker that offers no class, thus
+			// the pool's series must not count it as free capacity.
+			class := ateattr.NormalizeSandboxClass(w.GetStatus().GetDefaultRuntime().GetSandboxClass())
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, class}]++
 		}
 		for k, n := range tally {

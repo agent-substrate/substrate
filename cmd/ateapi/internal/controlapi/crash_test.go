@@ -567,8 +567,9 @@ func TestCrashActor_Metrics(t *testing.T) {
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    "pod-uid-1",
-		SandboxClass:    "gvisor",
-		Status:          &ateapipb.WorkerStatus{},
+		Status: &ateapipb.WorkerStatus{
+			DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+		},
 	}
 	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker: %v", err)

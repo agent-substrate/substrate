@@ -154,7 +154,7 @@ func filterWorkers(ctx context.Context, actors ActorLister, workers []*ateapipb.
 		if labelSel != nil && !labelSel.Matches(labels.Set(w.GetLabels())) {
 			continue
 		}
-		if sandboxClass != "" && w.GetSandboxClass() != sandboxClass {
+		if sandboxClass != "" && w.GetStatus().GetDefaultRuntime().GetSandboxClass() != sandboxClass {
 			continue
 		}
 		filtered = append(filtered, w)
@@ -332,7 +332,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 		items = append(items, &printer.WorkerTopItem{
 			Pod:       podName,
 			Pool:      pool,
-			Class:     w.GetSandboxClass(),
+			Class:     w.GetStatus().GetDefaultRuntime().GetSandboxClass(),
 			Status:    printer.WorkerOccupancy(w),
 			CPU:       cpuStr,
 			Memory:    memStr,
