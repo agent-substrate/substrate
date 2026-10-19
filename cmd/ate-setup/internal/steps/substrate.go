@@ -167,11 +167,8 @@ func (e *Env) DeleteSubstrateDemo(ctx context.Context, refs []resources.ActorTem
 			}
 			actorRef := resources.ActorRefFromActor(actor)
 			log.Stepf("  deleting actor %s/%s", actorRef.Atespace, actorRef.Name)
-			// AnyState skips the SUSPENDED precondition: teardown discards the
-			// actor, so there is nothing to be gained by suspending it first.
 			if _, err := client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-				Actor:    actorRef.ToObjectRef(),
-				AnyState: true,
+				Actor: actorRef.ToObjectRef(),
 			}); err != nil {
 				log.Warnf("while deleting actor %s/%s: %v", actorRef.Atespace, actorRef.Name, err)
 			}

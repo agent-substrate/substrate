@@ -164,8 +164,9 @@ const (
 	// detach-delay, atelet detaches it: it uploads the latest local snapshot
 	// unless that is durable already, then deletes all the local snapshots.
 	//
-	// atelet never uploads or detaches a snapshot it cannot make durable, such
-	// as one without `snapshot.object`.
+	// atelet reports the actor's state with
+	// WorkerService.ReportActorSnapshotState once such an upload makes a newer
+	// snapshot durable, and once such a detach has deleted the local snapshots.
 	UploadMode_UPLOAD_MODE_DEFERRED UploadMode = 1
 	// Upload the snapshot synchronously before Checkpoint returns, and keep a
 	// local copy if atelet can: failing to store it does not fail the
@@ -811,6 +812,122 @@ func (*RequestActorSuspendResponse) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{9}
 }
 
+type ReportActorCrashedRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The actor the calling worker is hosting, as for RequestActorSuspend.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	ActorAtespace string `protobuf:"bytes,1,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-uuid
+	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// What the worker saw, e.g. how the sandbox exited.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096
+	Message       string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportActorCrashedRequest) Reset() {
+	*x = ReportActorCrashedRequest{}
+	mi := &file_atelet_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportActorCrashedRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportActorCrashedRequest) ProtoMessage() {}
+
+func (x *ReportActorCrashedRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_atelet_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportActorCrashedRequest.ProtoReflect.Descriptor instead.
+func (*ReportActorCrashedRequest) Descriptor() ([]byte, []int) {
+	return file_atelet_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ReportActorCrashedRequest) GetActorAtespace() string {
+	if x != nil {
+		return x.ActorAtespace
+	}
+	return ""
+}
+
+func (x *ReportActorCrashedRequest) GetActorName() string {
+	if x != nil {
+		return x.ActorName
+	}
+	return ""
+}
+
+func (x *ReportActorCrashedRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+func (x *ReportActorCrashedRequest) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+type ReportActorCrashedResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportActorCrashedResponse) Reset() {
+	*x = ReportActorCrashedResponse{}
+	mi := &file_atelet_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportActorCrashedResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportActorCrashedResponse) ProtoMessage() {}
+
+func (x *ReportActorCrashedResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_atelet_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportActorCrashedResponse.ProtoReflect.Descriptor instead.
+func (*ReportActorCrashedResponse) Descriptor() ([]byte, []int) {
+	return file_atelet_proto_rawDescGZIP(), []int{11}
+}
+
 type GetActorEgressPolicyRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor the calling worker is hosting. atelet reads its policy from the
@@ -828,7 +945,7 @@ type GetActorEgressPolicyRequest struct {
 
 func (x *GetActorEgressPolicyRequest) Reset() {
 	*x = GetActorEgressPolicyRequest{}
-	mi := &file_atelet_proto_msgTypes[10]
+	mi := &file_atelet_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -840,7 +957,7 @@ func (x *GetActorEgressPolicyRequest) String() string {
 func (*GetActorEgressPolicyRequest) ProtoMessage() {}
 
 func (x *GetActorEgressPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[10]
+	mi := &file_atelet_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -853,7 +970,7 @@ func (x *GetActorEgressPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActorEgressPolicyRequest.ProtoReflect.Descriptor instead.
 func (*GetActorEgressPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{10}
+	return file_atelet_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetActorEgressPolicyRequest) GetActorAtespace() string {
@@ -881,7 +998,7 @@ type GetActorEgressPolicyResponse struct {
 
 func (x *GetActorEgressPolicyResponse) Reset() {
 	*x = GetActorEgressPolicyResponse{}
-	mi := &file_atelet_proto_msgTypes[11]
+	mi := &file_atelet_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -893,7 +1010,7 @@ func (x *GetActorEgressPolicyResponse) String() string {
 func (*GetActorEgressPolicyResponse) ProtoMessage() {}
 
 func (x *GetActorEgressPolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[11]
+	mi := &file_atelet_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -906,7 +1023,7 @@ func (x *GetActorEgressPolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActorEgressPolicyResponse.ProtoReflect.Descriptor instead.
 func (*GetActorEgressPolicyResponse) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{11}
+	return file_atelet_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetActorEgressPolicyResponse) GetEgressPolicy() *EgressPolicy {
@@ -930,7 +1047,7 @@ type EgressPolicy struct {
 
 func (x *EgressPolicy) Reset() {
 	*x = EgressPolicy{}
-	mi := &file_atelet_proto_msgTypes[12]
+	mi := &file_atelet_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -942,7 +1059,7 @@ func (x *EgressPolicy) String() string {
 func (*EgressPolicy) ProtoMessage() {}
 
 func (x *EgressPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[12]
+	mi := &file_atelet_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -955,7 +1072,7 @@ func (x *EgressPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EgressPolicy.ProtoReflect.Descriptor instead.
 func (*EgressPolicy) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{12}
+	return file_atelet_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *EgressPolicy) GetRules() []*EgressRule {
@@ -982,7 +1099,7 @@ type EgressRule struct {
 
 func (x *EgressRule) Reset() {
 	*x = EgressRule{}
-	mi := &file_atelet_proto_msgTypes[13]
+	mi := &file_atelet_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -994,7 +1111,7 @@ func (x *EgressRule) String() string {
 func (*EgressRule) ProtoMessage() {}
 
 func (x *EgressRule) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[13]
+	mi := &file_atelet_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1007,7 +1124,7 @@ func (x *EgressRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EgressRule.ProtoReflect.Descriptor instead.
 func (*EgressRule) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{13}
+	return file_atelet_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *EgressRule) GetHttp() *EgressDestinations {
@@ -1045,7 +1162,7 @@ type EgressDestinations struct {
 
 func (x *EgressDestinations) Reset() {
 	*x = EgressDestinations{}
-	mi := &file_atelet_proto_msgTypes[14]
+	mi := &file_atelet_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1057,7 +1174,7 @@ func (x *EgressDestinations) String() string {
 func (*EgressDestinations) ProtoMessage() {}
 
 func (x *EgressDestinations) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[14]
+	mi := &file_atelet_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1070,7 +1187,7 @@ func (x *EgressDestinations) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EgressDestinations.ProtoReflect.Descriptor instead.
 func (*EgressDestinations) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{14}
+	return file_atelet_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *EgressDestinations) GetHostnames() []string {
@@ -1101,7 +1218,7 @@ type EgressPorts struct {
 
 func (x *EgressPorts) Reset() {
 	*x = EgressPorts{}
-	mi := &file_atelet_proto_msgTypes[15]
+	mi := &file_atelet_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1113,7 +1230,7 @@ func (x *EgressPorts) String() string {
 func (*EgressPorts) ProtoMessage() {}
 
 func (x *EgressPorts) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[15]
+	mi := &file_atelet_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1126,7 +1243,7 @@ func (x *EgressPorts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EgressPorts.ProtoReflect.Descriptor instead.
 func (*EgressPorts) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{15}
+	return file_atelet_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *EgressPorts) GetAll() *EgressAllPorts {
@@ -1152,7 +1269,7 @@ type EgressAllPorts struct {
 
 func (x *EgressAllPorts) Reset() {
 	*x = EgressAllPorts{}
-	mi := &file_atelet_proto_msgTypes[16]
+	mi := &file_atelet_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1164,7 +1281,7 @@ func (x *EgressAllPorts) String() string {
 func (*EgressAllPorts) ProtoMessage() {}
 
 func (x *EgressAllPorts) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[16]
+	mi := &file_atelet_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1177,7 +1294,7 @@ func (x *EgressAllPorts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EgressAllPorts.ProtoReflect.Descriptor instead.
 func (*EgressAllPorts) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{16}
+	return file_atelet_proto_rawDescGZIP(), []int{18}
 }
 
 type MintActorCertificateRequest struct {
@@ -1186,29 +1303,29 @@ type MintActorCertificateRequest struct {
 	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	ActorAtespace string `protobuf:"bytes,3,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
+	ActorAtespace string `protobuf:"bytes,1,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	ActorName string `protobuf:"bytes,4,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	// The UID of the actor --- used to guard against deletion and recreation of
 	// an actor with the same name.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-uuid
-	ActorUid string `protobuf:"bytes,5,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// DER-encoded PKCS #10 certificate signing request. Atunnel retains the
 	// corresponding private key.
 	//
 	// +k8s:required
 	// +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
-	CertificateSigningRequest []byte `protobuf:"bytes,1,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
+	CertificateSigningRequest []byte `protobuf:"bytes,4,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *MintActorCertificateRequest) Reset() {
 	*x = MintActorCertificateRequest{}
-	mi := &file_atelet_proto_msgTypes[17]
+	mi := &file_atelet_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1220,7 +1337,7 @@ func (x *MintActorCertificateRequest) String() string {
 func (*MintActorCertificateRequest) ProtoMessage() {}
 
 func (x *MintActorCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[17]
+	mi := &file_atelet_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1233,7 +1350,7 @@ func (x *MintActorCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintActorCertificateRequest.ProtoReflect.Descriptor instead.
 func (*MintActorCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{17}
+	return file_atelet_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *MintActorCertificateRequest) GetActorAtespace() string {
@@ -1274,7 +1391,7 @@ type MintActorCertificateResponse struct {
 
 func (x *MintActorCertificateResponse) Reset() {
 	*x = MintActorCertificateResponse{}
-	mi := &file_atelet_proto_msgTypes[18]
+	mi := &file_atelet_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1286,7 +1403,7 @@ func (x *MintActorCertificateResponse) String() string {
 func (*MintActorCertificateResponse) ProtoMessage() {}
 
 func (x *MintActorCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[18]
+	mi := &file_atelet_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1299,7 +1416,7 @@ func (x *MintActorCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintActorCertificateResponse.ProtoReflect.Descriptor instead.
 func (*MintActorCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{18}
+	return file_atelet_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *MintActorCertificateResponse) GetActorCertificates() [][]byte {
@@ -1345,7 +1462,7 @@ type TerminateRequest struct {
 
 func (x *TerminateRequest) Reset() {
 	*x = TerminateRequest{}
-	mi := &file_atelet_proto_msgTypes[19]
+	mi := &file_atelet_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1357,7 +1474,7 @@ func (x *TerminateRequest) String() string {
 func (*TerminateRequest) ProtoMessage() {}
 
 func (x *TerminateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[19]
+	mi := &file_atelet_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1370,7 +1487,7 @@ func (x *TerminateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateRequest.ProtoReflect.Descriptor instead.
 func (*TerminateRequest) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{19}
+	return file_atelet_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *TerminateRequest) GetWorkerPodUid() string {
@@ -1430,7 +1547,7 @@ type TerminateResponse struct {
 
 func (x *TerminateResponse) Reset() {
 	*x = TerminateResponse{}
-	mi := &file_atelet_proto_msgTypes[20]
+	mi := &file_atelet_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1442,7 +1559,7 @@ func (x *TerminateResponse) String() string {
 func (*TerminateResponse) ProtoMessage() {}
 
 func (x *TerminateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[20]
+	mi := &file_atelet_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1455,7 +1572,7 @@ func (x *TerminateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateResponse.ProtoReflect.Descriptor instead.
 func (*TerminateResponse) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{20}
+	return file_atelet_proto_rawDescGZIP(), []int{22}
 }
 
 type RunRequest struct {
@@ -1520,7 +1637,7 @@ type RunRequest struct {
 
 func (x *RunRequest) Reset() {
 	*x = RunRequest{}
-	mi := &file_atelet_proto_msgTypes[21]
+	mi := &file_atelet_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1532,7 +1649,7 @@ func (x *RunRequest) String() string {
 func (*RunRequest) ProtoMessage() {}
 
 func (x *RunRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[21]
+	mi := &file_atelet_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1545,7 +1662,7 @@ func (x *RunRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunRequest.ProtoReflect.Descriptor instead.
 func (*RunRequest) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{21}
+	return file_atelet_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *RunRequest) GetWorkerPodUid() string {
@@ -1648,7 +1765,7 @@ type EgressGateway struct {
 
 func (x *EgressGateway) Reset() {
 	*x = EgressGateway{}
-	mi := &file_atelet_proto_msgTypes[22]
+	mi := &file_atelet_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1660,7 +1777,7 @@ func (x *EgressGateway) String() string {
 func (*EgressGateway) ProtoMessage() {}
 
 func (x *EgressGateway) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[22]
+	mi := &file_atelet_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1673,7 +1790,7 @@ func (x *EgressGateway) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EgressGateway.ProtoReflect.Descriptor instead.
 func (*EgressGateway) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{22}
+	return file_atelet_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *EgressGateway) GetAddress() string {
@@ -1708,7 +1825,7 @@ type AssetFile struct {
 
 func (x *AssetFile) Reset() {
 	*x = AssetFile{}
-	mi := &file_atelet_proto_msgTypes[23]
+	mi := &file_atelet_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1720,7 +1837,7 @@ func (x *AssetFile) String() string {
 func (*AssetFile) ProtoMessage() {}
 
 func (x *AssetFile) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[23]
+	mi := &file_atelet_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1733,7 +1850,7 @@ func (x *AssetFile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssetFile.ProtoReflect.Descriptor instead.
 func (*AssetFile) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{23}
+	return file_atelet_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AssetFile) GetUrl() string {
@@ -1764,7 +1881,7 @@ type ArchAssets struct {
 
 func (x *ArchAssets) Reset() {
 	*x = ArchAssets{}
-	mi := &file_atelet_proto_msgTypes[24]
+	mi := &file_atelet_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1776,7 +1893,7 @@ func (x *ArchAssets) String() string {
 func (*ArchAssets) ProtoMessage() {}
 
 func (x *ArchAssets) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[24]
+	mi := &file_atelet_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1789,7 +1906,7 @@ func (x *ArchAssets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchAssets.ProtoReflect.Descriptor instead.
 func (*ArchAssets) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{24}
+	return file_atelet_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ArchAssets) GetFiles() map[string]*AssetFile {
@@ -1830,7 +1947,7 @@ type SandboxAssets struct {
 
 func (x *SandboxAssets) Reset() {
 	*x = SandboxAssets{}
-	mi := &file_atelet_proto_msgTypes[25]
+	mi := &file_atelet_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1842,7 +1959,7 @@ func (x *SandboxAssets) String() string {
 func (*SandboxAssets) ProtoMessage() {}
 
 func (x *SandboxAssets) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[25]
+	mi := &file_atelet_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1855,7 +1972,7 @@ func (x *SandboxAssets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxAssets.ProtoReflect.Descriptor instead.
 func (*SandboxAssets) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{25}
+	return file_atelet_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SandboxAssets) GetSandboxClass() string {
@@ -1900,7 +2017,7 @@ type WorkloadSpec struct {
 
 func (x *WorkloadSpec) Reset() {
 	*x = WorkloadSpec{}
-	mi := &file_atelet_proto_msgTypes[26]
+	mi := &file_atelet_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1912,7 +2029,7 @@ func (x *WorkloadSpec) String() string {
 func (*WorkloadSpec) ProtoMessage() {}
 
 func (x *WorkloadSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[26]
+	mi := &file_atelet_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1925,7 +2042,7 @@ func (x *WorkloadSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkloadSpec.ProtoReflect.Descriptor instead.
 func (*WorkloadSpec) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{26}
+	return file_atelet_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *WorkloadSpec) GetContainers() []*Container {
@@ -1950,7 +2067,7 @@ type DurableDirVolumeSource struct {
 
 func (x *DurableDirVolumeSource) Reset() {
 	*x = DurableDirVolumeSource{}
-	mi := &file_atelet_proto_msgTypes[27]
+	mi := &file_atelet_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1962,7 +2079,7 @@ func (x *DurableDirVolumeSource) String() string {
 func (*DurableDirVolumeSource) ProtoMessage() {}
 
 func (x *DurableDirVolumeSource) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[27]
+	mi := &file_atelet_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1975,7 +2092,7 @@ func (x *DurableDirVolumeSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DurableDirVolumeSource.ProtoReflect.Descriptor instead.
 func (*DurableDirVolumeSource) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{27}
+	return file_atelet_proto_rawDescGZIP(), []int{29}
 }
 
 type ExternalVolumeSource struct {
@@ -1984,11 +2101,11 @@ type ExternalVolumeSource struct {
 	// sends volumes that finished provisioning.
 	//
 	// +k8s:required
-	// +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+	// +k8s:maxLength=256 # matches ExternalVolumeStatus.storage_volume_id's bound
 	// +k8s:customValidation # no control characters
 	StorageVolumeId string `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// +k8s:optional
-	// +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+	// +k8s:maxLength=253 # matches ExternalVolumeStatus.volume_type's bound
 	// +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
 	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// volume_context is the driver's provisioning metadata. Its entries are the
@@ -2009,7 +2126,7 @@ type ExternalVolumeSource struct {
 
 func (x *ExternalVolumeSource) Reset() {
 	*x = ExternalVolumeSource{}
-	mi := &file_atelet_proto_msgTypes[28]
+	mi := &file_atelet_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2021,7 +2138,7 @@ func (x *ExternalVolumeSource) String() string {
 func (*ExternalVolumeSource) ProtoMessage() {}
 
 func (x *ExternalVolumeSource) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[28]
+	mi := &file_atelet_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2034,7 +2151,7 @@ func (x *ExternalVolumeSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExternalVolumeSource.ProtoReflect.Descriptor instead.
 func (*ExternalVolumeSource) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{28}
+	return file_atelet_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ExternalVolumeSource) GetStorageVolumeId() string {
@@ -2079,7 +2196,7 @@ type ImageVolumeSource struct {
 
 func (x *ImageVolumeSource) Reset() {
 	*x = ImageVolumeSource{}
-	mi := &file_atelet_proto_msgTypes[29]
+	mi := &file_atelet_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2091,7 +2208,7 @@ func (x *ImageVolumeSource) String() string {
 func (*ImageVolumeSource) ProtoMessage() {}
 
 func (x *ImageVolumeSource) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[29]
+	mi := &file_atelet_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2104,7 +2221,7 @@ func (x *ImageVolumeSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImageVolumeSource.ProtoReflect.Descriptor instead.
 func (*ImageVolumeSource) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{29}
+	return file_atelet_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ImageVolumeSource) GetReference() string {
@@ -2136,7 +2253,7 @@ type ActorMetadataItem struct {
 
 func (x *ActorMetadataItem) Reset() {
 	*x = ActorMetadataItem{}
-	mi := &file_atelet_proto_msgTypes[30]
+	mi := &file_atelet_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2148,7 +2265,7 @@ func (x *ActorMetadataItem) String() string {
 func (*ActorMetadataItem) ProtoMessage() {}
 
 func (x *ActorMetadataItem) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[30]
+	mi := &file_atelet_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2161,7 +2278,7 @@ func (x *ActorMetadataItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActorMetadataItem.ProtoReflect.Descriptor instead.
 func (*ActorMetadataItem) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{30}
+	return file_atelet_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ActorMetadataItem) GetField() ActorMetadataField {
@@ -2197,7 +2314,7 @@ type ActorMetadataDataSource struct {
 
 func (x *ActorMetadataDataSource) Reset() {
 	*x = ActorMetadataDataSource{}
-	mi := &file_atelet_proto_msgTypes[31]
+	mi := &file_atelet_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2209,7 +2326,7 @@ func (x *ActorMetadataDataSource) String() string {
 func (*ActorMetadataDataSource) ProtoMessage() {}
 
 func (x *ActorMetadataDataSource) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[31]
+	mi := &file_atelet_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2222,7 +2339,7 @@ func (x *ActorMetadataDataSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActorMetadataDataSource.ProtoReflect.Descriptor instead.
 func (*ActorMetadataDataSource) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{31}
+	return file_atelet_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ActorMetadataDataSource) GetItems() []*ActorMetadataItem {
@@ -2249,14 +2366,14 @@ type TrustBundleDataSource struct {
 	// +k8s:listType=set
 	// +k8s:eachVal=+k8s:minLength=1
 	// +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
-	Names         []string `protobuf:"bytes,3,rep,name=names,proto3" json:"names,omitempty"`
+	Names         []string `protobuf:"bytes,2,rep,name=names,proto3" json:"names,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TrustBundleDataSource) Reset() {
 	*x = TrustBundleDataSource{}
-	mi := &file_atelet_proto_msgTypes[32]
+	mi := &file_atelet_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2268,7 +2385,7 @@ func (x *TrustBundleDataSource) String() string {
 func (*TrustBundleDataSource) ProtoMessage() {}
 
 func (x *TrustBundleDataSource) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[32]
+	mi := &file_atelet_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2281,7 +2398,7 @@ func (x *TrustBundleDataSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrustBundleDataSource.ProtoReflect.Descriptor instead.
 func (*TrustBundleDataSource) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{32}
+	return file_atelet_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *TrustBundleDataSource) GetPath() string {
@@ -2316,7 +2433,7 @@ type SystemInfoDataSource struct {
 
 func (x *SystemInfoDataSource) Reset() {
 	*x = SystemInfoDataSource{}
-	mi := &file_atelet_proto_msgTypes[33]
+	mi := &file_atelet_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2328,7 +2445,7 @@ func (x *SystemInfoDataSource) String() string {
 func (*SystemInfoDataSource) ProtoMessage() {}
 
 func (x *SystemInfoDataSource) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[33]
+	mi := &file_atelet_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2341,7 +2458,7 @@ func (x *SystemInfoDataSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SystemInfoDataSource.ProtoReflect.Descriptor instead.
 func (*SystemInfoDataSource) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{33}
+	return file_atelet_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *SystemInfoDataSource) GetActorMetadata() *ActorMetadataDataSource {
@@ -2374,7 +2491,7 @@ type SystemInfoVolumeSource struct {
 
 func (x *SystemInfoVolumeSource) Reset() {
 	*x = SystemInfoVolumeSource{}
-	mi := &file_atelet_proto_msgTypes[34]
+	mi := &file_atelet_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2386,7 +2503,7 @@ func (x *SystemInfoVolumeSource) String() string {
 func (*SystemInfoVolumeSource) ProtoMessage() {}
 
 func (x *SystemInfoVolumeSource) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[34]
+	mi := &file_atelet_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2399,7 +2516,7 @@ func (x *SystemInfoVolumeSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SystemInfoVolumeSource.ProtoReflect.Descriptor instead.
 func (*SystemInfoVolumeSource) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{34}
+	return file_atelet_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SystemInfoVolumeSource) GetDataSources() []*SystemInfoDataSource {
@@ -2435,7 +2552,7 @@ type Volume struct {
 
 func (x *Volume) Reset() {
 	*x = Volume{}
-	mi := &file_atelet_proto_msgTypes[35]
+	mi := &file_atelet_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2447,7 +2564,7 @@ func (x *Volume) String() string {
 func (*Volume) ProtoMessage() {}
 
 func (x *Volume) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[35]
+	mi := &file_atelet_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2460,7 +2577,7 @@ func (x *Volume) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Volume.ProtoReflect.Descriptor instead.
 func (*Volume) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{35}
+	return file_atelet_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *Volume) GetName() string {
@@ -2517,7 +2634,7 @@ type VolumeMount struct {
 
 func (x *VolumeMount) Reset() {
 	*x = VolumeMount{}
-	mi := &file_atelet_proto_msgTypes[36]
+	mi := &file_atelet_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2529,7 +2646,7 @@ func (x *VolumeMount) String() string {
 func (*VolumeMount) ProtoMessage() {}
 
 func (x *VolumeMount) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[36]
+	mi := &file_atelet_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2542,7 +2659,7 @@ func (x *VolumeMount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VolumeMount.ProtoReflect.Descriptor instead.
 func (*VolumeMount) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{36}
+	return file_atelet_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *VolumeMount) GetName() string {
@@ -2607,7 +2724,7 @@ type Container struct {
 
 func (x *Container) Reset() {
 	*x = Container{}
-	mi := &file_atelet_proto_msgTypes[37]
+	mi := &file_atelet_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2619,7 +2736,7 @@ func (x *Container) String() string {
 func (*Container) ProtoMessage() {}
 
 func (x *Container) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[37]
+	mi := &file_atelet_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2632,7 +2749,7 @@ func (x *Container) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Container.ProtoReflect.Descriptor instead.
 func (*Container) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{37}
+	return file_atelet_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *Container) GetName() string {
@@ -2709,7 +2826,7 @@ type SecurityContext struct {
 
 func (x *SecurityContext) Reset() {
 	*x = SecurityContext{}
-	mi := &file_atelet_proto_msgTypes[38]
+	mi := &file_atelet_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2721,7 +2838,7 @@ func (x *SecurityContext) String() string {
 func (*SecurityContext) ProtoMessage() {}
 
 func (x *SecurityContext) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[38]
+	mi := &file_atelet_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2734,7 +2851,7 @@ func (x *SecurityContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecurityContext.ProtoReflect.Descriptor instead.
 func (*SecurityContext) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{38}
+	return file_atelet_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *SecurityContext) GetCapabilities() *Capabilities {
@@ -2764,7 +2881,7 @@ type Capabilities struct {
 
 func (x *Capabilities) Reset() {
 	*x = Capabilities{}
-	mi := &file_atelet_proto_msgTypes[39]
+	mi := &file_atelet_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2776,7 +2893,7 @@ func (x *Capabilities) String() string {
 func (*Capabilities) ProtoMessage() {}
 
 func (x *Capabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[39]
+	mi := &file_atelet_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2789,7 +2906,7 @@ func (x *Capabilities) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Capabilities.ProtoReflect.Descriptor instead.
 func (*Capabilities) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{39}
+	return file_atelet_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *Capabilities) GetAdd() []string {
@@ -2827,7 +2944,7 @@ type ResourceLimits struct {
 
 func (x *ResourceLimits) Reset() {
 	*x = ResourceLimits{}
-	mi := &file_atelet_proto_msgTypes[40]
+	mi := &file_atelet_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2839,7 +2956,7 @@ func (x *ResourceLimits) String() string {
 func (*ResourceLimits) ProtoMessage() {}
 
 func (x *ResourceLimits) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[40]
+	mi := &file_atelet_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2852,7 +2969,7 @@ func (x *ResourceLimits) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResourceLimits.ProtoReflect.Descriptor instead.
 func (*ResourceLimits) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{40}
+	return file_atelet_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *ResourceLimits) GetMemoryBytes() int64 {
@@ -2886,7 +3003,7 @@ type EnvVar struct {
 
 func (x *EnvVar) Reset() {
 	*x = EnvVar{}
-	mi := &file_atelet_proto_msgTypes[41]
+	mi := &file_atelet_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2898,7 +3015,7 @@ func (x *EnvVar) String() string {
 func (*EnvVar) ProtoMessage() {}
 
 func (x *EnvVar) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[41]
+	mi := &file_atelet_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2911,7 +3028,7 @@ func (x *EnvVar) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvVar.ProtoReflect.Descriptor instead.
 func (*EnvVar) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{41}
+	return file_atelet_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *EnvVar) GetName() string {
@@ -2946,7 +3063,7 @@ type WakeupProbe struct {
 
 func (x *WakeupProbe) Reset() {
 	*x = WakeupProbe{}
-	mi := &file_atelet_proto_msgTypes[42]
+	mi := &file_atelet_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2958,7 +3075,7 @@ func (x *WakeupProbe) String() string {
 func (*WakeupProbe) ProtoMessage() {}
 
 func (x *WakeupProbe) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[42]
+	mi := &file_atelet_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2971,7 +3088,7 @@ func (x *WakeupProbe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WakeupProbe.ProtoReflect.Descriptor instead.
 func (*WakeupProbe) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{42}
+	return file_atelet_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *WakeupProbe) GetHttpGet() *HttpGetAction {
@@ -3009,7 +3126,7 @@ type HttpGetAction struct {
 
 func (x *HttpGetAction) Reset() {
 	*x = HttpGetAction{}
-	mi := &file_atelet_proto_msgTypes[43]
+	mi := &file_atelet_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3021,7 +3138,7 @@ func (x *HttpGetAction) String() string {
 func (*HttpGetAction) ProtoMessage() {}
 
 func (x *HttpGetAction) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[43]
+	mi := &file_atelet_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3034,7 +3151,7 @@ func (x *HttpGetAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HttpGetAction.ProtoReflect.Descriptor instead.
 func (*HttpGetAction) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{43}
+	return file_atelet_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *HttpGetAction) GetPath() string {
@@ -3059,7 +3176,7 @@ type RunResponse struct {
 
 func (x *RunResponse) Reset() {
 	*x = RunResponse{}
-	mi := &file_atelet_proto_msgTypes[44]
+	mi := &file_atelet_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3071,7 +3188,7 @@ func (x *RunResponse) String() string {
 func (*RunResponse) ProtoMessage() {}
 
 func (x *RunResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[44]
+	mi := &file_atelet_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3084,7 +3201,7 @@ func (x *RunResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunResponse.ProtoReflect.Descriptor instead.
 func (*RunResponse) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{44}
+	return file_atelet_proto_rawDescGZIP(), []int{46}
 }
 
 type ObjectStorage struct {
@@ -3102,7 +3219,7 @@ type ObjectStorage struct {
 
 func (x *ObjectStorage) Reset() {
 	*x = ObjectStorage{}
-	mi := &file_atelet_proto_msgTypes[45]
+	mi := &file_atelet_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3114,7 +3231,7 @@ func (x *ObjectStorage) String() string {
 func (*ObjectStorage) ProtoMessage() {}
 
 func (x *ObjectStorage) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[45]
+	mi := &file_atelet_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3127,7 +3244,7 @@ func (x *ObjectStorage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObjectStorage.ProtoReflect.Descriptor instead.
 func (*ObjectStorage) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{45}
+	return file_atelet_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ObjectStorage) GetSnapshotUri() string {
@@ -3170,14 +3287,10 @@ type Snapshot struct {
 	// +k8s:minimum=1
 	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
 	Fidelity SnapshotFidelity `protobuf:"varint,3,opt,name=fidelity,proto3,enum=atelet.SnapshotFidelity" json:"fidelity,omitempty"`
-	// The snapshot's durable copy in object storage. Required on Checkpoint
-	// and PromoteSnapshot: atelet uploads there, or reads from there when it
-	// holds no usable local copy.
+	// The snapshot's durable copy in object storage: atelet uploads there, or
+	// reads from there when it holds no usable local copy.
 	//
-	// TODO: Temporarily, this is optional on RestoreRequest while the control
-	// plane does not set it when restoring a paused actor.
-	//
-	// +k8s:optional
+	// +k8s:required
 	Object        *ObjectStorage `protobuf:"bytes,4,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3185,7 +3298,7 @@ type Snapshot struct {
 
 func (x *Snapshot) Reset() {
 	*x = Snapshot{}
-	mi := &file_atelet_proto_msgTypes[46]
+	mi := &file_atelet_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3197,7 +3310,7 @@ func (x *Snapshot) String() string {
 func (*Snapshot) ProtoMessage() {}
 
 func (x *Snapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[46]
+	mi := &file_atelet_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3210,7 +3323,7 @@ func (x *Snapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Snapshot.ProtoReflect.Descriptor instead.
 func (*Snapshot) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{46}
+	return file_atelet_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *Snapshot) GetSnapshotUuid() string {
@@ -3257,7 +3370,7 @@ type SnapshotReport struct {
 
 func (x *SnapshotReport) Reset() {
 	*x = SnapshotReport{}
-	mi := &file_atelet_proto_msgTypes[47]
+	mi := &file_atelet_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3269,7 +3382,7 @@ func (x *SnapshotReport) String() string {
 func (*SnapshotReport) ProtoMessage() {}
 
 func (x *SnapshotReport) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[47]
+	mi := &file_atelet_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3282,7 +3395,7 @@ func (x *SnapshotReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotReport.ProtoReflect.Descriptor instead.
 func (*SnapshotReport) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{47}
+	return file_atelet_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *SnapshotReport) GetSnapshot() *Snapshot {
@@ -3338,7 +3451,7 @@ type ActorSnapshotState struct {
 
 func (x *ActorSnapshotState) Reset() {
 	*x = ActorSnapshotState{}
-	mi := &file_atelet_proto_msgTypes[48]
+	mi := &file_atelet_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3350,7 +3463,7 @@ func (x *ActorSnapshotState) String() string {
 func (*ActorSnapshotState) ProtoMessage() {}
 
 func (x *ActorSnapshotState) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[48]
+	mi := &file_atelet_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3363,7 +3476,7 @@ func (x *ActorSnapshotState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActorSnapshotState.ProtoReflect.Descriptor instead.
 func (*ActorSnapshotState) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{48}
+	return file_atelet_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ActorSnapshotState) GetLatestLocal() *SnapshotReport {
@@ -3407,7 +3520,7 @@ type UploadConfig struct {
 
 func (x *UploadConfig) Reset() {
 	*x = UploadConfig{}
-	mi := &file_atelet_proto_msgTypes[49]
+	mi := &file_atelet_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3419,7 +3532,7 @@ func (x *UploadConfig) String() string {
 func (*UploadConfig) ProtoMessage() {}
 
 func (x *UploadConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[49]
+	mi := &file_atelet_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3432,7 +3545,7 @@ func (x *UploadConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadConfig.ProtoReflect.Descriptor instead.
 func (*UploadConfig) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{49}
+	return file_atelet_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *UploadConfig) GetMode() UploadMode {
@@ -3483,7 +3596,6 @@ type CheckpointRequest struct {
 	// workload.
 	//
 	// +k8s:required
-	// +k8s:subfield(object)=+k8s:required
 	Snapshot *Snapshot `protobuf:"bytes,8,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	// When the snapshot becomes durable.
 	//
@@ -3495,7 +3607,7 @@ type CheckpointRequest struct {
 
 func (x *CheckpointRequest) Reset() {
 	*x = CheckpointRequest{}
-	mi := &file_atelet_proto_msgTypes[50]
+	mi := &file_atelet_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3507,7 +3619,7 @@ func (x *CheckpointRequest) String() string {
 func (*CheckpointRequest) ProtoMessage() {}
 
 func (x *CheckpointRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[50]
+	mi := &file_atelet_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3520,7 +3632,7 @@ func (x *CheckpointRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckpointRequest.ProtoReflect.Descriptor instead.
 func (*CheckpointRequest) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{50}
+	return file_atelet_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *CheckpointRequest) GetWorkerPodUid() string {
@@ -3594,9 +3706,9 @@ type CheckpointResponse struct {
 	// uploading ends.
 	//
 	// TODO: Add a snapshot garbage collection system for orphaned objects in
-	// object storage. atelet reports snapshot state to ateapi only on RPC
-	// responses, so a background upload superseded before the next response
-	// leaves objects ateapi never learned were durable.
+	// object storage. atelet reports a background upload only when it records
+	// a newer durable snapshot, so an upload that a newer durable snapshot
+	// superseded while it ran leaves objects ateapi never learned were durable.
 	State         *ActorSnapshotState `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3604,7 +3716,7 @@ type CheckpointResponse struct {
 
 func (x *CheckpointResponse) Reset() {
 	*x = CheckpointResponse{}
-	mi := &file_atelet_proto_msgTypes[51]
+	mi := &file_atelet_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3616,7 +3728,7 @@ func (x *CheckpointResponse) String() string {
 func (*CheckpointResponse) ProtoMessage() {}
 
 func (x *CheckpointResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[51]
+	mi := &file_atelet_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3629,7 +3741,7 @@ func (x *CheckpointResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckpointResponse.ProtoReflect.Descriptor instead.
 func (*CheckpointResponse) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{51}
+	return file_atelet_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *CheckpointResponse) GetState() *ActorSnapshotState {
@@ -3671,16 +3783,16 @@ type RestoreRequest struct {
 	// detaching the actor, it waits for the detach to finish and then reads
 	// `snapshot.object`. Fails if neither copy exists: that generation is lost.
 	//
-	// TODO: Temporarily, the control plane does not set `snapshot.object` when
-	// it restores a paused actor, so atelet has nothing to fall back to if that
-	// actor's local copy is missing or unusable.
+	// `snapshot.object` is required even while the control plane has not
+	// recorded the snapshot's upload complete: atelet may have uploaded the
+	// snapshot and detached the actor before its report of the upload landed.
 	//
 	// +k8s:required
 	Snapshot *Snapshot `protobuf:"bytes,8,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	//
 	// +k8s:optional
-	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
+	EgressGateway *EgressGateway `protobuf:"bytes,9,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. For
 	// gVisor and micro-VM VOLUMES restores the sandbox is (re)sized to these;
 	// for a MEMORY micro-VM restore the size baked into the snapshot wins. Zero
@@ -3689,15 +3801,15 @@ type RestoreRequest struct {
 	// +k8s:optional
 	// +k8s:minimum=0
 	// +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-	CpuMilli int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
+	CpuMilli int64 `protobuf:"varint,10,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"` // CPU limit in millicores (1000 = one core).
 	// +k8s:optional
 	// +k8s:minimum=0
-	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	MemoryBytes int64 `protobuf:"varint,11,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// The sandbox binaries and pause image to restore with, resolved from the
 	// assigned worker pool's SandboxConfig.
 	//
 	// +k8s:required
-	SandboxAssets *SandboxAssets `protobuf:"bytes,16,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
+	SandboxAssets *SandboxAssets `protobuf:"bytes,12,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	// The runtime the assigned worker restores this actor under, from
 	// WorkerAssignment.sandbox_runtime.
 	//
@@ -3706,14 +3818,14 @@ type RestoreRequest struct {
 	// sandbox_assets.
 	//
 	// +k8s:optional
-	SandboxRuntime *SandboxRuntime `protobuf:"bytes,17,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
+	SandboxRuntime *SandboxRuntime `protobuf:"bytes,13,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RestoreRequest) Reset() {
 	*x = RestoreRequest{}
-	mi := &file_atelet_proto_msgTypes[52]
+	mi := &file_atelet_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3725,7 +3837,7 @@ func (x *RestoreRequest) String() string {
 func (*RestoreRequest) ProtoMessage() {}
 
 func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[52]
+	mi := &file_atelet_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3738,7 +3850,7 @@ func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreRequest.ProtoReflect.Descriptor instead.
 func (*RestoreRequest) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{52}
+	return file_atelet_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *RestoreRequest) GetWorkerPodUid() string {
@@ -3840,7 +3952,7 @@ type RestoreResponse struct {
 
 func (x *RestoreResponse) Reset() {
 	*x = RestoreResponse{}
-	mi := &file_atelet_proto_msgTypes[53]
+	mi := &file_atelet_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3852,7 +3964,7 @@ func (x *RestoreResponse) String() string {
 func (*RestoreResponse) ProtoMessage() {}
 
 func (x *RestoreResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[53]
+	mi := &file_atelet_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3865,16 +3977,13 @@ func (x *RestoreResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreResponse.ProtoReflect.Descriptor instead.
 func (*RestoreResponse) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{53}
+	return file_atelet_proto_rawDescGZIP(), []int{55}
 }
 
 type PromoteSnapshotRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Golden actors are never paused, so the golden atespace is rejected.
-	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # not the golden atespace
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
@@ -3894,7 +4003,6 @@ type PromoteSnapshotRequest struct {
 	// it is, or will be, uploaded.
 	//
 	// +k8s:required
-	// +k8s:subfield(object)=+k8s:required
 	Snapshot      *Snapshot `protobuf:"bytes,6,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3902,7 +4010,7 @@ type PromoteSnapshotRequest struct {
 
 func (x *PromoteSnapshotRequest) Reset() {
 	*x = PromoteSnapshotRequest{}
-	mi := &file_atelet_proto_msgTypes[54]
+	mi := &file_atelet_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3914,7 +4022,7 @@ func (x *PromoteSnapshotRequest) String() string {
 func (*PromoteSnapshotRequest) ProtoMessage() {}
 
 func (x *PromoteSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[54]
+	mi := &file_atelet_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3927,7 +4035,7 @@ func (x *PromoteSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*PromoteSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{54}
+	return file_atelet_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *PromoteSnapshotRequest) GetAtespace() string {
@@ -3983,7 +4091,7 @@ type PromoteSnapshotResponse struct {
 
 func (x *PromoteSnapshotResponse) Reset() {
 	*x = PromoteSnapshotResponse{}
-	mi := &file_atelet_proto_msgTypes[55]
+	mi := &file_atelet_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3995,7 +4103,7 @@ func (x *PromoteSnapshotResponse) String() string {
 func (*PromoteSnapshotResponse) ProtoMessage() {}
 
 func (x *PromoteSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[55]
+	mi := &file_atelet_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4008,7 +4116,7 @@ func (x *PromoteSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*PromoteSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{55}
+	return file_atelet_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *PromoteSnapshotResponse) GetState() *ActorSnapshotState {
@@ -4037,7 +4145,7 @@ type DetachActorRequest struct {
 
 func (x *DetachActorRequest) Reset() {
 	*x = DetachActorRequest{}
-	mi := &file_atelet_proto_msgTypes[56]
+	mi := &file_atelet_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4049,7 +4157,7 @@ func (x *DetachActorRequest) String() string {
 func (*DetachActorRequest) ProtoMessage() {}
 
 func (x *DetachActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[56]
+	mi := &file_atelet_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4062,7 +4170,7 @@ func (x *DetachActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetachActorRequest.ProtoReflect.Descriptor instead.
 func (*DetachActorRequest) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{56}
+	return file_atelet_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *DetachActorRequest) GetAtespace() string {
@@ -4097,7 +4205,7 @@ type DetachActorResponse struct {
 
 func (x *DetachActorResponse) Reset() {
 	*x = DetachActorResponse{}
-	mi := &file_atelet_proto_msgTypes[57]
+	mi := &file_atelet_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4109,7 +4217,7 @@ func (x *DetachActorResponse) String() string {
 func (*DetachActorResponse) ProtoMessage() {}
 
 func (x *DetachActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_atelet_proto_msgTypes[57]
+	mi := &file_atelet_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4122,7 +4230,7 @@ func (x *DetachActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetachActorResponse.ProtoReflect.Descriptor instead.
 func (*DetachActorResponse) Descriptor() ([]byte, []int) {
-	return file_atelet_proto_rawDescGZIP(), []int{57}
+	return file_atelet_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *DetachActorResponse) GetState() *ActorSnapshotState {
@@ -4166,7 +4274,14 @@ const file_atelet_proto_rawDesc = "" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\"\x1d\n" +
-	"\x1bRequestActorSuspendResponse\"c\n" +
+	"\x1bRequestActorSuspendResponse\"\x98\x01\n" +
+	"\x19ReportActorCrashedRequest\x12%\n" +
+	"\x0eactor_atespace\x18\x01 \x01(\tR\ractorAtespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\"\x1c\n" +
+	"\x1aReportActorCrashedResponse\"c\n" +
 	"\x1bGetActorEgressPolicyRequest\x12%\n" +
 	"\x0eactor_atespace\x18\x01 \x01(\tR\ractorAtespace\x12\x1d\n" +
 	"\n" +
@@ -4188,11 +4303,11 @@ const file_atelet_proto_rawDesc = "" +
 	"\anumbers\x18\x02 \x03(\x05R\anumbers\"\x10\n" +
 	"\x0eEgressAllPorts\"\xc0\x01\n" +
 	"\x1bMintActorCertificateRequest\x12%\n" +
-	"\x0eactor_atespace\x18\x03 \x01(\tR\ractorAtespace\x12\x1d\n" +
+	"\x0eactor_atespace\x18\x01 \x01(\tR\ractorAtespace\x12\x1d\n" +
 	"\n" +
-	"actor_name\x18\x04 \x01(\tR\tactorName\x12\x1b\n" +
-	"\tactor_uid\x18\x05 \x01(\tR\bactorUid\x12>\n" +
-	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\"M\n" +
+	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12>\n" +
+	"\x1bcertificate_signing_request\x18\x04 \x01(\fR\x19certificateSigningRequest\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa2\x02\n" +
 	"\x10TerminateRequest\x12$\n" +
@@ -4266,10 +4381,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x05field\x18\x01 \x01(\x0e2\x1a.atelet.ActorMetadataFieldR\x05field\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\"J\n" +
 	"\x17ActorMetadataDataSource\x12/\n" +
-	"\x05items\x18\x01 \x03(\v2\x19.atelet.ActorMetadataItemR\x05items\"M\n" +
+	"\x05items\x18\x01 \x03(\v2\x19.atelet.ActorMetadataItemR\x05items\"A\n" +
 	"\x15TrustBundleDataSource\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
-	"\x05names\x18\x03 \x03(\tR\x05namesJ\x04\b\x02\x10\x03R\x04name\"\xa0\x01\n" +
+	"\x05names\x18\x02 \x03(\tR\x05names\"\xa0\x01\n" +
 	"\x14SystemInfoDataSource\x12F\n" +
 	"\x0eactor_metadata\x18\x01 \x01(\v2\x1f.atelet.ActorMetadataDataSourceR\ractorMetadata\x12@\n" +
 	"\ftrust_bundle\x18\x02 \x01(\v2\x1d.atelet.TrustBundleDataSourceR\vtrustBundle\"Y\n" +
@@ -4359,11 +4474,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12,\n" +
 	"\bsnapshot\x18\b \x01(\v2\x10.atelet.SnapshotR\bsnapshot\x12A\n" +
-	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
-	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
-	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12<\n" +
-	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\x12?\n" +
-	"\x0fsandbox_runtime\x18\x11 \x01(\v2\x16.atelet.SandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
+	"\x0eegress_gateway\x18\t \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
+	"\tcpu_milli\x18\n" +
+	" \x01(\x03R\bcpuMilli\x12!\n" +
+	"\fmemory_bytes\x18\v \x01(\x03R\vmemoryBytes\x12<\n" +
+	"\x0esandbox_assets\x18\f \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\x12?\n" +
+	"\x0fsandbox_runtime\x18\r \x01(\v2\x16.atelet.SandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse\"\x86\x02\n" +
 	"\x16PromoteSnapshotRequest\x12\x1a\n" +
@@ -4397,12 +4513,13 @@ const file_atelet_proto_rawDesc = "" +
 	"UploadMode\x12\x1b\n" +
 	"\x17UPLOAD_MODE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14UPLOAD_MODE_DEFERRED\x10\x01\x12\x19\n" +
-	"\x15UPLOAD_MODE_IMMEDIATE\x10\x022\x8e\x03\n" +
+	"\x15UPLOAD_MODE_IMMEDIATE\x10\x022\xed\x03\n" +
 	"\rWorkerSupport\x12c\n" +
 	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Q\n" +
 	"\x0eRegisterWorker\x12\x1d.atelet.RegisterWorkerRequest\x1a\x1e.atelet.RegisterWorkerResponse\"\x00\x12`\n" +
 	"\x13RequestActorSuspend\x12\".atelet.RequestActorSuspendRequest\x1a#.atelet.RequestActorSuspendResponse\"\x00\x12c\n" +
-	"\x14GetActorEgressPolicy\x12#.atelet.GetActorEgressPolicyRequest\x1a$.atelet.GetActorEgressPolicyResponse\"\x002\xa3\x03\n" +
+	"\x14GetActorEgressPolicy\x12#.atelet.GetActorEgressPolicyRequest\x1a$.atelet.GetActorEgressPolicyResponse\"\x00\x12]\n" +
+	"\x12ReportActorCrashed\x12!.atelet.ReportActorCrashedRequest\x1a\".atelet.ReportActorCrashedResponse\"\x002\xa3\x03\n" +
 	"\x06Atelet\x120\n" +
 	"\x03Run\x12\x12.atelet.RunRequest\x1a\x13.atelet.RunResponse\"\x00\x12E\n" +
 	"\n" +
@@ -4425,7 +4542,7 @@ func file_atelet_proto_rawDescGZIP() []byte {
 }
 
 var file_atelet_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_atelet_proto_msgTypes = make([]protoimpl.MessageInfo, 62)
+var file_atelet_proto_msgTypes = make([]protoimpl.MessageInfo, 64)
 var file_atelet_proto_goTypes = []any{
 	(ActorMetadataField)(0),              // 0: atelet.ActorMetadataField
 	(SnapshotFidelity)(0),                // 1: atelet.SnapshotFidelity
@@ -4440,59 +4557,61 @@ var file_atelet_proto_goTypes = []any{
 	(*RegisterWorkerResponse)(nil),       // 10: atelet.RegisterWorkerResponse
 	(*RequestActorSuspendRequest)(nil),   // 11: atelet.RequestActorSuspendRequest
 	(*RequestActorSuspendResponse)(nil),  // 12: atelet.RequestActorSuspendResponse
-	(*GetActorEgressPolicyRequest)(nil),  // 13: atelet.GetActorEgressPolicyRequest
-	(*GetActorEgressPolicyResponse)(nil), // 14: atelet.GetActorEgressPolicyResponse
-	(*EgressPolicy)(nil),                 // 15: atelet.EgressPolicy
-	(*EgressRule)(nil),                   // 16: atelet.EgressRule
-	(*EgressDestinations)(nil),           // 17: atelet.EgressDestinations
-	(*EgressPorts)(nil),                  // 18: atelet.EgressPorts
-	(*EgressAllPorts)(nil),               // 19: atelet.EgressAllPorts
-	(*MintActorCertificateRequest)(nil),  // 20: atelet.MintActorCertificateRequest
-	(*MintActorCertificateResponse)(nil), // 21: atelet.MintActorCertificateResponse
-	(*TerminateRequest)(nil),             // 22: atelet.TerminateRequest
-	(*TerminateResponse)(nil),            // 23: atelet.TerminateResponse
-	(*RunRequest)(nil),                   // 24: atelet.RunRequest
-	(*EgressGateway)(nil),                // 25: atelet.EgressGateway
-	(*AssetFile)(nil),                    // 26: atelet.AssetFile
-	(*ArchAssets)(nil),                   // 27: atelet.ArchAssets
-	(*SandboxAssets)(nil),                // 28: atelet.SandboxAssets
-	(*WorkloadSpec)(nil),                 // 29: atelet.WorkloadSpec
-	(*DurableDirVolumeSource)(nil),       // 30: atelet.DurableDirVolumeSource
-	(*ExternalVolumeSource)(nil),         // 31: atelet.ExternalVolumeSource
-	(*ImageVolumeSource)(nil),            // 32: atelet.ImageVolumeSource
-	(*ActorMetadataItem)(nil),            // 33: atelet.ActorMetadataItem
-	(*ActorMetadataDataSource)(nil),      // 34: atelet.ActorMetadataDataSource
-	(*TrustBundleDataSource)(nil),        // 35: atelet.TrustBundleDataSource
-	(*SystemInfoDataSource)(nil),         // 36: atelet.SystemInfoDataSource
-	(*SystemInfoVolumeSource)(nil),       // 37: atelet.SystemInfoVolumeSource
-	(*Volume)(nil),                       // 38: atelet.Volume
-	(*VolumeMount)(nil),                  // 39: atelet.VolumeMount
-	(*Container)(nil),                    // 40: atelet.Container
-	(*SecurityContext)(nil),              // 41: atelet.SecurityContext
-	(*Capabilities)(nil),                 // 42: atelet.Capabilities
-	(*ResourceLimits)(nil),               // 43: atelet.ResourceLimits
-	(*EnvVar)(nil),                       // 44: atelet.EnvVar
-	(*WakeupProbe)(nil),                  // 45: atelet.WakeupProbe
-	(*HttpGetAction)(nil),                // 46: atelet.HttpGetAction
-	(*RunResponse)(nil),                  // 47: atelet.RunResponse
-	(*ObjectStorage)(nil),                // 48: atelet.ObjectStorage
-	(*Snapshot)(nil),                     // 49: atelet.Snapshot
-	(*SnapshotReport)(nil),               // 50: atelet.SnapshotReport
-	(*ActorSnapshotState)(nil),           // 51: atelet.ActorSnapshotState
-	(*UploadConfig)(nil),                 // 52: atelet.UploadConfig
-	(*CheckpointRequest)(nil),            // 53: atelet.CheckpointRequest
-	(*CheckpointResponse)(nil),           // 54: atelet.CheckpointResponse
-	(*RestoreRequest)(nil),               // 55: atelet.RestoreRequest
-	(*RestoreResponse)(nil),              // 56: atelet.RestoreResponse
-	(*PromoteSnapshotRequest)(nil),       // 57: atelet.PromoteSnapshotRequest
-	(*PromoteSnapshotResponse)(nil),      // 58: atelet.PromoteSnapshotResponse
-	(*DetachActorRequest)(nil),           // 59: atelet.DetachActorRequest
-	(*DetachActorResponse)(nil),          // 60: atelet.DetachActorResponse
-	nil,                                  // 61: atelet.ArchAssets.FilesEntry
-	nil,                                  // 62: atelet.SandboxAssets.AssetsEntry
-	nil,                                  // 63: atelet.ExternalVolumeSource.VolumeContextEntry
-	nil,                                  // 64: atelet.ExternalVolumeSource.PublishContextEntry
-	(*timestamppb.Timestamp)(nil),        // 65: google.protobuf.Timestamp
+	(*ReportActorCrashedRequest)(nil),    // 13: atelet.ReportActorCrashedRequest
+	(*ReportActorCrashedResponse)(nil),   // 14: atelet.ReportActorCrashedResponse
+	(*GetActorEgressPolicyRequest)(nil),  // 15: atelet.GetActorEgressPolicyRequest
+	(*GetActorEgressPolicyResponse)(nil), // 16: atelet.GetActorEgressPolicyResponse
+	(*EgressPolicy)(nil),                 // 17: atelet.EgressPolicy
+	(*EgressRule)(nil),                   // 18: atelet.EgressRule
+	(*EgressDestinations)(nil),           // 19: atelet.EgressDestinations
+	(*EgressPorts)(nil),                  // 20: atelet.EgressPorts
+	(*EgressAllPorts)(nil),               // 21: atelet.EgressAllPorts
+	(*MintActorCertificateRequest)(nil),  // 22: atelet.MintActorCertificateRequest
+	(*MintActorCertificateResponse)(nil), // 23: atelet.MintActorCertificateResponse
+	(*TerminateRequest)(nil),             // 24: atelet.TerminateRequest
+	(*TerminateResponse)(nil),            // 25: atelet.TerminateResponse
+	(*RunRequest)(nil),                   // 26: atelet.RunRequest
+	(*EgressGateway)(nil),                // 27: atelet.EgressGateway
+	(*AssetFile)(nil),                    // 28: atelet.AssetFile
+	(*ArchAssets)(nil),                   // 29: atelet.ArchAssets
+	(*SandboxAssets)(nil),                // 30: atelet.SandboxAssets
+	(*WorkloadSpec)(nil),                 // 31: atelet.WorkloadSpec
+	(*DurableDirVolumeSource)(nil),       // 32: atelet.DurableDirVolumeSource
+	(*ExternalVolumeSource)(nil),         // 33: atelet.ExternalVolumeSource
+	(*ImageVolumeSource)(nil),            // 34: atelet.ImageVolumeSource
+	(*ActorMetadataItem)(nil),            // 35: atelet.ActorMetadataItem
+	(*ActorMetadataDataSource)(nil),      // 36: atelet.ActorMetadataDataSource
+	(*TrustBundleDataSource)(nil),        // 37: atelet.TrustBundleDataSource
+	(*SystemInfoDataSource)(nil),         // 38: atelet.SystemInfoDataSource
+	(*SystemInfoVolumeSource)(nil),       // 39: atelet.SystemInfoVolumeSource
+	(*Volume)(nil),                       // 40: atelet.Volume
+	(*VolumeMount)(nil),                  // 41: atelet.VolumeMount
+	(*Container)(nil),                    // 42: atelet.Container
+	(*SecurityContext)(nil),              // 43: atelet.SecurityContext
+	(*Capabilities)(nil),                 // 44: atelet.Capabilities
+	(*ResourceLimits)(nil),               // 45: atelet.ResourceLimits
+	(*EnvVar)(nil),                       // 46: atelet.EnvVar
+	(*WakeupProbe)(nil),                  // 47: atelet.WakeupProbe
+	(*HttpGetAction)(nil),                // 48: atelet.HttpGetAction
+	(*RunResponse)(nil),                  // 49: atelet.RunResponse
+	(*ObjectStorage)(nil),                // 50: atelet.ObjectStorage
+	(*Snapshot)(nil),                     // 51: atelet.Snapshot
+	(*SnapshotReport)(nil),               // 52: atelet.SnapshotReport
+	(*ActorSnapshotState)(nil),           // 53: atelet.ActorSnapshotState
+	(*UploadConfig)(nil),                 // 54: atelet.UploadConfig
+	(*CheckpointRequest)(nil),            // 55: atelet.CheckpointRequest
+	(*CheckpointResponse)(nil),           // 56: atelet.CheckpointResponse
+	(*RestoreRequest)(nil),               // 57: atelet.RestoreRequest
+	(*RestoreResponse)(nil),              // 58: atelet.RestoreResponse
+	(*PromoteSnapshotRequest)(nil),       // 59: atelet.PromoteSnapshotRequest
+	(*PromoteSnapshotResponse)(nil),      // 60: atelet.PromoteSnapshotResponse
+	(*DetachActorRequest)(nil),           // 61: atelet.DetachActorRequest
+	(*DetachActorResponse)(nil),          // 62: atelet.DetachActorResponse
+	nil,                                  // 63: atelet.ArchAssets.FilesEntry
+	nil,                                  // 64: atelet.SandboxAssets.AssetsEntry
+	nil,                                  // 65: atelet.ExternalVolumeSource.VolumeContextEntry
+	nil,                                  // 66: atelet.ExternalVolumeSource.PublishContextEntry
+	(*timestamppb.Timestamp)(nil),        // 67: google.protobuf.Timestamp
 }
 var file_atelet_proto_depIdxs = []int32{
 	7,  // 0: atelet.RegisterWorkerRequest.capacity:type_name -> atelet.WorkerResources
@@ -4502,86 +4621,88 @@ var file_atelet_proto_depIdxs = []int32{
 	6,  // 4: atelet.VersionedSandboxCompat.attributes:type_name -> atelet.AttributeEntry
 	8,  // 5: atelet.WorkerResources.resources:type_name -> atelet.Resources
 	9,  // 6: atelet.Resources.limits:type_name -> atelet.Limits
-	15, // 7: atelet.GetActorEgressPolicyResponse.egress_policy:type_name -> atelet.EgressPolicy
-	16, // 8: atelet.EgressPolicy.rules:type_name -> atelet.EgressRule
-	17, // 9: atelet.EgressRule.http:type_name -> atelet.EgressDestinations
-	17, // 10: atelet.EgressRule.https:type_name -> atelet.EgressDestinations
-	17, // 11: atelet.EgressRule.tls_passthrough:type_name -> atelet.EgressDestinations
-	18, // 12: atelet.EgressDestinations.ports:type_name -> atelet.EgressPorts
-	19, // 13: atelet.EgressPorts.all:type_name -> atelet.EgressAllPorts
-	29, // 14: atelet.TerminateRequest.spec:type_name -> atelet.WorkloadSpec
-	29, // 15: atelet.RunRequest.spec:type_name -> atelet.WorkloadSpec
-	28, // 16: atelet.RunRequest.sandbox_assets:type_name -> atelet.SandboxAssets
-	25, // 17: atelet.RunRequest.egress_gateway:type_name -> atelet.EgressGateway
+	17, // 7: atelet.GetActorEgressPolicyResponse.egress_policy:type_name -> atelet.EgressPolicy
+	18, // 8: atelet.EgressPolicy.rules:type_name -> atelet.EgressRule
+	19, // 9: atelet.EgressRule.http:type_name -> atelet.EgressDestinations
+	19, // 10: atelet.EgressRule.https:type_name -> atelet.EgressDestinations
+	19, // 11: atelet.EgressRule.tls_passthrough:type_name -> atelet.EgressDestinations
+	20, // 12: atelet.EgressDestinations.ports:type_name -> atelet.EgressPorts
+	21, // 13: atelet.EgressPorts.all:type_name -> atelet.EgressAllPorts
+	31, // 14: atelet.TerminateRequest.spec:type_name -> atelet.WorkloadSpec
+	31, // 15: atelet.RunRequest.spec:type_name -> atelet.WorkloadSpec
+	30, // 16: atelet.RunRequest.sandbox_assets:type_name -> atelet.SandboxAssets
+	27, // 17: atelet.RunRequest.egress_gateway:type_name -> atelet.EgressGateway
 	4,  // 18: atelet.RunRequest.sandbox_runtime:type_name -> atelet.SandboxRuntime
-	61, // 19: atelet.ArchAssets.files:type_name -> atelet.ArchAssets.FilesEntry
-	62, // 20: atelet.SandboxAssets.assets:type_name -> atelet.SandboxAssets.AssetsEntry
-	40, // 21: atelet.WorkloadSpec.containers:type_name -> atelet.Container
-	38, // 22: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
-	63, // 23: atelet.ExternalVolumeSource.volume_context:type_name -> atelet.ExternalVolumeSource.VolumeContextEntry
-	64, // 24: atelet.ExternalVolumeSource.publish_context:type_name -> atelet.ExternalVolumeSource.PublishContextEntry
+	63, // 19: atelet.ArchAssets.files:type_name -> atelet.ArchAssets.FilesEntry
+	64, // 20: atelet.SandboxAssets.assets:type_name -> atelet.SandboxAssets.AssetsEntry
+	42, // 21: atelet.WorkloadSpec.containers:type_name -> atelet.Container
+	40, // 22: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
+	65, // 23: atelet.ExternalVolumeSource.volume_context:type_name -> atelet.ExternalVolumeSource.VolumeContextEntry
+	66, // 24: atelet.ExternalVolumeSource.publish_context:type_name -> atelet.ExternalVolumeSource.PublishContextEntry
 	0,  // 25: atelet.ActorMetadataItem.field:type_name -> atelet.ActorMetadataField
-	33, // 26: atelet.ActorMetadataDataSource.items:type_name -> atelet.ActorMetadataItem
-	34, // 27: atelet.SystemInfoDataSource.actor_metadata:type_name -> atelet.ActorMetadataDataSource
-	35, // 28: atelet.SystemInfoDataSource.trust_bundle:type_name -> atelet.TrustBundleDataSource
-	36, // 29: atelet.SystemInfoVolumeSource.data_sources:type_name -> atelet.SystemInfoDataSource
-	30, // 30: atelet.Volume.durable_dir:type_name -> atelet.DurableDirVolumeSource
-	31, // 31: atelet.Volume.external:type_name -> atelet.ExternalVolumeSource
-	37, // 32: atelet.Volume.system_info:type_name -> atelet.SystemInfoVolumeSource
-	32, // 33: atelet.Volume.image:type_name -> atelet.ImageVolumeSource
-	44, // 34: atelet.Container.env:type_name -> atelet.EnvVar
-	45, // 35: atelet.Container.wakeup_probe:type_name -> atelet.WakeupProbe
-	39, // 36: atelet.Container.volume_mounts:type_name -> atelet.VolumeMount
-	41, // 37: atelet.Container.security_context:type_name -> atelet.SecurityContext
-	43, // 38: atelet.Container.resources:type_name -> atelet.ResourceLimits
-	42, // 39: atelet.SecurityContext.capabilities:type_name -> atelet.Capabilities
-	46, // 40: atelet.WakeupProbe.http_get:type_name -> atelet.HttpGetAction
+	35, // 26: atelet.ActorMetadataDataSource.items:type_name -> atelet.ActorMetadataItem
+	36, // 27: atelet.SystemInfoDataSource.actor_metadata:type_name -> atelet.ActorMetadataDataSource
+	37, // 28: atelet.SystemInfoDataSource.trust_bundle:type_name -> atelet.TrustBundleDataSource
+	38, // 29: atelet.SystemInfoVolumeSource.data_sources:type_name -> atelet.SystemInfoDataSource
+	32, // 30: atelet.Volume.durable_dir:type_name -> atelet.DurableDirVolumeSource
+	33, // 31: atelet.Volume.external:type_name -> atelet.ExternalVolumeSource
+	39, // 32: atelet.Volume.system_info:type_name -> atelet.SystemInfoVolumeSource
+	34, // 33: atelet.Volume.image:type_name -> atelet.ImageVolumeSource
+	46, // 34: atelet.Container.env:type_name -> atelet.EnvVar
+	47, // 35: atelet.Container.wakeup_probe:type_name -> atelet.WakeupProbe
+	41, // 36: atelet.Container.volume_mounts:type_name -> atelet.VolumeMount
+	43, // 37: atelet.Container.security_context:type_name -> atelet.SecurityContext
+	45, // 38: atelet.Container.resources:type_name -> atelet.ResourceLimits
+	44, // 39: atelet.SecurityContext.capabilities:type_name -> atelet.Capabilities
+	48, // 40: atelet.WakeupProbe.http_get:type_name -> atelet.HttpGetAction
 	1,  // 41: atelet.Snapshot.fidelity:type_name -> atelet.SnapshotFidelity
-	48, // 42: atelet.Snapshot.object:type_name -> atelet.ObjectStorage
-	49, // 43: atelet.SnapshotReport.snapshot:type_name -> atelet.Snapshot
-	65, // 44: atelet.SnapshotReport.local_commit_time:type_name -> google.protobuf.Timestamp
-	65, // 45: atelet.SnapshotReport.durable_complete_time:type_name -> google.protobuf.Timestamp
-	50, // 46: atelet.ActorSnapshotState.latest_local:type_name -> atelet.SnapshotReport
-	50, // 47: atelet.ActorSnapshotState.uploading:type_name -> atelet.SnapshotReport
-	50, // 48: atelet.ActorSnapshotState.latest_durable:type_name -> atelet.SnapshotReport
-	65, // 49: atelet.ActorSnapshotState.upload_due_time:type_name -> google.protobuf.Timestamp
+	50, // 42: atelet.Snapshot.object:type_name -> atelet.ObjectStorage
+	51, // 43: atelet.SnapshotReport.snapshot:type_name -> atelet.Snapshot
+	67, // 44: atelet.SnapshotReport.local_commit_time:type_name -> google.protobuf.Timestamp
+	67, // 45: atelet.SnapshotReport.durable_complete_time:type_name -> google.protobuf.Timestamp
+	52, // 46: atelet.ActorSnapshotState.latest_local:type_name -> atelet.SnapshotReport
+	52, // 47: atelet.ActorSnapshotState.uploading:type_name -> atelet.SnapshotReport
+	52, // 48: atelet.ActorSnapshotState.latest_durable:type_name -> atelet.SnapshotReport
+	67, // 49: atelet.ActorSnapshotState.upload_due_time:type_name -> google.protobuf.Timestamp
 	2,  // 50: atelet.UploadConfig.mode:type_name -> atelet.UploadMode
-	29, // 51: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
-	49, // 52: atelet.CheckpointRequest.snapshot:type_name -> atelet.Snapshot
-	52, // 53: atelet.CheckpointRequest.upload_config:type_name -> atelet.UploadConfig
-	51, // 54: atelet.CheckpointResponse.state:type_name -> atelet.ActorSnapshotState
-	29, // 55: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
-	49, // 56: atelet.RestoreRequest.snapshot:type_name -> atelet.Snapshot
-	25, // 57: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
-	28, // 58: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
+	31, // 51: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
+	51, // 52: atelet.CheckpointRequest.snapshot:type_name -> atelet.Snapshot
+	54, // 53: atelet.CheckpointRequest.upload_config:type_name -> atelet.UploadConfig
+	53, // 54: atelet.CheckpointResponse.state:type_name -> atelet.ActorSnapshotState
+	31, // 55: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
+	51, // 56: atelet.RestoreRequest.snapshot:type_name -> atelet.Snapshot
+	27, // 57: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
+	30, // 58: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
 	4,  // 59: atelet.RestoreRequest.sandbox_runtime:type_name -> atelet.SandboxRuntime
-	49, // 60: atelet.PromoteSnapshotRequest.snapshot:type_name -> atelet.Snapshot
-	51, // 61: atelet.PromoteSnapshotResponse.state:type_name -> atelet.ActorSnapshotState
-	51, // 62: atelet.DetachActorResponse.state:type_name -> atelet.ActorSnapshotState
-	26, // 63: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
-	27, // 64: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	20, // 65: atelet.WorkerSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	51, // 60: atelet.PromoteSnapshotRequest.snapshot:type_name -> atelet.Snapshot
+	53, // 61: atelet.PromoteSnapshotResponse.state:type_name -> atelet.ActorSnapshotState
+	53, // 62: atelet.DetachActorResponse.state:type_name -> atelet.ActorSnapshotState
+	28, // 63: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
+	29, // 64: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
+	22, // 65: atelet.WorkerSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
 	3,  // 66: atelet.WorkerSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
 	11, // 67: atelet.WorkerSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
-	13, // 68: atelet.WorkerSupport.GetActorEgressPolicy:input_type -> atelet.GetActorEgressPolicyRequest
-	24, // 69: atelet.Atelet.Run:input_type -> atelet.RunRequest
-	53, // 70: atelet.Atelet.Checkpoint:input_type -> atelet.CheckpointRequest
-	55, // 71: atelet.Atelet.Restore:input_type -> atelet.RestoreRequest
-	57, // 72: atelet.Atelet.PromoteSnapshot:input_type -> atelet.PromoteSnapshotRequest
-	59, // 73: atelet.Atelet.DetachActor:input_type -> atelet.DetachActorRequest
-	22, // 74: atelet.Atelet.Terminate:input_type -> atelet.TerminateRequest
-	21, // 75: atelet.WorkerSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	10, // 76: atelet.WorkerSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
-	12, // 77: atelet.WorkerSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
-	14, // 78: atelet.WorkerSupport.GetActorEgressPolicy:output_type -> atelet.GetActorEgressPolicyResponse
-	47, // 79: atelet.Atelet.Run:output_type -> atelet.RunResponse
-	54, // 80: atelet.Atelet.Checkpoint:output_type -> atelet.CheckpointResponse
-	56, // 81: atelet.Atelet.Restore:output_type -> atelet.RestoreResponse
-	58, // 82: atelet.Atelet.PromoteSnapshot:output_type -> atelet.PromoteSnapshotResponse
-	60, // 83: atelet.Atelet.DetachActor:output_type -> atelet.DetachActorResponse
-	23, // 84: atelet.Atelet.Terminate:output_type -> atelet.TerminateResponse
-	75, // [75:85] is the sub-list for method output_type
-	65, // [65:75] is the sub-list for method input_type
+	15, // 68: atelet.WorkerSupport.GetActorEgressPolicy:input_type -> atelet.GetActorEgressPolicyRequest
+	13, // 69: atelet.WorkerSupport.ReportActorCrashed:input_type -> atelet.ReportActorCrashedRequest
+	26, // 70: atelet.Atelet.Run:input_type -> atelet.RunRequest
+	55, // 71: atelet.Atelet.Checkpoint:input_type -> atelet.CheckpointRequest
+	57, // 72: atelet.Atelet.Restore:input_type -> atelet.RestoreRequest
+	59, // 73: atelet.Atelet.PromoteSnapshot:input_type -> atelet.PromoteSnapshotRequest
+	61, // 74: atelet.Atelet.DetachActor:input_type -> atelet.DetachActorRequest
+	24, // 75: atelet.Atelet.Terminate:input_type -> atelet.TerminateRequest
+	23, // 76: atelet.WorkerSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	10, // 77: atelet.WorkerSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
+	12, // 78: atelet.WorkerSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
+	16, // 79: atelet.WorkerSupport.GetActorEgressPolicy:output_type -> atelet.GetActorEgressPolicyResponse
+	14, // 80: atelet.WorkerSupport.ReportActorCrashed:output_type -> atelet.ReportActorCrashedResponse
+	49, // 81: atelet.Atelet.Run:output_type -> atelet.RunResponse
+	56, // 82: atelet.Atelet.Checkpoint:output_type -> atelet.CheckpointResponse
+	58, // 83: atelet.Atelet.Restore:output_type -> atelet.RestoreResponse
+	60, // 84: atelet.Atelet.PromoteSnapshot:output_type -> atelet.PromoteSnapshotResponse
+	62, // 85: atelet.Atelet.DetachActor:output_type -> atelet.DetachActorResponse
+	25, // 86: atelet.Atelet.Terminate:output_type -> atelet.TerminateResponse
+	76, // [76:87] is the sub-list for method output_type
+	65, // [65:76] is the sub-list for method input_type
 	65, // [65:65] is the sub-list for extension type_name
 	65, // [65:65] is the sub-list for extension extendee
 	0,  // [0:65] is the sub-list for field type_name
@@ -4592,15 +4713,15 @@ func file_atelet_proto_init() {
 	if File_atelet_proto != nil {
 		return
 	}
-	file_atelet_proto_msgTypes[21].OneofWrappers = []any{}
-	file_atelet_proto_msgTypes[52].OneofWrappers = []any{}
+	file_atelet_proto_msgTypes[23].OneofWrappers = []any{}
+	file_atelet_proto_msgTypes[54].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_atelet_proto_rawDesc), len(file_atelet_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   62,
+			NumMessages:   64,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

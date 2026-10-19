@@ -24,9 +24,10 @@ workerSelector:
     workload: benchmark-worker
 volumes:
 - name: external-storage
-  externalVolumeTemplate:
-    capacity: 1Gi
-    storageClassName: ${STORAGE_CLASS_NAME}
+  external:
+    template:
+      capacity: 1Gi
+      storageClassName: ${STORAGE_CLASS_NAME}
 containers:
 - name: glutton-storage
   image: ko://go.ate.dev/substrate/cmd/benchmarking/glutton

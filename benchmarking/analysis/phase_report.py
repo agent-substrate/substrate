@@ -294,9 +294,9 @@ def fmt_s(seconds: float) -> str:
 
 def report_phases(breakdowns: list[Breakdown], writer) -> list[dict]:
     """Per (source, op, sandbox class, kind, scope, phase) percentiles. A
-    golden restore (which downloads the golden image) and a latest restore,
-    or a gVisor and a micro-VM checkpoint, are different distributions and
-    must not be pooled. Returns the rows for CSV."""
+    local restore and a latest one, or a gVisor and a micro-VM checkpoint,
+    are different distributions and must not be pooled. Returns the rows
+    for CSV."""
     groups: dict[tuple, list[float]] = defaultdict(list)
     for b in breakdowns:
         if b.failed:

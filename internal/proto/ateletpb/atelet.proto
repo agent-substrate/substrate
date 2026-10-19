@@ -51,6 +51,11 @@ service WorkerSupport {
   // Control.GetActorEgressPolicy. An error is the control plane's, passed
   // through as it was given.
   rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (GetActorEgressPolicyResponse) {}
+
+  // ReportActorCrashed reports that the sandbox of the actor this worker
+  // hosts died on its own, for atelet to forward to the control plane's
+  // WorkerService, which this mirrors.
+  rpc ReportActorCrashed(ReportActorCrashedRequest) returns (ReportActorCrashedResponse) {}
 }
 
 message RegisterWorkerRequest {
@@ -213,6 +218,31 @@ message RequestActorSuspendRequest {
 message RequestActorSuspendResponse {
 }
 
+message ReportActorCrashedRequest {
+  // The actor the calling worker is hosting, as for RequestActorSuspend.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 3;
+
+  // What the worker saw, e.g. how the sandbox exited.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096
+  string message = 4;
+}
+
+message ReportActorCrashedResponse {
+}
+
 message GetActorEgressPolicyRequest {
   // The actor the calling worker is hosting. atelet reads its policy from the
   // control plane by name.
@@ -283,25 +313,25 @@ message MintActorCertificateRequest {
   //
   // +k8s:required
   // +k8s:format=k8s-short-name
-  string actor_atespace = 3;
+  string actor_atespace = 1;
 
   // +k8s:required
   // +k8s:format=k8s-short-name
-  string actor_name = 4;
+  string actor_name = 2;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
-  string actor_uid = 5;
+  string actor_uid = 3;
 
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
   //
   // +k8s:required
   // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
-  bytes certificate_signing_request = 1;
+  bytes certificate_signing_request = 4;
 }
 
 message MintActorCertificateResponse {
@@ -313,6 +343,10 @@ message MintActorCertificateResponse {
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
+//
+// atelet runs at most one Run, Restore, Checkpoint, PromoteSnapshot,
+// DetachActor, or Terminate of an actor at a time. A call waits for the one in
+// progress, up to the call's deadline.
 service Atelet {
   // Run tells atelet to create a new containerized workload from scratch on a
   // worker.
@@ -343,15 +377,14 @@ service Atelet {
 
   // DetachActor makes the actor's latest local snapshot durable, then deletes
   // the actor's local snapshots on this node, so it can resume on any node.
-  // atelet also detaches a suspended actor on its own after its detach delay.
+  // atelet also detaches a suspended actor on its own after its detach delay,
+  // and reports that with WorkerService.ReportActorSnapshotState; it does not
+  // report a DetachActor call, whose caller reads the state from the response.
   // Waits for an operation already in progress on the actor, such as an
   // upload or a detach. Does nothing when atelet holds no local snapshot for
-  // the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-  // actor is in progress or the actor runs on this node, and
+  // the actor. Returns ABORTED when the actor runs on this node, and
   // FAILED_PRECONDITION when atelet cannot make the latest local snapshot
   // durable, such as when it has no `snapshot.object`.
-  //
-  // TODO: Temporarily, atelet returns UNIMPLEMENTED.
   rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
@@ -561,12 +594,12 @@ message ExternalVolumeSource {
   // sends volumes that finished provisioning.
   //
   // +k8s:required
-  // +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+  // +k8s:maxLength=256 # matches ExternalVolumeStatus.storage_volume_id's bound
   // +k8s:customValidation # no control characters
   string storage_volume_id = 1;
 
   // +k8s:optional
-  // +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+  // +k8s:maxLength=253 # matches ExternalVolumeStatus.volume_type's bound
   // +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
   string volume_type = 2;
 
@@ -651,9 +684,7 @@ message TrustBundleDataSource {
   // +k8s:listType=set
   // +k8s:eachVal=+k8s:minLength=1
   // +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
-  repeated string names = 3;
-  reserved 2;
-  reserved "name";
+  repeated string names = 2;
 }
 
 // SystemInfoDataSource selects exactly one projection to place in the
@@ -920,14 +951,10 @@ message Snapshot {
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
   SnapshotFidelity fidelity = 3;
 
-  // The snapshot's durable copy in object storage. Required on Checkpoint
-  // and PromoteSnapshot: atelet uploads there, or reads from there when it
-  // holds no usable local copy.
+  // The snapshot's durable copy in object storage: atelet uploads there, or
+  // reads from there when it holds no usable local copy.
   //
-  // TODO: Temporarily, this is optional on RestoreRequest while the control
-  // plane does not set it when restoring a paused actor.
-  //
-  // +k8s:optional
+  // +k8s:required
   ObjectStorage object = 4;
 }
 
@@ -995,8 +1022,9 @@ enum UploadMode {
   // detach-delay, atelet detaches it: it uploads the latest local snapshot
   // unless that is durable already, then deletes all the local snapshots.
   //
-  // atelet never uploads or detaches a snapshot it cannot make durable, such
-  // as one without `snapshot.object`.
+  // atelet reports the actor's state with
+  // WorkerService.ReportActorSnapshotState once such an upload makes a newer
+  // snapshot durable, and once such a detach has deleted the local snapshots.
   UPLOAD_MODE_DEFERRED = 1;
 
   // Upload the snapshot synchronously before Checkpoint returns, and keep a
@@ -1053,7 +1081,6 @@ message CheckpointRequest {
   // workload.
   //
   // +k8s:required
-  // +k8s:subfield(object)=+k8s:required
   Snapshot snapshot = 8;
 
   // When the snapshot becomes durable.
@@ -1069,9 +1096,9 @@ message CheckpointResponse {
   // uploading ends.
   //
   // TODO: Add a snapshot garbage collection system for orphaned objects in
-  // object storage. atelet reports snapshot state to ateapi only on RPC
-  // responses, so a background upload superseded before the next response
-  // leaves objects ateapi never learned were durable.
+  // object storage. atelet reports a background upload only when it records
+  // a newer durable snapshot, so an upload that a newer durable snapshot
+  // superseded while it ran leaves objects ateapi never learned were durable.
   ActorSnapshotState state = 1;
 }
 
@@ -1113,9 +1140,9 @@ message RestoreRequest {
   // detaching the actor, it waits for the detach to finish and then reads
   // `snapshot.object`. Fails if neither copy exists: that generation is lost.
   //
-  // TODO: Temporarily, the control plane does not set `snapshot.object` when
-  // it restores a paused actor, so atelet has nothing to fall back to if that
-  // actor's local copy is missing or unusable.
+  // `snapshot.object` is required even while the control plane has not
+  // recorded the snapshot's upload complete: atelet may have uploaded the
+  // snapshot and detached the actor before its report of the upload landed.
   //
   // +k8s:required
   Snapshot snapshot = 8;
@@ -1123,7 +1150,7 @@ message RestoreRequest {
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  optional EgressGateway egress_gateway = 13;
+  optional EgressGateway egress_gateway = 9;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For
   // gVisor and micro-VM VOLUMES restores the sandbox is (re)sized to these;
@@ -1133,17 +1160,17 @@ message RestoreRequest {
   // +k8s:optional
   // +k8s:minimum=0
   // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
+  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
 
   // +k8s:optional
   // +k8s:minimum=0
-  int64 memory_bytes = 15; // Memory limit in bytes.
+  int64 memory_bytes = 11; // Memory limit in bytes.
 
   // The sandbox binaries and pause image to restore with, resolved from the
   // assigned worker pool's SandboxConfig.
   //
   // +k8s:required
-  SandboxAssets sandbox_assets = 16;
+  SandboxAssets sandbox_assets = 12;
 
   // The runtime the assigned worker restores this actor under, from
   // WorkerAssignment.sandbox_runtime.
@@ -1153,18 +1180,15 @@ message RestoreRequest {
   // sandbox_assets.
   //
   // +k8s:optional
-  SandboxRuntime sandbox_runtime = 17;
+  SandboxRuntime sandbox_runtime = 13;
 }
 
 message RestoreResponse {
 }
 
 message PromoteSnapshotRequest {
-  // Golden actors are never paused, so the golden atespace is rejected.
-  //
   // +k8s:required
   // +k8s:format=k8s-short-name
-  // +k8s:customValidation # not the golden atespace
   string atespace = 1;
 
   // +k8s:required
@@ -1189,7 +1213,6 @@ message PromoteSnapshotRequest {
   // it is, or will be, uploaded.
   //
   // +k8s:required
-  // +k8s:subfield(object)=+k8s:required
   Snapshot snapshot = 6;
 }
 

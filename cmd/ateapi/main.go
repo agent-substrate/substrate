@@ -110,6 +110,7 @@ var (
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
 	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/control.sock", "Unix socket of the control object-store plugin that external snapshots are deleted and copied through.")
+	snapshotLocation        = pflag.String("snapshot-location", "", "Base object-storage URI (for example gs://BUCKET/PREFIX/) that actor snapshots are stored under. Required unless the PerTemplateSnapshotLocation preview gate is enabled; with the gate, an actor template's snapshotConfig.storageLocation overrides it.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
@@ -166,6 +167,13 @@ func main() {
 	// Restore; a value it would refuse must fail the rollout, not the actors.
 	if errs := resources.ValidateHostPort(field.NewPath("default-egress-gateway-address"), *defaultEgressGatewayAddress); len(errs) > 0 {
 		serverboot.Fatal(ctx, "Invalid --default-egress-gateway-address", errs.ToAggregate())
+	}
+	if *snapshotLocation != "" {
+		if err := resources.ValidateSnapshotLocation(*snapshotLocation); err != nil {
+			serverboot.Fatal(ctx, "Invalid --snapshot-location", err)
+		}
+	} else if !preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+		serverboot.Fatal(ctx, "Missing --snapshot-location", fmt.Errorf("required unless the %s preview gate is enabled", preview.GatePerTemplateSnapshotLocation))
 	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
@@ -349,6 +357,7 @@ func main() {
 		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
+		*snapshotLocation,
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
@@ -455,6 +464,7 @@ func loadFlagsFromEnv() error {
 		{postgresOwnerRole, "ATE_API_POSTGRES_OWNER_ROLE"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
 		{actorJWTIssuer, "ATE_API_ACTOR_JWT_ISSUER"},
+		{snapshotLocation, "ATE_API_SNAPSHOT_LOCATION"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -506,6 +516,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
+		slog.String("snapshot-location", *snapshotLocation),
 		slog.Any("preview", *previewFlags),
 	)
 }

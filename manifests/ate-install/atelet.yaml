@@ -282,7 +282,6 @@ spec:
         ports:
         - name: grpc
           containerPort: 21998
-          hostPort: 21998
         - name: prometheus
           containerPort: 9090
           protocol: TCP

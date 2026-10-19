@@ -45,6 +45,8 @@ export ENABLE_NESTED_VIRTUALIZATION=true
 export KUBECTL_CONTEXT=
 
 export BUCKET_NAME=snapshot-substrate-test-${PROJECT_ID}
+# Cluster-wide location ate-api-server stores snapshots under.
+export SNAPSHOT_LOCATION="gs://${BUCKET_NAME}/"
 
 export KO_DOCKER_REPO="gcr.io/${PROJECT_ID}/ate-images"
 

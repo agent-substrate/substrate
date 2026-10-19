@@ -97,10 +97,13 @@ func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *act
 	removeOld := false
 	switch {
 	case err == nil:
-		t.recordUploadLocked(a, target, uploaded)
+		if t.recordUploadLocked(a, target, uploaded) {
+			t.markReportDueLocked(a)
+		}
 		a.Uploading = nil
 		a.uploadingFailed = false
 		t.succeededLocked(a)
+		t.queueReportLocked(a)
 		removeOld = a.localSuperseded(&target)
 	case !a.uploadNeeded(target):
 		// A newer snapshot became durable while the upload ran, as an
@@ -130,23 +133,21 @@ func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *act
 	}
 }
 
-// recordUploadLocked records that an upload of target succeeded. uploaded
-// reports whether the upload wrote the manifest rather than finding it
-// committed already.
-func (t *Tracker) recordUploadLocked(a *actorSnapshots, target SnapshotRef, uploaded bool) {
+// recordUploadLocked records that an upload of target succeeded, and reports
+// whether target is now LatestDurable, which it is not when that generation or
+// a newer snapshot was already durable. uploaded reports whether the upload
+// wrote the manifest rather than finding it committed already.
+func (t *Tracker) recordUploadLocked(a *actorSnapshots, target SnapshotRef, uploaded bool) bool {
 	now := t.clock.Now()
 	d := target.clone()
 	if uploaded {
 		d.UploadTime = now
-	} else if durable, err := a.isLatestDurable(*d); err == nil && durable {
-		// An earlier upload by this atelet committed the manifest: keep its
-		// time.
-		d.UploadTime = a.LatestDurable.UploadTime
 	}
-	a.recordDurable(d)
-	if a.LatestDurable == d {
-		a.uploadSucceeded(now)
+	if !a.recordDurable(d) {
+		return false
 	}
+	a.uploadSucceeded(now)
+	return true
 }
 
 // removeSupersededLocalCopy deletes the local copy of target, an upload's

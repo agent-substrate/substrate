@@ -86,6 +86,7 @@ func loadEnv(t *testing.T) {
 		"KUBECTL_CONTEXT",
 		"MEMORYSTORE_INSTANCE",
 		"PROJECT_ID",
+		"SNAPSHOT_LOCATION",
 		"ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
 	} {
 		// Unset, not blanked. An exported empty variable is a value a channel

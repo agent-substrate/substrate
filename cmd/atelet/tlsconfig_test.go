@@ -21,7 +21,7 @@ import (
 )
 
 func TestAteletServerTLSConfigRejectsUnreadableCACerts(t *testing.T) {
-	_, err := ateletServerTLSConfig("/nonexistent-cred-bundle.pem", filepath.Join(t.TempDir(), "absent.pem"))
+	_, err := ateletServerTLSConfig("/nonexistent-cred-bundle.pem", filepath.Join(t.TempDir(), "absent.pem"), allowAll)
 	if err == nil {
 		t.Fatalf("ateletServerTLSConfig() error = nil, want an error for a missing CA file")
 	}
@@ -36,7 +36,7 @@ func TestAteletServerTLSConfigReloadsCACertsWithoutRestart(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	cfg, err := ateletServerTLSConfig("/nonexistent-cred-bundle.pem", path)
+	cfg, err := ateletServerTLSConfig("/nonexistent-cred-bundle.pem", path, allowAll)
 	if err != nil {
 		t.Fatalf("ateletServerTLSConfig() error = %v", err)
 	}

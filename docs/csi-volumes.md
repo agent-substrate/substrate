@@ -16,7 +16,7 @@ do not need it.
 
 In Kubernetes, volumes are reconciled asynchronously via standard Kubernetes objects (e.g. `PersistentVolumeClaim`, `PersistentVolume`). Agent Substrate takes a different approach tailored for actor lifecycle operations:
 
-* **No PV or PVC Objects:** External volumes are declaratively defined in the [`ActorTemplate`](api-guide.md#2-actortemplate-the-workload-blueprint) via `externalVolumeTemplate` and provisioned dynamically for each actor instance. Volume operations are coupled directly with the actor lifecycle.
+* **No PV or PVC Objects:** External volumes are declaratively defined in the [`ActorTemplate`](api-guide.md#2-actortemplate-the-workload-blueprint) via `external.template` and provisioned dynamically for each actor instance. Volume operations are coupled directly with the actor lifecycle.
 * **Direct Network-Based CSI Controller:** The Substrate control plane (`ateapi`) communicates directly with the CSI Controller gRPC service over the network (via TCP or DNS endpoints, optionally secured with TLS/mTLS).
 
 ---
@@ -74,7 +74,7 @@ External volumes are declared on the `ActorTemplate` resource. For complete deta
 
 To attach a CSI volume to an actor:
 
-1. Define the volume under `volumes` with an `externalVolumeTemplate`.
+1. Define the volume under `volumes` with an `external.template`.
 2. Mount the volume inside one or more containers under `containers[].volumeMounts`.
 
 #### `volumes[]`
@@ -82,14 +82,15 @@ To attach a CSI volume to an actor:
 ```yaml
 volumes:
 - name: my-data-volume
-  externalVolumeTemplate:
-    capacity: 10Gi
-    storageClassName: standard-rwx
+  external:
+    template:
+      capacity: 10Gi
+      storageClassName: standard-rwx
 ```
 
 * `name`: Unique DNS-label-compliant volume name.
-* `externalVolumeTemplate.capacity`: Quantity string representing the requested volume size (e.g. `1Gi`, `50Gi`).
-* `externalVolumeTemplate.storageClassName`: Name of a Kubernetes `StorageClass` present in the cluster whose `provisioner` matches a registered `CSIDriverConfig`.
+* `external.template.capacity`: Quantity string representing the requested volume size (e.g. `1Gi`, `50Gi`).
+* `external.template.storageClassName`: Name of a Kubernetes `StorageClass` present in the cluster whose `provisioner` matches a registered `CSIDriverConfig`.
 
 #### `containers[].volumeMounts[]`
 
@@ -197,7 +198,8 @@ snapshotConfig:
   storageLocation: gs://my-snapshots-bucket/stateful-agent
 volumes:
 - name: shared-storage
-  externalVolumeTemplate:
-    capacity: 5Gi
-    storageClassName: csi-nfs-sc
+  external:
+    template:
+      capacity: 5Gi
+      storageClassName: csi-nfs-sc
 ```

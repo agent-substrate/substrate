@@ -19,6 +19,7 @@ Patch releases add no API fields, public or internal, and no schema migrations.
 ## Components
 
 * `ate-api-server`: serves the public API, calls `atelet`, talks to the database.
+* `ate-idp-server`: publishes the keys that verify actor JWTs. It shares only the actor JWT key pool with `ate-api-server`, and is upgraded with it.
 * `ate-controller`: renders WorkerPools into Deployments, registers workers with `ate-api-server`.
 * `atelet`: one pod per node (DaemonSet), drives the `ateworker` processes on its node.
 * Workers: the pods of a WorkerPool, running `ateworker` and the actors.
@@ -115,7 +116,7 @@ To move from N to N+1, in this order, waiting for each step to finish:
 1. `podcertificate-controller`.
 2. `atelet`, node by node.
 3. Every WorkerPool's `spec.workerImage`, which rolls its workers.
-4. `ate-api-server`. The first N+1 replica migrates the schema.
+4. `ate-api-server` and `ate-idp-server`. The first N+1 `ate-api-server` replica migrates the schema.
 5. The CRDs, then `ate-controller`.
 6. `atenet`.
 7. The SandboxConfig admission policy and the default SandboxConfig.

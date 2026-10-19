@@ -36,7 +36,7 @@ func (s *Server) ReportActorSnapshotState(ctx context.Context, req *ateapipb.Rep
 		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	if err := s.suspender.ApplyActorSnapshotState(ctx, actorRef, req.GetActorUid(), caller.NodeName, req.GetState()); err != nil {
+	if err := s.control.ApplyActorSnapshotState(ctx, actorRef, req.GetActorUid(), caller.NodeName, req.GetState()); err != nil {
 		return nil, err
 	}
 	return &ateapipb.ReportActorSnapshotStateResponse{}, nil

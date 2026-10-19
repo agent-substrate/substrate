@@ -107,6 +107,7 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 			Subnetwork:                 cfg.Subnetwork,
 			NetworkConfig:              networkConfig,
 			ManagedOpentelemetryConfig: &containerpb.ManagedOpenTelemetryConfig{Scope: containerpb.ManagedOpenTelemetryConfig_COLLECTION_AND_INSTRUMENTATION_COMPONENTS.Enum()},
+			// Only new clusters; an existing cluster's add-on is left alone.
 			AddonsConfig: &containerpb.AddonsConfig{
 				GcpFilestoreCsiDriverConfig: &containerpb.GcpFilestoreCsiDriverConfig{
 					Enabled: false,
@@ -114,10 +115,6 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 			},
 		},
 	}
-}
-
-func filestoreCsiDriverEnabled(cluster *containerpb.Cluster) bool {
-	return cluster.GetAddonsConfig().GetGcpFilestoreCsiDriverConfig().GetEnabled()
 }
 
 // nestedVirtualizationEnabled reports whether any node pool exposes /dev/kvm,
@@ -303,31 +300,6 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 		}
 	} else {
 		slog.Info("Cluster ManagedOpentelemetryConfig match perfectly.", slog.String("cluster", cfg.ClusterName))
-	}
-
-	if filestoreCsiDriverEnabled(cluster) {
-		slog.Info("Mismatch in Filestore CSI driver config",
-			slog.Bool("current", true),
-			slog.Bool("expected", false))
-		slog.Info("Updating cluster to disable Filestore CSI driver...")
-		op, err := client.UpdateCluster(ctx, &containerpb.UpdateClusterRequest{
-			Name: clusterName,
-			Update: &containerpb.ClusterUpdate{
-				DesiredAddonsConfig: &containerpb.AddonsConfig{
-					GcpFilestoreCsiDriverConfig: &containerpb.GcpFilestoreCsiDriverConfig{
-						Enabled: false,
-					},
-				},
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("update cluster filestore csi driver: %w", err)
-		}
-		if err := waitContainerOperation(ctx, client, op.Name, cfg); err != nil {
-			return err
-		}
-	} else {
-		slog.Info("Cluster Filestore CSI driver match perfectly.", slog.String("cluster", cfg.ClusterName))
 	}
 
 	// Nested virtualization is fixed at node creation, so an existing cluster

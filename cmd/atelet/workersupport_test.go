@@ -240,8 +240,17 @@ func TestRegisterWorker(t *testing.T) {
 type fakeSuspendService struct {
 	ateapipb.WorkerServiceClient
 
-	got []*ateapipb.RequestActorSuspendRequest
-	err error
+	got        []*ateapipb.RequestActorSuspendRequest
+	gotCrashed []*ateapipb.ReportActorCrashedRequest
+	err        error
+}
+
+func (s *fakeSuspendService) ReportActorCrashed(_ context.Context, in *ateapipb.ReportActorCrashedRequest, _ ...grpc.CallOption) (*ateapipb.ReportActorCrashedResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.gotCrashed = append(s.gotCrashed, in)
+	return &ateapipb.ReportActorCrashedResponse{}, nil
 }
 
 func (s *fakeSuspendService) RequestActorSuspend(_ context.Context, in *ateapipb.RequestActorSuspendRequest, _ ...grpc.CallOption) (*ateapipb.RequestActorSuspendResponse, error) {
@@ -470,5 +479,46 @@ func TestGetActorEgressPolicy(t *testing.T) {
 				t.Errorf("returned policy mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestReportActorCrashedNamesTheCallingWorker(t *testing.T) {
+	workers := &fakeSuspendService{}
+	svc := &workerSupportServer{workers: workers}
+
+	if _, err := svc.ReportActorCrashed(workerContext(t, "pod-a"), &ateletpb.ReportActorCrashedRequest{
+		ActorAtespace: "team-a",
+		ActorName:     "actor-1",
+		ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
+		Message:       "cloud-hypervisor exited",
+	}); err != nil {
+		t.Fatalf("ReportActorCrashed() failed: %v", err)
+	}
+	want := []*ateapipb.ReportActorCrashedRequest{{
+		Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid: "01234567-89ab-cdef-0123-456789abcdef",
+		Message:  "cloud-hypervisor exited",
+	}}
+	if diff := cmp.Diff(want, workers.gotCrashed, protocmp.Transform()); diff != "" {
+		t.Errorf("forwarded request mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestReportActorCrashedRequiresACertificate(t *testing.T) {
+	workers := &fakeSuspendService{}
+	svc := &workerSupportServer{workers: workers}
+
+	_, err := svc.ReportActorCrashed(context.Background(), &ateletpb.ReportActorCrashedRequest{
+		ActorAtespace: "team-a",
+		ActorName:     "actor-1",
+		ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
+		Message:       "cloud-hypervisor exited",
+	})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("unauthenticated report returned %v, want Unauthenticated", err)
+	}
+	if len(workers.gotCrashed) != 0 {
+		t.Errorf("unauthenticated report was still forwarded: %v", workers.gotCrashed)
 	}
 }

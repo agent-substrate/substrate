@@ -151,6 +151,73 @@ func TestCreateTag_ReusedTagName(t *testing.T) {
 	}
 }
 
+// TestCreateTag_FromPausedActor verifies that tagging a paused actor has the
+// atelet on its node upload the node-local snapshot first, and tags that
+// snapshot. The actor keeps the snapshot on its node.
+func TestCreateTag_FromPausedActor(t *testing.T) {
+	ns := namespaceForTest("ns-tag-paused")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	ctx := context.Background()
+	ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-paused"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   ref,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	}); err != nil {
+		t.Fatalf("pause failed: %v", err)
+	}
+	paused, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	pausedSnap := localSnapshot(paused.GetStatus())
+	if pausedSnap == nil {
+		t.Fatal("paused actor has no local snapshot")
+	}
+
+	tag, err := tc.client.CreateTag(ctx, &ateapipb.CreateTagRequest{
+		Tag: &ateapipb.Tag{
+			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "from-paused"},
+			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+			SourceActor: ref,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTag failed: %v", err)
+	}
+
+	if got := tc.fakeAtelet.PromoteRequest.GetSnapshot().GetSnapshotUuid(); got != pausedSnap.GetUuid() {
+		t.Errorf("PromoteSnapshot snapshot uuid = %q, want the paused snapshot %q", got, pausedSnap.GetUuid())
+	}
+	if len(snapshotObjectNames(t, tc, tagSnapshotURI(tag))) == 0 {
+		t.Errorf("the tag's external snapshot %s is empty", tagSnapshotURI(tag))
+	}
+	stored, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	// The paused snapshot is now durable and stays on its node.
+	if got := durableSnapshot(stored.GetStatus()); got.GetUuid() != pausedSnap.GetUuid() {
+		t.Errorf("latest durable snapshot = %v, want the paused snapshot %q", got, pausedSnap.GetUuid())
+	}
+	if got := localSnapshot(stored.GetStatus()); got.GetUuid() != pausedSnap.GetUuid() {
+		t.Errorf("local snapshot = %v, want the paused snapshot %q kept on its node", got, pausedSnap.GetUuid())
+	}
+}
+
 // suspendActorForTest creates, resumes and suspends an actor on workerName,
 // and returns the URI of the external snapshot the suspend wrote.
 func suspendActorForTest(t *testing.T, tc *testContext, workerName, name string) string {

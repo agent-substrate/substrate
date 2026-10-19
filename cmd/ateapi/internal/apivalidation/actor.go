@@ -58,12 +58,6 @@ func ValidateDeleteActorRequest(ctx context.Context, req *ateapipb.DeleteActorRe
 	return Validate_DeleteActorRequest(ctx, op, nil, req, nil)
 }
 
-func ValidatePauseActorRequest(ctx context.Context, req *ateapipb.PauseActorRequest) field.ErrorList {
-	// Call the generated validation.
-	op := MakeCreateOp(ctx)
-	return Validate_PauseActorRequest(ctx, op, nil, req, nil)
-}
-
 func ValidateResumeActorRequest(ctx context.Context, req *ateapipb.ResumeActorRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
@@ -143,14 +137,14 @@ func ValidateCustom_WorkerAssignment_WorkerSpiffeId(_ context.Context, _ operati
 	return validateSPIFFEID(fldPath, *value)
 }
 
-func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_ExternalVolumeStatus_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateVolumeType(fldPath, *value)
 }
 
-func ValidateCustom_ExternalVolume_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_ExternalVolumeStatus_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateStorageVolumeID(fldPath, *value)
 }
 
-func ValidateCustom_ExternalVolume_VolumeContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+func ValidateCustom_ExternalVolumeStatus_VolumeContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
 	return resources.ValidateCSIMap(fldPath, value)
 }

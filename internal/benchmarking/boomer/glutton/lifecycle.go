@@ -469,7 +469,7 @@ func (u *gluttonActor) hibernate(ctx context.Context) error {
 }
 
 func (u *gluttonActor) pause(ctx context.Context) error {
-	err := u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor:   u.ref(),
 			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
@@ -503,8 +503,7 @@ func (u *gluttonActor) suspend(ctx context.Context) error {
 func (u *gluttonActor) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			Actor:    u.ref(),
-			AnyState: true,
+			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})

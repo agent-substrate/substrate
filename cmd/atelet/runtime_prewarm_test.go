@@ -21,7 +21,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +41,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
@@ -108,10 +114,16 @@ func pauseImageInTestRegistry(t *testing.T) (ref string, host string) {
 // returns its hash.
 func indexedTestRuntime(t *testing.T, index *runtimeIndex, content []byte, pauseImage string) string {
 	t.Helper()
+	return indexedTestRuntimeAt(t, index, "gs://bucket/gvisor.tar", content, pauseImage)
+}
+
+// indexedTestRuntimeAt is indexedTestRuntime with the asset at url.
+func indexedTestRuntimeAt(t *testing.T, index *runtimeIndex, url string, content []byte, pauseImage string) string {
+	t.Helper()
 	rec := &sandboxAssetsRecord{
 		SandboxClass: "gvisor",
 		PauseImage:   pauseImage,
-		Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor.tar", SHA256: fmt.Sprintf("%x", sha256.Sum256(content))}},
+		Assets:       map[string]assetEntry{gvisorAssetName: {URL: url, SHA256: fmt.Sprintf("%x", sha256.Sum256(content))}},
 	}
 	hash, err := versionBundleHash(rec)
 	if err != nil {
@@ -121,6 +133,18 @@ func indexedTestRuntime(t *testing.T, index *runtimeIndex, content []byte, pause
 		versionPlan: versionPlan{name: "v1", isDefault: true, rec: rec}, hash: hash,
 	}}})
 	return hash
+}
+
+// defaultItem makes the directory the syncer would make for hash as a
+// default of pod-a under root, so the links land on the cache's
+// filesystem, and returns the item the syncer would hand the prewarmer.
+func defaultItem(t *testing.T, root, hash string) prewarmItem {
+	t.Helper()
+	dir := filepath.Join(root, "workers", "pod-a", defaultRuntimeDirsName, strings.ReplaceAll(hash, ":", "-"))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return prewarmItem{hash: hash, dir: dir}
 }
 
 func newTestImageStore(t *testing.T) *imagecache.Store {
@@ -134,78 +158,101 @@ func newTestImageStore(t *testing.T) *imagecache.Store {
 
 // TestRuntimePrewarmProcess covers the worker's failure handling: a failed
 // prewarm is requeued with backoff until prewarmMaxRetries and then dropped,
-// and a hash that is not in the index is dropped at once.
+// and an item naming a hash that is not in the index is dropped at once.
 func TestRuntimePrewarmProcess(t *testing.T) {
-	useTempAssetScratch(t)
 	ctx := context.Background()
 	index := newRuntimeIndex()
 	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t), "")
-	herder := &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
+	root := t.TempDir()
+	herder := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
 	p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
 
+	item := defaultItem(t, root, hash)
 	for i := 1; i <= prewarmMaxRetries; i++ {
-		p.process(ctx, hash)
-		if got := p.queue.NumRequeues(hash); got != i {
+		p.process(ctx, item)
+		if got := p.queue.NumRequeues(item); got != i {
 			t.Fatalf("NumRequeues after %d failed prewarms = %d, want %d (requeued with backoff)", i, got, i)
 		}
 	}
-	p.process(ctx, hash)
-	if got := p.queue.NumRequeues(hash); got != 0 {
+	p.process(ctx, item)
+	if got := p.queue.NumRequeues(item); got != 0 {
 		t.Errorf("NumRequeues after giving up = %d, want 0 (forgotten)", got)
 	}
 
-	p.process(ctx, "sha256:not-in-the-index")
-	if got := p.queue.NumRequeues("sha256:not-in-the-index"); got != 0 {
+	unknown := prewarmItem{hash: "sha256:not-in-the-index", dir: item.dir}
+	p.process(ctx, unknown)
+	if got := p.queue.NumRequeues(unknown); got != 0 {
 		t.Errorf("NumRequeues for an unknown hash = %d, want 0 (forgotten)", got)
 	}
 }
 
-// TestRuntimePrewarmOnce pins that a runtime is prewarmed once: a hash
-// whose prewarm succeeded is skipped by every later enqueue, while one whose
-// prewarm failed is queued again.
-func TestRuntimePrewarmOnce(t *testing.T) {
-	useTempAssetScratch(t)
+// TestRuntimePrewarmSuperseded pins what a prewarm does once the syncer
+// removed its directory, after a later sync or the worker's removal: no
+// fetch, nothing recreated, and no retry, whether the directory went
+// before the item ran or while it staged.
+func TestRuntimePrewarmSuperseded(t *testing.T) {
 	ctx := context.Background()
 	index := newRuntimeIndex()
-	release := gvisorReleaseTarball(t)
-	good := indexedTestRuntime(t, index, release, "")
-	// The store serves the same bytes for every asset, so this one's digest
-	// never matches and its prewarm fails.
-	bad := indexedTestRuntime(t, index, gvisorReleaseTarballWith(t, "another runsc"), "")
-	herder := &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{data: release}}
-	p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
+	content := gvisorReleaseTarball(t)
+	hash := indexedTestRuntime(t, index, content, "")
+	root := t.TempDir()
+	herder := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
 
-	drain := func() {
-		for p.queue.Len() > 0 {
-			hash, _ := p.queue.Get()
-			p.process(ctx, hash)
+	t.Run("directory gone before the item runs", func(t *testing.T) {
+		item := defaultItem(t, root, hash)
+		if err := os.RemoveAll(item.dir); err != nil {
+			t.Fatal(err)
 		}
-	}
-	p.enqueue(good)
-	p.enqueue(good) // a second pod of the pool: collapsed while it waits
-	if got := p.queue.Len(); got != 1 {
-		t.Fatalf("queue holds %d items after two enqueues of one hash, want 1", got)
-	}
-	drain()
-	p.enqueue(good) // a later pod, re-plan or retry: already prewarmed
-	if got := p.queue.Len(); got != 0 {
-		t.Errorf("queue holds %d items after enqueueing a prewarmed hash, want 0", got)
-	}
+		p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
+		p.process(ctx, item)
+		if got := p.queue.NumRequeues(item); got != 0 {
+			t.Errorf("NumRequeues after a superseded prewarm = %d, want 0 (not retried)", got)
+		}
+		if n := cachedAssets(t, root); n != 0 {
+			t.Errorf("a superseded prewarm fetched %d assets, want 0", n)
+		}
+		if exists(item.dir) {
+			t.Error("a superseded prewarm recreated its directory")
+		}
+	})
 
-	p.enqueue(bad)
-	drain()
-	p.queue.Forget(bad) // drop the retry backoff for the test
-	p.enqueue(bad)
-	if got := p.queue.Len(); got != 1 {
-		t.Errorf("queue holds %d items after enqueueing a hash whose prewarm failed, want 1 (not skipped)", got)
+	t.Run("worker gone while staging", func(t *testing.T) {
+		item := defaultItem(t, root, hash)
+		removing := &removingFetcher{inner: herder, remove: filepath.Join(root, "workers", "pod-a")}
+		p := newRuntimePrewarmer(index, removing, newTestImageStore(t))
+		p.process(ctx, item)
+		if got := p.queue.NumRequeues(item); got != 0 {
+			t.Errorf("NumRequeues after the worker went mid-staging = %d, want 0 (not retried)", got)
+		}
+		if exists(filepath.Join(root, "workers", "pod-a")) {
+			t.Error("a prewarm recreated the directory of a worker removed while it staged")
+		}
+	})
+}
+
+// removingFetcher removes a directory the moment staging starts, standing in
+// for a worker deleted after the prewarm found its directory in place.
+type removingFetcher struct {
+	inner  sandboxAssetFetcher
+	remove string
+}
+
+func (r *removingFetcher) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
+	return r.inner.ensureSandboxAssets(ctx, rec, dstDir)
+}
+
+func (r *removingFetcher) stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
+	if err := os.RemoveAll(r.remove); err != nil {
+		return nil, err
 	}
+	return r.inner.stageSandboxAssets(ctx, rec, dstDir)
 }
 
 // TestRuntimePrewarmFillsBothCaches covers a successful prewarm: the asset
-// lands in the asset cache with nothing left in the scratch dir, and the
-// pause image lands in the image cache.
+// lands in the asset cache, linked into the runtime's directory so an
+// eviction pass keeps it, and the pause image lands in the image cache. A
+// second prewarm of the same directory fetches nothing.
 func TestRuntimePrewarmFillsBothCaches(t *testing.T) {
-	useTempAssetScratch(t)
 	ctx := context.Background()
 	pauseRef, _ := pauseImageInTestRegistry(t)
 	content := gvisorReleaseTarball(t)
@@ -215,25 +262,54 @@ func TestRuntimePrewarmFillsBothCaches(t *testing.T) {
 
 	root := t.TempDir()
 	images := newTestImageStore(t)
-	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}, images)
-	if err := p.prewarm(ctx, hash, rt); err != nil {
+	var gets atomic.Int32
+	// No min age, so the only thing standing between the entry and a pass is
+	// the directory's link.
+	s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root, filecache.WithMinAge(0)), anonGCSClient: fakeObjectStorage{data: content, gets: &gets}}
+	p := newRuntimePrewarmer(index, s, images)
+	item := defaultItem(t, root, hash)
+	if err := p.prewarm(ctx, item, rt); err != nil {
 		t.Fatalf("prewarm: %v", err)
 	}
 	if n := cachedAssets(t, root); n != 1 {
 		t.Errorf("asset cache holds %d assets after prewarm, want 1", n)
 	}
-	if left, err := os.ReadDir(ateletpath.SandboxAssetScratchDir); err != nil || len(left) != 0 {
-		t.Errorf("prewarm left %d scratch dirs behind (%v)", len(left), err)
+	if _, err := os.Stat(filepath.Join(item.dir, gvisorAssetName, "runsc")); err != nil {
+		t.Errorf("prewarm did not link the runtime's asset into its directory: %v", err)
 	}
 	if _, err := images.EnsureImage(ctx, pauseRef); err != nil {
 		t.Errorf("pause image not prewarmed into the image cache: %v", err)
+	}
+	stats, err := s.sandboxAssetCache.EvictUnused(ctx, 1<<40, false)
+	if err != nil {
+		t.Fatalf("EvictUnused: %v", err)
+	}
+	if stats.Retired != 0 || stats.SkippedLinked != 1 || cachedAssets(t, root) != 1 {
+		t.Errorf("after an eviction pass: stats=%+v, cached=%d; want the linked asset kept", stats, cachedAssets(t, root))
+	}
+
+	// A re-sync with the same default hands the same directory over again:
+	// the staging finds every asset in place and downloads nothing.
+	before := gets.Load()
+	if err := p.prewarm(ctx, item, rt); err != nil {
+		t.Fatalf("second prewarm: %v", err)
+	}
+	if got := gets.Load(); got != before {
+		t.Errorf("a prewarm of a complete directory fetched %d times, want 0", got-before)
+	}
+
+	// The worker goes, and its directory with it: the entry is evictable.
+	if err := os.RemoveAll(filepath.Join(root, "workers", "pod-a")); err != nil {
+		t.Fatal(err)
+	}
+	if stats, _ := s.sandboxAssetCache.EvictUnused(ctx, 1<<40, true); stats.Retired != 1 {
+		t.Errorf("after the worker went, a pass would retire %d entries, want 1", stats.Retired)
 	}
 }
 
 // TestRuntimePrewarmAssetFailureStillPullsImage pins that the two halves
 // are independent: a failing asset fetch does not stop the pause image pull.
 func TestRuntimePrewarmAssetFailureStillPullsImage(t *testing.T) {
-	useTempAssetScratch(t)
 	ctx := context.Background()
 	pauseRef, _ := pauseImageInTestRegistry(t)
 	index := newRuntimeIndex()
@@ -241,8 +317,9 @@ func TestRuntimePrewarmAssetFailureStillPullsImage(t *testing.T) {
 	rt, _ := index.lookup(hash)
 
 	images := newTestImageStore(t)
-	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}, images)
-	if err := p.prewarm(ctx, hash, rt); err == nil {
+	root := t.TempDir()
+	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}, images)
+	if err := p.prewarm(ctx, defaultItem(t, root, hash), rt); err == nil {
 		t.Error("prewarm returned nil despite the asset fetch failing")
 	}
 	if _, err := images.EnsureImage(ctx, pauseRef); err != nil {
@@ -254,15 +331,16 @@ func TestRuntimePrewarmAssetFailureStillPullsImage(t *testing.T) {
 // the prewarmer's attempt timeout: the queue has one worker, so an attempt
 // that never returned would block every other runtime's prewarm.
 func TestRuntimePrewarmAttemptTimeout(t *testing.T) {
-	useTempAssetScratch(t)
 	index := newRuntimeIndex()
 	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t), "")
 	rt, _ := index.lookup(hash)
-	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: hangingObjectStorage{}}, newTestImageStore(t))
+	root := t.TempDir()
+	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: hangingObjectStorage{}}, newTestImageStore(t))
 	p.attemptTimeout = 50 * time.Millisecond
 
+	item := defaultItem(t, root, hash)
 	done := make(chan error, 1)
-	go func() { done <- p.prewarm(context.Background(), hash, rt) }()
+	go func() { done <- p.prewarm(context.Background(), item, rt) }()
 	select {
 	case err := <-done:
 		if err == nil {
@@ -273,22 +351,32 @@ func TestRuntimePrewarmAttemptTimeout(t *testing.T) {
 	}
 }
 
-// TestSyncPodPrewarmsDefaultRuntime pins the hand-off: a worker's default
-// runtime, and only that, is handed to the prewarmer, and before the build
-// fetches anything for its probes, so the probes are the prewarm's head
-// start. A build that then fails has still handed it over.
+// TestSyncPodPrewarmsDefaultRuntime pins the hand-off: once a worker's file
+// is written, its default runtime, and only that, is handed to the
+// prewarmer in a directory of its own under the pod's, and the pod's
+// default-runtime directory is made to match the file: a retired default's
+// directory goes, the current one stays as it is. A build that fails hands
+// nothing over and touches no directory, and the pod's removal takes them
+// all.
 func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	pod := workerPod("pod-a", "pool")
 	s := newTestSyncer(t, pod, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
-	var prewarmed []string
-	s.prewarm = func(hash string) { prewarmed = append(prewarmed, hash) }
+	rec := &recordingPrewarm{}
+	s.prewarm = rec
 	s.assets = &fakeAssetFetcher{
-		fn: func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
-			if len(prewarmed) == 0 {
-				t.Error("the build fetched for a probe before the default runtime was handed to the prewarmer")
+		fn: func(ctx context.Context, r *sandboxAssetsRecord) (map[string]string, error) {
+			if rec.count() != 0 {
+				t.Error("the default runtime was handed to the prewarmer before the build finished")
 			}
-			return newTestAssetFetcher().ensureSandboxAssets(ctx, rec, "")
+			return newTestAssetFetcher().ensureSandboxAssets(ctx, r, "")
 		},
+	}
+	dirs := filepath.Join(s.podDir("pod-a"), defaultRuntimeDirsName)
+	// Left by an earlier sync: a default the pool no longer runs, which must
+	// go, and a stray file in the parent, which must go too.
+	stale := filepath.Join(dirs, "sha256-stale")
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
 	}
 	if err := s.syncPod(context.Background(), pod); err != nil {
 		t.Fatalf("syncPod: %v", err)
@@ -298,42 +386,104 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 		t.Fatal("pod-a not indexed")
 	}
 	cr, _ := wr.class(v1alpha1.SandboxClassGvisor)
-	if len(prewarmed) != 1 || prewarmed[0] != cr.defaultHash {
-		t.Errorf("prewarmed %v, want the default runtime %s once", prewarmed, cr.defaultHash)
+	want := []prewarmItem{{hash: cr.defaultHash, dir: s.defaultRuntimeDir("pod-a", cr.defaultHash)}}
+	if got := rec.items(); !slices.Equal(got, want) {
+		t.Errorf("prewarm handed %+v, want %+v", got, want)
+	}
+	if !exists(want[0].dir) {
+		t.Error("the default's directory was not created")
+	}
+	if exists(stale) {
+		t.Error("a retired default's directory survived the sync")
 	}
 	if len(cr.hashes) < 2 {
 		t.Fatalf("config advertises %d runtimes, want several so the test proves only the default is prewarmed", len(cr.hashes))
 	}
 
-	// A build that fails on the default's probe writes nothing, but the
-	// prewarm was queued before it started.
+	// A re-sync with the same default: the directory, and what the
+	// prewarmer put in it, stays; the default is handed over again.
+	marker := filepath.Join(want[0].dir, "staged")
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.syncPod(context.Background(), pod); err != nil {
+		t.Fatalf("syncPod again: %v", err)
+	}
+	if got := rec.items(); len(got) != 2 || got[1] != want[0] {
+		t.Errorf("prewarm handed %+v after a re-sync, want the same item twice", got)
+	}
+	if !exists(marker) {
+		t.Error("a re-sync with the same default emptied its directory")
+	}
+	if err := s.removeDir(context.Background(), "pod-a"); err != nil {
+		t.Fatal(err)
+	}
+	if exists(dirs) {
+		t.Error("the default runtime directories survived the pod's removal")
+	}
+
+	// A build that fails on the default's probe writes nothing, hands
+	// nothing over, and leaves the directories as they were.
 	s = newTestSyncer(t, pod, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
-	prewarmed = nil
-	s.prewarm = func(hash string) { prewarmed = append(prewarmed, hash) }
+	rec = &recordingPrewarm{}
+	s.prewarm = rec
 	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return nil, errors.New("runsc failed") }
+	previous := s.defaultRuntimeDir("pod-a", "sha256:previous")
+	if err := os.MkdirAll(previous, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.syncPod(context.Background(), pod); err == nil {
 		t.Fatal("syncPod with the default's probe failing = nil, want an error")
 	}
-	if len(prewarmed) != 1 || prewarmed[0] != cr.defaultHash {
-		t.Errorf("prewarmed %v after a failed build, want the default runtime %s once", prewarmed, cr.defaultHash)
+	if got := rec.items(); len(got) != 0 {
+		t.Errorf("prewarm handed %+v after a failed build, want nothing", got)
+	}
+	if !exists(previous) {
+		t.Error("a failed build removed the previous default's directory")
 	}
 	if _, ok := s.index.worker("pod-a"); ok {
 		t.Error("a failed build registered the worker")
 	}
 }
 
+// recordingPrewarm stands in for the prewarmer in syncer tests. Safe to
+// read while a syncer's workers call it.
+type recordingPrewarm struct {
+	mu       sync.Mutex
+	enqueued []prewarmItem
+}
+
+func (r *recordingPrewarm) enqueue(hash, dir string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.enqueued = append(r.enqueued, prewarmItem{hash: hash, dir: dir})
+}
+
+func (r *recordingPrewarm) items() []prewarmItem {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]prewarmItem(nil), r.enqueued...)
+}
+
+func (r *recordingPrewarm) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.enqueued)
+}
+
 // TestDefaultRuntimePrewarmThroughSyncer runs the whole path: a worker pod,
 // its pool and SandboxConfig in fake clientsets flow through the informers
 // into the syncer, which indexes the pod's runtimes, writes its file, and
 // hands its default runtime to the prewarmer, which lands the asset in the
-// cache without any Run/Restore request.
+// cache, linked under the worker's directory, without any Run/Restore
+// request.
 func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
-	useTempAssetScratch(t)
+	useTempAssetScratch(t) // the syncer's runsc probe stages into it
 	// The worker's own prewarm call returns only when the asset has landed
 	// and the pause-image pull has finished. Waiting for the call keeps the
 	// pull's last writes from racing the TempDir cleanup.
 	prewarmed := make(chan error, 1)
-	onFinished := func(_ string, err error) {
+	onFinished := func(_ prewarmItem, err error) {
 		// Non-blocking: a failed attempt is retried, and the worker must not
 		// block on a result nobody reads.
 		select {
@@ -354,6 +504,7 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	root := t.TempDir()
+	workersDir := filepath.Join(root, "workers") // on the cache's filesystem
 	index := newRuntimeIndex()
 	herder := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
 	p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
@@ -372,7 +523,7 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 		ateFactory.Api().V1alpha1().WorkerPools(),
 		ateFactory.Api().V1alpha1().SandboxConfigs(),
 		newScriptAssetFetcher(t), // the syncer's runsc probe; prewarm goes through herder
-		t.TempDir(), index, p.enqueue)
+		workersDir, index, p)
 	if err != nil {
 		t.Fatalf("startWorkerSandboxSyncer: %v", err)
 	}
@@ -390,11 +541,16 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 	if n := cachedAssets(t, root); n != 1 {
 		t.Fatalf("asset cache holds %d assets after prewarm, want 1", n)
 	}
-	// The prewarm is queued before the build probes, so it can finish
-	// before the file is written; the syncer catches up on its own.
 	waitFor(t, "the worker's runtimes file to be written", func() bool { return exists(s.runtimesFile("pod-a")) })
-	waitFor(t, "the prewarm's and the probe's scratch dirs to be removed", func() bool {
+	waitFor(t, "the probe's scratch dir to be removed", func() bool {
 		left, err := os.ReadDir(ateletpath.SandboxAssetScratchDir)
 		return err == nil && len(left) == 0
 	})
+	wr, _ := index.worker("pod-a")
+	cr, _ := wr.class(v1alpha1.SandboxClassGvisor)
+	linked := filepath.Join(s.defaultRuntimeDir("pod-a", cr.defaultHash), gvisorAssetName, "runsc")
+	waitFor(t, "the worker's default runtime to be linked under its directory", func() bool { return exists(linked) })
+	if dirs, err := os.ReadDir(filepath.Join(s.podDir("pod-a"), defaultRuntimeDirsName)); err != nil || len(dirs) != 1 {
+		t.Errorf("default runtime directories under the worker's = %v, %v; want exactly one", dirs, err)
+	}
 }

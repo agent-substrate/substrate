@@ -128,10 +128,10 @@ func TestEvictUnusedRespectsMinAge(t *testing.T) {
 	}
 }
 
-func TestEvictUnusedPrefersUnlinkedOverOlderLinked(t *testing.T) {
+func TestEvictUnusedTakesOnlyUnlinkedEntries(t *testing.T) {
 	s := newTestStore(t, WithMinAge(0))
-	// The linked entry is older; pure LRU would take it first. The pass must
-	// prefer the unlinked one, whose bytes actually come back.
+	// The linked entry is older; pure LRU would take it first. A link is a
+	// consumer's claim, so the pass takes the unlinked one and nothing else.
 	linked := cacheEntry(t, s, "linked", "xx", 3*time.Hour, true)
 	unlinked := cacheEntry(t, s, "unlinked", "yy", time.Hour, false)
 
@@ -139,18 +139,21 @@ func TestEvictUnusedPrefersUnlinkedOverOlderLinked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvictUnused: %v", err)
 	}
-	if stats.Retired != 1 || stats.FreedBytes == 0 || stats.PendingBytes != 0 {
-		t.Errorf("stats = %+v, want one eviction with freed bytes only", stats)
+	if stats.Retired != 1 || stats.FreedBytes == 0 || stats.SkippedLinked != 1 {
+		t.Errorf("stats = %+v, want one eviction and one linked entry skipped", stats)
 	}
 	if entryExists(t, s, unlinked) {
 		t.Error("unlinked entry survived")
 	}
 	if !entryExists(t, s, linked) {
-		t.Error("linked entry evicted while an unlinked one satisfied the target")
+		t.Error("linked entry evicted")
 	}
 }
 
-func TestEvictUnusedLinkedEntryIsSafeForConsumer(t *testing.T) {
+// TestEvictUnusedNeverEvictsALinkedEntry pins the contract a consumer's
+// link buys: however old the entry and however short the pass falls, the
+// entry stays, and the next caller gets a hit rather than a second copy.
+func TestEvictUnusedNeverEvictsALinkedEntry(t *testing.T) {
 	s := newTestStore(t, WithMinAge(0))
 	key := URIKey("test://held")
 	fetch, calls := countingFetcher("held bytes")
@@ -167,23 +170,38 @@ func TestEvictUnusedLinkedEntryIsSafeForConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvictUnused: %v", err)
 	}
-	if stats.Retired != 1 || stats.FreedBytes != 0 || stats.PendingBytes == 0 {
-		t.Errorf("stats = %+v, want one eviction counted as pending bytes", stats)
+	if stats.Retired != 0 || stats.FreedBytes != 0 || stats.SkippedLinked != 1 {
+		t.Errorf("stats = %+v, want nothing evicted and one linked entry skipped", stats)
 	}
-	if entryExists(t, s, key) {
-		t.Error("entry still published after eviction")
+	if !entryExists(t, s, key) {
+		t.Error("linked entry evicted")
 	}
-	// The consumer's link is untouched: eviction cost is a re-download,
-	// never a broken consumer.
 	got, err := os.ReadFile(dst)
 	if err != nil || string(got) != "held bytes" {
-		t.Errorf("consumer link after eviction: %q, %v", got, err)
+		t.Errorf("consumer link after the pass: %q, %v", got, err)
 	}
 	if err := s.GetFileTo(context.Background(), key, dstPath(t, s, "held2"), fetch); err != nil {
-		t.Fatalf("GetFileTo after eviction: %v", err)
+		t.Fatalf("GetFileTo after the pass: %v", err)
 	}
-	if calls.Load() != 2 {
-		t.Errorf("fetch ran %d times, want 2 (original + post-eviction)", calls.Load())
+	if calls.Load() != 1 {
+		t.Errorf("fetch ran %d times, want 1 (the second caller hits)", calls.Load())
+	}
+
+	// Once the consumer's link is gone, the entry is an ordinary candidate.
+	for _, d := range []string{dst, dstPath(t, s, "held2")} {
+		if err := os.Remove(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(s.entryDir(key), stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = s.EvictUnused(context.Background(), evictAll, false)
+	if err != nil {
+		t.Fatalf("EvictUnused after unlinking: %v", err)
+	}
+	if stats.Retired != 1 || entryExists(t, s, key) {
+		t.Errorf("stats = %+v, entry exists = %v; want the unlinked entry evicted", stats, entryExists(t, s, key))
 	}
 }
 
@@ -196,8 +214,8 @@ func TestEvictUnusedDryRunTouchesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvictUnused(dryRun): %v", err)
 	}
-	if stats.Retired != 2 || stats.FreedBytes == 0 || stats.PendingBytes == 0 {
-		t.Errorf("stats = %+v, want both entries reported (one freed, one pending)", stats)
+	if stats.Retired != 1 || stats.FreedBytes == 0 || stats.SkippedLinked != 1 {
+		t.Errorf("stats = %+v, want the unlinked entry reported and the linked one skipped", stats)
 	}
 	if !entryExists(t, s, a) || !entryExists(t, s, b) {
 		t.Error("dry run removed entries")
@@ -355,6 +373,46 @@ func TestRetireEntryVetoesWhenLastUseMoved(t *testing.T) {
 	}
 }
 
+// TestRetireEntryVetoesWhenLinkedSinceListing pins the contract at its
+// last gate: an entry a consumer linked after the pass listed it is not
+// retired even when the link left the last-use clock alone, as a failed
+// best-effort touch would.
+func TestRetireEntryVetoesWhenLinkedSinceListing(t *testing.T) {
+	s := newTestStore(t, WithMinAge(0))
+	key := cacheEntry(t, s, "relinked", "x", time.Hour, false)
+
+	fi, err := os.Stat(s.entryDir(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := evictCandidate{dir: key.dir, mtime: fi.ModTime(), size: 1}
+
+	// A consumer links the entry out between the listing and the retire,
+	// without the touch a hit makes.
+	held := dstPath(t, s, "held")
+	if err := os.Link(s.dataPath(key), held); err != nil {
+		t.Fatal(err)
+	}
+	rmPath, retired, err := s.retireEntry(listed)
+	if err != nil {
+		t.Fatalf("retireEntry: %v", err)
+	}
+	if retired || rmPath != "" {
+		t.Errorf("retireEntry retired an entry linked since the listing (rmPath=%q)", rmPath)
+	}
+	if !entryExists(t, s, key) {
+		t.Error("linked entry vanished")
+	}
+
+	// The link goes: the same candidate retires.
+	if err := os.Remove(held); err != nil {
+		t.Fatal(err)
+	}
+	if _, retired, err := s.retireEntry(listed); err != nil || !retired {
+		t.Errorf("retireEntry after the link went = retired %v, err %v; want retired", retired, err)
+	}
+}
+
 func TestRetireEntryRetiresUnchangedEntry(t *testing.T) {
 	s := newTestStore(t, WithMinAge(0))
 	key := cacheEntry(t, s, "stale", "x", time.Hour, false)
@@ -437,7 +495,7 @@ func TestEvictUnusedUnlinkedTreeFreesItsBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvictUnused: %v", err)
 	}
-	if stats.Retired != 1 || stats.FreedBytes != size || stats.PendingBytes != 0 {
+	if stats.Retired != 1 || stats.FreedBytes != size {
 		t.Errorf("stats = %+v, want one eviction freeing %d bytes", stats, size)
 	}
 	if entryExists(t, s, key) {
@@ -446,10 +504,9 @@ func TestEvictUnusedUnlinkedTreeFreesItsBytes(t *testing.T) {
 	noRetiredLeftovers(t, s)
 }
 
-// TestEvictUnusedPartlyLinkedTreeIsSafeForConsumer pins that a tree counts
-// as linked while a consumer keeps any one of its files, and that evicting
-// it leaves the consumer's files intact.
-func TestEvictUnusedPartlyLinkedTreeIsSafeForConsumer(t *testing.T) {
+// TestEvictUnusedPartlyLinkedTreeIsNotEvicted pins that a tree counts as
+// linked while a consumer keeps any one of its files, and so stays.
+func TestEvictUnusedPartlyLinkedTreeIsNotEvicted(t *testing.T) {
 	s := newTestStore(t, WithMinAge(0))
 	key, dst := cacheTree(t, s, "held", time.Hour, []string{"gvisor-bin/LICENSE"})
 	if _, linked, err := s.sizeEntry(s.entryDir(key)); err != nil || !linked {
@@ -460,11 +517,11 @@ func TestEvictUnusedPartlyLinkedTreeIsSafeForConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvictUnused: %v", err)
 	}
-	if stats.Retired != 1 || stats.FreedBytes != 0 || stats.PendingBytes == 0 {
-		t.Errorf("stats = %+v, want one eviction counted as pending bytes", stats)
+	if stats.Retired != 0 || stats.SkippedLinked != 1 {
+		t.Errorf("stats = %+v, want nothing evicted and the tree skipped as linked", stats)
 	}
-	if entryExists(t, s, key) {
-		t.Error("entry still published after eviction")
+	if !entryExists(t, s, key) {
+		t.Error("linked tree evicted")
 	}
 	got, err := os.ReadFile(filepath.Join(dst, "gvisor-bin", "LICENSE"))
 	if err != nil || string(got) != releaseTree["gvisor-bin/LICENSE"].content {
@@ -473,7 +530,7 @@ func TestEvictUnusedPartlyLinkedTreeIsSafeForConsumer(t *testing.T) {
 	noRetiredLeftovers(t, s)
 }
 
-func TestEvictUnusedPrefersUnlinkedTreeOverOlderLinkedTree(t *testing.T) {
+func TestEvictUnusedTakesOnlyUnlinkedTrees(t *testing.T) {
 	s := newTestStore(t, WithMinAge(0))
 	linkedKey, _ := cacheTree(t, s, "old-linked", 3*time.Hour, []string{"runsc"})
 	unlinkedKey, _ := cacheTree(t, s, "new-unlinked", time.Hour, nil)

@@ -80,7 +80,7 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 	}, {
 		runtime: "microvm",
 		shape: func(s *specs.Spec) error {
-			return ShapeMicroVM(s, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"})
+			return ShapeMicroVM(s, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"})
 		},
 	}} {
 		t.Run(tc.runtime, func(t *testing.T) {
@@ -109,14 +109,14 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 // ShapeMicroVM rewrites bind sources to their guest share paths.
 func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 	spec := Build(parityOptions)
-	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err != nil {
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
 	for _, tc := range []struct{ dest, wantSource string }{
 		{"/var/data", GuestSharedDir + "/" + ShareDurable + "/data"},
 		{"/run/ate", GuestSharedDir + "/" + ShareSystemInfo + "/sysinfo"},
 		{"/mnt/csi", GuestSharedDir + "/" + ShareCSI + "/csi"},
-		{"/ate", GuestSharedDir + "/app/" + ShareVolumes + "/agent"},
+		{"/ate", GuestSharedDir + "/c_app/" + ShareVolumes + "/agent"},
 	} {
 		if got := mountFor(t, spec, tc.dest).Source; got != tc.wantSource {
 			t.Errorf("%s source = %q, want %q", tc.dest, got, tc.wantSource)
@@ -132,7 +132,7 @@ func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
 	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
 	spec.Mounts = append(spec.Mounts, specs.Mount{Destination: "/mnt/new", Type: "bind", Source: "/var/lib/ate/new-kind/x"})
-	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err == nil {
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err == nil {
 		t.Fatal("ShapeMicroVM() = nil, want an error for a bind that is not staged into the share")
 	}
 }

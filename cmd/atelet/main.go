@@ -32,6 +32,8 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/spf13/pflag"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"go.ate.dev/substrate/cmd/atelet/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/credentialprovider"
@@ -39,6 +41,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
 	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
+	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateapiauth"
 	"go.ate.dev/substrate/internal/ateattr"
@@ -47,6 +50,7 @@ import (
 	"go.ate.dev/substrate/internal/clustertrustbundle"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/otlprelay"
@@ -94,11 +98,12 @@ var (
 	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	healthListenAddr  = pflag.String("health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
 
-	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
-	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
-	ateapiAddress        = pflag.String("ateapi-address", "k8s:///api.ate-system.svc:443", "ateapi gRPC target used by the credential broker.")
-	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ateapi.")
-	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ateapi certificate.")
+	grpcServerCredBundle  = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
+	clientCACerts         = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
+	herderAllowedSPIFFEID = pflag.String("herder-allowed-spiffe-id", installdefaults.SPIFFEID(installdefaults.NamespaceFromPodEnv(), installdefaults.APIServerServiceAccount), "The only SPIFFE ID allowed to call AteomHerder.")
+	ateapiAddress         = pflag.String("ateapi-address", "k8s:///api.ate-system.svc:443", "ateapi gRPC target used by the credential broker.")
+	ateapiCAFile          = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ateapi.")
+	ateapiServerName      = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ateapi certificate.")
 
 	// The kubelet already knows how to authenticate to its node's cloud
 	// registry, via an exec plugin the node ships. Pointing atelet at the same
@@ -121,11 +126,13 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
-	snapshotUploadDelay     = pflag.Duration("snapshot-upload-delay", snapshottracker.DefaultUploadDelay, "How long after an actor's oldest snapshot not yet in object storage was taken atelet uploads the actor's latest local snapshot in the background; later while an upload is in progress or failing.")
-	snapshotDetachDelay     = pflag.Duration("snapshot-detach-delay", snapshottracker.DefaultDetachDelay, "How long an actor stays suspended on this node, its latest snapshot kept locally, before atelet detaches it in the background.")
-	snapshotUploadWorkers   = pflag.Int("snapshot-upload-workers", snapshottracker.DefaultUploadWorkers, "How many background snapshot uploads atelet runs at once.")
-	snapshotDetachWorkers   = pflag.Int("snapshot-detach-workers", snapshottracker.DefaultDetachWorkers, "How many background detaches atelet runs at once.")
+	objectStorePluginSocket   = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
+	snapshotUploadDelay       = pflag.Duration("snapshot-upload-delay", snapshottracker.DefaultUploadDelay, "How long after an actor's oldest snapshot not yet in object storage was taken atelet uploads the actor's latest local snapshot in the background; later while an upload is in progress or failing.")
+	snapshotDetachDelay       = pflag.Duration("snapshot-detach-delay", snapshottracker.DefaultDetachDelay, "How long an actor stays suspended on this node, its latest snapshot kept locally, before atelet detaches it in the background.")
+	snapshotUploadWorkers     = pflag.Int("snapshot-upload-workers", snapshottracker.DefaultUploadWorkers, "How many background snapshot uploads atelet runs at once.")
+	snapshotDetachWorkers     = pflag.Int("snapshot-detach-workers", snapshottracker.DefaultDetachWorkers, "How many background detaches atelet runs at once.")
+	snapshotReportWorkers     = pflag.Int("snapshot-report-workers", snapshottracker.DefaultReportWorkers, "How many background snapshot state reports atelet runs at once. 0 disables background reporting.")
+	snapshotReportGiveUpAfter = pflag.Duration("snapshot-report-give-up-after", snapshottracker.DefaultReportGiveUpAfter, "How long after a background upload or detach atelet keeps retrying a failed snapshot state report before giving up on it.")
 )
 
 var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
@@ -206,7 +213,7 @@ func main() {
 	// directly for its whole life, so the socket should exist before any worker
 	// pod on this node boots.
 	if relay, err := otlprelay.NewServer(ctx, *otlpRelaySocket); err != nil {
-		slog.ErrorContext(ctx, "Failed to create the OTLP relay; workers will export directly", slog.Any("err", err))
+		slog.ErrorContext(ctx, "Failed to create the OTLP relay; workers fall back to their own OTLP endpoint", slog.Any("err", err))
 	} else if relay != nil {
 		// Deferred rather than tied to the drain: the relay carries other
 		// processes' telemetry, so it should outlive atelet's own RPC serving
@@ -215,7 +222,7 @@ func main() {
 		go func() {
 			if err := relay.Serve(ctx); err != nil {
 				// Not fatal: atelet's actual job does not depend on the relay,
-				// and the workers fall back to exporting directly.
+				// and the workers fall back to their own OTLP endpoint.
 				slog.ErrorContext(ctx, "OTLP relay stopped", slog.Any("err", err))
 			}
 		}()
@@ -260,9 +267,21 @@ func main() {
 	if err := validateSandboxAssetCacheFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid sandbox asset cache flags", err)
 	}
-	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout)
+	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout, nodepath.ActorsDir, nodepath.WorkersDir())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open sandbox asset cache", err)
+	}
+	if err := validateSandboxAssetCacheGCFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid sandbox asset cache GC flags", err)
+	}
+	sandboxAssetCacheInstruments, err := newSandboxAssetCacheInstruments(otel.Meter("atelet"), sandboxAssetCache)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create sandbox asset cache metrics", err)
+	}
+	if *sandboxAssetCacheMaxBytes == 0 {
+		slog.WarnContext(ctx, "Sandbox asset cache has no budget; it only grows", slog.String("flag", "--sandbox-asset-cache-max-bytes"))
+	} else if *sandboxAssetCacheGCPeriod > 0 {
+		go newSandboxAssetCacheGC(sandboxAssetCache, sandboxAssetCacheInstruments).Run(ctx)
 	}
 
 	// Sandbox assets go through the object-store plugin; a gs:// asset it
@@ -332,6 +351,25 @@ func main() {
 		serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 	}
 
+	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		K8sClient:        k8sClient,
+		CAFile:           *ateapiCAFile,
+		ServerName:       *ateapiServerName,
+		ClientCredBundle: *grpcServerCredBundle,
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
+	}
+	// atelet acts for the system, not a user, so it always opts in to the
+	// preview features the server enables.
+	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
+	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
+	}
+	defer ateapiConn.Close()
+	workerService := ateapipb.NewWorkerServiceClient(ateapiConn)
+
 	// The snapshot tracker's workers get a context of their own, cancelled only
 	// once the gRPC server has drained, so background snapshot work keeps
 	// running while in-flight RPCs finish.
@@ -342,7 +380,10 @@ func main() {
 		snapshottracker.WithDetachDelay(*snapshotDetachDelay),
 		snapshottracker.WithUploadWorkers(*snapshotUploadWorkers),
 		snapshottracker.WithDetachWorkers(*snapshotDetachWorkers),
-		snapshottracker.WithInstruments(trackerInstruments))
+		snapshottracker.WithInstruments(trackerInstruments),
+		snapshottracker.WithReporter(&trackerReporter{workers: workerService}),
+		snapshottracker.WithReportWorkers(*snapshotReportWorkers),
+		snapshottracker.WithReportGiveUpAfter(*snapshotReportGiveUpAfter))
 	// The runtimes this node's workers advertise, read by Run and Restore.
 	// Loaded from disk before anything serves, so a runtime a worker
 	// registered before a restart resolves at once; the worker sandbox
@@ -371,25 +412,12 @@ func main() {
 	snapshots.Start()
 	go systemInfoVolumes.run(ctx)
 
-	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        k8sClient,
-		CAFile:           *ateapiCAFile,
-		ServerName:       *ateapiServerName,
-		ClientCredBundle: *grpcServerCredBundle,
-	})
+	herderCaller, err := spiffeid.FromString(*herderAllowedSPIFFEID)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
+		serverboot.Fatal(ctx, "Invalid --herder-allowed-spiffe-id", err)
 	}
-	// atelet acts for the system, not a user, so it always opts in to the
-	// preview features the server enables.
-	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
-	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
-	}
-	defer ateapiConn.Close()
-
-	tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts)
+	// Any pod can get a podidentity certificate, so also check the caller.
+	tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts, verifyClientSPIFFEID(herderCaller))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to build server TLS config", err)
 	}
@@ -438,7 +466,7 @@ func main() {
 		ateFactory.Api().V1alpha1().WorkerPools(),
 		ateFactory.Api().V1alpha1().SandboxConfigs(),
 		wmService,
-		nodepath.WorkersDir(), runtimes, prewarmer.enqueue)
+		nodepath.WorkersDir(), runtimes, prewarmer)
 	if err != nil {
 		// Without the syncer no runtime is ever indexed, so no actor could run.
 		serverboot.Fatal(ctx, "Failed to start the worker sandbox runtimes syncer", err)
@@ -448,8 +476,10 @@ func main() {
 	ateFactory.Start(stopCh)
 	workerPodFactory.Start(stopCh)
 
-	workerFacingTLS := tlsCfg.Clone()
-	workerFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
+	workerFacingTLS, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts, verifyClientOnSameNode(ateletIdentity))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build credential broker TLS config", err)
+	}
 	if err := os.Remove(nodepath.WorkerSupportSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
 		serverboot.Fatal(ctx, "Failed to remove stale credential broker socket", err)
 	}
@@ -465,7 +495,7 @@ func main() {
 	workerFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(workerFacingTLS)))
 
 	ateletpb.RegisterWorkerSupportServer(workerFacingSrv, &workerSupportServer{
-		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
+		workers: workerService,
 		control: ateapipb.NewControlClient(ateapiConn),
 	})
 	go func() {
@@ -539,10 +569,10 @@ func rejectStorageEnv() error {
 	return nil
 }
 
-// validateSnapshotDelayFlags checks --snapshot-upload-delay and
-// --snapshot-detach-delay: both must be positive, and the upload delay must not
-// exceed the detach delay, since a detach uploads the latest local snapshot
-// anyway.
+// validateSnapshotDelayFlags checks --snapshot-upload-delay,
+// --snapshot-detach-delay, and --snapshot-report-give-up-after: all three must
+// be positive, and the upload delay must not exceed the detach delay, since a
+// detach uploads the latest local snapshot anyway.
 func validateSnapshotDelayFlags() error {
 	if *snapshotUploadDelay <= 0 {
 		return fmt.Errorf("--snapshot-upload-delay %v must be > 0", *snapshotUploadDelay)
@@ -553,17 +583,24 @@ func validateSnapshotDelayFlags() error {
 	if *snapshotUploadDelay > *snapshotDetachDelay {
 		return fmt.Errorf("--snapshot-upload-delay %v must not exceed --snapshot-detach-delay %v", *snapshotUploadDelay, *snapshotDetachDelay)
 	}
+	if *snapshotReportGiveUpAfter <= 0 {
+		return fmt.Errorf("--snapshot-report-give-up-after %v must be > 0", *snapshotReportGiveUpAfter)
+	}
 	return nil
 }
 
-// validateSnapshotWorkerFlags checks --snapshot-upload-workers and
-// --snapshot-detach-workers: each must be at least 1.
+// validateSnapshotWorkerFlags checks --snapshot-upload-workers,
+// --snapshot-detach-workers, and --snapshot-report-workers: upload and detach
+// must be at least 1, and report must be at least 0.
 func validateSnapshotWorkerFlags() error {
 	if *snapshotUploadWorkers < 1 {
 		return fmt.Errorf("--snapshot-upload-workers %d must be >= 1", *snapshotUploadWorkers)
 	}
 	if *snapshotDetachWorkers < 1 {
 		return fmt.Errorf("--snapshot-detach-workers %d must be >= 1", *snapshotDetachWorkers)
+	}
+	if *snapshotReportWorkers < 0 {
+		return fmt.Errorf("--snapshot-report-workers %d must be >= 0", *snapshotReportWorkers)
 	}
 	return nil
 }
@@ -642,9 +679,20 @@ type Atelet struct {
 
 	// snapshots tracks each actor's snapshots on this node.
 	snapshots *snapshottracker.Tracker
+	// actorLocks serializes lifecycle RPCs per actor.
+	actorLocks actorlock.Locks
 }
 
 var _ ateletpb.AteletServer = (*Atelet)(nil)
+
+// lockActor acquires the per-actor RPC lock for actorUID, or returns an error
+// wrapping ctx.Err() if ctx ends while waiting.
+func (s *Atelet) lockActor(ctx context.Context, actorUID string) (func(), error) {
+	if !s.actorLocks.Lock(ctx, actorUID) {
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
+	}
+	return func() { s.actorLocks.Unlock(actorUID) }, nil
+}
 
 // NewService creates a new WorkersManagerService.
 func NewService(
@@ -698,6 +746,11 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	if err != nil {
 		return nil, err
 	}
+	unlockActor, err := s.lockActor(ctx, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
 	endStart, err := s.snapshots.BeginStart(ctx, actorUID)
 	if err != nil {
 		return nil, err
@@ -877,7 +930,13 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 			snapshotLogAttrs(attribution, op, checkpointDurationMetric, err, phases)...)
 	}()
 
-	// A detach in progress finishes first, and none starts until the
+	unlockActor, err := s.lockActor(ctx, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
+
+	// A detach in progress finishes first, and no detach starts until the
 	// checkpoint returns, so it cannot delete the snapshot being written.
 	endCheckpoint, err := s.snapshots.BeginCheckpoint(ctx, actorUID, req.GetSnapshot())
 	if err != nil {
@@ -1172,8 +1231,7 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
-		// Always the actor's durable latest: golden actors are never paused
-		// (validation above rejects the golden atespace).
+		// Uploading a paused checkpoint creates a durable latest snapshot.
 		kind:     ateattr.SnapshotKindLatest,
 		fidelity: ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
 	}
@@ -1188,6 +1246,12 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 		return nil, apierror.InvalidArgument("%v", err)
 	}
 	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetSnapshot().GetSnapshotUuid())
+
+	unlockActor, err := s.lockActor(ctx, req.GetActorUid())
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
 
 	// A detach or a background upload of this snapshot in progress finishes
 	// first, and no detach starts until the promote returns.
@@ -1235,7 +1299,7 @@ func (s *Atelet) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.Pro
 			return "", false, nil
 		}
 		if status.Code(fetchErr) == codes.NotFound {
-			return "", false, fmt.Errorf("local snapshot %q is gone and no uploaded copy exists: %w",
+			return "", false, apierror.NotFound("local snapshot %q is gone and no uploaded copy exists: %w",
 				localSnapshotName, fetchErr)
 		}
 		return "", false, fmt.Errorf("while probing for an already-uploaded snapshot manifest: %w", fetchErr)
@@ -1374,8 +1438,14 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			snapshotLogAttrs(attribution, op, restoreDurationMetric, err, phases)...)
 	}()
 
-	// A detach in progress finishes first; its local copy is then gone, and
-	// the restore reads snapshot.object.
+	unlockActor, err := s.lockActor(ctx, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
+
+	// A detach in progress finishes first. If it ran, its local copy is gone,
+	// and the restore reads snapshot.object.
 	endStart, err := s.snapshots.BeginStart(ctx, actorUID)
 	if err != nil {
 		return nil, err
@@ -1434,10 +1504,6 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		checkpointDir = localDir
 		sandboxRec = localRec
 	} else {
-		if durable == nil {
-			return nil, apierror.NotFound("snapshot %q has no usable local copy and no snapshot.object to fall back to: %w",
-				req.GetSnapshot().GetSnapshotUuid(), localErr)
-		}
 		if errors.Is(localErr, errUnusableLocalSnapshot) {
 			// The next checkpoint or terminate prunes the unusable copy.
 			slog.WarnContext(ctx, "Local snapshot is unusable; restoring from object storage",
@@ -1459,8 +1525,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	dManifest = time.Since(tManifest)
 	manifestDone = true
 
-	// The manifest is what tells a golden restore from a latest one, so the
-	// snapshot kind only becomes knowable here.
+	// The snapshot kind is recorded once the manifest has been read.
 	op.kind = restoreSnapshotKind(directLocal, sandboxRec)
 
 	var registration *registeredActor
@@ -1581,6 +1646,25 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	return &ateletpb.RestoreResponse{}, nil
 }
 
+// DetachActor makes the actor's latest local snapshot durable, then deletes the
+// actor's local snapshots on this node.
+func (s *Atelet) DetachActor(ctx context.Context, req *ateletpb.DetachActorRequest) (*ateletpb.DetachActorResponse, error) {
+	if errs := apivalidation.ValidateDetachActorRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
+	}
+	unlockActor, err := s.lockActor(ctx, req.GetActorUid())
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
+
+	state, err := s.snapshots.Detach(ctx, req.GetActorUid())
+	if err != nil {
+		return nil, err
+	}
+	return &ateletpb.DetachActorResponse{State: state}, nil
+}
+
 // Terminate terminates any running workload on worker, unmounts external volumes,
 // and resets actor directories on the node.
 func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
@@ -1590,6 +1674,12 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
+
+	unlockActor, err := s.lockActor(ctx, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockActor()
 
 	if req.GetWorkerPodUid() != "" {
 		var assetPaths map[string]string
@@ -2137,8 +2227,13 @@ func removeActorDirs(actorUID string) error {
 
 // ateletServerTLSConfig builds a *tls.Config for a gRPC server that presents the
 // credential bundle at servingBundlePath, requires a client certificate
-// chaining to a CA in clientCAPath.
-func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config, error) {
+// chaining to a CA in clientCAPath, and authorizes the client with
+// verifyClient. verifyClient must be set on the config GetConfigForClient
+// returns; crypto/tls ignores the outer config's VerifyConnection.
+func ateletServerTLSConfig(servingBundlePath, clientCAPath string, verifyClient func(tls.ConnectionState) error) (*tls.Config, error) {
+	if verifyClient == nil {
+		return nil, fmt.Errorf("client authorization callback is required")
+	}
 	loadClientCAs := credbundle.PoolLoader(clientCAPath)
 	if _, err := loadClientCAs(); err != nil {
 		return nil, fmt.Errorf("load CA bundle %s: %w", clientCAPath, err)
@@ -2152,13 +2247,32 @@ func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config,
 				return nil, err
 			}
 			return &tls.Config{
-				MinVersion:     tls.VersionTLS13,
-				GetCertificate: serverCert,
-				ClientAuth:     tls.RequireAndVerifyClientCert,
-				ClientCAs:      clientCAs,
+				MinVersion:       tls.VersionTLS13,
+				GetCertificate:   serverCert,
+				ClientAuth:       tls.RequireAndVerifyClientCert,
+				ClientCAs:        clientCAs,
+				VerifyConnection: verifyClient,
 			}, nil
 		},
 	}, nil
+}
+
+// verifyClientSPIFFEID returns a TLS callback that accepts only a client whose
+// verified certificate carries exactly the SPIFFE ID want.
+func verifyClientSPIFFEID(want spiffeid.ID) func(tls.ConnectionState) error {
+	return func(state tls.ConnectionState) error {
+		if len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 {
+			return fmt.Errorf("verified client certificate is required")
+		}
+		got, err := x509svid.IDFromCert(state.VerifiedChains[0][0])
+		if err != nil {
+			return fmt.Errorf("client certificate has no valid SPIFFE ID: %w", err)
+		}
+		if got != want {
+			return fmt.Errorf("client SPIFFE ID %q is not authorized, want %q", got, want)
+		}
+		return nil
+	}
 }
 
 func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {

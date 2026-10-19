@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package snapshottracker tracks each actor's snapshots on an atelet node, and
-// uploads and detaches them in the background.
+// Package snapshottracker tracks each actor's snapshots on an atelet node,
+// uploads and detaches them in the background, and reports what those change
+// to the control plane.
 package snapshottracker
 
 import (
@@ -43,6 +44,10 @@ type Store interface {
 // or PromoteSnapshot does any work, and commits never replace a snapshot with
 // an older generation. It uploads and detaches them in the background.
 //
+// Callers serialize lifecycle RPCs (Run, Restore, Checkpoint, PromoteSnapshot,
+// DetachActor, and Terminate) per actor before calling Tracker, so at most one
+// RPC runs for an actor at a time.
+//
 // Background work runs off two delaying workqueues of actor UIDs, one for
 // uploads and one for detaches, each drained by a fixed pool of workers of its
 // own, so slow uploads cannot hold up a due detach, nor detaches an upload.
@@ -71,8 +76,8 @@ type Store interface {
 //     operation in progress (see actorOp): a worker that finds one leaves the
 //     actor to that operation's end, which queues it again.
 //  5. An upload leaves LatestLocal on disk so a same-node Restore still
-//     reads it. A detach, in the background or via the Detach RPC, makes
-//     LatestLocal durable and then deletes all the actor's local snapshots.
+//     reads it. A detach, in the background or via Detach, makes LatestLocal
+//     durable and then deletes all the actor's local snapshots.
 //  6. A Run or Restore unschedules the actor's detach as it begins
 //     (BeginStart), and saves that before the workload can start, so atelet
 //     does not detach an actor whose start has begun, even after a restart or
@@ -81,14 +86,28 @@ type Store interface {
 //     Checkpoint, or PromoteSnapshot is in progress (BeginStart,
 //     BeginCheckpoint, or BeginPromote) waits for it to end, which queues the
 //     actor again.
+//  7. A background upload that records a new LatestDurable, or a background
+//     detach that records one or clears LatestLocal, makes a report of the
+//     actor's state due (ReportDueSince), saved with the change so that it
+//     survives a restart. A Checkpoint, a PromoteSnapshot while a local
+//     snapshot is kept, or a Detach call returns the latest state to the
+//     control plane, so it cancels any pending report. Report workers, apart
+//     from the upload and detach workers, spread saved reports across a
+//     startup window, send the actor's whole state through the Reporter, and
+//     retry with per-actor and queue-wide backoff until the control plane
+//     acknowledges or refuses it, a call cancels it, or reporting.giveUpAfter
+//     passes. A report waits while a Run, Restore, Checkpoint, or
+//     PromoteSnapshot is in progress, and a background change made while a
+//     report ran is reported again.
 //
-// The Detach RPC runs in the calling goroutine rather than on a worker, so an
-// explicit control-plane call does not wait behind other actors' background
-// work. It does wait for the actor's own operation in progress, even an
-// upload of an older snapshot; Run, Restore, and Checkpoint wait for a detach
-// in progress; and PromoteSnapshot waits for a detach or a background upload
-// of the same snapshot. A worker leaves an actor with an operation in
-// progress to that operation's end, which queues the actor again.
+// Detach runs in the calling goroutine rather than on a worker, so an explicit
+// control-plane call does not wait behind other actors' background work. It
+// does wait for the actor's own background operation in progress, even an
+// upload of an older snapshot; Run, Restore, and Checkpoint wait for a
+// background detach in progress; and PromoteSnapshot waits for a background
+// detach or a background upload of the same snapshot. A worker leaves an actor
+// with an operation in progress to that operation's end, which queues the
+// actor again.
 type Tracker struct {
 	// ctx bounds background work, and shuts the queues down when it ends.
 	ctx context.Context
@@ -105,9 +124,14 @@ type Tracker struct {
 	// this node before atelet detaches it: DefaultDetachDelay unless
 	// WithDetachDelay sets it.
 	detachDelay time.Duration
-	// instruments records background upload duration and outcome. Nil without
-	// WithInstruments.
+	// instruments records the background uploads and detaches (how late they
+	// start, how long they take, and how they end) and reports
+	// undurableActorsTally. Nil without WithInstruments.
 	instruments *Instruments
+	// undurableActorsTally tallies the actors that hold an undurable local
+	// snapshot on this node, for instruments to report. Nil without
+	// instruments.
+	undurableActorsTally *undurableActorsTally
 	// retries says how long an actor's background work is held back after a
 	// failure: longer with each consecutive failure for the actor.
 	retries workqueue.TypedRateLimiter[string]
@@ -118,12 +142,15 @@ type Tracker struct {
 	// queues hold the UIDs of actors with a background operation of each kind
 	// scheduled.
 	queues [numOpKinds]workqueue.TypedDelayingInterface[string]
+	// reporting holds the queue and settings for reporting snapshot state
+	// changes to the control plane.
+	reporting reportQueue
 	// workersDone counts the workers still running.
 	workersDone sync.WaitGroup
 
-	// locks holds each actor's lock. Work on an actor, including its snapshot
-	// state file I/O, holds that actor's lock, so it never holds up another
-	// actor.
+	// locks holds each actor's state lock. Short critical sections on an
+	// actor, including its snapshot state file I/O, hold that actor's lock, so
+	// they never hold up another actor.
 	locks *actorlock.Locks
 
 	// mu guards the actors map, and is never held during file I/O.
@@ -131,7 +158,7 @@ type Tracker struct {
 	// actors maps actorUID to the entries requeueLocked keeps in memory (see
 	// requeueLocked). requeueLocked drops any other entry, and findLocked then
 	// reads the state from the file. Read and change it through findLocked,
-	// findOrAddLocked, addLocked, dropLocked, tracksLocked, and heldLocked.
+	// findOrAddLocked, addLocked, dropLocked, and heldLocked.
 	actors map[string]*actorSnapshots
 }
 
@@ -169,11 +196,36 @@ func WithDetachWorkers(n int) Option {
 	}
 }
 
-// WithInstruments attaches the instruments the tracker records background
-// uploads on. A nil *Instruments is a no-op.
+// WithInstruments attaches the instruments that record the tracker's
+// background uploads and detaches, and report the undurable local snapshots on
+// this node. A nil *Instruments is a no-op.
 func WithInstruments(inst *Instruments) Option {
 	return func(t *Tracker) {
 		t.instruments = inst
+	}
+}
+
+// WithReporter sets what reports an actor's snapshot state to the control
+// plane after a background upload or detach.
+func WithReporter(r Reporter) Option {
+	return func(t *Tracker) {
+		t.reporting.reporter = r
+	}
+}
+
+// WithReportWorkers sets how many background reports run at once on this node.
+// Zero disables background reporting.
+func WithReportWorkers(n int) Option {
+	return func(t *Tracker) {
+		t.reporting.workers = n
+	}
+}
+
+// WithReportGiveUpAfter sets how long atelet keeps retrying a failed report
+// since it became due before giving up on it.
+func WithReportGiveUpAfter(d time.Duration) Option {
+	return func(t *Tracker) {
+		t.reporting.giveUpAfter = d
 	}
 }
 
@@ -189,6 +241,7 @@ func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option)
 		detachDelay: DefaultDetachDelay,
 		retries:     workqueue.NewTypedItemExponentialFailureRateLimiter[string](snapshotRetryDelay, maxSnapshotRetryDelay),
 		workers:     [numOpKinds]int{opUpload: DefaultUploadWorkers, opDetach: DefaultDetachWorkers},
+		reporting:   newReportQueue(clk),
 		locks:       actorlock.New(),
 		actors:      map[string]*actorSnapshots{},
 	}
@@ -198,10 +251,18 @@ func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option)
 	for _, opt := range opts {
 		opt(t)
 	}
+	if t.reporting.workers <= 0 {
+		t.reporting.reporter = nil
+	}
+	if t.instruments != nil {
+		t.undurableActorsTally = newUndurableActorsTally(clk, t.uploadDelay, t.store != nil)
+		t.instruments.watch(t.undurableActorsTally)
+	}
 	context.AfterFunc(ctx, func() {
 		for _, q := range t.queues {
 			q.ShutDown()
 		}
+		t.reporting.queue.ShutDown()
 	})
 	return t
 }
@@ -254,14 +315,6 @@ func (t *Tracker) dropLocked(actorUID string) {
 	delete(t.actors, actorUID)
 }
 
-// tracksLocked reports whether a is still its actor's entry in memory: false
-// once Forget has dropped the actor, even if a new entry has been added since.
-func (t *Tracker) tracksLocked(a *actorSnapshots) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.actors[a.actorUID] == a
-}
-
 // heldLocked reports whether a Run, Restore, Checkpoint, or PromoteSnapshot of
 // the actor is in progress. An entry with one stays in memory, so this never
 // reads the snapshot state file.
@@ -269,7 +322,7 @@ func (t *Tracker) heldLocked(actorUID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	a := t.actors[actorUID]
-	return a != nil && a.holds > 0
+	return a != nil && a.hold != holdNone
 }
 
 // uploadDueLocked returns when the actor's background upload is due, as

@@ -124,10 +124,9 @@ func onTag(relation string, ref resourceRef, fldPath *field.Path) ([]check, fiel
 }
 
 // onSourceTag checks can_use_tag on the tag an actor is created from, if the
-// request names one. Golden tags are exempt: the handler only accepts one
-// built from the actor's own template, which can_use_template already covers.
+// request names one.
 func onSourceTag(ref *ateapipb.ObjectRef, fldPath *field.Path) ([]check, field.ErrorList) {
-	if ref == nil || ref.GetAtespace() == resources.GoldenActorAtespace {
+	if ref == nil {
 		return nil, nil
 	}
 	return onTag(RelationCanUseTag, ref, fldPath)
@@ -250,10 +249,6 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 
 	// Actor lifecycle.
-	// TODO: delete this entry together with the PauseActor RPC. Every served RPC needs an entry here until then.
-	ateapipb.Control_PauseActor_FullMethodName: rule(checksOf(func(r *ateapipb.PauseActorRequest) ([]check, field.ErrorList) {
-		return onActor(RelationCanSuspend, r.GetActor(), field.NewPath("actor"))
-	})),
 	ateapipb.Control_ResumeActor_FullMethodName: rule(checksOf(func(r *ateapipb.ResumeActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanResume, r.GetActor(), field.NewPath("actor"))
 	})),
@@ -340,6 +335,7 @@ var defaultRPCPermissions = map[string]rpcRule{
 	// WorkerService is served only to atelet, which each handler
 	// authenticates by its mTLS SPIFFE ID.
 	ateapipb.WorkerService_RegisterWorker_FullMethodName:             inHandler("ateletauth: caller is atelet on the Worker's node"),
+	ateapipb.WorkerService_ReportActorCrashed_FullMethodName:         inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
 	ateapipb.WorkerService_RequestActorSuspend_FullMethodName:        inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
 	ateapipb.WorkerService_MintWorkerActorCertificate_FullMethodName: inHandler("ateletauth: caller is atelet on the node of the Worker the Actor is assigned to"),
 	ateapipb.WorkerService_MintWorkerActorJwt_FullMethodName:         inHandler("ateletauth: caller is atelet on the node hosting the Actor"),

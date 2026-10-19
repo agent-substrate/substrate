@@ -29,6 +29,8 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -164,12 +166,6 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if state != ateapipb.ActorState_ACTOR_STATE_RUNNING && state != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
 		return nil, apierror.FailedPrecondition("MarkSuspending prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, state, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
-	// Golden actors are only suspended, never paused. Checked before the skip,
-	// so an async retry can't finish a golden actor's suspend as a pause.
-	// TODO: Remove this check: the suspend workflow should not special-case golden actors.
-	if mode == suspendAsync && actorRef.Atespace == resources.GoldenActorAtespace {
-		return nil, apierror.FailedPrecondition("actors in atespace %q are golden actors, which cannot be paused", actorRef.Atespace)
-	}
 	if state == ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
 		markSkipped(ctx, "actor already SUSPENDING")
 		return actor, nil
@@ -178,7 +174,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 
 	// Fail here rather than at checkpoint time if the template's location
 	// cannot produce a usable URI: nothing has been written yet.
-	uri, err := newInProgressSnapshotURI(actorTemplate, actor, snapshotName)
+	uri, err := w.newInProgressSnapshotURI(actorTemplate, actor, snapshotName)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +189,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 		snap := newDurableSnapshot(
 			gen,
 			ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
-			preferredFidelity(actorRef.Atespace, actorTemplate),
+			actorTemplate.GetSnapshotConfig().GetPreferredFidelity(),
 			actorTemplate.GetMetadata().GetUid(),
 			uri.Name(),
 			uri.String(),
@@ -211,17 +207,6 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 	return storedActor, nil
-}
-
-// preferredFidelity returns the fidelity a suspend snapshot is taken with.
-// Golden actors always commit MEMORY regardless of the template's
-// preferredFidelity: new actors borrow the golden snapshot and resume it
-// with memory, so it must carry the guest memory and filesystem.
-func preferredFidelity(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb.SnapshotFidelity {
-	if atespace == resources.GoldenActorAtespace {
-		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	}
-	return tmpl.GetSnapshotConfig().GetPreferredFidelity()
 }
 
 // ensureAteletSuspended checkpoints the workload to the actor's persisted
@@ -259,7 +244,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
 	inProgressSnap := snapshotAtLatestGeneration(actor.GetStatus())
-	fidelity := fidelityToAtelet(preferredFidelity(actor.GetMetadata().GetAtespace(), actorTemplate))
+	fidelity := fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity())
 	req := &ateletpb.CheckpointRequest{
 		WorkerPodUid:          assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
@@ -284,6 +269,10 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 
 	resp, err := client.Checkpoint(ctx, req)
 	if err != nil {
+		// A snapshot conflict leaves the actor and its assignment intact for a retry.
+		if ctx.Err() == nil && status.Code(err) == codes.Aborted {
+			return wireFidelity, nil, apierror.Aborted("while calling atelet Checkpoint: %w", err)
+		}
 		return wireFidelity, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireFidelity, resp.GetState(), nil
@@ -291,9 +280,13 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 
 // newInProgressSnapshotURI is where the snapshot an actor is currently taking is
 // written: under the actor's own prefix, so the objects name their owner.
-func newInProgressSnapshotURI(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, snapshotName string) (resources.SnapshotURI, error) {
+func (w *ActorWorkflow) newInProgressSnapshotURI(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, snapshotName string) (resources.SnapshotURI, error) {
+	location, err := w.snapshotLocation(actorTemplate)
+	if err != nil {
+		return resources.SnapshotURI{}, err
+	}
 	atespace := actor.GetMetadata().GetAtespace()
-	uri, err := resources.NewActorSnapshotURI(actorTemplate.GetSnapshotConfig().GetStorageLocation(), atespace, actor.GetMetadata().GetUid(), snapshotName)
+	uri, err := resources.NewActorSnapshotURI(location, atespace, actor.GetMetadata().GetUid(), snapshotName)
 	if err != nil {
 		return resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for actor %s/%s: %w", atespace, actor.GetMetadata().GetName(), err)
 	}
@@ -329,8 +322,7 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // is no longer SUSPENDING is left as it is and the step fails with
 // FailedPrecondition.
 // ateletState is the state atelet returned from Checkpoint, applied in the
-// same update. A state that conflicts with the record fails the step before it
-// frees the worker.
+// same update. A state that conflicts with the record crashes the actor.
 func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, ateletState *ateletpb.ActorSnapshotState) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
@@ -376,12 +368,14 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)
 	}
 
-	// Apply atelet's state before freeing the worker, so a state that
-	// conflicts with the record fails the step while a retry can still call
-	// atelet again.
+	// A state that conflicts with the record crashes the actor. Atelet has
+	// already destroyed the workload, so a retried Checkpoint can't succeed.
 	applied := proto.CloneOf(latestActor.GetStatus())
-	if err := applyCheckpointState(ctx, applied, ateletState); err != nil {
-		return nil, err
+	if err := applyAteletResponseState(ctx, applied, ateletState); err != nil {
+		slog.WarnContext(ctx, "Snapshot state atelet returned conflicts with the record",
+			slog.Any("actor", actorRef),
+			slog.Any("err", err))
+		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 	}
 
 	// 1. Free the worker (if it hasn't been freed yet)

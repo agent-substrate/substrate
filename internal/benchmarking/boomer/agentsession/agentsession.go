@@ -877,7 +877,7 @@ func (u *sessionUser) hibernate(ctx context.Context) {
 	}
 	var err error
 	if mode == dynconfig.LifecycleModePause {
-		err = u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
+		err = u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
 			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: u.ref(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}, grpc.Trailer(tr))
 			return err
 		})
@@ -906,7 +906,7 @@ func (u *sessionUser) suspendAndDelete(ctx context.Context) {
 	_, _ = u.cfg.APIStub.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{Actor: u.ref()})
 	cancel()
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{Actor: u.ref(), AnyState: true}, grpc.Trailer(tr))
+		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
 		return err
 	})
 	bmetrics.UpdateUsers(agentSessionUserClass, -1)

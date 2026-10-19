@@ -86,6 +86,7 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorke
 			Atespace:  meta.GetAtespace(),
 			ActorName: meta.GetName(),
 			ActorUID:  meta.GetUid(),
+			Node:      caller.NodeName,
 		},
 	}
 	token, err := s.actorIDJWTPool.SignJWT(claims)

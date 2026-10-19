@@ -16,7 +16,6 @@ package apivalidation
 
 import (
 	"context"
-	"fmt"
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -27,6 +26,11 @@ import (
 // ValidateRequestActorSuspendRequest runs the generated validation for req.
 func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) field.ErrorList {
 	return Validate_RequestActorSuspendRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateReportActorCrashedRequest runs the generated validation for req.
+func ValidateReportActorCrashedRequest(ctx context.Context, req *ateletpb.ReportActorCrashedRequest) field.ErrorList {
+	return Validate_ReportActorCrashedRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
 // ValidateGetActorEgressPolicyRequest runs the generated validation for
@@ -101,16 +105,6 @@ func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Oper
 func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateAssetHash(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
-	}
-	return nil
-}
-
-// ValidateCustom_PromoteSnapshotRequest_Atespace rejects the golden atespace:
-// golden actors are never paused, so a paused checkpoint is never promoted to
-// a golden snapshot.
-func ValidateCustom_PromoteSnapshotRequest_Atespace(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if *value == resources.GoldenActorAtespace {
-		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("atespace %q holds golden actors, which are never paused", *value))}
 	}
 	return nil
 }

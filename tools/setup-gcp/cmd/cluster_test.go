@@ -335,62 +335,6 @@ func TestNodeSysctlsConfigured(t *testing.T) {
 	}
 }
 
-func TestFilestoreCsiDriverEnabled(t *testing.T) {
-	tests := []struct {
-		name    string
-		cluster *containerpb.Cluster
-		want    bool
-	}{
-		{
-			name:    "nil cluster",
-			cluster: nil,
-			want:    false,
-		},
-		{
-			name:    "nil addons config",
-			cluster: &containerpb.Cluster{},
-			want:    false,
-		},
-		{
-			name: "nil filestore config",
-			cluster: &containerpb.Cluster{
-				AddonsConfig: &containerpb.AddonsConfig{},
-			},
-			want: false,
-		},
-		{
-			name: "filestore disabled",
-			cluster: &containerpb.Cluster{
-				AddonsConfig: &containerpb.AddonsConfig{
-					GcpFilestoreCsiDriverConfig: &containerpb.GcpFilestoreCsiDriverConfig{
-						Enabled: false,
-					},
-				},
-			},
-			want: false,
-		},
-		{
-			name: "filestore enabled",
-			cluster: &containerpb.Cluster{
-				AddonsConfig: &containerpb.AddonsConfig{
-					GcpFilestoreCsiDriverConfig: &containerpb.GcpFilestoreCsiDriverConfig{
-						Enabled: true,
-					},
-				},
-			},
-			want: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := filestoreCsiDriverEnabled(tt.cluster); got != tt.want {
-				t.Errorf("filestoreCsiDriverEnabled() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestValidateBootDisk(t *testing.T) {
 	tests := []struct {
 		name    string

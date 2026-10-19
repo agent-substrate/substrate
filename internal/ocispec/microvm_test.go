@@ -15,11 +15,30 @@
 package ocispec
 
 import (
+	"regexp"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
+
+// kata's verify_id, see GuestContainerID
+var kataID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]+$`)
+
+func TestGuestContainerID(t *testing.T) {
+	shares := []string{ShareDurable, ShareCSI, ShareSystemInfo}
+	for _, name := range append([]string{"w", "app", strings.Repeat("a", 63)}, shares...) {
+		id := GuestContainerID(name)
+		if !kataID.MatchString(id) {
+			t.Errorf("GuestContainerID(%q) = %q, which kata rejects", name, id)
+		}
+		if slices.Contains(shares, id) {
+			t.Errorf("GuestContainerID(%q) = %q, which collides with a share dir", name, id)
+		}
+	}
+}
 
 // The device allowlist and CPU shares from guestResources are the proven-good
 // kata shape. Overlaying a memory limit must not drop them: a container without
@@ -125,7 +144,7 @@ func TestShapeMicroVM_KeepsDeclaredContainerLimits(t *testing.T) {
 		Args:      []string{"/app"},
 		Resources: &ateworkerpb.ResourceLimits{MemoryBytes: declared},
 	}}})
-	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err != nil {
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
 
@@ -141,7 +160,7 @@ func TestShapeMicroVM_KeepsDeclaredContainerLimits(t *testing.T) {
 // RAM is the real ceiling, and a cap equal to the whole guest can never bind.
 func TestShapeMicroVM_LeavesUndeclaredContainerUnlimited(t *testing.T) {
 	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
-	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err != nil {
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
 

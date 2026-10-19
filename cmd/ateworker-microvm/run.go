@@ -23,12 +23,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/child"
 	"go.ate.dev/substrate/internal/workerstats"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
@@ -59,13 +60,17 @@ type runningActor struct {
 	baseID string
 
 	// ateworker owns this CH process (booted at Run or relaunched at Restore).
-	chCmd *exec.Cmd
-	// vfsdCmd is the virtiofsd serving the unified share (merged rootfs overlay,
+	chProc *child.Process
+	// vfsdProc is the virtiofsd serving the unified share (merged rootfs overlay,
 	// durable-dir volumes, and CSI volumes). ateworker owns it; teardownActor
 	// kills it after the CH process.
-	vfsdCmd *exec.Cmd
+	vfsdProc *child.Process
 	// apiSocket is the CH api-socket for this ateworker-owned VMM.
 	apiSocket string
+	// stopping is set once teardown starts, so watchVM can tell an expected
+	// exit from a crash: shutting the VM down makes cloud-hypervisor exit, and
+	// virtiofsd exits once its only client is gone.
+	stopping atomic.Bool
 
 	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
 	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
@@ -166,23 +171,22 @@ const minGuestMemMiB = 128
 // workloads to signal and wait on, and it must name what the guest actually
 // runs: a container the agent does not know is rejected with InvalidContainerId,
 // and graceful shutdown then gives up without ever reaching the workload.
-//
-// Containers run under their bare name.
 func workloadIDs(ctrs []actorContainer) []string {
 	ids := make([]string, 0, len(ctrs))
 	for _, c := range ctrs {
-		ids = append(ids, c.name)
+		ids = append(ids, c.id)
 	}
 	return ids
 }
 
 // actorContainer is one of the actor's containers prepared for the shared micro-VM:
-// its name (also the kata containerID + the merged rootfs's find-paths subdir), its
+// its name, its kata container ID (also the merged rootfs's find-paths subdir), its
 // host OCI bundle and the bundle rootfs that backs the overlay lower, and its OCI
 // spec. The writable upper is a host directory (see rootfsupper.go); the host kernel
 // merges the two.
 type actorContainer struct {
 	name         string
+	id           string // see ocispec.GuestContainerID
 	bundle       string
 	bundleRootfs string
 	// spec is the container's OCI spec shaped for micro-VM execution.
@@ -489,20 +493,19 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return err
 	}
 	defer leaf.Close()
-	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
+	vfsdProc, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if retErr != nil && vfsdCmd.Process != nil {
-			_ = vfsdCmd.Process.Kill()
-			_, _ = vfsdCmd.Process.Wait()
+		if retErr != nil {
+			vfsdProc.Stop()
 		}
 	}()
 
 	// Launch a bare VMM (CH + api-socket); ateworker owns this process for teardown.
 	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api.sock")
-	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
+	chProc, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
 		Binary:      rr.chBinary,
 		APISocket:   apiSocket,
 		Stdout:      slogWriter{ctx},
@@ -513,9 +516,8 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return fmt.Errorf("while launching VMM: %w", err)
 	}
 	defer func() {
-		if retErr != nil && chCmd.Process != nil {
-			_ = chCmd.Process.Kill()
-			_, _ = chCmd.Process.Wait()
+		if retErr != nil {
+			chProc.Stop()
 		}
 	}()
 
@@ -601,21 +603,21 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
 	}
 	s.setRunningVM(actorUID, ra)
+	go s.watchVM(p.attribution(), p.actorDirs, ra)
 
 	// Forward each container's stdout/stderr into the pod logs, keyed by the
-	// container id (== the name; see StartRootfsContainer). The goroutines read
-	// over ac for the actor's lifetime and exit (io.EOF) when teardownActor
-	// closes ac.
+	// container id (see StartRootfsContainer). The goroutines read over ac for
+	// the actor's lifetime and exit (io.EOF) when teardownActor closes ac.
 	workloadIDs := make([]string, 0, len(ctrs))
 	attribution := p.actorAttribution()
 	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, attribution, c.name, c.name)
-		workloadIDs = append(workloadIDs, c.name)
+		s.startActorLogForwarding(ac, attribution, c.id, c.name)
+		workloadIDs = append(workloadIDs, c.id)
 	}
 
 	// Publish the guest to GetWorkloadStats, past every error return above: a
@@ -644,7 +646,7 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		cn := c.GetName()
 		bundle := ociBundlePath(actorDirs, cn)
 		spec := ocispec.Build(ocispec.Options{ActorUID: actorUID, ActorDirs: actorDirs, Container: c})
-		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerID: cn}); err != nil {
+		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerName: cn}); err != nil {
 			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an
@@ -663,6 +665,7 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		}
 		ctrs[i] = actorContainer{
 			name:         cn,
+			id:           ocispec.GuestContainerID(cn),
 			bundle:       bundle,
 			bundleRootfs: bundleRootfs,
 			spec:         spec,
@@ -681,15 +684,15 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 // wipes SharedDir) and stageRootfsUpper (which owns the upper contents). The returned virtiofsd cmd outlives this call (CH
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
-func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
+func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*child.Process, error) {
 	upperBase := rootfsUpperDir(actorDirs)
 	for _, c := range ctrs {
-		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, id, c.name); err != nil {
+		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, c.name, id, c.id); err != nil {
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
 			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetName())
-			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetName()); err != nil {
+			if err := kata.StageImageVolume(ctx, src, id, c.id, vm.GetName()); err != nil {
 				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetName(), c.name, err)
 			}
 		}
@@ -710,7 +713,7 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 		}
 	}
 	vfsdLog, _ := os.OpenFile(virtiofsdLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	vfsdCmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
+	vfsdProc, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
 		Binary:      rr.virtiofsd,
 		SocketPath:  kata.VirtiofsdSocketPath(id),
 		SharedDir:   kata.SharedDir(id),
@@ -720,7 +723,7 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 	if err != nil {
 		return nil, fmt.Errorf("while starting virtiofsd: %w", err)
 	}
-	return vfsdCmd, nil
+	return vfsdProc, nil
 }
 
 // kernelParams returns the guest kernel params
@@ -892,19 +895,19 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 }
 
 // startRootfsContainer brings up one container on its host-merged rootfs (the
-// stock kata flow: create + start against shared/<name>/rootfs). On failure it
+// stock kata flow: create + start against shared/<id>/rootfs). On failure it
 // dumps the guest's view of the shared tree.
 //
 // Its spec binds every declared volume at its mount path.
 func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := ac.StartRootfsContainer(cCtx, c.name, c.spec)
+	err := ac.StartRootfsContainer(cCtx, c.id, c.spec)
 	cancel()
 	if err != nil {
 		if s.guestDebug {
 			dump := kata.DebugConsoleDump(ctx, vsockPath,
 				"echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40; "+
-					"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.name+"/rootfs/ 2>&1 | head; "+
+					"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.id+"/rootfs/ 2>&1 | head; "+
 					"echo '== mounts =='; grep -E 'kata|virtiofs' /proc/mounts 2>&1")
 			slog.ErrorContext(ctx, "rootfs container failed; dump", slog.String("container", c.name), slog.String("dump", dump))
 		}

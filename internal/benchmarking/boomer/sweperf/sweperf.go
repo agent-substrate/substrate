@@ -416,11 +416,11 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (_ *sweperfUser, err err
 
 // retireUser deletes the actor of a session that finished its trajectory and
 // unbinds it from goroutine gid, so the next iterate starts a fresh actor. The
-// final cycle leaves the actor running, and DeleteActor with AnyState removes
-// it from any state, so no suspend is sent first. The delete runs detached
-// from the run context so shutdown cannot cut it short. A failed delete is
-// retried once, with a fresh timeout; if that also fails the actor is left
-// behind and logged.
+// final cycle leaves the actor running, and DeleteActor removes it from any
+// state, so no suspend is sent first. The delete runs detached from the run
+// context so shutdown cannot cut it short. A failed delete is retried once,
+// with a fresh timeout; if that also fails the actor is left behind and
+// logged.
 func (r *sweperfRuntime) retireUser(gid int64, u *sweperfUser) {
 	r.users.CompareAndDelete(gid, u)
 	if !u.cleanedUp.CompareAndSwap(false, true) {
@@ -623,17 +623,15 @@ func (u *sweperfUser) delete(ctx context.Context) error {
 	return u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
 			Actor: u.ref(),
-			// Teardown discards the actor, so skip the SUSPENDED precondition.
-			AnyState: true,
 		}, grpc.Trailer(tr))
 		return err
 	})
 }
 
 // teardown releases the actor and the worker it holds, and decrements the
-// user gauge. Like retireUser, it deletes with AnyState and sends no suspend
-// first. Safe to call more than once and from several goroutines: only the
-// first call does anything.
+// user gauge. Like retireUser, it sends no suspend before deleting. Safe to
+// call more than once and from several goroutines: only the first call does
+// anything.
 func (u *sweperfUser) teardown(ctx context.Context) {
 	if !u.cleanedUp.CompareAndSwap(false, true) {
 		return

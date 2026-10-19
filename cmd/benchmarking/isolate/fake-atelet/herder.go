@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 // placeholderObject is the one object written under each snapshot URI.
@@ -195,7 +196,12 @@ func (h *herder) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	if err := wait(ctx, start, h.delays.promoteSnapshot); err != nil {
 		return nil, err
 	}
-	return &ateletpb.PromoteSnapshotResponse{}, nil
+	// Like atelet, report the snapshot durable and still kept on the node.
+	report := &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(req.GetSnapshot())}
+	return &ateletpb.PromoteSnapshotResponse{State: &ateletpb.ActorSnapshotState{
+		LatestLocal:   report,
+		LatestDurable: proto.CloneOf(report),
+	}}, nil
 }
 
 func (h *herder) Terminate(ctx context.Context, _ *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {

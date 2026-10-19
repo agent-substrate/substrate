@@ -59,7 +59,7 @@ import (
 )
 
 // rootfsUpperTarFile is the snapshot file holding the tar of one container's
-// rootfs upperdir (<cid>/fs under rootfsUpperDir, see kata.UpperWorkDirs).
+// rootfs upperdir (<name>/fs under rootfsUpperDir, see kata.UpperWorkDirs).
 // Entries are relative to the upperdir, plus a root entry: overlayfs presents
 // the upperdir's own mode, ownership, and xattrs as the container's /. The workdir is never archived: with
 // index=off pinned on the mount (see kata.StageMergedRootfs) a restored

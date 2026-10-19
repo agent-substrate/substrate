@@ -37,7 +37,6 @@ const (
 	Control_CreateActor_FullMethodName                = "/ateapi.Control/CreateActor"
 	Control_UpdateActor_FullMethodName                = "/ateapi.Control/UpdateActor"
 	Control_SuspendActor_FullMethodName               = "/ateapi.Control/SuspendActor"
-	Control_PauseActor_FullMethodName                 = "/ateapi.Control/PauseActor"
 	Control_ResumeActor_FullMethodName                = "/ateapi.Control/ResumeActor"
 	Control_RevertActor_FullMethodName                = "/ateapi.Control/RevertActor"
 	Control_DeleteActor_FullMethodName                = "/ateapi.Control/DeleteActor"
@@ -94,20 +93,15 @@ type ControlClient interface {
 	// Suspend a given actor to a new snapshot. A running actor is checkpointed
 	// on its worker. A SUSPENDED actor is returned as it is.
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
-	// Deprecated: Do not use.
-	// Pause a given actor: checkpoint it to its worker's node and leave it
-	// SUSPENDED with that node-local snapshot, pinned to the node. A paused
-	// actor is told from a suspended one by its snapshots, not its state.
-	//
-	// Deprecated: use SuspendActor with DURABILITY_MODE_ASYNCHRONOUS.
-	PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
 	// Revert an actor to SUSPENDED state at its durable snapshot.
-	// Only crashed, running or paused actors can be reverted.
+	// Only crashed or running actors, or suspended actors with a node-local
+	// snapshot, can be reverted. A suspended actor without a node-local snapshot
+	// is already at its durable snapshot, so there is nothing to revert.
 	RevertActor(ctx context.Context, in *RevertActorRequest, opts ...grpc.CallOption) (*RevertActorResponse, error)
-	// Delete an actor. Only suspended or crashed actors can be deleted unless
-	// any_state is set.
+	// Delete an actor. A running actor's workload is terminated, its volumes
+	// detached, and its worker released before the record is removed.
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
@@ -130,7 +124,8 @@ type ControlClient interface {
 	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
 	// Tag the external snapshot a suspended Actor holds. The tag gets its own
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
-	// cannot collect it.
+	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
+	// atelet uploads it first, so the call can take as long as that upload.
 	CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// Get a Tag.
 	GetTag(ctx context.Context, in *GetTagRequest, opts ...grpc.CallOption) (*Tag, error)
@@ -187,7 +182,7 @@ type ControlClient interface {
 	GetActorTemplate(ctx context.Context, in *GetActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
-	// tag in the reserved ate-golden atespace.
+	// tag in the template's atespace.
 	DeleteActorTemplate(ctx context.Context, in *DeleteActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	// Get the deployment-wide global access policy singleton. Returns NotFound
 	// until the policy has been created.
@@ -252,17 +247,6 @@ func (c *controlClient) SuspendActor(ctx context.Context, in *SuspendActorReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SuspendActorResponse)
 	err := c.cc.Invoke(ctx, Control_SuspendActor_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// Deprecated: Do not use.
-func (c *controlClient) PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PauseActorResponse)
-	err := c.cc.Invoke(ctx, Control_PauseActor_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -674,20 +658,15 @@ type ControlServer interface {
 	// Suspend a given actor to a new snapshot. A running actor is checkpointed
 	// on its worker. A SUSPENDED actor is returned as it is.
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
-	// Deprecated: Do not use.
-	// Pause a given actor: checkpoint it to its worker's node and leave it
-	// SUSPENDED with that node-local snapshot, pinned to the node. A paused
-	// actor is told from a suspended one by its snapshots, not its state.
-	//
-	// Deprecated: use SuspendActor with DURABILITY_MODE_ASYNCHRONOUS.
-	PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
 	// Revert an actor to SUSPENDED state at its durable snapshot.
-	// Only crashed, running or paused actors can be reverted.
+	// Only crashed or running actors, or suspended actors with a node-local
+	// snapshot, can be reverted. A suspended actor without a node-local snapshot
+	// is already at its durable snapshot, so there is nothing to revert.
 	RevertActor(context.Context, *RevertActorRequest) (*RevertActorResponse, error)
-	// Delete an actor. Only suspended or crashed actors can be deleted unless
-	// any_state is set.
+	// Delete an actor. A running actor's workload is terminated, its volumes
+	// detached, and its worker released before the record is removed.
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error)
@@ -710,7 +689,8 @@ type ControlServer interface {
 	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)
 	// Tag the external snapshot a suspended Actor holds. The tag gets its own
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
-	// cannot collect it.
+	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
+	// atelet uploads it first, so the call can take as long as that upload.
 	CreateTag(context.Context, *CreateTagRequest) (*Tag, error)
 	// Get a Tag.
 	GetTag(context.Context, *GetTagRequest) (*Tag, error)
@@ -767,7 +747,7 @@ type ControlServer interface {
 	GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error)
 	ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
-	// tag in the reserved ate-golden atespace.
+	// tag in the template's atespace.
 	DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error)
 	// Get the deployment-wide global access policy singleton. Returns NotFound
 	// until the policy has been created.
@@ -809,9 +789,6 @@ func (UnimplementedControlServer) UpdateActor(context.Context, *UpdateActorReque
 }
 func (UnimplementedControlServer) SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SuspendActor not implemented")
-}
-func (UnimplementedControlServer) PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method PauseActor not implemented")
 }
 func (UnimplementedControlServer) ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResumeActor not implemented")
@@ -1019,24 +996,6 @@ func _Control_SuspendActor_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).SuspendActor(ctx, req.(*SuspendActorRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Control_PauseActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PauseActorRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).PauseActor(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_PauseActor_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).PauseActor(ctx, req.(*PauseActorRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1767,10 +1726,6 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_SuspendActor_Handler,
 		},
 		{
-			MethodName: "PauseActor",
-			Handler:    _Control_PauseActor_Handler,
-		},
-		{
 			MethodName: "ResumeActor",
 			Handler:    _Control_ResumeActor_Handler,
 		},
@@ -1937,6 +1892,7 @@ const (
 	WorkerService_MintWorkerActorJwt_FullMethodName         = "/ateapi.WorkerService/MintWorkerActorJwt"
 	WorkerService_RequestActorSuspend_FullMethodName        = "/ateapi.WorkerService/RequestActorSuspend"
 	WorkerService_ReportActorSnapshotState_FullMethodName   = "/ateapi.WorkerService/ReportActorSnapshotState"
+	WorkerService_ReportActorCrashed_FullMethodName         = "/ateapi.WorkerService/ReportActorCrashed"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -2014,6 +1970,17 @@ type WorkerServiceClient interface {
 	// node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
 	// conflicts with the record; don't retry.
 	ReportActorSnapshotState(ctx context.Context, in *ReportActorSnapshotStateRequest, opts ...grpc.CallOption) (*ReportActorSnapshotStateResponse, error)
+	// ReportActorCrashed tells the control plane that the sandbox of an Actor
+	// the calling Worker hosts died on its own. Nothing else notices: the
+	// control plane only learns of a dead sandbox when an operation on the Actor
+	// fails.
+	//
+	// A RUNNING Actor is moved to ACTOR_STATE_CRASHED and its Worker is
+	// released. An Actor in any other state is left alone and the report is
+	// refused as FailedPrecondition: an operation in flight owns the Actor and
+	// fails on its own if the sandbox is gone. Authorized like
+	// RequestActorSuspend.
+	ReportActorCrashed(ctx context.Context, in *ReportActorCrashedRequest, opts ...grpc.CallOption) (*ReportActorCrashedResponse, error)
 }
 
 type workerServiceClient struct {
@@ -2068,6 +2035,16 @@ func (c *workerServiceClient) ReportActorSnapshotState(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReportActorSnapshotStateResponse)
 	err := c.cc.Invoke(ctx, WorkerService_ReportActorSnapshotState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ReportActorCrashed(ctx context.Context, in *ReportActorCrashedRequest, opts ...grpc.CallOption) (*ReportActorCrashedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportActorCrashedResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ReportActorCrashed_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2149,6 +2126,17 @@ type WorkerServiceServer interface {
 	// node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
 	// conflicts with the record; don't retry.
 	ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error)
+	// ReportActorCrashed tells the control plane that the sandbox of an Actor
+	// the calling Worker hosts died on its own. Nothing else notices: the
+	// control plane only learns of a dead sandbox when an operation on the Actor
+	// fails.
+	//
+	// A RUNNING Actor is moved to ACTOR_STATE_CRASHED and its Worker is
+	// released. An Actor in any other state is left alone and the report is
+	// refused as FailedPrecondition: an operation in flight owns the Actor and
+	// fails on its own if the sandbox is gone. Authorized like
+	// RequestActorSuspend.
+	ReportActorCrashed(context.Context, *ReportActorCrashedRequest) (*ReportActorCrashedResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -2173,6 +2161,9 @@ func (UnimplementedWorkerServiceServer) RequestActorSuspend(context.Context, *Re
 }
 func (UnimplementedWorkerServiceServer) ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportActorSnapshotState not implemented")
+}
+func (UnimplementedWorkerServiceServer) ReportActorCrashed(context.Context, *ReportActorCrashedRequest) (*ReportActorCrashedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportActorCrashed not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -2285,6 +2276,24 @@ func _WorkerService_ReportActorSnapshotState_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ReportActorCrashed_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportActorCrashedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ReportActorCrashed(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ReportActorCrashed_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ReportActorCrashed(ctx, req.(*ReportActorCrashedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2311,6 +2320,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportActorSnapshotState",
 			Handler:    _WorkerService_ReportActorSnapshotState_Handler,
+		},
+		{
+			MethodName: "ReportActorCrashed",
+			Handler:    _WorkerService_ReportActorCrashed_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

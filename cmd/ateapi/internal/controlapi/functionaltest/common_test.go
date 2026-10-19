@@ -253,6 +253,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		testActorJWTIssuer,
 		actorJWTAuthorityPool,
 		actorCAPool,
+		testStorageLocation,
 	)
 
 	// 5. Start REAL gRPC Server for ATE API
@@ -383,7 +384,7 @@ const goldenSnapshotName = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
 // goldenSnapshotURI is the snapshot owned by the test template's golden tag.
 func goldenSnapshotURI(t *testing.T) string {
 	t.Helper()
-	uri, err := resources.NewTagSnapshotURI(testStorageLocation, resources.GoldenActorAtespace, goldenSnapshotName)
+	uri, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, goldenSnapshotName)
 	if err != nil {
 		t.Fatalf("NewTagSnapshotURI: %v", err)
 	}
@@ -499,10 +500,9 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		t.Fatalf("failed to create actor template: %v", err)
 	}
 
-	createAtespace(t, tc, resources.GoldenActorAtespace)
 	tag, err := tc.persistence.CreateTag(context.Background(), &ateapipb.Tag{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
-		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
+		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapipb.TagStatus{
 			Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, created.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),

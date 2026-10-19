@@ -285,17 +285,6 @@ func TestTrackerDetach(t *testing.T) {
 			wantCode: codes.Aborted,
 		},
 		{
-			name: "refused while a checkpoint is in progress",
-			setup: func(t *testing.T, tr *Tracker) {
-				end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s2", 2, time.Time{}).Snapshot)
-				if err != nil {
-					t.Fatalf("beginCheckpoint: %v", err)
-				}
-				t.Cleanup(end)
-			},
-			wantCode: codes.Aborted,
-		},
-		{
 			name: "refused when durable generation mismatches local",
 			setup: func(t *testing.T, tr *Tracker) {
 				tr.CommitDurable(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
@@ -461,8 +450,8 @@ func TestTrackerStartFailsIfItCannotSave(t *testing.T) {
 	if got := detachDueOf(tr, trackedActorUID); !got.Equal(due) {
 		t.Errorf("detachDue after the failed start = %v, want %v kept", got, due)
 	}
-	if holds := tr.actors[trackedActorUID].holds; holds != 0 {
-		t.Errorf("holds after the failed start = %d, want none", holds)
+	if hold := tr.actors[trackedActorUID].hold; hold != holdNone {
+		t.Errorf("hold after the failed start = %v, want none", hold)
 	}
 
 	// Once saves work again, the start goes ahead.
@@ -481,56 +470,65 @@ func TestTrackerStartFailsIfItCannotSave(t *testing.T) {
 
 // A restore or a checkpoint that arrives during a detach waits for it to end.
 func TestTrackerWaitsForDetach(t *testing.T) {
-	store := newFakeSnapshotStore()
-	store.setBlocking(true)
-	tr := newTestTracker(t, store)
-	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
-	results := map[string]<-chan error{"detach": startDetach(t, tr)}
-	waitStarted(t, store)
-
-	for name, begin := range map[string]func(context.Context, string) (func(), error){
-		"beginStart": tr.BeginStart,
-		"beginCheckpoint": func(ctx context.Context, uid string) (func(), error) {
-			return tr.BeginCheckpoint(ctx, uid, testRef("s2", 2, time.Time{}).Snapshot)
+	for _, tc := range []struct {
+		name  string
+		begin func(tr *Tracker, ctx context.Context, uid string) (func(), error)
+	}{
+		{
+			name: "BeginStart",
+			begin: func(tr *Tracker, ctx context.Context, uid string) (func(), error) {
+				return tr.BeginStart(ctx, uid)
+			},
+		},
+		{
+			name: "BeginCheckpoint",
+			begin: func(tr *Tracker, ctx context.Context, uid string) (func(), error) {
+				return tr.BeginCheckpoint(ctx, uid, testRef("s2", 2, time.Time{}).Snapshot)
+			},
 		},
 	} {
-		result := make(chan error, 1)
-		results[name] = result
-		go func() {
-			end, err := begin(t.Context(), trackedActorUID)
-			if err == nil {
-				end()
-			}
-			result <- err
-		}()
-	}
-	for name, result := range results {
-		select {
-		case err := <-result:
-			t.Fatalf("%s returned (%v) during a detach", name, err)
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeSnapshotStore()
+			store.setBlocking(true)
+			tr := newTestTracker(t, store)
+			tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+			detachResult := startDetach(t, tr)
+			waitStarted(t, store)
 
-	store.release <- nil
-	for name, result := range results {
-		select {
-		case err := <-result:
-			if err != nil {
-				t.Errorf("%s: %v", name, err)
+			result := make(chan error, 1)
+			go func() {
+				end, err := tc.begin(tr, t.Context(), trackedActorUID)
+				if err == nil {
+					end()
+				}
+				result <- err
+			}()
+			select {
+			case err := <-result:
+				t.Fatalf("%s returned (%v) during a detach", tc.name, err)
+			case <-time.After(50 * time.Millisecond):
 			}
-		case <-time.After(10 * time.Second):
-			t.Fatalf("%s did not return after the detach", name)
-		}
-	}
-	if got := tr.State(trackedActorUID).GetLatestLocal(); got != nil {
-		t.Errorf("latest_local = %v after the detach, want unset", got)
+
+			store.release <- nil
+			for name, ch := range map[string]<-chan error{"detach": detachResult, tc.name: result} {
+				select {
+				case err := <-ch:
+					if err != nil {
+						t.Errorf("%s: %v", name, err)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatalf("%s did not return after the detach", name)
+				}
+			}
+			if got := tr.State(trackedActorUID).GetLatestLocal(); got != nil {
+				t.Errorf("latest_local = %v after the detach, want unset", got)
+			}
+		})
 	}
 }
 
 // BeginCheckpoint and BeginPromote fail at once during a detach when the
-// requested snapshot is already stale, and fail once the detach ends when a
-// newer snapshot was committed while they waited.
+// requested snapshot is already stale.
 func TestTrackerDetachWaitChecksGeneration(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
@@ -541,59 +539,19 @@ func TestTrackerDetachWaitChecksGeneration(t *testing.T) {
 
 	stale := testRef("s0", 1, time.Time{})
 	returnsPromptly(t, "BeginCheckpoint of stale generation during detach", func() {
-		if _, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, stale.Snapshot); apierror.Code(err) != codes.FailedPrecondition {
-			t.Errorf("BeginCheckpoint = %v, want FailedPrecondition", err)
+		if _, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, stale.Snapshot); apierror.Code(err) != codes.Aborted {
+			t.Errorf("BeginCheckpoint = %v, want Aborted", err)
 		}
 	})
 	returnsPromptly(t, "BeginPromote of stale generation during detach", func() {
-		if _, _, err := tr.BeginPromote(t.Context(), trackedActorUID, stale); apierror.Code(err) != codes.FailedPrecondition {
-			t.Errorf("BeginPromote = %v, want FailedPrecondition", err)
+		if _, _, err := tr.BeginPromote(t.Context(), trackedActorUID, stale); apierror.Code(err) != codes.Aborted {
+			t.Errorf("BeginPromote = %v, want Aborted", err)
 		}
 	})
 
-	superseded := testRef("s2", 3, time.Time{})
-	results := make(map[string]chan error)
-	for name, begin := range map[string]func() (func(), error){
-		"beginCheckpoint": func() (func(), error) {
-			return tr.BeginCheckpoint(t.Context(), trackedActorUID, superseded.Snapshot)
-		},
-		"beginPromote": func() (func(), error) {
-			_, end, err := tr.BeginPromote(t.Context(), trackedActorUID, superseded)
-			return end, err
-		},
-	} {
-		result := make(chan error, 1)
-		results[name] = result
-		go func() {
-			end, err := begin()
-			if err == nil {
-				end()
-			}
-			result <- err
-		}()
-	}
-	for name, result := range results {
-		select {
-		case err := <-result:
-			t.Fatalf("%s returned (%v) during a detach", name, err)
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-
-	tr.CommitDurable(trackedActorUID, testRef("s3", 4, tr.clock.Now()))
 	store.release <- nil
 	if err := <-detached; err != nil {
 		t.Fatalf("detach: %v", err)
-	}
-	for name, result := range results {
-		select {
-		case err := <-result:
-			if apierror.Code(err) != codes.FailedPrecondition {
-				t.Errorf("%s = %v, want FailedPrecondition", name, err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatalf("%s did not return after the detach", name)
-		}
 	}
 }
 
@@ -692,20 +650,24 @@ func TestTrackerDetachWithoutStore(t *testing.T) {
 // actor as it began, as on the actor's first checkpoint on this node.
 func TestTrackerHoldsFirstCheckpoint(t *testing.T) {
 	store := newFakeSnapshotStore()
-	tr := newTestTracker(t, store)
+	tr := newIdleTestTracker(t, store)
 	s1 := testRef("s1", 1, tr.clock.Now())
 	end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s1.Snapshot)
 	if err != nil {
 		t.Fatalf("beginCheckpoint: %v", err)
 	}
 	tr.CommitLocal(trackedActorUID, s1)
-	if _, err := tr.Detach(t.Context(), trackedActorUID); apierror.Code(err) != codes.Aborted {
-		t.Errorf("detach during the checkpoint = %v, want Aborted", err)
+	stepTo(tr, detachDueOf(tr, trackedActorUID))
+	if run := tr.beginDueWork(trackedActorUID, opDetach); run != nil {
+		t.Error("a due detach began during the checkpoint, want it held off")
+		run()
 	}
 	end()
-	if _, err := tr.Detach(t.Context(), trackedActorUID); err != nil {
-		t.Errorf("detach after the checkpoint: %v", err)
+	run := tr.beginDueWork(trackedActorUID, opDetach)
+	if run == nil {
+		t.Fatal("no detach began after the checkpoint, want the due detach")
 	}
+	run()
 }
 
 // A start when no upload is due, or a checkpoint replacing the local snapshot,
@@ -745,31 +707,6 @@ func TestTrackerLiftsBackoffWithDetach(t *testing.T) {
 				t.Error("entry in memory, want it dropped with no backoff left")
 			}
 		})
-	}
-}
-
-// Forget during a Run, Restore, or Checkpoint drops the actor for good: the
-// start's end leaves it forgotten.
-func TestTrackerForgetDuringStart(t *testing.T) {
-	store := newFakeSnapshotStore()
-	tr := newTestTracker(t, store)
-	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
-	end, err := tr.BeginStart(t.Context(), trackedActorUID)
-	if err != nil {
-		t.Fatalf("beginStart: %v", err)
-	}
-	if err := tr.Forget(trackedActorUID); err != nil {
-		t.Fatalf("Forget: %v", err)
-	}
-	end()
-	if st := tr.State(trackedActorUID); !proto.Equal(st, &ateletpb.ActorSnapshotState{}) {
-		t.Errorf("state = %v, want empty", st)
-	}
-	if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(trackedActorUID)); !os.IsNotExist(err) {
-		t.Errorf("state file after the start ended: stat = %v, want none", err)
-	}
-	if inMemory(tr) {
-		t.Error("entry in memory after Forget, want none")
 	}
 }
 

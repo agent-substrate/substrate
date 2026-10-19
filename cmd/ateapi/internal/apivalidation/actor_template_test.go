@@ -119,17 +119,17 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("volume_mounts").Index(0).Child("name"), "ghost-vol", "")},
 	}, {
-		"missing snapshot_config",
+		"missing snapshot_config is allowed",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig = nil
 		})},
-		field.ErrorList{field.Required(field.NewPath("actor_template", "snapshot_config"), "")},
+		nil,
 	}, {
-		"missing snapshot_config.storage_location",
+		"snapshot_config.storage_location is not needed when the preview gate is off",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig.StorageLocation = ""
 		})},
-		field.ErrorList{field.Required(field.NewPath("actor_template", "snapshot_config", "storage_location"), "")},
+		nil,
 	}, {
 		"storage_location without a bucket",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -190,7 +190,7 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 func TestValidateCreateActorTemplateRequest_PreviewRestricted(t *testing.T) {
 	setPreviewForTest(t, "ALL")
 	req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-		tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi", StorageClassName: "fast-ssd"}}}
+		tmpl.Volumes = []*ateapipb.Volume{{Name: "data", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi", StorageClassName: "fast-ssd"}}}}
 	})}
 
 	t.Run("allowed", func(t *testing.T) {
@@ -198,9 +198,63 @@ func TestValidateCreateActorTemplateRequest_PreviewRestricted(t *testing.T) {
 	})
 	t.Run("restricted", func(t *testing.T) {
 		ctx := preview.ContextWithOptOut(context.Background())
-		want := field.ErrorList{field.Forbidden(field.NewPath("actor_template", "volumes").Index(0).Child("external_volume_template"), "")}
+		want := field.ErrorList{
+			field.Forbidden(field.NewPath("actor_template", "volumes").Index(0).Child("external"), ""),
+			field.Forbidden(field.NewPath("actor_template", "snapshot_config", "storage_location"), ""),
+		}
 		assertValidateErr(t, ValidateCreateActorTemplateRequest(ctx, req), want)
 	})
+}
+
+func TestValidateCreateActorTemplateRequest_PerTemplateSnapshotLocationOptIn(t *testing.T) {
+	storageLocation := field.NewPath("actor_template", "snapshot_config", "storage_location")
+	withoutLocation := func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" }
+	tests := []struct {
+		name   string
+		gates  string
+		optOut bool
+		mutate func(*ateapipb.ActorTemplate)
+		want   field.ErrorList
+	}{{
+		name:   "gate off, opted out, location set",
+		optOut: true,
+	}, {
+		name:   "gate off, opted out, no location",
+		optOut: true,
+		mutate: withoutLocation,
+	}, {
+		name:   "gate on, opted out, location set",
+		gates:  "PerTemplateSnapshotLocation",
+		optOut: true,
+		want:   field.ErrorList{field.Forbidden(storageLocation, "")},
+	}, {
+		name:   "gate on, opted out, no location",
+		gates:  "PerTemplateSnapshotLocation",
+		optOut: true,
+		mutate: withoutLocation,
+	}, {
+		name:  "gate on, opted in, location set",
+		gates: "PerTemplateSnapshotLocation",
+	}, {
+		name:   "gate on, opted in, no location",
+		gates:  "PerTemplateSnapshotLocation",
+		mutate: withoutLocation,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setPreviewForTest(t, tt.gates)
+			ctx := context.Background()
+			if tt.optOut {
+				ctx = preview.ContextWithOptOut(ctx)
+			}
+			var mutations []func(*ateapipb.ActorTemplate)
+			if tt.mutate != nil {
+				mutations = append(mutations, tt.mutate)
+			}
+			req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(mutations...)}
+			assertValidateErr(t, ValidateCreateActorTemplateRequest(ctx, req), tt.want)
+		})
+	}
 }
 
 func TestValidateGetActorTemplateRequest(t *testing.T) {
@@ -359,9 +413,9 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_selector", "match_labels").Key("tier"), nil, "").WithOrigin("format=k8s-label-value")},
 	}, {
-		name:   "missing snapshot_config",
+		name:   "missing snapshot_config is allowed",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig = nil },
-		want:   field.ErrorList{field.Required(field.NewPath("snapshot_config"), "")},
+		want:   nil,
 	}, {
 		name: "storage_location too long",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
@@ -371,7 +425,9 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name:   "missing storage_location",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" },
-		want:   field.ErrorList{field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
+		// Optional with or without the gate: an empty field falls back to
+		// --snapshot-location.
+		want: nil,
 	}, {
 		name: "unspecified snapshot scope",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
@@ -771,52 +827,52 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "valid external volume template",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi", StorageClassName: "fast-ssd"}}}
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi", StorageClassName: "fast-ssd"}}}}
 		},
-		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external_volume_template"), "")},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
 	}, {
 		name: "external volume template missing capacity",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "fast-ssd"}}}
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "fast-ssd"}}}}
 		},
-		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external_volume_template"), "")},
-		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Required(field.NewPath("volumes").Index(0).Child("external_volume_template", "capacity"), "")}},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Required(field.NewPath("volumes").Index(0).Child("external", "template", "capacity"), "")}},
 	}, {
 		name: "external volume template malformed capacity",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "ten gigs", StorageClassName: "fast-ssd"}}}
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{Capacity: "ten gigs", StorageClassName: "fast-ssd"}}}}
 		},
-		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external_volume_template"), "")},
-		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external_volume_template", "capacity"), nil, "")}},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "template", "capacity"), nil, "")}},
 	}, {
 		name: "external volume template capacity at the length bound",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: strings.Repeat("1", 30) + "Gi", StorageClassName: "fast-ssd"}}}
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{Capacity: strings.Repeat("1", 30) + "Gi", StorageClassName: "fast-ssd"}}}}
 		},
-		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external_volume_template"), "")},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
 	}, {
 		name: "external volume template capacity too long",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: strings.Repeat("1", 31) + "Gi", StorageClassName: "fast-ssd"}}}
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{Capacity: strings.Repeat("1", 31) + "Gi", StorageClassName: "fast-ssd"}}}}
 		},
-		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external_volume_template"), "")},
-		wantWithPreview: map[string]field.ErrorList{"ALL": {field.TooLong(field.NewPath("volumes").Index(0).Child("external_volume_template", "capacity"), nil, 32).WithOrigin("maxLength")}},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.TooLong(field.NewPath("volumes").Index(0).Child("external", "template", "capacity"), nil, 32).WithOrigin("maxLength")}},
 	}, {
 		name: "external volume template missing storage_class_name",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi"}}}
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi"}}}}
 		},
-		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external_volume_template"), "")},
-		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Required(field.NewPath("volumes").Index(0).Child("external_volume_template", "storage_class_name"), "")}},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Required(field.NewPath("volumes").Index(0).Child("external", "template", "storage_class_name"), "")}},
 	}, {
 		name: "external volume template invalid storage_class_name",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi", StorageClassName: "Fast SSD"}}}
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi", StorageClassName: "Fast SSD"}}}}
 		},
-		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external_volume_template"), "")},
-		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external_volume_template", "storage_class_name"), nil, "").WithOrigin("format=k8s-long-name")}},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "template", "storage_class_name"), nil, "").WithOrigin("format=k8s-long-name")}},
 	}, {
 		name: "valid resources",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {

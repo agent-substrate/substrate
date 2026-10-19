@@ -233,6 +233,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		APIAuthzBootstrapOwners:    bootstrapOwners,
 
 		BucketName:         r.String("storage.bucketName"),
+		SnapshotLocation:   r.String("storage.snapshotLocation"),
 		KODockerRepo:       r.String("ko.dockerRepo"),
 		KODefaultPlatforms: r.String("ko.defaultPlatforms"),
 		ActorJWTAlgorithm:  r.String("actorJWT.algorithm"),
@@ -357,6 +358,11 @@ func applyKindDefaults(r *Resolved) {
 	}
 	if !namedExplicitly(r, "storage.bucketName") {
 		r.set("storage.bucketName", "ate-snapshots", OriginKindProfile)
+	}
+	// Follows the bucket, so the location names the one the local rustfs
+	// creates rather than a GCS bucket from the developer's environment.
+	if !namedExplicitly(r, "storage.snapshotLocation") {
+		r.set("storage.snapshotLocation", "gs://"+r.String("storage.bucketName")+"/", OriginKindProfile)
 	}
 }
 

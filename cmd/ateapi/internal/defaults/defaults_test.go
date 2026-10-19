@@ -29,6 +29,13 @@ func TestApply(t *testing.T) {
 		scopeFull = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 		scopeData = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	)
+	// defaultSnapshotConfig is what an omitted snapshot_config defaults to.
+	defaultSnapshotConfig := func() *ateapipb.SnapshotConfig {
+		return &ateapipb.SnapshotConfig{
+			PreferredFidelity:    scopeFull,
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		}
+	}
 	tests := []struct {
 		name string
 		in   proto.Message
@@ -38,9 +45,9 @@ func TestApply(t *testing.T) {
 		in:   (*ateapipb.ActorTemplate)(nil),
 		want: (*ateapipb.ActorTemplate)(nil),
 	}, {
-		name: "missing snapshot_config is left for validation",
+		name: "missing snapshot_config gets every default",
 		in:   &ateapipb.ActorTemplate{},
-		want: &ateapipb.ActorTemplate{},
+		want: &ateapipb.ActorTemplate{SnapshotConfig: defaultSnapshotConfig()},
 	}, {
 		name: "empty snapshot_config gets every default",
 		in:   &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{}},
@@ -60,13 +67,13 @@ func TestApply(t *testing.T) {
 	}, {
 		name: "container without wakeup probe stays without one",
 		in:   &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "main"}}},
-		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "main"}}},
+		want: &ateapipb.ActorTemplate{SnapshotConfig: defaultSnapshotConfig(), Containers: []*ateapipb.Container{{Name: "main"}}},
 	}, {
 		name: "wakeup probe gets timeout and path",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
 			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 8080}}},
 		}},
-		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
+		want: &ateapipb.ActorTemplate{SnapshotConfig: defaultSnapshotConfig(), Containers: []*ateapipb.Container{
 			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/"},
 				TimeoutSeconds: 30,
@@ -77,7 +84,7 @@ func TestApply(t *testing.T) {
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
 			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{}},
 		}},
-		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
+		want: &ateapipb.ActorTemplate{SnapshotConfig: defaultSnapshotConfig(), Containers: []*ateapipb.Container{
 			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{TimeoutSeconds: 30}},
 		}},
 	}, {
@@ -88,7 +95,7 @@ func TestApply(t *testing.T) {
 				TimeoutSeconds: 5,
 			}},
 		}},
-		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
+		want: &ateapipb.ActorTemplate{SnapshotConfig: defaultSnapshotConfig(), Containers: []*ateapipb.Container{
 			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/healthz"},
 				TimeoutSeconds: 5,
@@ -101,7 +108,7 @@ func TestApply(t *testing.T) {
 			{Name: "b"},
 			{Name: "c", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 3}}},
 		}},
-		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
+		want: &ateapipb.ActorTemplate{SnapshotConfig: defaultSnapshotConfig(), Containers: []*ateapipb.Container{
 			{Name: "a", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 1, Path: "/"}, TimeoutSeconds: 30}},
 			{Name: "b"},
 			{Name: "c", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 3, Path: "/"}, TimeoutSeconds: 30}},

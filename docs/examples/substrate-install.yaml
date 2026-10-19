@@ -50,6 +50,7 @@ images:
 # Snapshot storage.
 storage:
   bucketName: ate-snapshots
+  snapshotLocation: gs://ate-snapshots/
 
 ateapi:
   postgres:

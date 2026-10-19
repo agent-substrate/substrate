@@ -48,7 +48,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 			// Server-owned status on the request is ignored.
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+					GoldenTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "golden-tag"},
 				},
 			},
 		},
@@ -163,7 +163,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !parsed.OwnedBy(resources.TagSnapshotOwner(resources.GoldenActorAtespace, golden.GetMetadata().GetUid())) {
+	if !parsed.OwnedBy(resources.TagSnapshotOwner(testAtespace, golden.GetMetadata().GetUid())) {
 		t.Fatalf("golden snapshot %q is not under the golden tag's own prefix", uri)
 	}
 	assertSnapshotPresent(t, tc, uri)
@@ -208,7 +208,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	}
 	assertSnapshotPresent(t, tc, uri)
 	for _, actor := range []*ateapipb.Actor{early, late} {
-		if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: resources.ActorRefFromActor(actor).ToObjectRef(), AnyState: true}); err != nil {
+		if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: resources.ActorRefFromActor(actor).ToObjectRef()}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -247,7 +247,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	}
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 	controlTemplate := createTemplateWithSelector(t, tc, "golden-control", &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}})
-	goldenRef := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
+	goldenRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()}
 	assertNoGolden := func(ctx context.Context) error {
 		if _, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef}); status.Code(err) != codes.NotFound {
 			return fmt.Errorf("disabled template's golden actor: got %v, want NotFound", err)
@@ -314,7 +314,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if err := assertNoGolden(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil {
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}); err != nil {
@@ -406,11 +406,60 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 						VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
 					}},
 					Volumes: []*ateapipb.Volume{{
-						Name:                   "data",
-						ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", Capacity: "1Gi"},
+						Name:     "data",
+						External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", Capacity: "1Gi"}},
 					}},
 					Resources:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
 					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+				},
+			})
+			if status.Code(err) != tt.wantCode {
+				t.Fatalf("CreateActorTemplate error = %v, want %v", err, tt.wantCode)
+			}
+		})
+	}
+}
+
+// TestCreateActorTemplate_PerTemplateSnapshotLocationPreview pins how
+// snapshotConfig.storageLocation combines the PerTemplateSnapshotLocation gate
+// with the client's preview opt-in. With the gate off the field is ignored,
+// so any client may set it. With the gate on, only a client that opts in may
+// set it; a template that leaves it empty uses the server's
+// --snapshot-location.
+func TestCreateActorTemplate_PerTemplateSnapshotLocationPreview(t *testing.T) {
+	ns := namespaceForTest("ns-template-storage-location-preview")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	for i, tt := range []struct {
+		name     string
+		gates    []string
+		optIn    bool
+		location string
+		wantCode codes.Code
+	}{
+		{name: "gate off, no opt-in, location set", optIn: false, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
+		{name: "gate off, opt-in, location set", optIn: true, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
+		{name: "gate on, no opt-in, location set", gates: []string{"PerTemplateSnapshotLocation"}, optIn: false, location: "gs://my-bucket/snapshots", wantCode: codes.InvalidArgument},
+		{name: "gate on, no opt-in, no location", gates: []string{"PerTemplateSnapshotLocation"}, optIn: false, wantCode: codes.OK},
+		{name: "gate on, opt-in, location set", gates: []string{"PerTemplateSnapshotLocation"}, optIn: true, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
+		{name: "gate on, opt-in, no location", gates: []string{"PerTemplateSnapshotLocation"}, optIn: true, wantCode: codes.OK},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, tt.gates...)
+			ctx := context.Background()
+			if tt.optIn {
+				ctx = metadata.AppendToOutgoingContext(ctx, preview.Header, "true")
+			}
+			_, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+				ActorTemplate: &ateapipb.ActorTemplate{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("tmpl-loc-%d", i)},
+					Containers: []*ateapipb.Container{{
+						Name:  "main",
+						Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+					}},
+					Resources:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
+					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: tt.location},
 				},
 			})
 			if status.Code(err) != tt.wantCode {

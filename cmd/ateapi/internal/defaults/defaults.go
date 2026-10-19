@@ -51,6 +51,10 @@ func applyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
 	if t == nil {
 		return
 	}
+	// snapshot_config is optional; an omitted one takes every default.
+	if t.SnapshotConfig == nil {
+		t.SnapshotConfig = &ateapipb.SnapshotConfig{}
+	}
 	applySnapshotConfigDefaults(t.SnapshotConfig)
 	for _, c := range t.Containers {
 		applyContainerDefaults(c)

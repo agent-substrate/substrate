@@ -96,6 +96,32 @@ func TestIDPServerGetsTheIssuerAndSharesTheAPIServerPool(t *testing.T) {
 	}
 }
 
+// deploy apiserver applies ate-idp-server on its own, so it has to set the
+// issuer as deploy ate-system does.
+func TestRenderIDPServerSetsTheIssuer(t *testing.T) {
+	const issuer = "https://idp.example.com"
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t), ActorJWTIssuer: issuer}}
+	rendered, err := e.renderIDPServer()
+	if err != nil {
+		t.Fatalf("renderIDPServer: %v", err)
+	}
+	objs, err := kube.DecodeManifestBytes(rendered)
+	if err != nil {
+		t.Fatalf("DecodeManifestBytes: %v", err)
+	}
+	idp := findObject(objs, "Deployment", "ate-idp-server")
+	if idp == nil {
+		t.Fatal("renderIDPServer has no deployment/ate-idp-server")
+	}
+	var dep appsv1.Deployment
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(idp.Object, &dep); err != nil {
+		t.Fatal(err)
+	}
+	if args := dep.Spec.Template.Spec.Containers[0].Args; !slices.Contains(args, "--issuer="+issuer) {
+		t.Errorf("ate-idp-server args = %v, want --issuer=%s", args, issuer)
+	}
+}
+
 func TestSetIDPServerIssuerWithoutTheDeployment(t *testing.T) {
 	manifest := []byte("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ate-api-server\n")
 	if _, err := setIDPServerIssuer(manifest, "https://idp.example.com"); err == nil {

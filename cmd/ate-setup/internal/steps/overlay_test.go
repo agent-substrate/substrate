@@ -447,6 +447,11 @@ func TestRenderCordonControlPlane(t *testing.T) {
 			want: []string{"ate-api-server"},
 		},
 		{
+			name: "idp server file",
+			path: func(e *Env) string { return e.idpServerManifestPath() },
+			want: []string{"ate-idp-server"},
+		},
+		{
 			name: "podcert file",
 			path: func(e *Env) string { return e.Cfg.Manifest("pod-certificate-controller.yaml") },
 			want: []string{"podcertificate-controller"},

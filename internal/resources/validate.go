@@ -224,11 +224,12 @@ func ValidateAssetHash(sha256Hash string) error {
 	return nil
 }
 
-// ValidateSnapshotLocation ensures an ActorTemplate's snapshotConfig.location
-// is a well-formed URI with a bucket, so a bad location fails fast instead of
-// deep inside an object-storage call. It deliberately does not restrict the
-// scheme: the storage layer only uses the host (bucket) and path, and which
-// schemes are acceptable is a storage-backend policy, not a per-RPC one.
+// ValidateSnapshotLocation ensures an ActorTemplate's
+// snapshotConfig.storageLocation is a well-formed URI with a bucket, so a bad
+// location fails fast instead of deep inside an object-storage call. It
+// deliberately does not restrict the scheme: the storage layer only uses the
+// host (bucket) and path, and which schemes are acceptable is a
+// storage-backend policy, not a per-RPC one.
 //
 // This validates the base that many snapshots share, not any one snapshot's
 // URI; SnapshotURI is the type for the latter, and it applies this check when

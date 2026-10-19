@@ -52,8 +52,8 @@ type resumeSnapshotSource struct {
 	// TemplateReplaced is true when the external snapshot's recorded template
 	// UID differs from the actor's current template.
 	TemplateReplaced bool
-	// RequiredRuntime is the runtime resolved from the snapshot's guest state
-	// (via requiredSnapshotRuntime), or nil when guest state is not restored.
+	// RequiredRuntime is the runtime resolved from the snapshot's memory state
+	// (via requiredSnapshotRuntime), or nil when memory state is not restored.
 	RequiredRuntime *ateapipb.SandboxRuntime
 }
 
@@ -141,20 +141,6 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	return actor, true, nil
 }
 
-// validateGoldenSnapshotFidelity rejects a golden snapshot that does not carry
-// the guest state (memory + fs delta) a restore needs. Golden actors always
-// commit MEMORY (preferredFidelity), so this only trips on a golden snapshot
-// whose record drifted — surface a clear error instead of shipping a restore
-// request atelet would reject (or that would boot an empty guest).
-func validateGoldenSnapshotFidelity(snapshot *ateapipb.Snapshot) error {
-	if fidelity := snapshot.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
-		return apierror.FailedPrecondition(
-			"ActorTemplate golden snapshot %q was taken with fidelity %s, not MEMORY; regenerate the golden snapshot",
-			snapshot.GetDurableSnapshot().GetObject().GetSnapshotUri(), fidelity)
-	}
-	return nil
-}
-
 // loadActorForResume fetches the current actor record and its template, and
 // resolves the boot source for the pending restore.
 func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
@@ -192,6 +178,13 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		src.Fidelity = snap.GetFidelity()
 		src.TemplateReplaced = templateReplaced(snap, actorTemplate)
 	}
+	// A local restore also names the local snapshot's upload, so a URI that
+	// does not parse fails here too, before a worker is claimed.
+	if local := findLatestLocalSnapshot(actor.GetStatus()); local != nil {
+		if _, err = resources.ParseSnapshotURI(local.GetDurableSnapshot().GetObject().GetSnapshotUri()); err != nil {
+			return nil, nil, src, apierror.DataLoss("Actor %s local snapshot: %v", actorRef, err)
+		}
+	}
 
 	return actor, actorTemplate, src, nil
 }
@@ -211,7 +204,7 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	ctx, done := stepSpan(ctx, "CreateVolumes")
 	defer func() { err = done(err) }()
 
-	pending := slices.ContainsFunc(actor.GetStatus().GetExternalVolumes(), func(vol *ateapipb.ExternalVolume) bool {
+	pending := slices.ContainsFunc(actor.GetStatus().GetExternalVolumes().GetVolumes(), func(vol *ateapipb.ExternalVolumeStatus) bool {
 		return vol.GetStorageVolumeId() == ""
 	})
 	if !pending {
@@ -222,12 +215,12 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 		return nil, apierror.FailedPrecondition("cannot create volumes for Actor %s in state %s", actorRef, st)
 	}
 
-	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetExternalVolumes())
+	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetExternalVolumes().GetVolumes())
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
 	updatePrecondition := store.PreconditionFrom(actor)
 	persistVolumes := func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.ExternalVolumes = volumes
+		toUpdate.Status.ExternalVolumes = externalVolumesStatus(volumes)
 		return nil
 	}
 	if createErr != nil {
@@ -710,15 +703,12 @@ func snapshotSandboxClass(actor *ateapipb.Actor) string {
 }
 
 // requiredSnapshotRuntime returns the SandboxRuntime stamped on the snapshot
-// that ResumeActor will restore guest state from, or nil when the resume does
-// not restore guest state (cold boot, VOLUMES fidelity, or replaced template).
-//
-// TODO: Once gVisor can restore ROOTFS snapshots, return nil for ROOTFS as
-// well: a rootfs upper is files tied to the image, not to the runtime, so only
-// MEMORY needs a runtime match. Until then ROOTFS is pinned like MEMORY.
+// that ResumeActor will restore memory state from, or nil when the resume does
+// not restore memory state (cold boot, ROOTFS or VOLUMES fidelity, or replaced
+// template).
 func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
 	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
-		if localSnap.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		if localSnap.GetFidelity() != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 			return nil
 		}
 		if templateReplaced(localSnap, tmpl) {
@@ -727,7 +717,7 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 		return localSnap.GetSandboxRuntime()
 	}
 	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
-		if snap.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		if snap.GetFidelity() != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 			return nil
 		}
 		if templateReplaced(snap, tmpl) {
@@ -739,7 +729,7 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 }
 
 // canRelaxRuntime reports whether a resume may drop its RequiredRuntime
-// constraint and fall back to a volumes-only restore when no
+// constraint and fall back to restoring without memory state when no
 // runtime-compatible worker has capacity. A local pause checkpoint is not
 // relaxed: the resume stays pinned to its node, the local restore has no
 // fidelity downgrade, and nothing invalidates the checkpoint files if the actor
@@ -772,7 +762,7 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 	ctx, done := stepSpan(ctx, "AttachVolumes")
 	defer func() { err = done(err) }()
 
-	if len(actor.GetStatus().GetExternalVolumes()) > 0 && !preview.IsEnabled(preview.GateExternalVolumes) {
+	if len(actor.GetStatus().GetExternalVolumes().GetVolumes()) > 0 && !preview.IsEnabled(preview.GateExternalVolumes) {
 		return nil, fmt.Errorf("external volumes are not supported unless the ExternalVolumes preview gate is enabled")
 	}
 
@@ -783,7 +773,7 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 
 	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
 	volumePublishContexts := make(map[string]map[string]string)
-	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes(), actorTemplate) {
+	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes().GetVolumes(), actorTemplate) {
 		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := w.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
@@ -861,6 +851,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 				SnapshotUuid: localSnap.GetUuid(),
 				Generation:   localSnap.GetGeneration(),
 				Fidelity:     fidelity,
+				// Named even while the upload is PENDING: atelet may have
+				// uploaded the snapshot and detached the actor before its
+				// report of the upload lands. atelet reads it only when it
+				// holds no usable local copy, and the manifest, uploaded
+				// last, tells a complete upload from a partial one.
+				Object: &ateletpb.ObjectStorage{SnapshotUri: localSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()},
 			},
 			SandboxAssets:  sandboxAssets,
 			SandboxRuntime: sandboxRuntime,
@@ -868,11 +864,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			EgressGateway:  egressGateway,
 			CpuMilli:       cpuMilli,
 			MemoryBytes:    memBytes,
-		}
-		// atelet uploads a pause's snapshot in the background. Once that upload
-		// is recorded, atelet can download it if its local copy is gone.
-		if durable := localSnap.GetDurableSnapshot(); durable.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
-			req.Snapshot.Object = &ateletpb.ObjectStorage{SnapshotUri: durable.GetObject().GetSnapshotUri()}
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
@@ -884,15 +875,15 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLatest
 		scope := fidelityToAtelet(src.Fidelity)
-		if src.TemplateReplaced || runtimeIncompatible {
-			if runtimeIncompatible {
-				logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime)
-			}
-			// TODO: Once gVisor can restore ROOTFS snapshots, drop an incompatible
-			// runtime to ROOTFS, not VOLUMES: only the memory layer is invalid. A
-			// replaced template still drops to VOLUMES, as the rootfs upper is
-			// only valid over the image it was written on.
+		// Exclusive by construction: requiredSnapshotRuntime returns nil when
+		// the template changed, so runtimeIncompatible is false when
+		// src.TemplateReplaced is true.
+		switch {
+		case src.TemplateReplaced:
 			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		case runtimeIncompatible:
+			logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime)
+			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)
 		req := &ateletpb.RestoreRequest{
@@ -946,11 +937,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	}
 }
 
-// logRuntimeFallback records a resume that restores the durable volumes alone
-// because the assigned worker does not run the runtime the snapshot's guest
+// logRuntimeFallback records a resume that restores without memory state
+// because the assigned worker does not run the runtime the snapshot's memory
 // state was captured under.
 func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapipb.WorkerAssignment, required *ateapipb.SandboxRuntime) {
-	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring volumes only",
+	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring without memory state",
 		slog.String("actor", actorRef.String()),
 		slog.String("worker", assignment.GetWorkerPod()),
 		slog.Any("required_runtime", required),

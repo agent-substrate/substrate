@@ -215,6 +215,7 @@ func TestComponentManifestsMatchSystemBundle(t *testing.T) {
 			kind, name, path string
 		}{
 			{"Deployment", "ate-api-server", e.apiServerManifestPath()},
+			{"Deployment", "ate-idp-server", e.idpServerManifestPath()},
 			{"DaemonSet", "atelet", e.ateletManifestPath()},
 		} {
 			want := findObject(bundle, component.kind, component.name)

@@ -41,8 +41,12 @@ type FetchSnapshotRequest struct {
 	// The snapshot to read, e.g. gs://<bucket>/<prefix>.
 	SnapshotUri string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// The JWT of the actor that owns the snapshot, for plugins that authorize
-	// storage access per actor. Substrate does not set it yet, so it is
-	// currently always empty.
+	// storage access per actor. It is a worker-for-actor token ate-api-server
+	// minted for the node hosting the actor, with the audience
+	// "objectstore-plugin.ate.dev". That audience belongs to this API, so every
+	// plugin serving it verifies the same value. The token names the node it
+	// was minted for and is refused once the actor has left it. Substrate does
+	// not set the field yet, so it is currently always empty.
 	ActorJwt string `protobuf:"bytes,2,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
 	// Full local path of the directory the files are written into. It must
 	// exist.
@@ -153,8 +157,12 @@ type UploadSnapshotRequest struct {
 	// The snapshot to write, e.g. gs://<bucket>/<prefix>.
 	SnapshotUri string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// The JWT of the actor that owns the snapshot, for plugins that authorize
-	// storage access per actor. Substrate does not set it yet, so it is
-	// currently always empty.
+	// storage access per actor. It is a worker-for-actor token ate-api-server
+	// minted for the node hosting the actor, with the audience
+	// "objectstore-plugin.ate.dev". That audience belongs to this API, so every
+	// plugin serving it verifies the same value. The token names the node it
+	// was minted for and is refused once the actor has left it. Substrate does
+	// not set the field yet, so it is currently always empty.
 	ActorJwt string `protobuf:"bytes,2,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
 	// Full local path of the directory the files are read from.
 	LocalPath string `protobuf:"bytes,3,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`

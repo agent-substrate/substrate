@@ -54,8 +54,12 @@ message FetchSnapshotRequest {
   string snapshot_uri = 1;
 
   // The JWT of the actor that owns the snapshot, for plugins that authorize
-  // storage access per actor. Substrate does not set it yet, so it is
-  // currently always empty.
+  // storage access per actor. It is a worker-for-actor token ate-api-server
+  // minted for the node hosting the actor, with the audience
+  // "objectstore-plugin.ate.dev". That audience belongs to this API, so every
+  // plugin serving it verifies the same value. The token names the node it
+  // was minted for and is refused once the actor has left it. Substrate does
+  // not set the field yet, so it is currently always empty.
   string actor_jwt = 2 [ debug_redact = true ];
 
   // Full local path of the directory the files are written into. It must
@@ -74,8 +78,12 @@ message UploadSnapshotRequest {
   string snapshot_uri = 1;
 
   // The JWT of the actor that owns the snapshot, for plugins that authorize
-  // storage access per actor. Substrate does not set it yet, so it is
-  // currently always empty.
+  // storage access per actor. It is a worker-for-actor token ate-api-server
+  // minted for the node hosting the actor, with the audience
+  // "objectstore-plugin.ate.dev". That audience belongs to this API, so every
+  // plugin serving it verifies the same value. The token names the node it
+  // was minted for and is refused once the actor has left it. Substrate does
+  // not set the field yet, so it is currently always empty.
   string actor_jwt = 2 [ debug_redact = true ];
 
   // Full local path of the directory the files are read from.

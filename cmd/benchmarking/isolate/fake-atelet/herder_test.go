@@ -27,10 +27,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 const testSnapshotURI = "gs://bench-bucket/benchmark-workloads/sleep/atespaces/team-a/actors/0f9c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f/snapshots/snap-1"
@@ -201,6 +203,29 @@ func TestHerderWritesNothingForLocalCheckpoint(t *testing.T) {
 	}
 	if got := storage.objects(); len(got) != 0 {
 		t.Errorf("wrote %v, want nothing outside immediate uploads and promotions", got)
+	}
+}
+
+// ate-api-server checks that PromoteSnapshot reports the snapshot it asked for
+// durable, and fails the tag otherwise.
+func TestHerderPromoteSnapshotReportsSnapshotDurable(t *testing.T) {
+	snap := &ateletpb.Snapshot{
+		SnapshotUuid: "snap-1",
+		Generation:   2,
+		Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Object:       &ateletpb.ObjectStorage{SnapshotUri: testSnapshotURI},
+	}
+	h := &herder{storage: &recordingStorage{}}
+	resp, err := h.PromoteSnapshot(context.Background(), &ateletpb.PromoteSnapshotRequest{Snapshot: snap})
+	if err != nil {
+		t.Fatalf("PromoteSnapshot: %v", err)
+	}
+	want := &ateletpb.ActorSnapshotState{
+		LatestLocal:   &ateletpb.SnapshotReport{Snapshot: snap},
+		LatestDurable: &ateletpb.SnapshotReport{Snapshot: snap},
+	}
+	if diff := cmp.Diff(want, resp.GetState(), protocmp.Transform()); diff != "" {
+		t.Errorf("PromoteSnapshot state mismatch (-want +got):\n%s", diff)
 	}
 }
 

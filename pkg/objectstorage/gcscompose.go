@@ -25,34 +25,53 @@ import (
 
 	"cloud.google.com/go/storage"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/api/option"
 )
 
 // uploadPoolSize is how many storage.Clients the parallel part upload spreads its
 // parts over. One client keeps a single HTTP/2 connection per host and multiplexes
 // every part onto it, so parts that should be independent share one TCP stream:
 // measured on a GKE worker node at 8 streams, 334 MB/s shared against 518 MB/s with a
-// connection each.
+// connection each. The same holds for the many small objects a node moves at once:
+// each snapshot below the part and range thresholds is a single request, so the
+// single-request paths draw on this pool too (see nextClient).
 const uploadPoolSize = 8
 
-// uploadClient returns the client part i should use, or the default client if the pool
-// could not be built (a pool failure costs throughput, not correctness).
-func (g *gcsClient) uploadClient(ctx context.Context, i int) *storage.Client {
-	g.poolOnce.Do(func() {
-		for range uploadPoolSize {
-			// The clients outlive this call, so they must not hold its cancellation.
-			c, err := storage.NewClient(context.WithoutCancel(ctx), g.opts...)
-			if err != nil {
-				slog.WarnContext(ctx, "Falling back to one client for part uploads", slog.Any("err", err))
-				return
-			}
-			setRetry(c)
-			g.pool = append(g.pool, c)
+// newPool builds the uploadPoolSize clients transfers are spread over, from the
+// same opts as the client they stand in for: a pooled client that authenticates
+// differently from the one that opened an object fails partway through reading
+// it. It is built with that client rather than on first use, so a burst of
+// transfers on a fresh node does not wait for it. A pool that could not be
+// completed is used as far as it got, down to none: that costs throughput, not
+// correctness.
+func newPool(ctx context.Context, opts []option.ClientOption) []*storage.Client {
+	pool := make([]*storage.Client, 0, uploadPoolSize)
+	for range uploadPoolSize {
+		c, err := storage.NewClient(ctx, opts...)
+		if err != nil {
+			slog.WarnContext(ctx, "GCS connection pool is short; transfers share fewer connections",
+				slog.Int("built", len(pool)), slog.Int("want", uploadPoolSize), slog.Any("err", err))
+			break
 		}
-	})
+		setRetry(c)
+		pool = append(pool, c)
+	}
+	return pool
+}
+
+// uploadClient returns the client part i should use, or the default client if there
+// is no pool.
+func (g *gcsClient) uploadClient(i int) *storage.Client {
 	if len(g.pool) == 0 {
 		return g.client
 	}
 	return g.pool[i%len(g.pool)]
+}
+
+// nextClient hands out pooled clients round-robin, for a transfer that is one
+// request and so has no part or range index of its own.
+func (g *gcsClient) nextClient() *storage.Client {
+	return g.uploadClient(int(g.next.Add(1) - 1))
 }
 
 // One stream to GCS tops out near 100 MiB/s however it is chunked; several do not
@@ -75,24 +94,13 @@ const (
 // into object. Only for objects past uploadCompositeMin; putSingle handles the rest.
 func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, head io.Reader, rest io.Reader) (err error) {
 	bkt := g.client.Bucket(bucket)
-	// A run id keeps concurrent or retried uploads of the same object from colliding on
-	// part names, and makes leftovers from a crash identifiable.
-	var idBytes [8]byte
-	if _, err := rand.Read(idBytes[:]); err != nil {
-		return fmt.Errorf("while naming upload parts: %w", err)
+	runID, err := newRunID()
+	if err != nil {
+		return err
 	}
-	runID := hex.EncodeToString(idBytes[:])
 
 	var parts []*storage.ObjectHandle
-	defer func() {
-		// Parts are scratch either way, and deleting them must not mask the real error.
-		for _, p := range parts {
-			if delErr := p.Delete(context.WithoutCancel(ctx)); delErr != nil &&
-				!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
-				err = fmt.Errorf("while removing upload part %q: %w", p.ObjectName(), delErr)
-			}
-		}
-	}()
+	defer func() { err = removeScratch(ctx, parts, err) }()
 
 	// The stream is read in order here and whole parts handed to the uploaders; buffers
 	// cycle through free so the peak stays at uploadConcurrency of them.
@@ -115,7 +123,7 @@ func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, hea
 		if n > 0 {
 			part := bkt.Object(fmt.Sprintf("%s.part-%s-%04d", object, runID, i))
 			parts = append(parts, part)
-			upPart := g.uploadClient(ctx, i).Bucket(bucket).Object(part.ObjectName())
+			upPart := g.uploadClient(i).Bucket(bucket).Object(part.ObjectName())
 			data := buf[:n]
 			g2.Go(func() error {
 				defer func() { free <- buf }()
@@ -137,6 +145,29 @@ func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, hea
 	return composeAll(ctx, bkt, object, parts, runID)
 }
 
+// newRunID returns an id that keeps concurrent or retried uploads of the same object
+// from colliding on part names, and makes leftovers from a crash identifiable.
+func newRunID() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("while naming upload parts: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// removeScratch deletes objs, which are scratch whether or not the upload succeeded.
+// It returns err, or the first delete failure if err is nil, so cleanup never masks
+// the real error.
+func removeScratch(ctx context.Context, objs []*storage.ObjectHandle, err error) error {
+	for _, o := range objs {
+		if delErr := o.Delete(context.WithoutCancel(ctx)); delErr != nil &&
+			!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
+			err = fmt.Errorf("while removing scratch object %q: %w", o.ObjectName(), delErr)
+		}
+	}
+	return err
+}
+
 // writeObject writes data to obj in one request.
 func writeObject(ctx context.Context, obj *storage.ObjectHandle, data []byte, size int) error {
 	w := obj.NewWriter(ctx)
@@ -150,11 +181,15 @@ func writeObject(ctx context.Context, obj *storage.ObjectHandle, data []byte, si
 }
 
 // composeAll composes parts into object, folding in rounds when there are more parts
-// than GCS accepts in one call. Intermediates are cleaned up as they are consumed.
-func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, parts []*storage.ObjectHandle, runID string) error {
+// than GCS accepts in one call. The intermediates it creates are removed on return; the
+// caller removes parts.
+func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, parts []*storage.ObjectHandle, runID string) (err error) {
 	if len(parts) == 0 {
 		return fmt.Errorf("no parts to compose into %q", object)
 	}
+	var mids []*storage.ObjectHandle
+	defer func() { err = removeScratch(ctx, mids, err) }()
+
 	round := 0
 	for len(parts) > maxComposeSources {
 		var next []*storage.ObjectHandle
@@ -166,13 +201,10 @@ func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, p
 				continue
 			}
 			mid := bkt.Object(fmt.Sprintf("%s.compose-%s-%d-%04d", object, runID, round, i))
+			// Before Run: it can fail after GCS committed mid.
+			mids = append(mids, mid)
 			if _, err := mid.ComposerFrom(group...).Run(ctx); err != nil {
 				return fmt.Errorf("while composing parts of %q: %w", object, err)
-			}
-			// The sources are dead once folded; the caller's deferred cleanup only
-			// knows about the leaf parts.
-			for _, s := range group {
-				_ = s.Delete(context.WithoutCancel(ctx))
 			}
 			next = append(next, mid)
 		}

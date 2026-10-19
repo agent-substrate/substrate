@@ -65,7 +65,7 @@ func decodeJWTClaims(t *testing.T, token string) actoridjwt.WireClaims {
 
 func TestMintWorkerActorJwt(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, testActorJWTIssuer, newTestJWTPool(t))
+	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, testActorJWTIssuer, newTestJWTPool(t))
 
 	ctx := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))
 	before := time.Now().Truncate(time.Second)
@@ -96,7 +96,7 @@ func TestMintWorkerActorJwt(t *testing.T) {
 	if !ok || kind != actoridjwt.KindWorkerForActor {
 		t.Fatalf("token kind = %v (ok %v), want KindWorkerForActor under worker-for-actor.ate.dev", kind, ok)
 	}
-	if got, want := *substrate, (actoridjwt.WireSubstrateClaims{Atespace: "team-a", ActorName: "my-actor", ActorUID: actor.GetMetadata().GetUid()}); got != want {
+	if got, want := *substrate, (actoridjwt.WireSubstrateClaims{Atespace: "team-a", ActorName: "my-actor", ActorUID: actor.GetMetadata().GetUid(), Node: "node-1"}); got != want {
 		t.Errorf("worker-for-actor.ate.dev = %+v, want %+v", got, want)
 	}
 
@@ -139,7 +139,7 @@ func uploadPendingStatus(node string) *ateapipb.ActorStatus {
 
 func TestMintWorkerActorJwt_Errors(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, testActorJWTIssuer, newTestJWTPool(t))
+	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, testActorJWTIssuer, newTestJWTPool(t))
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))
 
 	valid := func() *ateapipb.MintWorkerActorJwtRequest {
@@ -455,7 +455,7 @@ func TestNodeRefusalLogNamesCredential(t *testing.T) {
 
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	csr, _ := generateTestCSR(t)
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, newTestCAPool(t), testActorJWTIssuer, newTestJWTPool(t))
+	s := New(st, &fakeControl{}, testAteletSPIFFEID, newTestCAPool(t), testActorJWTIssuer, newTestJWTPool(t))
 	// The actor's worker runs on node-1.
 	otherNode := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-2"))
 	actorRef := &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"}

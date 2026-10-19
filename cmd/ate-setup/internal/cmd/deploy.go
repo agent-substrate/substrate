@@ -100,7 +100,7 @@ var deployAteletCmd = &cobra.Command{
 var deployAPIServerCmd = &cobra.Command{
 	Use:     "apiserver",
 	Aliases: []string{"ate-apiserver"},
-	Short:   "Deploy ate-api-server only",
+	Short:   "Deploy ate-api-server and ate-idp-server",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.DeployAteAPIServer(cmd.Context())
