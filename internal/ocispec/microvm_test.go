@@ -152,3 +152,32 @@ func TestShapeMicroVM_LeavesUndeclaredContainerUnlimited(t *testing.T) {
 		t.Errorf("cpu quota = %d, want unset for a container that declared none", *c.Quota)
 	}
 }
+
+// An image volume the guest mounts from EROFS layer images is bound from
+// GuestEROFSImageVolume; one the host composes still comes from the share.
+func TestShapeMicroVM_EROFSImageVolumes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		erofs []string
+		want  string
+	}{
+		{"from the share", nil, GuestSharedDir + "/app/" + ShareVolumes + "/agent"},
+		{"from layer images", []string{"agent"}, GuestEROFSImageVolume("app", "agent")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := Build(parityOptions)
+			if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app", EROFSImageVolumes: tc.erofs}); err != nil {
+				t.Fatalf("ShapeMicroVM() = %v", err)
+			}
+			var got string
+			for _, m := range spec.Mounts {
+				if m.Destination == "/ate" {
+					got = m.Source
+				}
+			}
+			if got != tc.want {
+				t.Errorf("image volume bind source = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

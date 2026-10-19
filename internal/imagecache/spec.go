@@ -55,6 +55,11 @@ type OverlaySpec struct {
 	// fs/), bottom-most layer first — the order the image manifest lists
 	// them. Consumers reverse this into overlayfs's top-first lowerdir.
 	Layers []string `json:"layers"`
+	// EROFS indicates that every layer in Layers has a layer.erofs image (see
+	// LayerEROFSPath). Micro-VM consumers attach those images to the guest and
+	// fail if any is missing; SetupBundleRootfs refuses such a bundle, as the
+	// host mounts only fs/ trees.
+	EROFS bool `json:"erofs,omitempty"`
 	// ExtraDirs are absolute in-rootfs directories the consumer creates after
 	// mounting (they land in the actor's private upper): bind-mount targets
 	// that must exist for the runtime to attach them, e.g. the actor identity
@@ -77,6 +82,23 @@ type ImageVolumeOverlay struct {
 	ImageDigest string `json:"imageDigest,omitempty"`
 	// Layers are the cached layer directories, bottom-most first.
 	Layers []string `json:"layers"`
+	// EROFS indicates that every layer in Layers has a layer.erofs image
+	// (see LayerEROFSPath), as OverlaySpec.EROFS does for the rootfs: a
+	// micro-VM guest mounts the volume from them; the host composes only
+	// fs/ trees.
+	EROFS bool `json:"erofs,omitempty"`
+}
+
+// EROFSVolumeLayers returns the distinct layer directories of an EROFS image
+// volume, top-most first (overlayfs lowerdir order).
+func EROFSVolumeLayers(vol ImageVolumeOverlay) ([]string, error) {
+	if !vol.EROFS {
+		return nil, fmt.Errorf("image volume %q has no EROFS layer images", vol.Name)
+	}
+	if len(vol.Layers) == 0 {
+		return nil, fmt.Errorf("image volume %q has no layers", vol.Name)
+	}
+	return lowerLayers(vol.Layers), nil
 }
 
 // WriteSpec writes spec into the bundle at bundlePath.
@@ -133,9 +155,9 @@ func ReadSpec(bundlePath string) (*OverlaySpec, error) {
 	return &spec, nil
 }
 
-// overlayLowerDirs returns the overlayfs lowerdir paths for the spec's
-// layers: top-most layer first (the reverse of the spec's bottom-first
-// order), each pointing at the layer's fs/ tree.
+// lowerLayers returns the spec's layer directories in overlayfs's top-most
+// layer first order (the reverse of the spec's bottom-first order), with
+// repeats collapsed.
 //
 // An image may legitimately list the same layer at several positions
 // (repeated identical build steps produce identical diffids; real images
@@ -144,19 +166,28 @@ func ReadSpec(bundlePath string) (*OverlaySpec, error) {
 // the mount with ELOOP).
 // For identical content only the topmost occurrence can affect the merged
 // view, so keep the first one seen walking top-first and drop the rest.
+func lowerLayers(layers []string) []string {
+	lowers := make([]string, 0, len(layers))
+	seen := make(map[string]bool, len(layers))
+	for _, layer := range slices.Backward(layers) {
+		if seen[layer] {
+			continue
+		}
+		seen[layer] = true
+		lowers = append(lowers, layer)
+	}
+	return lowers
+}
+
+// overlayLowerDirs returns the overlayfs lowerdir paths for the spec's
+// layers (see lowerLayers), each pointing at the layer's fs/ tree.
 //
 // Each path is handed to the kernel in its own fsconfig(2) "lowerdir+" call,
 // so no separator escaping or aggregate option-string length cap applies.
 func overlayLowerDirs(layers []string) []string {
-	lowers := make([]string, 0, len(layers))
-	seen := make(map[string]bool, len(layers))
-	for _, layer := range slices.Backward(layers) {
-		p := filepath.Join(layer, layerFSDirName)
-		if seen[p] {
-			continue
-		}
-		seen[p] = true
-		lowers = append(lowers, p)
+	lowers := lowerLayers(layers)
+	for i, layer := range lowers {
+		lowers[i] = filepath.Join(layer, layerFSDirName)
 	}
 	return lowers
 }

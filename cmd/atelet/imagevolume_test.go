@@ -116,7 +116,7 @@ func TestResolveImageVolumes_RecordsLayersAndDigest(t *testing.T) {
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
 
-	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, mounts)
+	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, mounts, imagecache.Form{})
 	if err != nil {
 		t.Fatalf("resolveImageVolumes: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestResolveImageVolumes_MultiLayer(t *testing.T) {
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
 
-	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, mounts)
+	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, mounts, imagecache.Form{})
 	if err != nil {
 		t.Fatalf("resolveImageVolumes: %v", err)
 	}
@@ -172,11 +172,46 @@ func TestResolveImageVolumes_UnmountedVolumeNotPulled(t *testing.T) {
 		Image: &ateletpb.ImageVolumeSource{Reference: "127.0.0.1:1/nope@sha256:abc"},
 	}}
 
-	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, nil)
+	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, nil, imagecache.Form{})
 	if err != nil {
 		t.Fatalf("resolveImageVolumes: %v", err)
 	}
 	if len(got) != 0 {
 		t.Errorf("resolveImageVolumes = %+v, want empty", got)
+	}
+}
+
+// On a micro-VM node the volume is pulled in the container's form: a volume
+// that shares a base layer with the container image lands as EROFS beside
+// it, where a pull in the other form would be refused (one form per node).
+func TestResolveImageVolumes_FollowsTheContainerForm(t *testing.T) {
+	host := imageVolumeTestRegistry(t)
+	base := singleFileLayer(t, "base", "b")
+	imageRef, volRef := host+"/app:v1", host+"/tools:v1"
+	pushTestImage(t, imageRef, base, singleFileLayer(t, "app", "a"))
+	pushTestImage(t, volRef, base, singleFileLayer(t, "tool", "t"))
+	store := newImageVolumeStore(t)
+	form := imagecache.Form{EROFS: true}
+	img, err := store.EnsureImageAs(t.Context(), imageRef, form)
+	if err != nil {
+		t.Fatalf("EnsureImageAs(container image): %v", err)
+	}
+
+	volumes := []*ateletpb.Volume{{Name: "tools", Image: &ateletpb.ImageVolumeSource{Reference: volRef}}}
+	mounts := []*ateletpb.VolumeMount{{Name: "tools", MountPath: "/tools"}}
+	got, err := resolveImageVolumes(t.Context(), store, volumes, mounts, form)
+	if err != nil {
+		t.Fatalf("resolveImageVolumes: %v", err)
+	}
+	if len(got) != 1 || !got[0].EROFS || len(got[0].Layers) != 2 || got[0].Layers[0] != img.LayerDirs[0] {
+		t.Fatalf("resolveImageVolumes = %+v, want one EROFS volume sharing its base layer dir %q", got, img.LayerDirs[0])
+	}
+	for i, dir := range got[0].Layers {
+		if _, err := os.Stat(imagecache.LayerEROFSPath(dir)); err != nil {
+			t.Errorf("volume layer %d has no EROFS image: %v", i, err)
+		}
+	}
+	if _, err := resolveImageVolumes(t.Context(), store, volumes, mounts, imagecache.Form{}); err == nil {
+		t.Error("resolveImageVolumes(fs/) over the EROFS base layer succeeded, want the one-form error")
 	}
 }

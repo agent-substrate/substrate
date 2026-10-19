@@ -49,6 +49,11 @@ func SetupBundleRootfs(bundlePath string) error {
 	if spec == nil {
 		return nil
 	}
+	// A bundle on EROFS layer images is merged by the consumer that asked
+	// for them (a guest, over virtio-pmem); the host composes only fs/ trees.
+	if spec.EROFS {
+		return errors.New("bundle names EROFS layer images, which the host does not mount")
+	}
 
 	for _, layerDir := range spec.Layers {
 		if err := FinalizeLayer(layerDir); err != nil {

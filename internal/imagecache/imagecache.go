@@ -26,17 +26,20 @@
 //     overlayfs whiteouts are char devices (CAP_MKNOD) with trusted.* xattrs
 //     for opaque dirs (CAP_SYS_ADMIN).
 //   - worker (privileged; it already owns every mount on the node) finalizes
-//     layers — materializing the recorded whiteout state, once per layer —
+//     fs/ layers — materializing the recorded whiteout state, once per layer —
 //     and mounts the overlay rootfs (SetupBundleRootfs) just before
-//     `runsc create` / staging the micro-VM virtio-fs lower.
+//     `runsc create`. The micro-VM worker attaches layer.erofs images to the
+//     guest instead and mounts nothing on the host.
 //
 // On-disk layout under the cache root (a directory on the BasePath hostPath,
 // so the same absolute paths resolve in atelet and every worker pod):
 //
 //	version                          layout version marker
 //	layers/sha256/<diffid-hex>/
-//	    fs/                          the unpacked layer tree (overlay lowerdir)
-//	    whiteouts.json               whiteout state recorded at unpack time
+//	    fs/                          the unpacked layer tree (Form{} consumers), or
+//	    layer.erofs                  the layer as an EROFS image (Form{EROFS: true}
+//	    layer.erofs.sha256           consumers) and its digest; a node holds one form
+//	    whiteouts.json               whiteout and implicit-dir metadata recorded at unpack
 //	    finalized                    marker written by FinalizeLayer (worker)
 //	manifests/sha256/<digest-hex>.json
 //	                                 image config + ordered diffID list
@@ -280,6 +283,16 @@ func WithMeter(m metric.Meter) Option {
 	return func(s *Store) { s.meter = m }
 }
 
+// Form is how a consumer wants an image's layers stored. A node's consumers
+// agree on one form per layer: the pool holds a layer in the form it was
+// first pulled in, and a request for the other form is an error.
+type Form struct {
+	// EROFS asks for a layer.erofs image per layer (built in userspace; a
+	// guest mounts it over virtio-pmem with DAX). Otherwise the layer is an
+	// unpacked fs/ tree the host composes an overlay from.
+	EROFS bool
+}
+
 // Image describes one cached, ready-to-compose image.
 type Image struct {
 	// Digest is the manifest digest the caller's ref resolved to (for a
@@ -289,8 +302,11 @@ type Image struct {
 	// Config is the OCI image config (entrypoint, env, ...).
 	Config v1.Config
 	// LayerDirs are the absolute cached layer directories, bottom-most layer
-	// first. Each contains the unpacked tree under "fs/".
+	// first.
 	LayerDirs []string
+	// EROFS reports that every LayerDir holds a layer.erofs image rather
+	// than an fs/ tree: the Form the image was pulled in.
+	EROFS bool
 }
 
 // imageRecord is the persisted form of a cached image, stored under
@@ -372,9 +388,9 @@ func (s *Store) recordPath(digest v1.Hash) string {
 
 // sweepTempDirs removes unpack temp dirs, retired layer dirs, and
 // manifest-record temp files orphaned by a crash. A layer dir without the
-// temp/retired prefix and a record without a leading dot are always
-// complete (both are moved into place with a single rename), so this is
-// the only recovery the pool needs.
+// temp/retired prefix is complete and a record without a leading dot is
+// complete (each is moved into place with a single rename), so this is the
+// only recovery the pool needs.
 func (s *Store) sweepTempDirs() error {
 	entries, err := os.ReadDir(s.layersDir())
 	if err != nil {
@@ -382,13 +398,13 @@ func (s *Store) sweepTempDirs() error {
 	}
 	swept := 0
 	for _, e := range entries {
+		p := filepath.Join(s.layersDir(), e.Name())
 		// ".tmp-": an unpack in flight at crash. ".rm-": a layer retirement
 		// renamed aside but not yet removed. Either way, unreferenced
 		// garbage.
 		if !strings.HasPrefix(e.Name(), ".tmp-") && !strings.HasPrefix(e.Name(), retiredPrefix) {
 			continue
 		}
-		p := filepath.Join(s.layersDir(), e.Name())
 		slog.Info("Image cache sweeping orphaned layer dir", slog.String("dir", e.Name()))
 		if err := RemoveAllWritable(p); err != nil {
 			return fmt.Errorf("while sweeping orphaned layer dir %q: %w", p, err)
@@ -422,7 +438,14 @@ func (s *Store) sweepTempDirs() error {
 // I/O; tag refs cost one HEAD request to resolve the tag to a manifest
 // digest (so tag refs are cacheable, and a moved tag is picked up on the
 // next call).
-func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err error) {
+func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
+	return s.EnsureImageAs(ctx, ref, Form{})
+}
+
+// EnsureImageAs is EnsureImage for consumers that want the layers in a
+// particular Form. A layer the cache already holds in the other form is an
+// error (see Form).
+func (s *Store) EnsureImageAs(ctx context.Context, ref string, form Form) (_ *Image, err error) {
 	// A miss until a complete record proves otherwise; recordRequest
 	// reclassifies a failure onto its own outcome.
 	outcome := ateattr.ImageCacheOutcomeMiss
@@ -454,7 +477,7 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 		digest = desc.Digest
 	}
 
-	img, err := s.cachedImageHit(digest)
+	img, err := s.cachedImageHit(digest, form)
 	if err != nil {
 		return nil, err
 	}
@@ -474,10 +497,12 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 	// timeout: a waiter must only ever see a real pull failure, never another
 	// caller's cancellation. Each caller stops waiting when its own ctx ends,
 	// while the pull runs on to warm the cache for the next attempt.
-	ch := s.imageSF.DoChan(digest.String(), func() (any, error) {
+	// The flight is keyed by digest and form, so a second form of the same
+	// image reaches the per-layer form check instead of sharing the flight.
+	ch := s.imageSF.DoChan(digest.String()+formFlightSuffix(form), func() (any, error) {
 		pullCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.pullTimeout)
 		defer cancel()
-		return s.pull(pullCtx, parsedRef, digest)
+		return s.pull(pullCtx, parsedRef, digest, form)
 	})
 	select {
 	case res := <-ch:
@@ -496,20 +521,20 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 // hitMu exclusive). Refreshing the mtime also renews the min-age veto, so
 // an image in active use cannot age into eviction between this stat and
 // the worker's mount.
-func (s *Store) cachedImageHit(digest v1.Hash) (*Image, error) {
+func (s *Store) cachedImageHit(digest v1.Hash, form Form) (*Image, error) {
 	s.hitMu.RLock()
 	defer s.hitMu.RUnlock()
-	img, err := s.cachedImage(digest)
+	img, err := s.cachedImage(digest, form)
 	if err == nil && img != nil {
 		s.touchRecord(digest)
 	}
 	return img, err
 }
 
-// cachedImage returns the cached image for digest, or nil if the record or
-// any of its layer dirs is missing (in which case the caller re-pulls; only
-// the missing layers cost anything).
-func (s *Store) cachedImage(digest v1.Hash) (*Image, error) {
+// cachedImage returns the cached image for digest in form, or nil if the
+// record or any layer's form is missing (in which case the caller re-pulls;
+// only the missing layers or forms cost anything).
+func (s *Store) cachedImage(digest v1.Hash, form Form) (*Image, error) {
 	b, err := os.ReadFile(s.recordPath(digest))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -521,6 +546,7 @@ func (s *Store) cachedImage(digest v1.Hash) (*Image, error) {
 		return nil, fmt.Errorf("while decoding image record for %s: %w", digest, err)
 	}
 
+	erofs := form.EROFS
 	layerDirs := make([]string, len(rec.DiffIDs))
 	for i, d := range rec.DiffIDs {
 		diffID, err := v1.NewHash(d)
@@ -528,12 +554,41 @@ func (s *Store) cachedImage(digest v1.Hash) (*Image, error) {
 			return nil, fmt.Errorf("invalid diffID %q in image record for %s: %w", d, digest, err)
 		}
 		dir := s.layerDir(diffID)
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
+		if !layerComplete(dir, erofs) {
 			return nil, nil
 		}
 		layerDirs[i] = dir
 	}
-	return &Image{Digest: digest, Config: rec.Config, LayerDirs: layerDirs}, nil
+	return &Image{Digest: digest, Config: rec.Config, LayerDirs: layerDirs, EROFS: erofs}, nil
+}
+
+// formFlightSuffix distinguishes image singleflight keys by Form, so two
+// callers wanting the same image in different forms do not share a result.
+func formFlightSuffix(f Form) string {
+	if !f.EROFS {
+		return ""
+	}
+	return "+erofs"
+}
+
+// layerComplete reports whether dir holds the layer in the given form:
+// layer.erofs with its digest, or the unpacked fs/ tree.
+func layerComplete(dir string, erofs bool) bool {
+	if erofs {
+		for _, f := range []string{layerEROFSFileName, layerEROFSDigestFileName} {
+			if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+				return false
+			}
+		}
+		return true
+	}
+	_, err := os.Stat(filepath.Join(dir, layerFSDirName))
+	return err == nil
+}
+
+// layerPresent reports whether dir holds the layer in any form.
+func layerPresent(dir string) bool {
+	return layerComplete(dir, false) || layerComplete(dir, true)
 }
 
 // pull fetches the image (by its resolved digest, so what is unpacked is
@@ -545,10 +600,10 @@ func (s *Store) cachedImage(digest v1.Hash) (*Image, error) {
 // means "known image, possibly partially present", which readers already
 // handle: cachedImage verifies every layer and re-pulls what is missing,
 // so an interrupted pull's record is just resumable progress.
-func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Hash) (*Image, error) {
+func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Hash, form Form) (*Image, error) {
 	// Re-check under the flight lock: a racing EnsureImage may have completed
 	// the pull between our cache miss and winning the singleflight slot.
-	if img, err := s.cachedImage(digest); err != nil {
+	if img, err := s.cachedImage(digest, form); err != nil {
 		return nil, err
 	} else if img != nil {
 		return img, nil
@@ -558,14 +613,14 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 	// fetched after the manifest, and finished layers are reused.
 	var out *Image
 	err := s.withCredentials(ctx, parsedRef, func(opts []remote.Option) (err error) {
-		out, err = s.pullWith(ctx, parsedRef, digest, opts)
+		out, err = s.pullWith(ctx, parsedRef, digest, form, opts)
 		return err
 	})
 	return out, err
 }
 
 // pullWith is pull with the given remote options.
-func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v1.Hash, opts []remote.Option) (*Image, error) {
+func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v1.Hash, form Form, opts []remote.Option) (*Image, error) {
 	tStart := time.Now()
 	digestRef := parsedRef.Context().Digest(digest.String())
 	img, err := remote.Image(digestRef, opts...)
@@ -609,6 +664,7 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 		}
 	}
 
+	erofs := form.EROFS
 	layerDirs := make([]string, len(layers))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(layerPullConcurrency)
@@ -622,7 +678,7 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 				// The record must reference exactly what lands on disk.
 				return fmt.Errorf("layer %d diffID %s does not match config rootfs diffID %s", i, diffID, diffIDs[i])
 			}
-			dir, err := s.ensureLayer(gctx, diffID, layer)
+			dir, err := s.ensureLayer(gctx, diffID, layer, erofs)
 			if err != nil {
 				return fmt.Errorf("while unpacking layer %s: %w", diffID, err)
 			}
@@ -658,8 +714,8 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 	// naming a missing lowerdir. Ordered after the rewrite so even this
 	// failure path leaves the surviving layers referenced.
 	for _, dir := range layerDirs {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
-			return nil, fmt.Errorf("layer dir vanished during pull (evicted?): %w", err)
+		if !layerComplete(dir, erofs) {
+			return nil, fmt.Errorf("layer dir %q vanished during pull (evicted?)", dir)
 		}
 	}
 
@@ -668,15 +724,18 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 		slog.Int("layers", len(layers)),
 		slog.Duration("took", time.Since(tStart)))
 
-	return &Image{Digest: digest, Config: cfgFile.Config, LayerDirs: layerDirs}, nil
+	return &Image{Digest: digest, Config: cfgFile.Config, LayerDirs: layerDirs, EROFS: erofs}, nil
 }
 
-// ensureLayer makes the unpacked tree for diffID present in the pool,
-// collapsing concurrent requests for the same layer across images.
-func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
+// ensureLayer makes the layer for diffID present in the pool in the given
+// form, collapsing concurrent requests for the same layer across images. A
+// layer the pool holds in the other form is an error: a node's consumers
+// use one form (micro-VM nodes EROFS, gVisor nodes fs/), so two forms of
+// one layer on one node is a misconfiguration, not something to convert.
+func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer, erofs bool) (string, error) {
 	dir := s.layerDir(diffID)
 	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+		if layerComplete(dir, erofs) {
 			// Refresh the dir mtime inside the flight: retireLayer re-checks
 			// the mtime in this same flight, so a layer reused here can
 			// never be renamed away between this stat and the image record
@@ -687,18 +746,37 @@ func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer)
 			}
 			return nil, nil
 		}
-		return nil, s.unpackLayerToPool(ctx, diffID, layer)
+		if layerPresent(dir) {
+			return nil, formConflictError(diffID, erofs)
+		}
+		return nil, s.unpackLayerToPool(ctx, diffID, layer, erofs)
 	})
 	if err != nil {
 		return "", err
 	}
+	// A caller that joined another form's in-flight build gets that build's
+	// nil: say what is wrong here rather than "vanished" at the end.
+	if !layerComplete(dir, erofs) && layerPresent(dir) {
+		return "", formConflictError(diffID, erofs)
+	}
 	return dir, nil
 }
 
-// unpackLayerToPool streams the layer (download → decompress → untar) into a
-// temp dir and renames it into place, so a layer dir either exists complete
-// or not at all.
-func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.Layer) (retErr error) {
+// formConflictError is the error for a pull in the other form of a layer the
+// pool already holds. The usual cause is gVisor and micro-VM actors sharing
+// a node: reserve micro-VM node pools with the ate.dev/sandboxClass=microvm
+// taint (the worker pools tolerate their own class).
+func formConflictError(diffID v1.Hash, erofs bool) error {
+	have, want := layerFSDirName, layerEROFSFileName
+	if !erofs {
+		have, want = want, have
+	}
+	return fmt.Errorf("layer %s is cached as %s on this node but the pull asks for %s: a node serves one layer form; keep gVisor and micro-VM actors on separate node pools (taint micro-VM pools ate.dev/sandboxClass=microvm:NoSchedule)", diffID, have, want)
+}
+
+// unpackLayerToPool streams the layer into a temp dir in the given form and
+// renames it into place, so a layer dir either exists complete or not at all.
+func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.Layer, erofs bool) (retErr error) {
 	tmp, err := os.MkdirTemp(filepath.Dir(s.layerDir(diffID)), ".tmp-"+diffID.Hex[:12]+"-")
 	if err != nil {
 		return fmt.Errorf("while creating layer temp dir: %w", err)
@@ -712,33 +790,56 @@ func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.
 		}
 	}()
 
-	fsDir := filepath.Join(tmp, layerFSDirName)
-	if err := os.Mkdir(fsDir, 0o755); err != nil {
-		return fmt.Errorf("while creating layer fs dir: %w", err)
-	}
-
 	rc, err := layer.Uncompressed()
 	if err != nil {
 		return fmt.Errorf("while opening layer stream: %w", err)
 	}
 	defer rc.Close()
 
-	root, err := os.OpenRoot(fsDir)
-	if err != nil {
-		return fmt.Errorf("while opening layer fs dir as os.Root: %w", err)
+	var (
+		wh        *whiteoutSet
+		layerSize int64
+	)
+	if erofs {
+		out, err := os.OpenFile(filepath.Join(tmp, layerEROFSFileName), os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
+		if err != nil {
+			return fmt.Errorf("while creating EROFS image: %w", err)
+		}
+		var digest string
+		layerSize, digest, wh, err = buildLayerEROFS(rc, out, tmp)
+		if err != nil {
+			out.Close()
+			return fmt.Errorf("while building EROFS image: %w", err)
+		}
+		if err := out.Close(); err != nil {
+			return fmt.Errorf("while closing EROFS image: %w", err)
+		}
+		if err := writeLayerEROFSDigest(tmp, digest); err != nil {
+			return fmt.Errorf("while recording EROFS image digest: %w", err)
+		}
+	} else {
+		fsDir := filepath.Join(tmp, layerFSDirName)
+		if err := os.Mkdir(fsDir, 0o755); err != nil {
+			return fmt.Errorf("while creating layer fs dir: %w", err)
+		}
+		root, err := os.OpenRoot(fsDir)
+		if err != nil {
+			return fmt.Errorf("while opening layer fs dir as os.Root: %w", err)
+		}
+		defer root.Close()
+		// The uncompressed tar stream is the recorded size: an optimistic
+		// estimate (tar framing vs. block rounding), cheap to capture here.
+		cr := &countingReader{r: rc}
+		wh, err = unpackLayer(ctx, cr, root)
+		if err != nil {
+			return err
+		}
+		layerSize = cr.n
 	}
-	defer root.Close()
 
-	// The uncompressed tar stream is the recorded size: an optimistic
-	// estimate (tar framing vs. block rounding), cheap to capture here.
-	cr := &countingReader{r: rc}
-	wh, err := unpackLayer(ctx, cr, root)
-	if err != nil {
-		return err
-	}
 	// Non-fatal: a missing size file is recovered by layerSize's backfill,
 	// so a metadata write must not discard a successful unpack.
-	if err := os.WriteFile(filepath.Join(tmp, layerSizeFileName), []byte(strconv.FormatInt(cr.n, 10)+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, layerSizeFileName), []byte(strconv.FormatInt(layerSize, 10)+"\n"), 0o600); err != nil {
 		slog.WarnContext(ctx, "Failed to record layer size; will backfill lazily",
 			slog.String("diffid", diffID.String()), slog.Any("err", err))
 	}
@@ -751,10 +852,13 @@ func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.
 		return fmt.Errorf("while writing layer whiteouts: %w", err)
 	}
 
-	if err := os.Rename(tmp, s.layerDir(diffID)); err != nil {
-		// A concurrent unpack (another process sharing the pool) may have won;
-		// its layer is as good as ours.
-		if _, statErr := os.Stat(filepath.Join(s.layerDir(diffID), layerFSDirName)); statErr == nil {
+	target := s.layerDir(diffID)
+	if err := os.Rename(tmp, target); err != nil {
+		// A concurrent unpack (another process sharing the pool) may have
+		// won. Its layer is as good as ours if it has this form. A pool
+		// directory is never removed here: it may already be named by an
+		// image record or mounted.
+		if layerComplete(target, erofs) {
 			return nil
 		}
 		return fmt.Errorf("while moving layer into pool: %w", err)
