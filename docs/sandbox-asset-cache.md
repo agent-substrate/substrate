@@ -165,11 +165,15 @@ renamed to `.rm-*` and deleted. A hit racing the pass vetoes its entry.
 
 ## Metrics
 
+The eviction loop and its instruments are shared by every file cache on the
+node (`cmd/atelet/internal/filecachegc`), so the instruments carry the cache
+in `ate.filecache.name`; this cache is `sandbox_asset`.
+
 | Instrument | Type | What it says |
 |---|---|---|
-| `ate.sandboxassetcache.size` | up/down counter, bytes | Disk the cache occupies, read on every collection. Compare with the budget. |
-| `ate.sandboxassetcache.evictions` | counter, entries | Entries passes removed; a dry run counts none. A steady rate with the size at the budget means the cache thrashes: a runtime leaves and returns on each pass, and each return pays for a download. |
-| `ate.sandboxassetcache.gc.passes` | counter, by `ate.sandboxassetcache.gc.outcome` | Passes that had work to do. `complete`: the pass reached its target. `shortfall`: it freed less than asked. `skipped`: it could not size the cache and did nothing. A pass within budget is not counted. |
+| `ate.filecache.size` | up/down counter, bytes, by `ate.filecache.name` | Disk the cache occupies, read on every collection. Compare with the budget. |
+| `ate.filecache.evictions` | counter, entries, by `ate.filecache.name` | Entries passes removed; a dry run counts none. A steady rate with the size at the budget means the cache thrashes: a runtime leaves and returns on each pass, and each return pays for a download. |
+| `ate.filecache.gc.passes` | counter, by `ate.filecache.name` and `ate.filecache.gc.outcome` | Passes that had work to do. `complete`: the pass reached its target. `shortfall`: it freed less than asked. `skipped`: it could not size the cache and did nothing. A pass within budget is not counted. |
 
 A **shortfall** is not a fault of the pass. Everything left is linked by an
 actor or by a worker for its default, younger than the min age, or busy. The
@@ -183,8 +187,9 @@ metrics suite asserts that one.
 
 ## Runbook: a node is over budget
 
-1. Read `ate.sandboxassetcache.size` against `--sandbox-asset-cache-max-bytes`
-   and `ate.sandboxassetcache.gc.passes` by outcome for the node.
+1. Read `ate.filecache.size` for `ate.filecache.name=sandbox_asset` against
+   `--sandbox-asset-cache-max-bytes`, and `ate.filecache.gc.passes` by
+   outcome for the node.
 2. `shortfall`: list `/var/lib/ate/workers/*/default-runtime/` for the
    defaults the node's workers hold, and
    `ls -l /var/lib/ate/actors/*/sandbox-assets/` for what actors hold. If
