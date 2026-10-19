@@ -4027,6 +4027,167 @@ func TestSuspendActor(t *testing.T) {
 	assertSnapshotPresent(t, tc, cloneSnapshotURI)
 }
 
+// A synchronous suspend can keep a local copy without binding placement to
+// that node. Repointing restores that checkpoint's volumes under the new
+// template, including when capacity requires another node.
+func TestResumeActor_SyncSuspendKeepsLocalCopy(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		repoint      bool
+		relocate     bool
+		wantNode     string
+		wantTemplate string
+		wantFidelity ateletpb.SnapshotFidelity
+	}{
+		{
+			name:         "same template on the original node",
+			wantNode:     "node1",
+			wantTemplate: "tmpl1",
+			wantFidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		},
+		{
+			name:         "new template on the original node",
+			repoint:      true,
+			wantNode:     "node1",
+			wantTemplate: "tmpl2",
+			wantFidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		},
+		{
+			name:         "new template on another node",
+			repoint:      true,
+			relocate:     true,
+			wantNode:     "node2",
+			wantTemplate: "tmpl2",
+			wantFidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-sync-local-resume")
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
+			ctx := context.Background()
+			tmpl := createTemplate(t, tc, ns)
+			if tt.repoint {
+				replacement := proto.CloneOf(tmpl)
+				replacement.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl2"}
+				replacement.Status = nil
+				if _, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: replacement}); err != nil {
+					t.Fatalf("CreateActorTemplate(tmpl2): %v", err)
+				}
+			}
+			worker := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+			tc.fakeAtelet.Lock.Lock()
+			tc.fakeAtelet.KeepCheckpointLocal = true
+			tc.fakeAtelet.Lock.Unlock()
+
+			actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"}
+			if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: actorRef.GetName()},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			}}); err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+			if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+				t.Fatalf("initial ResumeActor: %v", err)
+			}
+			if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+				Actor:   actorRef,
+				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			}); err != nil {
+				t.Fatalf("sync SuspendActor: %v", err)
+			}
+			suspended, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+			if err != nil {
+				t.Fatalf("GetActor after suspend: %v", err)
+			}
+			if got := suspended.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+				t.Fatalf("state after suspend = %v, want SUSPENDED", got)
+			}
+			if got := suspended.GetStatus().GetAssignedNode(); got != "" {
+				t.Fatalf("AssignedNode after sync suspend = %q, want no node binding", got)
+			}
+			if got := suspended.GetStatus().GetWorkerAssignment(); got != nil {
+				t.Fatalf("WorkerAssignment after sync suspend = %v, want none", got)
+			}
+			snap := localSnapshot(suspended.GetStatus())
+			if snap == nil || snap.GetLocality() != "node1" {
+				t.Fatalf("sync snapshot = %v, want its local copy on node1 recorded", snap)
+			}
+			if got := snap.GetDurableSnapshot().GetStatus(); got != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+				t.Fatalf("sync snapshot durable status = %v, want COMPLETED", got)
+			}
+			if got := snap.GetActorTemplateUid(); got != tmpl.GetMetadata().GetUid() {
+				t.Fatalf("snapshot template UID = %q, want original template %q", got, tmpl.GetMetadata().GetUid())
+			}
+			if snap.GetUuid() == "" || snap.GetGeneration() == 0 || snap.GetDurableSnapshot().GetObject().GetSnapshotUri() == "" {
+				t.Fatalf("snapshot has incomplete identity: %v", snap)
+			}
+			assertSnapshotPresent(t, tc, snap.GetDurableSnapshot().GetObject().GetSnapshotUri())
+			waitForWorkerAvailable(t, tc, worker)
+
+			if tt.repoint {
+				toUpdate := proto.CloneOf(suspended)
+				toUpdate.ActorTemplate = &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl2"}
+				updated, err := tc.client.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: toUpdate})
+				if err != nil {
+					t.Fatalf("UpdateActor with durable local snapshot: %v", err)
+				}
+				if got := localSnapshot(updated.GetStatus()); !proto.Equal(got, snap) {
+					t.Fatalf("snapshot after template update = %v, want unchanged %v", got, snap)
+				}
+			}
+			if tt.relocate {
+				// Fill node1 before adding node2, so the resume must use node2
+				// even though the checkpoint's locality still names node1.
+				squatterRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "squatter"}
+				if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+					Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: squatterRef.GetName()},
+					ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+				}}); err != nil {
+					t.Fatalf("CreateActor(squatter): %v", err)
+				}
+				if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: squatterRef}); err != nil {
+					t.Fatalf("ResumeActor(squatter): %v", err)
+				}
+				createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+				setupAteletOnNode(t, tc, "atelet-node2", "node2")
+			}
+
+			resumed, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+			if err != nil {
+				t.Fatalf("ResumeActor with durable local snapshot: %v", err)
+			}
+			if got := resumed.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+				t.Errorf("state after resume = %v, want RUNNING", got)
+			}
+			if got := resumed.GetActor().GetStatus().GetWorkerAssignment().GetNodeName(); got != tt.wantNode {
+				t.Errorf("resumed on node %q, want %q", got, tt.wantNode)
+			}
+			restore := tc.fakeAtelet.lastRestoreRequest()
+			if restore == nil || restore.GetActorName() != actorRef.GetName() {
+				t.Fatalf("Restore request = %v, want actor-1", restore)
+			}
+			if got := restore.GetWorkerPodUid(); got != resumed.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPodUid() {
+				t.Errorf("Restore worker UID = %q, want the assigned worker", got)
+			}
+			if got := restore.GetActorTemplateName(); got != tt.wantTemplate {
+				t.Errorf("Restore template = %q, want %q", got, tt.wantTemplate)
+			}
+			if got := restore.GetSnapshot().GetFidelity(); got != tt.wantFidelity {
+				t.Errorf("Restore fidelity = %v, want %v", got, tt.wantFidelity)
+			}
+			if got := restore.GetSnapshot(); got.GetSnapshotUuid() != snap.GetUuid() ||
+				got.GetGeneration() != snap.GetGeneration() ||
+				got.GetObject().GetSnapshotUri() != snap.GetDurableSnapshot().GetObject().GetSnapshotUri() {
+				t.Errorf("Restore snapshot = %v, want original checkpoint identity %v", got, snap)
+			}
+			if got := localSnapshot(resumed.GetActor().GetStatus()).GetLocality(); got != "node1" {
+				t.Errorf("locality after resume = %q, want original cache location node1", got)
+			}
+		})
+	}
+}
+
 // TestResumeActor_RepointTemplateBeforeResume checks what an Actor cloned from
 // a tag asks atelet to restore on its first resume.
 //
@@ -4229,7 +4390,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 // placement restores for a paused actor: once the pause checkpoint's own
 // durable copy completes, the actor may bind its node's worker even after that
 // worker stops running the checkpoint's runtime, and the local restore then
-// sends the checkpoint's own identity at VOLUMES fidelity instead of the
+// sends the checkpoint's own identity at ROOTFS fidelity instead of the
 // recorded MEMORY.
 func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 	ns := namespaceForTest("ns-paused-runtime-fallback")
@@ -4322,7 +4483,7 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 	}
 
 	// The restore keeps the local checkpoint's identity but, running under an
-	// incompatible runtime, restores the volumes alone.
+	// incompatible runtime, restores rootfs and volumes.
 	restoreReq := tc.fakeAtelet.lastRestoreRequest()
 	if got := restoreReq.GetSnapshot().GetSnapshotUuid(); got != paused.GetUuid() {
 		t.Errorf("RestoreRequest.SnapshotUuid = %q, want the local checkpoint's %q", got, paused.GetUuid())
@@ -4330,18 +4491,15 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 	if got := restoreReq.GetSnapshot().GetObject().GetSnapshotUri(); got != paused.GetDurableSnapshot().GetObject().GetSnapshotUri() {
 		t.Errorf("RestoreRequest.SnapshotUri = %q, want the local checkpoint's upload %q", got, paused.GetDurableSnapshot().GetObject().GetSnapshotUri())
 	}
-	if got := restoreReq.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
-		t.Errorf("RestoreRequest.Fidelity = %v, want VOLUMES (assigned worker cannot run the checkpoint's runtime)", got)
+	if got := restoreReq.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		t.Errorf("RestoreRequest.Fidelity = %v, want ROOTFS (assigned worker cannot run the checkpoint's runtime)", got)
 	}
 }
 
-// TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback verifies the
-// refusal the pause-upload fallback must not leak past: while the newest pause
-// checkpoint's own durable copy is still PENDING, an older generation's
-// COMPLETED snapshot neither authorizes relaxing the runtime constraint nor
-// substitutes for the checkpoint at restore. With no compatible worker, the
-// resume fails ResourceExhausted without reaching atelet, and the actor keeps
-// both generations as they were.
+// TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback verifies that
+// an older COMPLETED generation cannot bypass uploading the local checkpoint.
+// Without a compatible worker, resume must detach and upload that checkpoint
+// before runtime fallback. A failed detach leaves both generations unchanged.
 func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
 	ns := namespaceForTest("ns-paused-pending-refusal")
 	tc := setupTest(t, ns)
@@ -4421,9 +4579,16 @@ func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
 	// still PENDING, so the older durable generation must not loosen anything.
 	reportWorkerRuntime(t, tc, workerPod, rtB)
 	tc.fakeAtelet.Reset()
+	tc.fakeAtelet.FailDetach = status.Error(codes.Unavailable, "checkpoint upload unavailable")
 
 	_, err = tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
-	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
+	assertGrpcError(t, err, codes.Unavailable, "while calling atelet DetachActor: rpc error: code = Unavailable desc = checkpoint upload unavailable")
+	tc.fakeAtelet.Lock.Lock()
+	detachCalled := tc.fakeAtelet.DetachCalled
+	tc.fakeAtelet.Lock.Unlock()
+	if !detachCalled {
+		t.Error("ResumeActor did not attempt to detach the pending checkpoint")
+	}
 
 	if restore := tc.fakeAtelet.lastRestoreRequest(); restore != nil {
 		t.Errorf("ResumeActor sent a Restore request: %v, want none (neither the checkpoint nor the older generation)", restore)
@@ -4450,7 +4615,7 @@ func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
 
 // TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot verifies the
 // RESUMING re-entry of a relaxed pause resume: the first attempt binds the
-// node's incompatible worker at VOLUMES and fails at the atelet call, and the
+// node's incompatible worker at ROOTFS and fails at the atelet call, and the
 // retry must revalidate and keep that assignment rather than crashing the
 // actor, restoring the same pause checkpoint under the same worker.
 func TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot(t *testing.T) {
@@ -4569,8 +4734,8 @@ func TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot(t *testing.
 	if got := restoreReq.GetSnapshot().GetObject().GetSnapshotUri(); got != paused.GetDurableSnapshot().GetObject().GetSnapshotUri() {
 		t.Errorf("RestoreRequest.SnapshotUri = %q, want the pause checkpoint's upload %q", got, paused.GetDurableSnapshot().GetObject().GetSnapshotUri())
 	}
-	if got := restoreReq.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
-		t.Errorf("RestoreRequest.Fidelity = %v, want VOLUMES (assigned worker cannot run the checkpoint's runtime)", got)
+	if got := restoreReq.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		t.Errorf("RestoreRequest.Fidelity = %v, want ROOTFS (assigned worker cannot run the checkpoint's runtime)", got)
 	}
 }
 

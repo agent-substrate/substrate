@@ -382,16 +382,16 @@ a `Snapshot` with the following fields:
   restores the durable data only and boots the guest fresh, because memory
   captured under one sandbox image cannot be resumed under another.
 - `locality`: The node that holds a local copy of the snapshot. It is set when
-  a pause completes — and when a synchronous suspend's upload is kept on the
-  node — and cleared once those files are deleted from the node (when atelet
-  detaches the actor in the background, the actor is next paused or suspended,
-  or it is reverted). A resume restores from the files without deleting them,
-  so an actor resumed from pause still reports where they are. `locality`
+  an asynchronous suspend completes or a synchronous suspend keeps its uploaded
+  copy on the node. A detach report, a later checkpoint, or `RevertActor` clears
+  the record. Clearing the record does not guarantee immediate file deletion:
+  after a synchronous suspend, a revert leaves the unbound cache for the node's
+  background cleanup. A resume does not delete the local files. `locality`
   records where a copy lives; it does not by itself pin the actor to the node.
-  The pin is `status.assignedNode`: a paused actor — an `ACTOR_STATE_SUSPENDED`
-  actor whose latest snapshot has `locality` — keeps it until atelet detaches it
-  or it is reverted, while a synchronous suspend clears it even when it leaves
-  the uploaded copy on the node.
+  The pin is `status.assignedNode`: an asynchronously suspended actor keeps it
+  until atelet detaches its local snapshot or the actor is reverted. A
+  synchronous suspend clears it even when it leaves an uploaded copy on the
+  node.
 - `durableSnapshot`: The copy in object storage, with its URI in
   `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
   written and `COMPLETED` once it can be restored from. A pause records the copy
@@ -415,17 +415,19 @@ a `Snapshot` with the following fields:
     new worker's `defaultRuntime`.
   - A local checkpoint (with `locality`) is relaxed only once its own durable
     copy is `COMPLETED`; an older generation's completed snapshot does not
-    authorize the fallback for it. A `PENDING` local MEMORY checkpoint needs a
-    runtime-compatible worker on its pinned node. Once its own copy is
-    `COMPLETED`, fallback within the node binding restores at
+    authorize the fallback for it. Direct local restore of a `PENDING` MEMORY
+    checkpoint requires a runtime-compatible worker on its pinned node. Once
+    its own copy is `COMPLETED`, fallback within the node binding restores at
     `SNAPSHOT_FIDELITY_ROOTFS`, preserving rootfs and volumes under the fallback
     worker's runtime. A synchronously suspended actor has no node binding, so
     it can use any eligible node. The restore keeps the checkpoint's identity.
 
-  If no worker is available on a pinned node but another eligible node has
-  room, `ResumeActor` calls `DetachActor` on the original node. Detach waits for
-  the upload, clears locality and the node binding, and lets resume restore
-  from the durable copy elsewhere. A detach failure leaves the actor
+  If no worker satisfies the pinned assignment's constraints but a worker
+  satisfies them without node or runtime restrictions, `ResumeActor` calls
+  `DetachActor` on the pinned node. Detach waits for the latest checkpoint's
+  upload and clears locality and the node binding. Resume can then restore
+  from that durable copy on the same or another eligible node, with the
+  runtime fallback described above. A detach failure leaves the actor
   suspended on its original node.
 
   A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
@@ -629,7 +631,7 @@ Replaces the mutable fields of an existing actor with the ones in the request (`
     *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
     *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same location: its `snapshotConfig.storageLocation` with the `PerTemplateSnapshotLocation` preview gate, otherwise ate-api-server's `--snapshot-location` (see [Snapshot Storage Layout](#snapshot-storage-layout)).
     *   `worker_selector` may be updated or cleared (`nil`) in any state; the updated selector takes effect on the next `ResumeActor`.
-    *   A paused actor stays pinned to its node until atelet detaches it (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). Its next `ResumeActor` therefore needs a worker on that node that matches both the new template's `workerSelector` and the actor's updated `worker_selector`. If no worker there matches, `ResumeActor` returns `RESOURCE_EXHAUSTED` until the detach lifts the pin.
+    *   A paused actor is initially pinned to its node (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). `ResumeActor` first looks for a worker there matching the template and actor selectors. If none is available but a worker satisfies the remaining constraints without node or runtime restrictions, resume detaches the checkpoint and retries placement. If no eligible worker has room, it returns `RESOURCE_EXHAUSTED`.
 *   **Response:** the updated `Actor`.
 *   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `FAILED_PRECONDITION` if a change to `actor_template` breaks one of the rules above; `ABORTED` if either guard no longer matches the stored resource.
 
@@ -669,9 +671,9 @@ Deletion always runs before the database reference is dropped, and a failure fai
 #### `RevertActor`
 Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE_SUSPENDED` at its last completed external snapshot (`status.snapshots`).
 *   **Request:** `RevertActorRequest`
-    *   `actor`: `ObjectRef` of the actor to revert. Accepted from `ACTOR_STATE_RUNNING` and `ACTOR_STATE_CRASHED` (plus `ACTOR_STATE_REVERTING` for idempotent retries), and from a paused actor: `ACTOR_STATE_SUSPENDED` whose latest snapshot is node-local. Calling `RevertActor` on an `ACTOR_STATE_SUSPENDED` actor with no node-local snapshot returns `FAILED_PRECONDITION`.
+    *   `actor`: `ObjectRef` of the actor to revert. Accepted from `ACTOR_STATE_RUNNING` and `ACTOR_STATE_CRASHED` (plus `ACTOR_STATE_REVERTING` for idempotent retries), and from an `ACTOR_STATE_SUSPENDED` actor whose latest snapshot records a local copy, including one kept by a synchronous suspend. Calling `RevertActor` on an `ACTOR_STATE_SUSPENDED` actor with no node-local snapshot returns `FAILED_PRECONDITION`.
 *   **Response:** `RevertActorResponse` containing the reverted `Actor` in `ACTOR_STATE_SUSPENDED`.
-*   Reverting terminates any bound worker sandbox, clears node-local pause checkpoints, and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed durable snapshot in `status.snapshots`.
+*   Reverting terminates any bound worker sandbox, clears local snapshot records, and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed durable snapshot in `status.snapshots`. A local copy left by a synchronous suspend has no node binding; reverting clears its record and leaves its files for the node's background cleanup.
 *   External volumes are not reverted. Their contents are never part of a snapshot, so a reverted actor comes back with its memory and root filesystem rewound but its volumes exactly as the discarded execution left them.
 
 #### `DeleteActor`

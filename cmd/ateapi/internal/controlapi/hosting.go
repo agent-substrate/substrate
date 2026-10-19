@@ -32,7 +32,7 @@ import (
 // status.worker_assignment, and a crash keeps status.assigned_node as a record
 // of the last node. The rules:
 //   - SUSPENDED with no worker: assigned_node, the node the actor is bound
-//     to. A pause keeps it until a detach report leaves none of its
+//     to. A pause keeps it until revert or a detach report leaves none of its
 //     snapshots on the node; a sync suspend clears it even when it leaves a
 //     cached copy there, since a snapshot's locality records where the copy
 //     lives without binding the actor to that node.

@@ -734,10 +734,11 @@ type Snapshot struct {
 	ActorTemplateUid string `protobuf:"bytes,5,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
 	// locality identifies the node holding this snapshot's files (currently the
 	// Kubernetes node name). Set when a local pause checkpoint completes or a
-	// synchronous suspend's upload is kept on the node, and cleared once the
-	// files are deleted from that node; a resume does not delete them. It
-	// records where a copy lives and does not by itself pin the Actor to the
-	// node — assigned_node is the node binding.
+	// synchronous suspend's upload is kept on the node. A detach report, a later
+	// checkpoint, or revert clears the record, which does not guarantee immediate
+	// file deletion. A resume does not delete the local files. Locality records
+	// where a copy lives and does not by itself pin the Actor to the node;
+	// assigned_node is the node binding.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-long-name

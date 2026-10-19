@@ -1547,7 +1547,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			name: "14a repointed actor's Full local snapshot drops to Data",
 			actor: actorSeed{
 				localSnapshot: localSnap(localSnapshotName, fullScope),
-				tmplUID:       "mismatch",
+				localTmplUID:  "mismatch",
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
@@ -1559,7 +1559,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			name: "14b repointed actor's Rootfs local snapshot drops to Data",
 			actor: actorSeed{
 				localSnapshot: localSnap(localSnapshotName, rootfsScope),
-				tmplUID:       "mismatch",
+				localTmplUID:  "mismatch",
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
@@ -1624,22 +1624,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotName: localSnapshotName,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-			},
-		},
-		{
-			// The pause checkpoint itself was captured under a template the
-			// actor no longer points at: its guest state belongs to that old
-			// template's image, so the local restore keeps the checkpoint's
-			// identity but restores the volumes alone.
-			name: "18a local snapshot from a replaced template drops to Data",
-			actor: actorSeed{
-				localSnapshot: localSnap(localSnapshotName, fullScope),
-				localTmplUID:  "mismatch",
-			},
-			want: restoreWant{
-				snapshotName: localSnapshotName,
-				snapshotURI:  pauseUploadURI,
-				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -2943,7 +2927,7 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 		{
 			name: "ROOTFS local checkpoint imposes no constraint beside a stamped durable snapshot",
 			snapshots: []*ateapipb.Snapshot{
-				local(2, rootfs, localRT),
+				local(2, rootfs, tmplUID, localRT),
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
 		},
