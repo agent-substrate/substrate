@@ -37,6 +37,18 @@ import (
 // conflicts are retried; capacity errors fail immediately.
 const failFastResumeBudget = 15 * time.Second
 
+// attemptCeiling bounds a single ResumeActor RPC. The flight's budget cannot:
+// each attempt detaches the budget's deadline along with its cancellation so a
+// restore is never canceled mid-flight, and the router dials ateapi without a
+// client keepalive, so a wedged connection would leave the RPC — and with it
+// the retry loop and the flight, whose only eviction is publish — hanging
+// forever, wedging every later request for the same actor. The ceiling sits
+// above ateapi's 10-minute maximum RPC deadline (see maxRPCDeadline in
+// cmd/ateapi), so on a live connection the server's own deadline always fires
+// first and the ceiling only ever ends an attempt whose outcome can no longer
+// be observed.
+const attemptCeiling = 11 * time.Minute
+
 // resumeBackoff builds the backoff between resume attempts while a request is
 // parked, from the configured retry parameters.
 //
@@ -217,7 +229,6 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 	// the shared resume. Only cancellation is detached; the trace context is kept.
 	bgCtx, bgCancel := context.WithTimeout(trace.ContextWithSpanContext(context.Background(), callerSpanCtx), r.budget)
 	defer bgCancel()
-	attemptCtx := context.WithoutCancel(bgCtx)
 
 	backoff := r.backoff
 
@@ -225,6 +236,13 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 	var lastRetryErr error
 
 	err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(context.Context) (bool, error) {
+		// WithoutCancel drops the budget's deadline together with its
+		// cancellation, so an attempt may outlive the budget while it
+		// completes server-side. Give each attempt its own ceiling so a
+		// wedged connection cannot hang the loop — and the flight's publish —
+		// forever.
+		attemptCtx, cancelAttempt := context.WithTimeout(context.WithoutCancel(bgCtx), attemptCeiling)
+		defer cancelAttempt()
 		var err error
 		resumeResp, err = r.apiClient.ResumeActor(attemptCtx, &ateapipb.ResumeActorRequest{
 			Actor: actorRef.ToObjectRef(),
