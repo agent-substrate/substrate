@@ -28,7 +28,7 @@ rules:
   resources: ["nodes"]
   verbs: ["get"]
 - apiGroups: ["ate.dev"]
-  resources: ["workerpools", "csidriverconfigs"]
+  resources: ["csidriverconfigs"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
