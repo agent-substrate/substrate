@@ -17,6 +17,8 @@ package e2e
 import (
 	"sort"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // A trimmed sample of what the Collector's prometheus exporter emits: HELP/TYPE
@@ -124,7 +126,7 @@ const sampleNode = "kind-worker2"
 const sampleTargetInfo = `# HELP target_info Target metadata
 # TYPE target_info gauge
 target_info{job="atelet",instance="pod-uid-1",k8s_namespace_name="ate-system",k8s_pod_name="atelet-abc",k8s_node_name="` + sampleNode + `"} 1
-target_info{job="ateom-gvisor",instance="pod-uid-2",k8s_namespace_name="ate-system",k8s_pod_name="wp-xyz",k8s_node_name="` + sampleNode + `"} 1
+target_info{job="ateworker-gvisor",instance="pod-uid-2",k8s_namespace_name="ate-system",k8s_pod_name="wp-xyz",k8s_node_name="` + sampleNode + `"} 1
 target_info{job="atecontroller",instance="pod-uid-3",k8s_namespace_name="ate-system",k8s_pod_name="ctrl-def"} 1
 ate_workerpool_workers{job="atelet",ate_workerpool_name="pool-a"} 3
 `
@@ -138,7 +140,7 @@ func TestTargetInfoLabel(t *testing.T) {
 		want    string
 	}{
 		{"node on the first resource", sampleTargetInfo, "atelet", "k8s_node_name", sampleNode},
-		{"node on a later resource", sampleTargetInfo, "ateom-gvisor", "k8s_node_name", sampleNode},
+		{"node on a later resource", sampleTargetInfo, "ateworker-gvisor", "k8s_node_name", sampleNode},
 		{"label absent for that service", sampleTargetInfo, "atecontroller", "k8s_node_name", ""},
 		{"service absent", sampleTargetInfo, "atenet", "k8s_node_name", ""},
 		{"other resource attributes still readable", sampleTargetInfo, "atelet", "k8s_pod_name", "atelet-abc"},
@@ -166,80 +168,109 @@ substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="crash
 substrate_spans_total{service_name="ateapi"} 40
 `
 
-func TestLifecycleEventCounts(t *testing.T) {
+func TestLifecycleEventSeries(t *testing.T) {
 	tests := []struct {
 		name   string
 		scrape string
-		want   map[string]float64
+		want   map[string]map[string]float64
 	}{
 		{
-			name:   "every counted state, summed over instances",
+			name:   "every counted state, one entry per instance",
 			scrape: sampleLifecycleScrape,
-			want:   map[string]float64{"resuming": 2, "running": 5, "crashed": 1},
+			want: map[string]map[string]float64{
+				"resuming": {`substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="resuming"}`: 2},
+				"running": {
+					`substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="running"}`:                  2,
+					`substrate_actor_state_changes_total{service_name="ateapi",instance="other",ate_actor_state="running"}`: 3,
+				},
+				"crashed": {`substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="crashed"}`: 1},
+			},
 		},
 		{
 			name:   "no events counted",
 			scrape: sampleScrape,
-			want:   map[string]float64{},
+			want:   map[string]map[string]float64{},
 		},
 		{
 			name:   "empty scrape",
 			scrape: "",
-			want:   map[string]float64{},
+			want:   map[string]map[string]float64{},
 		},
 		{
 			name:   "a series with no state label contributes nothing",
 			scrape: "substrate_actor_state_changes_total{service_name=\"ateapi\"} 3\n",
-			want:   map[string]float64{},
+			want:   map[string]map[string]float64{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := LifecycleEventCounts(tt.scrape)
-			if len(got) != len(tt.want) {
-				t.Fatalf("LifecycleEventCounts() = %v, want %v", got, tt.want)
-			}
-			for state, want := range tt.want {
-				if got[state] != want {
-					t.Errorf("LifecycleEventCounts()[%q] = %v, want %v", state, got[state], want)
-				}
+			got := LifecycleEventSeries(tt.scrape)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("LifecycleEventSeries() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
 }
 
 func TestStatesNotAdvanced(t *testing.T) {
+	const a, b = `m{instance="a"}`, `m{instance="b"}`
+	type series = map[string]map[string]float64
 	tests := []struct {
 		name          string
-		before, after map[string]float64
+		before, after series
 		states        []string
 		want          []string
 	}{
 		{
 			name:   "every state advanced",
-			before: map[string]float64{"running": 1, "crashed": 0},
-			after:  map[string]float64{"running": 3, "crashed": 1},
+			before: series{"running": {a: 1}, "crashed": {a: 0}},
+			after:  series{"running": {a: 3}, "crashed": {a: 1}},
 			states: []string{"running", "crashed"},
 		},
 		{
 			name:   "a stale count from an earlier run is not an advance",
-			before: map[string]float64{"running": 3, "crashed": 1},
-			after:  map[string]float64{"running": 3, "crashed": 1},
+			before: series{"running": {a: 3}, "crashed": {a: 1}},
+			after:  series{"running": {a: 3}, "crashed": {a: 1}},
 			states: []string{"running", "crashed"},
 			want:   []string{"running", "crashed"},
 		},
 		{
 			name:   "a state that never appeared",
-			before: map[string]float64{},
-			after:  map[string]float64{"running": 2},
+			before: series{},
+			after:  series{"running": {a: 2}},
 			states: []string{"running", "suspended"},
 			want:   []string{"suspended"},
 		},
 		{
 			name:   "first observation of a state counts as an advance",
-			before: map[string]float64{},
-			after:  map[string]float64{"running": 1},
+			before: series{},
+			after:  series{"running": {a: 1}},
 			states: []string{"running"},
+		},
+		{
+			name:   "a new instance's series counts as an advance",
+			before: series{"crashed": {a: 3}},
+			after:  series{"crashed": {a: 3, b: 1}},
+			states: []string{"crashed"},
+		},
+		{
+			name:   "an expired series does not hide an advance on another",
+			before: series{"crashed": {a: 3, b: 1}},
+			after:  series{"crashed": {b: 2}},
+			states: []string{"crashed"},
+		},
+		{
+			name:   "an expired series alone is not an advance",
+			before: series{"crashed": {a: 3, b: 1}},
+			after:  series{"crashed": {b: 1}},
+			states: []string{"crashed"},
+			want:   []string{"crashed"},
+		},
+		{
+			name:   "a restarted stream counts as an advance",
+			before: series{"crashed": {a: 3}},
+			after:  series{"crashed": {a: 1}},
+			states: []string{"crashed"},
 		},
 	}
 	for _, tt := range tests {
@@ -253,174 +284,6 @@ func TestStatesNotAdvanced(t *testing.T) {
 					t.Errorf("StatesNotAdvanced() = %v, want %v", got, tt.want)
 					break
 				}
-			}
-		})
-	}
-}
-
-const sampleEgressEnvoyScrape = `# TYPE envoy_http_ext_proc_egress_identity_streams_started counter
-envoy_http_ext_proc_egress_identity_streams_started{envoy_http_conn_manager_prefix="egress_connect"} 6
-# TYPE envoy_http_ext_proc_egress_policy_mitm_streams_started counter
-envoy_http_ext_proc_egress_policy_mitm_streams_started{envoy_http_conn_manager_prefix="mitm_http"} 1
-# TYPE envoy_http_ext_proc_egress_policy_cleartext_streams_started counter
-envoy_http_ext_proc_egress_policy_cleartext_streams_started{envoy_http_conn_manager_prefix="mitm_cleartext"} 0
-# TYPE envoy_http_ext_proc_egress_identity_streams_closed counter
-envoy_http_ext_proc_egress_identity_streams_closed{envoy_http_conn_manager_prefix="egress_connect"} 6
-# TYPE envoy_dynamicmodulescustom_ate_egress_cache_hit counter
-envoy_dynamicmodulescustom_ate_egress_cache_hit{} 4
-# TYPE envoy_dynamicmodulescustom_ate_egress_cache_miss counter
-envoy_dynamicmodulescustom_ate_egress_cache_miss{} 1
-# TYPE envoy_dynamicmodulescustom_ate_egress_allowed counter
-envoy_dynamicmodulescustom_ate_egress_allowed{} 3
-# TYPE envoy_dynamicmodulescustom_ate_egress_rejected counter
-envoy_dynamicmodulescustom_ate_egress_rejected{} 2
-# TYPE envoy_dynamicmodulescustom_ate_egress_has_effects counter
-envoy_dynamicmodulescustom_ate_egress_has_effects{} 5
-`
-
-func TestEgressExtProcStreamCounts(t *testing.T) {
-	tests := []struct {
-		name   string
-		scrape string
-		want   map[string]int
-	}{
-		{
-			name:   "per-leg ext_proc counters",
-			scrape: sampleEgressEnvoyScrape,
-			want: map[string]int{
-				EgressExtProcIdentityStatPrefix:   6,
-				EgressExtProcPolicyMITMStatPrefix: 1,
-				"egress_policy_cleartext":         0,
-			},
-		},
-		{
-			name:   "summed across replicas",
-			scrape: sampleEgressEnvoyScrape + sampleEgressEnvoyScrape,
-			want: map[string]int{
-				EgressExtProcIdentityStatPrefix:   12,
-				EgressExtProcPolicyMITMStatPrefix: 2,
-				"egress_policy_cleartext":         0,
-			},
-		},
-		{
-			name:   "empty scrape",
-			scrape: "",
-			want:   map[string]int{},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := EgressExtProcStreamCounts(tt.scrape)
-			if len(got) != len(tt.want) {
-				t.Fatalf("EgressExtProcStreamCounts() = %v, want %v", got, tt.want)
-			}
-			for prefix, want := range tt.want {
-				if got[prefix] != want {
-					t.Errorf("EgressExtProcStreamCounts()[%q] = %d, want %d", prefix, got[prefix], want)
-				}
-			}
-		})
-	}
-}
-
-func TestEgressPolicyCacheCounts(t *testing.T) {
-	tests := []struct {
-		name       string
-		scrape     string
-		wantHits   int
-		wantMisses int
-	}{
-		{
-			name:       "single replica",
-			scrape:     sampleEgressEnvoyScrape,
-			wantHits:   4,
-			wantMisses: 1,
-		},
-		{
-			name:       "summed across replicas",
-			scrape:     sampleEgressEnvoyScrape + sampleEgressEnvoyScrape,
-			wantHits:   8,
-			wantMisses: 2,
-		},
-		{
-			name:       "empty scrape",
-			scrape:     "",
-			wantHits:   0,
-			wantMisses: 0,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotHits, gotMisses := EgressPolicyCacheCounts(tt.scrape)
-			if gotHits != tt.wantHits || gotMisses != tt.wantMisses {
-				t.Errorf("EgressPolicyCacheCounts() = (%d, %d), want (%d, %d)", gotHits, gotMisses, tt.wantHits, tt.wantMisses)
-			}
-		})
-	}
-}
-
-func TestEgressPolicyVerdictCounts(t *testing.T) {
-	tests := []struct {
-		name         string
-		scrape       string
-		wantAllowed  int
-		wantRejected int
-	}{
-		{
-			name:         "single replica",
-			scrape:       sampleEgressEnvoyScrape,
-			wantAllowed:  3,
-			wantRejected: 2,
-		},
-		{
-			name:         "summed across replicas",
-			scrape:       sampleEgressEnvoyScrape + sampleEgressEnvoyScrape,
-			wantAllowed:  6,
-			wantRejected: 4,
-		},
-		{
-			name:         "empty scrape",
-			scrape:       "",
-			wantAllowed:  0,
-			wantRejected: 0,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotAllowed, gotRejected := EgressPolicyVerdictCounts(tt.scrape)
-			if gotAllowed != tt.wantAllowed || gotRejected != tt.wantRejected {
-				t.Errorf("EgressPolicyVerdictCounts() = (%d, %d), want (%d, %d)", gotAllowed, gotRejected, tt.wantAllowed, tt.wantRejected)
-			}
-		})
-	}
-}
-
-func TestEgressPolicyHasEffectsCount(t *testing.T) {
-	tests := []struct {
-		name   string
-		scrape string
-		want   int
-	}{
-		{
-			name:   "single replica",
-			scrape: sampleEgressEnvoyScrape,
-			want:   5,
-		},
-		{
-			name:   "summed across replicas",
-			scrape: sampleEgressEnvoyScrape + sampleEgressEnvoyScrape,
-			want:   10,
-		},
-		{
-			name:   "empty scrape",
-			scrape: "",
-			want:   0,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := EgressPolicyHasEffectsCount(tt.scrape); got != tt.want {
-				t.Errorf("EgressPolicyHasEffectsCount() = %d, want %d", got, tt.want)
 			}
 		})
 	}

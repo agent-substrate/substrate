@@ -17,7 +17,6 @@ package egress
 import (
 	"context"
 	"maps"
-	"slices"
 	"testing"
 	"time"
 
@@ -27,13 +26,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // testActorSPIFFEID is the identity filter state the CONNECT chain shares.
-const testActorSPIFFEID = "spiffe://substrate-actor.local/ateom-for-actor/default/my-actor"
+const testActorSPIFFEID = "spiffe://substrate-actor.local/worker-for-actor/default/my-actor"
 
 // testDialed is the IP:port the test actor's kernel dialed for a callout on
 // leg: the default port of the protocol that leg carries.
@@ -201,67 +199,6 @@ func TestRequestLegAnswersTheNameToDial(t *testing.T) {
 	}
 }
 
-func TestRequestLegIncludesEgressPolicyMetadata(t *testing.T) {
-	policy := combined(
-		httpPolicy("api.example.com"),
-		httpPolicyOnPorts(ports(8080), "custom.example.com"),
-		httpsPolicy("api.example.com", "*.example.org"),
-		cleartextInjectionPolicy("effects.example.com"),
-	)
-	h := policyHandler(policy)
-
-	tests := []struct {
-		name      string
-		leg       string
-		authority string
-		attrs     map[string]string
-		want      []egresspolicy.EgressRule
-	}{
-		{
-			name:      "cleartext default port 80",
-			leg:       extproc.EgressCleartextFilterChainName,
-			authority: "api.example.com",
-			want: []egresspolicy.EgressRule{
-				{Pattern: "api.example.com", Mode: egresspolicy.EgressModeCleartext},
-				{Pattern: "effects.example.com", Mode: egresspolicy.EgressModeCleartext, HasEffects: true},
-			},
-		},
-		{
-			name:      "cleartext custom dialed port 8080",
-			leg:       extproc.EgressCleartextFilterChainName,
-			authority: "custom.example.com",
-			attrs:     dialed("93.184.216.34:8080"),
-			want: []egresspolicy.EgressRule{
-				{Pattern: "custom.example.com", Mode: egresspolicy.EgressModeCleartext},
-			},
-		},
-		{
-			name:      "mitm port 443",
-			leg:       extproc.EgressTLSMITMFilterChainName,
-			authority: "api.example.com",
-			want: []egresspolicy.EgressRule{
-				{Pattern: "api.example.com", Mode: egresspolicy.EgressModeMITM},
-				{Pattern: "*.example.org", Mode: egresspolicy.EgressModeMITM},
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			before := time.Now().UTC()
-			res, err := h.HandleRequestHeaders(context.Background(), innerMetadata(tc.leg, "GET", tc.authority, tc.attrs))
-			after := time.Now().UTC()
-			wantDial(t, res, err, extproc.EgressDialName)
-			if got := egressRulesOf(t, res); !slices.Equal(got, tc.want) {
-				t.Errorf("egress rules = %v, want %v", got, tc.want)
-			}
-			if got := egressCreatedAtOf(t, res); got.Before(before) || got.After(after) {
-				t.Errorf("created_at = %v, want within [%v, %v]", got, before, after)
-			}
-		})
-	}
-}
-
 // The cleartext leg decides on the Host the request named and the port the
 // actor dialed (80 unless a case says otherwise), by the http rules alone. An
 // allowed request is dialed by name.
@@ -407,6 +344,27 @@ func TestRequestLegDeniesHTTP1WebSocketUpgrade(t *testing.T) {
 	}
 }
 
+func TestRequestLegDeniesConnect(t *testing.T) {
+	for name, policy := range map[string]*ateapipb.EgressPolicy{
+		"allow-all policy": allowAllPolicy(),
+		"no policy":        nil,
+	} {
+		for _, leg := range []string{extproc.EgressCleartextFilterChainName, extproc.EgressTLSMITMFilterChainName} {
+			for _, method := range []string{"CONNECT", "connect"} {
+				t.Run(name+"/"+leg+"/"+method, func(t *testing.T) {
+					h := policyHandler(policy)
+					md := innerMetadata(leg, method, "api.example.com:443", nil)
+					_, err := h.HandleRequestHeaders(context.Background(), md)
+					wantStatus(t, err, envoy_type.StatusCode_Forbidden)
+					if err.Error() != connectDeniedBody {
+						t.Errorf("denial body = %q, want %q", err, connectDeniedBody)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestRequestLegAllowsOrdinaryHTTPSRequest(t *testing.T) {
 	h := policyHandler(allowAllPolicy())
 	for _, tc := range []struct {
@@ -473,7 +431,7 @@ func TestRequestLegPolicyLookup(t *testing.T) {
 // could be allowed through it, and warms the cache for the requests inside.
 func TestConnectLegRequiresAPolicy(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
-	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/default/my-actor", actorCertOptions{})
+	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/default/my-actor", actorCertOptions{})
 
 	tests := []struct {
 		name   string

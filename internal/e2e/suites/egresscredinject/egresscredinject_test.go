@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -48,7 +48,7 @@ var probeNamespace string
 // the egress gateway trusts once hack/setup-e2e-egress-tls-kind.sh has run.
 var echoServer = e2e.ServiceDNSTLS(e2e.ServerPod{
 	Name:       "echo",
-	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+	ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 	Args:       []string{"http"},
 })
 
@@ -121,12 +121,6 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	}
 	defer rc.Close()
 
-	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
-	if err != nil {
-		t.Fatalf("scraping egress Envoy metrics before requests: %v", err)
-	}
-	hasEffectsBefore := e2e.EgressPolicyHasEffectsCount(beforeScrape)
-
 	// HTTPS is injected on the gateway's MITM leg and plain HTTP on its
 	// cleartext leg, each by a rule with the same effect. dial is where the
 	// echo origin serves the scheme.
@@ -193,18 +187,6 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 				}
 			})
 		}
-	}
-
-	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
-	if err != nil {
-		t.Fatalf("scraping egress Envoy metrics after requests: %v", err)
-	}
-	hasEffectsAfter := e2e.EgressPolicyHasEffectsCount(afterScrape)
-	// 10 requests total: 2 echo origins (HTTPS and HTTP) × 2 requests each (with
-	// and without the placeholder header) + 3 fail-closed origins × 2 protocols
-	// (HTTPS and HTTP).
-	if got := hasEffectsAfter - hasEffectsBefore; got != 10 {
-		t.Fatalf("ate_egress.has_effects incremented by %d, want 10 (before=%d, after=%d)", got, hasEffectsBefore, hasEffectsAfter)
 	}
 }
 

@@ -36,9 +36,8 @@ RUN cargo build --release --locked
 # otherwise) selects a matching Envoy binary.
 FROM envoyproxy/envoy:v1.39.4@sha256:74bd4eb5629708d3fadca1a5e6b85d208f338d7bb54e06b69565905c5294cc01
 
-# Copy the built dynamic module shared libraries from the builder stage
+# Copy the built dynamic module shared library from the builder stage
 COPY --from=builder /usr/src/dynamic-modules/target/release/libenvoy_substrate_egress_policy.so /usr/local/lib/libenvoy_substrate_egress_policy.so
-COPY --from=builder /usr/src/dynamic-modules/target/release/libenvoy_substrate_egress_policy_pep.so /usr/local/lib/libenvoy_substrate_egress_policy_pep.so
 
 # Set default search path for Envoy dynamic modules
 ENV ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib

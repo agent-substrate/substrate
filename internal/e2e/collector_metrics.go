@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/portforward"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/portforward"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -37,34 +37,8 @@ const (
 	// AgentGateway exposes native Prometheus metrics; it does not export these
 	// instruments through the OTLP collector.
 	agentGatewayRouterStatsPort = 15020
-	// The egress Envoy exposes its Prometheus stats on the admin listener.
+	// Envoy exposes its Prometheus stats on the admin listener.
 	egressEnvoyAdminPort = 15000
-
-	// EgressExtProcIdentityStatPrefix is the Envoy ext_proc filter stat_prefix on
-	// the outer CONNECT leg in atenet-egress.
-	EgressExtProcIdentityStatPrefix = "egress_identity"
-	// EgressExtProcPolicyMITMStatPrefix is the Envoy ext_proc filter stat_prefix
-	// on the inner MITM HTTP leg in atenet-egress.
-	EgressExtProcPolicyMITMStatPrefix = "egress_policy_mitm"
-	// EgressExtProcPolicyClearTextStatPrefix is the Envoy ext_proc filter stat_prefix
-	// on the inner clear text HTTP leg in atenet-egress.
-	EgressExtProcPolicyClearTextStatPrefix = "egress_policy_cleartext"
-
-	// EgressRequestCacheHitCounter is the Envoy dynamic-module counter name for
-	// inner request policy cache hits in atenet-egress.
-	EgressRequestCacheHitCounter = "ate_egress_cache_hit"
-	// EgressRequestCacheMissCounter is the Envoy dynamic-module counter name for
-	// inner request policy cache misses in atenet-egress.
-	EgressRequestCacheMissCounter = "ate_egress_cache_miss"
-	// EgressAllowedCounter is the Envoy dynamic-module counter name for
-	// allowed requests in atenet-egress.
-	EgressAllowedCounter = "ate_egress_allowed"
-	// EgressRejectedCounter is the Envoy dynamic-module counter name for
-	// rejected requests in atenet-egress.
-	EgressRejectedCounter = "ate_egress_rejected"
-	// EgressHasEffectsCounter is the Envoy dynamic-module counter name for
-	// requests matching a rule that has effects in atenet-egress.
-	EgressHasEffectsCounter = "ate_egress_has_effects"
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -82,6 +56,8 @@ var PlatformMetricPrefixes = []string{
 	"ate_actor_restore_duration",
 	"ate_actor_checkpoint_duration",
 	"atelet_snapshot_size",
+	"atelet_snapshot_upload_overdue_actors",
+	"atelet_snapshot_undurable_age_max",
 	"atenet_router_route_duration",
 }
 
@@ -159,9 +135,34 @@ func ScrapeCollectorMetrics(ctx context.Context) (string, error) {
 	return string(body), nil
 }
 
-// ScrapeEgressEnvoyMetrics port-forwards each ready atenet-egress pod's Envoy
-// admin port and reads its /stats/prometheus endpoint, returning the
-// concatenated exposition text.
+// MissingPlatformMetrics returns the prefixes with no matching series in the
+// Prometheus exposition text. A metric matches when its name equals a prefix or
+// begins with prefix+"_"; the underscore boundary stops "ate_actor_restore" from
+// matching an unrelated "ate_actor_restored".
+func MissingPlatformMetrics(scrape string, prefixes []string) []string {
+	present := make(map[string]bool, len(prefixes))
+	for _, line := range strings.Split(scrape, "\n") {
+		name := metricNameFromLine(line)
+		if name == "" {
+			continue
+		}
+		for _, p := range prefixes {
+			if name == p || strings.HasPrefix(name, p+"_") {
+				present[p] = true
+			}
+		}
+	}
+	var missing []string
+	for _, p := range prefixes {
+		if !present[p] {
+			missing = append(missing, p)
+		}
+	}
+	return missing
+}
+
+// Port-forward each ready atenet-egress pod's Envoy admin port and read its
+// stats/prometheus endpoint, returning the concatenated Prometheus exposition text.
 func ScrapeEgressEnvoyMetrics(ctx context.Context) (string, error) {
 	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
 	if err != nil {
@@ -226,155 +227,21 @@ func scrapeEgressEnvoyPod(ctx context.Context, config *rest.Config, clientset ku
 	return string(body), nil
 }
 
-// EgressExtProcStreamCounts returns the envoy_http_ext_proc_<prefix>_streams_started
-// count for each egress ext_proc stat_prefix in an Envoy /stats/prometheus
-// scrape, summed across instances.
-func EgressExtProcStreamCounts(scrape string) map[string]int {
-	counts := map[string]int{}
-	for _, line := range strings.Split(scrape, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		name := metricNameFromLine(line)
-		rest, ok := strings.CutPrefix(name, "envoy_http_ext_proc_")
-		if !ok {
-			continue
-		}
-		statPrefix, ok := strings.CutSuffix(rest, "_streams_started")
-		if !ok {
-			statPrefix, ok = strings.CutSuffix(rest, "_streams_started_total")
-		}
-		if !ok || statPrefix == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
-		if err != nil {
-			continue
-		}
-		counts[statPrefix] += int(v)
-	}
-	return counts
-}
-
-// EgressPolicyCacheCounts returns the CONNECT policy cache hit and miss counts
-// from an Envoy /stats/prometheus scrape, summed across instances.
-func EgressPolicyCacheCounts(scrape string) (hits, misses int) {
-	for _, line := range strings.Split(scrape, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		name := strings.TrimSuffix(metricNameFromLine(line), "_total")
-		fields := strings.Fields(line)
-		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
-		if err != nil {
-			continue
-		}
-		switch name {
-		case "envoy_dynamicmodulescustom_" + EgressRequestCacheHitCounter,
-			"envoy_" + EgressRequestCacheHitCounter:
-			hits += int(v)
-		case "envoy_dynamicmodulescustom_" + EgressRequestCacheMissCounter,
-			"envoy_" + EgressRequestCacheMissCounter:
-			misses += int(v)
-		}
-	}
-	return hits, misses
-}
-
-// EgressPolicyVerdictCounts returns the allowed and rejected request counts
-// from an Envoy /stats/prometheus scrape, summed across instances.
-func EgressPolicyVerdictCounts(scrape string) (allowed, rejected int) {
-	for _, line := range strings.Split(scrape, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		name := strings.TrimSuffix(metricNameFromLine(line), "_total")
-		fields := strings.Fields(line)
-		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
-		if err != nil {
-			continue
-		}
-		switch name {
-		case "envoy_dynamicmodulescustom_" + EgressAllowedCounter,
-			"envoy_" + EgressAllowedCounter:
-			allowed += int(v)
-		case "envoy_dynamicmodulescustom_" + EgressRejectedCounter,
-			"envoy_" + EgressRejectedCounter:
-			rejected += int(v)
-		}
-	}
-	return allowed, rejected
-}
-
-// EgressPolicyHasEffectsCount returns the count of requests matching a rule
-// with effects from an Envoy /stats/prometheus scrape, summed across instances.
-func EgressPolicyHasEffectsCount(scrape string) int {
-	var count int
-	for _, line := range strings.Split(scrape, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		name := strings.TrimSuffix(metricNameFromLine(line), "_total")
-		fields := strings.Fields(line)
-		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
-		if err != nil {
-			continue
-		}
-		switch name {
-		case "envoy_dynamicmodulescustom_" + EgressHasEffectsCounter,
-			"envoy_" + EgressHasEffectsCounter:
-			count += int(v)
-		}
-	}
-	return count
-}
-
-// MissingPlatformMetrics returns the prefixes with no matching series in the
-// Prometheus exposition text. A metric matches when its name equals a prefix or
-// begins with prefix+"_"; the underscore boundary stops "ate_actor_restore" from
-// matching an unrelated "ate_actor_restored".
-func MissingPlatformMetrics(scrape string, prefixes []string) []string {
-	present := make(map[string]bool, len(prefixes))
-	for _, line := range strings.Split(scrape, "\n") {
-		name := metricNameFromLine(line)
-		if name == "" {
-			continue
-		}
-		for _, p := range prefixes {
-			if name == p || strings.HasPrefix(name, p+"_") {
-				present[p] = true
-			}
-		}
-	}
-	var missing []string
-	for _, p := range prefixes {
-		if !present[p] {
-			missing = append(missing, p)
-		}
-	}
-	return missing
-}
-
 // LifecycleEventMetric is the count connector's view of the actor lifecycle
 // events. Reading it rather than a log store keeps this check on the metrics
 // harness: kind has no place to query log records.
 const LifecycleEventMetric = "substrate_actor_state_changes"
 
-// LifecycleEventCounts returns the count the collector holds for each
-// ate.actor.state. The counter is cumulative and the collector outlives any one
-// test, so compare two reads rather than asserting a state is merely present:
-// a stale count from an earlier run would pass a presence check even with the
-// exporter turned off.
+// LifecycleEventSeries returns each lifecycle series the collector holds, keyed
+// by ate.actor.state and then by the series' full name and labels. The counter
+// is cumulative and the collector outlives any one test, so compare two reads
+// rather than asserting a state is merely present: a stale count from an
+// earlier run would pass a presence check even with the exporter turned off.
 //
-// One state can appear on several lines, one per emitting ateapi instance, so
-// the counts are summed.
-func LifecycleEventCounts(scrape string) map[string]float64 {
-	counts := map[string]float64{}
+// Series are kept apart, one per emitting instance, otherwise a series the
+// exporter expired looks like the count went down.
+func LifecycleEventSeries(scrape string) map[string]map[string]float64 {
+	series := map[string]map[string]float64{}
 	for _, line := range strings.Split(scrape, "\n") {
 		name := metricNameFromLine(line)
 		if name != LifecycleEventMetric && !strings.HasPrefix(name, LifecycleEventMetric+"_") {
@@ -384,22 +251,40 @@ func LifecycleEventCounts(scrape string) map[string]float64 {
 		if state == "" {
 			continue
 		}
-		fields := strings.Fields(line)
-		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		line = strings.TrimSpace(line)
+		i := strings.LastIndexAny(line, " \t")
+		if i < 0 {
+			continue
+		}
+		v, err := strconv.ParseFloat(line[i+1:], 64)
 		if err != nil {
 			continue
 		}
-		counts[state] += v
+		if series[state] == nil {
+			series[state] = map[string]float64{}
+		}
+		series[state][strings.TrimSpace(line[:i])] = v
 	}
-	return counts
+	return series
 }
 
-// StatesNotAdvanced returns the states whose count did not rise between the two
-// reads. An empty result means every state was emitted during the window.
-func StatesNotAdvanced(before, after map[string]float64, states []string) []string {
+// StatesNotAdvanced returns the states with no series that appeared or changed
+// between the two reads. An empty result means every state was emitted during
+// the window.
+//
+// A drop counts, since deltatocumulative only restarts a stale stream on a new
+// count. A series that vanished does not, the exporter expires idle series.
+func StatesNotAdvanced(before, after map[string]map[string]float64, states []string) []string {
 	var stale []string
 	for _, s := range states {
-		if after[s] <= before[s] {
+		advanced := false
+		for key, v := range after[s] {
+			if old, ok := before[s][key]; !ok || v != old {
+				advanced = true
+				break
+			}
+		}
+		if !advanced {
 			stale = append(stale, s)
 		}
 	}

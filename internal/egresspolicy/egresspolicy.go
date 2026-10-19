@@ -17,7 +17,7 @@
 // matches with, so the two cannot drift.
 //
 // Requests are decided here; TLS connections are decided by the dataplane
-// against EgressRules.
+// against SNIRules.
 //
 // The package is pure: no I/O, no logging.
 package egresspolicy
@@ -33,7 +33,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/validate/content"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // Destination is what a request is going to, as far as the leg evaluating it
@@ -163,31 +163,28 @@ func (r compiledRule) matchesPort(port uint16) bool {
 	return r.anyPort || slices.Contains(r.ports, port)
 }
 
-// EgressMode is how a connection or request is handled when an EgressRule
-// matches. Values must match cmd/dataplane/envoy/dynamic-modules.
-type EgressMode string
+// SNIMode is how a TLS connection is handled when an SNIRule matches. Values
+// must match cmd/dataplane/envoy/dynamic-modules/egress-policy.
+type SNIMode string
 
 const (
-	// EgressModeCleartext handles plain HTTP requests.
-	EgressModeCleartext EgressMode = "cleartext"
-	// EgressModeMITM terminates TLS and decides each request inside.
-	EgressModeMITM EgressMode = "mitm"
-	// EgressModePassthrough forwards TLS without decryption.
-	EgressModePassthrough EgressMode = "passthrough"
+	// SNIModeMITM terminates TLS and decides each request inside.
+	SNIModeMITM SNIMode = "mitm"
+	// SNIModePassthrough forwards TLS without decryption.
+	SNIModePassthrough SNIMode = "passthrough"
 )
 
-// EgressRule is a hostname pattern and the mode applied when it matches first.
-type EgressRule struct {
-	Pattern    string
-	Mode       EgressMode
-	HasEffects bool
+// SNIRule is an SNI pattern and the mode applied when it matches first.
+type SNIRule struct {
+	Pattern string
+	Mode    SNIMode
 }
 
-// EgressRules returns the http, https, and tls_passthrough rules for a dialed
-// port, sorted according to the API tie-breaking rules.
-func (p *Policy) EgressRules(port uint16) []EgressRule {
+// SNIRules returns the https and tls_passthrough rules for a dialed port,
+// sorted according to the API tie-breaking rules
+func (p *Policy) SNIRules(port uint16) []SNIRule {
 	type ranked struct {
-		rule EgressRule
+		rule SNIRule
 		rank matchRank
 	}
 	var entries []ranked
@@ -195,23 +192,18 @@ func (p *Policy) EgressRules(port uint16) []EgressRule {
 		if !rule.matchesPort(port) {
 			continue
 		}
-		var mode EgressMode
-		var hasEffects bool
+		var mode SNIMode
 		switch rule.protocol {
-		case protocolHTTP:
-			mode = EgressModeCleartext
-			hasEffects = len(rule.effects.GetReplaceHeaders()) > 0
 		case protocolHTTPS:
-			mode = EgressModeMITM
-			hasEffects = len(rule.effects.GetReplaceHeaders()) > 0
+			mode = SNIModeMITM
 		case protocolTLSPassthrough:
-			mode = EgressModePassthrough
+			mode = SNIModePassthrough
 		default:
 			continue
 		}
 		for _, pattern := range rule.patterns {
 			entries = append(entries, ranked{
-				rule: EgressRule{Pattern: pattern.String(), Mode: mode, HasEffects: hasEffects},
+				rule: SNIRule{Pattern: pattern.String(), Mode: mode},
 				rank: matchRank{name: pattern.rank(), port: rule.portRank()},
 			})
 		}
@@ -225,7 +217,7 @@ func (p *Policy) EgressRules(port uint16) []EgressRule {
 		}
 		return 0
 	})
-	rules := make([]EgressRule, len(entries))
+	rules := make([]SNIRule, len(entries))
 	for i, e := range entries {
 		rules[i] = e.rule
 	}
@@ -450,7 +442,7 @@ func lowerASCII(s string) string {
 }
 
 // DNSEgressPolicyEnforceInAtunnel is the --dns-egress-policy mode that
-// enforces an Actor's EgressPolicy on DNS queries in the ateom DNS relay.
+// enforces an Actor's EgressPolicy on DNS queries in the worker DNS relay.
 const DNSEgressPolicyEnforceInAtunnel = "enforce-in-atunnel"
 
 // ValidateDNSEgressPolicy checks the --dns-egress-policy flag value.
