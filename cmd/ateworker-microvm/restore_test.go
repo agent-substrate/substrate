@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -572,6 +573,17 @@ func TestRestoreGuestReadyError(t *testing.T) {
 		}
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("err = %v, want it to wrap context.Canceled", err)
+		}
+	})
+
+	t.Run("stopped guest reports Internal, not Unavailable", func(t *testing.T) {
+		stopped := fmt.Errorf("%w (cloud-hypervisor removed %q): %w", errGuestStopped, "/run/vsock.sock", fs.ErrNotExist)
+		err := restoreGuestReadyError(t.Context(), "dialing kata-agent after resume", stopped)
+		if got := apierror.Code(err); got != codes.Internal {
+			t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Internal, err)
+		}
+		if !errors.Is(err, errGuestStopped) {
+			t.Errorf("err = %v, want it to wrap errGuestStopped", err)
 		}
 	})
 }

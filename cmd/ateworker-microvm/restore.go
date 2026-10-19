@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -565,9 +566,18 @@ func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string,
 // attempt leaves no state behind and is safe for the caller to retry (re-staging
 // the snapshot if it was dropped above). When the caller's own context ended,
 // wrap ctx.Err() so the server reports the context status instead.
+//
+// A guest that stopped (errGuestStopped: cloud-hypervisor exited, e.g. a guest
+// kernel panic after resume or a corrupt memory image) is not reported as
+// Unavailable. That is not host contention, and the same snapshot would most
+// likely stop the guest again on every retry; coldBootActorRetrying bounds the
+// same case to coldBootAttempts for the same reason.
 func restoreGuestReadyError(ctx context.Context, step string, err error) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("while %s: %v: %w", step, err, ctx.Err())
+	}
+	if errors.Is(err, errGuestStopped) {
+		return fmt.Errorf("while %s: %w", step, err)
 	}
 	return apierror.Unavailable("while %s: %w", step, err)
 }

@@ -718,6 +718,11 @@ type Atelet struct {
 	actorLocks actorlock.Locks
 	// workerActorJWTs mints the JWT every snapshot transfer carries.
 	workerActorJWTs *workerActorJWTs
+
+	// restoreFailures counts each actor's consecutive retryable worker restore
+	// failures, so a restore that can never succeed stops being retried (see
+	// boundRetryableRestoreError).
+	restoreFailures restoreFailureCounter
 }
 
 var _ ateletpb.AteletServer = (*Atelet)(nil)
@@ -1778,7 +1783,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {
-		return nil, workerRestoreError(ctx, err)
+		return nil, s.boundRetryableRestoreError(actorUID, workerRestoreError(ctx, err))
 	}
 
 	// Record the sandbox binaries actually running the guest on-node so a
@@ -1788,6 +1793,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		// Note: crash the actor right away, if we cannot write the sandbox record now, we will not be able to checkpoint it later.
 		return nil, err
 	}
+	s.restoreFailures.reset(actorUID)
 
 	return &ateletpb.RestoreResponse{}, nil
 }
@@ -1829,6 +1835,61 @@ func workerRestoreError(ctx context.Context, err error) error {
 	default:
 		return fmt.Errorf("while calling worker RestoreWorkload: %w", err)
 	}
+}
+
+// maxConsecutiveRetryableRestoreFailures is how many restores of one actor in a
+// row may fail with a retryable worker error before atelet reports the failure
+// as Internal, crashing the actor. Contention on a busy node clears within a
+// retry or two; a restore that keeps failing (a guest that hangs on every
+// resume of its snapshot, say) would otherwise keep the actor RESUMING forever,
+// visible only as 503s.
+const maxConsecutiveRetryableRestoreFailures = 3
+
+// restoreFailureCounter counts each actor's consecutive retryable worker
+// restore failures on this node. The zero value is ready to use.
+//
+// The counts live in memory: an atelet restart starts every actor over, which
+// only allows a few more retries.
+type restoreFailureCounter struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+// add records another consecutive failure for actorUID and returns the count.
+func (c *restoreFailureCounter) add(actorUID string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.counts == nil {
+		c.counts = map[string]int{}
+	}
+	c.counts[actorUID]++
+	return c.counts[actorUID]
+}
+
+// reset forgets actorUID's consecutive failures.
+func (c *restoreFailureCounter) reset(actorUID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.counts, actorUID)
+}
+
+// boundRetryableRestoreError counts a retryable (Unavailable) worker restore
+// failure for actorUID and, once the actor has failed
+// maxConsecutiveRetryableRestoreFailures times in a row, reports it as Internal
+// instead so the control plane crashes the actor rather than retrying again.
+// Any other error passes through uncounted: errors from atelet's own steps
+// (snapshot download, asset fetch) are not counted, and a context error means
+// this attempt was cut short rather than that the restore failed.
+func (s *Atelet) boundRetryableRestoreError(actorUID string, err error) error {
+	if apierror.Code(err) != codes.Unavailable {
+		return err
+	}
+	n := s.restoreFailures.add(actorUID)
+	if n < maxConsecutiveRetryableRestoreFailures {
+		return err
+	}
+	s.restoreFailures.reset(actorUID)
+	return apierror.Internal("worker restore failed with a retryable error %d times in a row, giving up: %v", n, err)
 }
 
 // Terminate terminates any running workload on worker, unmounts external volumes,
@@ -1916,6 +1977,7 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	if err := removeActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("failed to remove actor directories during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
+	s.restoreFailures.reset(actorUID)
 
 	return &ateletpb.TerminateResponse{}, nil
 }
