@@ -275,17 +275,58 @@ func TestTrackerReportsBackgroundDetach(t *testing.T) {
 	})
 }
 
-// A Detach call makes no report due: its caller learns the actor's state from
-// the response.
-func TestTrackerDoesNotReportDetachCall(t *testing.T) {
+// A Detach call makes a report of the detach due, as a background detach does.
+func TestTrackerReportsDetachCall(t *testing.T) {
 	store := newFakeSnapshotStore()
 	tr := newReportingTracker(t, store, newFakeReporter())
 	tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
 	if _, err := tr.Detach(t.Context(), trackedActorUID); err != nil {
 		t.Fatalf("detach: %v", err)
 	}
-	if reportDue(tr) || tr.reporting.queue.Len() != 0 {
-		t.Errorf("report due = %v, queued = %d after a Detach call, want neither", reportDue(tr), tr.reporting.queue.Len())
+	if !reportDue(tr) || !reportDueOnDisk() || tr.reporting.queue.Len() != 1 {
+		t.Errorf("report due = %v, on disk = %v, queued = %d after a Detach call, want due, saved, and queued",
+			reportDue(tr), reportDueOnDisk(), tr.reporting.queue.Len())
+	}
+}
+
+// A Detach call whose upload succeeds and prune fails still reports the upload.
+func TestTrackerReportsDetachCallUploadWhenPruneFails(t *testing.T) {
+	store := newFakeSnapshotStore()
+	tr := newReportingTracker(t, store, newFakeReporter())
+	tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
+	// A file where the local checkpoint directory belongs fails the prune.
+	if err := os.WriteFile(ateletpath.LocalCheckpointsDir(trackedActorUID), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Detach(t.Context(), trackedActorUID); err == nil {
+		t.Fatal("detach succeeded, want the prune's error")
+	}
+	if st := tr.State(trackedActorUID); uuidOf(st.GetLatestDurable()) != "s1" {
+		t.Fatalf("state = %v, want s1 durable", st)
+	}
+	if !reportDue(tr) || !reportDueOnDisk() {
+		t.Error("no report due for the upload after the prune failed")
+	}
+}
+
+// A Detach call with nothing left to detach keeps a report already due.
+func TestTrackerDetachCallKeepsReportDue(t *testing.T) {
+	store := newFakeSnapshotStore()
+	tr := newReportingTracker(t, store, newFakeReporter())
+	tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
+	detachNow(t, tr)
+	if !reportDue(tr) {
+		t.Fatal("report not due after the background detach")
+	}
+	st, err := tr.Detach(t.Context(), trackedActorUID)
+	if err != nil {
+		t.Fatalf("detach: %v", err)
+	}
+	if st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+		t.Errorf("state = %v, want s1 durable and nothing local", st)
+	}
+	if !reportDue(tr) || !reportDueOnDisk() {
+		t.Error("report no longer due after the Detach call")
 	}
 }
 
@@ -926,23 +967,6 @@ func TestTrackerCancelsReportOnForegroundCall(t *testing.T) {
 			alreadyDetached: true,
 			call: func(_ *testing.T, tr *Tracker) {
 				tr.CommittedCheckpointState(trackedActorUID)
-			},
-		},
-		{
-			name: "Detach with local snapshot",
-			call: func(t *testing.T, tr *Tracker) {
-				if _, err := tr.Detach(t.Context(), trackedActorUID); err != nil {
-					t.Fatalf("Detach: %v", err)
-				}
-			},
-		},
-		{
-			name:            "Detach when already detached",
-			alreadyDetached: true,
-			call: func(t *testing.T, tr *Tracker) {
-				if _, err := tr.Detach(t.Context(), trackedActorUID); err != nil {
-					t.Fatalf("Detach: %v", err)
-				}
 			},
 		},
 	} {

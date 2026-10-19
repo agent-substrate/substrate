@@ -35,11 +35,9 @@ const (
 	// DefaultDetachDelay is how long an actor stays suspended on this node by
 	// default, its latest snapshot kept locally, before atelet detaches it.
 	DefaultDetachDelay = 30 * time.Minute
-	// DefaultUploadTimeout is how long one background upload attempt,
-	// including the one a background detach runs first, may run by default,
-	// on top of the time its snapshot takes at the estimated upload
-	// throughput, before atelet cancels it. It keeps a wedged object-store
-	// call from holding a background worker forever.
+	// DefaultUploadTimeout is how long an upload attempt, background or part
+	// of a detach, may run beyond its estimated upload time before atelet
+	// cancels it, so a wedged object-store call can't hold it forever.
 	DefaultUploadTimeout = 2 * time.Minute
 	// DefaultUploadEstThroughput, in bytes per second of a snapshot's
 	// allocated local size, is how fast atelet expects a background upload to
@@ -114,9 +112,8 @@ func logOp(ctx context.Context, actorUID string, kind opKind, target SnapshotRef
 // actorOp is an actor's operation in progress: an upload or a detach. An
 // actor has at most one, of any kind.
 //
-// A worker runs it in the background once it is due. An atelet RPC such as
-// Detach runs it in the RPC's goroutine instead, without going through the
-// background queue.
+// A worker runs it in the background once it is due. A Detach call begins one
+// directly instead, and it runs on if the caller leaves.
 //
 // The operation holds the actor's lock only while it begins and ends, not
 // while it runs:
@@ -177,9 +174,13 @@ func (t *Tracker) Start() {
 	}
 }
 
-// Wait blocks until the workers have stopped, which they do once the tracker's
-// context ends, or until ctx ends. It returns ctx's error if ctx ended first.
+// Wait blocks until the workers and any detach a Detach call started have
+// stopped, which they do once the tracker's context ends. It returns ctx's
+// error if ctx ends first. Detach starts nothing after Wait begins.
 func (t *Tracker) Wait(ctx context.Context) error {
+	t.foregroundMu.Lock()
+	t.waiting = true
+	t.foregroundMu.Unlock()
 	stopped := make(chan struct{})
 	go func() {
 		t.workersDone.Wait()
@@ -235,8 +236,7 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 	a := t.findLocked(actorUID)
 	if a == nil || a.op != nil {
 		// Forgotten, or an operation is already in progress on the actor: one
-		// a worker of the other queue began, or one an atelet RPC such as
-		// Detach runs in the RPC's goroutine. When that operation ends,
+		// a worker of the other queue or a Detach call began. When it ends,
 		// requeueLocked queues the actor again.
 		return nil
 	}

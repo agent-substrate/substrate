@@ -390,11 +390,13 @@ service Atelet {
 
   // DetachActor makes the actor's latest local snapshot durable, then deletes
   // the actor's local snapshots on this node, so it can resume on any node.
-  // atelet also detaches a suspended actor on its own after its detach delay,
-  // and reports that with WorkerService.ReportActorSnapshotState; it does not
-  // report a DetachActor call, whose caller reads the state from the response.
-  // Waits for an operation already in progress on the actor, such as an
-  // upload or a detach. Does nothing when atelet holds no local snapshot for
+  // atelet also detaches a suspended actor on its own after its detach delay.
+  // It reports either detach with WorkerService.ReportActorSnapshotState, so
+  // the control plane records a DetachActor call's detach even if the caller
+  // does not. The detach doesn't end with the call: if the caller's context
+  // ends first, DetachActor returns that error and the detach runs on. Waits
+  // for an operation already in progress on the actor, such as an upload or a
+  // detach. Does nothing when atelet holds no local snapshot for
   // the actor. Returns ABORTED when the actor runs on this node, and
   // FAILED_PRECONDITION when atelet cannot make the latest local snapshot
   // durable, such as when it has no `snapshot.object`.

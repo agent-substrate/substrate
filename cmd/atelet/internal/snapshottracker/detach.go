@@ -16,6 +16,9 @@ package snapshottracker
 
 import (
 	"context"
+	"errors"
+	"log/slog"
+	"sync"
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
@@ -40,10 +43,11 @@ func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, back
 // actor's local snapshots. It is a no-op when atelet holds no local snapshot
 // for the actor. It fails with Aborted once a Run or Restore of the actor has
 // begun since its latest local snapshot, and with FailedPrecondition when no
-// detach can make the snapshot durable. It runs in the calling goroutine
-// rather than through the background queue, once any operation in progress on
-// the actor has ended. Callers serialize it with the actor's other lifecycle
-// RPCs (see Tracker).
+// detach can make the snapshot durable. It starts once the actor's operation
+// in progress ends, and runs on the tracker's context, not ctx. If ctx ends
+// first, Detach returns ctx's error and the detach runs on, recorded by its
+// report. After Wait begins, Detach fails with Unavailable. Callers serialize
+// it with the actor's other lifecycle RPCs (see Tracker).
 func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorSnapshotState, error) {
 	if t.store == nil {
 		return nil, apierror.Unimplemented("atelet has no snapshot store to detach actors with")
@@ -59,12 +63,10 @@ func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorS
 	}
 	if a == nil || a.LatestLocal == nil {
 		// No local snapshot is stored on this node, so there is no work to be
-		// done.
+		// done. A report already due stays due, in case the caller doesn't
+		// record this state.
 		st := &ateletpb.ActorSnapshotState{}
 		if a != nil {
-			if a.reportDue() {
-				t.clearReportDueLocked(a)
-			}
 			st = t.stateLocked(a)
 		}
 		t.unlock(actorUID)
@@ -76,19 +78,81 @@ func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorS
 		t.unlock(actorUID)
 		return nil, apierror.Aborted("actor %s is in use on this node", actorUID)
 	}
-	finish, err := t.beginDetachLocked(ctx, a, false)
-	t.unlock(actorUID)
+	// Under foregroundMu, so no detach joins workersDone after Wait begins.
+	t.foregroundMu.Lock()
+	if t.waiting || t.ctx.Err() != nil {
+		t.foregroundMu.Unlock()
+		t.unlock(actorUID)
+		return nil, apierror.Unavailable("atelet is shutting down")
+	}
+	finish, err := t.beginDetachLocked(t.ctx, a, false)
 	if err != nil {
+		t.foregroundMu.Unlock()
+		t.unlock(actorUID)
 		return nil, err
 	}
-	return finish()
+	type result struct {
+		state *ateletpb.ActorSnapshotState
+		err   error
+	}
+	// mu ensures exactly one of the detach and its caller handles the result.
+	var mu sync.Mutex
+	callerLeft := false
+	done := make(chan result, 1)
+	t.workersDone.Go(func() {
+		st, err := finish()
+		mu.Lock()
+		defer mu.Unlock()
+		if callerLeft {
+			t.logDetachAfterCallerLeft(actorUID, err)
+			return
+		}
+		done <- result{st, err}
+	})
+	t.foregroundMu.Unlock()
+	t.unlock(actorUID)
+
+	select {
+	case r := <-done:
+		return r.state, t.detachCallError(ctx, r.err)
+	case <-ctx.Done():
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	select {
+	case r := <-done:
+		return r.state, t.detachCallError(ctx, r.err)
+	default:
+	}
+	callerLeft = true
+	return nil, ctx.Err()
+}
+
+// detachCallError returns err, or Unavailable if the tracker's shutdown ended
+// the detach, so the caller doesn't mistake it for its own cancellation.
+func (t *Tracker) detachCallError(ctx context.Context, err error) error {
+	if err != nil && t.ctx.Err() != nil && ctx.Err() == nil {
+		return apierror.Unavailable("atelet stopped during the detach: %v", err)
+	}
+	return err
+}
+
+// logDetachAfterCallerLeft logs a failure no caller is left to see.
+func (t *Tracker) logDetachAfterCallerLeft(actorUID string, err error) {
+	if err == nil {
+		return
+	}
+	level := slog.LevelWarn
+	if errors.Is(err, context.Canceled) {
+		level = slog.LevelInfo
+	}
+	slog.Log(t.ctx, level, "Detach failed after its caller left", slog.String("actorUID", actorUID), slog.Any("err", err))
 }
 
 // finishDetach runs op, a detach of the actor's latest local snapshot: it
 // uploads the snapshot unless already durable, then deletes the actor's local
 // snapshots. background reports whether a worker runs it, rather than a Detach
-// call; a worker's detach makes a report of what it changed due, while a
-// Detach call returns the new state and cancels any pending report.
+// call. Either way it makes a report of what it changed due.
 func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp, alreadyDurable, background bool) (*ateletpb.ActorSnapshotState, error) {
 	defer close(op.done)
 	uploaded := false
@@ -102,7 +166,7 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 		}
 		if err == nil {
 			t.updateOp(actorUID, func(a *actorSnapshots) {
-				if t.recordUploadLocked(a, target, uploaded) && background {
+				if t.recordUploadLocked(a, target, uploaded) {
 					t.markReportDueLocked(a)
 				}
 			})
@@ -129,11 +193,7 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 		switch {
 		case err == nil:
 			t.clearLatestLocalLocked(a)
-			if background {
-				t.markReportDueLocked(a)
-			} else {
-				t.cancelReportLocked(a)
-			}
+			t.markReportDueLocked(a)
 		case ctx.Err() == nil:
 			// Detach again once the retry delay has passed, and no sooner
 			// than the detach was due.

@@ -86,8 +86,8 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 		return nil, apierror.Internal("atelet on node %q detached Actor %s but still reports a local snapshot", node, actorRef)
 	}
 
-	// A conflict fails the resume with Aborted. The next resume detaches
-	// again, and atelet returns the same state.
+	// A conflict fails the resume with Aborted. atelet's report of the detach
+	// records it, and so does the next resume, which detaches again.
 	stored, err := w.recordDetach(ctx, actorRef, actor, node, state)
 	if err != nil {
 		return nil, err

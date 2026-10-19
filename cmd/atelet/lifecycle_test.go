@@ -2099,6 +2099,12 @@ func startBlockedDetach(t *testing.T, a *pluginActor) {
 	t.Cleanup(func() {
 		cancel()
 		<-detached
+		// The detach outlives the call, until the tracker's context ends.
+		waitCtx, cancelWait := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelWait()
+		if err := a.s.snapshots.Wait(waitCtx); err != nil {
+			t.Errorf("detach still running after the test: %v", err)
+		}
 	})
 	select {
 	case <-store.started:
