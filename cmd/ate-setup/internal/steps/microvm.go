@@ -51,13 +51,10 @@ const (
 
 	defaultKataVersion            = "4.1.0"
 	defaultCloudHypervisorVersion = "v53.0"
-	// virtiofsdVersion is the version bundled inside kata-static for
-	// defaultKataVersion (verified before stamping).
-	virtiofsdVersion = "1.14.0"
 
 	assetStampFile               = ".asset-versions"
 	defaultKindMicroVMBucket     = "ate-snapshots"
-	microvmSandboxConfigTemplate = "manifests/microvm/sandboxconfig-microvm.yaml.tmpl"
+	microvmSandboxConfigTemplate = "manifests/ate-install/sandboxconfig-microvm.yaml.tmpl"
 	microvmSandboxConfigName     = "microvm"
 
 	// Keep in sync with manifests/ate-install/kind/rustfs.yaml.
@@ -76,7 +73,7 @@ var (
 	microvmAssets = []string{"cloud-hypervisor", "virtiofsd", "vmlinux", "rootfs.img"}
 
 	// microvmAssetDigests pins the expected sha256 digest of each assembled
-	// file in microvmAssets, matching manifests/microvm/sandboxconfig-microvm.yaml.tmpl.
+	// file in microvmAssets, matching manifests/ate-install/sandboxconfig-microvm.yaml.tmpl.
 	microvmAssetDigests = map[string]map[string]string{
 		"arm64": {
 			"cloud-hypervisor": "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850",
@@ -129,9 +126,9 @@ func (e *Env) DeployMicroVMDeps(ctx context.Context) error {
 			}
 		} else {
 			log.Infof("Assets already present in %s; skipping assemble.", outDir)
-		}
-		if err := verifyMicroVMAssetDigests(outDir, arch); err != nil {
-			return err
+			if err := verifyMicroVMAssetDigests(outDir, arch); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -149,7 +146,7 @@ func (e *Env) DeployMicroVMDeps(ctx context.Context) error {
 
 	log.Infof("Applying microvm SandboxConfig from %s...", microvmSandboxConfigTemplate)
 	rendered, err := render.Template(
-		e.Cfg.Path("manifests", "microvm", "sandboxconfig-microvm.yaml.tmpl"),
+		e.Cfg.Manifest("sandboxconfig-microvm.yaml.tmpl"),
 		map[string]string{
 			"BUCKET_SCHEME":     e.microVMBucketScheme(),
 			"ASSET_BUCKET_NAME": bucket,
@@ -162,7 +159,7 @@ func (e *Env) DeployMicroVMDeps(ctx context.Context) error {
 	if err := e.Kube.ApplyBytes(ctx, rendered); err != nil {
 		return err
 	}
-	log.Infof("Done. ActorTemplates must reference this SandboxConfig by name (sandboxConfig.configName: microvm).")
+	log.Infof("Done. Installed cluster-wide microvm SandboxConfig.")
 	return nil
 }
 
@@ -226,8 +223,8 @@ func cloudHypervisorAssetName(arch string) (string, error) {
 }
 
 func microvmAssetStamp(arch, kataVer, chVer string) string {
-	return fmt.Sprintf("arch=%s\nkata=%s\ncloud-hypervisor=%s\nvirtiofsd=%s\n",
-		arch, kataVer, chVer, virtiofsdVersion)
+	return fmt.Sprintf("arch=%s\nkata=%s\ncloud-hypervisor=%s\n",
+		arch, kataVer, chVer)
 }
 
 func checkMicroVMAssets(outDir string) error {
@@ -282,8 +279,8 @@ func microvmAssetsNeedAssemble(outDir, wantStamp string) (needAssemble, stale bo
 }
 
 // assembleMicroVMAssets downloads the Kata static tarball and Cloud Hypervisor
-// binary for arch into outDir, verifies the bundled virtiofsd version when
-// runnable on the host, and writes the .asset-versions stamp last.
+// binary for arch into outDir, verifies the SHA-256 digests against
+// microvmAssetDigests, and writes the .asset-versions stamp last.
 func assembleMicroVMAssets(ctx context.Context, outDir, arch, kataVer, chVer string) error {
 	chAsset, err := cloudHypervisorAssetName(arch)
 	if err != nil {
@@ -322,7 +319,7 @@ func assembleMicroVMAssets(ctx context.Context, outDir, arch, kataVer, chVer str
 	if err := checkMicroVMAssets(outDir); err != nil {
 		return err
 	}
-	if err := verifyVirtiofsdVersion(ctx, filepath.Join(outDir, "virtiofsd"), kataVer, virtiofsdVersion); err != nil {
+	if err := verifyMicroVMAssetDigests(outDir, arch); err != nil {
 		return err
 	}
 	if err := os.WriteFile(stampPath, []byte(microvmAssetStamp(arch, kataVer, chVer)), 0o644); err != nil {
@@ -490,23 +487,6 @@ func downloadToFile(ctx context.Context, url, dstPath string, mode fs.FileMode) 
 		return fmt.Errorf("while downloading %s: unexpected HTTP status %s", url, resp.Status)
 	}
 	return writeStreamToFile(dstPath, mode, resp.Body)
-}
-
-func verifyVirtiofsdVersion(ctx context.Context, virtiofsdPath, kataVer, wantVersion string) error {
-	out, err := exec.CommandContext(ctx, virtiofsdPath, "--version").Output()
-	if err != nil {
-		return ctx.Err()
-	}
-	firstLine, _, _ := strings.Cut(string(out), "\n")
-	fields := strings.Fields(firstLine)
-	if len(fields) < 2 {
-		return nil
-	}
-	if got := fields[1]; got != wantVersion {
-		return fmt.Errorf("kata %s bundles virtiofsd %s, not %s: update virtiofsdVersion", kataVer, got, wantVersion)
-	}
-	log.Infof("virtiofsd %s", fields[1])
-	return nil
 }
 
 func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, bucket string) error {
