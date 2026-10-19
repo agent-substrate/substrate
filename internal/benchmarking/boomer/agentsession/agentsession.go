@@ -80,6 +80,10 @@ const (
 	// maxConsecutiveStepFailures is how many ReplaceIfPersistent failures in
 	// a row a session tolerates before its actor is deleted and recreated.
 	maxConsecutiveStepFailures = 3
+
+	derivedMetricMethod = "actor"
+	taskCELMetric       = "TaskCEL"
+	taskWallClockMetric = "TaskWallClock"
 )
 
 // burnRate is the per-goroutine sha256 iteration rate BurnCPU reports.
@@ -371,6 +375,7 @@ func (r *runtime) iterate() {
 		u, err := r.startUser(context.Background(), loaded)
 		if err != nil {
 			slog.Warn("agentsession start failed; goroutine will retry next iter",
+				slog.Int64("user", gid),
 				slog.String("err", err.Error()))
 			time.Sleep(2 * time.Second)
 			return
@@ -382,17 +387,29 @@ func (r *runtime) iterate() {
 	step := u.steps[u.stepIndex]
 
 	// The LLM is "thinking": the actor stays suspended for the gap.
-	time.Sleep(r.think(step))
+	thinkDur := r.think(step)
+	time.Sleep(thinkDur)
+	if !u.hibernatePending && !u.retryingStep {
+		u.lapThink += thinkDur
+	}
 
 	if u.runStep(context.Background(), step) {
+		u.retryingStep = false
 		u.stepIndex = (u.stepIndex + 1) % len(u.steps)
 		if u.stepIndex == 0 {
+			u.recordTaskMetrics()
 			slog.Info("agent session completed the full script; starting over",
 				slog.String("actor", u.actorName))
 		}
+	} else {
+		u.retryingStep = true
+		u.lapRetries++
 	}
 
 	if u.broken {
+		if u.stepIndex != 0 || u.lapFailed {
+			u.recordTaskMetrics()
+		}
 		slog.Warn("agent session wedged; deleting its actor and starting a fresh session",
 			slog.String("actor", u.actorName),
 			slog.Int("consecutive_failures", u.consecutiveFailures))
@@ -413,10 +430,13 @@ func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*session
 		return nil, err
 	}
 	u := &sessionUser{
-		cfg:       r.cfg,
-		actorName: "agent-" + uuid.NewString(),
-		steps:     loaded.Steps,
-		ingestBuf: loaded.ingestBuf,
+		cfg:        r.cfg,
+		actorName:  "agent-" + uuid.NewString(),
+		scriptName: loaded.Name,
+		steps:      loaded.Steps,
+		ingestBuf:  loaded.ingestBuf,
+		userID:     boomerutil.GoroutineID(),
+		lapStart:   time.Now(),
 	}
 	slog.Info("Creating agent session", slog.String("actor", u.actorName))
 	bmetrics.UpdateUsers(agentSessionUserClass, 1)
@@ -425,6 +445,7 @@ func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*session
 		bmetrics.UpdateUsers(agentSessionUserClass, -1)
 		return nil, fmt.Errorf("ensureAtespace: %w", err)
 	}
+	startupStart := time.Now()
 	if err := u.create(ctx); err != nil {
 		bmetrics.UpdateUsers(agentSessionUserClass, -1)
 		return nil, fmt.Errorf("createActor: %w", err)
@@ -434,6 +455,7 @@ func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*session
 		u.suspendAndDelete(ctx)
 		return nil, fmt.Errorf("waitServing: %w", err)
 	}
+	u.startupDur = time.Since(startupStart)
 	u.awake = true
 	// Park the fresh actor so step 01 wakes it like any other step, unless
 	// the session stays resident (--lifecycle-mode none or
@@ -442,6 +464,7 @@ func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*session
 	if u.shouldHibernateAtStart(dyn) {
 		u.hibernate(ctx)
 	}
+	u.lapStart = time.Now()
 	return u, nil
 }
 
@@ -470,6 +493,7 @@ const shutdownConcurrency = 64
 // shutdown suspends and deletes every session's actor, shutdownConcurrency
 // at a time, until done or ctx expires.
 func (r *runtime) shutdown(ctx context.Context) {
+	slog.Info("agentsession shutdown started")
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, shutdownConcurrency)
 	r.users.Range(func(_, val any) bool {
@@ -492,10 +516,11 @@ func (r *runtime) shutdown(ctx context.Context) {
 // sessionUser is one coding-agent session: a single actor plus its progress
 // through the script. Owned by one boomer goroutine; no locking needed.
 type sessionUser struct {
-	cfg       *userclass.Config
-	actorName string
-	stepIndex int
-	cleanedUp bool
+	cfg        *userclass.Config
+	actorName  string
+	scriptName string
+	stepIndex  int
+	cleanedUp  bool
 	// steps is the script this session started on; a knob change mid-run
 	// does not move a session to another script.
 	steps []Step
@@ -515,6 +540,21 @@ type sessionUser struct {
 	// otherwise stuck actor never recovers on its own, and without
 	// replacement it would wedge its VU for the rest of the run.
 	broken bool
+	// Facts for the per-lap task record (logTaskRecord).
+	userID       int64
+	lapStart     time.Time
+	startupDur   time.Duration
+	lapCEL       time.Duration
+	lapWall      time.Duration
+	lapThink     time.Duration
+	resumeMax    time.Duration
+	ttfeMax      time.Duration
+	lapBurnIters int64
+	lapRetries   int
+	lapFailed    bool
+	failStep     string
+	failCycle    int
+	retryingStep bool
 }
 
 // httpError is a router reply with a status of 400 or above. It keeps the
@@ -612,6 +652,10 @@ func (u *sessionUser) shouldHibernateAfterStep(dyn knobs) bool {
 // the parked wake, so the row measures the wake alone rather than the wake
 // plus whatever heavy op happens to lead the step.
 func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
+	stepNum := u.stepIndex + 1
+	turnStart := time.Now()
+	defer func() { u.lapWall += time.Since(turnStart) }()
+
 	// A failed hibernate left the actor awake. In implicit mode the wake
 	// ping would return in a few ms and be booked as a WakeFirstTouch
 	// success; in explicit mode ResumeActor would fail FailedPrecondition.
@@ -619,36 +663,61 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 	// and pick the step up next iteration.
 	if u.hibernatePending {
 		u.hibernate(ctx)
+		if u.hibernatePending {
+			u.noteLapFailure("suspend", stepNum)
+		}
 		return false
 	}
 
 	dyn := dynconfig.Get[knobs](u.cfg.Dyn)
 	wasParked := !u.awake && dyn.LifecycleMode != dynconfig.LifecycleModeNone
+	var resumeLatency time.Duration
 	if wasParked && dyn.ResumeMode == dynconfig.ResumeModeExplicit {
-		if err := u.resume(ctx); err != nil {
+		var err error
+		resumeLatency, err = u.resume(ctx)
+		if err != nil {
 			u.noteFailure(err)
+			u.noteLapFailure("resume", stepNum)
 			return false
 		}
+		u.resumeMax = max(u.resumeMax, resumeLatency)
 	}
 
 	wakeStart := time.Now()
 	if err := u.execOp(ctx, ping()); err != nil {
 		u.noteFailure(err)
+		if wasParked && dyn.ResumeMode != dynconfig.ResumeModeExplicit {
+			u.noteLapFailure("resume", stepNum)
+		} else {
+			u.noteLapFailure("execute", stepNum)
+		}
 		if wasParked {
 			bmetrics.RecordFailure("http", "WakeFirstTouch", agentSessionUserClass, time.Since(wakeStart), err.Error())
 		}
 		slog.Warn("agent session wake failed",
 			slog.String("actor", u.actorName),
 			slog.String("step", step.Name),
+			slog.Int("cycle", stepNum),
 			slog.String("err", err.Error()))
 		if wasParked || u.shouldHibernateAfterStep(dyn) {
 			u.hibernate(ctx)
 		}
 		return false
 	}
+	wakeDur := time.Since(wakeStart)
 	u.awake = true
+	var ttfe time.Duration
 	if wasParked {
-		bmetrics.RecordSuccess("http", "WakeFirstTouch", agentSessionUserClass, time.Since(wakeStart), 0)
+		bmetrics.RecordSuccess("http", "WakeFirstTouch", agentSessionUserClass, wakeDur, 0)
+		if dyn.ResumeMode != dynconfig.ResumeModeExplicit {
+			resumeLatency = wakeDur
+			ttfe = wakeDur
+			u.resumeMax = max(u.resumeMax, wakeDur)
+			u.ttfeMax = max(u.ttfeMax, wakeDur)
+		} else {
+			ttfe = time.Since(turnStart)
+			u.ttfeMax = max(u.ttfeMax, ttfe)
+		}
 	}
 
 	metricName := "Step_" + step.Name
@@ -656,10 +725,12 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 	for i, o := range step.Ops {
 		if err := u.execOp(ctx, o); err != nil {
 			u.noteFailure(err)
+			u.noteLapFailure("execute", stepNum)
 			bmetrics.RecordFailure("http", metricName, agentSessionUserClass, time.Since(stepStart), err.Error())
 			slog.Warn("agent session step failed",
 				slog.String("actor", u.actorName),
 				slog.String("step", step.Name),
+				slog.Int("cycle", stepNum),
 				slog.Int("op", i),
 				slog.String("err", err.Error()))
 			if wasParked || u.shouldHibernateAfterStep(dyn) {
@@ -668,13 +739,109 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 			return false
 		}
 	}
+	stepDur := time.Since(stepStart)
+	u.lapCEL += stepDur
 	u.noteSuccess()
-	bmetrics.RecordSuccess("http", metricName, agentSessionUserClass, time.Since(stepStart), 0)
+	bmetrics.RecordSuccess("http", metricName, agentSessionUserClass, stepDur, 0)
 
+	suspended := true
 	if u.shouldHibernateAfterStep(dyn) {
 		u.hibernate(ctx)
+		if u.hibernatePending {
+			suspended = false
+			u.noteLapFailure("suspend", stepNum)
+		}
 	}
+
+	attrs := []any{
+		slog.String("actor", u.actorName),
+		slog.Int("cycle", stepNum),
+		slog.String("step", step.Name),
+		slog.Float64("cel_ms", boomerutil.MsFloat(stepDur)),
+		slog.Float64("wall_ms", boomerutil.MsFloat(time.Since(turnStart))),
+		slog.Bool("ok", suspended),
+	}
+	if wasParked {
+		attrs = append(attrs, slog.Float64("resume_ms", boomerutil.MsFloat(resumeLatency)))
+	}
+	if ttfe > 0 {
+		attrs = append(attrs, slog.Float64("ttfe_ms", boomerutil.MsFloat(ttfe)))
+	}
+	slog.Info("Completed agentsession step", attrs...)
 	return true
+}
+
+// noteLapFailure records the first failure in the current script lap.
+func (u *sessionUser) noteLapFailure(step string, cycle int) {
+	u.lapFailed = true
+	if u.failStep == "" {
+		u.failStep, u.failCycle = step, cycle
+	}
+}
+
+// recordTaskMetrics reports the finished lap's compute time and active wall
+// clock, logs its task record, and resets the per-lap counters.
+func (u *sessionUser) recordTaskMetrics() {
+	u.logTaskRecord()
+	if u.lapFailed {
+		bmetrics.RecordFailure(derivedMetricMethod, taskCELMetric, agentSessionUserClass,
+			u.lapCEL, "step failure in session lap")
+		bmetrics.RecordFailure(derivedMetricMethod, taskWallClockMetric, agentSessionUserClass,
+			u.lapWall, "step failure in session lap")
+	} else {
+		bmetrics.RecordSuccess(derivedMetricMethod, taskCELMetric, agentSessionUserClass, u.lapCEL, 0)
+		bmetrics.RecordSuccess(derivedMetricMethod, taskWallClockMetric, agentSessionUserClass, u.lapWall, 0)
+	}
+	u.resetLap()
+}
+
+// logTaskRecord logs one line of facts about a finished script lap so
+// tools/goodput can classify it without benchmark-side judgment.
+func (u *sessionUser) logTaskRecord() {
+	scriptName := u.scriptName
+	if scriptName == "" {
+		scriptName = DefaultScript
+	}
+	attrs := []any{
+		slog.Int("v", 1),
+		slog.Int64("user", u.userID),
+		slog.String("actor", u.actorName),
+		slog.String("template", "agentsession-"+scriptName),
+		slog.Int("cycles", len(u.steps)),
+		slog.Int("steps", len(u.steps)),
+		slog.Time("task_start", u.lapStart),
+		slog.Time("end", time.Now()),
+		slog.Float64("startup_ms", boomerutil.MsFloat(u.startupDur)),
+		slog.Float64("cel_ms", boomerutil.MsFloat(u.lapCEL)),
+		slog.Float64("wall_ms", boomerutil.MsFloat(u.lapWall)),
+		slog.Float64("think_ms", boomerutil.MsFloat(u.lapThink)),
+		slog.Float64("resume_max_ms", boomerutil.MsFloat(u.resumeMax)),
+		slog.Int64("burn_iterations", u.lapBurnIters),
+		slog.Int("retries", u.lapRetries),
+		slog.Bool("failed", u.lapFailed),
+		slog.String("fail_step", u.failStep),
+		slog.Int("fail_cycle", u.failCycle),
+	}
+	if u.ttfeMax > 0 {
+		attrs = append(attrs, slog.Float64("ttfe_max_ms", boomerutil.MsFloat(u.ttfeMax)))
+	}
+	slog.Info("agentsession task record", attrs...)
+}
+
+func (u *sessionUser) resetLap() {
+	u.lapStart = time.Now()
+	u.startupDur = 0
+	u.lapCEL = 0
+	u.lapWall = 0
+	u.lapThink = 0
+	u.resumeMax = 0
+	u.ttfeMax = 0
+	u.lapBurnIters = 0
+	u.lapRetries = 0
+	u.lapFailed = false
+	u.failStep = ""
+	u.failCycle = 0
+	u.retryingStep = false
 }
 
 // execOp performs one scripted op as a glutton RPC through the router.
@@ -695,6 +862,7 @@ func (u *sessionUser) execOp(ctx context.Context, o op) error {
 			&gluttonpb.BurnCPURequest{DurationMs: o.millis, Parallelism: o.parallel}, resp); err != nil {
 			return err
 		}
+		u.lapBurnIters += resp.GetIterations()
 		observeBurnRate(o, resp.GetIterations())
 		return nil
 	case opWriteDisk:
@@ -849,8 +1017,8 @@ func (u *sessionUser) waitServing(ctx context.Context) error {
 
 // resume issues ResumeActor, retrying concurrent-update conflicts inside
 // the traced call so the reported latency spans every attempt.
-func (u *sessionUser) resume(ctx context.Context) error {
-	err := u.tracedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
+func (u *sessionUser) resume(ctx context.Context) (time.Duration, error) {
+	latency, err := u.tracedCallLatency(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
 		return boomerutil.RetryOnConflict(callCtx, func() error {
 			_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
 			return err
@@ -862,7 +1030,7 @@ func (u *sessionUser) resume(ctx context.Context) error {
 		}
 		slog.Error("ResumeActor failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
 	}
-	return err
+	return latency, err
 }
 
 // hibernate suspends the actor at the end of a step, asynchronously in pause
@@ -889,6 +1057,7 @@ func (u *sessionUser) hibernate(ctx context.Context) {
 	}
 	u.hibernatePending = err != nil
 	if err != nil {
+		slog.Error("SuspendActor failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
 		u.noteFailure(err)
 		return
 	}
@@ -917,6 +1086,11 @@ func (u *sessionUser) suspendAndDelete(ctx context.Context) {
 // records it as a locust stats row of the same name, preferring the
 // server-measured elapsed time from the response trailer.
 func (u *sessionUser) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) error {
+	_, err := u.tracedCallLatency(ctx, name, do)
+	return err
+}
+
+func (u *sessionUser) tracedCallLatency(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(ctx, controlRPCTimeout)
 	defer cancel()
 	ctx, span := u.cfg.Tracer.Start(ctx, name)
@@ -931,8 +1105,8 @@ func (u *sessionUser) tracedCall(ctx context.Context, name string, do func(conte
 	boomerutil.LogSampledTrace(span, name, serverLatency, source, err)
 	if err != nil {
 		bmetrics.RecordFailure("grpc", name, agentSessionUserClass, latency, err.Error())
-		return err
+		return latency, err
 	}
 	bmetrics.RecordSuccess("grpc", name, agentSessionUserClass, latency, 0)
-	return nil
+	return latency, nil
 }

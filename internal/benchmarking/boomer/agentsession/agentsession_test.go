@@ -15,8 +15,11 @@
 package agentsession
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1058,5 +1061,53 @@ func TestSnapshotSteps(t *testing.T) {
 	}
 	if got := countCalls(badCtl.recordedCalls(), "CreateActor"); got != 0 {
 		t.Errorf("CreateActor called %d times on out-of-range snapshot step, want 0", got)
+	}
+}
+
+func TestTaskRecordOnLapCompletionAndRetry(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	path := filepath.Join(t.TempDir(), "tiny.yaml")
+	if err := os.WriteFile(path, []byte(validScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctl := &fakeControlClient{templateMemory: "1Gi"}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{
+		ScriptFile: path,
+		ThinkScale: 0.001,
+		Lifecycle:  dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit},
+	})
+	rt := &runtime{cfg: u.cfg}
+
+	// Lap 1: clean 2-step lap.
+	rt.iterate()
+	rt.iterate()
+
+	// Lap 2: step 1 fails once at ResumeActor, then succeeds on retry, then step 2 completes.
+	ctl.mu.Lock()
+	ctl.resumeErrs = []error{status.Error(codes.Unavailable, "transient")}
+	ctl.mu.Unlock()
+	rt.iterate() // fails resume on step 1
+	rt.iterate() // retries step 1 and succeeds
+	rt.iterate() // completes step 2
+
+	var recs []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) == nil && rec["msg"] == "agentsession task record" {
+			recs = append(recs, rec)
+		}
+	}
+	if len(recs) != 2 {
+		t.Fatalf("got %d task records, want 2; logs:\n%s", len(recs), buf.String())
+	}
+	if recs[0]["template"] != "agentsession-tiny" || recs[0]["failed"] != false || recs[0]["steps"] != 2.0 || recs[0]["retries"] != 0.0 {
+		t.Errorf("lap 1 record = %v; want template=agentsession-tiny, failed=false, steps=2, retries=0", recs[0])
+	}
+	if recs[1]["failed"] != true || recs[1]["fail_step"] != "resume" || recs[1]["fail_cycle"] != 1.0 || recs[1]["retries"] != 1.0 {
+		t.Errorf("lap 2 record = %v; want failed=true, fail_step=resume, fail_cycle=1, retries=1", recs[1])
 	}
 }

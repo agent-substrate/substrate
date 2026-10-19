@@ -447,8 +447,17 @@ To go back to a built-in variant, redeploy without the flag.
   **is** the user-visible wake latency, unpolluted by the step's own work.
 * `Step_<name>` (e.g. `Step_06_first_build`): wall time of that step's ops,
   think gap excluded.
+* `TaskCEL` and `TaskWallClock` (method `actor`): per-lap sum of `Step_<name>`
+  execution durations (`TaskCEL`) and active turn durations (`TaskWallClock`,
+  excluding between-step think gaps).
 * `SuspendActor` / `ResumeActor` / `CreateActor` / `DeleteActor`: control-plane
   lifecycle latencies.
+* `agentsession task record`: one structured log line per completed (or retired)
+  script lap carrying the same per-task facts as `sweperf task record` (`v`,
+  `user`, `actor`, `template` as `agentsession-<script>`, `cycles`, `steps`,
+  `task_start`, `end`, `startup_ms`, `cel_ms`, `wall_ms`, `think_ms`,
+  `resume_max_ms`, `ttfe_max_ms`, `burn_iterations`, `retries`, `failed`,
+  `fail_step`, `fail_cycle`) for post-processing by `tools/goodput`.
 
 ### Spawn Benchmark
 
