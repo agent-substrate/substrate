@@ -15,10 +15,23 @@ bindings in a process-wide `DashMap`.
   proceeds through `ext_proc`, which resolves or resumes the actor and populates
   the `ORIGINAL_DST` dynamic metadata. On response headers, the filter records
   the worker IP in the cache for `cache_ttl_seconds`.
-- **Stale binding recovery (`on_response_headers`)**: If a fast-path request
-  receives `421 Misdirected Request` (or `503` across an internal `CONNECT`
-  tunnel), the filter evicts the cached entry, removes `ate-endpoint-cached`,
-  and calls `recreate_stream` so the request replays through `ext_proc`.
+- **Stale binding eviction (`on_response_headers`)**: If a fast-path request
+  fails with `421 Misdirected Request` (with `x-ate-assignment-stale: true`),
+  `503 Service Unavailable` with upstream transport failure response flags (`UF`,
+  `UH`, `UC`, `UR`), or gRPC status `14` (`UNAVAILABLE`), the filter immediately
+  evicts the cached binding so subsequent requests resolve through `ext_proc`.
+- **Stream replay (`recreate_stream`)**: To prevent duplicate execution of requests
+  with side effects, automatic replay is only performed for bodiless requests
+  (such as `GET` or `HEAD`) when failure is guaranteed to have occurred before any
+  request reached or executed on the upstream actor:
+  - `421 Misdirected Request` with `x-ate-assignment-stale: true` (rejected by
+    worker `atunnel` prior to forwarding).
+  - `503 Service Unavailable` with zero-byte upstream failure response flags:
+    `UF` (upstream connection failure / connection refused before connection
+    establishment) or `UH` (no healthy upstream host in cluster).
+  Other failure conditions such as `503 UC` (upstream connection termination) or
+  `503 UR` (upstream remote reset) are evicted immediately from the cache but are
+  not silently replayed by the router, leaving retries to the client.
 
 ## Filter configuration
 

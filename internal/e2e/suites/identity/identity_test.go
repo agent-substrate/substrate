@@ -302,7 +302,12 @@ func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) 
 	t.Helper()
 	out, err := tryWhoami(ctx, rc, id)
 	if err != nil {
-		t.Fatal(err)
+		// A stale cache hit after migration/restore evicts on the first failure.
+		// Retry once through the fresh ext_proc route.
+		out, err = tryWhoami(ctx, rc, id)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	return out
 }
