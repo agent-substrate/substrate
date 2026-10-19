@@ -31,9 +31,11 @@ import (
 // worker (delete its row in the store's worker assignments) before they clear
 // status.worker_assignment, and a crash keeps status.assigned_node as a record
 // of the last node. The rules:
-//   - SUSPENDED with no worker: assigned_node. It is set only while a
-//     snapshot whose locality is that node still holds files there, uploaded
-//     or not, and cleared once none does.
+//   - SUSPENDED with no worker: assigned_node, the node the actor is bound
+//     to. A pause keeps it until a detach report leaves none of its
+//     snapshots on the node; a sync suspend clears it even when it leaves a
+//     cached copy there, since a snapshot's locality records where the copy
+//     lives without binding the actor to that node.
 //   - RESUMING, RUNNING and SUSPENDING with status.worker_assignment set: the
 //     worker's node, but only while the store's worker assignment row binds
 //     that worker to this actor's UID; "" once it is released or the worker

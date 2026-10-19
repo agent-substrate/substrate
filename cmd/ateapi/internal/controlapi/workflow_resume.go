@@ -269,11 +269,13 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 // assignment is revalidated (worker still exists, not draining, still owned
 // by this actor UID, still eligible for the actor's constraints) and reused;
 // a stale assignment crashes the actor. A SUSPENDED actor goes through
-// scheduling (pinned to its assigned node when it holds a node-local
-// snapshot), claiming the worker and persisting RESUMING with the
-// assignment. A version conflict there is retried under a bounded backoff
-// only after re-reading the actor and revalidating it can still be resumed —
-// the conflicting writer may have crashed, drained, or deleted it.
+// scheduling, pinned to its assigned node while a pause keeps its local
+// snapshot there (a local copy a sync suspend leaves behind does not pin:
+// that actor's AssignedNode is clear), claiming the worker and persisting
+// RESUMING with the assignment. A version conflict there is retried under a
+// bounded backoff only after re-reading the actor and revalidating it can
+// still be resumed — the conflicting writer may have crashed, drained, or
+// deleted it.
 func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, _ *ateapipb.Worker, err error) {
 	ctx, done := stepSpan(ctx, "AssignWorker")
 	defer func() { err = done(err) }()
@@ -682,8 +684,9 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		return scheduling.Constraints{}, fmt.Errorf("invalid template resource limits: %w", err)
 	}
 	var requiredNodes []string
-	// A suspended Actor with a local snapshot stays pinned to its node until
-	// atelet detaches it. When the node is full, ResumeActor detaches it.
+	// AssignedNode binds a paused Actor to its node until atelet detaches it.
+	// When the node is full, ResumeActor detaches it. A local copy a sync
+	// suspend keeps is recorded only in locality and does not pin placement.
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}
