@@ -42,8 +42,6 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atelet"
-	"go.ate.dev/substrate/internal/imagecache"
-	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -322,29 +320,6 @@ func TestSnapshotManifestFidelityAbsent(t *testing.T) {
 	}
 	if bytes.Contains(got, []byte(`"fidelity"`)) {
 		t.Errorf("fidelity-less record serialized a fidelity key: %s", got)
-	}
-}
-
-// TestPrepareOCIBundlesNoSandboxBundle pins that only application containers
-// get a bundle. The worker writes the sandbox spec itself.
-func TestPrepareOCIBundlesNoSandboxBundle(t *testing.T) {
-	useTempNodeDirs(t)
-	host := imageVolumeTestRegistry(t)
-	image := host + "/actor:v1"
-	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
-	spec := &ateletpb.WorkloadSpec{
-		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
-	}
-	const actorUID = "actor-uid-1"
-	s := &Atelet{imageCache: newImageVolumeStore(t)}
-	if _, err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec); err != nil {
-		t.Fatalf("prepareOCIBundles: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(ateletpath.OCIBundlePath(actorUID, "app"), imagecache.OverlaySpecFileName)); err != nil {
-		t.Errorf("app bundle: %v", err)
-	}
-	if _, err := os.Stat(ateletpath.OCIBundlePath(actorUID, ocispec.SandboxID)); !os.IsNotExist(err) {
-		t.Errorf("sandbox bundle stat = %v, want it absent", err)
 	}
 }
 

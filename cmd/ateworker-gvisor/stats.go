@@ -44,9 +44,9 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // sandbox as a whole.
 //
 // gVisor runs every container of a sandbox as threads inside one host process,
-// the sentry. runsc starts that process from the sandbox's create and from
-// inside the sandbox's cgroup — container.createRoot wraps the sandbox spawn in
-// cgroup.RunInCgroup — so the sentry lands in the sandbox's leaf. RunWorkload
+// the sentry. runsc starts that process from the sandbox's create, inside the
+// sandbox's cgroup (container.createRoot wraps the sandbox spawn in
+// cgroup.RunInCgroup), so the sentry lands in the sandbox's leaf. RunWorkload
 // and RestoreWorkload create the sandbox first.
 //
 // The leaf is a direct child of the delegated scope rather than of ateworker's own
@@ -73,9 +73,8 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // What the leaf holds besides the actor's own work: the sentry's own overhead
 // (its Go heap, page tables, netstack) and the gofers. Process listings taken
 // on a live node in #161 put runsc-sandbox and the gofers in the sandbox's
-// cgroup leaf. Those runs predate #496, so they establish that everything
-// lands in one leaf, not its name or absolute path, which #496's delegation
-// moved under the pod scope.
+// cgroup leaf. Those runs predate #496 and the rename to _sandbox, so they
+// establish only that everything lands in one leaf.
 //
 // So this measures the sandbox, not the actor's processes in isolation, which
 // is what the proto means by "the unit of measurement is the SANDBOX". Sizing

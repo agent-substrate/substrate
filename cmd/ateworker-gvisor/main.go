@@ -688,10 +688,10 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 
 	// Create and start each application container, each with its own log pipe so
 	// every line is tagged with the originating container (ate.actor.container.name).
-	// The bundle rootfs is composed here — an overlay of the node's cached
-	// image layers plus the bundle's private upper — because mounting is
-	// ateworker's job (atelet runs with no capabilities); runsc's gofer
-	// resolves the mount in this pod's mount namespace.
+	// The bundle rootfs is composed here, as an overlay of the node's cached
+	// image layers plus the bundle's private upper. atelet runs with no
+	// capabilities, so ateworker mounts it, and runsc's gofer resolves the
+	// mount in this pod's mount namespace.
 	for _, ac := range req.GetSpec().GetContainers() {
 		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
 		if err != nil {

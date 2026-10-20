@@ -98,7 +98,7 @@ func (r *runsc) writeSpec(containerName string) error {
 	bundlePath := ociBundlePath(r.actorDirs, containerName)
 	var spec *specs.Spec
 	if containerName == ocispec.SandboxID {
-		// atelet makes the application containers' bundles, not the sandbox's.
+		// atelet makes only the application containers' bundles.
 		if err := os.MkdirAll(bundlePath, 0o700); err != nil {
 			return fmt.Errorf("while creating bundle %q: %w", bundlePath, err)
 		}
