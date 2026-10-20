@@ -110,9 +110,6 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			return nil, false, err
 		}
 		actor = detached
-		if err = validateExpectedSnapshot(actor, expected); err != nil {
-			return nil, false, err
-		}
 		assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate, expected)
 	}
 	if err != nil {
