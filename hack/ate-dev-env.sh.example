@@ -58,5 +58,12 @@ export KO_DOCKER_REPO="gcr.io/${PROJECT_ID}/ate-images"
 # uses a provider you deploy yourself. See docs/egress-credential-injection.md.
 export ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}'
 
+# SPIFFE IDs (exact match, comma-separated) of the clients the ingress router
+# lets reach actors over its TLS ports; required when deploying the Envoy
+# router (--atenet-dataplane=envoy). The podidentity signer issues
+# spiffe://cluster.local/ns/<namespace>/sa/<service-account>. The default below
+# allowlists the E2E suite's router client (internal/e2e/ingressauth.go).
+export ATE_INGRESS_ALLOWED_SPIFFE_IDS="spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client"
+
 # Set this if you want to override the default build platforms
 export KO_DEFAULTPLATFORMS=linux/amd64
