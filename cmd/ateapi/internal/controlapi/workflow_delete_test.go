@@ -137,12 +137,12 @@ type detachDeletePlugin struct{ mockDetachVolumePlugin }
 func (*detachDeletePlugin) DeleteVolume(context.Context, string) error { return nil }
 
 // TestRevertAndDelete_AssignedNodeGone runs the whole revert and delete
-// workflows for a paused and a crashed actor whose assigned node has no
-// atelet (#2470). If the Node object is gone, both finish, and the revert
-// clears assigned_node. If it still exists, both fail with ErrNoAteletOnNode
-// and leave the actor REVERTING or DELETING for a retry. A volume detach on
-// the gone node still runs: OK and NotFound from the plugin count as detached,
-// and any other error fails the step as before.
+// workflows for a paused actor with a PENDING upload and a crashed actor whose
+// assigned node has no atelet (#2470). If the Node object is gone, both finish,
+// and revert clears assigned_node. If it still exists, both fail with
+// ErrNoAteletOnNode and leave the actor REVERTING or DELETING for a retry.
+// A volume detach on the gone node still runs: OK and NotFound from the plugin
+// count as detached, and any other error fails the step as before.
 func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
