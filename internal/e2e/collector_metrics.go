@@ -39,6 +39,8 @@ const (
 	agentGatewayRouterStatsPort = 15020
 	// Envoy exposes its Prometheus stats on the admin listener.
 	egressEnvoyAdminPort = 15000
+	// routerEnvoyMetricsPort is the atenet-router's envoy-metrics port.
+	routerEnvoyMetricsPort = 9902
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -223,6 +225,95 @@ func scrapeEgressEnvoyPod(ctx context.Context, config *rest.Config, clientset ku
 		return "", fmt.Errorf("egress Envoy metrics on %s returned %d: %s", podName, resp.StatusCode, body)
 	}
 	return string(body), nil
+}
+
+// ScrapeRouterEnvoyMetrics port-forwards each ready atenet-router pod's Envoy
+// metrics port (9902) and reads its /stats/prometheus endpoint, returning the
+// concatenated Prometheus exposition text.
+func ScrapeRouterEnvoyMetrics(ctx context.Context) (string, error) {
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
+	if err != nil {
+		return "", fmt.Errorf("loading kubeconfig: %w", err)
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return "", fmt.Errorf("creating k8s client: %w", err)
+	}
+
+	ns := SystemNamespace()
+	pods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=atenet-router",
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing atenet-router pods: %w", err)
+	}
+
+	var b strings.Builder
+	ready := 0
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !portforward.IsPodReady(pod) {
+			continue
+		}
+		ready++
+		body, err := scrapeRouterEnvoyPod(ctx, config, clientset, ns, pod.Name)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(body)
+	}
+	if ready == 0 {
+		return "", fmt.Errorf("no ready atenet-router pods in %s", ns)
+	}
+	return b.String(), nil
+}
+
+func scrapeRouterEnvoyPod(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, podName string) (string, error) {
+	localPort, stop, err := portforward.PodPortForward(ctx, config, clientset, namespace, podName, routerEnvoyMetricsPort)
+	if err != nil {
+		return "", err
+	}
+	defer stop()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/stats/prometheus", localPort), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("scraping router Envoy metrics on %s: %w", podName, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading router Envoy metrics on %s: %w", podName, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("router Envoy metrics on %s returned %d: %s", podName, resp.StatusCode, body)
+	}
+	return string(body), nil
+}
+
+// RouterCacheCounterValue sums the value of a named counter metric from the
+// router Prometheus scrape (e.g. "ate_ingress_cache_hit").
+func RouterCacheCounterValue(scrape, metricSuffix string) float64 {
+	var total float64
+	for _, line := range strings.Split(scrape, "\n") {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		name := metricNameFromLine(line)
+		if strings.HasSuffix(name, metricSuffix) {
+			fields := strings.Fields(line)
+			if len(fields) > 0 {
+				v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+				if err == nil {
+					total += v
+				}
+			}
+		}
+	}
+	return total
 }
 
 // LifecycleEventMetric is the count connector's view of the actor lifecycle

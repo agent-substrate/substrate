@@ -301,8 +301,23 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
     }
 
     increment_counter(envoy_filter, self.cache_miss);
-    // Ensure cache-bypass header is not set on a miss or recreated stream.
-    envoy_filter.remove_request_header(ROUTE_RESOLVED_HEADER);
+    // If an untrusted downstream client forged the cache-bypass header on a cache miss,
+    // Envoy evaluated the route table before this filter ran and disabled ext_proc for this stream.
+    // Stripping the header alone does not restore ext_proc to an already-constructed filter chain.
+    // Reject untrusted requests with 400 Bad Request to prevent ext_proc bypass.
+    let had_route_header = envoy_filter
+      .get_request_header_value(ROUTE_RESOLVED_HEADER)
+      .is_some();
+    if had_route_header {
+      envoy_filter.remove_request_header(ROUTE_RESOLVED_HEADER);
+      envoy_filter.send_response(
+        400,
+        &[("content-type", b"text/plain")],
+        Some(b"forged ate-endpoint-cached header is not allowed\n"),
+        Some("untrusted_cached_header"),
+      );
+      return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
+    }
     self.was_cache_hit = false;
     self.learn_key = Some(key);
     envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
@@ -419,9 +434,9 @@ mod tests {
       .withf(|key| key == "content-length")
       .returning(|_| None);
     mock
-      .expect_remove_request_header()
+      .expect_get_request_header_value()
       .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| true);
+      .returning(|_| None);
 
     let status = filter.on_request_headers(&mut mock, false);
     assert_eq!(
@@ -472,6 +487,51 @@ mod tests {
     assert_eq!(
       entry.worker_spiffe_id.as_deref(),
       Some("spiffe://cluster.local/ns/default/sa/worker-pool-1")
+    );
+  }
+
+  #[test]
+  fn test_cache_miss_with_forged_route_header_rejects_with_400() {
+    let config = Config::default();
+    let mut filter = CacheFilter::new_test_filter(config);
+
+    let target_actor = b"team-b/actor-2";
+    let mut mock = MockEnvoyHttpFilter::default();
+    mock
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == TARGET_ACTOR_FILTER_STATE_KEY)
+      .returning(move |_| Some(EnvoyBuffer::new(target_actor)));
+    mock
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == CONNECT_AUTHORITY_FILTER_STATE_KEY)
+      .returning(|_| None);
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == ":method")
+      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == "content-length")
+      .returning(|_| None);
+    mock
+      .expect_get_request_header_value()
+      .withf(|key| key == ROUTE_RESOLVED_HEADER)
+      .returning(|_| Some(EnvoyBuffer::new(b"1")));
+    mock
+      .expect_remove_request_header()
+      .withf(|key| key == ROUTE_RESOLVED_HEADER)
+      .returning(|_| true);
+    mock
+      .expect_send_response()
+      .withf(|status_code, _, _, details| {
+        *status_code == 400 && details == &Some("untrusted_cached_header")
+      })
+      .returning(|_, _, _, _| ());
+
+    let status = filter.on_request_headers(&mut mock, true);
+    assert_eq!(
+      status,
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
     );
   }
 
@@ -587,7 +647,7 @@ mod tests {
     mock
       .expect_remove_request_header()
       .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| true);
+      .returning(|_| false);
     mock.expect_recreate_stream().returning(|_| true);
 
     let resp_status = filter.on_response_headers(&mut mock, false);
@@ -631,7 +691,7 @@ mod tests {
     mock
       .expect_remove_request_header()
       .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| true);
+      .returning(|_| false);
     mock.expect_recreate_stream().returning(|_| true);
 
     let resp_status = filter.on_response_headers(&mut mock, false);
@@ -780,7 +840,7 @@ mod tests {
     mock
       .expect_remove_request_header()
       .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| true);
+      .returning(|_| false);
     mock.expect_recreate_stream().returning(|_| true);
 
     let resp_status = filter.on_response_headers(&mut mock, false);
@@ -858,7 +918,7 @@ mod tests {
     mock
       .expect_remove_request_header()
       .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| true);
+      .returning(|_| false);
     mock.expect_recreate_stream().returning(|_| true);
 
     let resp_status = filter.on_response_headers(&mut mock, false);
