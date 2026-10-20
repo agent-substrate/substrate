@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Go must be new enough to honor the `tool` directive in
 # hack/tools/*/go.mod (Go 1.24+). Pin a version known to match the
 # substrate project's pinned ko (see hack/tools/ko/go.mod).
-ARG GO_VERSION=1.26.3
+ARG GO_VERSION=1.27.3
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
         | tar -C /usr/local -xz
 ENV PATH=/usr/local/go/bin:$PATH

@@ -35,7 +35,7 @@ RUN PYTHON=python3 OUT_DIR=/out benchmarking/locust/codegen/generate.sh
 # Stage 3: Go build of the boomer-worker worker. Lives in the same image so
 # runner.py can spawn it as a subprocess during headless runs of glutton.
 # CGO_ENABLED=0 keeps us on boomer's pure-Go ZMQ (gomq), no libzmq needed.
-FROM golang:1.26-bookworm AS goboomer
+FROM golang:1.27.3-bookworm@sha256:5c3e9b43cfd3bb95c7937462e29d87ada57b481a96fa23ad0eb61778d7a00110 AS goboomer
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.sum ./
