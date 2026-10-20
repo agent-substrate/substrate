@@ -515,6 +515,28 @@ func TestSNIRules(t *testing.T) {
 			},
 		},
 		{name: "invalid patterns dropped", policy: policy(httpsRule("good.example.com", "not a hostname")), port: 443, want: mitm("good.example.com")},
+		{
+			name: "https rule with effects sets HasEffects",
+			policy: policy(
+				&ateapipb.EgressRule{Https: &ateapipb.HttpsRule{
+					Hostnames: []string{"api.example.com", "auth.example.com"},
+					Effects: &ateapipb.HttpRuleEffects{
+						ReplaceHeaders: []*ateapipb.CredentialHeader{{
+							Header:        "authorization",
+							Prefix:        "Bearer ",
+							CredentialUri: "ate-secret://k8s/default/token",
+						}},
+					},
+				}},
+				httpsRule("plain.example.com"),
+			),
+			port: 443,
+			want: []SNIRule{
+				{Pattern: "api.example.com", Mode: SNIModeMITM, HasEffects: true},
+				{Pattern: "auth.example.com", Mode: SNIModeMITM, HasEffects: true},
+				{Pattern: "plain.example.com", Mode: SNIModeMITM, HasEffects: false},
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -203,8 +203,9 @@ func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule
 	values := make([]*structpb.Value, len(rules))
 	for i, rule := range rules {
 		values[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressSNIRulePatternKey: structpb.NewStringValue(rule.Pattern),
-			extproc.EgressSNIRuleModeKey:    structpb.NewStringValue(string(rule.Mode)),
+			extproc.EgressSNIRulePatternKey:    structpb.NewStringValue(rule.Pattern),
+			extproc.EgressSNIRuleModeKey:       structpb.NewStringValue(string(rule.Mode)),
+			extproc.EgressSNIRuleHasEffectsKey: structpb.NewBoolValue(rule.HasEffects),
 		}})
 	}
 	policyStruct := &structpb.Struct{Fields: map[string]*structpb.Value{
