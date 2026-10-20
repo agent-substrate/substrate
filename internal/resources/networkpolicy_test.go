@@ -14,57 +14,30 @@
 
 package resources
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestNetworkPolicyName(t *testing.T) {
 	tests := []struct {
-		name       string
-		wpName     string
-		wantPrefix string
+		wpName string
+		want   string
 	}{
-		{
-			name:       "short workerpool name",
-			wpName:     "my-wp",
-			wantPrefix: "substrate-my-wp-",
-		},
-		{
-			name:       "long workerpool name truncated at 30 chars",
-			wpName:     "a-very-long-workerpool-name-that-exceeds-30-chars",
-			wantPrefix: "substrate-a-very-long-workerpool-name-th-",
-		},
-		{
-			name:   "workerpool name truncated ending with a hyphen",
-			wpName: "this-is-a-long-worker-pool-n-with-hyphen-at-30",
-			// "this-is-a-long-worker-pool-n-" is 30 chars long, ending in a hyphen.
-			// Trimming trailing hyphens turns it into "this-is-a-long-worker-pool-n".
-			wantPrefix: "substrate-this-is-a-long-worker-pool-n-",
-		},
-		{
-			name:       "workerpool name ending with hyphens",
-			wpName:     "workerpool-name---",
-			wantPrefix: "substrate-workerpool-name-",
-		},
+		{"my-wp", "substrate-my-wp"},
+		{"a-very-long-workerpool-name-that-exceeds-30-chars", "substrate-a-very-long-workerpool-name-that-exceeds-30-chars"},
+		{"my.pool", "substrate-my.pool"},
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := NetworkPolicyName(tt.wpName)
+		if got := NetworkPolicyName(tt.wpName); got != tt.want {
+			t.Errorf("NetworkPolicyName(%q) = %q, want %q", tt.wpName, got, tt.want)
+		}
+	}
+}
 
-			if !strings.HasPrefix(got, tt.wantPrefix) {
-				t.Errorf("NetworkPolicyName(%q) = %q, want prefix %q", tt.wpName, got, tt.wantPrefix)
-			}
-
-			// Ensure no double hyphens before the hash
-			// The format is substrate-<truncated>-<hash>
-			parts := strings.Split(got, "-")
-			for i, part := range parts {
-				if part == "" && i > 0 && i < len(parts)-1 {
-					t.Errorf("NetworkPolicyName(%q) = %q contains empty part (double hyphen)", tt.wpName, got)
-				}
-			}
-		})
+// These names share their first 30 characters and the first 5 hex digits of
+// their SHA-256, so a name built from those collided.
+func TestNetworkPolicyNameDiffersForFormerlyCollidingPools(t *testing.T) {
+	a := NetworkPolicyName("a-very-long-workerpool-name-th-323")
+	b := NetworkPolicyName("a-very-long-workerpool-name-th-423")
+	if a == b {
+		t.Errorf("NetworkPolicyName gave %q for both pools", a)
 	}
 }

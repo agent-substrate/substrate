@@ -14,26 +14,9 @@
 
 package resources
 
-import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-	"strings"
-)
-
-// NetworkPolicyName returns the deterministic Kubernetes NetworkPolicy name
-// generated for a given WorkerPool name.
+// NetworkPolicyName returns the NetworkPolicy name for a WorkerPool. The
+// WorkerPool name is a label value (at most 63 characters), so the result is
+// unique per pool and a valid name without truncation.
 func NetworkPolicyName(wpName string) string {
-	sum := sha256.Sum256([]byte(wpName))
-	hash := hex.EncodeToString(sum[:])
-	if len(hash) > 5 {
-		hash = hash[:5]
-	}
-	truncated := wpName
-	if len(truncated) > 30 {
-		truncated = truncated[:30]
-	}
-	// Trim trailing hyphens to prevent double hyphens when appending "-<hash>".
-	truncated = strings.TrimRight(truncated, "-")
-	return fmt.Sprintf("substrate-%s-%s", truncated, hash)
+	return "substrate-" + wpName
 }
