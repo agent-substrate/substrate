@@ -335,8 +335,8 @@ func requireAssignedNode(t *testing.T, actor *ateapipb.Actor, want string) {
 }
 
 // requireAssignedToWorkerNode fails unless the running actor's assigned_node
-// matches the node of its worker assignment.
-func requireAssignedToWorkerNode(ctx context.Context, t *testing.T, clients *e2e.Clients, actorRef resources.ActorRef) {
+// matches the node of its worker assignment. It returns the assigned node.
+func requireAssignedToWorkerNode(ctx context.Context, t *testing.T, clients *e2e.Clients, actorRef resources.ActorRef) string {
 	t.Helper()
 
 	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
@@ -348,6 +348,7 @@ func requireAssignedToWorkerNode(ctx context.Context, t *testing.T, clients *e2e
 		t.Fatalf("running actor's worker assignment names no node: %v", actor.GetStatus().GetWorkerAssignment())
 	}
 	requireAssignedNode(t, actor, node)
+	return node
 }
 
 func TestCombinedVolumes(t *testing.T) {
@@ -431,11 +432,14 @@ func TestCombinedVolumes(t *testing.T) {
 	})
 
 	t.Run("SurvivesSuspendResume", func(t *testing.T) {
+		runningNode := requireAssignedToWorkerNode(ctx, t, clients, actorRef)
 		suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
 		if err != nil {
 			t.Fatalf("SuspendActor: %v", err)
 		}
-		requireAssignedNode(t, suspended.GetActor(), "")
+		// Synchronous suspend preserves the actor's node binding while its
+		// local snapshot copy is retained.
+		requireAssignedNode(t, suspended.GetActor(), runningNode)
 
 		// This suite checks volume restore, which can outlast the router's
 		// request-parking budget on a busy node. Resume through the control
