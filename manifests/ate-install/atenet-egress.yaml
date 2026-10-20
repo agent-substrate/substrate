@@ -284,8 +284,9 @@ data:
       #
       # The egress-policy module (cmd/dataplane/envoy/dynamic-modules/egress-policy)
       # writes the chain name to dev.ate.egress.filter_chain: TLS matching an
-      # SNI rule goes to MITM, other TLS is denied, and non-TLS goes to
-      # cleartext. "denied" matches no chain, so the connection is closed.
+      # SNI rule goes to MITM or passthrough, cleartext HTTP goes to cleartext,
+      # and everything else is denied. "denied" matches no chain, so the
+      # connection is closed.
       #
       # The two HTTP chains are named so ext_proc can tell them apart
       # (xds.filter_chain_name; the names must match
@@ -645,7 +646,6 @@ data:
         # The cleartext chain. Nothing to terminate and nothing to mint: the
         # Host header is already in the clear, so this leg reads the
         # destination directly rather than from a certificate it issued.
-        # Non-HTTP streams fail in the codec.
         - name: egress_cleartext
           filters:
           - name: envoy.filters.network.http_connection_manager
