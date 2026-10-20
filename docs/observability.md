@@ -323,7 +323,7 @@ For the `ate.filecache.*` instruments, one series per cache under `ate.filecache
 **No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_capacity` outcome, names no pool. No instrument sends the pair with both keys empty.
 
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
-* `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (the copy on the node: an asynchronous suspend writes it, and a resume reads it while the node still has it, whether or not its upload to durable storage has finished), `latest` (a durable snapshot, including a template's golden snapshot), or `boot` (from scratch, so it never appears on the atelet histograms).
+* `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (the copy on the node: an asynchronous suspend writes it, and a resume reads it while the node still has it, whether or not its upload to durable storage has finished. A synchronous suspend is `latest`, but it also keeps a copy on the node, so the resume after it can be `local`), `latest` (a durable snapshot, including a template's golden snapshot), or `boot` (from scratch, so it never appears on the atelet histograms).
 * `ate.snapshot.fidelity`: what state it holds. `volumes`, `rootfs`, or `memory`.
 * `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `worker_restore` on restore; `sandbox_assets`, `worker_checkpoint`, `persist`, `cleanup` on checkpoint; `total` on both.
 
