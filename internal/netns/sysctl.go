@@ -27,32 +27,37 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Sysctl is a key-value sysctl setting.
+type Sysctl struct {
+	Key   string
+	Value string
+}
+
 // AllowUnprivilegedPorts lets this namespace bind ports below 1024 without
 // CAP_NET_BIND_SERVICE, which is how atunnel answers a sandbox's DNS on 53.
 // The sysctl is per-namespace and grants nothing outside it.
 func AllowUnprivilegedPorts() error {
-	return setSysctl("net/ipv4/ip_unprivileged_port_start", "0")
+	return SetSysctls(Sysctl{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"})
+}
+
+// ForwardingSysctls disables IPv4 and IPv6 forwarding. Setting all/forwarding
+// also updates default/forwarding in the kernel.
+var ForwardingSysctls = []Sysctl{
+	{Key: "net/ipv4/conf/all/forwarding", Value: "0"},
+	{Key: "net/ipv6/conf/all/forwarding", Value: "0"},
 }
 
 // DisableForwarding turns off IPv4 and IPv6 forwarding in this namespace, which
 // otherwise inherits the node's IPv4 setting. Missing IPv6 keys are skipped.
 func DisableForwarding() error {
-	return hostProcSys.disableForwarding()
+	return SetSysctls(ForwardingSysctls...)
 }
 
-func (p procSys) disableForwarding() error {
-	for _, key := range []string{
-		"net/ipv4/conf/all/forwarding",
-		"net/ipv4/conf/default/forwarding",
-		"net/ipv6/conf/all/forwarding",
-		"net/ipv6/conf/default/forwarding",
-	} {
-		err := p.set(key, "0")
-		if err != nil && !(strings.HasPrefix(key, "net/ipv6/") && errors.Is(err, fs.ErrNotExist)) {
-			return err
-		}
-	}
-	return nil
+// SetSysctls writes value to each sysctl in the current network namespace under
+// a single lock hold and at most one /proc/sys read-write remount. Missing
+// net/ipv6/ keys are skipped.
+func SetSysctls(sysctls ...Sysctl) error {
+	return hostProcSys.set(sysctls)
 }
 
 // procSysMu serializes setSysctl. Sandboxes are set up concurrently and share
@@ -83,39 +88,63 @@ var hostProcSys = procSys{
 }
 
 // setSysctl writes value to the named sysctl in the current network
-// namespace, remounting /proc/sys read-write when the runtime bind-mounted it
-// read-only. A no-op when it already reads that way.
+// namespace.
 func setSysctl(key, value string) error {
-	return hostProcSys.set(key, value)
+	return SetSysctls(Sysctl{Key: key, Value: value})
 }
 
-func (p procSys) set(key, value string) error {
+func (p procSys) set(sysctls []Sysctl) error {
 	procSysMu.Lock()
 	defer procSysMu.Unlock()
 
-	path := "/proc/sys/" + key
-	b, err := p.readFile(path)
-	if err == nil && strings.TrimSpace(string(b)) == value {
+	var toWrite []Sysctl
+	for _, s := range sysctls {
+		path := "/proc/sys/" + s.Key
+		b, err := p.readFile(path)
+		if err == nil && strings.TrimSpace(string(b)) == s.Value {
+			continue
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			if strings.HasPrefix(s.Key, "net/ipv6/") {
+				continue
+			}
+			return fmt.Errorf("while setting %s in the current netns: %w", s.Key, err)
+		}
+		toWrite = append(toWrite, s)
+	}
+	if len(toWrite) == 0 {
 		return nil
 	}
-	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("while setting %s in the current netns: %w", key, err)
-	}
-	// Only EROFS is worth remounting for; any other error is returned as is.
-	if err := p.writeFile(path, []byte(value+"\n")); !errors.Is(err, unix.EROFS) {
-		if err != nil {
-			return fmt.Errorf("while setting %s in the current netns: %w", key, err)
+
+	writeAll := func() error {
+		for _, s := range toWrite {
+			path := "/proc/sys/" + s.Key
+			if err := p.writeFile(path, []byte(s.Value+"\n")); err != nil {
+				return fmt.Errorf("while setting %s in the current netns: %w", s.Key, err)
+			}
 		}
 		return nil
 	}
+
+	firstPath := "/proc/sys/" + toWrite[0].Key
+	if err := p.writeFile(firstPath, []byte(toWrite[0].Value+"\n")); !errors.Is(err, unix.EROFS) {
+		if err != nil {
+			return fmt.Errorf("while setting %s in the current netns: %w", toWrite[0].Key, err)
+		}
+		for _, s := range toWrite[1:] {
+			path := "/proc/sys/" + s.Key
+			if err := p.writeFile(path, []byte(s.Value+"\n")); err != nil {
+				return fmt.Errorf("while setting %s in the current netns: %w", s.Key, err)
+			}
+		}
+		return nil
+	}
+
 	if err := p.remount(false); err != nil {
-		return fmt.Errorf("while remounting /proc/sys read-write to set %s: %w", key, err)
+		return fmt.Errorf("while remounting /proc/sys read-write: %w", err)
 	}
 	defer func() {
 		_ = p.remount(true)
 	}()
-	if err := p.writeFile(path, []byte(value+"\n")); err != nil {
-		return fmt.Errorf("while setting %s in the current netns: %w", key, err)
-	}
-	return nil
+	return writeAll()
 }

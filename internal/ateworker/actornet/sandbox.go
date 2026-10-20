@@ -210,13 +210,14 @@ func linkUp(name string) error {
 // setupGatewaySide brings up lo and puts atunnel in front of the actor's TCP.
 func setupGatewaySide(ctx context.Context, ns netns.Handle, egressPort uint16) error {
 	if err := netns.Do(ctx, ns, func(context.Context) error {
-		// atunnel answers the actor's DNS on 53, and the worker holds no
-		// CAP_NET_BIND_SERVICE.
-		if err := netns.AllowUnprivilegedPorts(); err != nil {
-			return err
-		}
-		// Actor packets end at atunnel, the DNS relay, or a drop; never route them.
-		if err := netns.DisableForwarding(); err != nil {
+		// atunnel answers the actor's DNS on 53 (requiring unprivileged port bind),
+		// and actor packets must never route. Configure both under a single
+		// /proc/sys remount.
+		if err := netns.SetSysctls(
+			netns.Sysctl{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"},
+			netns.Sysctl{Key: "net/ipv4/conf/all/forwarding", Value: "0"},
+			netns.Sysctl{Key: "net/ipv6/conf/all/forwarding", Value: "0"},
+		); err != nil {
 			return err
 		}
 		return linkUp("lo")
@@ -231,6 +232,7 @@ func setupGatewaySide(ctx context.Context, ns netns.Handle, egressPort uint16) e
 // from both rules so ingress replies and DNS reach their local sockets.
 func installEgressRules(ns netns.Handle, egressPort uint16) error {
 	const (
+		icmpNetUnreachable                          = 0
 		icmpDestinationAdministrativelyProhibited   = 13
 		icmpv6DestinationAdministrativelyProhibited = 1
 	)
@@ -292,6 +294,15 @@ func installEgressRules(ns netns.Handle, egressPort uint16) error {
 				&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: family.addressLen, Mask: mask, Xor: make([]byte, family.addressLen)},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: address},
 				&expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: family.rejectCode},
+			)
+			c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: expressions})
+		}
+		if family.tableFamily == nftables.TableFamilyIPv4 {
+			// With forwarding off, the kernel drops unroutable packets silently instead
+			// of returning ICMP net unreachable. Reject non-TCP egress leaving the /30
+			// so UDP or ping fails fast rather than waiting out a timeout.
+			expressions := append(l4ProtocolNotEqual(unix.IPPROTO_TCP),
+				&expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: icmpNetUnreachable},
 			)
 			c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: expressions})
 		}

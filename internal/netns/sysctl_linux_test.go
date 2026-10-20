@@ -56,7 +56,7 @@ func TestSetSysctlSerializesTheRemount(t *testing.T) {
 	for i := range callers {
 		wg.Go(func() {
 			<-start
-			errs[i] = fake.procSys().set(fmt.Sprintf("net/ipv4/caller_%d", i), "0")
+			errs[i] = fake.procSys().set([]Sysctl{{Key: fmt.Sprintf("net/ipv4/caller_%d", i), Value: "0"}})
 		})
 	}
 	close(start)
@@ -75,15 +75,41 @@ func TestSetSysctlSerializesTheRemount(t *testing.T) {
 	}
 }
 
+// Setting multiple sysctls performs at most one read-write remount cycle.
+func TestSetSysctlsBatchesRemount(t *testing.T) {
+	fake := &fakeProcSys{readOnly: true, values: map[string]string{
+		"/proc/sys/net/ipv4/ip_unprivileged_port_start": "1024",
+		"/proc/sys/net/ipv4/conf/all/forwarding":        "1",
+		"/proc/sys/net/ipv6/conf/all/forwarding":        "1",
+	}}
+	if err := fake.procSys().set([]Sysctl{
+		{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"},
+		{Key: "net/ipv4/conf/all/forwarding", Value: "0"},
+		{Key: "net/ipv6/conf/all/forwarding", Value: "0"},
+	}); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if fake.remountCalls != 2 {
+		t.Errorf("remount calls = %d, want 2 (one rw, one ro)", fake.remountCalls)
+	}
+	for key, want := range map[string]string{
+		"/proc/sys/net/ipv4/ip_unprivileged_port_start": "0",
+		"/proc/sys/net/ipv4/conf/all/forwarding":        "0",
+		"/proc/sys/net/ipv6/conf/all/forwarding":        "0",
+	} {
+		if fake.values[key] != want {
+			t.Errorf("%s = %q, want %q", key, fake.values[key], want)
+		}
+	}
+}
+
 func TestDisableForwardingClearsEveryFamily(t *testing.T) {
 	fake := &fakeProcSys{readOnly: true, values: map[string]string{
-		"/proc/sys/net/ipv4/conf/all/forwarding":     "1",
-		"/proc/sys/net/ipv4/conf/default/forwarding": "1",
-		"/proc/sys/net/ipv6/conf/all/forwarding":     "1",
-		"/proc/sys/net/ipv6/conf/default/forwarding": "1",
+		"/proc/sys/net/ipv4/conf/all/forwarding": "1",
+		"/proc/sys/net/ipv6/conf/all/forwarding": "1",
 	}}
-	if err := fake.procSys().disableForwarding(); err != nil {
-		t.Fatalf("disableForwarding: %v", err)
+	if err := fake.procSys().set(ForwardingSysctls); err != nil {
+		t.Fatalf("set: %v", err)
 	}
 	for key, v := range fake.values {
 		if v != "0" {
@@ -113,13 +139,11 @@ func TestDisableIPv4ForwardingWhenIPv6Disabled(t *testing.T) {
 			return nil
 		},
 	}
-	if err := p.disableForwarding(); err != nil {
-		t.Fatalf("disableForwarding without IPv6: %v", err)
+	if err := p.set(ForwardingSysctls); err != nil {
+		t.Fatalf("set without IPv6: %v", err)
 	}
-	for _, key := range []string{"/proc/sys/net/ipv4/conf/all/forwarding", "/proc/sys/net/ipv4/conf/default/forwarding"} {
-		if values[key] != "0" {
-			t.Errorf("%s = %q, want 0", key, values[key])
-		}
+	if values["/proc/sys/net/ipv4/conf/all/forwarding"] != "0" {
+		t.Errorf("net/ipv4/conf/all/forwarding = %q, want 0", values["/proc/sys/net/ipv4/conf/all/forwarding"])
 	}
 }
 
@@ -129,8 +153,8 @@ func TestDisableForwardingReportsAMissingIPv4Key(t *testing.T) {
 		writeFile: func(path string, data []byte) error { return nil },
 		remount:   func(bool) error { return nil },
 	}
-	if err := p.disableForwarding(); !errors.Is(err, unix.ENOENT) {
-		t.Fatalf("disableForwarding with no IPv4 keys: got %v, want ENOENT", err)
+	if err := p.set(ForwardingSysctls); !errors.Is(err, unix.ENOENT) {
+		t.Fatalf("set with no IPv4 keys: got %v, want ENOENT", err)
 	}
 }
 
@@ -142,7 +166,7 @@ type fakeProcSys struct {
 	values   map[string]string
 	// remounted counts callers inside the read-write window; maxRemounted is
 	// its peak.
-	remounted, maxRemounted int
+	remounted, maxRemounted, remountCalls int
 }
 
 func (f *fakeProcSys) procSys() procSys {
@@ -165,15 +189,15 @@ func (f *fakeProcSys) procSys() procSys {
 			return nil
 		},
 		remount: func(readOnly bool) error {
+			f.mu.Lock()
+			f.remountCalls++
 			if readOnly {
-				f.mu.Lock()
-				defer f.mu.Unlock()
 				f.readOnly = true
 				f.remounted--
+				f.mu.Unlock()
 				return nil
 			}
 			time.Sleep(time.Millisecond)
-			f.mu.Lock()
 			f.readOnly = false
 			f.remounted++
 			f.maxRemounted = max(f.maxRemounted, f.remounted)

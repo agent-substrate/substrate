@@ -457,16 +457,30 @@ func TestSandboxNamespacesDoNotForward(t *testing.T) {
 				t.Fatal(err)
 			}
 			dropping := map[nftables.TableFamily]bool{}
+			var foundDisallowedEgress bool
 			for _, ch := range chains {
 				if ch.Hooknum != nil && *ch.Hooknum == *nftables.ChainHookForward &&
 					ch.Policy != nil && *ch.Policy == nftables.ChainPolicyDrop {
 					dropping[ch.Table.Family] = true
+				}
+				if ch.Table.Family == nftables.TableFamilyIPv4 && ch.Name == "disallowed-egress" {
+					foundDisallowedEgress = true
+					rules, err := c.GetRules(ch.Table, ch)
+					if err != nil {
+						t.Fatalf("getting disallowed-egress rules: %v", err)
+					}
+					if len(rules) != 3 {
+						t.Errorf("disallowed-egress has %d rules, want 3", len(rules))
+					}
 				}
 			}
 			for _, family := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6} {
 				if !dropping[family] {
 					t.Errorf("no forward-hook chain with a drop policy for family %v", family)
 				}
+			}
+			if !foundDisallowedEgress {
+				t.Error("no disallowed-egress chain found in IPv4 table")
 			}
 		})
 	}
@@ -497,7 +511,7 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 		_ = netns.RemoveNamed(probeNSName)
 	})
 
-	gwAddr, probeAddr := mustAddr(t, "10.99.0.1/30"), mustAddr(t, "10.99.0.2/30")
+	gwAddr, probeAddr := MustParseAddr("10.99.0.1/30"), MustParseAddr("10.99.0.2/30")
 	if err := netns.Do(ctx, n.GatewayNetNS, func(context.Context) error {
 		if err := netlink.LinkAdd(&netlink.Veth{
 			LinkAttrs: netlink.LinkAttrs{Name: "stray0"}, PeerName: "stray1",
@@ -531,7 +545,7 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 		}
 		// A return route, so reverse-path filtering in the probe can't hide a forward.
 		if err := netlink.RouteReplace(&netlink.Route{
-			LinkIndex: l.Attrs().Index, Dst: mustAddr(t, ActorVethSubnet).IPNet, Gw: gwAddr.IP,
+			LinkIndex: l.Attrs().Index, Dst: MustParseAddr(ActorVethSubnet).IPNet, Gw: gwAddr.IP,
 		}); err != nil {
 			return err
 		}
@@ -579,20 +593,11 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.CloseLasting() }()
-	c.DelChain(&nftables.Chain{Name: "forward", Table: &nftables.Table{Family: nftables.TableFamilyIPv4, Name: "worker-actor"}})
+	c.DelTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "worker-actor"})
 	if err := c.Flush(); err != nil {
-		t.Fatalf("removing the forward chain: %v", err)
+		t.Fatalf("removing the worker-actor table: %v", err)
 	}
 	if !arrives(5 * time.Second) {
-		t.Fatal("the probe saw nothing even with forwarding on and no forward chain; this test cannot detect routing")
+		t.Fatal("the probe saw nothing even with forwarding on and no firewall; this test cannot detect routing")
 	}
-}
-
-func mustAddr(t *testing.T, cidr string) *netlink.Addr {
-	t.Helper()
-	a, err := netlink.ParseAddr(cidr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return a
 }
