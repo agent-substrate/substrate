@@ -23,6 +23,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -42,6 +43,7 @@ func shouldDetachFromNode(actor *ateapipb.Actor, assignErr error) bool {
 
 // detachFromFullNode releases the node binding so scheduling can retry.
 // Unreachable nodes can be forgotten when the latest local snapshot is durable.
+// Otherwise a deleted node crashes the actor.
 func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, assignErr error) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "DetachFromFullNode")
 	defer func() { err = done(err) }()
@@ -67,6 +69,16 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 	if err != nil {
 		if canDetachWithoutAtelet(ctx, actor, err) {
 			return w.recordDetach(ctx, actorRef, actor, node, nil)
+		}
+		if errors.Is(err, ErrNoAteletOnNode) {
+			gone, nodeErr := w.dialer.NodeGone(ctx, node)
+			if nodeErr != nil {
+				return nil, apierror.Unavailable("while getting atelet conn for node %q: %w (and while checking the node: %w)", node, err, nodeErr)
+			}
+			if gone {
+				// The latest snapshot is not durable, so it went with the node.
+				return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageLocalSnapshotNodeGone)
+			}
 		}
 		return nil, apierror.Unavailable("while getting atelet conn for node %q: %w", node, err)
 	}

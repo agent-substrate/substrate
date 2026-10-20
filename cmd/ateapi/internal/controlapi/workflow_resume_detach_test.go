@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,10 @@ func TestDetachFromFullNode(t *testing.T) {
 		completed bool
 		cancel    bool
 		noIPs     bool
+		// nodeGone deletes node's Node object. nodeLookupErr fails every
+		// Node read.
+		nodeGone      bool
+		nodeLookupErr error
 		// before updates the actor after it was read and before the step
 		// runs, and during while atelet detaches it.
 		before, during func(*ateapipb.Actor)
@@ -128,6 +133,7 @@ func TestDetachFromFullNode(t *testing.T) {
 		detachState  func(*ateapipb.Snapshot) *ateletpb.ActorSnapshotState
 		detachErr    error
 		wantDetached bool
+		wantCrashed  bool
 		wantCode     codes.Code
 		wantCall     bool
 	}{{
@@ -250,6 +256,27 @@ func TestDetachFromFullNode(t *testing.T) {
 		otherNode: true,
 		wantCode:  codes.Unavailable,
 	}, {
+		name:         "node gone, upload completed: detaches",
+		node:         "node-3",
+		otherNode:    true,
+		completed:    true,
+		nodeGone:     true,
+		wantDetached: true,
+	}, {
+		name:        "node gone, upload PENDING: crashes on its node",
+		node:        "node-3",
+		otherNode:   true,
+		nodeGone:    true,
+		wantCrashed: true,
+		wantCode:    codes.FailedPrecondition,
+	}, {
+		name:          "node lookup fails: Unavailable, actor stays on its node",
+		node:          "node-3",
+		otherNode:     true,
+		nodeGone:      true,
+		nodeLookupErr: errors.New("connection refused"),
+		wantCode:      codes.Unavailable,
+	}, {
 		name:      "atelet refuses: Aborted, actor stays on its node",
 		node:      "node-1",
 		otherNode: true,
@@ -312,6 +339,11 @@ func TestDetachFromFullNode(t *testing.T) {
 					Spec:       corev1.PodSpec{NodeName: tt.node},
 				}), installdefaults.SystemNamespace, "", "")
 			}
+			nodes := []string{"node-1", "node-2"}
+			if !tt.nodeGone {
+				nodes = append(nodes, tt.node)
+			}
+			WithNodeGetter(nodeGetter(tt.nodeLookupErr, nodes...))(w.dialer)
 			if tt.detachState != nil {
 				atelet.detachState = tt.detachState(snap)
 			}
@@ -363,6 +395,20 @@ func TestDetachFromFullNode(t *testing.T) {
 			after, err := st.GetActor(context.Background(), actorRef)
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
+			}
+			if tt.wantCrashed {
+				// Only the state and crash change. The node and the PENDING
+				// snapshot stay for revert to clean up.
+				crashed := proto.CloneOf(want.GetStatus())
+				crashed.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+				crashed.Crash = after.GetStatus().GetCrash()
+				if !proto.Equal(after.GetStatus(), crashed) {
+					t.Errorf("status = %v, want %v", after.GetStatus(), crashed)
+				}
+				if got := after.GetStatus().GetCrash().GetMessage(); !strings.Contains(got, crashMessageLocalSnapshotNodeGone) {
+					t.Errorf("crash message = %q, want %q", got, crashMessageLocalSnapshotNodeGone)
+				}
+				return
 			}
 			if !tt.wantDetached {
 				if !proto.Equal(after.GetStatus(), want.GetStatus()) {
@@ -462,6 +508,64 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 				t.Errorf("Restore snapshot = %v, want %v", restore.GetSnapshot(), want)
 			}
 		})
+	}
+}
+
+// TestResumeActor_NodeGoneWithPendingUpload resumes a paused actor whose node
+// was deleted before atelet uploaded its latest snapshot. The resume crashes
+// the actor, a revert returns it to its older durable snapshot, and the next
+// resume restores that snapshot on another node.
+func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
+	ctx := context.Background()
+	st := newTestPersistence(t)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+
+	storetest.MustCreateAtespace(t, ctx, st, "ns")
+	if _, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	}); err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	worker := seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", testSandboxRuntime())
+	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	durable := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "durable-1",
+		someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	paused := newPausedSnapshot(t, 2, memory, "", "pause-snap-2", "node-3")
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+		a.Status.AssignedNode = "node-3"
+		a.Status.LastAssignedGeneration = 2
+		a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(durable), proto.CloneOf(paused)}
+	})
+	w, atelet := newDetachTestWorkflow(t, ctx, st)
+	addAteletOnNode(t, w, "node-2")
+	WithNodeGetter(nodeGetter(nil, "node-1", "node-2"))(w.dialer)
+
+	if _, _, err := w.ResumeActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("first ResumeActor = %v, want FailedPrecondition", err)
+	}
+	if got, err := st.GetActor(ctx, actorRef); err != nil || got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Fatalf("after first resume: state %v, err %v, want CRASHED", got.GetStatus().GetState(), err)
+	}
+
+	reverted, err := w.RevertActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("RevertActor: %v", err)
+	}
+	if s := reverted.GetStatus(); s.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || s.GetAssignedNode() != "" {
+		t.Fatalf("after revert: state %v, assigned node %q, want SUSPENDED with no node", s.GetState(), s.GetAssignedNode())
+	}
+
+	got, resumed, err := w.ResumeActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("second ResumeActor: %v", err)
+	}
+	if !resumed || got.GetStatus().GetAssignedNode() != "node-2" {
+		t.Fatalf("second ResumeActor = (node %q, resumed %v), want node-2 and resumed", got.GetStatus().GetAssignedNode(), resumed)
+	}
+	restore, _ := atelet.requests()
+	if restore.GetWorkerPodUid() != worker.GetWorkerPodUid() || restore.GetSnapshot().GetSnapshotUuid() != durable.GetUuid() {
+		t.Errorf("Restore = (worker %q, snapshot %q), want (%q, %q)", restore.GetWorkerPodUid(), restore.GetSnapshot().GetSnapshotUuid(), worker.GetWorkerPodUid(), durable.GetUuid())
 	}
 }
 
