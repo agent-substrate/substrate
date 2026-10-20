@@ -1046,6 +1046,65 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 	}
 }
 
+func TestResumeActor_RecreatedTemplateRestoresLocalVolumes(t *testing.T) {
+	ctx := t.Context()
+	persistence := newTestPersistence(t)
+	w := newTestActorWorkflow(t, persistence, "ns", "tmpl1")
+	templateRef := resources.ActorTemplateRef{Atespace: "ns", Name: "tmpl1"}
+	original, err := persistence.GetActorTemplate(ctx, templateRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	snap := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, original.GetMetadata().GetUid(), "pause-1", "node-1")
+	snap.SandboxRuntime = testSandboxRuntime()
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+		a.Status.AssignedNode = "node-1"
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{snap}
+	})
+	if _, err := w.DeleteActorTemplate(ctx, templateRef, store.DeletePreconditions{}); err != nil {
+		t.Fatal(err)
+	}
+	replacement := proto.CloneOf(original)
+	replacement.Metadata = &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"}
+	replacement.Containers = []*ateapipb.Container{{Name: "app", Image: "example/app:v2"}}
+	replacement, err = persistence.CreateActorTemplate(ctx, replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.GetMetadata().GetUid() == original.GetMetadata().GetUid() {
+		t.Fatal("recreated template must have a new UID")
+	}
+	seedRuntimeWorker(t, ctx, persistence, "pod-1", "node-1", testSandboxRuntime())
+	w, atelet := newDetachTestWorkflow(t, ctx, persistence)
+
+	actor, resumed, err := w.ResumeActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("ResumeActor: %v", err)
+	}
+	if !resumed || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Fatalf("ResumeActor = (state %v, resumed %v), want RUNNING and resumed", actor.GetStatus().GetState(), resumed)
+	}
+	restore, run := atelet.requests()
+	if restore == nil || run != nil {
+		t.Fatalf("atelet requests = (restore=%v, run=%v), want Restore and no Run", restore, run)
+	}
+	wantSnapshot := &ateletpb.Snapshot{
+		SnapshotUuid: snap.GetUuid(),
+		Generation:   snap.GetGeneration(),
+		Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		Object:       &ateletpb.ObjectStorage{SnapshotUri: snap.GetDurableSnapshot().GetObject().GetSnapshotUri()},
+	}
+	if diff := cmp.Diff(wantSnapshot, restore.GetSnapshot(), protocmp.Transform()); diff != "" {
+		t.Errorf("restored snapshot mismatch (-want +got):\n%s", diff)
+	}
+	containers := restore.GetSpec().GetContainers()
+	if len(containers) != 1 || containers[0].GetImage() != replacement.GetContainers()[0].GetImage() {
+		t.Errorf("restored containers = %v, want the replacement template's image", containers)
+	}
+}
+
 func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
