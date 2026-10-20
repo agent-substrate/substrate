@@ -469,10 +469,11 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 }
 
 func (r *LogsActorRunner) runFollow(ctx context.Context) error {
-	var lastWorkerPod string
+	var lastWorkerPod, lastWorkerNamespace string
 	// lastSeenTime is the kubelet's timestamp on the last line read from
 	// lastWorkerPod, the resume cursor for a reconnect to it.
 	var lastSeenTime time.Time
+	var lastSeenCount int
 	var waitingLogged bool
 	var lastWaitingState ateapipb.ActorState
 
@@ -517,10 +518,11 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		waitingLogged = false
 
 		// The actor resumed on another worker.
-		switchedPod := podName != lastWorkerPod
-		if switchedPod {
+		if podName != lastWorkerPod || namespace != lastWorkerNamespace {
 			fmt.Fprintf(r.stderr, "Actor is currently running on pod %s/%s\n", namespace, podName)
-			lastWorkerPod = podName
+			lastWorkerPod, lastWorkerNamespace = podName, namespace
+			lastSeenTime = time.Time{}
+			lastSeenCount = 0
 		}
 
 		// The kubelet's own timestamp on every line is the resume cursor. It
@@ -550,22 +552,29 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		}
 
 		var wg sync.WaitGroup
-		r.startMigrationMonitor(streamCtx, streamCancel, &wg, podName)
+		r.startMigrationMonitor(streamCtx, streamCancel, &wg, namespace, podName)
 
+		replayTime, replayCount := lastSeenTime, lastSeenCount
 		scanner := bufio.NewScanner(stream)
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 		for scanner.Scan() {
 			stamp, line, ok := splitKubeletTimestamp(scanner.Text())
 			if ok {
-				// SinceTime has second precision, so a reconnect to the same pod
-				// re-reads the cursor's second; lines up to the cursor were
-				// already shown. Another pod's lines are all new, and its node's
-				// clock is not this one's, so they are not compared.
-				if !switchedPod && !stamp.After(lastSeenTime) {
+				// SinceTime replays the cursor's second. Skip only records
+				// consumed before this connection, including filtered records.
+				if stamp.Before(replayTime) {
 					continue
 				}
-				lastSeenTime = stamp
+				if stamp.Equal(replayTime) && replayCount > 0 {
+					replayCount--
+					continue
+				}
+				if !stamp.Equal(lastSeenTime) {
+					lastSeenTime = stamp
+					lastSeenCount = 0
+				}
+				lastSeenCount++
 			} else {
 				vlogf(r.stderr, vTrace, "Log line had no kubelet timestamp prefix")
 			}
@@ -602,7 +611,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	wg *sync.WaitGroup,
-	currentPod string,
+	currentNamespace, currentPod string,
 ) {
 	wg.Add(1)
 	go func() {
@@ -622,7 +631,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 					continue
 				}
 				act := resp
-				if act.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || act.GetStatus().GetWorkerAssignment().GetWorkerPod() != currentPod {
+				if act.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || act.GetStatus().GetWorkerAssignment().GetWorkerPod() != currentPod || act.GetStatus().GetWorkerAssignment().GetWorkerNamespace() != currentNamespace {
 					// Actor suspended or migrated! Cancel stream context to reconnect.
 					vlogf(r.stderr, vBasic, "Actor %s left pod %s (state=%s, pod=%s); closing current log stream",
 						r.actorRef, currentPod, act.GetStatus().GetState(), act.GetStatus().GetWorkerAssignment().GetWorkerPod())
