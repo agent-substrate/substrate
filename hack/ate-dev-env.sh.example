@@ -48,7 +48,8 @@ export BUCKET_NAME=snapshot-substrate-test-${PROJECT_ID}
 # Cluster-wide location ate-api-server stores snapshots under.
 export SNAPSHOT_LOCATION="gs://${BUCKET_NAME}/"
 
-export KO_DOCKER_REPO="gcr.io/${PROJECT_ID}/ate-images"
+export ARTIFACT_REGISTRY_REPOSITORY=ate-images
+export KO_DOCKER_REPO="${GCE_REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY}"
 
 # Credential provider the egress gateway injects credentials from, as JSON; the
 # install requires a choice. {"name":"k8s.io"} deploys the bundled Kubernetes

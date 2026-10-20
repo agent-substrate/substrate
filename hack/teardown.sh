@@ -51,6 +51,8 @@ function usage() {
   echo "  --delete-gvisor-node-pool             Delete gVisor node pool"
   echo "  --delete-cluster                      Delete GKE cluster"
   echo "  --delete-dashboards                   Delete the Substrate monitoring dashboards"
+  echo "  --delete-repository                   Delete the Artifact Registry repository and its images"
+  echo "  --keep-repository                     Keep the image repository when using --all"
   echo "  --all                                 Run all teardown steps (reverse order of setup)"
   exit 1
 }
@@ -157,9 +159,59 @@ delete_cluster() {
     --quiet || true
 }
 
+validate_repository_config() {
+  require PROJECT_ID GCE_REGION
+  ARTIFACT_REGISTRY_REPOSITORY="${ARTIFACT_REGISTRY_REPOSITORY:-ate-images}"
+  if [[ ! "${ARTIFACT_REGISTRY_REPOSITORY}" =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+    echo "ARTIFACT_REGISTRY_REPOSITORY must be 1-63 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit" >&2
+    exit 1
+  fi
+}
+
+delete_repository() {
+  local repository="projects/${PROJECT_ID}/locations/${GCE_REGION}/repositories/${ARTIFACT_REGISTRY_REPOSITORY}"
+  local existing
+  existing=$(gcloud artifacts repositories list \
+    --project="${PROJECT_ID}" \
+    --location="${GCE_REGION}" \
+    --filter="name=\"${repository}\"" \
+    --format="value(name)" \
+    --quiet)
+  if [ -z "${existing}" ]; then
+    echo "Artifact Registry repository ${repository} does not exist; skipping"
+    return
+  fi
+  echo "Deleting Artifact Registry repository ${repository} and its images..."
+  gcloud artifacts repositories delete "${ARTIFACT_REGISTRY_REPOSITORY}" \
+    --project="${PROJECT_ID}" \
+    --location="${GCE_REGION}" \
+    --quiet
+}
+
 # --- Main Logic ---
 if [ "$#" -eq 0 ]; then
   usage
+fi
+
+keep_repository=false
+delete_repository_requested=false
+all_requested=false
+for arg in "$@"; do
+  case "${arg}" in
+    --keep-repository) keep_repository=true ;;
+    --delete-repository) delete_repository_requested=true ;;
+    --all) all_requested=true ;;
+    --revoke-gke-node-permissions|--revoke-atelet-permissions|--delete-iam-policy-bindings|--delete-snapshot-bucket|--delete-gvisor-node-pool|--delete-cluster|--delete-dashboards) ;;
+    *) usage ;;
+  esac
+done
+
+if ${keep_repository} && { ${delete_repository_requested} || ! ${all_requested}; }; then
+  echo "--keep-repository requires --all and cannot be used with --delete-repository" >&2
+  exit 1
+fi
+if ${delete_repository_requested} || { ${all_requested} && ! ${keep_repository}; }; then
+  validate_repository_config
 fi
 
 while [[ "$#" -gt 0 ]]; do
@@ -171,6 +223,8 @@ while [[ "$#" -gt 0 ]]; do
     --delete-gvisor-node-pool) delete_gvisor_node_pool ;;
     --delete-cluster) delete_cluster ;;
     --delete-dashboards) delete_dashboards ;;
+    --delete-repository) delete_repository ;;
+    --keep-repository) ;;
     --all)
       delete_dashboards
       delete_iam_policy_bindings
@@ -185,6 +239,9 @@ while [[ "$#" -gt 0 ]]; do
         echo "NODE_POOL_NAME not set; skipping node pool deletion (the cluster deletion removes its pools)"
       fi
       delete_cluster
+      if ! ${keep_repository}; then
+        delete_repository
+      fi
       ;;
     *) usage ;;
   esac

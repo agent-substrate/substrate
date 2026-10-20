@@ -35,7 +35,7 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
   ```
 - An **Anthropic API key** (the agents call Claude).
 - A GCS bucket for substrate state snapshots (configured during Substrate install).
-- `KO_DOCKER_REPO` set to a registry you can push to (e.g. `gcr.io/${PROJECT_ID}/ate-images`, same as `hack/ate-dev-env.sh.example`). The deploy step builds and pushes the workload image there with a sha256-pinned reference.
+- `KO_DOCKER_REPO` set to a registry you can push to (e.g. `${GCE_REGION}-docker.pkg.dev/${PROJECT_ID}/ate-images`, same as `hack/ate-dev-env.sh.example`). The deploy step builds and pushes the workload image there with a sha256-pinned reference.
 - `docker buildx` (the deploy function builds the workload image — a Dockerfile-based Python + Claude Code wrapper, not a Go binary, so `ko` doesn't apply for the workload itself).
 
 ## Components
