@@ -50,6 +50,13 @@ func TestWriteSpec(t *testing.T) {
 		actorDirs:  actorDirs,
 		containers: []*ateworkerpb.Container{{Name: "app", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app", "serve"}}}},
 	}
+	// atelet makes the application bundle; writeSpec does not make it.
+	if err := r.writeSpec("app"); err == nil {
+		t.Error("writeSpec(app) = nil without the bundle atelet makes")
+	}
+	if err := os.MkdirAll(ociBundlePath(actorDirs, "app"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"app", ocispec.SandboxID} {
 		if err := r.writeSpec(name); err != nil {
 			t.Fatalf("writeSpec(%q) = %v", name, err)
