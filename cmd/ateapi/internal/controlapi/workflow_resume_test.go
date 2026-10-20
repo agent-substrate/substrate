@@ -2903,7 +2903,11 @@ func seedVolumeAssignFixture(t *testing.T, ctx context.Context, persistence stor
 		WorkerPodUid:    testWorkerUID("pod-1"),
 		NodeName:        node,
 		SandboxClass:    "gvisor",
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+		Status: &ateapipb.WorkerStatus{
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:       &ateapipb.WorkerResources{Actors: 1},
+			DefaultRuntime: testSandboxRuntime(),
+		},
 	}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
