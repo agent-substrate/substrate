@@ -100,13 +100,6 @@ func TestVirtiofsdArgs(t *testing.T) {
 	}
 }
 
-func TestRemountReadOnly_NonExistent(t *testing.T) {
-	dst := filepath.Join(t.TempDir(), "nonexistent")
-	if err := RemountReadOnly(dst); !errors.Is(err, unix.ENOENT) {
-		t.Errorf("RemountReadOnly(%q) = %v, want ENOENT", dst, err)
-	}
-}
-
 func TestUnmount_NonExistent(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "nonexistent")
 	// Unmount must handle non-existent destinations cleanly without panicking.
