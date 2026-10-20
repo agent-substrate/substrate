@@ -208,11 +208,12 @@ func (s *supervisor) startSandboxProcesses(info workerhost.Info) ([]*exec.Cmd, e
 		if err := start(sb.NetNS, "ingress-actor", "--port", strconv.Itoa(info.ActorPort), "--body-bytes", strconv.Itoa(s.bodyBytes), "--stats-socket", socket); err != nil {
 			return cmds, err
 		}
+		socket = filepath.Join(s.shared, "egress-actor-"+strconv.Itoa(i)+".sock")
+		if err := start(sb.NetNS, "egress-actor", "--socket", socket); err != nil {
+			return cmds, err
+		}
 	}
-	if err := start(info.Sandboxes[0].NetNS, "egress-actor", "--socket", filepath.Join(s.shared, "egress-actor.sock")); err != nil {
-		return cmds, err
-	}
-	fmt.Fprintf(os.Stderr, "worker: %d sandboxes with ingress actors, egress actor in %s\n", len(info.Sandboxes), info.Sandboxes[0].Actor)
+	fmt.Fprintf(os.Stderr, "worker: %d sandboxes, each with an ingress actor and an egress actor\n", len(info.Sandboxes))
 	return cmds, nil
 }
 

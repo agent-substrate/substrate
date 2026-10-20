@@ -91,7 +91,7 @@ atunnel's own atelet client.
 |---|---|
 | atelet | `worker` serves the two atelet calls atunnel makes, certificate minting and egress policy |
 | the actor's program receiving requests | an ingress actor: a small HTTP server in each sandbox |
-| the actor's program making outgoing connections | the egress actor, in actor-0's sandbox |
+| the actor's program making outgoing connections | an egress actor in each sandbox; EgressIdleConns splits its connections across them, the other egress scenarios use actor-0's |
 | the router | the generator, presenting the router's identity |
 | the egress gateway | `sink`, with the real gateway's Envoy HTTP/2 settings; it never dials out |
 | Pod certificates | files from a throwaway CA |
