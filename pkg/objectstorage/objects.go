@@ -24,7 +24,6 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -473,7 +472,7 @@ func decodeContent(out io.Writer, src io.Reader) (decodeContentResult, error) {
 
 	// Plain zstd stream: put back the peeked bytes, then decompress.
 	r := io.MultiReader(bytes.NewReader(magic[:n]), src)
-	zrc := newParZstdReader(r, runtime.GOMAXPROCS(0))
+	zrc := newParZstdReader(r)
 	defer zrc.Close()
 	if f, ok := out.(*os.File); ok {
 		size, written, derr := copyZstdSparse(f, zrc)
