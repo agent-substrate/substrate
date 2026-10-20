@@ -240,7 +240,7 @@ func hashVersions(plan *sandboxPlan) []hashedVersion {
 // once the file is written, and Run/Restore fetch any other version on
 // demand.
 func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, hashed []hashedVersion) (*sandboxruntimes.File, error) {
-	out := &sandboxruntimes.File{}
+	class := sandboxruntimes.Class{SandboxClass: string(plan.sandboxClass)}
 	seen := make(map[string]bool, len(hashed))
 	var incomplete error
 	for _, v := range hashed {
@@ -265,11 +265,13 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, 
 		}
 		seen[v.hash] = true
 		if v.isDefault {
-			out.DefaultRuntime = attrs
+			class.DefaultRuntime = sandboxruntimes.Runtime{Version: attrs}
 		} else {
-			out.RestorableRuntimes = append(out.RestorableRuntimes, attrs)
+			class.RestorableRuntimes = append(class.RestorableRuntimes, sandboxruntimes.Runtime{Version: attrs})
 		}
 	}
+	// One class per pool today.
+	out := &sandboxruntimes.File{SandboxClasses: []sandboxruntimes.Class{class}}
 	if incomplete != nil {
 		return out, fmt.Errorf("%w: %w", errIncomplete, incomplete)
 	}
@@ -487,10 +489,12 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 // writtenVersions returns the versions of hashed whose runtime file names,
 // in hashed's order: every version whose attributes were built.
 func writtenVersions(hashed []hashedVersion, file *sandboxruntimes.File) []hashedVersion {
-	written := make(map[string]bool, 1+len(file.RestorableRuntimes))
-	written[file.DefaultRuntime[hardware.AttrSandboxBundleHash]] = true
-	for _, attrs := range file.RestorableRuntimes {
-		written[attrs[hardware.AttrSandboxBundleHash]] = true
+	written := make(map[string]bool, len(hashed))
+	for _, c := range file.SandboxClasses {
+		written[c.DefaultRuntime.Version[hardware.AttrSandboxBundleHash]] = true
+		for _, rt := range c.RestorableRuntimes {
+			written[rt.Version[hardware.AttrSandboxBundleHash]] = true
+		}
 	}
 	out := make([]hashedVersion, 0, len(hashed))
 	for _, v := range hashed {
@@ -510,11 +514,14 @@ func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, wan
 		return err
 	}
 	if wrote {
-		slog.InfoContext(ctx, "Wrote worker sandbox runtimes",
-			slog.String("pod_uid", uid),
-			slog.String("sandbox_config", config),
-			slog.String("default_bundle_hash", want.DefaultRuntime[hardware.AttrSandboxBundleHash]),
-			slog.Int("restorable_runtimes", len(want.RestorableRuntimes)))
+		for _, c := range want.SandboxClasses {
+			slog.InfoContext(ctx, "Wrote worker sandbox runtimes",
+				slog.String("pod_uid", uid),
+				slog.String("sandbox_config", config),
+				slog.String("sandbox_class", c.SandboxClass),
+				slog.String("default_bundle_hash", c.DefaultRuntime.Version[hardware.AttrSandboxBundleHash]),
+				slog.Int("restorable_runtimes", len(c.RestorableRuntimes)))
+		}
 	}
 	return nil
 }

@@ -243,12 +243,24 @@ func wantRuntimeWithFeatures(name, cpuFeatures string) sandboxruntimes.Attribute
 	}
 }
 
+// classFile is the file content of a worker in a pool of the given class:
+// one entry, with the given default and restorable runtimes.
+func classFile(class v1alpha1.SandboxClass, def sandboxruntimes.Attributes, restorable ...sandboxruntimes.Attributes) *sandboxruntimes.File {
+	c := sandboxruntimes.Class{SandboxClass: string(class), DefaultRuntime: sandboxruntimes.Runtime{Version: def}}
+	for _, r := range restorable {
+		c.RestorableRuntimes = append(c.RestorableRuntimes, sandboxruntimes.Runtime{Version: r})
+	}
+	return &sandboxruntimes.File{SandboxClasses: []sandboxruntimes.Class{c}}
+}
+
+// gvisorFile is classFile for a gVisor pool.
+func gvisorFile(def sandboxruntimes.Attributes, restorable ...sandboxruntimes.Attributes) *sandboxruntimes.File {
+	return classFile(v1alpha1.SandboxClassGvisor, def, restorable...)
+}
+
 // wantVersions is the file content for multiVersionConfig.
 func wantVersions() *sandboxruntimes.File {
-	return &sandboxruntimes.File{
-		DefaultRuntime:     wantRuntime("v2"),
-		RestorableRuntimes: []sandboxruntimes.Attributes{wantRuntime("v1")},
-	}
+	return gvisorFile(wantRuntime("v2"), wantRuntime("v1"))
 }
 
 // planAndBuild runs the plan and build steps of syncPod for pod.
@@ -264,7 +276,7 @@ func TestPlanAndBuild(t *testing.T) {
 	defaultNoArch := multiVersionConfig()
 	defaultNoArch.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{"other-arch": defaultNoArch.Spec.Versions[3].Assets[runtime.GOARCH]}
 
-	onlyDefault := &sandboxruntimes.File{DefaultRuntime: wantRuntime("v2")}
+	onlyDefault := gvisorFile(wantRuntime("v2"))
 
 	// sameAsDefault has v1 run the default version's binaries.
 	sameAsDefault := multiVersionConfig()
@@ -402,10 +414,7 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 
 	// Once a probe succeeds, every later sync reuses it.
 	probeErr = nil
-	want := &sandboxruntimes.File{
-		DefaultRuntime:     wantMicroVM("sha-v2"),
-		RestorableRuntimes: []sandboxruntimes.Attributes{wantMicroVM("sha-v1")},
-	}
+	want := classFile(v1alpha1.SandboxClassMicroVM, wantMicroVM("sha-v2"), wantMicroVM("sha-v1"))
 	for _, uid := range []string{"pod-a", "pod-b"} {
 		got, err := planAndBuild(s, workerPod(uid, "microvm-pool"))
 		if err != nil {
@@ -480,17 +489,15 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 			t.Fatalf("first planAndBuild() error = %v", err)
 		}
 		v3Rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{gvisorAssetName: {SHA256: "sha-v1"}, "extra": {SHA256: "sha-extra"}}}
-		want := &sandboxruntimes.File{
-			DefaultRuntime: wantRuntimeWithFeatures("v2", "3"),
-			RestorableRuntimes: []sandboxruntimes.Attributes{
-				wantRuntimeWithFeatures("v1", "1"),
-				{
-					hardware.AttrArchitecture:      runtime.GOARCH,
-					hardware.AttrCPUFeatures:       "1",
-					hardware.AttrSandboxBundleHash: bundleHash(v3Rec),
-				},
+		want := gvisorFile(
+			wantRuntimeWithFeatures("v2", "3"),
+			wantRuntimeWithFeatures("v1", "1"),
+			sandboxruntimes.Attributes{
+				hardware.AttrArchitecture:      runtime.GOARCH,
+				hardware.AttrCPUFeatures:       "1",
+				hardware.AttrSandboxBundleHash: bundleHash(v3Rec),
 			},
-		}
+		)
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("planAndBuild() mismatch (-want +got):\n%s", diff)
 		}
@@ -549,7 +556,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 		if !errors.Is(err, errIncomplete) || errors.Is(err, errPermanent) {
 			t.Errorf("planAndBuild() on a restorable version's fetch error = %v, want errIncomplete and not errPermanent", err)
 		}
-		want := &sandboxruntimes.File{DefaultRuntime: wantRuntime("v2")}
+		want := gvisorFile(wantRuntime("v2"))
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("planAndBuild() partial file mismatch (-want +got):\n%s", diff)
 		}
@@ -580,7 +587,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 		if err != nil {
 			t.Fatalf("planAndBuild() with unknown feature on non-default error = %v", err)
 		}
-		want := &sandboxruntimes.File{DefaultRuntime: wantRuntime("v2")}
+		want := gvisorFile(wantRuntime("v2"))
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("planAndBuild() mismatch (-want +got):\n%s", diff)
 		}
