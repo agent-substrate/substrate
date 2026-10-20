@@ -77,8 +77,12 @@ done
 released_ref="${1:-}"
 if [[ -z "${released_ref}" ]]; then
   while read -r tag; do
-    if [[ ! "${tag}" =~ ^v[1-9][0-9]*\.[0-9]+\.[0-9]+$ ]]; then
+    if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
       continue
+    fi
+    # Migrations were squashed after v0.5.0, so older releases don't match.
+    if [[ "${tag}" =~ ^v0\.[0-5]\. ]]; then
+      break
     fi
     if [[ "$(git ls-tree -r --name-only "${tag}" -- "${MIGRATIONS_DIR}")" == *".sql"* ]]; then
       released_ref="${tag}"
