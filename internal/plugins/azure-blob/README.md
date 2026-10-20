@@ -222,7 +222,7 @@ example:
 ```yaml
 assets:
   amd64:
-    vmlinux:
+    kata-kernel:
       url: https://<account>.blob.core.windows.net/<container>/kata/vmlinux
       sha256: <sha256 of the blob>
 ```
