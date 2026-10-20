@@ -113,9 +113,9 @@ func TestUnmount_NonExistent(t *testing.T) {
 	Unmount(dst)
 }
 
-// image volumes are rbound into the share, so submounts must go read-only too
+// Image volumes are rbound into the share, so submounts must go read-only too
 // without losing their other flags, and later mounts under the source must not
-// propagate in
+// propagate in.
 func TestRemountReadOnlyAndUnmount(t *testing.T) {
 	roottest.Require(t, "bind mounts")
 	dir := t.TempDir()
