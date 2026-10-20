@@ -314,8 +314,8 @@ The table lists the OpenTelemetry instrument names. How a name appears in a quer
 
 For the PostgreSQL connection pool metrics:
 * `db.client.connection.pool.name` is `main` (store and authorization traffic),
-  `watch` (worker-event polling and expired-lease cleanup), or `owner` (migrations
-  and outbox partition maintenance). It never contains a connection string,
+  `watch` (worker-event polling and expired-lease cleanup), `owner` (migrations
+  and outbox partition maintenance), or `probe` (readiness checks). It never contains a connection string,
   database hostname, or actor identity.
 * Compare `used` connections with `db.client.connection.max` and idle connections
   within the same ateapi instance and pool. Few idle connections alone need not
