@@ -258,6 +258,13 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	if err != nil {
 		return err
 	}
+	// On failure, undo everything below that outlives the processes. This defer
+	// MUST stay registered first (right after PrepareEgress): defers run last
+	// in, first out, so it runs after the defers below have drained the
+	// background untar and stopped cloud-hypervisor and virtiofsd. Only then is
+	// it safe to sweep the sandbox state (which detaches the merged rootfs
+	// overlays over the upper dir) and remove the upper dir; moving a defer
+	// above this one would remove the upper under a live untar or overlay.
 	defer func() {
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -265,17 +272,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 			if cleanupErr := s.tunnel.Deactivate(cleanupCtx, p.attribution()); cleanupErr != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", cleanupErr))
 			}
-			// Sweep any per-sandbox host-side mounts and state after the VMM and
-			// virtiofsd defers below have stopped the processes, then remove the
-			// extracted upper dir and detach the bundle rootfs overlays (mirroring
-			// teardownActor).
-			s.cleanupSandboxState(cleanupCtx, actorUID)
-			if err := os.RemoveAll(rootfsUpperDir(p.actorDirs)); err != nil {
-				slog.WarnContext(cleanupCtx, "Failed to remove rootfs upper dir after Restore failure", slog.String("actorUID", actorUID), slog.Any("err", err))
-			}
-			if err := imagecache.UnmountAllUnder(p.actorDirs.GetOciBundleDir()); err != nil {
-				slog.WarnContext(cleanupCtx, "Failed to unmount bundle rootfs overlays after Restore failure", slog.Any("err", err))
-			}
+			s.cleanupFailedRestoreRootfs(cleanupCtx, actorUID, p.actorDirs)
 		}
 	}()
 	s.cleanupSandboxState(ctx, actorUID)
@@ -559,19 +556,47 @@ func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string,
 	dropStagedMemoryImage(ctx, restoreDir)
 }
 
+// cleanupFailedRestoreRootfs removes what a failed memory restore assembled on
+// the host for the actor's rootfs, mirroring teardownActor: it sweeps the
+// sandbox state (detaching the merged rootfs overlays), removes the rootfs
+// upper dir re-materialized from the snapshot, and detaches the bundle rootfs
+// overlays mounted by buildActorContainers. The caller must have stopped the
+// actor's VMM and virtiofsd and drained the upper dir's untar first.
+func (s *AteWorkerService) cleanupFailedRestoreRootfs(ctx context.Context, actorUID string, actorDirs *ateworkerpb.ActorDirs) {
+	s.cleanupSandboxState(ctx, actorUID)
+	if err := os.RemoveAll(rootfsUpperDir(actorDirs)); err != nil {
+		slog.WarnContext(ctx, "Failed to remove rootfs upper dir after Restore failure", slog.String("actorUID", actorUID), slog.Any("err", err))
+	}
+	if err := imagecache.UnmountAllUnder(actorDirs.GetOciBundleDir()); err != nil {
+		slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure", slog.String("actorUID", actorUID), slog.Any("err", err))
+	}
+}
+
 // restoreGuestReadyError classifies a failure to resume the restored micro-VM or
-// reach its kata-agent before the workload serves any traffic. Because the
-// restoreMemoryFidelity and RestoreWorkload defers tear down the VMM, virtiofsd,
-// rootfs mounts, network, and hosted-actor slot on the way out, the failed
-// attempt leaves no state behind and is safe for the caller to retry (re-staging
-// the snapshot if it was dropped above). When the caller's own context ended,
-// wrap ctx.Err() so the server reports the context status instead.
+// reach its kata-agent before the workload serves any inbound traffic. Because
+// the restoreMemoryFidelity and RestoreWorkload defers tear down the VMM,
+// virtiofsd, rootfs mounts, network, and hosted-actor slot on the way out, the
+// failed attempt leaves no worker-local state behind and is safe for the caller
+// to retry (re-staging the snapshot if it was dropped above). When the caller's
+// own context ended, wrap ctx.Err() so the server reports the context status
+// instead.
 //
-// A guest that stopped (errGuestStopped: cloud-hypervisor exited, e.g. a guest
-// kernel panic after resume or a corrupt memory image) is not reported as
-// Unavailable. That is not host contention, and the same snapshot would most
-// likely stop the guest again on every retry; coldBootActorRetrying bounds the
-// same case to coldBootAttempts for the same reason.
+// The guest did run, though: after Resume, it and the workload in it run while
+// the agent is dialed and the CRNG reseeded (up to about 15s plus
+// reseedTimeout). Nothing routes inbound traffic to it yet, and atunnel's
+// egress proxy closes its outbound TCP connections until tunnel.Activate, but
+// it can query the DNS relay and write to its volumes, and what it writes to
+// external volumes stays. When the reseed is what failed, it ran on CRNG state
+// shared with the snapshot's other clones. The retry resumes the same snapshot
+// again.
+//
+// A guest found stopped while dialing the agent (errGuestStopped:
+// cloud-hypervisor exited, e.g. a guest kernel panic after resume or a corrupt
+// memory image) is not reported as Unavailable: the same snapshot would likely
+// stop the guest again on every retry. coldBootActorRetrying likewise caps
+// retries of that case, at coldBootAttempts. A stop that surfaces in Resume or
+// the reseed instead is reported as Unavailable, and the caller's limit on
+// consecutive retryable failures bounds it.
 func restoreGuestReadyError(ctx context.Context, step string, err error) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("while %s: %v: %w", step, err, ctx.Err())

@@ -98,6 +98,9 @@ type fakeWorker struct {
 	// onTerminate, if non-nil, runs inside TerminateWorkload, which fails with
 	// the error it returns.
 	onTerminate func() error
+	// onRestore, if non-nil, runs inside RestoreWorkload after it recorded
+	// the request, before it fails with restoreErr or succeeds.
+	onRestore func()
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
@@ -144,6 +147,9 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
 	f.recordFidelity("RestoreWorkload", req.GetFidelity())
 	f.preserveRestoreDir = req.GetPreserveRestoreDir()
+	if f.onRestore != nil {
+		f.onRestore()
+	}
 	if f.restoreErr != nil {
 		return nil, f.restoreErr
 	}
@@ -2965,16 +2971,18 @@ func TestWorkerRestoreError(t *testing.T) {
 			wantCode: codes.Unavailable,
 		},
 		{
-			name:     "worker DeadlineExceeded with live caller context maps to apierror.Unavailable",
+			// The worker reports any step's internal timeout this way, not
+			// only one before the workload served traffic.
+			name:     "worker DeadlineExceeded with live caller context maps to codes.Internal",
 			ctx:      t.Context(),
 			err:      status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
-			wantCode: codes.Unavailable,
+			wantCode: codes.Internal,
 		},
 		{
-			name:     "worker Canceled with live caller context maps to apierror.Unavailable",
+			name:     "worker Canceled with live caller context maps to codes.Internal",
 			ctx:      t.Context(),
 			err:      status.Error(codes.Canceled, "context canceled"),
-			wantCode: codes.Unavailable,
+			wantCode: codes.Internal,
 		},
 		{
 			name:     "worker Internal maps to codes.Internal",
@@ -3001,26 +3009,31 @@ func TestWorkerRestoreError(t *testing.T) {
 	}
 }
 
-func TestRestoreFailureUnmountsExternalVolumesAndAllowsRetry(t *testing.T) {
-	a := runPluginActor(t)
-	snap := a.snapshot("pause-snap-1", 1)
-	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
-	}
-
+// withExternalVolumes gives the actor's spec the external volumes ids, served
+// by a fake volume plugin, and returns the plugin.
+func (a *pluginActor) withExternalVolumes(ids ...string) *fakeWorkerPlugin {
 	volPlugin := &fakeWorkerPlugin{}
 	a.s.volumePlugins = map[string]volume.VolumePluginWorkerPlane{
 		"mock-driver": volPlugin,
 	}
-	a.spec.Volumes = []*ateletpb.Volume{{
-		Name: "ext-vol",
-		External: &ateletpb.ExternalVolumeSource{
-			StorageVolumeId: "vol-123",
-			VolumeType:      "mock-driver",
-		},
-	}}
+	a.spec.Volumes = nil
+	for _, id := range ids {
+		a.spec.Volumes = append(a.spec.Volumes, &ateletpb.Volume{
+			Name: "ext-" + id,
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: id,
+				VolumeType:      "mock-driver",
+			},
+		})
+	}
+	return volPlugin
+}
 
-	restoreReq := &ateletpb.RestoreRequest{
+// restoreRequest is the control plane's request to restore the actor from
+// snap.
+func (a *pluginActor) restoreRequest(t *testing.T, snap *ateletpb.Snapshot) *ateletpb.RestoreRequest {
+	t.Helper()
+	return &ateletpb.RestoreRequest{
 		Atespace:              "ate-demo",
 		ActorName:             "counter",
 		ActorUid:              pluginActorUID,
@@ -3031,8 +3044,28 @@ func TestRestoreFailureUnmountsExternalVolumesAndAllowsRetry(t *testing.T) {
 		Spec:                  a.spec,
 		Snapshot:              snap,
 	}
+}
 
-	a.worker.restoreErr = status.Error(codes.Unavailable, "while reseeding guest CRNG: context deadline exceeded")
+// checkpointed checkpoints the actor as snapshot name and returns the
+// snapshot.
+func (a *pluginActor) checkpointed(t *testing.T, name string, generation int32) *ateletpb.Snapshot {
+	t.Helper()
+	snap := a.snapshot(name, generation)
+	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	return snap
+}
+
+var errWorkerGuestNotReady = status.Error(codes.Unavailable, "while reseeding guest CRNG: context deadline exceeded")
+
+func TestRestoreUnavailableFailureUnmountsExternalVolumes(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.checkpointed(t, "pause-snap-1", 1)
+	volPlugin := a.withExternalVolumes("vol-123")
+	restoreReq := a.restoreRequest(t, snap)
+
+	a.worker.restoreErr = errWorkerGuestNotReady
 	_, err := a.s.Restore(t.Context(), restoreReq)
 	if got := apierror.Code(err); got != codes.Unavailable {
 		t.Fatalf("first Restore code = %v, want %v (err: %v)", got, codes.Unavailable, err)
@@ -3041,6 +3074,7 @@ func TestRestoreFailureUnmountsExternalVolumesAndAllowsRetry(t *testing.T) {
 		t.Fatalf("unmounted volumes after failed Restore = %v, want [vol-123]", volPlugin.unmounted)
 	}
 
+	// The retry mounts the volume again.
 	a.worker.restoreErr = nil
 	if _, err := a.s.Restore(t.Context(), restoreReq); err != nil {
 		t.Fatalf("second Restore after transient Unavailable failed: %v", err)
@@ -3050,27 +3084,86 @@ func TestRestoreFailureUnmountsExternalVolumesAndAllowsRetry(t *testing.T) {
 	}
 }
 
+// A mount failing partway through the list unmounts the volumes mounted before
+// it, or the next restore's resetActorDirs would hit their mountpoints.
+func TestRestoreMountFailureUnmountsVolumesMountedBeforeIt(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.checkpointed(t, "pause-snap-1", 1)
+	volPlugin := a.withExternalVolumes("vol-1", "vol-2")
+	volPlugin.mountErrs = map[string]error{"vol-2": errors.New("attach failed")}
+
+	if _, err := a.s.Restore(t.Context(), a.restoreRequest(t, snap)); err == nil {
+		t.Fatal("Restore with a failing mount succeeded, want an error")
+	}
+	if !slices.Contains(volPlugin.unmounted, "vol-1") {
+		t.Errorf("unmounted volumes = %v, want vol-1, which mounted before vol-2 failed", volPlugin.unmounted)
+	}
+}
+
+// Once the worker restored the guest, or while it may still be tearing the
+// guest down, a failed Restore leaves the external volumes mounted: the guest
+// may be using them.
+func TestRestoreKeepsVolumesMountedWhileTheGuestMayUseThem(t *testing.T) {
+	t.Run("failure after the worker restored the guest", func(t *testing.T) {
+		a := runPluginActor(t)
+		snap := a.checkpointed(t, "pause-snap-1", 1)
+		volPlugin := a.withExternalVolumes("vol-123")
+		// A non-empty directory where the sandbox record goes fails the
+		// record write that follows a successful worker call.
+		a.worker.onRestore = func() {
+			record := ateletpath.ActorSandboxAssetsFile(pluginActorUID)
+			_ = os.Remove(record)
+			if err := os.MkdirAll(filepath.Join(record, "blocker"), 0o700); err != nil {
+				t.Error(err)
+			}
+		}
+		if _, err := a.s.Restore(t.Context(), a.restoreRequest(t, snap)); err == nil {
+			t.Fatal("Restore with a failing sandbox record write succeeded, want an error")
+		}
+		if len(volPlugin.unmounted) != 0 {
+			t.Errorf("unmounted volumes = %v, want none: the restored guest is using them", volPlugin.unmounted)
+		}
+	})
+
+	t.Run("atelet stopped waiting for the worker", func(t *testing.T) {
+		a := runPluginActor(t)
+		snap := a.checkpointed(t, "pause-snap-1", 1)
+		volPlugin := a.withExternalVolumes("vol-123")
+		ctx, cancel := context.WithCancel(t.Context())
+		a.worker.onRestore = cancel
+		a.worker.restoreErr = errWorkerGuestNotReady
+		_, err := a.s.Restore(ctx, a.restoreRequest(t, snap))
+		if got := apierror.Code(err); got != codes.Canceled {
+			t.Fatalf("Restore code = %v, want %v (err: %v)", got, codes.Canceled, err)
+		}
+		if len(volPlugin.unmounted) != 0 {
+			t.Errorf("unmounted volumes = %v, want none: the worker may still be tearing the guest down", volPlugin.unmounted)
+		}
+	})
+}
+
 func TestBoundRetryableRestoreError(t *testing.T) {
 	const actorUID = "01234567-89ab-cdef-0123-456789abcdef"
+	const snapshotUUID = "snap-1"
 	s := &Atelet{}
 	unavailable := apierror.Unavailable("while calling worker RestoreWorkload: guest not ready")
 
 	for i := 1; i < maxConsecutiveRetryableRestoreFailures; i++ {
-		if got := apierror.Code(s.boundRetryableRestoreError(actorUID, unavailable)); got != codes.Unavailable {
+		if got := apierror.Code(s.boundRetryableRestoreError(actorUID, snapshotUUID, unavailable)); got != codes.Unavailable {
 			t.Fatalf("failure %d: code = %v, want %v", i, got, codes.Unavailable)
 		}
 	}
 	// Errors that are not Unavailable pass through and are not counted.
 	internal := errors.New("corrupt snapshot config")
-	if got := s.boundRetryableRestoreError(actorUID, internal); got != internal {
+	if got := s.boundRetryableRestoreError(actorUID, snapshotUUID, internal); got != internal {
 		t.Errorf("non-retryable error = %v, want it unchanged", got)
 	}
 	canceled := fmt.Errorf("while calling worker RestoreWorkload: %w", context.Canceled)
-	if got := apierror.Code(s.boundRetryableRestoreError(actorUID, canceled)); got != codes.Canceled {
+	if got := apierror.Code(s.boundRetryableRestoreError(actorUID, snapshotUUID, canceled)); got != codes.Canceled {
 		t.Errorf("context error code = %v, want %v", got, codes.Canceled)
 	}
 
-	err := s.boundRetryableRestoreError(actorUID, unavailable)
+	err := s.boundRetryableRestoreError(actorUID, snapshotUUID, unavailable)
 	if got := apierror.Code(err); got != codes.Internal {
 		t.Fatalf("failure %d: code = %v, want %v (err: %v)", maxConsecutiveRetryableRestoreFailures, got, codes.Internal, err)
 	}
@@ -3078,60 +3171,105 @@ func TestBoundRetryableRestoreError(t *testing.T) {
 		t.Errorf("err = %v, want it to carry the worker's error", err)
 	}
 	// Giving up starts the count over.
-	if got := apierror.Code(s.boundRetryableRestoreError(actorUID, unavailable)); got != codes.Unavailable {
+	if got := apierror.Code(s.boundRetryableRestoreError(actorUID, snapshotUUID, unavailable)); got != codes.Unavailable {
 		t.Errorf("first failure after giving up: code = %v, want %v", got, codes.Unavailable)
 	}
 	// Other actors keep their own counts.
-	if got := apierror.Code(s.boundRetryableRestoreError("another-actor", unavailable)); got != codes.Unavailable {
+	if got := apierror.Code(s.boundRetryableRestoreError("another-actor", snapshotUUID, unavailable)); got != codes.Unavailable {
 		t.Errorf("another actor's first failure: code = %v, want %v", got, codes.Unavailable)
+	}
+	// A failure to restore another snapshot starts a new streak.
+	for i := 2; i < maxConsecutiveRetryableRestoreFailures; i++ {
+		if got := apierror.Code(s.boundRetryableRestoreError(actorUID, snapshotUUID, unavailable)); got != codes.Unavailable {
+			t.Fatalf("failure %d after giving up: code = %v, want %v", i, got, codes.Unavailable)
+		}
+	}
+	if got := apierror.Code(s.boundRetryableRestoreError(actorUID, "snap-2", unavailable)); got != codes.Unavailable {
+		t.Errorf("first failure of another snapshot: code = %v, want %v", got, codes.Unavailable)
 	}
 }
 
 func TestRestoreStopsRetryingAfterConsecutiveUnavailableFailures(t *testing.T) {
 	a := runPluginActor(t)
-	snap := a.snapshot("pause-snap-1", 1)
-	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
-	}
-	restoreReq := &ateletpb.RestoreRequest{
-		Atespace:              "ate-demo",
-		ActorName:             "counter",
-		ActorUid:              pluginActorUID,
-		ActorTemplateAtespace: "default",
-		ActorTemplateName:     "counter",
-		WorkerPodUid:          pluginWorkerPodUID,
-		SandboxRuntime:        runtimeFor(t, a.rec),
-		Spec:                  a.spec,
-		Snapshot:              snap,
-	}
+	snap := a.checkpointed(t, "pause-snap-1", 1)
+	restoreReq := a.restoreRequest(t, snap)
 	restoreCode := func() codes.Code {
 		_, err := a.s.Restore(t.Context(), restoreReq)
 		return apierror.Code(err)
 	}
-
-	a.worker.restoreErr = status.Error(codes.Unavailable, "while reseeding guest CRNG: context deadline exceeded")
-	for i := 1; i < maxConsecutiveRetryableRestoreFailures; i++ {
-		if got := restoreCode(); got != codes.Unavailable {
-			t.Fatalf("Restore %d code = %v, want %v", i, got, codes.Unavailable)
+	failRetryably := func(times int, after string) {
+		t.Helper()
+		a.worker.restoreErr = errWorkerGuestNotReady
+		for i := 1; i <= times; i++ {
+			if got := restoreCode(); got != codes.Unavailable {
+				t.Fatalf("Restore %d %s: code = %v, want %v", i, after, got, codes.Unavailable)
+			}
 		}
 	}
+
+	failRetryably(maxConsecutiveRetryableRestoreFailures-1, "at first")
 	if got := restoreCode(); got != codes.Internal {
 		t.Fatalf("Restore %d code = %v, want %v", maxConsecutiveRetryableRestoreFailures, got, codes.Internal)
 	}
 
-	// A successful restore clears the count, so the next failure is retryable
-	// again even after earlier failures.
-	if got := restoreCode(); got != codes.Unavailable {
-		t.Fatalf("Restore after giving up: code = %v, want %v", got, codes.Unavailable)
-	}
+	// Giving up starts the count over, and so does a successful restore.
+	failRetryably(maxConsecutiveRetryableRestoreFailures-1, "after giving up")
 	a.worker.restoreErr = nil
 	if got := restoreCode(); got != codes.OK {
 		t.Fatalf("successful Restore code = %v, want %v", got, codes.OK)
 	}
-	a.worker.restoreErr = status.Error(codes.Unavailable, "while reseeding guest CRNG: context deadline exceeded")
-	for i := 1; i < maxConsecutiveRetryableRestoreFailures; i++ {
-		if got := restoreCode(); got != codes.Unavailable {
-			t.Fatalf("Restore %d after a success: code = %v, want %v", i, got, codes.Unavailable)
-		}
+	failRetryably(maxConsecutiveRetryableRestoreFailures-1, "after a success")
+
+	// So does a failure that crashes the actor: the control plane's crash
+	// handling does not call Terminate, so nothing else would clear the count
+	// before the actor is restored here again.
+	a.worker.restoreErr = status.Error(codes.Internal, "corrupt snapshot config")
+	if got := restoreCode(); got != codes.Internal {
+		t.Fatalf("Restore with a worker Internal error: code = %v, want %v", got, codes.Internal)
+	}
+	failRetryably(maxConsecutiveRetryableRestoreFailures-1, "after a crash")
+
+	// So does a failure in atelet's own steps before the worker call, here a
+	// volume that does not mount.
+	volPlugin := a.withExternalVolumes("vol-1")
+	volPlugin.mountErr = errors.New("attach failed")
+	if got := restoreCode(); got != codes.Internal {
+		t.Fatalf("Restore with a failing volume mount: code = %v, want %v", got, codes.Internal)
+	}
+	volPlugin.mountErr = nil
+	failRetryably(maxConsecutiveRetryableRestoreFailures-1, "after a failed mount")
+
+	// An attempt atelet stopped waiting on leaves the actor RESUMING, and the
+	// count as is, so the next retryable failure is the last.
+	ctx, cancel := context.WithCancel(t.Context())
+	a.worker.onRestore = cancel
+	_, err := a.s.Restore(ctx, restoreReq)
+	if got := apierror.Code(err); got != codes.Canceled {
+		t.Fatalf("Restore that atelet stopped waiting on: code = %v, want %v (err: %v)", got, codes.Canceled, err)
+	}
+	a.worker.onRestore = nil
+	if got := restoreCode(); got != codes.Internal {
+		t.Fatalf("Restore after a canceled attempt: code = %v, want %v", got, codes.Internal)
+	}
+}
+
+func TestEndsRestoreFailureStreak(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "success", err: nil, want: true},
+		{name: "error that crashes the actor", err: errors.New("corrupt snapshot config"), want: true},
+		{name: "invalid request", err: apierror.InvalidArgument("bad spec"), want: true},
+		{name: "retryable", err: apierror.Unavailable("guest not ready"), want: false},
+		{name: "canceled", err: fmt.Errorf("while calling worker RestoreWorkload: %w", context.Canceled), want: false},
+		{name: "deadline exceeded", err: fmt.Errorf("while downloading: %w", context.DeadlineExceeded), want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := endsRestoreFailureStreak(tc.err); got != tc.want {
+				t.Errorf("endsRestoreFailureStreak(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
