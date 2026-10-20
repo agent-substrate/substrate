@@ -91,6 +91,28 @@ func CreateActorTemplate(ctx context.Context, client *ateclient.Client, template
 	return nil
 }
 
+// CreateActor creates an actor from template through the ate API, leaving an
+// existing actor in place so re-running deploy is idempotent.
+func CreateActor(ctx context.Context, client *ateclient.Client, actor resources.ActorRef, template resources.ActorTemplateRef) error {
+	_, err := client.CreateActor(ctx, &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: actor.Atespace,
+				Name:     actor.Name,
+			},
+			ActorTemplate: template.ToObjectRef(),
+		},
+	})
+	if status.Code(err) == codes.AlreadyExists {
+		log.Stepf("actor %s already exists; keeping it", actor)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("creating actor %s: %w", actor, err)
+	}
+	return nil
+}
+
 // WaitActorTemplateGolden blocks until the template's golden snapshot is
 // built. It fails fast when the template reconciler reports an error, and
 // returns immediately for a template that opted out of the golden snapshot.

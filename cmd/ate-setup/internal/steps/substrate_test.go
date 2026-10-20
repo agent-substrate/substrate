@@ -23,6 +23,8 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/internal/ateclient"
@@ -199,4 +201,45 @@ func TestWaitActorTemplateGoldenDisabledTemplateReady(t *testing.T) {
 	if err := WaitActorTemplateGolden(context.Background(), client, ref, 0); err != nil {
 		t.Fatalf("WaitActorTemplateGolden on a disabled template = %v, want nil", err)
 	}
+}
+
+type recordingCreateActorClient struct {
+	ateapipb.ControlClient
+	got *ateapipb.CreateActorRequest
+	err error
+}
+
+func (r *recordingCreateActorClient) CreateActor(_ context.Context, in *ateapipb.CreateActorRequest, _ ...grpc.CallOption) (*ateapipb.Actor, error) {
+	r.got = in
+	if r.err != nil {
+		return nil, r.err
+	}
+	return in.GetActor(), nil
+}
+
+func TestCreateActor(t *testing.T) {
+	actorRef := resources.ActorRef{Atespace: "claude-multiplex-demo", Name: "luna"}
+	tmplRef := resources.ActorTemplateRef{Atespace: "claude-multiplex-demo", Name: "agent-luna"}
+
+	t.Run("creates actor with template ref", func(t *testing.T) {
+		rec := &recordingCreateActorClient{}
+		client := &ateclient.Client{ControlClient: rec}
+		if err := CreateActor(context.Background(), client, actorRef, tmplRef); err != nil {
+			t.Fatalf("CreateActor = %v, want nil", err)
+		}
+		if got := resources.ActorRefFromActor(rec.got.GetActor()); got != actorRef {
+			t.Errorf("created actor ref = %s, want %s", got, actorRef)
+		}
+		if got := resources.ActorTemplateRefFromObjectRef(rec.got.GetActor().GetActorTemplate()); got != tmplRef {
+			t.Errorf("created actor template ref = %s, want %s", got, tmplRef)
+		}
+	})
+
+	t.Run("idempotent on AlreadyExists", func(t *testing.T) {
+		rec := &recordingCreateActorClient{err: status.Error(codes.AlreadyExists, "exists")}
+		client := &ateclient.Client{ControlClient: rec}
+		if err := CreateActor(context.Background(), client, actorRef, tmplRef); err != nil {
+			t.Fatalf("CreateActor on AlreadyExists = %v, want nil", err)
+		}
+	})
 }

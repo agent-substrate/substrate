@@ -35,5 +35,16 @@ metadata:
 spec:
   replicas: 2
   workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
+  template:
+    # One worker holding one actor: the limits are what it advertises as
+    # capacity, and they match one agent template's limits (1 CPU, 2Gi memory),
+    # so the 2-pod pool can host at most 2 running agents at once.
+    resources:
+      limits:
+        cpu: "1"
+        memory: 2Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
   sandboxClasses:
   - name: gvisor
