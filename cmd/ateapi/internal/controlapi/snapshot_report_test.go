@@ -564,8 +564,8 @@ func TestApplyAteletResponseState(t *testing.T) {
 
 		otherActorUID = "1a7e4c83-6d20-4f95-b3c8-9e0a2f6d4b17"
 	)
-	// previousPause is a pausing actor's status, holding the snapshot of the
-	// pause before, whose upload is pending.
+	// previousPause is a suspending actor's status, holding the snapshot of the
+	// async suspend before, whose upload is pending.
 	previousPause := func() *ateapipb.ActorStatus {
 		return &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
 			withDurable(t, 1, reportNode, pending),

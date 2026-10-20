@@ -170,9 +170,10 @@ func nextReport(t *testing.T, clk *clocktesting.FakeClock, workers *fakeReportSe
 	return got
 }
 
-// TestBackgroundUploadAndDetachAreReported pauses an actor and leaves it
-// paused: atelet reports the background upload of its snapshot, then its
-// background detach, to the control plane, for the actor its Checkpoint named.
+// TestBackgroundUploadAndDetachAreReported checkpoints an actor locally and
+// leaves it suspended: atelet reports the background upload of its snapshot,
+// then its background detach, to the control plane, for the actor its
+// Checkpoint named.
 func TestBackgroundUploadAndDetachAreReported(t *testing.T) {
 	a := runPluginActor(t)
 	clk := clocktesting.NewFakeClock(time.Now())

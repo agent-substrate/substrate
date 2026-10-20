@@ -1264,7 +1264,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		snap.SandboxRuntime = rt
 		return snap
 	}
-	// pauseUploadURI is where atelet uploads the pause snapshot.
+	// pauseUploadURI is where atelet uploads the local snapshot.
 	pauseUploadURI := someActorSnapshotURI(t, testStorageLocation, "team-a", localSnapshotName)
 	uploadedLocalSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
 		snap := localSnap(name, fidelity)
@@ -1284,7 +1284,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 
 	// actorSeed is the actor status a row persists before resuming.
 	type actorSeed struct {
-		// localSnapshot seeds a completed local snapshot (the pause checkpoint);
+		// localSnapshot seeds a completed local snapshot;
 		// a non-nil value also pins the actor to the snapshot's node.
 		localSnapshot *ateapipb.Snapshot
 		// externalSnapshot seeds a completed durable snapshot.
@@ -1493,8 +1493,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
-			// A pause snapshot's upload is PENDING until atelet reports it,
-			// but a local restore names it anyway, so atelet can download the
+			// An async suspend snapshot's upload is PENDING until atelet reports
+			// it, but a local restore names it anyway, so atelet can download the
 			// snapshot if it detached the actor before the report landed.
 			name: "13 Full pause snapshot restores locally as Full",
 			actor: actorSeed{
@@ -1591,7 +1591,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		},
 		{
 			// An older external snapshot's template mismatch does not affect a
-			// local pause restore captured under the current template.
+			// local restore captured under the current template.
 			name: "18 local snapshot ignores an older external snapshot's template mismatch",
 			actor: actorSeed{
 				localSnapshot: func() *ateapipb.Snapshot {
@@ -1741,7 +1741,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		},
 		{
 			// A recorded upload changes nothing: a local restore names the
-			// pause snapshot's upload whether or not it is COMPLETED.
+			// local snapshot's upload whether or not it is COMPLETED.
 			name: "25 uploaded pause snapshot restores locally and sends its upload",
 			actor: actorSeed{
 				localSnapshot: uploadedLocalSnap(localSnapshotName, fullScope),
@@ -1754,7 +1754,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// A local restore names the pause snapshot's upload, so a record
+			// A local restore names the local snapshot's upload, so a record
 			// that cannot name it fails, as a malformed durable snapshot URI
 			// does.
 			name:  "26 local snapshot with no upload recorded fails with DataLoss",
@@ -1807,7 +1807,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				t.Fatal("created template has no UID; the matching tmplUID case would be vacuous")
 			}
 
-			// Paused and suspended actors are both SUSPENDED; a pause
+			// Sync and async suspended actors are both SUSPENDED; a node-local
 			// checkpoint is what makes the resume local.
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 			var extGen, localGen int32
@@ -2578,8 +2578,8 @@ func seedMicroVMWorker(t *testing.T, ctx context.Context, st store.Interface, po
 }
 
 // seedActorWithSnapshot stores actor team-a/id1 in state holding snap as its
-// only snapshot. node is the AssignedNode a PAUSED actor keeps, which pins
-// its resume to that node.
+// only snapshot. node is the AssignedNode a suspended actor with a local
+// snapshot keeps.
 func seedActorWithSnapshot(t *testing.T, ctx context.Context, st store.Interface, state ateapipb.ActorState, node string, snap *ateapipb.Snapshot) *ateapipb.Actor {
 	t.Helper()
 	return storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
@@ -2720,7 +2720,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		ctx := context.Background()
 		st := newTestPersistence(t)
 		seedRuntimeWorker(t, ctx, st, "node1-incompatible", "node-1", arm64RT)
-		// A paused actor: SUSPENDED, pinned to its node by a local snapshot.
+		// A suspended actor with a local snapshot on node-1.
 		local := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1")
 		local.SandboxRuntime = amd64RT
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "node-1", local)
@@ -2729,7 +2729,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		if got := apierror.Code(err); got != codes.ResourceExhausted {
 			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.ResourceExhausted, err)
 		}
-		// Nothing was written: the actor waits for its node, still paused,
+		// Nothing was written: the actor waits for its node, still SUSPENDED,
 		// unassigned, and holding no claim anything would have to release.
 		after, err := st.GetActor(ctx, actorRef)
 		if err != nil {

@@ -567,7 +567,7 @@ func TestTrackerCommitPromoted(t *testing.T) {
 	}
 }
 
-// A promote of a paused actor's local snapshot leaves its detach schedule as
+// A promote of an actor's local snapshot leaves its detach schedule as
 // it is: the detach its checkpoint scheduled, or none for an actor whose Run
 // or Restore has begun since the snapshot was taken.
 func TestTrackerCommitPromotedKeepsDetachSchedule(t *testing.T) {

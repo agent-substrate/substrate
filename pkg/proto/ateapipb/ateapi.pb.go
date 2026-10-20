@@ -739,9 +739,9 @@ type Snapshot struct {
 	// +k8s:format=k8s-long-name
 	Locality string `protobuf:"bytes,6,opt,name=locality,proto3" json:"locality,omitempty"`
 	// durable_snapshot holds the durable storage representation of this snapshot.
-	// PENDING while the snapshot is uploaded, including a pause's snapshot that
-	// so far exists only on the node named by locality. COMPLETED once the
-	// upload is recorded.
+	// PENDING while the snapshot is uploaded, including an asynchronous suspend's
+	// snapshot that so far exists only on the node named by locality. COMPLETED
+	// once the upload is recorded.
 	//
 	// +k8s:optional
 	DurableSnapshot *SnapshotStorage `protobuf:"bytes,7,opt,name=durable_snapshot,json=durableSnapshot,proto3" json:"durable_snapshot,omitempty"`
@@ -2071,7 +2071,7 @@ type ActorStatus struct {
 	// +k8s:listMapKey=generation
 	Snapshots []*Snapshot `protobuf:"bytes,6,rep,name=snapshots,proto3" json:"snapshots,omitempty"`
 	// last_assigned_generation tracks the last snapshot generation assigned for
-	// this Actor during a Suspend or Pause request.
+	// this Actor during a Suspend request.
 	// Even during Revert, the generation is not decreased to keep track of snapshots
 	// that have become stale and need to be cleaned up.
 	//
@@ -3040,7 +3040,7 @@ type SnapshotConfig struct {
 	// +k8s:customValidation # Validate URI
 	StorageLocation string `protobuf:"bytes,1,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
 	// preferred_fidelity is the highest fidelity the system packages when it
-	// snapshots the actor, on pause (node-local) and on suspend (uploaded).
+	// snapshots the actor.
 	// It is a best-effort ceiling, not a guarantee: the system never packages
 	// more than this level, and it may package less when a layer cannot be
 	// captured or is too expensive to capture at the time, for example memory

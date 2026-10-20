@@ -202,8 +202,8 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 	onWorker := func(state ateapipb.ActorState) *ateapipb.ActorStatus {
 		return &ateapipb.ActorStatus{State: state, WorkerAssignment: &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: "worker-1"}}}
 	}
-	// pausingOnWorker is a pause in progress: SUSPENDING on worker-1 with a
-	// latest snapshot that is node-local and not yet captured.
+	// pausingOnWorker is an async suspend in progress: SUSPENDING on worker-1
+	// with a latest snapshot that is not yet captured.
 	pausingOnWorker := func() *ateapipb.ActorStatus {
 		status := onWorker(ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
 		status.AssignedNode = "node-1"
@@ -254,7 +254,7 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 			want:   codes.OK,
 		},
 		{
-			// Pause, suspend and crash release the worker before they clear the
+			// Suspend and crash release the worker before they clear the
 			// actor's status, which keeps naming the worker until they do.
 			name:        "running actor whose worker was released",
 			ctx:         authed,
@@ -364,8 +364,8 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 			want: codes.NotFound,
 		},
 		{
-			// MintWorkerActorJwt serves a paused actor's checkpoint node. No
-			// worker runs a paused actor, so no worker gets its certificate.
+			// MintWorkerActorJwt serves a node holding an actor's local snapshot. No
+			// worker runs a SUSPENDED actor, so no worker gets its certificate.
 			name:        "paused actor on this node",
 			ctx:         authed,
 			status:      pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"),
@@ -399,7 +399,7 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 			want:        codes.NotFound,
 		},
 		{
-			// An empty worker name must not match a paused actor's empty
+			// An empty worker name must not match a SUSPENDED actor's empty
 			// assignment.
 			name:        "paused actor, empty worker name",
 			ctx:         authed,

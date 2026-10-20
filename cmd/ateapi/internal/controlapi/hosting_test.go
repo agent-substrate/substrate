@@ -36,13 +36,13 @@ import (
 // doing so until the workflow is retried. The worker's node must not count as
 // hosting the actor in that window, nor once the worker hosts another actor.
 func TestHostingNodeAfterWorkerRelease(t *testing.T) {
-	// The worker is the one wireTestAssignment names, so a pause or suspend
+	// The worker is the one wireTestAssignment names, so an async or sync suspend
 	// reaches newWireCaptureWorkflow's fake atelet on its node.
 	wa := wireTestAssignment()
 	node := wa.GetNodeName()
 	// wantFinalNode is HostingNode once the retry commits, by workflow name.
 	wantFinalNode := map[string]string{
-		// Paused: the node holding the local snapshot.
+		// Async suspend: the node holding the local snapshot.
 		"pause": node,
 	}
 	for _, tc := range ReleaseWindowWorkflows() {

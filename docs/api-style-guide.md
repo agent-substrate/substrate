@@ -10,7 +10,7 @@ This guide is derived from [Google's AIP (API Improvement Proposals)](https://go
 
 *Follows [AIP-121](https://google.aip.dev/121).*
 
-APIs are structured around **resources** (nouns) and a small set of standard **methods** (verbs). Standard methods are Get, List, Create, Update, and Delete. **Custom methods** handle operations that don't fit these patterns (e.g., Suspend, Resume, Pause for Actors).
+APIs are structured around **resources** (nouns) and a small set of standard **methods** (verbs). Standard methods are Get, List, Create, Update, and Delete. **Custom methods** handle operations that don't fit these patterns (e.g., Suspend, Resume, Revert for Actors).
 
 Rules:
 - Every primary noun the API exposes is a resource.
@@ -333,7 +333,7 @@ allow external controllers and upstream systems / automations to react to resour
 
 *Follows [AIP-136](https://google.aip.dev/136).*
 
-Custom methods are for operations that don't map cleanly to CRUD: lifecycle transitions (Suspend, Resume, Pause), long-running actions, or commands with side effects that standard Update semantics would misrepresent.
+Custom methods are for operations that don't map cleanly to CRUD: lifecycle transitions (Suspend, Resume, Revert), long-running actions, or commands with side effects that standard Update semantics would misrepresent.
 
 ```proto
 rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}

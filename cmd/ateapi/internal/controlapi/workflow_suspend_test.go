@@ -612,10 +612,11 @@ func TestSuspendActor_Finalized_ReleasesReplacedSnapshot(t *testing.T) {
 	}
 }
 
-// TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot verifies that a
-// pause keeping the previous pause's upload collects the external snapshot
-// that upload replaced, and keeps the upload. The upload is recorded from the
-// pause's Checkpoint state, or before the pause from atelet's report.
+// TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot verifies that an
+// async suspend keeping the previous async suspend's upload collects the
+// external snapshot that upload replaced, and keeps the upload. The upload is
+// recorded from the Checkpoint state, or before the suspend from atelet's
+// report.
 func TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot(t *testing.T) {
 	const node = "node-1"
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
@@ -623,8 +624,8 @@ func TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot(t *testing.T) {
 	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
 	for _, tc := range []struct {
 		name string
-		// reported records the upload before the pause, as atelet's report
-		// does. Otherwise only the pause's Checkpoint state carries it.
+		// reported records the upload before the suspend, as atelet's report
+		// does. Otherwise only the suspend's Checkpoint state carries it.
 		reported bool
 	}{
 		{name: "recorded from the pause's Checkpoint state"},
@@ -647,8 +648,9 @@ func TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot(t *testing.T) {
 				},
 			})
 
-			// The actor suspended to old, paused to snap-2 and resumed from
-			// it, and is now pausing to snap-3. atelet has uploaded snap-2.
+			// The actor suspended to old, suspended asynchronously to snap-2 and
+			// resumed from it, and is now suspending asynchronously to snap-3.
+			// atelet has uploaded snap-2.
 			old := mustActorSnapshotURI(t, template, actor, "old")
 			paused := mustActorSnapshotURI(t, template, actor, "snap-2")
 			pausing := mustActorSnapshotURI(t, template, actor, "snap-3")
@@ -1445,9 +1447,9 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 		},
 		wantSnapshots: []snapshotOutcome{{generation: 1, fidelity: memory, durable: completed}, {generation: 2, fidelity: memory, locality: node, durable: pending}},
 	}, {
-		// A RUNNING actor resumed from a pause keeps that pause's snapshot,
-		// with its PENDING durable copy. atelet uploads it in the background,
-		// and the next pause records that.
+		// A RUNNING actor resumed from a local snapshot keeps that async
+		// suspend's snapshot, with its PENDING durable copy. atelet uploads it
+		// in the background, and the next async suspend records that.
 		name:   "async: the previous pause's upload atelet finished is recorded as COMPLETED",
 		mode:   suspendAsync,
 		status: &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{newPausedSnapshot(t, 1, memory, "", "snap-1", node)}},

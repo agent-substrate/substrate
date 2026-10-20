@@ -74,7 +74,7 @@ func TestFindLatestDurableAndLocalSnapshots(t *testing.T) {
 		t.Errorf("findLatestDurableSnapshot(COMPLETED) = %v, want gen 2 (gs://b/snap-2)", gotSnap)
 	}
 
-	// A paused snapshot's durable copy is PENDING until atelet uploads it.
+	// An async suspend snapshot's durable copy is PENDING until atelet uploads it.
 	gotSnap = findLatestDurableSnapshot(status, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
 	if gotSnap != s4 {
 		t.Errorf("findLatestDurableSnapshot(PENDING) = %v, want gen 4", gotSnap)
@@ -207,10 +207,9 @@ func TestSnapshotPruningHelpers(t *testing.T) {
 	})
 }
 
-// TestLatestSnapshotIsLocal pins the shape a paused actor has: the latest
-// snapshot is node-local, whether or not atelet has uploaded it. A latest
-// snapshot with only a durable copy, or a local one not captured yet, does not
-// count.
+// TestLatestSnapshotIsLocal pins when the actor's latest snapshot is
+// node-local, whether or not atelet has uploaded it. A latest snapshot with
+// only a durable copy, or a local one not captured yet, does not count.
 func TestLatestSnapshotIsLocal(t *testing.T) {
 	local := func(gen int32) *ateapipb.Snapshot {
 		return newPausedSnapshot(t, gen, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local", "node-1")

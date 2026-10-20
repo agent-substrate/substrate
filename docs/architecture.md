@@ -423,27 +423,28 @@ stateDiagram-v2
     [*] --> SUSPENDED : CreateActor
     SUSPENDED --> RESUMING : ResumeActor
     RESUMING --> RUNNING : restore / boot complete
-    RUNNING --> SUSPENDING : SuspendActor (sync)
+    RUNNING --> SUSPENDING : SuspendActor
     SUSPENDING --> SUSPENDED : checkpoint complete
-    RUNNING --> SUSPENDING : SuspendActor (async, the default: keeps the snapshot on the node)
     SUSPENDED --> [*] : DeleteActor
 ```
 
-A pause and a suspend both pass through `SUSPENDING`, and a paused actor and
-a suspended actor are both `SUSPENDED`. They differ only in the shape of
-`status.snapshots`:
+Both synchronous and asynchronous `SuspendActor` pass through `SUSPENDING`,
+leave the actor in `SUSPENDED`, and keep a local copy of the snapshot on the
+node (`locality`). They differ in when the snapshot is uploaded to object
+storage:
 
-  * After a pause (an asynchronous suspend), the latest snapshot has a
-    `locality` (the node holding its files) and a `PENDING`
-    `durableSnapshot`. `status.assignedNode` pins the actor to that node, so
-    `ResumeActor` restores it there from the local files.
-  * atelet uploads a paused actor's snapshot in the background
-    (`--snapshot-upload-delay`) and reports it, which marks the
-    `durableSnapshot` `COMPLETED`. `--snapshot-detach-delay` after the pause,
-    atelet deletes the local files and reports that too, which clears the
-    `locality` and `status.assignedNode`.
-  * After a synchronous suspend, the latest snapshot has a `COMPLETED`
-    `durableSnapshot` and the actor is pinned to no node.
+  * After an asynchronous suspend (the default), `SuspendActor` returns as soon
+    as the local checkpoint is written, with a `PENDING` `durableSnapshot`.
+    `atelet` uploads the snapshot in the background (`--snapshot-upload-delay`)
+    and reports it, which marks the `durableSnapshot` `COMPLETED`.
+  * After a synchronous suspend, `atelet` uploads the snapshot before
+    `SuspendActor` returns, so the `durableSnapshot` is immediately
+    `COMPLETED`.
+  * While the latest snapshot has `locality`, `ResumeActor` restores from the
+    local files on that node. `--snapshot-detach-delay` after the suspend (or
+    during `ResumeActor` when that node has no room), `atelet` deletes the
+    local files (uploading the snapshot first if needed), clearing `locality`
+    and `status.assignedNode`.
 
 `SuspendActor` on a `SUSPENDED` actor returns it as it is, in either mode.
 
@@ -485,10 +486,11 @@ Triggered by an explicit `SuspendActor` call.
 
   1. **Checkpoint**: The `atelet` instructs `ateworker` to freeze the process and capture a memory+disk snapshot.
 
-  2. **Persistence**: The `atelet` uploads the snapshot to durable storage
-     (e.g., GCS). With `DURABILITY_MODE_SYNCHRONOUS` the upload finishes before
-     `SuspendActor` returns. With the asynchronous default the snapshot stays
-     on the node and `atelet` uploads it in the background.
+  2. **Persistence**: The `atelet` keeps a local copy of the snapshot on the
+     node and uploads it to durable storage (e.g., GCS). With
+     `DURABILITY_MODE_SYNCHRONOUS` the upload finishes before `SuspendActor`
+     returns. With the asynchronous default `SuspendActor` returns once the
+     local checkpoint is written, and `atelet` uploads it in the background.
 
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
@@ -510,7 +512,7 @@ tags cannot be deleted until they are.
 
 ### Phase 4: Recovery (`RevertActor`) and Deletion (`DeleteActor`)
 
-An actor in `ACTOR_STATE_RUNNING` or `ACTOR_STATE_CRASHED`, or a paused actor (`ACTOR_STATE_SUSPENDED` with a node-local latest snapshot), can be reverted back to `ACTOR_STATE_SUSPENDED` at its durable snapshot via `RevertActor`. Reverting terminates any active sandbox, discards any local pause checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
+An actor in `ACTOR_STATE_RUNNING` or `ACTOR_STATE_CRASHED`, or an `ACTOR_STATE_SUSPENDED` actor with a node-local latest snapshot, can be reverted back to `ACTOR_STATE_SUSPENDED` at its durable snapshot via `RevertActor`. Reverting terminates any active sandbox, discards any node-local checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
 
 An actor in any state (such as `ACTOR_STATE_RUNNING`) can be deleted from the Control Plane. The workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
 

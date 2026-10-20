@@ -117,7 +117,7 @@ one **atespace**.
 | Create, update, delete access policies | ✅ | | ✅ (its own) | | |
 | Get and list actors, actor templates, tags, egress policies | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Create, update, delete actors and actor templates | ✅ | | ✅ | ✅ | |
-| Pause, resume, suspend, revert actors | ✅ | | ✅ | ✅ | |
+| Resume, suspend, revert actors | ✅ | | ✅ | ✅ | |
 | Create, update, delete egress policies | ✅ | | ✅ | ✅ | |
 | Create, publish, delete tags | ✅ | | ✅ | ✅ | |
 | Create an actor from a tag (`sourceTag`) | ✅ | | ✅ | ✅ | |

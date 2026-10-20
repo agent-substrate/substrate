@@ -151,9 +151,10 @@ func TestCreateTag_ReusedTagName(t *testing.T) {
 	}
 }
 
-// TestCreateTag_FromPausedActor verifies that tagging a paused actor has the
-// atelet on its node upload the node-local snapshot first, and tags that
-// snapshot. The actor keeps the snapshot on its node.
+// TestCreateTag_FromPausedActor verifies that tagging a suspended actor whose
+// local snapshot is not uploaded yet has the atelet on its node upload the
+// node-local snapshot first, and tags that snapshot. The actor keeps the
+// snapshot on its node.
 func TestCreateTag_FromPausedActor(t *testing.T) {
 	ns := namespaceForTest("ns-tag-paused")
 	tc := setupTest(t, ns)
@@ -209,7 +210,7 @@ func TestCreateTag_FromPausedActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	// The paused snapshot is now durable and stays on its node.
+	// The node-local snapshot is now durable and stays on its node.
 	if got := durableSnapshot(stored.GetStatus()); got.GetUuid() != pausedSnap.GetUuid() {
 		t.Errorf("latest durable snapshot = %v, want the paused snapshot %q", got, pausedSnap.GetUuid())
 	}

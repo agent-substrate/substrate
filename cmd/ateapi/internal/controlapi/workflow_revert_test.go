@@ -37,7 +37,7 @@ import (
 // SUSPENDED is the load-bearing rejection: it is revert's own destination, and
 // also what a suspend that won the race leaves behind, so accepting it would
 // report success for the opposite of what was asked. A SUSPENDED actor that
-// holds a node-local snapshot is paused, not reverted, and is accepted; see
+// holds a node-local snapshot is accepted; see
 // TestEnsureMarkedReverting_AcceptsPaused.
 func TestEnsureMarkedReverting_StateMatrix(t *testing.T) {
 	allowed := map[ateapipb.ActorState]bool{
@@ -71,9 +71,9 @@ func TestEnsureMarkedReverting_StateMatrix(t *testing.T) {
 	}
 }
 
-// TestEnsureMarkedReverting_AcceptsPaused verifies a paused actor (SUSPENDED
-// whose latest snapshot is node-local) takes the revert edge: the revert
-// discards that snapshot and returns the actor to its durable one.
+// TestEnsureMarkedReverting_AcceptsPaused verifies a SUSPENDED actor whose
+// latest snapshot is node-local takes the revert edge: the revert discards that
+// local copy and returns the actor to its durable snapshot.
 func TestEnsureMarkedReverting_AcceptsPaused(t *testing.T) {
 	ctx := context.Background()
 	st, cleanup := storetest.SetupTestStore(t)
@@ -107,7 +107,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		seedState ateapipb.ActorState
-		// paused seeds the paused shape: the latest snapshot is node-local
+		// paused seeds the local-snapshot shape: the latest snapshot is node-local
 		// and the actor is pinned to its node. Only meaningful with
 		// SUSPENDED, which the revert otherwise rejects.
 		paused bool
@@ -133,9 +133,10 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			}
 
 			// The snapshot revert must preserve, plus the node-local state a
-			// pause left behind, which it must not. A paused actor's latest
-			// snapshot is the completed local one; the other origins also carry
-			// the half-written local snapshot an interrupted pause leaves.
+			// suspend left behind, which it must not. The suspended actor's
+			// latest snapshot is the completed local one; the other origins
+			// also carry the half-written local snapshot an interrupted suspend
+			// leaves.
 			const keptURI = "gs://snapshots/team-a/actors/keep/snapshot"
 			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
 			mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
@@ -335,11 +336,11 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 	}
 }
 
-// TestRevertActor_PausedSnapshotAlreadyUploaded verifies a revert of a paused
-// actor whose snapshot atelet uploaded returns it to that upload, its latest
-// durable snapshot, and collects the durable snapshot the upload replaced. The
-// actor has no assigned node, so there is nothing to terminate, as in
-// TestRevertActor_ReturnsActorToItsSnapshot.
+// TestRevertActor_PausedSnapshotAlreadyUploaded verifies a revert of a
+// suspended actor whose local snapshot atelet uploaded returns it to that
+// upload, its latest durable snapshot, and collects the durable snapshot the
+// upload replaced. The actor has no assigned node, so there is nothing to
+// terminate, as in TestRevertActor_ReturnsActorToItsSnapshot.
 func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
@@ -495,8 +496,8 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 		// foreignInFlight records the in-progress snapshot under another
 		// owner's prefix, which no suspend can produce.
 		foreignInFlight bool
-		// earlierPause records an older PENDING snapshot: a pause whose upload
-		// atelet never reported before the actor resumed.
+		// earlierPause records an older PENDING snapshot: an async suspend whose
+		// upload atelet never reported before the actor resumed.
 		earlierPause              bool
 		wantInFlightDiscarded     bool
 		wantEarlierPauseDiscarded bool

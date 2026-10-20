@@ -205,11 +205,12 @@ func lifecycleSnapshot(actorUID, name string, generation int32, fidelity ateletp
 }
 
 // TestLocalSnapshotGC walks an actor through
-// run -> pause -> resume -> pause -> terminate over atelet's RPC surface and
-// ensures that superseded local snapshots are pruned by the next checkpoint
-// and all remaining state is garbage collected after the actor is terminated.
-// It runs at every fidelity atelet forwards, pinning that the pause and the
-// resume hand worker the fidelity the control plane asked for, unchanged.
+// run -> deferred checkpoint -> restore -> deferred checkpoint -> terminate
+// over atelet's RPC surface and ensures that superseded local snapshots are
+// pruned by the next checkpoint and all remaining state is garbage collected
+// after the actor is terminated. It runs at every fidelity atelet forwards,
+// pinning that the checkpoint and the restore hand worker the fidelity the
+// control plane asked for, unchanged.
 func TestLocalSnapshotGC(t *testing.T) {
 	for _, fidelity := range []ateletpb.SnapshotFidelity{
 		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
@@ -270,7 +271,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		t.Fatalf("Run: %v", err)
 	}
 
-	// Pause: a deferred checkpoint, which leaves the snapshot on this node.
+	// Async suspend: a deferred checkpoint, which leaves the snapshot on this node.
 	resp, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -289,8 +290,8 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 	if _, err := os.Stat(snapshotFile); err != nil {
 		t.Fatalf("pause did not write the local snapshot: %v", err)
 	}
-	// A paused actor stays resumable on this node, so it keeps its staged
-	// assets, and with them its binaries in the cache.
+	// An actor with a local snapshot stays resumable on this node, so it keeps
+	// its staged assets, and with them its binaries in the cache.
 	if _, err := os.Stat(stagedRunsc(actorUID)); err != nil {
 		t.Errorf("paused actor lost its staged runsc: %v", err)
 	}
@@ -335,7 +336,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		t.Fatalf("expected RestoreStateDir to remain empty on local pause restore, got entries=%v err=%v", entries, err)
 	}
 
-	// Second pause: must replace, not accumulate alongside, the first snapshot.
+	// Second deferred checkpoint: must replace, not accumulate alongside, the first snapshot.
 	if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -371,7 +372,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 	}
 
 	// Every RPC hands worker the same directory set, except that a local
-	// restore points restore_dir at the pause snapshot; the fake already
+	// restore points restore_dir at the local snapshot; the fake already
 	// relied on checkpoint_dir and restore_dir above to place and find it.
 	for _, rpc := range []string{"RunWorkload", "CheckpointWorkload", "RestoreWorkload", "TerminateWorkload"} {
 		want := ateletpath.ActorDirs(actorUID)
@@ -1058,7 +1059,7 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 }
 
 // TestTerminateWithoutWorkerPodUID verifies that Terminate with an empty
-// WorkerPodUid (used when cleaning up the assigned node for a paused or
+// WorkerPodUid (used when cleaning up the assigned node for a SUSPENDED or
 // crashed actor that no longer has a worker pod) skips dialing worker while
 // still pruning local checkpoints and removing actor directories on the node.
 func TestTerminateWithoutWorkerPodUID(t *testing.T) {
@@ -1592,7 +1593,7 @@ func TestTerminateWaitsForInFlightRPC(t *testing.T) {
 }
 
 // TestFailedCheckpointKeepsLocalSnapshot checkpoints a resumed actor again, and
-// fails before the new snapshot commits: the pause snapshot stays on disk and
+// fails before the new snapshot commits: the local snapshot stays on disk and
 // recorded as the actor's latest local snapshot, so the actor can still be
 // restored from it.
 func TestFailedCheckpointKeepsLocalSnapshot(t *testing.T) {
@@ -1669,10 +1670,10 @@ func TestFailedCheckpointKeepsLocalSnapshot(t *testing.T) {
 	}
 }
 
-// TestPromoteSnapshotRecordsUpload suspends a paused actor: the promote
-// records the uploaded snapshot as the latest durable one, with the pause's
-// commit time, and keeps the local copy on the node. A retry reports the same
-// state.
+// TestPromoteSnapshotRecordsUpload promotes a suspended actor's local snapshot:
+// the promote records the uploaded snapshot as the latest durable one, with the
+// checkpoint's commit time, and keeps the local copy on the node. A retry
+// reports the same state.
 func TestPromoteSnapshotRecordsUpload(t *testing.T) {
 	a := runPluginActor(t)
 	snap := a.snapshot("pause-snap-1", 1)
@@ -1851,7 +1852,7 @@ func TestTrackerStoreUploadLocalSnapshot(t *testing.T) {
 	}
 	st := &trackerStore{s: a.s}
 
-	// An upload asking for a fidelity other than the pause captured is
+	// An upload asking for a fidelity other than the checkpoint captured is
 	// rejected before uploading.
 	noFidelity := proto.CloneOf(snap)
 	noFidelity.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
@@ -1876,7 +1877,7 @@ func TestTrackerStoreUploadLocalSnapshot(t *testing.T) {
 	}
 }
 
-// TestRestoredActorIsNotDetached restores a paused actor from its local copy:
+// TestRestoredActorIsNotDetached restores an actor from its local copy:
 // once the actor runs on the node, atelet refuses to detach it.
 func TestRestoredActorIsNotDetached(t *testing.T) {
 	a := runPluginActor(t)
@@ -1890,9 +1891,10 @@ func TestRestoredActorIsNotDetached(t *testing.T) {
 	}
 }
 
-// TestFailedRestoreUnschedulesDetach fails a restore of a paused actor after
-// it began: as after a restore that succeeds, atelet keeps the actor's local
-// snapshot, and does not detach the actor until its next checkpoint.
+// TestFailedRestoreUnschedulesDetach fails a restore of an actor from its local
+// snapshot after it began: as after a restore that succeeds, atelet keeps the
+// actor's local snapshot, and does not detach the actor until its next
+// checkpoint.
 func TestFailedRestoreUnschedulesDetach(t *testing.T) {
 	a := runPluginActor(t)
 	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
@@ -1923,7 +1925,7 @@ func TestFailedRestoreUnschedulesDetach(t *testing.T) {
 	}
 }
 
-// TestRestoreAfterDetachReadsUpload resumes a paused actor that atelet
+// TestRestoreAfterDetachReadsUpload resumes a suspended actor that atelet
 // detached before the control plane recorded the upload, so the control plane
 // still sends the Restore here: atelet restores the actor from the upload the
 // request names.
@@ -1968,9 +1970,9 @@ func detachActorRequest() *ateletpb.DetachActorRequest {
 	return &ateletpb.DetachActorRequest{Atespace: "ate-demo", ActorName: "counter", ActorUid: pluginActorUID}
 }
 
-// TestDetachActorDetachesPausedActor detaches a paused actor through the RPC:
-// atelet uploads its local snapshot, deletes the local copy, and returns the
-// new state.
+// TestDetachActorDetachesPausedActor detaches a suspended actor through the
+// RPC: atelet uploads its local snapshot, deletes the local copy, and returns
+// the new state.
 func TestDetachActorDetachesPausedActor(t *testing.T) {
 	a := runPluginActor(t)
 	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
@@ -2123,8 +2125,8 @@ func (s *blockingTrackerStore) UploadLocalSnapshot(ctx context.Context, _ string
 	return false, ctx.Err()
 }
 
-// startBlockedDetach pauses the actor as pause-snap-1, and starts a Detach of
-// it whose upload blocks until the test ends.
+// startBlockedDetach checkpoints the actor locally as pause-snap-1, and starts
+// a Detach of it whose upload blocks until the test ends.
 func startBlockedDetach(t *testing.T, a *pluginActor) {
 	t.Helper()
 	store := &blockingTrackerStore{started: make(chan struct{}, 1)}
@@ -2206,10 +2208,10 @@ func TestPromoteSnapshotRecordsDetachWait(t *testing.T) {
 	}
 }
 
-// TestPromoteSnapshotFoundAlreadyUploaded promotes a paused actor's snapshot
-// whose upload committed before the promote, unrecorded, and whose local copy
-// is gone since: the promote records the snapshot as durable, without an
-// upload time, since it wrote nothing.
+// TestPromoteSnapshotFoundAlreadyUploaded promotes an asynchronously suspended
+// actor's snapshot whose upload committed before the promote, unrecorded, and
+// whose local copy is gone since: the promote records the snapshot as durable,
+// without an upload time, since it wrote nothing.
 func TestPromoteSnapshotFoundAlreadyUploaded(t *testing.T) {
 	a := runPluginActor(t)
 	snap := a.snapshot("pause-snap-1", 1)
@@ -2458,8 +2460,8 @@ func TestPromoteSnapshotWaitsForBackgroundUpload(t *testing.T) {
 	}
 }
 
-// TestCheckpointKeepsSnapshotBeingUploaded pauses a resumed actor while the
-// background upload of its previous pause snapshot still runs: the
+// TestCheckpointKeepsSnapshotBeingUploaded checkpoints a resumed actor locally
+// while the background upload of its previous local snapshot still runs: the
 // checkpoint's prune keeps that snapshot for the upload, which deletes it once
 // it ends.
 func TestCheckpointKeepsSnapshotBeingUploaded(t *testing.T) {
@@ -2509,7 +2511,7 @@ func TestCheckpointKeepsSnapshotBeingUploaded(t *testing.T) {
 }
 
 // TestImmediateCheckpointCancelsBackgroundUpload suspends a resumed actor with
-// an immediate upload while the background upload of its previous pause
+// an immediate upload while the background upload of its previous local
 // snapshot still runs: the checkpoint checkpoints the worker without waiting
 // for that upload, then cancels it, and returns only once it has stopped, so
 // the control plane can delete the older snapshot's objects.
@@ -2594,7 +2596,7 @@ func TestImmediateCheckpointCancelsBackgroundUpload(t *testing.T) {
 	}
 }
 
-// resumedWithPendingUpload runs a plugin actor, pauses it into pause-snap-1
+// resumedWithPendingUpload runs a plugin actor, checkpoints it into pause-snap-1
 // with a deferred upload, and resumes it from that snapshot's local copy
 // before the upload is due. It returns the actor, its gated tracker store, and
 // a func that steps the clock past the upload's due time and reports whether
@@ -2646,7 +2648,7 @@ func resumedWithPendingUpload(t *testing.T) (*pluginActor, *gatingTrackerStore, 
 }
 
 // TestImmediateCheckpointHoldsOffBackgroundUpload checkpoints an actor resumed
-// from its pause snapshot while that snapshot's background upload comes due:
+// from its local snapshot while that snapshot's background upload comes due:
 // under UPLOAD_MODE_IMMEDIATE the upload does not start, since the checkpoint
 // would only cancel it, while under UPLOAD_MODE_DEFERRED it starts.
 func TestImmediateCheckpointHoldsOffBackgroundUpload(t *testing.T) {
@@ -2674,7 +2676,7 @@ func TestImmediateCheckpointHoldsOffBackgroundUpload(t *testing.T) {
 }
 
 // TestTerminateHoldsOffBackgroundUpload terminates an actor resumed from its
-// pause snapshot, whose background upload comes due while the worker tears the
+// local snapshot, whose background upload comes due while the worker tears the
 // actor down: the upload does not start, since Terminate would only cancel it.
 // When the worker fails to tear the actor down, Terminate fails before it
 // forgets the actor, and the upload, still due, starts once Terminate returns.

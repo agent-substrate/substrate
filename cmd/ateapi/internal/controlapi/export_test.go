@@ -53,7 +53,7 @@ type ReleaseWindowWorkflow struct {
 	// Snapshot, when set, is the actor's latest snapshot.
 	Snapshot func(t *testing.T) *ateapipb.Snapshot
 	// Finalize runs the workflow or step that releases the worker and then
-	// records the actor's new state against st. Pause and suspend reach the
+	// records the actor's new state against st. Async and sync suspend reach the
 	// fake atelet newWireCaptureWorkflow serves for the worker
 	// WireTestAssignment names, so the actor must be assigned that worker
 	// and run from the template SeedSuspendTemplate stores.
@@ -64,11 +64,11 @@ type ReleaseWindowWorkflow struct {
 	WantFinalState ateapipb.ActorState
 }
 
-// ReleaseWindowWorkflows returns pause, suspend, crash, and a resume onto an
-// ineligible worker: the workflows that release a worker before rewriting the
-// actor's status while the actor is in a state HostingNode resolves through
-// the worker assignment. Revert and delete release theirs in REVERTING and
-// DELETING, which HostingNode never resolves to a node.
+// ReleaseWindowWorkflows returns async suspend ("pause"), sync suspend, crash,
+// and a resume onto an ineligible worker: the workflows that release a worker
+// before rewriting the actor's status while the actor is in a state HostingNode
+// resolves through the worker assignment. Revert and delete release theirs in
+// REVERTING and DELETING, which HostingNode never resolves to a node.
 func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 	// The workers these tests create carry no labels, so a template
 	// selecting a pool makes any of them ineligible.
@@ -80,10 +80,10 @@ func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 			Name:  "pause",
 			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 			Snapshot: func(t *testing.T) *ateapipb.Snapshot {
-				// A pause in progress: a PENDING durable copy, not yet captured.
+				// An async suspend in progress: a PENDING durable copy, not yet captured.
 				return newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "local-snap-1")
 			},
-			// The actor is seeded SUSPENDING, so the pause skips its mark step
+			// The actor is seeded SUSPENDING, so the suspend skips its mark step
 			// and its first actor update is the finalize commit.
 			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
 				w, _ := newWireCaptureWorkflow(t, st)
@@ -99,7 +99,7 @@ func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 			Snapshot: func(t *testing.T) *ateapipb.Snapshot {
 				return newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
 			},
-			// As for the pause, the finalize commit is the first actor update.
+			// As for the async suspend, the finalize commit is the first actor update.
 			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
 				w, _ := newWireCaptureWorkflow(t, st)
 				_, err := w.SuspendActor(ctx, actorRef, suspendSync)

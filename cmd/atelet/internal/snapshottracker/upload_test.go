@@ -512,7 +512,7 @@ func TestTrackerWithoutStoreSchedulesNoUploads(t *testing.T) {
 	}
 }
 
-// A local snapshot no upload can make durable, as a pause takes today, never
+// A local snapshot no upload can make durable (e.g. with no upload URI) never
 // comes due for a background upload, rather than failing it again and again.
 // A checkpoint that replaces it schedules an upload again.
 func TestTrackerSkipsUnuploadableSnapshots(t *testing.T) {
@@ -803,9 +803,9 @@ func TestTrackerBeginPromote(t *testing.T) {
 	}
 }
 
-// When a background upload of s1 fails after a pause replaced LatestLocal with
-// s2 (which has no object storage location), s1 stays in Uploading on disk and
-// is retried. Further pause checkpoints keep s1 on disk and preserve its
+// When a background upload of s1 fails after a checkpoint replaced LatestLocal
+// with s2 (which has no object storage location), s1 stays in Uploading on disk
+// and is retried. Further local checkpoints keep s1 on disk and preserve its
 // backoff, and once s1's retry succeeds, s1's local copy is deleted.
 func TestTrackerRetriesUploadingWhenLatestLocalHasNoObject(t *testing.T) {
 	store := newFakeSnapshotStore()
@@ -838,7 +838,7 @@ func TestTrackerRetriesUploadingWhenLatestLocalHasNoObject(t *testing.T) {
 		t.Fatalf("state after failed upload = %v, want s2 local, s1 uploading, due at %v", st, retryAt)
 	}
 
-	// Another pause checkpoint during backoff still keeps s1 and its backoff.
+	// Another local checkpoint during backoff still keeps s1 and its backoff.
 	s3 := testRef("s3", 3, tr.clock.Now())
 	s3.Snapshot.Object = nil
 	st = tr.CommitLocal(trackedActorUID, s3)
@@ -1278,7 +1278,7 @@ func TestTrackerUploadActsForTheActor(t *testing.T) {
 		if got := waitStarted(t, store); got != "s1" {
 			t.Fatalf("before started = %q, want s1", got)
 		}
-		// A pause snapshot no upload can make durable leaves s1 in Uploading,
+		// A local snapshot no upload can make durable leaves s1 in Uploading,
 		// so the resumed upload reads its actor from there.
 		s2 := testRef("s2", 2, t0.Add(time.Minute))
 		s2.Snapshot.Object = nil

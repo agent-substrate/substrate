@@ -1512,9 +1512,9 @@ func TestDeleteActor_StateDeleting(t *testing.T) {
 	}
 }
 
-// TestDeleteActor_Paused deletes a paused actor: a paused actor is SUSPENDED
-// (holding a node-local snapshot), and the delete terminates it on its
-// assigned node so the local snapshot is removed.
+// TestDeleteActor_Paused deletes an asynchronously suspended actor: it is
+// SUSPENDED (holding a node-local snapshot), and the delete terminates it on
+// its assigned node so the local snapshot is removed.
 func TestDeleteActor_Paused(t *testing.T) {
 	ns := namespaceForTest("ns-delete-paused")
 	tc := setupTest(t, ns)
@@ -1862,7 +1862,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	}
 	waitForWorkerAvailable(t, tc, workerName)
 
-	// 4. ResumeActor from paused
+	// 4. ResumeActor from node-local snapshot
 	waitForWorkerAvailable(t, tc, workerName)
 	resumeResp2, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
@@ -2861,7 +2861,7 @@ func TestSuspendActor_VolumeDetachFailure_DeleteActor(t *testing.T) {
 // 1. Creates a template with an external volume and a mock worker pod on node1.
 // 2. Creates and resumes an actor to ACTOR_STATE_RUNNING; verifies volume is attached to node1 and restore request carries node1 publishContext.
 // 3. Calls async SuspendActor; verifies volume is detached from node1 and actor transitions to ACTOR_STATE_SUSPENDED with a local snapshot.
-// 4. Calls ResumeActor from pause; verifies volume is re-attached to node1 and restore request carries node1 publishContext.
+// 4. Calls ResumeActor from local snapshot; verifies volume is re-attached to node1 and restore request carries node1 publishContext.
 // 5. Calls SuspendActor, replaces worker-1 (node1) with worker-2 (node2), and calls ResumeActor; verifies volume is attached to node2 and restore request carries node2 publishContext.
 // 6. Calls SuspendActor and DeleteActor; verifies volume is detached from node2 and deleted.
 func TestSuspendActorAsync_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) {
@@ -2945,7 +2945,7 @@ func TestSuspendActorAsync_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) 
 	plugin.mu.Unlock()
 	waitForWorkerAvailable(t, tc, workerName)
 
-	// 4. ResumeActor from pause: volume is re-attached to node1 and actor transitions to ACTOR_STATE_RUNNING.
+	// 4. ResumeActor from local snapshot: volume is re-attached to node1 and actor transitions to ACTOR_STATE_RUNNING.
 	tc.fakeAtelet.Reset()
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
@@ -2964,7 +2964,7 @@ func TestSuspendActorAsync_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) 
 		t.Errorf("actor state after retry = %v, want ACTOR_STATE_RUNNING", getResp.GetStatus().GetState())
 	}
 	plugin.mu.Lock()
-	// Should have attached twice: first resume + resume from pause
+	// Should have attached twice: first resume + resume from local snapshot
 	if diff := cmp.Diff([]string{"node1", "node1"}, plugin.attachedNodes); diff != "" {
 		t.Errorf("attached nodes after resume from pause mismatch (-want +got):\n%s", diff)
 	}
@@ -3780,7 +3780,7 @@ func TestResumeActor_AteletTransportErrorLeavesActorResuming(t *testing.T) {
 }
 
 // TestResumeActor_LocalRestoreFailureCrashesActor: an atelet error restoring a
-// paused actor from its local snapshot crashes it and releases its worker.
+// suspended actor from its local snapshot crashes it and releases its worker.
 func TestResumeActor_LocalRestoreFailureCrashesActor(t *testing.T) {
 	ns := namespaceForTest("ns-resume-local-crash")
 	tc := setupTest(t, ns)
@@ -4425,9 +4425,9 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 }
 
 // TestResumeActor_PausedAfterRepointUsesLocalProvenance verifies that an actor
-// paused after a template repoint restores from its pause checkpoint in FULL,
-// not DATA. At that point the actor holds an external snapshot captured on v1
-// and a local checkpoint captured on v2; judging the local restore by the
+// suspended after a template repoint restores from its local checkpoint in
+// FULL, not DATA. At that point the actor holds an external snapshot captured
+// on v1 and a local checkpoint captured on v2; judging the local restore by the
 // external snapshot's provenance would wrongly discard the v2 memory image.
 func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 	ns := namespaceForTest("ns-repoint-pause")
@@ -4469,8 +4469,8 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 	}
 
 	// Resume on v2 (this restore is DATA, from the v1 external snapshot), then
-	// pause; the pause checkpoint is captured on v2 while the external
-	// snapshot still says v1.
+	// suspend asynchronously; the local checkpoint is captured on v2 while the
+	// external snapshot still says v1.
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("ResumeActor(v2 from v1 snapshot) failed: %v", err)
 	}
@@ -4487,8 +4487,8 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 	}
 	waitForWorkerAvailable(t, tc, worker)
 
-	// Resume from pause: the local checkpoint was captured on v2 and the
-	// actor's template is v2, so the restore must be FULL.
+	// Resume from local snapshot: the local checkpoint was captured on v2 and
+	// the actor's template is v2, so the restore must be FULL.
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("ResumeActor(from v2 pause) failed: %v", err)
 	}
@@ -4971,9 +4971,9 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 }
 
 // TestResumeActor_PausedLocalSnapshotMissing_Crashes tests that if the local checkpoint
-// files on the worker node are missing (e.g. node reboot, /tmp wipe) when resuming a paused actor,
-// atelet returns a terminal file system error and ateapi marks the actor ACTOR_STATE_CRASHED
-// while releasing the assigned worker pod.
+// files on the worker node are missing (e.g. node reboot, /tmp wipe) when resuming a
+// suspended actor from its local snapshot, atelet returns a terminal file system error
+// and ateapi marks the actor ACTOR_STATE_CRASHED while releasing the assigned worker pod.
 func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
 	ns := namespaceForTest("ns-resume-paused-missing")
 	tc := setupTest(t, ns)
@@ -5588,8 +5588,8 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 }
 
 // TestSuspendActor_FromPaused verifies SuspendActor, in either mode, returns a
-// paused actor as it is: atelet is not called, and the actor keeps its
-// node-local snapshot and stays pinned to its node.
+// suspended actor as it is: atelet is not called, and the actor keeps its
+// node-local snapshot on its node.
 func TestSuspendActor_FromPaused(t *testing.T) {
 	tests := []struct {
 		name string
@@ -5630,8 +5630,8 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 			if localSnapshot(paused.GetStatus()) == nil {
 				t.Fatal("paused actor has no local snapshot")
 			}
-			// Drop the pause's Checkpoint call so the suspend's atelet traffic is
-			// observable in isolation.
+			// Drop the first suspend's Checkpoint call so the second suspend's
+			// atelet traffic is observable in isolation.
 			tc.fakeAtelet.Reset()
 
 			suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: ref, Options: tt.opts})
@@ -5847,8 +5847,8 @@ func TestSuspendActor_SnapshotConflictPreservesState(t *testing.T) {
 	}
 }
 
-// TestCheckpointFailureCrashes: an atelet Checkpoint error while pausing or
-// suspending a running actor crashes it, records atelet's error text, and
+// TestCheckpointFailureCrashes: an atelet Checkpoint error while suspending a
+// running actor (in either mode) crashes it, records atelet's error text, and
 // releases its worker.
 func TestCheckpointFailureCrashes(t *testing.T) {
 	tests := []struct {
@@ -5928,9 +5928,9 @@ func TestCheckpointFailureCrashes(t *testing.T) {
 }
 
 // TestResumeActor_RelocatesAfterDetach covers the capacity-recovery flow: a
-// paused actor is pinned to the node holding its local snapshot, so it cannot
-// resume while that node is full. Once atelet reports the snapshot uploaded and
-// detached from the node, the pin is dropped and the actor is scheduled onto a
+// suspended actor with a local snapshot is placed on the node holding its
+// local snapshot. Once atelet reports the snapshot uploaded and detached from
+// the node, the node placement is cleared and the actor is scheduled onto a
 // worker on a different node.
 func TestResumeActor_RelocatesAfterDetach(t *testing.T) {
 	ns := namespaceForTest("ns-resume-relocate")
@@ -5950,8 +5950,9 @@ func TestResumeActor_RelocatesAfterDetach(t *testing.T) {
 		}
 	}
 
-	// The actor under test runs on node1's only worker, then pauses — which
-	// frees that worker but pins the actor to node1 via LocalSnapshot.
+	// The actor under test runs on node1's only worker, then suspends
+	// asynchronously — which frees that worker but pins the actor to node1 via
+	// the local snapshot.
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
 	}); err != nil {
@@ -5989,7 +5990,7 @@ func TestResumeActor_RelocatesAfterDetach(t *testing.T) {
 	createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
 	setupAteletOnNode(t, tc, "atelet-node2", "node2")
 
-	// node1's atelet reports the paused snapshot uploaded and detached: a report
+	// node1's atelet reports the local snapshot uploaded and detached: a report
 	// with only latest_durable.
 	ls := localSnapshot(paused.GetStatus())
 	if err := tc.service.ApplyActorSnapshotState(context.Background(), resources.ActorRefFromActor(paused), paused.GetMetadata().GetUid(), "node1", &ateapipb.ActorSnapshotState{
@@ -6034,7 +6035,7 @@ func TestResumeActor_RelocatesAfterDetach(t *testing.T) {
 	}
 }
 
-// TestResumeActor_DetachesFromFullNode resumes a paused actor whose node is
+// TestResumeActor_DetachesFromFullNode resumes a suspended actor whose node is
 // full while another has room: it is detached and restored on the other node.
 func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 	ns := namespaceForTest("ns-resume-detach")
@@ -6108,7 +6109,7 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 }
 
 // TestLifecycleOpPoolAttributesOnSuccess is the regression test for #957: a
-// successful suspend and pause must stamp the pool they ran on. Both recorded
+// successful sync or async suspend must stamp the pool it ran on. Both recorded
 // the histogram from a defer that read the finalized record, whose assignment
 // the finalize step had already cleared, so the pair landed only on failures.
 func TestLifecycleOpPoolAttributesOnSuccess(t *testing.T) {
@@ -6544,8 +6545,9 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 	}
 }
 
-// TestRevertActor_FromPaused reverts a paused actor back to its external
-// snapshot, discarding the local pause snapshot info on the actor record.
+// TestRevertActor_FromPaused reverts a suspended actor with a local snapshot
+// back to its external snapshot, discarding the local snapshot info on the
+// actor record.
 func TestRevertActor_FromPaused(t *testing.T) {
 	ns := namespaceForTest("ns-revert-paused")
 	tc := setupTest(t, ns)
@@ -7001,7 +7003,8 @@ func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defau
 //  4. When the other worker advertises the snapshot's runtime in
 //     restorable_runtimes, ResumeActor restores at full MEMORY fidelity,
 //     records the matched restorable runtime on WorkerAssignment, and preserves
-//     that stamp through async SuspendActor and sync SuspendActor-from-PAUSED.
+//     that stamp through async SuspendActor and sync SuspendActor on an
+//     already-SUSPENDED actor.
 func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	ns := namespaceForTest("ns-runtime-fallback")
 	tc := setupTest(t, ns)
@@ -7222,7 +7225,8 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	// keeping rtB as its default. Resuming an actor whose snapshot requires rtA
 	// onto worker-b (with worker-a still full) must restore at MEMORY fidelity,
 	// record the matched restorable entry (rtA, not rtB) on WorkerAssignment,
-	// and preserve rtA through async SuspendActor and sync SuspendActor-from-PAUSED.
+	// and preserve rtA through async SuspendActor and sync SuspendActor on the
+	// already-SUSPENDED actor.
 	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: goldenActorRef}); err != nil {
 		t.Fatalf("SuspendActor(golden-actor) failed: %v", err)
 	}
@@ -7260,8 +7264,8 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 		t.Fatalf("paused local Snapshot.SandboxRuntime = %v, want %v", got, rtA)
 	}
 
-	// A sync suspend of the paused actor returns it as it is: the node-local
-	// snapshot keeps its runtime stamp.
+	// A sync suspend of the already-SUSPENDED actor returns it as it is: the
+	// node-local snapshot keeps its runtime stamp.
 	suspendedFromPaused, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: restorableRef, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
 	if err != nil {
 		t.Fatalf("SuspendActor from PAUSED(restorable-actor) failed: %v", err)

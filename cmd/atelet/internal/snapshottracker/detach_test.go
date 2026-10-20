@@ -334,7 +334,7 @@ func TestTrackerDetach(t *testing.T) {
 	}
 }
 
-// A local snapshot no detach can make durable, as a pause takes today, never
+// A local snapshot no detach can make durable (e.g. with no upload URI) never
 // comes due for a background detach, rather than failing it again and again.
 // A checkpoint that replaces it schedules a detach again.
 func TestTrackerSkipsUndetachableSnapshots(t *testing.T) {

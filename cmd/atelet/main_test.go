@@ -1272,7 +1272,7 @@ func (r *recordingObjectStorage) keys() []string {
 	return keys
 }
 
-// writeLocalSnapshot lays a local pause snapshot out in dir: the given files
+// writeLocalSnapshot lays a node-local snapshot out in dir: the given files
 // plus the marshaled manifest beside them.
 func writeLocalSnapshot(t *testing.T, dir string, rec sandboxAssetsRecord, contents map[string]string) {
 	t.Helper()

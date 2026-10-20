@@ -168,9 +168,9 @@ func TestActorStateChangeRecords(t *testing.T) {
 	}
 }
 
-// markOnly runs a suspend or pause on a RUNNING actor only as far as its mark
-// step: the actor gets a worker to checkpoint on, but the atelet dial fails,
-// so the SUSPENDING mark is the only transition the workflow commits.
+// markOnly runs a suspend (sync or async) on a RUNNING actor only as far as its
+// mark step: the actor gets a worker to checkpoint on, but the atelet dial
+// fails, so the SUSPENDING mark is the only transition the workflow commits.
 func markOnly(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, mode suspendMode) {
 	t.Helper()
 	ctx := context.Background()

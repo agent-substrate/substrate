@@ -83,18 +83,15 @@ for etcd.
 ## Lifecycle
 
 - **Suspend**: hibernate a running Actor into a snapshot. The Actor is
-  checkpointed on its Worker, which is then freed. A synchronous suspend
-  uploads the snapshot to external storage before it returns; an asynchronous
-  one is a Pause. Suspending an Actor that is already suspended or paused
-  returns it as it is.
+  checkpointed on its Worker, which is then freed. Snapshot files remain on the
+  node VM so the following Resume can restore from them locally (until `atelet`
+  or a Resume detaches them), and are also uploaded to external storage: a
+  synchronous suspend uploads the snapshot before it returns, while an
+  asynchronous suspend (the default) returns once the local snapshot is captured
+  and `atelet` uploads it in the background. Suspending an Actor that is already
+  suspended returns it as it is.
 
-- **Pause**: a short-term checkpoint of a running Actor, taken by an
-  asynchronous suspend. Snapshot files remain on the node VM, and the following
-  Resume is prioritized onto the node VM where the snapshots are persisted.
-  atelet uploads the snapshot to external storage in the background, and ends
-  the node pinning once it deletes the local files.
-
-- **Resume**: activate a suspended/paused Actor by restoring it onto a Worker. The
+- **Resume**: activate a suspended Actor by restoring it onto a Worker. The
   common path restores from a snapshot rather than cold-booting.
 
 ## Volumes
@@ -125,8 +122,8 @@ for etcd.
 
   Fidelity describes only what a snapshot *holds*. A template sets one
   level, `preferredFidelity`, the ceiling for every snapshot of its actors:
-  the node-local checkpoint a [Pause](#lifecycle) keeps on the node and the
-  snapshot a [Suspend](#lifecycle) uploads to snapshot storage. It is best
+  both the node-local checkpoint a [Suspend](#lifecycle) keeps on the node and
+  the snapshot uploaded to snapshot storage. It is best
   effort: the system never packages more than that level, and may package
   less when a layer cannot be captured or is too expensive to capture at
   the time. A process resumed in place keeps its memory regardless.

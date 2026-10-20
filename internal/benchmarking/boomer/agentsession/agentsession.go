@@ -633,9 +633,9 @@ type sessionUser struct {
 	// ingestBuf is the runtime's shared read-only ingest payload.
 	ingestBuf []byte
 	// awake is true when the actor is resident (RUNNING) rather than
-	// suspended or paused. Zero value (false) means parked.
+	// suspended. Zero value (false) means parked.
 	awake bool
-	// hibernatePending is set by a failed Pause/Suspend: the actor is
+	// hibernatePending is set by a failed SuspendActor: the actor is
 	// stranded RUNNING or SUSPENDING. Waking it from there would misreport
 	// WakeFirstTouch, so runStep finishes the hibernate first.
 	hibernatePending bool

@@ -533,8 +533,9 @@ func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapi
 	}
 }
 
-// newPausedSnapshot is the snapshot a pause leaves on node locality: its
-// durable copy, under the actor's own prefix, is PENDING until atelet uploads it.
+// newPausedSnapshot is the snapshot an asynchronous suspend leaves on node
+// locality: its durable copy, under the actor's own prefix, is PENDING until
+// atelet uploads it.
 func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, actorUID, uuid, locality string) *ateapipb.Snapshot {
 	t.Helper()
 	uri, err := resources.NewActorSnapshotURI(testStorageLocation, testAtespace, actorUID, uuid)

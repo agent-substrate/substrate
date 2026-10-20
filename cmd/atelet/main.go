@@ -1158,8 +1158,9 @@ func (s *Atelet) cleanUpAfterCheckpoint(ctx context.Context, req *ateletpb.Check
 	// Do not move this above CheckpointWorkload to keep MergeDeltaIntoBase on its
 	// in-place path: that leaves the whole checkpoint window with no local snapshot
 	// while LocalSnapshotInfo still names the pruned one, and a crash there strands
-	// the actor for good (a paused actor has no uploaded copy for resume to fall
-	// back to, RequiredNodes pins it to this node, nothing clears the field).
+	// the actor for good (before the background upload completes, the actor has no
+	// uploaded copy for resume to fall back to, RequiredNodes pins it to this node,
+	// and nothing clears the field).
 	//
 	// Best-effort: if this fails, the actor's next checkpoint or terminate
 	// prunes again.
@@ -1328,11 +1329,11 @@ func (s *Atelet) uploadSnapshot(ctx context.Context, actor actorRef, uri resourc
 	return nil
 }
 
-// PromoteSnapshot uploads a paused actor's local checkpoint to object
-// storage so the actor can be suspended and is no longer tied to this node. It
-// drives no worker — the actor's sandbox is gone; the checkpoint files and their
-// self-describing manifest already sit under the actor's local-checkpoints
-// directory, written by an earlier local Checkpoint (pause).
+// PromoteSnapshot uploads a suspended actor's local checkpoint to object
+// storage while keeping the local copy on this node (e.g. for CreateTag). It
+// drives no worker — the actor's sandbox is gone; the checkpoint files and
+// their self-describing manifest already sit under the actor's
+// local-checkpoints directory, written by an earlier Checkpoint.
 func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (_ *ateletpb.PromoteSnapshotResponse, err error) {
 	if errs := apivalidation.ValidatePromoteSnapshotRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
@@ -1343,7 +1344,7 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
-		// Uploading a paused checkpoint creates a durable latest snapshot.
+		// Uploading a local checkpoint creates a durable latest snapshot.
 		kind:     ateattr.SnapshotKindLatest,
 		fidelity: ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
 	}
@@ -1440,14 +1441,13 @@ func (s *Atelet) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.Pro
 
 	capturedFidelity := rec.Fidelity
 	if capturedFidelity == "" {
-		return rec.SandboxClass, false, apierror.FailedPrecondition("local snapshot %q has no fidelity recorded in its manifest; resume and pause the actor again before suspending it", localSnapshotName)
+		return rec.SandboxClass, false, apierror.FailedPrecondition("local snapshot %q has no fidelity recorded in its manifest; resume and suspend the actor again", localSnapshotName)
 	}
-	// Pause and suspend capture the template's one preferred fidelity, and a
-	// paused actor's template cannot change, so the upload is always of what
-	// the pause captured. A mismatch means the store or the control plane
-	// drifted; refuse rather than guess.
+	// Every suspend records the fidelity it captured on the snapshot, so the
+	// upload is always of what the checkpoint captured. A mismatch means the
+	// store or the control plane drifted; refuse rather than guess.
 	if desiredFidelity := ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()); capturedFidelity != desiredFidelity {
-		return rec.SandboxClass, false, apierror.FailedPrecondition("pause snapshot captured %s; upload asks for %s", capturedFidelity, desiredFidelity)
+		return rec.SandboxClass, false, apierror.FailedPrecondition("local snapshot captured %s; upload asks for %s", capturedFidelity, desiredFidelity)
 	}
 
 	// The local snapshot stays until the upload succeeds, so a retry can
@@ -1866,7 +1866,7 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 		return nil, fmt.Errorf("failed to unmount external volumes during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 
-	// The actor is gone, so no pause snapshot of it can ever be restored again.
+	// The actor is gone, so no local snapshot of it can ever be restored again.
 	// Forget cancels the actor's background upload or detach in progress and
 	// waits for it to end before this prunes the actor's files.
 	// TODO(#664): this only removes local snapshots in one node. We should clean

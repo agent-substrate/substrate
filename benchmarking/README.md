@@ -371,9 +371,10 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
   gap gets ±20% jitter so sessions don't move in lockstep.
 * `--resume-mode implicit|explicit` — implicit (default) lets the parked
   first request wake the actor; explicit issues ResumeActor before traffic.
-* `--lifecycle-mode suspend|pause|none` — durable suspend (default),
-  node-local pause between steps, or `none` to keep actors resident in memory
-  between steps without hibernating.
+* `--lifecycle-mode suspend|pause|none` — synchronous suspend (`suspend`,
+  default, uploads the snapshot before returning), asynchronous suspend
+  (`pause`, uploads the snapshot in the background), or `none` to keep actors
+  resident in memory between steps without hibernating.
 * `--agentsession-snapshot-steps` — comma-separated 1-based step numbers after
   which the actor is hibernated (for example, `3,10,20,30,40,50,61`); between
   all other steps the actor stays resident.
@@ -539,26 +540,26 @@ count users × `--actors-per-user`, not `--total-actors`.
 ### ResumePaused Benchmark
 
 The ResumePaused benchmark drives ate-api-server's cold resume path at a set
-rate. A cold resume here is a ResumeActor of a paused actor: ateapi takes the
+rate. A cold resume here is a ResumeActor of a suspended actor: ateapi takes the
 actor lease, binds a worker, and restores the actor from its snapshot. A
 ResumeActor of a running actor does none of that. Each user owns one actor
 from the `glutton` template. On its first iteration the user creates the actor
-and makes it cold with a resume and a pause; every later iteration resumes the
-actor and pauses it again, so every measured resume is cold.
+and makes it cold with a resume and a suspend; every later iteration resumes the
+actor and suspends it again, so every measured resume is cold.
 
 The warm-up runs in the step that added the user, unpaced, and is recorded
 under its own names.
 
 It sends no requests to the actors themselves, so it runs on the fake data
 plane, where it measures what a cold resume costs ate-api-server and Postgres
-without the router or the restore in the way. The pauses run at the resume
-rate, so a capacity it finds is one of resume and pause cycles, not of resumes
+without the router or the restore in the way. The suspends run at the resume
+rate, so a capacity it finds is one of resume and suspend cycles, not of resumes
 alone.
 
 Actors are named `rp-<uuid>` and deleted when boomer exits. If the atespace
 cannot be ensured, boomer exits at startup. An actor that fails to warm is
 deleted, and its user creates another on its next iteration. When a step lowers
-the user count, the actors of the stopped users stay paused, unused, until
+the user count, the actors of the stopped users stay suspended, unused, until
 boomer exits.
 
 #### ResumePaused Configuration Knobs
@@ -566,7 +567,7 @@ boomer exits.
 * `--target-rps`: Cold resumes per second the whole boomer process paces to
   (default `0`, unpaced). A `--ladder` step ending in `@target_rps`, as in
   `200:3m@1000`, changes it as the step starts. Keep the users at or above the
-  rate times the p99 of one resume plus one pause in seconds, or the step falls
+  rate times the p99 of one resume plus one suspend in seconds, or the step falls
   short of its rate.
 
 The web UI shows the same field.
@@ -792,9 +793,9 @@ actually did, independent of what the load generator reported.
 * `snapshots.restore_p50_s` through `restore_p99_s`, `restore_mean_s`, and the
   same for `checkpoint_*`: how long the atelet took to resume or suspend an
   actor (`ate_actor_{restore,checkpoint}_duration`, `total` phase). Every
-  snapshot kind counts, as in the sizes: the actor's own snapshot, a
-  template's first start from its golden snapshot, and a pause. The buckets
-  reach 60s, so a slower operation reads as 60s.
+  snapshot kind counts, as in the sizes: the actor's own snapshot and a
+  template's first start from its golden snapshot. The buckets reach 60s, so a
+  slower operation reads as 60s.
 * `snapshots.checkpoints_in_window`, `checkpoints_cumulative`: checkpoint
   volume over the steady-state window, and since the atelet started.
 * `snapshots.checkpoint_mb_s`: bytes written per second spent checkpointing,

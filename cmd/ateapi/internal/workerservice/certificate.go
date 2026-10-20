@@ -56,16 +56,17 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapipb.M
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
 	}
 	// Only the assigned worker may mint, via its node's atelet, checked before the
-	// UID so other callers get NotFound. Unlike MintWorkerActorJwt, a paused actor
-	// gets NotFound too: it has no worker to bind the certificate to.
+	// UID so other callers get NotFound. Unlike MintWorkerActorJwt, a SUSPENDED
+	// actor gets NotFound too: it has no worker to bind the certificate to.
 	if err := s.checkActorOnNode(ctx, dbActor, caller.NodeName, "certificate"); err != nil {
 		return nil, err
 	}
 	// The status must name the requesting worker. When it names one,
 	// checkActorOnNode has confirmed in the store's worker assignments that
-	// this worker holds the actor. When it names none (a paused actor, or a
-	// resume that has bound a worker but not yet recorded it), checkActorOnNode
-	// read assigned_node alone, and no worker runs the actor yet.
+	// this worker holds the actor. When it names none (a SUSPENDED actor on
+	// assigned_node, or a resume that has bound a worker but not yet recorded
+	// it), checkActorOnNode read assigned_node alone, and no worker runs the
+	// actor yet.
 	if assigned := dbActor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); assigned == "" || assigned != req.GetWorker().GetName() {
 		slog.WarnContext(ctx, "Refusing a worker-for-actor certificate for an actor not assigned to the calling worker",
 			slog.String("actor", resources.ActorRefFromActor(dbActor).String()),

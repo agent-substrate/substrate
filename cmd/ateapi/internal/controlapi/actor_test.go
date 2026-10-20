@@ -361,8 +361,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Fatalf("UpdateActor repointing a running actor = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
-	// Repointing a paused actor is allowed while suspended, even when it holds
-	// a node-local snapshot.
+	// Repointing a suspended actor is allowed even when it holds a node-local
+	// snapshot.
 	for _, name := range []string{"paused-actor", "uploaded-paused-actor"} {
 		paused := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
@@ -468,10 +468,10 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		name     string
 		template string
 		snapshot func(*testing.T, *ateapipb.Actor) string
-		// pending leaves the snapshot's upload PENDING, as a pause does.
+		// pending leaves the snapshot's upload PENDING, as an async suspend does.
 		pending bool
 		// lastAssignedGen overrides status.LastAssignedGeneration when > 0
-		// (e.g. after a reverted pause or crashed suspend pruned a higher
+		// (e.g. after a reverted or crashed suspend pruned a higher
 		// pending generation).
 		lastAssignedGen int32
 		repointTo       string

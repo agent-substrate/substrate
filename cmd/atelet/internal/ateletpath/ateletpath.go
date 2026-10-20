@@ -154,7 +154,7 @@ func LocalCheckpointsDir(actorUID string) string {
 	)
 }
 
-// LocalSnapshotDir is the directory holding one named local (pause) snapshot
+// LocalSnapshotDir is the directory holding one named node-local snapshot
 // of an actor: the checkpoint files plus their manifest.
 func LocalSnapshotDir(actorUID, snapshotName string) string {
 	return filepath.Join(LocalCheckpointsDir(actorUID), snapshotName)

@@ -381,9 +381,9 @@ type AteletClient interface {
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
 	// PromoteSnapshot makes `snapshot` durable in object storage while keeping
 	// its local copy on this node. Used when a snapshot needs to be in object
-	// storage (e.g. for tagging) without evicting the paused actor from the
-	// node. Waits for an in-flight detach, and fails for an actor running on
-	// this node.
+	// storage (e.g. for tagging) without evicting the suspended actor's local
+	// snapshot from the node. Waits for an in-flight detach, and fails for an
+	// actor running on this node.
 	//
 	// Idempotent: once the snapshot is durable, atelet answers from the
 	// manifest at `snapshot.object`, and fails if there is none.
@@ -506,9 +506,9 @@ type AteletServer interface {
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	// PromoteSnapshot makes `snapshot` durable in object storage while keeping
 	// its local copy on this node. Used when a snapshot needs to be in object
-	// storage (e.g. for tagging) without evicting the paused actor from the
-	// node. Waits for an in-flight detach, and fails for an actor running on
-	// this node.
+	// storage (e.g. for tagging) without evicting the suspended actor's local
+	// snapshot from the node. Waits for an in-flight detach, and fails for an
+	// actor running on this node.
 	//
 	// Idempotent: once the snapshot is durable, atelet answers from the
 	// manifest at `snapshot.object`, and fails if there is none.

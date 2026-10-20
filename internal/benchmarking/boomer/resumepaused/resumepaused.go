@@ -13,13 +13,13 @@
 // limitations under the License.
 
 // Package resumepaused drives ate-api-server's cold resume path: every
-// ResumeActor targets a paused actor, so ateapi takes the actor lease, binds
-// a worker, and waits on an atelet restore. Each resume is followed by a
-// pause that makes the actor cold again. Run on the fake data plane
+// ResumeActor targets a suspended actor, so ateapi takes the actor lease,
+// binds a worker, and waits on an atelet restore. Each resume is followed by a
+// suspend that makes the actor cold again. Run on the fake data plane
 // (benchmarking/workloads/deploy.sh --fake-data-plane), it measures what a
 // cold resume costs ateapi and Postgres without the router or the restore in
-// the way. The pauses run at the resume rate, so a capacity it finds is one
-// of resume and pause cycles, not of resumes alone. It sends the actors
+// the way. The suspends run at the resume rate, so a capacity it finds is one
+// of resume and suspend cycles, not of resumes alone. It sends the actors
 // themselves no requests, since none exist there.
 package resumepaused
 

@@ -207,8 +207,8 @@ func toAteAPICompat(in *ateletpb.VersionedSandboxCompat) *ateapipb.VersionedSand
 //
 // The control plane's error is returned unwrapped: a refusal is a real answer
 // here -- the actor is no longer assigned to this worker, or the suspend lost a
-// race to a resume, pause, or delete -- and the worker needs to tell those from
-// a transport failure it should retry.
+// race to a resume, suspend, or delete -- and the worker needs to tell those
+// from a transport failure it should retry.
 func (s *workerSupportServer) RequestActorSuspend(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) (*ateletpb.RequestActorSuspendResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request: a
 	// worker can speak for the actors it hosts and no others. Which those are

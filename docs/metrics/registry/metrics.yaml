@@ -104,8 +104,9 @@ groups:
               stability: development
               value: suspending
               brief: >
-                ateapi is writing a snapshot: node-local for an asynchronous
-                suspend, durable for a synchronous suspend.
+                ateapi is writing a snapshot: uploaded to object storage before
+                returning for a synchronous suspend, or in the background for
+                an asynchronous suspend.
             - id: suspended
               stability: development
               value: suspended
@@ -299,9 +300,11 @@ groups:
               stability: development
               value: local
               brief: >
-                The copy on the node. An asynchronous suspend writes it. A
-                resume reads it while the node still has it, after either kind
-                of suspend and whether or not the upload has finished.
+                The copy on the node. On checkpoint, an asynchronous suspend
+                writes local (whereas a synchronous suspend writes latest,
+                though it also keeps a copy on the node). On restore, a resume
+                reads local while the node still has the copy, after either
+                kind of suspend and whether or not the upload has finished.
             - id: latest
               stability: development
               value: latest

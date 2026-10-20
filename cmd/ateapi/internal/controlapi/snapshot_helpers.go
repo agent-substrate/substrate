@@ -91,13 +91,14 @@ func clearLocalSnapshots(status *ateapipb.ActorStatus) {
 // beforehand.
 //
 // Dropping PENDING durable snapshots is safe because:
-//   - On pause finalization, the new snapshot is kept with its PENDING copy.
-//     An earlier pause's PENDING copy is dropped: whatever atelet uploaded of
-//     it stays under the actor's prefix until DeleteActor collects it.
+//   - On asynchronous suspend finalization, the new snapshot is kept with its
+//     PENDING copy. An earlier asynchronous suspend's PENDING copy is dropped:
+//     whatever atelet uploaded of it stays under the actor's prefix until
+//     DeleteActor collects it.
 //   - On revert finalization, ensureInProgressSnapshotDiscarded has already
 //     deleted the objects of every PENDING durable snapshot.
-//   - On suspend finalization, the latest snapshot has already been marked
-//     COMPLETED.
+//   - On synchronous suspend finalization, the latest snapshot has already been
+//     marked COMPLETED.
 //
 // status.LastAssignedGeneration is not decreased so that we can keep track of
 // stale snapshots that need to be cleaned up and discarded generation numbers

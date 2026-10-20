@@ -340,7 +340,7 @@ type gluttonActor struct {
 	// ACTOR_STATE_CRASHED (codes.Aborted with "crashed" in the message).
 	// ateapi never rehabilitates one, so iterate() replaces it.
 	crashed bool
-	// hibernatePending is set by a failed Pause/Suspend: the actor is
+	// hibernatePending is set by a failed SuspendActor: the actor is
 	// stranded RUNNING or SUSPENDING, which resume has no edge out of.
 	hibernatePending bool
 	// deleted is set once replaceActor has issued this actor's DeleteActor,

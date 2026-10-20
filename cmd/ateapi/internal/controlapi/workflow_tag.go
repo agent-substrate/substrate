@@ -37,8 +37,8 @@ import (
 //
 // The tag is built in 6 phases:
 //  1. Check that the name is free and the storage location is usable.
-//  2. Make the actor's latest snapshot durable, if it is not uploaded yet: a
-//     paused actor's snapshot may still be uploading.
+//  2. Make the actor's latest snapshot durable, if it is not uploaded yet: an
+//     asynchronously suspended actor's snapshot may still be uploading.
 //  3. Reserve the tag's name; the store assigns its UID.
 //  4. Record the snapshot's URI, under the tag's UID, before anything is
 //     copied there.
@@ -269,11 +269,11 @@ func (w *ActorWorkflow) checkTagCreatable(ctx context.Context, tagRef resources.
 }
 
 // ensureTagSourceSnapshotDurable makes the actor's latest snapshot durable when
-// it is not uploaded yet, the shape a pause leaves until atelet's background
-// upload is recorded. It asks the atelet on the snapshot's node to upload it
-// with PromoteSnapshot, which keeps the local copy so the actor still resumes
-// on that node, and records the upload on the actor. It returns the actor as
-// stored afterwards.
+// it is not uploaded yet, the shape an asynchronous suspend leaves until
+// atelet's background upload is recorded. It asks the atelet on the snapshot's
+// node to upload it with PromoteSnapshot, which keeps the local copy so the
+// actor still resumes on that node, and records the upload on the actor. It
+// returns the actor as stored afterwards.
 //
 // A failed upload does not crash the actor: the tag fails and the actor is
 // left as it was.
