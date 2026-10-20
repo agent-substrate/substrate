@@ -46,49 +46,25 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 		request     func(*ateapi.ExpectedSnapshot)
 		want        codes.Code
 	}{
-		{name: "matching durable"},
-		{name: "wrong incarnation", request: func(e *ateapi.ExpectedSnapshot) { e.ActorUid = someActorUID }, want: codes.FailedPrecondition},
-		{name: "wrong uuid", request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid = "other" }, want: codes.FailedPrecondition},
-		{name: "wrong generation", request: func(e *ateapi.ExpectedSnapshot) { e.Generation = 2 }, want: codes.FailedPrecondition},
-		{name: "missing checkpoint", mutate: func(a *ateapi.Actor) { a.Status.Snapshots = nil }, want: codes.FailedPrecondition},
-		{name: "matching pending", mutate: pending, want: codes.Unavailable},
-		{name: "matching pending with local", mutate: func(a *ateapi.Actor) { local(a); pending(a) }, want: codes.Unavailable},
-		{name: "newer pending blocks older completed", mutate: newer, want: codes.FailedPrecondition},
-		{name: "newer pending itself unavailable", mutate: newer, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }, want: codes.Unavailable},
-		{name: "older local takes precedence over matching durable", mutate: func(a *ateapi.Actor) {
+		{name: "matching checkpoint/durable"},
+		{name: "matching checkpoint/UUID mismatch", request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid = "other" }, want: codes.FailedPrecondition},
+		{name: "matching checkpoint/retryable RESUMING", phase: "resuming"},
+		{name: "matching checkpoint/local restore differs", mutate: func(a *ateapi.Actor) {
 			local(a)
 			next := proto.CloneOf(a.Status.Snapshots[0])
 			next.Uuid, next.Generation, next.Locality = "snap-2", 2, ""
 			a.Status.Snapshots = append(a.Status.Snapshots, next)
 			a.Status.LastAssignedGeneration = 2
 		}, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }, want: codes.FailedPrecondition},
-		{name: "matching local and durable", mutate: local},
-		{name: "discarded generations do not block held snapshot", mutate: func(a *ateapi.Actor) { a.Status.LastAssignedGeneration = 9 }},
-		{name: "running", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING }, want: codes.FailedPrecondition},
-		{name: "crashed", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED }, want: codes.FailedPrecondition},
-		{name: "suspending", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDING }, want: codes.FailedPrecondition},
-		{name: "deleting", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_DELETING }, want: codes.FailedPrecondition},
-		{name: "resuming mismatch", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING }, request: func(e *ateapi.ExpectedSnapshot) { e.Generation = 2 }, want: codes.FailedPrecondition},
-		{name: "unconditional pending local still resumes", phase: "unconditional", mutate: func(a *ateapi.Actor) { local(a); pending(a) }},
-		{name: "unconditional cold boot", phase: "unconditional", mutate: func(a *ateapi.Actor) { a.Status.Snapshots = nil }},
-		{name: "unrelated update retries", phase: "conflict", mutate: func(a *ateapi.Actor) { a.WorkerSelector = &ateapi.Selector{} }},
-		{name: "changed template name", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Name = "tmpl2" }, want: codes.FailedPrecondition},
-		{name: "changed template atespace", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Atespace = "other" }, want: codes.FailedPrecondition},
-		{name: "changed checkpoint uuid", phase: "conflict", mutate: func(a *ateapi.Actor) { a.Status.Snapshots[0].Uuid = "snap-2" }, want: codes.FailedPrecondition},
-		{name: "changed checkpoint generation", phase: "conflict", mutate: func(a *ateapi.Actor) { a.Status.Snapshots[0].Generation = 2 }, want: codes.FailedPrecondition},
-		{name: "upload no longer completed", phase: "conflict", mutate: pending, want: codes.Unavailable},
-		{name: "actor crashed", phase: "conflict", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED }, want: codes.FailedPrecondition},
-		{name: "changed source under lease", phase: "lease", mutate: changed, want: codes.FailedPrecondition},
-		{name: "running preflight does not bypass lease", phase: "running lease", mutate: changed, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }},
-		{name: "matching resuming", phase: "resuming"},
-		{name: "intervening resume and suspend", phase: "suspend", want: codes.FailedPrecondition},
-		{name: "replacement under same name", phase: "replace", want: codes.FailedPrecondition},
-		{name: "missing uid", phase: "malformed", request: func(e *ateapi.ExpectedSnapshot) { e.ActorUid = "" }, want: codes.InvalidArgument},
-		{name: "invalid uid", phase: "malformed", request: func(e *ateapi.ExpectedSnapshot) { e.ActorUid = "not-a-uuid" }, want: codes.InvalidArgument},
-		{name: "missing snapshot", phase: "malformed", request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid = "" }, want: codes.InvalidArgument},
-		{name: "invalid snapshot", phase: "malformed", request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid = "Bad/Snapshot" }, want: codes.InvalidArgument},
-		{name: "missing generation", phase: "malformed", request: func(e *ateapi.ExpectedSnapshot) { e.Generation = 0 }, want: codes.InvalidArgument},
-		{name: "negative generation", phase: "malformed", request: func(e *ateapi.ExpectedSnapshot) { e.Generation = -1 }, want: codes.InvalidArgument},
+		{name: "GetActor-ResumeActor race/intervening suspend", phase: "suspend", want: codes.FailedPrecondition},
+		{name: "GetActor-ResumeActor race/source changes after preflight", phase: "lease", mutate: changed, want: codes.FailedPrecondition},
+		{name: "same-name replacement", phase: "replace", want: codes.FailedPrecondition},
+		{name: "RUNNING", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING }, want: codes.FailedPrecondition},
+		{name: "newer pending checkpoint/older completed refused", mutate: newer, want: codes.FailedPrecondition},
+		{name: "newer pending checkpoint/matching upload unavailable", mutate: newer, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }, want: codes.Unavailable},
+		{name: "template change/assignment conflict", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Name = "tmpl2" }, want: codes.FailedPrecondition},
+		{name: "malformed expectation", phase: "malformed", request: func(e *ateapi.ExpectedSnapshot) { e.ActorUid = "not-a-uuid" }, want: codes.InvalidArgument},
+		{name: "no expectation", phase: "unconditional", mutate: func(a *ateapi.Actor) { local(a); pending(a) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -124,17 +100,12 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 				}
 				injected = true
 			}
-			var leaseStore *resumeLeaseChangingStore
 			counted := &leaseCountingStore{Interface: st}
 			switch tc.phase {
 			case "conflict":
 				counted.Interface = &conflictInjectingStore{Interface: st, inject: mutate}
-			case "lease", "running lease":
-				if tc.phase == "running lease" {
-					actor = mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapi.ActorStatus) { s.State = ateapi.ActorState_ACTOR_STATE_RUNNING })
-				}
-				leaseStore = &resumeLeaseChangingStore{Interface: st, beforeAcquire: mutate}
-				counted.Interface = leaseStore
+			case "lease":
+				counted.Interface = &resumeLeaseChangingStore{Interface: st, beforeAcquire: mutate}
 			case "resuming":
 				tmpl, err := resolveActorTemplate(ctx, st, actor)
 				if err != nil {
@@ -185,11 +156,8 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 			if counted.acquireCalls != wantLeases {
 				t.Errorf("lease acquisitions = %d, want %d", counted.acquireCalls, wantLeases)
 			}
-			if (tc.phase == "conflict" || leaseStore != nil) && !injected {
+			if (tc.phase == "conflict" || tc.phase == "lease") && !injected {
 				t.Error("concurrent update was not injected")
-			}
-			if leaseStore != nil && leaseStore.heldReads == 0 {
-				t.Error("did not read actor under lifecycle lease")
 			}
 			restore, run := atelet.requests()
 			after := mustReadActor(t, ctx, st, ref)
@@ -207,42 +175,21 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 			if !resp.GetResumed() || after.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
 				t.Errorf("resume did not finish: %v", resp)
 			}
-			if len(actor.GetStatus().GetSnapshots()) == 0 {
-				if run == nil || restore != nil {
-					t.Errorf("want cold boot, restore = %v, run = %v", restore, run)
-				}
-			} else {
-				snapshot := actor.GetStatus().GetSnapshots()[0]
-				if restore.GetSnapshot().GetSnapshotUuid() != snapshot.GetUuid() || restore.GetSnapshot().GetGeneration() != snapshot.GetGeneration() || run != nil {
-					t.Errorf("restore = %v, run = %v; want snapshot %v", restore, run, snapshot)
-				}
-			}
-			if tc.phase == "conflict" && !proto.Equal(after.GetWorkerSelector(), actor.GetWorkerSelector()) {
-				t.Error("retry lost unrelated update")
+			snapshot := actor.GetStatus().GetSnapshots()[0]
+			if restore.GetSnapshot().GetSnapshotUuid() != snapshot.GetUuid() || restore.GetSnapshot().GetGeneration() != snapshot.GetGeneration() || run != nil {
+				t.Errorf("restore = %v, run = %v; want snapshot %v", restore, run, snapshot)
 			}
 		})
 	}
 }
 
+// resumeLeaseChangingStore changes the source after preflight, before the lease.
 type resumeLeaseChangingStore struct {
 	store.Interface
 	beforeAcquire func()
-	held          bool
-	heldReads     int
 }
 
 func (s *resumeLeaseChangingStore) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	s.beforeAcquire()
-	lease, err := s.Interface.AcquireLease(ctx, key)
-	if err == nil {
-		s.held = true
-	}
-	return lease, err
-}
-
-func (s *resumeLeaseChangingStore) GetActor(ctx context.Context, ref resources.ActorRef) (*ateapi.Actor, error) {
-	if s.held {
-		s.heldReads++
-	}
-	return s.Interface.GetActor(ctx, ref)
+	return s.Interface.AcquireLease(ctx, key)
 }

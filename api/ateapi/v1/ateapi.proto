@@ -1857,24 +1857,6 @@ message ResumeActorRequest {
   ExpectedSnapshot expected = 2;
 }
 
-// ExpectedSnapshot identifies the actor incarnation and checkpoint to resume.
-message ExpectedSnapshot {
-  // UID of the actor the caller observed.
-  // +k8s:required
-  // +k8s:format=k8s-uuid
-  string actor_uid = 1;
-
-  // UUID of the checkpoint the caller observed.
-  // +k8s:required
-  // +k8s:format=k8s-short-name
-  string snapshot_uuid = 2;
-
-  // Generation of the checkpoint the caller observed.
-  // +k8s:required
-  // +k8s:minimum=1
-  int32 generation = 3;
-}
-
 message ResumeActorResponse {
   Actor actor = 1;
 
@@ -3322,4 +3304,22 @@ extend google.protobuf.MessageOptions {
 
 extend google.protobuf.MethodOptions {
   MethodAnnotation method = 50000;
+}
+
+// ExpectedSnapshot identifies the actor incarnation and checkpoint to resume.
+message ExpectedSnapshot {
+  // UID of the actor the caller observed.
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 1;
+
+  // UUID of the checkpoint the caller observed.
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string snapshot_uuid = 2;
+
+  // Generation of the checkpoint the caller observed.
+  // +k8s:required
+  // +k8s:minimum=1
+  int32 generation = 3;
 }
