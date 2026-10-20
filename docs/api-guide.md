@@ -371,20 +371,12 @@ a `Snapshot` with the following fields:
   `SNAPSHOT_OWNER_TAG`).
 - `fidelity`: The state layers the snapshot holds (`SNAPSHOT_FIDELITY_VOLUMES`,
   `SNAPSHOT_FIDELITY_ROOTFS`, or `SNAPSHOT_FIDELITY_MEMORY`).
-- `actorTemplateUid`: The UID of the `ActorTemplate` whose sandbox the guest
-  state was captured from. This is not always the template the actor points at
-  now: an actor may be repointed while `SUSPENDED`, while the snapshot on disk
-  still came from the old one. A resume that finds the two disagree restores the
-  durable data only and boots the guest fresh, because memory captured under one
-  sandbox image cannot be resumed under another.
-- `locality`: The node that holds the snapshot's local files. It is set when a
-  pause completes and cleared once those files are deleted from the node (when
-  atelet detaches the actor in the background, the actor is next paused or
-  suspended, or it is reverted). A resume restores from the files without
-  deleting them, so an actor resumed from pause still reports where they are. A
-  paused actor is an `ACTOR_STATE_SUSPENDED` actor whose latest snapshot has
-  `locality`; it is pinned to that node (`status.assignedNode`) until atelet
-  detaches it or it is reverted.
+- `actorTemplateUid`: The UID of the `ActorTemplate` used to capture this snapshot.
+  An actor can change templates while `SUSPENDED`. A resume checks the snapshot
+  it restores. A snapshot captured under a replaced template restores volume
+  data and boots fresh.
+- `locality`: The node holding the snapshot's local files. For attachment rules,
+  see `ActorStatus.assigned_node` in the [API schema](../pkg/proto/ateapipb/ateapi.proto).
 - `durableSnapshot`: The copy in object storage, with its URI in
   `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
   written and `COMPLETED` once it can be restored from. A pause records the copy
@@ -406,11 +398,12 @@ a `Snapshot` with the following fields:
     worker and downgrades the restore to `SNAPSHOT_FIDELITY_ROOTFS`, preserving
     the snapshot's rootfs and volume data while booting the guest fresh under the
     new worker's `defaultRuntime`.
-  - A local pause checkpoint (with `locality`) is not relaxed; the resume
-    returns `RESOURCE_EXHAUSTED` and the actor stays paused on its node until a
-    compatible worker there has room, or until atelet detaches it. A detach
-    uploads the checkpoint, deletes the local files, and lifts the node pin,
-    after which the next resume may fall back like a durable snapshot.
+  - A local checkpoint first tries compatible workers on its attached node.
+    If that fails, `ResumeActor` checks capacity without the node and runtime
+    restrictions. When that capacity exists, it detaches the checkpoint and
+    retries placement. Detach uploads it if needed, deletes the local files,
+    and releases the binding. The retry prefers compatible workers before
+    using the durable fallback above. A detach error leaves the actor attached.
 
   A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
   `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime placement constraint. Because a
@@ -613,7 +606,7 @@ Replaces the mutable fields of an existing actor with the ones in the request (`
     *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
     *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same location: its `snapshotConfig.storageLocation` with the `PerTemplateSnapshotLocation` preview gate, otherwise ate-api-server's `--snapshot-location` (see [Snapshot Storage Layout](#snapshot-storage-layout)).
     *   `worker_selector` may be updated or cleared (`nil`) in any state; the updated selector takes effect on the next `ResumeActor`.
-    *   A paused actor stays pinned to its node until atelet detaches it (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). Its next `ResumeActor` therefore needs a worker on that node that matches both the new template's `workerSelector` and the actor's updated `worker_selector`. If no worker there matches, `ResumeActor` returns `RESOURCE_EXHAUSTED` until the detach lifts the pin.
+    *   A paused actor is initially pinned to its node (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). `ResumeActor` first looks for a worker there matching the template and actor selectors. If none is available but a worker satisfies the remaining constraints without node or runtime restrictions, resume detaches the checkpoint and retries placement. If no eligible worker has room, it returns `RESOURCE_EXHAUSTED`.
 *   **Response:** the updated `Actor`.
 *   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `FAILED_PRECONDITION` if a change to `actor_template` breaks one of the rules above; `ABORTED` if either guard no longer matches the stored resource.
 

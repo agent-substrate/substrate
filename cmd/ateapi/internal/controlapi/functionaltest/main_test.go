@@ -122,9 +122,10 @@ type FakeAteletServer struct {
 	RunRequest *ateletpb.RunRequest
 	FailRun    error
 
-	CheckpointCalled  bool
-	CheckpointRequest *ateletpb.CheckpointRequest
-	FailCheckpoint    error
+	CheckpointCalled    bool
+	CheckpointRequest   *ateletpb.CheckpointRequest
+	FailCheckpoint      error
+	KeepCheckpointLocal bool
 	// checkpointed is each actor's last checkpointed snapshot, by UID.
 	checkpointed map[string]*ateletpb.Snapshot
 
@@ -184,6 +185,7 @@ func (f *FakeAteletServer) Reset() {
 	f.CheckpointRequest = nil
 	f.FailCheckpoint = nil
 	f.checkpointed = nil
+	f.KeepCheckpointLocal = false
 
 	f.RestoreCalled = false
 	f.RestoreRequest = nil
@@ -281,6 +283,14 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 		if err := f.writeSnapshot(req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 			return nil, err
 		}
+	}
+	if f.KeepCheckpointLocal {
+		report := &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(req.GetSnapshot())}
+		state := &ateletpb.ActorSnapshotState{LatestLocal: report}
+		if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+			state.LatestDurable = proto.CloneOf(report)
+		}
+		return &ateletpb.CheckpointResponse{State: state}, nil
 	}
 	return &ateletpb.CheckpointResponse{}, nil
 }

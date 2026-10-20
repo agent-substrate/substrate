@@ -97,25 +97,32 @@ type uploadPlan struct {
 }
 
 func (u *Uploader) plan(content io.Reader) (uploadPlan, error) {
+	plan, _, _, err := u.planStream(content)
+	return plan, err
+}
+
+func (u *Uploader) planStream(content io.Reader) (uploadPlan, int64, io.Reader, error) {
 	buffers := uploadBufferMemory(u.client)
 	workers := min(int64(runtime.GOMAXPROCS(0)), (u.budget.capacity-buffers)/parallelWorkerMemory)
+	workerMemory := parallelWorkerMemory
 	parts := 1
+	streamMax := int64(-1)
 	if f, ok := content.(*os.File); ok {
 		info, err := f.Stat()
 		if err != nil {
-			return uploadPlan{}, err
+			return uploadPlan{}, 0, nil, err
 		}
 		position, err := f.Seek(0, io.SeekCurrent)
 		if err != nil {
-			return uploadPlan{}, err
+			return uploadPlan{}, 0, nil, err
 		}
 		exts, populated, err := sparseExtents(f, info.Size())
 		_, seekErr := f.Seek(position, io.SeekStart)
 		if err != nil {
-			return uploadPlan{}, err
+			return uploadPlan{}, 0, nil, err
 		}
 		if seekErr != nil {
-			return uploadPlan{}, seekErr
+			return uploadPlan{}, 0, nil, seekErr
 		}
 		// Holes never enter the compressor or range uploads.
 		workers = min(workers, populated/parZstdChunk+1)
@@ -124,17 +131,15 @@ func (u *Uploader) plan(content io.Reader) (uploadPlan, error) {
 			// PutSparseFile splits a file into parts whenever it has two or
 			// more (see errSparseTooSmall), so the streaming fallback never
 			// runs: reserve only what the parts hold.
-			return uploadPlan{workers: int(workers), parts: parts, memory: int64(parts) * sparseUploadMemory}, nil
+			return uploadPlan{workers: int(workers), parts: parts, memory: int64(parts) * sparseUploadMemory}, -1, content, nil
 		}
-		buffers = streamBufferMemory(u.client, sparseEncodedBound(populated, len(exts)))
+		streamMax = sparseEncodedBound(populated, len(exts))
+		buffers = streamBufferMemory(u.client, streamMax)
+		workerMemory = parZstdWorkerMemory(parZstdChunkSize(populated))
+		content = &sparseFile{File: f, size: info.Size(), exts: exts, populated: populated}
 	}
-	memory := buffers + workers*parallelWorkerMemory
-	if _, ok := u.client.(sparseFilePutter); ok {
-		// The range-parallel path and streaming fallback are alternatives,
-		// so reserve the larger requirement rather than adding both.
-		memory = max(memory, int64(parts)*sparseUploadMemory)
-	}
-	return uploadPlan{workers: int(workers), parts: parts, memory: memory}, nil
+	memory := buffers + workers*workerMemory
+	return uploadPlan{workers: int(workers), parts: parts, memory: memory}, streamMax, content, nil
 }
 
 // sparseEncodedBound bounds the size of the sparse-extent stream for a file
@@ -147,11 +152,12 @@ func sparseEncodedBound(populated int64, extents int) int64 {
 
 // streamBufferMemory is the backend buffering for a streamed object of at
 // most size bytes. GCS sends an object smaller than uploadCompositeMin in one
-// request: it holds PutObject's lookahead and the client's chunk buffer for
-// that request (see putSingle), never the composite parts.
+// request: PutObject allocates singleUploadChunkSize(size) for the lookahead
+// and putSingle sets the same ChunkSize on the writer, never allocating the
+// composite parts.
 func streamBufferMemory(client ObjectStorage, size int64) int64 {
 	if _, ok := client.(*gcsClient); ok && size < uploadCompositeMin {
-		return uploadCompositeMin + uploadChunkSize
+		return 2 * singleUploadChunkSize(size)
 	}
 	return uploadBufferMemory(client)
 }
@@ -179,7 +185,9 @@ func (u *Uploader) Send(ctx context.Context, url string, content io.Reader) erro
 		// A manifest is a few KiB: size its reservation by the file rather
 		// than by the largest object the backend could buffer.
 		if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
-			memory = streamBufferMemory(u.client, info.Size())
+			size := info.Size()
+			memory = streamBufferMemory(u.client, size)
+			content = boundedReader{Reader: content, max: size}
 		}
 	}
 	if err := u.budget.reserved.Acquire(ctx, memory); err != nil {

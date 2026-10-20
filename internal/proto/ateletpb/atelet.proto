@@ -832,6 +832,28 @@ message ObjectStorage {
   // +k8s:maxLength=2048
   // +k8s:customValidation # a parseable snapshot URI
   string snapshot_uri = 1;
+
+  // How the snapshot at snapshot_uri may be consumed, as the control plane
+  // knows it. Read on Restore, where it decides whether atelet may serve the
+  // snapshot's files from its node-local cache; meaningless where atelet
+  // writes to the snapshot.
+  //
+  // +k8s:optional
+  // +k8s:maximum=2 # keep this in sync with the SnapshotSharing enum
+  SnapshotSharing sharing = 2;
+}
+
+// SnapshotSharing is how a snapshot in object storage may be consumed, as
+// known by the control plane. atelet never infers it from the URI.
+enum SnapshotSharing {
+  // Not stated: treated as PRIVATE.
+  SNAPSHOT_SHARING_UNSPECIFIED = 0;
+  // Read by one actor and replaced by its next suspend. Never cached.
+  SNAPSHOT_SHARING_PRIVATE = 1;
+  // Immutable once published and read by many actors, such as a tag's
+  // snapshot borrowed at creation. atelet may serve its files from the
+  // node-local snapshot cache.
+  SNAPSHOT_SHARING_SHARED = 2;
 }
 
 // Snapshot identifies one snapshot of an actor, and where its durable copy

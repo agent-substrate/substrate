@@ -275,14 +275,27 @@ jobs:
       # gateway. ATE_PREVIEW above selects the preview features.
       env:
         ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
-      run: hack/install-ate-kind.sh --deploy-ate-system
+        NO_DEV_ENV: "true"
+        KO_DOCKER_REPO: "localhost:5001"
+        ATE_INSTALL_KIND: "true"
+        BUCKET_NAME: "ate-snapshot"
+        KIND_CLUSTER_NAME: "kind"
+        KUBECTL_CONTEXT: "kind-kind"
+      run: go run ./cmd/ate-setup deploy ate-system
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
         sudo modprobe nfs || true
         sudo modprobe nfsd || true
     - name: Install CSI NFS driver
-      run: hack/install-ate-kind.sh --setup-csi=nfs
+      env:
+        NO_DEV_ENV: "true"
+        KO_DOCKER_REPO: "localhost:5001"
+        ATE_INSTALL_KIND: "true"
+        BUCKET_NAME: "ate-snapshot"
+        KIND_CLUSTER_NAME: "kind"
+        KUBECTL_CONTEXT: "kind-kind"
+      run: go run ./cmd/ate-setup setup csi nfs
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and deploys the
       # counter-microvm demo onto the control plane installed above. The demo
@@ -291,15 +304,29 @@ jobs:
         ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       run: hack/run-microvm-demo-kind.sh
     - name: Deploy gVisor counter demo
-      run: hack/install-ate-kind.sh --deploy-demo-counter
+      env:
+        NO_DEV_ENV: "true"
+        KO_DOCKER_REPO: "localhost:5001"
+        ATE_INSTALL_KIND: "true"
+        BUCKET_NAME: "ate-snapshot"
+        KIND_CLUSTER_NAME: "kind"
+        KUBECTL_CONTEXT: "kind-kind"
+      run: go run ./cmd/ate-setup deploy demo counter
     - name: Deploy egress demos
       # TestActorEgress in the networking suite builds its Actor from the egress
       # ActorTemplate for the class under test, so both fixtures have to exist
       # before their respective lane runs. The demo's actors trust the CA the
       # gateway mints its leaves from.
+      env:
+        NO_DEV_ENV: "true"
+        KO_DOCKER_REPO: "localhost:5001"
+        ATE_INSTALL_KIND: "true"
+        BUCKET_NAME: "ate-snapshot"
+        KIND_CLUSTER_NAME: "kind"
+        KUBECTL_CONTEXT: "kind-kind"
       run: |
-        hack/install-ate-kind.sh --deploy-demo-egress
-        hack/install-ate-kind.sh --deploy-demo-egress-microvm
+        go run ./cmd/ate-setup deploy demo egress
+        go run ./cmd/ate-setup deploy demo egress-microvm
     - name: Trust local TLS origins in egress gateway
       run: hack/setup-e2e-egress-tls-kind.sh
     # scale the idle sandbox class's demo pools to zero so each lane has the node

@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -224,17 +225,21 @@ func isCheckpointDataFile(name string) bool {
 var evictCheckpointCache = snapshotcache.EvictWithRetries
 
 // dropActorCheckpointCacheAsync pins the snapshot data files in restoreDir
-// while the caller holds the actor lock. When the restore dir is not preserved,
-// it unlinks them immediately (the kernel frees pages and blocks once the
-// sentry closes its open FDs). When the restore dir is preserved, it waits in
-// the background (bounded by actorCtx) for async restore page loading to finish
-// and evicts clean pages from the host page cache.
+// while the caller holds the actor lock. When the restore dir is not preserved
+// and nothing else links the files, it unlinks them immediately: the kernel
+// frees pages and blocks once the sentry closes its open FDs, and the actor's
+// cgroup is no longer charged for them. When the restore dir is preserved, or
+// a file has another link, such as atelet's snapshot cache entry it was staged
+// from, so that unlinking would free nothing, it waits in the background
+// (bounded by actorCtx) for async restore page loading to finish and evicts
+// clean pages from the host page cache, then unlinks the files unless the
+// dir is preserved.
 func dropActorCheckpointCacheAsync(actorCtx context.Context, actorUID, restoreDir string, preserveRestoreDir bool, waitRestore func(context.Context) error) {
 	targets := snapshotcache.FindFiles(restoreDir, isCheckpointDataFile)
 	if len(targets) == 0 {
 		return
 	}
-	if !preserveRestoreDir {
+	if !preserveRestoreDir && !anyLinkedElsewhere(targets) {
 		snapshotcache.DropFiles(targets)
 		return
 	}
@@ -243,9 +248,26 @@ func dropActorCheckpointCacheAsync(actorCtx context.Context, actorUID, restoreDi
 			if err := waitRestore(actorCtx); err != nil {
 				slog.Warn("Skipping checkpoint page cache eviction after restore wait error",
 					slog.String("actorUID", actorUID), slog.Any("err", err))
+				if !preserveRestoreDir {
+					snapshotcache.DropFiles(targets)
+				}
 				return
 			}
 		}
 		evictCheckpointCache(targets)
+		if !preserveRestoreDir {
+			snapshotcache.DropFiles(targets)
+		}
 	}()
+}
+
+// anyLinkedElsewhere reports whether any of files has a hard link besides
+// the one in the restore dir.
+func anyLinkedElsewhere(files []snapshotcache.File) bool {
+	for _, f := range files {
+		if st, ok := f.Info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+			return true
+		}
+	}
+	return false
 }

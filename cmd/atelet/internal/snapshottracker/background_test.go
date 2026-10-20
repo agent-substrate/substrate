@@ -71,18 +71,13 @@ func beginOp(t *testing.T, tr *Tracker, target SnapshotRef) (context.Context, *a
 	return ctx, op
 }
 
-// endOp ends op, as a worker does, and reports whether it was still the
-// tracked actor's operation in progress. It then finishes like a worker
-// whose operation changed nothing, calling requeueLocked.
-func endOp(tr *Tracker, op *actorOp) bool {
+// endOp ends op, as a worker does whose operation changed nothing: it calls
+// requeueLocked and closes op.done.
+func endOp(tr *Tracker, op *actorOp) {
+	defer close(op.done)
 	tr.lock(trackedActorUID)
 	defer tr.unlock(trackedActorUID)
-	a := tr.endOpLocked(trackedActorUID, op)
-	if a == nil {
-		return false
-	}
-	tr.requeueLocked(a)
-	return true
+	tr.requeueLocked(tr.endOpLocked(trackedActorUID, op))
 }
 
 // inMemory reports whether the tracker holds the tracked actor's entry in
@@ -144,9 +139,7 @@ func TestEntryStaysInMemoryDuringOp(t *testing.T) {
 		t.Error("entry dropped from memory during an operation, want it kept")
 	}
 
-	if !endOp(tr, op) {
-		t.Fatal("endOpLocked = nil, want the operation still the actor's")
-	}
+	endOp(tr, op)
 	if inMemory(tr) {
 		t.Error("entry in memory after the operation ended, want it dropped")
 	}
@@ -217,34 +210,114 @@ func TestStartQueuesActorsWithSnapshotState(t *testing.T) {
 	}
 }
 
-// Forget does not wait for the actor's background operation in progress. It
-// cancels the operation, which finds itself abandoned when it ends, so it
-// leaves alone both the forgotten actor's state and an operation that began
-// for the actor after Forget.
-func TestForgetAbandonsInFlightOp(t *testing.T) {
+// Forget cancels the actor's background operation in progress and waits for it
+// to end, releasing the actor's lock meanwhile, before it drops the actor's
+// state in memory and on disk.
+func TestForgetWaitsForInFlightOp(t *testing.T) {
 	useActorDir(t)
 	tr := newTracker(t)
 	s1 := testRef("s1", 1, time.Now())
 	tr.CommitLocal(trackedActorUID, s1)
 	opCtx, op := beginOp(t, tr, s1)
 
-	returnsPromptly(t, "Forget during a background operation", func() {
-		if err := tr.Forget(trackedActorUID); err != nil {
+	forgetDone := make(chan error, 1)
+	go func() { forgetDone <- tr.Forget(trackedActorUID) }()
+	select {
+	case <-opCtx.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for Forget to cancel the operation")
+	}
+	returnsPromptly(t, "lock while Forget waits", func() {
+		tr.lock(trackedActorUID)
+		tr.unlock(trackedActorUID)
+	})
+	if !inMemory(tr) {
+		t.Error("entry dropped from memory while Forget waits, want it kept")
+	}
+	if got := uuidOf(newTracker(t).State(trackedActorUID).GetLatestLocal()); got != "s1" {
+		t.Errorf("latest_local a restarted atelet reads while Forget waits = %q, want %q", got, "s1")
+	}
+	select {
+	case err := <-forgetDone:
+		t.Fatalf("Forget returned (%v) before the canceled operation ended", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	endOp(tr, op)
+	select {
+	case err := <-forgetDone:
+		if err != nil {
 			t.Errorf("Forget: %v", err)
 		}
-	})
-	if opCtx.Err() == nil {
-		t.Error("the operation's context is live after Forget, want it cancelled")
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for Forget to return")
 	}
-	_, next := beginOp(t, tr, s1)
-	if endOp(tr, op) {
-		t.Error("endOpLocked = true after Forget, want the operation abandoned")
+	if inMemory(tr) {
+		t.Error("entry in memory after Forget, want it dropped")
 	}
-	if got, want := tr.State(trackedActorUID), (&ateletpb.ActorSnapshotState{Uploading: s1.report()}); !proto.Equal(got, want) {
-		t.Errorf("state after forget = %v, want %v: only the operation begun after Forget", got, want)
+	if st := newTracker(t).State(trackedActorUID); !proto.Equal(st, &ateletpb.ActorSnapshotState{}) {
+		t.Errorf("state a restarted atelet reads after Forget = %v, want empty", st)
 	}
-	if !endOp(tr, next) {
-		t.Error("endOpLocked = false for the operation begun after Forget, want the abandoned one's end to leave it alone")
+}
+
+// From BeginTerminate on, no background upload or detach of the actor begins,
+// though both are due. If the terminate fails before Forget, its end lets them
+// begin again; once Forget has dropped the actor, its end leaves the actor
+// alone and queues nothing for it.
+func TestTrackerTerminateHoldsOffBackgroundWork(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		forget bool
+	}{
+		{name: "terminate fails before Forget"},
+		{name: "Forget drops the actor", forget: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := newIdleTestTracker(t, newFakeSnapshotStore())
+			t0 := tr.clock.Now()
+			tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
+			stepTo(tr, t0.Add(testDetachDelay)) // An upload and a detach are both due.
+			eventually(t, "upload and detach are queued", func() bool {
+				return queuedNow(tr) == 2
+			})
+			for _, q := range tr.queues {
+				uid, _ := q.Get()
+				q.Done(uid)
+			}
+
+			end := tr.BeginTerminate(trackedActorUID)
+			for _, kind := range []opKind{opUpload, opDetach} {
+				if run := tr.beginDueWork(trackedActorUID, kind); run != nil {
+					t.Errorf("beginDueWork(%v) began work during Terminate, want none", kind)
+					run()
+				}
+			}
+			if tc.forget {
+				opCtx, op := beginOp(t, tr, testRef("s1", 1, t0))
+				go func() {
+					<-opCtx.Done()
+					endOp(tr, op)
+				}()
+				if err := tr.Forget(trackedActorUID); err != nil {
+					t.Fatalf("Forget: %v", err)
+				}
+			}
+			end()
+
+			if tc.forget {
+				if inMemory(tr) {
+					t.Error("entry in memory after Forget and the terminate's end, want it dropped")
+				}
+				if n := queuedNow(tr); n != 0 {
+					t.Errorf("queued = %d after Forget and the terminate's end, want nothing queued for the forgotten actor", n)
+				}
+				return
+			}
+			run := tr.beginDueWork(trackedActorUID, opUpload)
+			if run == nil {
+				t.Fatal("beginDueWork(upload) began nothing once the terminate failed, want the due upload")
+			}
+			run()
+		})
 	}
 }
 
@@ -274,9 +347,7 @@ func TestCommitsDoNotWaitForInFlightOp(t *testing.T) {
 	if err := opCtx.Err(); err != nil {
 		t.Errorf("the operation's context ended with %v, want it still running", err)
 	}
-	if !endOp(tr, op) {
-		t.Error("endOpLocked = false, want the operation still the actor's")
-	}
+	endOp(tr, op)
 }
 
 // An actor has at most one background operation in progress, and another
@@ -302,9 +373,7 @@ func TestBeginOpLockedAllowsOneOpPerActor(t *testing.T) {
 		t.Error("beginOpLocked for another actor = nil, want an operation")
 	}
 
-	if !endOp(tr, op) {
-		t.Fatal("endOpLocked = false, want the operation still the actor's")
-	}
+	endOp(tr, op)
 	_, op = beginOp(t, tr, s1)
 	s1.Snapshot.SnapshotUuid = "changed"
 	if got := op.target.Snapshot.GetSnapshotUuid(); got != "s1" {

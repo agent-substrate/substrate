@@ -68,11 +68,13 @@ in memory. The sparse format and download readers are unchanged.
 
 With the current buffer sizes, the minimum budget is `384Mi` for GCS and `224Mi`
 for S3. Startup rejects smaller values. Each upload reserves for the path it
-takes: on GCS, a file split into range parts reserves only those parts, and an
-object whose sparse stream is bounded below one request (`64Mi`) reserves that
-request's buffers instead of the composite-upload buffers. Other streamed
-objects still reserve for a composite upload, even when they ultimately fit in
-one request. Raise the budget to trade memory for more simultaneous uploads.
+takes: on GCS, a file split into range parts reserves only those parts, sparse
+files with less than `8Mi` of populated data scale their compression chunk
+buffers down to `1Mi`, and an object whose stream is bounded below one request
+(`64Mi`) sizes both its lookahead and single-request chunk buffer to that
+bound instead of the composite-upload buffers. Unbounded streamed objects still
+reserve for a composite upload, even when they ultimately fit in one request.
+Raise the budget to trade memory for more simultaneous uploads.
 
 The budget is **not a process memory limit**. The Go runtime, garbage awaiting
 collection, connections, downloads, and asset transfers need additional memory.

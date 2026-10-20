@@ -23,7 +23,6 @@ import (
 	"os"
 
 	"github.com/klauspost/compress/zstd"
-	"golang.org/x/sys/unix"
 )
 
 // sparseMagic marks the sparse-extent snapshot format (see writeSparseZstd). It is
@@ -43,6 +42,16 @@ const sparseVersion uint32 = 2
 // keeps the format streamable — the writer need not know the extent count up front
 // and the reader stops when it sees the sentinel.
 const sparseEndOffset int64 = -1
+
+// sparseFile holds a pre-scanned sparse file's logical size, extents, and
+// populated byte count so planning and compression share one SEEK_DATA/SEEK_HOLE
+// pass and use the same chunk size.
+type sparseFile struct {
+	*os.File
+	size      int64
+	exts      []extentRange
+	populated int64
+}
 
 // writeSparseZstd encodes a sparse file src to dst in the sparse-extent format:
 //
@@ -66,7 +75,17 @@ func writeSparseZstd(ctx context.Context, dst io.Writer, src *os.File, workers i
 		return 0, 0, err
 	}
 	size := fi.Size()
+	exts, populated, err := sparseExtents(src, size)
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := src.Seek(0, io.SeekStart); err != nil {
+		return 0, 0, err
+	}
+	return writeSparseExtents(ctx, dst, src, size, exts, populated, workers)
+}
 
+func writeSparseExtents(ctx context.Context, dst io.Writer, src *os.File, size int64, exts []extentRange, populated int64, workers int) (logical, dataBytes int64, err error) {
 	// magic + version in the clear (buffered: a couple of tiny writes).
 	bw := bufio.NewWriter(dst)
 	if _, err := bw.WriteString(sparseMagic); err != nil {
@@ -79,7 +98,7 @@ func writeSparseZstd(ctx context.Context, dst io.Writer, src *os.File, workers i
 		return 0, 0, err
 	}
 
-	zw := newParZstd(dst, workers)
+	zw := newParZstdChunk(dst, workers, parZstdChunkSize(populated))
 	cw := contextWriter{ctx: ctx, dst: zw}
 	// fail closes the encoder before returning err (Close flushes/frees state).
 	fail := func(e error) (int64, int64, error) {
@@ -90,36 +109,21 @@ func writeSparseZstd(ctx context.Context, dst io.Writer, src *os.File, workers i
 		return fail(err)
 	}
 
-	fd := int(src.Fd())
-	off := int64(0)
-	for off < size {
-		ds, serr := unix.Seek(fd, off, unix.SEEK_DATA)
-		if serr != nil {
-			if serr == unix.ENXIO { // no more data: the rest is a hole
-				break
-			}
-			return fail(fmt.Errorf("SEEK_DATA: %w", serr))
-		}
-		de, serr := unix.Seek(fd, ds, unix.SEEK_HOLE)
-		if serr != nil {
-			return fail(fmt.Errorf("SEEK_HOLE: %w", serr))
-		}
-		length := de - ds
-		if err := binary.Write(cw, binary.LittleEndian, ds); err != nil {
+	for _, e := range exts {
+		if err := binary.Write(cw, binary.LittleEndian, e.off); err != nil {
 			return fail(err)
 		}
-		if err := binary.Write(cw, binary.LittleEndian, length); err != nil {
+		if err := binary.Write(cw, binary.LittleEndian, e.length); err != nil {
 			return fail(err)
 		}
-		if _, err := src.Seek(ds, io.SeekStart); err != nil {
+		if _, err := src.Seek(e.off, io.SeekStart); err != nil {
 			return fail(err)
 		}
-		n, cerr := io.CopyN(cw, src, length)
+		n, cerr := io.CopyN(cw, src, e.length)
 		dataBytes += n
 		if cerr != nil {
-			return fail(fmt.Errorf("reading extent @%d+%d: %w", ds, length, cerr))
+			return fail(fmt.Errorf("reading extent @%d+%d: %w", e.off, e.length, cerr))
 		}
-		off = de
 	}
 	if err := binary.Write(cw, binary.LittleEndian, sparseEndOffset); err != nil {
 		return fail(err)

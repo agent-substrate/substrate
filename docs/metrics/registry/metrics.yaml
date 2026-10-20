@@ -104,14 +104,14 @@ groups:
               stability: development
               value: suspending
               brief: >
-                ateapi is writing a snapshot: durable for a suspend,
-                node-local for a pause.
+                ateapi is writing a snapshot: node-local for an asynchronous
+                suspend, durable for a synchronous suspend.
             - id: suspended
               stability: development
               value: suspended
               brief: >
-                The actor holds no worker. Its latest snapshot is durable, or
-                node-local after a pause.
+                The actor holds no worker. Its latest snapshot is durable,
+                node-local, or both.
             - id: crashed
               stability: development
               value: crashed
@@ -298,7 +298,10 @@ groups:
             - id: local
               stability: development
               value: local
-              brief: A snapshot on the node. A pause writes it.
+              brief: >
+                The copy on the node. An asynchronous suspend writes it. A
+                resume reads it while the node still has it, after either kind
+                of suspend and whether or not the upload has finished.
             - id: latest
               stability: development
               value: latest
@@ -589,6 +592,13 @@ groups:
                 The sandbox asset cache: the runsc binaries, the kernels and
                 the guest images the workers run actors with. Each actor on
                 the node links its assets from this one cache.
+            - id: snapshot
+              stability: development
+              value: snapshot
+              brief: >
+                The snapshot cache: the files of snapshots many actors
+                restore from, a tag's or a golden's, served to each restore
+                as hard links or private copies.
       - id: ate.filecache.gc.outcome
         stability: development
         brief: >
@@ -1354,10 +1364,11 @@ groups:
     note: >
       atelet reads the value on each collection as the sum of the allocated
       size of each entry in the cache. Compare it with the budget that the
-      cache's max-bytes flag sets, --sandbox-asset-cache-max-bytes for the
-      sandbox asset cache. A value that stays over the budget with shortfall
-      passes means that the cache's consumers hold more than the budget: for
-      the sandbox asset cache, the actors and the workers' default runtimes.
+      cache's max-bytes flag sets, --sandbox-asset-cache-max-bytes or
+      --snapshot-cache-max-bytes. A value that stays over the budget with
+      shortfall passes means that the cache's consumers hold more than the
+      budget: for the sandbox asset cache, the actors and the workers'
+      default runtimes; for the snapshot cache, the restores in progress.
       The budget is too small, or the node hosts too many runtimes.
     annotations:
       substrate:

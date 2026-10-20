@@ -285,14 +285,14 @@ func TestTrackerFailedUploadKeepsUndurableSince(t *testing.T) {
 	}
 }
 
-// Forget does not wait for a background upload in progress: it cancels the
-// upload, which then leaves the forgotten actor alone. The upload records no
-// state for the actor, and deletes none of its local snapshots, not even one
-// a newer checkpoint superseded: Terminate prunes them. Its metric records
-// error.type Canceled.
+// Forget cancels a background upload in progress and waits for it to end
+// before it drops the actor's state. The upload ends as a canceled one does,
+// deleting the local copy of s1, which a newer checkpoint superseded. Its
+// metric records error.type Canceled.
 func TestTrackerForgetCancelsUpload(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
+	store.setIgnoreCancel(true)
 	tr := newIdleTestTracker(t, store)
 	inst, reader := newTestInstruments(t)
 	tr.instruments = inst
@@ -304,20 +304,38 @@ func TestTrackerForgetCancelsUpload(t *testing.T) {
 	done := startUpload(t, tr, store)
 	tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
 
-	returnsPromptly(t, "Forget during an upload", func() {
-		if err := tr.Forget(trackedActorUID); err != nil {
+	forgetDone := make(chan error, 1)
+	go func() { forgetDone <- tr.Forget(trackedActorUID) }()
+	if got := waitCanceled(t, store); got != "s1" {
+		t.Fatalf("canceled upload = %q, want s1", got)
+	}
+	select {
+	case err := <-forgetDone:
+		t.Fatalf("Forget returned (%v) before the canceled upload ended", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	store.release <- context.Canceled
+	select {
+	case err := <-forgetDone:
+		if err != nil {
 			t.Errorf("Forget: %v", err)
 		}
-	})
-	waitClosed(t, done, "the cancelled upload")
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for Forget to return")
+	}
+	select {
+	case <-done:
+	default:
+		t.Error("Forget returned before the canceled upload ended")
+	}
 	if st := tr.State(trackedActorUID); !proto.Equal(st, &ateletpb.ActorSnapshotState{}) {
 		t.Errorf("state after forget = %v, want empty", st)
 	}
 	if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(trackedActorUID)); !os.IsNotExist(err) {
-		t.Errorf("state file once the cancelled upload ended: stat = %v, want none", err)
+		t.Errorf("state file after Forget: stat = %v, want none", err)
 	}
-	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); err != nil {
-		t.Errorf("s1 once the cancelled upload ended: %v, want it left for Terminate to prune", err)
+	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); !os.IsNotExist(err) {
+		t.Errorf("s1 after Forget: stat = %v, want the canceled upload to delete it", err)
 	}
 	if got, want := recordedErrorTypes(t, reader), []string{codes.Canceled.String()}; !slices.Equal(got, want) {
 		t.Errorf("recorded upload error types = %v, want %v", got, want)
@@ -945,6 +963,65 @@ func TestTrackerKeepsSupersededCopyWhileHeld(t *testing.T) {
 			t.Errorf("s1 after a worker cleared it during a Restore: stat = %v, want it kept", err)
 		}
 	})
+}
+
+// While Terminate holds the actor, no upload worker clears a superseded
+// Uploading snapshot or deletes its local copy: Terminate prunes the actor's
+// local snapshots once Forget drops it. If the terminate fails before Forget,
+// its end lets a worker clear the snapshot, which deletes the copy before
+// releasing the actor's lock.
+func TestTrackerTerminateHoldsOffSupersededUploadingCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		forget bool
+	}{
+		{name: "terminate fails before Forget"},
+		{name: "Forget drops the actor", forget: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeSnapshotStore()
+			store.setErr(errors.New("boom"))
+			tr := newIdleTestTracker(t, store)
+			s1Dir := ateletpath.LocalSnapshotDir(trackedActorUID, "s1")
+			if err := os.MkdirAll(s1Dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now().Add(-testUploadDelay)))
+			processNext(t, tr, opUpload) // s1's upload fails, and s1 waits in Uploading to retry.
+			tr.CommitDurable(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
+
+			end := tr.BeginTerminate(trackedActorUID)
+			processNext(t, tr, opUpload)
+			if rec := readSnapshotState(trackedActorUID); rec == nil || rec.Uploading == nil || rec.Uploading.uuid() != "s1" {
+				t.Errorf("state file during Terminate = %+v, want s1 still Uploading", rec)
+			}
+			if _, err := os.Stat(s1Dir); err != nil {
+				t.Errorf("s1 during Terminate: stat = %v, want it left for Terminate to prune", err)
+			}
+
+			if tc.forget {
+				if err := tr.Forget(trackedActorUID); err != nil {
+					t.Fatalf("Forget: %v", err)
+				}
+				end()
+				if n := queuedNow(tr); n != 0 {
+					t.Errorf("queued = %d after Forget and the terminate's end, want nothing queued for the forgotten actor", n)
+				}
+				return
+			}
+			end()
+			if run := tr.beginDueWork(trackedActorUID, opUpload); run != nil {
+				t.Error("beginDueWork left work to run after releasing the actor's lock, want s1 deleted under it")
+				run()
+			}
+			if rec := readSnapshotState(trackedActorUID); rec == nil || rec.Uploading != nil {
+				t.Errorf("state file once the terminate failed = %+v, want Uploading cleared", rec)
+			}
+			if _, err := os.Stat(s1Dir); !os.IsNotExist(err) {
+				t.Errorf("s1 once the terminate failed: stat = %v, want it deleted", err)
+			}
+		})
+	}
 }
 
 // Uploading is saved to the snapshot state file, so an atelet restart mid-upload

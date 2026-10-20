@@ -462,6 +462,72 @@ func TestDropStagedRestoreFiles(t *testing.T) {
 	}
 }
 
+// TestDropSharedRestoreFilesAfterEviction pins the case of a restore dir
+// whose files are hard links into atelet's snapshot cache: unlinking them at
+// once would free nothing, since the cache's link keeps the inode and its
+// pages charged to the actor's cgroup, so the files are evicted from the page
+// cache after the restore's page loading, as a preserved dir is, and only
+// then unlinked.
+func TestDropSharedRestoreFilesAfterEviction(t *testing.T) {
+	restoreDir := newRestoreDir(t)
+	cache := filepath.Join(t.TempDir(), "cache")
+	mustMkdir(t, cache)
+	for _, name := range []string{"checkpoint.img", "pages.img"} {
+		if err := os.Link(filepath.Join(restoreDir, name), filepath.Join(cache, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evicted := captureEviction(t)
+	restoreDone := make(chan struct{})
+
+	dropActorCheckpointCacheAsync(context.Background(), testActorUID, restoreDir, false, func(ctx context.Context) error {
+		select {
+		case <-restoreDone:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	// Nothing happens while the restore still loads pages from the files.
+	select {
+	case <-evicted:
+		t.Fatal("evicted before the restore wait completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	for _, name := range []string{"checkpoint.img", "pages.img", "fs/pages.img"} {
+		if _, err := os.Stat(filepath.Join(restoreDir, name)); err != nil {
+			t.Fatalf("%s unlinked before the restore wait completed: %v", name, err)
+		}
+	}
+
+	close(restoreDone)
+	select {
+	case targets := <-evicted:
+		if len(targets) != 3 {
+			t.Errorf("evicted %d files, want the 3 data files", len(targets))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("eviction never ran after the restore wait completed")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for _, name := range []string{"checkpoint.img", "pages.img", "fs/pages.img"} {
+		for {
+			if _, err := os.Stat(filepath.Join(restoreDir, name)); os.IsNotExist(err) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s still exists after eviction", name)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	for _, name := range []string{"checkpoint.img", "pages.img"} {
+		if _, err := os.Stat(filepath.Join(cache, name)); err != nil {
+			t.Errorf("the cache's link to %s went with the restore dir's: %v", name, err)
+		}
+	}
+}
+
 func TestEvictPreservedRestoreDir(t *testing.T) {
 	t.Run("evicts once the restore wait completes", func(t *testing.T) {
 		restoreDir := newRestoreDir(t)

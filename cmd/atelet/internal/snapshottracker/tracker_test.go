@@ -121,22 +121,31 @@ const (
 type fakeSnapshotStore struct {
 	// started receives each call's snapshot uuid as the call starts.
 	started chan string
+	// canceled receives each call's snapshot uuid once its ctx ends while
+	// ignoreCancel is set.
+	canceled chan string
 	// release ends a blocked call with the error it receives.
 	release chan error
 
-	mu       sync.Mutex
-	calls    []string
-	actors   map[string]resources.ActorRef
-	uploaded map[string]bool
-	blocking bool
-	err      error
+	mu           sync.Mutex
+	calls        []string
+	actors       map[string]resources.ActorRef
+	uploaded     map[string]bool
+	blocking     bool
+	ignoreCancel bool
+	err          error
 	// deadline is the deadline of the latest call's context: zero if it has
 	// none.
 	deadline time.Time
 }
 
 func newFakeSnapshotStore() *fakeSnapshotStore {
-	return &fakeSnapshotStore{started: make(chan string, 100), release: make(chan error), actors: map[string]resources.ActorRef{}}
+	return &fakeSnapshotStore{
+		started:  make(chan string, 100),
+		canceled: make(chan string, 100),
+		release:  make(chan error),
+		actors:   map[string]resources.ActorRef{},
+	}
 }
 
 // setBlocking makes later calls wait for release, or their context.
@@ -144,6 +153,14 @@ func (f *fakeSnapshotStore) setBlocking(blocking bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.blocking = blocking
+}
+
+// setIgnoreCancel makes blocked calls wait for release even after their
+// context ends, sending their snapshot uuid on canceled first.
+func (f *fakeSnapshotStore) setIgnoreCancel(ignore bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ignoreCancel = ignore
 }
 
 // setErr makes later calls fail with err, or succeed when it is nil.
@@ -179,14 +196,18 @@ func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, r
 	f.calls = append(f.calls, ref.uuid())
 	f.actors[ref.uuid()] = ref.Actor
 	f.deadline, _ = ctx.Deadline()
-	blocking, err := f.blocking, f.err
+	blocking, ignoreCancel, err := f.blocking, f.ignoreCancel, f.err
 	f.mu.Unlock()
 	f.started <- ref.uuid()
 	if blocking {
 		select {
 		case err = <-f.release:
 		case <-ctx.Done():
-			return false, ctx.Err()
+			if !ignoreCancel {
+				return false, ctx.Err()
+			}
+			f.canceled <- ref.uuid()
+			err = <-f.release
 		}
 	}
 	if err != nil {
@@ -321,6 +342,20 @@ func waitStarted(t *testing.T, store *fakeSnapshotStore) string {
 		return uuid
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for an upload to start")
+		return ""
+	}
+}
+
+// waitCanceled waits for the next blocked store call with ignoreCancel set to
+// see its context canceled, and returns the uuid of the snapshot it was
+// uploading.
+func waitCanceled(t *testing.T, store *fakeSnapshotStore) string {
+	t.Helper()
+	select {
+	case uuid := <-store.canceled:
+		return uuid
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for an upload to be canceled")
 		return ""
 	}
 }

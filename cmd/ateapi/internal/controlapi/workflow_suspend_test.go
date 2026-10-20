@@ -1548,3 +1548,94 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 		})
 	}
 }
+
+func TestSuspendActor_Finalized_RecordsLocalCopyWhenKept(t *testing.T) {
+	const node = "node-1"
+	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	localReport := func(snap *ateletpb.Snapshot) *ateletpb.ActorSnapshotState {
+		return &ateletpb.ActorSnapshotState{LatestLocal: &ateletpb.SnapshotReport{Snapshot: snap}}
+	}
+	variant := func(req *ateletpb.CheckpointRequest, mutate func(*ateletpb.Snapshot)) *ateletpb.Snapshot {
+		snap := proto.CloneOf(req.GetSnapshot())
+		mutate(snap)
+		return snap
+	}
+	tests := []struct {
+		name         string
+		state        func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState
+		wantLocality string
+	}{{
+		name: "kept",
+		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
+			return localReport(req.GetSnapshot())
+		},
+		wantLocality: node,
+	}, {
+		name: "not kept",
+		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
+			return &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: req.GetSnapshot()}}
+		},
+	}, {
+		name: "uuid mismatch",
+		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
+			return localReport(variant(req, func(snap *ateletpb.Snapshot) { snap.SnapshotUuid = "another-snapshot" }))
+		},
+	}, {
+		name: "generation mismatch",
+		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
+			return localReport(variant(req, func(snap *ateletpb.Snapshot) { snap.Generation = req.GetSnapshot().GetGeneration() - 1 }))
+		},
+	}, {
+		name: "uri mismatch",
+		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
+			return localReport(variant(req, func(snap *ateletpb.Snapshot) {
+				snap.Object = &ateletpb.ObjectStorage{SnapshotUri: "gs://bucket/root/another-snapshot"}
+			}))
+		},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: memory})
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: suspendTestTemplateRef(),
+				Status: &ateapipb.ActorStatus{
+					State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					AssignedNode:     node,
+					WorkerAssignment: wireTestAssignment(),
+				},
+			})
+			seedWireWorker(t, ctx, persistence, assignmentOf(created))
+			w, atelet := newWireCaptureWorkflow(t, persistence)
+			atelet.onCheckpoint = func(context.Context) error {
+				st := tt.state(atelet.checkpointRequest())
+				atelet.mu.Lock()
+				atelet.checkpointState = st
+				atelet.mu.Unlock()
+				return nil
+			}
+
+			if _, err := w.SuspendActor(ctx, actorRef, suspendSync); err != nil {
+				t.Fatalf("suspend: %v", err)
+			}
+			stored := mustReadActor(t, ctx, persistence, actorRef)
+			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+				t.Errorf("state = %v, want SUSPENDED", got)
+			}
+			if got := stored.GetStatus().GetAssignedNode(); got != tt.wantLocality {
+				t.Errorf("AssignedNode = %q, want %q", got, tt.wantLocality)
+			}
+			if got := stored.GetStatus().GetWorkerAssignment(); got != nil {
+				t.Errorf("WorkerAssignment = %v, want cleared", got)
+			}
+			want := []snapshotOutcome{{generation: 1, fidelity: memory, locality: tt.wantLocality, durable: completed}}
+			if diff := cmp.Diff(want, describeSnapshots(stored.GetStatus()), cmp.AllowUnexported(snapshotOutcome{})); diff != "" {
+				t.Errorf("snapshots mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}

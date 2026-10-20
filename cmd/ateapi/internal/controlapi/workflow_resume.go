@@ -48,6 +48,11 @@ type resumeSnapshotSource struct {
 	// snapshot, which takes precedence at restore).
 	SnapshotURI resources.SnapshotURI
 	Fidelity    ateapipb.SnapshotFidelity
+	// Owner is who the durable snapshot belongs to: the actor, whose next
+	// suspend replaces it, or a tag, whose snapshot is immutable and read by
+	// every actor created from it. It decides what the restore declares as
+	// the snapshot's sharing.
+	Owner ateapipb.SnapshotOwner
 	// TemplateReplaced is true when the external snapshot's recorded template
 	// UID differs from the actor's current template.
 	TemplateReplaced bool
@@ -198,6 +203,7 @@ func resolveResumeSource(actorRef resources.ActorRef, actor *ateapipb.Actor, act
 		src.SnapshotUUID = snap.GetUuid()
 		src.Generation = snap.GetGeneration()
 		src.Fidelity = snap.GetFidelity()
+		src.Owner = snap.GetOwner()
 		src.TemplateReplaced = templateReplaced(snap, actorTemplate)
 	}
 	// A local restore also names the local snapshot's upload, so a URI that
@@ -215,6 +221,18 @@ func resolveResumeSource(actorRef resources.ActorRef, actor *ateapipb.Actor, act
 func templateReplaced(snap *ateapipb.Snapshot, tmpl *ateapipb.ActorTemplate) bool {
 	capturedUnder := snap.GetActorTemplateUid()
 	return capturedUnder != "" && capturedUnder != tmpl.GetMetadata().GetUid()
+}
+
+// snapshotSharing is what a restore declares about a snapshot with the
+// given owner. A tag's snapshot is immutable once published and read by
+// every actor created from it, so atelet may serve its files from the
+// node-local cache; the actor's own is replaced by its next suspend, so
+// never, and so is one whose owner is not recorded.
+func snapshotSharing(owner ateapipb.SnapshotOwner) ateletpb.SnapshotSharing {
+	if owner == ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG {
+		return ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED
+	}
+	return ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE
 }
 
 // ensureVolumesCreated provisions any actor volumes that have no storage
@@ -261,18 +279,9 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	return storedActor, nil
 }
 
-// ensureWorkerAssigned leaves the actor RESUMING with a validated, live,
-// owned, and eligible worker.
-//
-// A RESUMING actor was assigned by a previous attempt: its persisted
-// assignment is revalidated (worker still exists, not draining, still owned
-// by this actor UID, still eligible for the actor's constraints) and reused;
-// a stale assignment crashes the actor. A SUSPENDED actor goes through
-// scheduling (pinned to its assigned node when it holds a node-local
-// snapshot), claiming the worker and persisting RESUMING with the
-// assignment. A version conflict there is retried under a bounded backoff
-// only after re-reading the actor and revalidating it can still be resumed —
-// the conflicting writer may have crashed, drained, or deleted it.
+// ensureWorkerAssigned assigns a worker and leaves the actor RESUMING.
+// Re-entry validates the recorded assignment before reuse.
+// Version conflicts re-read the actor before retrying.
 func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, _ *ateapipb.Worker, err error) {
 	ctx, done := stepSpan(ctx, "AssignWorker")
 	defer func() { err = done(err) }()
@@ -653,8 +662,6 @@ func toAteletSandboxRuntime(in *ateapipb.SandboxRuntime) *ateletpb.SandboxRuntim
 
 func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) scheduling.Constraints {
 	var requiredNodes []string
-	// A suspended Actor with a local snapshot stays pinned to its node until
-	// atelet detaches it. When the node is full, ResumeActor detaches it.
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}
@@ -713,18 +720,20 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 	return nil
 }
 
-// canRelaxRuntime reports whether a resume may drop its RequiredRuntime
-// constraint and fall back to restoring without memory state when no
-// runtime-compatible worker has capacity. A local pause checkpoint is not
-// relaxed: the resume stays pinned to its node, the local restore has no
-// fidelity downgrade, and nothing invalidates the checkpoint files if the actor
-// boots elsewhere. The pin lifts once atelet uploads the checkpoint and
-// detaches it from the node.
+// canRelaxRuntime reports whether scheduling may drop its runtime requirement.
 func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
 	if constraints.RequiredRuntime.Runtime() == nil {
 		return false
 	}
-	return findLatestLocalSnapshot(actor.GetStatus()) == nil
+	status := actor.GetStatus()
+	local := findLatestLocalSnapshot(status)
+	if local == nil {
+		return true
+	}
+	if status.GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && status.GetAssignedNode() != "" {
+		return false
+	}
+	return local.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 }
 
 // appliesWithFallback reports whether worker satisfies constraints, or — when
@@ -830,8 +839,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
 		fidelity := fidelityToAtelet(localSnap.GetFidelity())
-		if templateReplaced(localSnap, actorTemplate) {
+		switch {
+		case templateReplaced(localSnap, actorTemplate):
 			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		case runtimeIncompatible:
+			logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime)
+			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 		}
 		req := &ateletpb.RestoreRequest{
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
@@ -849,7 +862,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 				// report of the upload lands. atelet reads it only when it
 				// holds no usable local copy, and the manifest, uploaded
 				// last, tells a complete upload from a partial one.
-				Object: &ateletpb.ObjectStorage{SnapshotUri: localSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()},
+				Object: &ateletpb.ObjectStorage{
+					SnapshotUri: localSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(),
+					Sharing:     snapshotSharing(localSnap.GetOwner()),
+				},
 			},
 			SandboxRuntime: sandboxRuntime,
 			ActorUid:       actor.GetMetadata().Uid,
@@ -890,6 +906,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 				Fidelity:     scope,
 				Object: &ateletpb.ObjectStorage{
 					SnapshotUri: src.SnapshotURI.String(),
+					Sharing:     snapshotSharing(src.Owner),
 				},
 			},
 			SandboxRuntime: sandboxRuntime,

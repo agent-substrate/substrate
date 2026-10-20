@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
 	"go.ate.dev/substrate/internal/apierror"
@@ -76,6 +77,9 @@ type fakeWorker struct {
 	// restored holds the file contents staged into the restore dir by the
 	// most recent RestoreWorkload.
 	restored map[string]string
+	// restoreErr, if set, fails every RestoreWorkload after it recorded the
+	// request, as a worker that could not start the sandbox would.
+	restoreErr error
 	// actorDirs records the ActorDirs each RPC arrived with, by RPC name.
 	actorDirs map[string]*ateworkerpb.ActorDirs
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
@@ -87,6 +91,9 @@ type fakeWorker struct {
 	// onCheckpoint, if non-nil, runs inside CheckpointWorkload after snapshot
 	// files are written.
 	onCheckpoint func()
+	// onTerminate, if non-nil, runs inside TerminateWorkload, which fails with
+	// the error it returns.
+	onTerminate func() error
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
@@ -133,6 +140,9 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
 	f.recordFidelity("RestoreWorkload", req.GetFidelity())
 	f.preserveRestoreDir = req.GetPreserveRestoreDir()
+	if f.restoreErr != nil {
+		return nil, f.restoreErr
+	}
 	dir := req.GetActorDirs().GetRestoreDir()
 	f.restored = map[string]string{}
 	for name := range f.snapshotFiles {
@@ -147,6 +157,11 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 
 func (f *fakeWorker) TerminateWorkload(_ context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
 	f.recordActorDirs("TerminateWorkload", req.GetActorDirs())
+	if f.onTerminate != nil {
+		if err := f.onTerminate(); err != nil {
+			return nil, err
+		}
+	}
 	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
@@ -886,6 +901,86 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRestoreFailureRemovesStagedSnapshotFiles pins what a shared restore
+// that fails after its snapshot files were staged leaves behind: nothing in
+// the restore-state directory, so the links into the snapshot cache do not
+// hold its entries until a later lifecycle call resets the directory.
+func TestRestoreFailureRemovesStagedSnapshotFiles(t *testing.T) {
+	useTempNodeDirs(t)
+	const (
+		actorUID     = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a66"
+		snapshotName = "pause-snap-1"
+	)
+	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": ""}, restoreErr: status.Error(codes.Internal, "sandbox would not start")}
+	serveFakeWorker(t, worker)
+	host := imageVolumeTestRegistry(t)
+	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
+	release := newGVisorTestRelease(t)
+	sandboxRec := testSandboxRecord(release, pinnedImage)
+	manifestRec := sandboxAssetsRecord{
+		SandboxClass:  "gvisor",
+		PauseImage:    pinnedImage,
+		Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
+		SnapshotFiles: []string{"checkpoint.img"},
+	}
+	s := newPluginHerder(t, &recordingObjectStorage{})
+	s.workerDialer = newWorkerDialer(1)
+	s.imageCache = newImageVolumeStore(t)
+	s.anonGCSClient = fakeObjectStorage{data: release.tarball}
+	s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+	// No min age, so the only thing standing between a staged entry and a
+	// pass is the restore's link.
+	cache, err := filecache.New(filepath.Join(t.TempDir(), "cache"), filecache.WithMinAge(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.snapshotCache = cache
+	uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcDir := t.TempDir()
+	writeLocalSnapshot(t, srcDir, manifestRec, map[string]string{"checkpoint.img": "shared-memory"})
+	if err := s.uploadSnapshot(t.Context(), uri, srcDir, &manifestRec); err != nil {
+		t.Fatalf("uploadSnapshot: %v", err)
+	}
+	advertiseRuntime(t, s, sandboxRec)
+
+	_, err = s.Restore(t.Context(), &ateletpb.RestoreRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+		SandboxRuntime:        runtimeFor(t, sandboxRec),
+		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}}},
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: snapshotName,
+			Generation:   1,
+			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI, Sharing: ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED},
+		},
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("Restore = %v, want the worker's Internal", err)
+	}
+	if worker.actorDirs["RestoreWorkload"] == nil {
+		t.Fatal("the worker was never asked: the failure must come after the snapshot files were staged")
+	}
+	if entries, err := os.ReadDir(ateletpath.RestoreStateDir(actorUID)); err == nil && len(entries) != 0 {
+		t.Errorf("restore-state holds %v after a failed restore, want nothing", entries)
+	}
+	stats, err := cache.EvictUnused(t.Context(), 1<<40, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two entries, the manifest and checkpoint.img, both unlinked.
+	if stats.Retired != 2 || stats.SkippedLinked != 0 {
+		t.Errorf("after the failed restore a pass would retire %d entries and skip %d linked, want 2 and 0: the staged link must be gone", stats.Retired, stats.SkippedLinked)
 	}
 }
 
@@ -2028,7 +2123,8 @@ func runtimeFor(t *testing.T, rec *sandboxAssetsRecord) *ateletpb.SandboxRuntime
 }
 
 type gatingTrackerStore struct {
-	inner   snapshottracker.Store
+	inner snapshottracker.Store
+	// objects, if set, fails every upload after the first gated one.
 	objects *recordingObjectStorage
 	started chan struct{}
 	release chan struct{}
@@ -2042,6 +2138,9 @@ func (s *gatingTrackerStore) UploadLocalSnapshot(ctx context.Context, actorUID s
 		return false, ctx.Err()
 	}
 	uploaded, err := s.inner.UploadLocalSnapshot(ctx, actorUID, ref)
+	if s.objects == nil {
+		return uploaded, err
+	}
 	// Fail any second upload attempt so PromoteSnapshot proves it skips
 	// re-uploading once the background upload made the snapshot durable.
 	s.objects.mu.Lock()
@@ -2179,6 +2278,114 @@ func TestCheckpointKeepsSnapshotBeingUploaded(t *testing.T) {
 	})
 	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2")); err != nil {
 		t.Errorf("pause-snap-2 after the upload of pause-snap-1: stat = %v, want it kept", err)
+	}
+}
+
+// resumedWithPendingUpload runs a plugin actor, pauses it into pause-snap-1
+// with a deferred upload, and resumes it from that snapshot's local copy
+// before the upload is due. It returns the actor, its gated tracker store, and
+// a func that steps the clock past the upload's due time and reports whether
+// the upload starts within a moment.
+func resumedWithPendingUpload(t *testing.T) (*pluginActor, *gatingTrackerStore, func() bool) {
+	t.Helper()
+	a := runPluginActor(t)
+	clk := clocktesting.NewFakeClock(time.Now())
+	store := &gatingTrackerStore{
+		inner:   &trackerStore{s: a.s},
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	a.s.snapshots = snapshottracker.New(t.Context(), store, clk,
+		snapshottracker.WithUploadDelay(time.Second),
+		snapshottracker.WithDetachDelay(time.Hour))
+	a.s.snapshots.Start()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := a.s.snapshots.Wait(ctx); err != nil {
+			t.Errorf("Wait: %v", err)
+		}
+	})
+	// An upload that starts holds on until released; release it before Wait.
+	t.Cleanup(func() { close(store.release) })
+
+	cpResp, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+	if err != nil {
+		t.Fatalf("Checkpoint (pause-snap-1): %v", err)
+	}
+	due := cpResp.GetState().GetUploadDueTime().AsTime()
+	a.restoreLocal(t, "pause-snap-1", 1)
+	// Step on in one-second steps past the due time, in case the queue's timer
+	// was armed late (see stepToUpload).
+	stepPastDue := func() bool {
+		clk.Step(due.Sub(clk.Now()))
+		for range 5 {
+			select {
+			case <-store.started:
+				return true
+			case <-time.After(20 * time.Millisecond):
+				clk.Step(time.Second)
+			}
+		}
+		return false
+	}
+	return a, store, stepPastDue
+}
+
+// TestTerminateHoldsOffBackgroundUpload terminates an actor resumed from its
+// pause snapshot, whose background upload comes due while the worker tears the
+// actor down: the upload does not start, since Terminate would only cancel it.
+// When the worker fails to tear the actor down, Terminate fails before it
+// forgets the actor, and the upload, still due, starts once Terminate returns.
+func TestTerminateHoldsOffBackgroundUpload(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// teardownErr is what the worker's TerminateWorkload fails with.
+		teardownErr error
+	}{
+		{name: "Terminate succeeds"},
+		{name: "Terminate fails", teardownErr: status.Error(codes.Internal, "teardown failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, store, stepPastDue := resumedWithPendingUpload(t)
+			var started atomic.Bool
+			a.worker.onTerminate = func() error {
+				started.Store(stepPastDue())
+				return tc.teardownErr
+			}
+
+			_, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+				Atespace:              "ate-demo",
+				ActorName:             "counter",
+				ActorUid:              pluginActorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          pluginWorkerPodUID,
+				Spec:                  a.spec,
+			})
+			switch {
+			case tc.teardownErr == nil && err != nil:
+				t.Fatalf("Terminate: %v", err)
+			case tc.teardownErr != nil && err == nil:
+				t.Fatal("Terminate succeeded, want it to fail with the worker's teardown")
+			}
+			if started.Load() {
+				t.Error("background upload of pause-snap-1 started during Terminate, want none")
+			}
+			if tc.teardownErr == nil {
+				select {
+				case <-store.started:
+					t.Error("background upload of pause-snap-1 started during Terminate, want none")
+				default:
+				}
+				return
+			}
+			select {
+			case <-store.started:
+			case <-time.After(10 * time.Second):
+				t.Fatal("background upload of pause-snap-1 did not start once Terminate failed")
+			}
+		})
 	}
 }
 

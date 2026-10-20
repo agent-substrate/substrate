@@ -60,21 +60,14 @@ func findLatestDurableSnapshot(status *ateapipb.ActorStatus, storageStatus ateap
 	})
 }
 
-// findLatestLocalSnapshot returns the highest-generation Snapshot on status
-// that holds a completed local checkpoint (Locality != ""), or nil if none
-// exists.
+// findLatestLocalSnapshot returns the highest-generation snapshot with a local copy.
 func findLatestLocalSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 	return latestSnapshot(status, func(snap *ateapipb.Snapshot) bool {
 		return snap.GetLocality() != ""
 	})
 }
 
-// latestSnapshotIsLocal reports whether the snapshot at the actor's latest
-// generation is node-local: the shape a pause leaves behind, which atelet's
-// upload of the snapshot doesn't change. A paused actor is SUSPENDED with this
-// shape, and resumes only on the node named by Locality. A RUNNING actor
-// resumed from pause keeps the local snapshot too, so callers that need "at
-// rest" check the state as well.
+// latestSnapshotIsLocal reports whether the latest generation has a local copy.
 func latestSnapshotIsLocal(status *ateapipb.ActorStatus) bool {
 	return snapshotAtLatestGeneration(status).GetLocality() != ""
 }

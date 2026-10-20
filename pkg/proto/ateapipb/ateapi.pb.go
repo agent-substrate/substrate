@@ -732,10 +732,8 @@ type Snapshot struct {
 	// +k8s:optional
 	// +k8s:format=k8s-uuid
 	ActorTemplateUid string `protobuf:"bytes,5,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
-	// locality identifies the node holding this snapshot's files (currently the
-	// Kubernetes node name). Set when a local pause checkpoint completes, and
-	// cleared once the files are deleted from that node; a resume does not
-	// delete them.
+	// locality identifies the Kubernetes node holding this snapshot's files.
+	// Detach, revert, or a later checkpoint clears it. Resume keeps the files.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-long-name
@@ -2057,9 +2055,9 @@ type ActorStatus struct {
 	//
 	// +k8s:optional
 	Crash *ActorCrash `protobuf:"bytes,4,opt,name=crash,proto3" json:"crash,omitempty"`
-	// assigned_node is the Kubernetes node the Actor is currently attached to
-	// (hosting its active worker or its node-local snapshots). Unset when the
-	// Actor is detached from any node.
+	// assigned_node is the node hosting the Actor's worker or local snapshot.
+	// A suspended Actor remains attached while its local snapshot is kept.
+	// Detach or revert clears the binding.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-long-name

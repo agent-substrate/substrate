@@ -60,7 +60,7 @@ func TestUploaderBudgetFitsBothPaths(t *testing.T) {
 				continue
 			}
 			// An all-holes file streams a few bytes.
-			if plan.memory < streamBufferMemory(client, sparseEncodedBound(0, 0))+int64(plan.workers)*parallelWorkerMemory {
+			if plan.memory < streamBufferMemory(client, sparseEncodedBound(0, 0))+int64(plan.workers)*parZstdWorkerMemory(parZstdMinChunk) {
 				t.Fatalf("%T: streaming pipeline under-reserved: %+v", client, plan)
 			}
 		}
@@ -75,9 +75,9 @@ func TestUploaderPlansFromPopulatedBytes(t *testing.T) {
 		populatedMiB int
 		gcs, s3      uploadPlan
 	}{
-		{"all_holes", 0, uploadPlan{1, 1, 192 << 20}, uploadPlan{1, 1, 224 << 20}},
-		{"small", 1, uploadPlan{1, 1, 192 << 20}, uploadPlan{1, 1, 224 << 20}},
-		{"two_chunks", 9, uploadPlan{2, 1, 256 << 20}, uploadPlan{2, 1, 288 << 20}},
+		{"all_holes", 0, uploadPlan{1, 1, 8<<20 + 512<<10}, uploadPlan{1, 1, 168 << 20}},
+		{"small", 1, uploadPlan{1, 1, 8<<20 + 2560<<10}, uploadPlan{1, 1, 168 << 20}},
+		{"two_chunks", 9, uploadPlan{2, 1, 146<<20 + 512<<10}, uploadPlan{2, 1, 288 << 20}},
 		{"multiple_ranges", 192, uploadPlan{3, 3, 144 << 20}, uploadPlan{5, 3, 480 << 20}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,13 +140,13 @@ func TestUploaderReservesOnlyTheChosenPath(t *testing.T) {
 		if got.parts != 4 || got.memory != 4*sparseUploadMemory {
 			t.Errorf("capacity %d: ranged plan = %+v, want 4 parts reserving %d", capacity, got, 4*sparseUploadMemory)
 		}
-		// 1 MiB populated: one request, so PutObject's lookahead, the client's
-		// chunk buffer, and one worker.
+		// 1 MiB populated: one request, sized to the bounded stream and 1 MiB
+		// compression chunks.
 		got, err = u.plan(small)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := uploadCompositeMin + uploadChunkSize + parallelWorkerMemory; got.memory != want {
+		if want := streamBufferMemory(&gcsClient{}, sparseEncodedBound(1<<20, 1)) + parZstdWorkerMemory(parZstdMinChunk); got.memory != want {
 			t.Errorf("capacity %d: small plan = %+v, want %d", capacity, got, want)
 		}
 	}
@@ -162,7 +162,7 @@ func TestUploaderSmallSparseFilesShareBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		gate := make(chan struct{})
 		store := &gatedUploadStore{started: make(chan string, len(files)), release: gate}
-		u, err := NewUploader(store, 2*parallelWorkerMemory)
+		u, err := NewUploader(store, parallelWorkerMemory)
 		if err != nil {
 			t.Fatal(err)
 		}

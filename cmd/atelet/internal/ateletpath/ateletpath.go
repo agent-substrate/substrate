@@ -55,6 +55,14 @@ var (
 	// runtime registered before a restart resolves the moment atelet serves
 	// again.
 	SandboxRuntimeIndexFile = filepath.Join(nodepath.BasePath, "sandbox-runtime-index.json")
+
+	// SnapshotCacheDir is the node-local cache of shared snapshot files, the
+	// snapshots many actors are created from (see
+	// cmd/atelet/internal/filecache). It lives under BasePath because cache
+	// hits are served as hard links into the per-actor restore dirs under
+	// ActorsDir, and link(2) requires both ends on one mounted filesystem,
+	// the same mount, not merely the same disk.
+	SnapshotCacheDir = filepath.Join(nodepath.BasePath, "snapshot-cache")
 )
 
 func ActorPath(actorUID string) string {

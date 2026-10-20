@@ -206,19 +206,12 @@ func Unmount(dst string) {
 	}
 }
 
-// RemountReadOnly remounts a bind mount at dst as read-only, preserving existing
-// per-mount flags (nosuid, nodev, noexec, etc.) like libmount's remount,bind,ro.
+// RemountReadOnly makes the mount at dst and every mount beneath it read-only,
+// keeping their other flags. They are also made private, otherwise a mount made
+// under the source later would propagate in writable.
 func RemountReadOnly(dst string) error {
-	var st unix.Statfs_t
-	if err := unix.Statfs(dst, &st); err != nil {
-		return fmt.Errorf("statfs %q: %w", dst, err)
-	}
-	flags := unix.MS_BIND | unix.MS_REMOUNT | unix.MS_RDONLY |
-		int(st.Flags&(unix.ST_NOSUID|unix.ST_NODEV|unix.ST_NOEXEC|unix.ST_NOATIME|unix.ST_NODIRATIME))
-	if err := unix.Mount("", dst, "", uintptr(flags), ""); err != nil {
-		return err
-	}
-	return nil
+	attr := &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY, Propagation: unix.MS_PRIVATE}
+	return unix.MountSetattr(unix.AT_FDCWD, dst, unix.AT_RECURSIVE, attr)
 }
 
 // StageImageVolume bind-mounts one composed image volume read-only at

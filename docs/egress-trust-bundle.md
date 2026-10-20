@@ -123,7 +123,7 @@ Note: Do not bake the bundle into the image at build time. It will tie the image
 does exactly this. Deploy it:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-egress
+go run ./cmd/ate-setup deploy demo egress
 ```
 
 Then drive an actor's egress at an HTTPS URL an `https` rule allows and

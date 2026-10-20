@@ -35,8 +35,11 @@ import (
 // Independent chunks cost a little ratio (no matches across a boundary), which
 // parZstdChunk is sized to keep negligible.
 const (
-	// parZstdChunk is the per-frame chunk size.
+	// parZstdChunk is the maximum per-frame chunk size.
 	parZstdChunk = 8 << 20
+	// parZstdMinChunk is the smallest per-frame chunk size, covering a fast
+	// encoder's fixed tables, block buffers, and minimum history.
+	parZstdMinChunk = 1 << 20
 	// parZstdQueue is how many chunks may be outstanding per worker, so the producer
 	// can run ahead while workers compress.
 	parZstdQueue = 2
@@ -57,18 +60,43 @@ var (
 	parZstdFramePool = sync.Pool{New: func() any { b := make([]byte, 0, parZstdFrameCap); return &b }}
 )
 
+// parZstdChunkSize returns the per-frame chunk size for a sparse file with
+// populated data bytes, as a power of two between parZstdMinChunk and parZstdChunk.
+func parZstdChunkSize(populated int64) int64 {
+	chunk := int64(parZstdMinChunk)
+	for chunk < parZstdChunk && chunk < populated {
+		chunk <<= 1
+	}
+	return chunk
+}
+
+// parZstdWorkerMemory returns the memory reservation per worker for a given
+// frame chunk size.
+func parZstdWorkerMemory(chunk int64) int64 {
+	return (parZstdQueue*3 + 2) * chunk
+}
+
 // newChunkEncoder returns an encoder for EncodeAll use. Single-segment frames always
 // declare their content size, even the short last frame of a stream (zstd otherwise
 // leaves it out under 256 bytes), so a reader can size every frame without having
 // to bound it; a chunk is at most parZstdChunk, so the frame never needs a larger
 // window than that.
 func newChunkEncoder() *zstd.Encoder {
-	enc, err := zstd.NewWriter(nil,
+	return newChunkEncoderSized(parZstdChunk)
+}
+
+func newChunkEncoderSized(chunk int64) *zstd.Encoder {
+	opts := []zstd.EOption{
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
 		zstd.WithEncoderConcurrency(1),
-		zstd.WithSingleSegment(true))
+		zstd.WithSingleSegment(true),
+	}
+	if chunk > 0 && chunk < 4<<20 {
+		opts = append(opts, zstd.WithWindowSize(int(max(chunk, parZstdMinChunk))))
+	}
+	enc, err := zstd.NewWriter(nil, opts...)
 	if err != nil {
-		// NewWriter only fails on bad options, which are compile-time constants here.
+		// NewWriter only fails on bad options, which are bounded powers of two here.
 		panic(err)
 	}
 	return enc
@@ -76,6 +104,13 @@ func newChunkEncoder() *zstd.Encoder {
 
 func getChunk() []byte { return (*parZstdChunkPool.Get().(*[]byte))[:0] }
 func getFrame() []byte { return (*parZstdFramePool.Get().(*[]byte))[:0] }
+
+func getChunkSized(chunk int64) []byte {
+	if chunk == parZstdChunk {
+		return getChunk()
+	}
+	return make([]byte, 0, chunk)
+}
 
 func putChunk(b []byte) {
 	if cap(b) == parZstdChunk {
@@ -107,6 +142,7 @@ func putFrame(b []byte) {
 type parZstd struct {
 	dst     io.Writer
 	workers int
+	chunk   int64
 
 	buf      []byte
 	free     chan []byte
@@ -131,28 +167,37 @@ type parZstdJob struct {
 // One worker, after the cap, means inline mode with no goroutines, so with
 // GOMAXPROCS=1 every caller compresses inline.
 func newParZstd(dst io.Writer, workers int) *parZstd {
+	return newParZstdChunk(dst, workers, parZstdChunk)
+}
+
+func newParZstdChunk(dst io.Writer, workers int, chunk int64) *parZstd {
 	if workers <= 0 || workers > runtime.GOMAXPROCS(0) {
 		workers = runtime.GOMAXPROCS(0)
+	}
+	if chunk <= 0 || chunk > parZstdChunk {
+		chunk = parZstdChunk
 	}
 	if workers == 1 {
 		return &parZstd{
 			dst:     dst,
 			workers: 1,
+			chunk:   chunk,
 			inline:  true,
-			enc:     newChunkEncoder(),
-			buf:     getChunk(),
+			enc:     newChunkEncoderSized(chunk),
+			buf:     getChunkSized(chunk),
 		}
 	}
 	p := &parZstd{
 		dst:     dst,
 		workers: workers,
+		chunk:   chunk,
 		free:    make(chan []byte, workers*parZstdQueue),
 		jobs:    make(chan parZstdJob, workers),
 		ordered: make(chan chan []byte, workers*parZstdQueue),
 		done:    make(chan struct{}),
 	}
 	for range workers * parZstdQueue {
-		p.free <- getChunk()
+		p.free <- getChunkSized(chunk)
 	}
 	for range workers {
 		p.workerWG.Go(p.worker)
@@ -165,7 +210,7 @@ func newParZstd(dst io.Writer, workers int) *parZstd {
 // worker compresses whole chunks. Each holds its own encoder: the encoders are
 // single-shot EncodeAll users, so one per worker keeps their state private.
 func (p *parZstd) worker() {
-	enc := newChunkEncoder()
+	enc := newChunkEncoderSized(p.chunk)
 	defer enc.Close()
 	for j := range p.jobs {
 		// Only a full chunk takes a pooled frame. A partial one (a small file, or

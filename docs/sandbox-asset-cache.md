@@ -205,9 +205,10 @@ metrics suite asserts that one.
 
 ## Not covered here, deliberately
 
-- **Snapshots.** The same `filecache` store is designed to serve shared
-  snapshot restores, the golden and clone images many actors start from.
-  That milestone is separate and not yet merged.
+- **Snapshots.** The same `filecache` store, the same eviction loop and the
+  same instruments serve shared snapshot restores, the images many actors
+  start from, as the `snapshot` value of `ate.filecache.name`. This page is
+  about the asset cache only.
 - **One GC driver for both caches.** The image layer cache has its own
   eviction loop with the same shape but no metrics. Sharing the driver would
   give it the pass and eviction instruments; it is a follow-up.
