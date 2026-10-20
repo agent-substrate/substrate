@@ -503,6 +503,7 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 		{name: "node-1 has room: resumes there from the local copy", node1: true, wantNode: "node-1"},
 		{name: "expected checkpoint detaches and resumes", conditioned: true, wantNode: "node-2"},
 		{name: "template changes before detach", conditioned: true, change: func(a *ateapi.Actor) { a.ActorTemplate.Name = "other" }, want: codes.FailedPrecondition},
+		{name: "snapshot changes before detach", conditioned: true, change: func(a *ateapi.Actor) { a.Status.Snapshots[0].Uuid = "other" }, want: codes.FailedPrecondition},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
