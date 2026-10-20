@@ -28,3 +28,6 @@ rapidhash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thread_local.workspace = true
+
+[dev-dependencies]
+envoy-proxy-dynamic-modules-rust-sdk = { workspace = true, features = ["mock"] }

@@ -110,7 +110,7 @@ spec:
       containers:
       - name: envoy
         # Same envoyproxy/envoy digest as cmd/dataplane/envoy/Dockerfile.
-        image: envoyproxy/envoy:v1.39.4@sha256:74bd4eb5629708d3fadca1a5e6b85d208f338d7bb54e06b69565905c5294cc01
+        image: envoyproxy/envoy:v1.40.0@sha256:459f2a6404c340fe6afccd69d85527012d47f3c036765493e6f8f3113fa384de
         command:
         - /usr/local/bin/envoy
         args:

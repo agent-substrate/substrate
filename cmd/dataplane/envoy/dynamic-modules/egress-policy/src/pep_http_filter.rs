@@ -211,7 +211,7 @@ impl EgressPolicyPepFilter {
 
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyPepFilter {
   fn on_request_headers(
-    &mut self,
+    &self,
     envoy_filter: &mut EHF,
     end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
