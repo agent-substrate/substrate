@@ -15,15 +15,20 @@
 //! The egress-policy dynamic module provides listener and HTTP filters for
 //! egress policy evaluation and storage. See the README in this directory.
 
+mod constants;
 pub mod egress_policy;
 pub mod egress_policy_store;
 pub mod listener_filter;
+pub mod pep_config;
+pub mod pep_http_filter;
 pub mod policy_store_filter;
 
 use envoy_proxy_dynamic_modules_rust_sdk::declare_all_init_functions;
 pub use egress_policy::*;
 pub use egress_policy_store::*;
 pub use listener_filter::*;
+pub use pep_config::*;
+pub use pep_http_filter::*;
 pub use policy_store_filter::*;
 
 declare_all_init_functions!(

@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use envoy_proxy_dynamic_modules_rust_sdk::{
-  EnvoyCounterId, EnvoyHttpFilter, HttpFilter, HttpFilterConfig,
+  envoy_log_error, EnvoyCounterId, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
 };
 use serde::{de, Deserialize, Deserializer};
 
@@ -28,6 +28,21 @@ pub const DEFAULT_CACHE_ENABLED: bool = true;
 
 /// Default value for `cache_ttl` (5 seconds).
 pub const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// Counter name for egress policy cache hits.
+pub const CACHE_HIT_COUNTER_NAME: &str = "ate_egress.cache_hit";
+
+/// Counter name for egress policy cache misses.
+pub const CACHE_MISS_COUNTER_NAME: &str = "ate_egress.cache_miss";
+
+/// Counter name for requests allowed by egress policy enforcement.
+pub const ALLOWED_COUNTER_NAME: &str = "ate_egress.allowed";
+
+/// Counter name for requests rejected by egress policy enforcement.
+pub const REJECTED_COUNTER_NAME: &str = "ate_egress.rejected";
+
+/// Counter name for requests matching a rule that has effects.
+pub const HAS_EFFECTS_COUNTER_NAME: &str = "ate_egress.has_effects";
 
 /// Deserialized configuration parameters for egress-policy-pep.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -123,6 +138,36 @@ fn parse_seconds_duration(s: &str) -> Result<Duration, String> {
     .map(Duration::from_secs)
     .map_err(|_| format!("invalid duration: {s}"))
 }
+
+/// Called when a new HTTP filter configuration is created.
+fn new_http_filter_config_fn<
+  EC: EnvoyHttpFilterConfig,
+  EHF: EnvoyHttpFilter,
+>(
+  envoy_filter_config: &mut EC,
+  _name: &str,
+  config: &[u8],
+) -> Option<Box<dyn HttpFilterConfig<EHF>>> {
+  let config = match Config::from_config(config) {
+    Ok(cfg) => cfg,
+    Err(err) => {
+      envoy_log_error!("egress policy pep: invalid filter config: {}", err);
+      return None;
+    }
+  };
+  Some(Box::new(EgressPolicyPepFilterConfig {
+    config,
+    cache_hit_counter: envoy_filter_config.define_counter(CACHE_HIT_COUNTER_NAME).ok()?,
+    cache_miss_counter: envoy_filter_config.define_counter(CACHE_MISS_COUNTER_NAME).ok()?,
+    allowed_counter: envoy_filter_config.define_counter(ALLOWED_COUNTER_NAME).ok()?,
+    rejected_counter: envoy_filter_config.define_counter(REJECTED_COUNTER_NAME).ok()?,
+    has_effects_counter: envoy_filter_config.define_counter(HAS_EFFECTS_COUNTER_NAME).ok()?,
+  }))
+}
+
+// ==========================================
+// Tests
+// ==========================================
 
 #[cfg(test)]
 mod tests {
