@@ -45,6 +45,7 @@ type RPCService struct {
 	dialer                *AteletDialer
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	actorWorkflow         *ActorWorkflow
+	egressGateways        *egressgateway.Resolver
 	workerWorkflow        *WorkerWorkflow
 	instruments           *Instruments
 	mu                    sync.RWMutex
@@ -83,7 +84,7 @@ func NewRPCService(
 	storageClassLister storagev1listers.StorageClassLister,
 	dialer *AteletDialer,
 	instruments *Instruments,
-	resolveEgressGateway egressgateway.Resolve,
+	resolveEgressGateway *egressgateway.Resolver,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
 	objectStorePlugin objectstorev1.ControlProviderClient,
 	actorJWTIssuer string,
@@ -95,6 +96,7 @@ func NewRPCService(
 	impl.clusterSnapshotLocation = snapshotLocation
 	s := &RPCService{
 		impl:                  impl,
+		egressGateways:        resolveEgressGateway,
 		persistence:           persistence,
 		workerCache:           workerCache,
 		csiDriverConfigLister: csiDriverConfigLister,
@@ -106,7 +108,7 @@ func NewRPCService(
 		actorIDJWTPool:        actorIDJWTPool,
 		actorIDCAPool:         actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, resolveEgressGateway, s, objectStorePlugin)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, resolveEgressGateway.Resolve, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s

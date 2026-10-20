@@ -156,8 +156,9 @@ a JWT subject matching a gateway identity does not qualify. Missing, terminating
 or invalid gateways grant no authority. Kubernetes writes to `EgressGateway`
 resources must be restricted to trusted administrators.
 
-Atespace creation remains restricted to global owners even when experimental
-API authorization enforcement is disabled, because it selects the gateway.
+When experimental API authorization enforcement is disabled, Atespace creation
+can use the default gateway but rejects explicit gateway assignments. With
+enforcement enabled, global owners choose the gateway.
 
 Only `egress_gateway` can mint actor credentials: not even a global owner can,
 since a credential lets its holder act as the actor.

@@ -42,6 +42,10 @@ func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAte
 		return nil, resources.ToAPIError(errs)
 	}
 
+	if _, err := s.egressGateways.ForAtespace(inAtespace); err != nil {
+		return nil, err
+	}
+
 	// Handle the creation, including validation of the final stored object.
 	return s.impl.CreateAtespace(ctx, inAtespace)
 }

@@ -19,6 +19,7 @@ import (
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 )
 
@@ -36,6 +37,11 @@ func UnaryServerInterceptor(authorizer *Authorizer, enforce bool) grpc.UnaryServ
 			return handler(ctx, req)
 		}
 		if !enforce && !rule.alwaysEnforce {
+			// Explicit gateway assignment requires authorization even in installations
+			// that disable ordinary access checks. Omitted bindings use default.
+			if create, ok := req.(*ateapipb.CreateAtespaceRequest); ok && create.GetAtespace().GetEgressGateway() != nil {
+				return nil, apierror.PermissionDenied("explicit egress gateway assignment requires authorization enforcement")
+			}
 			return handler(ctx, req)
 		}
 		if !registered {

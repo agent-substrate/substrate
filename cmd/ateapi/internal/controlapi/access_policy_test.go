@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/cmd/ateapi/internal/egressgateway/egressgatewaytest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
@@ -48,7 +49,8 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	persistence.SetPolicyManager(policyManager)
 
-	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, "")
+	gateways := egressgatewaytest.New(t, persistence)
+	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, gateways, nil, nil, "", nil, nil, "")
 	interceptor := authz.UnaryServerInterceptor(authorizer, true)
 
 	userCtx := func(id string) context.Context {

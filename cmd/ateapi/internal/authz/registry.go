@@ -145,8 +145,7 @@ func both(aChecks []check, aErrs field.ErrorList, bChecks []check, bErrs field.E
 type rpcRule struct {
 	extract checkExtractor
 	// alwaysEnforce marks RPCs that are checked even when enforcement is
-	// disabled. Atespace creation sets it to protect gateway assignment.
-	// AccessPolicy RPCs set it so that nobody can grant themselves
+	// disabled. AccessPolicy RPCs set it so that nobody can grant themselves
 	// access while enforcement is off and keep that grant once it is turned on.
 	alwaysEnforce bool
 	// authorizedInHandler, when set, says how the RPC's handler authorizes
@@ -173,7 +172,7 @@ func inHandler(how string) rpcRule {
 // any RPC missing from it.
 var defaultRPCPermissions = map[string]rpcRule{
 	// Atespaces.
-	ateapipb.Control_CreateAtespace_FullMethodName: governance(checksOf(func(*ateapipb.CreateAtespaceRequest) ([]check, field.ErrorList) {
+	ateapipb.Control_CreateAtespace_FullMethodName: rule(checksOf(func(*ateapipb.CreateAtespaceRequest) ([]check, field.ErrorList) {
 		return onGlobal(RelationCanCreateAtespace)
 	})),
 	ateapipb.Control_ListAtespaces_FullMethodName: rule(checksOf(func(*ateapipb.ListAtespacesRequest) ([]check, field.ErrorList) {

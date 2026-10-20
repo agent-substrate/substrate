@@ -78,7 +78,7 @@ func TestResolve(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := New(st, listers.NewEgressGatewayLister(indexer))(context.Background(), "team-a")
+			got, err := New(st, listers.NewEgressGatewayLister(indexer), indexer).Resolve(context.Background(), "team-a")
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Resolve() = %v, %v", got, err)
 			}
@@ -87,4 +87,37 @@ func TestResolve(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGatewayIdentityIndex(t *testing.T) {
+	informer := cache.NewSharedIndexInformer(nil, &atev1.EgressGateway{}, 0, cache.Indexers{})
+	if err := IndexIdentities(informer); err != nil {
+		t.Fatal(err)
+	}
+	indexer := informer.GetIndexer()
+	r := New(nil, listers.NewEgressGatewayLister(indexer), indexer)
+	gateway := &atev1.EgressGateway{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}, Spec: atev1.EgressGatewaySpec{Identity: "spiffe://example/old"}}
+	if err := indexer.Add(gateway); err != nil {
+		t.Fatal(err)
+	}
+	check := func(id string, want bool) {
+		t.Helper()
+		got, err := r.IsGateway(id)
+		if err != nil || got != want {
+			t.Fatalf("IsGateway(%q) = %v, %v; want %v", id, got, err, want)
+		}
+	}
+	check("spiffe://example/old", true)
+	check("spiffe://example/ordinary", false)
+	changed := gateway.DeepCopy()
+	changed.Spec.Identity = "spiffe://example/new"
+	if err := indexer.Update(changed); err != nil {
+		t.Fatal(err)
+	}
+	check("spiffe://example/old", false)
+	check("spiffe://example/new", true)
+	if err := indexer.Delete(changed); err != nil {
+		t.Fatal(err)
+	}
+	check("spiffe://example/new", false)
 }

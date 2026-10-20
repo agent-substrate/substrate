@@ -16,13 +16,14 @@ package authz
 
 import (
 	"context"
+	"net/url"
 	"strings"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
-	"go.ate.dev/substrate/cmd/ateapi/internal/egressgateway"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
+	atev1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // Authorizer is the read-only policy decision point that evaluates runtime
@@ -50,7 +51,7 @@ type Authorizer struct {
 	// tuple can't match a JWT subject, and AccessPolicy reconciliation
 	// limited to its own relations, so it doesn't delete them.
 	systemPrincipals     map[string][]string
-	resolveEgressGateway egressgateway.Resolve
+	resolveEgressGateway gatewayResolver
 }
 
 // Check verifies that the principal in ctx has relation on object.
@@ -82,23 +83,27 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 		}
 	}
 	if p.Kind == principal.KindMTLS && a.resolveEgressGateway != nil {
-		objectType, id, _ := strings.Cut(object, ":")
-		atespace := ""
-		if objectType == "actor" {
-			atespace, _, _ = strings.Cut(id, "/")
-		}
-		if objectType == "atespace" {
-			atespace = id
-		}
-		if atespace != "" && (relation == RelationCanGet || relation == RelationCanGetEgressPolicy || relation == RelationCanMintActorJWT || relation == RelationCanMintActorCertificate || relation == RelationCanListActors) {
-			gateway, err := a.resolveEgressGateway(ctx, atespace)
-			// A missing gateway grants no authority. Ordinary users retain their
-			// independently assigned permissions even while a gateway is unavailable.
-			if err == nil && gateway != nil && p.ID == gateway.Identity {
-				grants = append(grants, &openfgav1.TupleKey{User: user, Relation: RoleEgressGateway, Object: AtespaceObject(atespace)})
+		if parent := atespaceOf(object); parent != "" {
+			isGateway, err := a.resolveEgressGateway.IsGateway(p.ID)
+			if err != nil {
+				return err
+			}
+			if isGateway {
+				name, err := url.PathUnescape(parent)
+				if err != nil {
+					return apierror.Internal("invalid atespace object: %v", err)
+				}
+				gateway, err := a.resolveEgressGateway.Resolve(ctx, name)
+				if err != nil {
+					return err
+				}
+				if p.ID == gateway.Identity {
+					grants = append(grants, &openfgav1.TupleKey{User: user, Relation: RoleEgressGateway, Object: "atespace:" + parent})
+				}
 			}
 		}
 	}
+
 	allowed, err := a.checkRaw(ctx, user, relation, object, grants...)
 	if err != nil {
 		return err
@@ -160,13 +165,13 @@ func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string
 //     `CreateActorTemplate`, `CreateActor` and `CreateTag` can insert their rows without
 //     opening an OpenFGA write transaction just to link the parent.
 func contextualTuples(object string) []*openfgav1.TupleKey {
-	objectType, id, _ := strings.Cut(object, ":")
+	objectType, _, _ := strings.Cut(object, ":")
 	switch objectType {
 	case "atespace", "worker":
 		return []*openfgav1.TupleKey{parentGlobalTuple(object)}
 	case "actor", "actor_template", "tag":
-		atespace, _, ok := strings.Cut(id, "/")
-		if !ok {
+		atespace := atespaceOf(object)
+		if atespace == "" {
 			return nil
 		}
 		// atespacedID escapes the atespace the same way AtespaceObject does.
@@ -187,4 +192,25 @@ func parentGlobalTuple(object string) *openfgav1.TupleKey {
 		Relation: "parent_global",
 		Object:   object,
 	}
+}
+
+// gatewayResolver checks caller identity before reading a persisted binding.
+type gatewayResolver interface {
+	IsGateway(string) (bool, error)
+	Resolve(context.Context, string) (*atev1.EgressGatewaySpec, error)
+}
+
+// atespaceOf returns the already escaped Atespace ID shared by scoped objects.
+func atespaceOf(object string) string {
+	kind, id, _ := strings.Cut(object, ":")
+	switch kind {
+	case "atespace":
+		return id
+	case "actor", "actor_template", "tag":
+		parent, _, ok := strings.Cut(id, "/")
+		if ok {
+			return parent
+		}
+	}
+	return ""
 }

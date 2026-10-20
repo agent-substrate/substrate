@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
+	"go.ate.dev/substrate/cmd/ateapi/internal/egressgateway/egressgatewaytest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
@@ -240,9 +241,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		scLister,
 		dialer,
 		instruments,
-		func(context.Context, string) (*atev1alpha1.EgressGatewaySpec, error) {
-			return &atev1alpha1.EgressGatewaySpec{Address: "gateway:443"}, nil
-		},
+		egressgatewaytest.New(t, persistence, "tenant-gateway"),
 		volPlugins,
 		objectstoreplugintest.ControlClient(objectStore),
 		testActorJWTIssuer,

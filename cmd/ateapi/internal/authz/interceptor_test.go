@@ -16,7 +16,6 @@ package authz
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -218,10 +217,17 @@ func TestUnaryServerInterceptor_EnforcementDisabled(t *testing.T) {
 		wantCode   codes.Code
 	}{
 		{
-			name:       "Atespace gateway binding remains admin-only",
+			name:       "Atespace creation uses default when enforcement is disabled",
 			ctx:        bobCtx,
 			fullMethod: ateapipb.Control_CreateAtespace_FullMethodName,
 			req:        &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team1"}}},
+			wantCode:   codes.OK,
+		},
+		{
+			name:       "explicit gateway assignment is denied without enforcement",
+			ctx:        bobCtx,
+			fullMethod: ateapipb.Control_CreateAtespace_FullMethodName,
+			req:        &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team1"}, EgressGateway: &ateapipb.ObjectRef{Name: "tenant"}}},
 			wantCode:   codes.PermissionDenied,
 		},
 		{
@@ -689,9 +695,13 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		pluginID     = "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
 		otherID      = "spiffe://cluster.local/ns/ate-system/sa/other"
 	)
+	resolveCalls := 0
+	resolvedAtespace := ""
 	resolveGateway := func(_ context.Context, atespace string) (*atev1.EgressGatewaySpec, error) {
+		resolveCalls++
+		resolvedAtespace = atespace
 		if atespace == "missing" {
-			return nil, fmt.Errorf("gateway unavailable")
+			return nil, apierror.Unavailable("gateway unavailable")
 		}
 		identity := egressID
 		if atespace == "team-b" {
@@ -706,7 +716,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		IngressRouterSPIFFEID:    routerID,
 		AteletSPIFFEID:           ateletID,
 		APIServerSidecarSPIFFEID: pluginID,
-	}, resolveGateway)
+	}, gatewayResolverStub{resolve: resolveGateway, identities: []string{egressID, otherID}})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -758,7 +768,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"custom gateway cannot mint other tenant certificate", mtls(otherID), mintCert, codes.PermissionDenied},
 		{"custom gateway cannot read other tenant policy", mtls(otherID), getEgress, codes.PermissionDenied},
 		{"JWT cannot impersonate custom gateway", jwt(otherID), rpcCall{ateapipb.Control_MintActorJwt_FullMethodName, &ateapipb.MintActorJwtRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-b", Name: "runner"}}}, codes.PermissionDenied},
-		{"missing gateway denies default identity", mtls(egressID), rpcCall{ateapipb.Control_MintActorJwt_FullMethodName, &ateapipb.MintActorJwtRequest{Actor: &ateapipb.ObjectRef{Atespace: "missing", Name: "runner"}}}, codes.PermissionDenied},
+		{"gateway store outage is retryable", mtls(egressID), rpcCall{ateapipb.Control_MintActorJwt_FullMethodName, &ateapipb.MintActorJwtRequest{Actor: &ateapipb.ObjectRef{Atespace: "missing", Name: "runner"}}}, codes.Unavailable},
 		{"custom gateway mints own certificate", mtls(otherID), rpcCall{ateapipb.Control_MintActorCertificate_FullMethodName, &ateapipb.MintActorCertificateRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-b", Name: "runner"}}}, codes.OK},
 		{"custom gateway reads own policy", mtls(otherID), rpcCall{ateapipb.Control_GetActorEgressPolicy_FullMethodName, &ateapipb.GetActorEgressPolicyRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-b", Name: "runner"}}}, codes.OK},
 
@@ -834,12 +844,16 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 	interceptor := UnaryServerInterceptor(authorizer, true)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			before := resolveCalls
 			userCtx := principal.InjectContext(ctx, tc.principal)
 			handlerCalled := false
 			_, err := interceptor(userCtx, tc.call.req, &grpc.UnaryServerInfo{FullMethod: tc.call.fullMethod}, func(context.Context, any) (any, error) {
 				handlerCalled = true
 				return "ok", nil
 			})
+			if (tc.principal.Kind != principal.KindMTLS || (tc.principal.ID != egressID && tc.principal.ID != otherID)) && resolveCalls != before {
+				t.Fatal("non-gateway caller read the Atespace binding")
+			}
 			if apierror.Code(err) != tc.wantCode {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", apierror.Code(err), tc.wantCode, err)
 			}
@@ -848,4 +862,32 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 			}
 		})
 	}
+	t.Run("escaped Atespace binding", func(t *testing.T) {
+		name := "a/b:%# *"
+		err := authorizer.Check(principal.InjectContext(ctx, mtls(egressID)), RelationCanMintActorJWT, ActorObject(name, "runner"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolvedAtespace != name {
+			t.Fatalf("resolved Atespace %q, want %q", resolvedAtespace, name)
+		}
+	})
+
+}
+
+type gatewayResolverStub struct {
+	resolve    func(context.Context, string) (*atev1.EgressGatewaySpec, error)
+	identities []string
+}
+
+func (s gatewayResolverStub) Resolve(ctx context.Context, name string) (*atev1.EgressGatewaySpec, error) {
+	return s.resolve(ctx, name)
+}
+func (s gatewayResolverStub) IsGateway(id string) (bool, error) {
+	for _, identity := range s.identities {
+		if id == identity {
+			return true, nil
+		}
+	}
+	return false, nil
 }

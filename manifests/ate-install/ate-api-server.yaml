@@ -408,12 +408,3 @@ spec:
     protocol: TCP
     port: 8445
     targetPort: 8445
-
----
-apiVersion: ate.dev/v1alpha1
-kind: EgressGateway
-metadata:
-  name: default
-spec:
-  address: atenet-egress.ate-system.svc:443
-  identity: spiffe://cluster.local/ns/ate-system/sa/atenet-egress

@@ -20,6 +20,7 @@ import (
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/cmd/ateapi/internal/egressgateway/egressgatewaytest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
@@ -71,7 +72,8 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	storeID := storesResp.GetStores()[0].GetId()
 
 	svc := &RPCService{
-		impl: newServiceImpl(persistence, nil),
+		impl:           newServiceImpl(persistence, nil),
+		egressGateways: egressgatewaytest.New(t, persistence),
 	}
 	interceptor := authz.UnaryServerInterceptor(authorizer, true)
 

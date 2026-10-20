@@ -252,8 +252,11 @@ func main() {
 	}
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
-	egressGatewayLister := ateFactory.Api().V1alpha1().EgressGateways().Lister()
-	resolveEgressGateway := egressgateway.New(persistence, egressGatewayLister)
+	gatewayInformer := ateFactory.Api().V1alpha1().EgressGateways()
+	if err := egressgateway.IndexIdentities(gatewayInformer.Informer()); err != nil {
+		serverboot.Fatal(ctx, "Failed to index egress gateways", err)
+	}
+	resolveEgressGateway := egressgateway.New(persistence, gatewayInformer.Lister(), gatewayInformer.Informer().GetIndexer())
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
 	fgaServer, err := authz.NewOpenFGAServer(pool)

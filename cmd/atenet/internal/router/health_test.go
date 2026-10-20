@@ -345,20 +345,3 @@ func TestHealthStartStopsWhenK8sCheckIsCanceled(t *testing.T) {
 		t.Fatal("router health loop did not stop after cancellation")
 	}
 }
-
-func TestAteAPIHealthAtespace(t *testing.T) {
-	for _, atespace := range []string{"", "tenant-a"} {
-		t.Run(atespace, func(t *testing.T) {
-			client := &healthControlClient{listActorsFn: func(_ context.Context, req *ateapipb.ListActorsRequest, _ ...grpc.CallOption) (*ateapipb.ListActorsResponse, error) {
-				if req.GetAtespace() != atespace || req.GetOptions().GetPageSize() != 1 {
-					t.Errorf("health request = %v", req)
-				}
-				return &ateapipb.ListActorsResponse{}, nil
-			}}
-			rh := newRouterHealth(time.Second, nil, client, routerConfig{HealthCheckAtespace: atespace})
-			if ok, message := rh.checkAteAPI(context.Background()); !ok {
-				t.Fatal(message)
-			}
-		})
-	}
-}

@@ -47,7 +47,9 @@ describing your use case.
 
 A global Substrate owner chooses the egress gateway when creating an Atespace.
 All actors in that Atespace use it, including actors created from templates in
-another Atespace. Actors cannot override the assignment.
+another Atespace. Actors cannot override the assignment. When authorization
+enforcement is disabled, creation accepts only an omitted gateway reference
+and uses `default`.
 
 A Kubernetes administrator defines the gateway:
 
@@ -77,7 +79,8 @@ Identity changes affect authorization as soon as the API server's Kubernetes
 cache observes them; coordinate identity rotation with actor reactivation.
 
 Missing, deleting, or invalid gateways fail activation closed; there is no
-fallback to another gateway. Provision the gateway before activating actors.
+fallback to another gateway. Provision the gateway before creating the Atespace. Creation validates the
+reference; activation checks it again.
 The binding selects a gateway independently of an actor's EgressPolicy rules.
 
 A custom gateway must support Substrate's mTLS CONNECT tunnel and trust the
@@ -89,6 +92,7 @@ for Atespaces assigned to that gateway. Distinct tenant gateways should use
 distinct identities. Custom gateways may list actors within their assigned
 Atespace; the built-in gateway retains its global actor-list health check.
 
-For a separate `atenet --mode=egress` deployment, set
-`--health-check-atespace=tenant-a` to scope its API health probe to a bound
-Atespace. Otherwise its global actor-list probe is denied.
+A separate `atenet --mode=egress` deployment cannot use the existing global
+actor-list diagnostic probe. Its `/statusz` API dependency check reports a
+denial; Kubernetes liveness and readiness do not depend on that report.
+A tenant-independent API health RPC is a separate follow-up.

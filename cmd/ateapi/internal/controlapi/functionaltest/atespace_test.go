@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -290,4 +291,21 @@ func TestDeleteAtespace_Preconditions(t *testing.T) {
 	}
 	_, err := tc.client.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: ref})
 	assertGrpcError(t, err, codes.NotFound, "Atespace team-a not found")
+}
+
+func TestCreateAtespaceMissingGateway(t *testing.T) {
+	tc := setupTest(t, namespaceForTest("ns-missing-gateway"))
+	defer tc.cleanup()
+	ctx := t.Context()
+	ref := &ateapipb.ObjectRef{Name: "missing-gateway"}
+	_, err := tc.client.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{
+		Metadata: &ateapipb.ResourceMetadata{Name: "team-missing"}, EgressGateway: ref,
+	}})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("CreateAtespace = %v, want FailedPrecondition", err)
+	}
+	_, err = tc.client.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-missing"}})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("invalid binding was persisted: %v", err)
+	}
 }
