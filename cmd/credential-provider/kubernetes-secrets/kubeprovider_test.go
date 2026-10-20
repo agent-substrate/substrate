@@ -456,6 +456,91 @@ func TestLoadNamespaceAuthorizerRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+// The provider rereads its policy when the file changes, and keeps the last
+// good policy while the file fails to load.
+func TestLoadNamespaceAuthorizerReloads(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/policy.yaml"
+	// Each step replaces the file the way a ConfigMap volume update does: a
+	// new file is renamed over the old one.
+	replace := func(t *testing.T, content string) {
+		t.Helper()
+		tmp := dir + "/next.yaml"
+		if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+			t.Fatalf("write policy: %v", err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			t.Fatalf("replace policy: %v", err)
+		}
+	}
+	replace(t, "policies:\n- atespace: team-a\n  allowedNamespaces: [ns1]\n")
+	authz, err := LoadNamespaceAuthorizer(path)
+	if err != nil {
+		t.Fatalf("LoadNamespaceAuthorizer: %v", err)
+	}
+
+	steps := []struct {
+		name string
+		// content replaces the file; empty removes it.
+		content     string
+		wantAllowed []string
+		wantRefused []string
+		wantErr     bool
+	}{
+		{
+			name:        "grant moves to another namespace",
+			content:     "policies:\n- atespace: team-a\n  allowedNamespaces: [ns2]\n",
+			wantAllowed: []string{"ns2"},
+			wantRefused: []string{"ns1"},
+		},
+		{
+			name:        "malformed file keeps the previous policy",
+			content:     "policies:\n- atespace: team-a\n  allowedNamespace: [ns3]\n",
+			wantAllowed: []string{"ns2"},
+			wantRefused: []string{"ns3"},
+			wantErr:     true,
+		},
+		{
+			name:        "fixed file loads",
+			content:     "policies:\n- atespace: team-a\n  allowedNamespaces: [ns3]\n",
+			wantAllowed: []string{"ns3"},
+			wantRefused: []string{"ns2"},
+		},
+		{
+			name:        "missing file keeps the previous policy",
+			wantAllowed: []string{"ns3"},
+			wantErr:     true,
+		},
+		{
+			name:        "file comes back",
+			content:     "policies: []\n",
+			wantRefused: []string{"ns3"},
+		},
+	}
+	for _, step := range steps {
+		if step.content == "" {
+			if err := os.Remove(path); err != nil {
+				t.Fatalf("%s: remove policy: %v", step.name, err)
+			}
+		} else {
+			replace(t, step.content)
+		}
+		for _, ns := range step.wantAllowed {
+			if !authz.Allowed("team-a", ns) || !authz.AllowedSecret("team-a", ns, nil) {
+				t.Errorf("%s: team-a/%s refused, want allowed", step.name, ns)
+			}
+		}
+		for _, ns := range step.wantRefused {
+			if authz.Allowed("team-a", ns) || authz.AllowedSecret("team-a", ns, nil) {
+				t.Errorf("%s: team-a/%s allowed, want refused", step.name, ns)
+			}
+		}
+		if err := authz.LoadError(); (err != nil) != step.wantErr {
+			t.Errorf("%s: LoadError() = %v, want error %v", step.name, err, step.wantErr)
+		}
+	}
+}
+
 // Each policy is its own grant and they are OR-ed. Merging them into one would
 // let a narrow policy take away what a broad one granted, and would AND the
 // selectors of separate policies together.

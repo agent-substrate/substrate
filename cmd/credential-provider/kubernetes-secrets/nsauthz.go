@@ -16,8 +16,10 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
@@ -69,8 +71,20 @@ type grant struct {
 
 // NamespaceAuthorizer decides whether an atespace may resolve secrets in a given
 // Kubernetes namespace. It is default-deny: an atespace absent from the mapping
-// can resolve nothing.
+// can resolve nothing. One loaded from a file rereads the file when it changes.
 type NamespaceAuthorizer struct {
+	// path is the policy file; empty when the authorizer was built from an
+	// already parsed policy and never reloads.
+	path string
+
+	mu sync.Mutex
+	// fi is the stat of path taken before its last parse, successful or not,
+	// so a file that fails to parse is reported once rather than per request.
+	// Nil when path could not be stat'ed, so the next call tries again.
+	fi os.FileInfo
+	// loadErr is why the last attempt to load path failed; nil when allowed
+	// came from the file as it is now.
+	loadErr error
 	// allowed maps atespace -> namespace -> the grants that apply there. Each
 	// policy contributes its own grant and they are OR-ed: a Secret is admitted
 	// when any one of them admits it. Within a grant the criteria are AND-ed,
@@ -79,8 +93,24 @@ type NamespaceAuthorizer struct {
 }
 
 // LoadNamespaceAuthorizer reads the YAML policy file at path and builds an
-// authorizer, so a malformed file fails startup rather than the first request.
+// authorizer that rereads the file whenever it changes. A malformed file fails
+// here, at startup; once running, a file that fails to load leaves the last
+// good policy in force.
 func LoadNamespaceAuthorizer(path string) (*NamespaceAuthorizer, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading namespace policy file %q: %w", path, err)
+	}
+	a, err := readNamespacePolicy(path)
+	if err != nil {
+		return nil, err
+	}
+	a.path, a.fi = path, fi
+	return a, nil
+}
+
+// readNamespacePolicy parses the YAML policy file at path.
+func readNamespacePolicy(path string) (*NamespaceAuthorizer, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading namespace policy file %q: %w", path, err)
@@ -133,13 +163,57 @@ func newNamespaceAuthorizer(file namespacePolicyFile) (*NamespaceAuthorizer, err
 	return &NamespaceAuthorizer{allowed: allowed}, nil
 }
 
+// policy returns the grants in force, first rereading the policy file if its
+// stat no longer matches the last one parsed. A ConfigMap volume swaps in a new
+// file on update, so the stat changes even when the size does not.
+func (a *NamespaceAuthorizer) policy() map[string]map[string][]grant {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.path == "" {
+		return a.allowed
+	}
+	fi, err := os.Stat(a.path)
+	if err == nil && a.fi != nil && os.SameFile(a.fi, fi) && fi.ModTime().Equal(a.fi.ModTime()) && fi.Size() == a.fi.Size() {
+		return a.allowed
+	}
+	a.fi = nil
+	var next *NamespaceAuthorizer
+	if err == nil {
+		a.fi = fi
+		next, err = readNamespacePolicy(a.path)
+	}
+	if err != nil {
+		if a.loadErr == nil || a.loadErr.Error() != err.Error() {
+			slog.Error("namespace policy reload failed, keeping the previous policy", slog.String("file", a.path), slog.Any("err", err))
+		}
+		a.loadErr = err
+		return a.allowed
+	}
+	a.allowed, a.loadErr = next.allowed, nil
+	slog.Info("reloaded namespace authorization policy", slog.String("file", a.path))
+	return a.allowed
+}
+
+// LoadError reports why the policy file failed to load, or nil when the
+// policy in force is the file's current content.
+func (a *NamespaceAuthorizer) LoadError() error {
+	if a == nil {
+		return nil
+	}
+	a.policy()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.loadErr
+}
+
 // Grants returns the loaded policy as atespace → sorted namespaces
 func (a *NamespaceAuthorizer) Grants() map[string][]string {
 	if a == nil {
 		return nil
 	}
-	out := make(map[string][]string, len(a.allowed))
-	for atespace, namespaces := range a.allowed {
+	allowed := a.policy()
+	out := make(map[string][]string, len(allowed))
+	for atespace, namespaces := range allowed {
 		list := make([]string, 0, len(namespaces))
 		for ns := range namespaces {
 			list = append(list, ns)
@@ -154,7 +228,7 @@ func (a *NamespaceAuthorizer) Grants() map[string][]string {
 // deny: an atespace absent from the mapping, or a namespace not in its list, is
 // refused.
 func (a *NamespaceAuthorizer) Allowed(atespace, namespace string) bool {
-	set, ok := a.allowed[atespace]
+	set, ok := a.policy()[atespace]
 	if !ok {
 		return false
 	}
@@ -164,9 +238,10 @@ func (a *NamespaceAuthorizer) Allowed(atespace, namespace string) bool {
 // AllowedSecret reports whether atespace may resolve a Secret with these
 // labels in namespace. A grant without a label selector admits every Secret,
 // including one that does not exist: pass nil labels to ask that question
-// before reading anything from Kubernetes.
+// before reading anything from Kubernetes. The namespace grant is checked again
+// here, so a request that straddles a reload is settled by the newer policy.
 func (a *NamespaceAuthorizer) AllowedSecret(atespace, namespace string, labels map[string]string) bool {
-	for _, g := range a.allowed[atespace][namespace] {
+	for _, g := range a.policy()[atespace][namespace] {
 		if len(g.labels) == 0 {
 			return true
 		}
