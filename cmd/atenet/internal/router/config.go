@@ -157,7 +157,9 @@ type routerConfig struct {
 	StatusPort        int
 	StatusAddr        string
 	HealthInterval    time.Duration
-	HttpsPort         int
+	// HealthCheckAtespace scopes the API health probe for tenant gateways.
+	HealthCheckAtespace string
+	HttpsPort           int
 	// ConnectPlainTextPort and ConnectTLSPort are the plaintext and TLS
 	// listener ports for CONNECT-tunneled traffic. Non-positive disables the
 	// corresponding listener.

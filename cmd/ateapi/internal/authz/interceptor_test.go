@@ -16,11 +16,13 @@ package authz
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
+	atev1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -37,7 +39,7 @@ func setupTestAuthorizer(t *testing.T) *Authorizer {
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil, testSystemPrincipals())
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil, testSystemPrincipals(), nil)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -216,11 +218,11 @@ func TestUnaryServerInterceptor_EnforcementDisabled(t *testing.T) {
 		wantCode   codes.Code
 	}{
 		{
-			name:       "regular RPC skips the check",
+			name:       "Atespace gateway binding remains admin-only",
 			ctx:        bobCtx,
 			fullMethod: ateapipb.Control_CreateAtespace_FullMethodName,
 			req:        &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team1"}}},
-			wantCode:   codes.OK,
+			wantCode:   codes.PermissionDenied,
 		},
 		{
 			name:       "governance RPC is still denied",
@@ -341,7 +343,7 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 	t.Cleanup(fgaServer.Close)
 	// bootstrap-owner is a global owner through configuration only; it has no
 	// stored tuples.
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals())
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals(), nil)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -489,7 +491,7 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 	t.Cleanup(fgaServer.Close)
 	// bootstrap-owner is a global owner through configuration only; it has no
 	// stored tuples.
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals())
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals(), nil)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -687,13 +689,24 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		pluginID     = "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
 		otherID      = "spiffe://cluster.local/ns/ate-system/sa/other"
 	)
+	resolveGateway := func(_ context.Context, atespace string) (*atev1.EgressGatewaySpec, error) {
+		if atespace == "missing" {
+			return nil, fmt.Errorf("gateway unavailable")
+		}
+		identity := egressID
+		if atespace == "team-b" {
+			identity = otherID
+		}
+		return &atev1.EgressGatewaySpec{Identity: identity}, nil
+	}
+
 	authorizer, _, err := New(ctx, pool, fgaServer, nil, SystemPrincipals{
 		ControllerSPIFFEID:       controllerID,
 		EgressGatewaySPIFFEID:    egressID,
 		IngressRouterSPIFFEID:    routerID,
 		AteletSPIFFEID:           ateletID,
 		APIServerSidecarSPIFFEID: pluginID,
-	})
+	}, resolveGateway)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -739,6 +752,16 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		call      rpcCall
 		wantCode  codes.Code
 	}{
+
+		{"custom gateway mints own JWT", mtls(otherID), rpcCall{ateapipb.Control_MintActorJwt_FullMethodName, &ateapipb.MintActorJwtRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-b", Name: "runner"}}}, codes.OK},
+		{"default gateway cannot mint other tenant JWT", mtls(egressID), rpcCall{ateapipb.Control_MintActorJwt_FullMethodName, &ateapipb.MintActorJwtRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-b", Name: "runner"}}}, codes.PermissionDenied},
+		{"custom gateway cannot mint other tenant certificate", mtls(otherID), mintCert, codes.PermissionDenied},
+		{"custom gateway cannot read other tenant policy", mtls(otherID), getEgress, codes.PermissionDenied},
+		{"JWT cannot impersonate custom gateway", jwt(otherID), rpcCall{ateapipb.Control_MintActorJwt_FullMethodName, &ateapipb.MintActorJwtRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-b", Name: "runner"}}}, codes.PermissionDenied},
+		{"missing gateway denies default identity", mtls(egressID), rpcCall{ateapipb.Control_MintActorJwt_FullMethodName, &ateapipb.MintActorJwtRequest{Actor: &ateapipb.ObjectRef{Atespace: "missing", Name: "runner"}}}, codes.PermissionDenied},
+		{"custom gateway mints own certificate", mtls(otherID), rpcCall{ateapipb.Control_MintActorCertificate_FullMethodName, &ateapipb.MintActorCertificateRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-b", Name: "runner"}}}, codes.OK},
+		{"custom gateway reads own policy", mtls(otherID), rpcCall{ateapipb.Control_GetActorEgressPolicy_FullMethodName, &ateapipb.GetActorEgressPolicyRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-b", Name: "runner"}}}, codes.OK},
+
 		// ate-controller manages workers and nothing else.
 		{"controller creates worker", mtls(controllerID), createWorker, codes.OK},
 		{"controller lists workers", mtls(controllerID), listWorkers, codes.OK},

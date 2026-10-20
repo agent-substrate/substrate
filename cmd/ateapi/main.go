@@ -33,6 +33,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/apiconfig"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
+	"go.ate.dev/substrate/cmd/ateapi/internal/egressgateway"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
@@ -59,7 +60,6 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -93,13 +93,12 @@ var (
 	// These SPIFFE IDs hold the matching system component role when they call
 	// over mTLS.
 	controllerSPIFFEID       = pflag.String("controller-spiffe-id", installdefaults.ControllerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of ate-controller. Holds the controller authz role, which manages workers.")
-	egressGatewaySPIFFEID    = pflag.String("egress-gateway-spiffe-id", installdefaults.EgressSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-egress. Holds the egress_gateway authz role, which reads and lists actors and reads their egress policies.")
+	egressGatewaySPIFFEID    = pflag.String("egress-gateway-spiffe-id", installdefaults.EgressSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID allowed to list actors for the built-in egress health check. Actor policy and credential access comes from the Atespace EgressGateway binding.")
 	ingressRouterSPIFFEID    = pflag.String("ingress-router-spiffe-id", installdefaults.RouterSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-router. Holds the ingress_router authz role, which resumes and lists actors.")
 	apiServerSidecarSPIFFEID = pflag.String("api-server-sidecar-spiffe-id", installdefaults.APIServerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of the ate-api-server pod, which its sidecars share. Holds the api_server_sidecar role, which reads actors so the objectstore control plugin can scope their storage credentials.")
 
-	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https://<host>, with no path. Required.")
-	defaultEgressGatewayAddress = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
+	actorIDJWTPoolFile = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	actorJWTIssuer     = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https://<host>, with no path. Required.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
@@ -162,11 +161,6 @@ func main() {
 	}
 	if err := validateActorJWTIssuer(*actorJWTIssuer); err != nil {
 		serverboot.Fatal(ctx, "Invalid --actor-jwt-issuer", err)
-	}
-	// atelet applies the same rule to EgressGateway.address on every Run and
-	// Restore; a value it would refuse must fail the rollout, not the actors.
-	if errs := resources.ValidateHostPort(field.NewPath("default-egress-gateway-address"), *defaultEgressGatewayAddress); len(errs) > 0 {
-		serverboot.Fatal(ctx, "Invalid --default-egress-gateway-address", errs.ToAggregate())
 	}
 	if *snapshotLocation != "" {
 		if err := resources.ValidateSnapshotLocation(*snapshotLocation); err != nil {
@@ -252,6 +246,16 @@ func main() {
 	ateletSPIFFEID := installdefaults.SPIFFEID(ateletNamespace, *ateletServiceAccount)
 	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace), slog.String("atelet-spiffe-id", ateletSPIFFEID))
 
+	clientset, ateClient, err := newKubeClients()
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
+	}
+	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
+	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
+	egressGatewayLister := ateFactory.Api().V1alpha1().EgressGateways().Lister()
+	resolveEgressGateway := egressgateway.New(persistence, egressGatewayLister)
+	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
+
 	fgaServer, err := authz.NewOpenFGAServer(pool)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
@@ -263,16 +267,11 @@ func main() {
 		IngressRouterSPIFFEID:    *ingressRouterSPIFFEID,
 		AteletSPIFFEID:           ateletSPIFFEID,
 		APIServerSidecarSPIFFEID: *apiServerSidecarSPIFFEID,
-	})
+	}, resolveEgressGateway)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
 	}
 	persistence.SetPolicyManager(policyManager)
-
-	clientset, ateClient, err := newKubeClients()
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
-	}
 
 	serverCreds, err := buildServerCreds(ctx)
 	if err != nil {
@@ -283,10 +282,6 @@ func main() {
 	if err := workerCache.Start(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}
-
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
-	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
@@ -348,7 +343,7 @@ func main() {
 		storageClassLister,
 		ateletDialer,
 		instruments,
-		*defaultEgressGatewayAddress,
+		resolveEgressGateway,
 		volPlugins,
 		objectstorev1.NewControlProviderClient(objectStorePluginConn),
 		*actorJWTIssuer,

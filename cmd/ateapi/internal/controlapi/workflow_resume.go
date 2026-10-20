@@ -826,7 +826,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	if err != nil {
 		return tele, err
 	}
-	egressGateway := w.egressGateway()
+	egressGateway, err := w.egressGateway(ctx, actorRef.Atespace)
+	if err != nil {
+		return tele, err
+	}
 
 	// The actor's declared limits ride the RPC down to the sandbox so it is sized
 	// to the actor (replacing the worker-pod downward-API approach).
@@ -952,11 +955,18 @@ func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assign
 		slog.Any("assigned_runtime", assignment.GetSandboxRuntime()))
 }
 
-func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
-	if w.egressGatewayAddress == "" {
-		return nil
+func (w *ActorWorkflow) egressGateway(ctx context.Context, atespace string) (*ateletpb.EgressGateway, error) {
+	if w.resolveEgressGateway == nil {
+		return nil, fmt.Errorf("egress gateway resolver is not configured")
 	}
-	return &ateletpb.EgressGateway{Address: w.egressGatewayAddress}
+	gateway, err := w.resolveEgressGateway(ctx, atespace)
+	if err != nil {
+		return nil, fmt.Errorf("resolving egress gateway: %w", err)
+	}
+	if gateway == nil {
+		return nil, fmt.Errorf("egress gateway resolver returned no gateway")
+	}
+	return &ateletpb.EgressGateway{Address: gateway.Address}, nil
 }
 
 // finalizeRunning re-reads the actor for a fresh version and commits RUNNING.

@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"go.ate.dev/substrate/cmd/ateapi/internal/egressgateway"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/internal/localca"
@@ -82,7 +83,7 @@ func NewRPCService(
 	storageClassLister storagev1listers.StorageClassLister,
 	dialer *AteletDialer,
 	instruments *Instruments,
-	egressGatewayAddress string,
+	resolveEgressGateway egressgateway.Resolve,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
 	objectStorePlugin objectstorev1.ControlProviderClient,
 	actorJWTIssuer string,
@@ -105,7 +106,7 @@ func NewRPCService(
 		actorIDJWTPool:        actorIDJWTPool,
 		actorIDCAPool:         actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, resolveEgressGateway, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s

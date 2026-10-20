@@ -45,6 +45,18 @@ func TestValidateCreateAtespaceRequest(t *testing.T) {
 		validReq(validAtespace()),
 		nil,
 	}, {
+		"valid gateway",
+		validReq(validAtespace(func(a *ateapipb.Atespace) { a.EgressGateway = &ateapipb.ObjectRef{Name: "tenant-a"} })),
+		nil,
+	}, {
+		"gateway name required",
+		validReq(validAtespace(func(a *ateapipb.Atespace) { a.EgressGateway = &ateapipb.ObjectRef{} })),
+		field.ErrorList{field.Required(field.NewPath("atespace", "egress_gateway", "name"), "")},
+	}, {
+		"gateway must be global",
+		validReq(validAtespace(func(a *ateapipb.Atespace) { a.EgressGateway = &ateapipb.ObjectRef{Name: "gateway", Atespace: "tenant"} })),
+		field.ErrorList{field.Forbidden(field.NewPath("atespace", "egress_gateway", "atespace"), "")},
+	}, {
 		"missing atespace",
 		&ateapipb.CreateAtespaceRequest{Atespace: nil},
 		field.ErrorList{field.Required(field.NewPath("atespace"), "")},

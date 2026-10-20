@@ -24,6 +24,8 @@ import (
 type Interface interface {
 	// CSIDriverConfigs returns a TypedCSIDriverConfigInformer.
 	CSIDriverConfigs() TypedCSIDriverConfigInformer
+	// EgressGateways returns a TypedEgressGatewayInformer.
+	EgressGateways() TypedEgressGatewayInformer
 	// SandboxConfigs returns a TypedSandboxConfigInformer.
 	SandboxConfigs() TypedSandboxConfigInformer
 	// WorkerPools returns a TypedWorkerPoolInformer.
@@ -44,6 +46,11 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // CSIDriverConfigs returns a TypedCSIDriverConfigInformer.
 func (v *version) CSIDriverConfigs() TypedCSIDriverConfigInformer {
 	return &cSIDriverConfigInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// EgressGateways returns a TypedEgressGatewayInformer.
+func (v *version) EgressGateways() TypedEgressGatewayInformer {
+	return &egressGatewayInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
 // SandboxConfigs returns a TypedSandboxConfigInformer.

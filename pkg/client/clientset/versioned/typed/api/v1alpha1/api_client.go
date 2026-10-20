@@ -27,6 +27,7 @@ import (
 type ApiV1alpha1Interface interface {
 	RESTClient() rest.Interface
 	CSIDriverConfigsGetter
+	EgressGatewaysGetter
 	SandboxConfigsGetter
 	WorkerPoolsGetter
 }
@@ -38,6 +39,10 @@ type ApiV1alpha1Client struct {
 
 func (c *ApiV1alpha1Client) CSIDriverConfigs() CSIDriverConfigInterface {
 	return newCSIDriverConfigs(c)
+}
+
+func (c *ApiV1alpha1Client) EgressGateways() EgressGatewayInterface {
+	return newEgressGateways(c)
 }
 
 func (c *ApiV1alpha1Client) SandboxConfigs() SandboxConfigInterface {

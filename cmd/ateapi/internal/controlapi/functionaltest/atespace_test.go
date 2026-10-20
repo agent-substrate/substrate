@@ -88,7 +88,7 @@ func TestGetAtespace_Found(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	created, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}})
+	created, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}, EgressGateway: &ateapipb.ObjectRef{Name: "tenant-gateway"}}})
 	if err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}

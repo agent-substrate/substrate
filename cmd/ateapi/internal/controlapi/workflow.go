@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.ate.dev/substrate/cmd/ateapi/internal/egressgateway"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
@@ -110,7 +111,7 @@ type ActorWorkflow struct {
 	dialer                  *AteletDialer
 	storageClassLister      storagev1listers.StorageClassLister
 	instruments             *Instruments
-	egressGatewayAddress    string
+	resolveEgressGateway    egressgateway.Resolve
 	pluginRegistry          VolumePluginRegistry
 	objectStorePlugin       objectstorev1.ControlProviderClient
 	clusterSnapshotLocation string
@@ -127,7 +128,7 @@ func NewActorWorkflow(
 	dialer *AteletDialer,
 	storageClassLister storagev1listers.StorageClassLister,
 	instruments *Instruments,
-	egressGatewayAddress string,
+	resolveEgressGateway egressgateway.Resolve,
 	pluginRegistry VolumePluginRegistry,
 	objectStorePlugin objectstorev1.ControlProviderClient,
 ) *ActorWorkflow {
@@ -138,7 +139,7 @@ func NewActorWorkflow(
 		dialer:               dialer,
 		storageClassLister:   storageClassLister,
 		instruments:          instruments,
-		egressGatewayAddress: egressGatewayAddress,
+		resolveEgressGateway: resolveEgressGateway,
 		pluginRegistry:       pluginRegistry,
 		objectStorePlugin:    objectStorePlugin,
 	}

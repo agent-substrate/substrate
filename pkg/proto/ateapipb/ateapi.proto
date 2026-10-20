@@ -1099,6 +1099,16 @@ message Atespace {
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ResourceMetadata metadata = 1;
+
+  // egress_gateway names the cluster-scoped Kubernetes EgressGateway that
+  // handles outbound traffic for every Actor in this Atespace. If omitted,
+  // the gateway named "default" is used. Only global owners create Atespaces;
+  // tenants cannot override this binding on Actors or ActorTemplates.
+  //
+  // +k8s:optional
+  // +k8s:immutable
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden
+  ObjectRef egress_gateway = 2;
 }
 
 // ObjectRef references a Substrate resource by its atespace and name.

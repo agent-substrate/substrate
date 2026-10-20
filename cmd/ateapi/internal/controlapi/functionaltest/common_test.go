@@ -240,7 +240,9 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		scLister,
 		dialer,
 		instruments,
-		"",
+		func(context.Context, string) (*atev1alpha1.EgressGatewaySpec, error) {
+			return &atev1alpha1.EgressGatewaySpec{Address: "gateway:443"}, nil
+		},
 		volPlugins,
 		objectstoreplugintest.ControlClient(objectStore),
 		testActorJWTIssuer,

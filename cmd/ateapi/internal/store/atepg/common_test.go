@@ -61,7 +61,7 @@ func setTestPolicyManager(t *testing.T, p *Persistence) {
 		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
 		AteletSPIFFEID:           installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
 		APIServerSidecarSPIFFEID: installdefaults.APIServerSPIFFEID(installdefaults.SystemNamespace),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}

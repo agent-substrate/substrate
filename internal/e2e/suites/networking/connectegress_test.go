@@ -55,7 +55,7 @@ type egressConnectResponse struct {
 const connectTunnelTarget = "example.com:443"
 
 // egressGatewayAddress is the egress gateway's CONNECT front door, the
-// default-egress-gateway-address ate-api-server hands every atelet.
+// Atespace EgressGateway address ate-api-server hands each atelet.
 func egressGatewayAddress() string {
 	return "atenet-egress." + e2e.SystemNamespace() + ".svc:443"
 }

@@ -68,6 +68,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Address of the External Processing (ext_proc) server: both the address it binds and the address the co-located dataplane is told to dial. Defaults to loopback, which keeps it unreachable from other pods; readiness is probed via /readyz on the health port, not this one. Empty binds every interface")
 	fs.IntVar(&cfg.StatusPort, "status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status)")
 	fs.StringVar(&cfg.StatusAddr, "status-address", "127.0.0.1", "Address to bind the unauthenticated /statusz dashboard to. Defaults to loopback; use /healthz and /readyz on the health port for health checks. Empty binds every interface")
+	fs.StringVar(&cfg.HealthCheckAtespace, "health-check-atespace", "", "Atespace for the API health probe; tenant egress gateways must name an assigned Atespace")
 	fs.DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
 	fs.IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the router dataplane")
 	fs.StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file.")

@@ -20,6 +20,10 @@ package v1alpha1
 // CSIDriverConfigLister.
 type CSIDriverConfigListerExpansion interface{}
 
+// EgressGatewayListerExpansion allows custom methods to be added to
+// EgressGatewayLister.
+type EgressGatewayListerExpansion interface{}
+
 // SandboxConfigListerExpansion allows custom methods to be added to
 // SandboxConfigLister.
 type SandboxConfigListerExpansion interface{}
