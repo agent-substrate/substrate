@@ -39,6 +39,7 @@ type AtenetDataplane interface {
 	RouteDurationSeen(context.Context, string) (bool, error)
 	ScrapeMetrics(context.Context) (string, error)
 	EgressConnectStats(before, after string) EgressConnectStats
+	EgressRequestStats(before, after string) EgressRequestStats
 }
 
 // EgressConnectStats holds the delta of egress CONNECT connections and requests
@@ -47,6 +48,15 @@ type AtenetDataplane interface {
 type EgressConnectStats struct {
 	Connections int
 	Requests    int
+}
+
+// EgressRequestStats holds the delta of stats from processing requests decapsulated
+// from the outer CONNECT request. A value of -1 indicates that the
+// dataplane does not report the stat.
+type EgressRequestStats struct {
+	MitmExtProcCalls   int
+	EgressPolicyHits   int
+	EgressPolicyMisses int
 }
 
 // CurrentAtenetDataplane returns the implementation selected for this test
@@ -100,6 +110,16 @@ func (envoyAtenetDataplane) EgressConnectStats(before, after string) EgressConne
 	}
 }
 
+func (envoyAtenetDataplane) EgressRequestStats(before, after string) EgressRequestStats {
+	beforeStats := parseEnvoyEgressRequestMetrics(before)
+	afterStats := parseEnvoyEgressRequestMetrics(after)
+	return EgressRequestStats{
+		MitmExtProcCalls:   afterStats.MitmExtProcCalls - beforeStats.MitmExtProcCalls,
+		EgressPolicyHits:   afterStats.EgressPolicyHits - beforeStats.EgressPolicyHits,
+		EgressPolicyMisses: afterStats.EgressPolicyMisses - beforeStats.EgressPolicyMisses,
+	}
+}
+
 func parseEnvoyEgressConnectMetrics(scrape string) EgressConnectStats {
 	var stats EgressConnectStats
 	for line := range strings.SplitSeq(scrape, "\n") {
@@ -124,6 +144,33 @@ func parseEnvoyEgressConnectMetrics(scrape string) EgressConnectStats {
 		case strings.HasPrefix(line, "envoy_http_downstream_rq_xx{") &&
 			strings.Contains(line, `envoy_response_code_class="2"`):
 			stats.Requests += int(val)
+		}
+	}
+	return stats
+}
+
+func parseEnvoyEgressRequestMetrics(scrape string) EgressRequestStats {
+	var stats EgressRequestStats
+	for line := range strings.SplitSeq(scrape, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		val, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			continue
+		}
+		switch strings.TrimSuffix(metricNameFromLine(line), "_total") {
+		case "envoy_http_ext_proc_egress_policy_mitm_streams_started":
+			stats.MitmExtProcCalls += int(val)
+		case "envoy_dynamicmodulescustom_ate_egress_cache_hit", "envoy_ate_egress_cache_hit":
+			stats.EgressPolicyHits += int(val)
+		case "envoy_dynamicmodulescustom_ate_egress_cache_miss", "envoy_ate_egress_cache_miss":
+			stats.EgressPolicyMisses += int(val)
 		}
 	}
 	return stats
@@ -169,6 +216,10 @@ func (agentGatewayAtenetDataplane) ScrapeMetrics(ctx context.Context) (string, e
 
 func (agentGatewayAtenetDataplane) EgressConnectStats(_, _ string) EgressConnectStats {
 	return EgressConnectStats{Connections: -1, Requests: -1}
+}
+
+func (agentGatewayAtenetDataplane) EgressRequestStats(_, _ string) EgressRequestStats {
+	return EgressRequestStats{MitmExtProcCalls: -1, EgressPolicyHits: -1, EgressPolicyMisses: -1}
 }
 
 type agentGatewayParkingObserver struct{}

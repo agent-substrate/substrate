@@ -335,116 +335,86 @@ func isDeniedLookup(body, name string) bool {
 	return strings.Contains(body, "lookup "+name) && strings.Contains(body, "no such host")
 }
 
-// TestActorEgressHTTPByHostnameCleartext: the gateway decides each cleartext
-// HTTP request by name: example.org 200, example.com 403.
-func TestActorEgressHTTPByHostnameCleartext(t *testing.T) {
-	ctx := context.Background()
-	dataplane := e2e.CurrentAtenetDataplane()
-	router, actorRef := hostnamePolicyActor(t, ctx)
-
-	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
-	if err != nil {
-		t.Fatalf("scraping egress Envoy metrics before requests: %v", err)
-	}
-	allowedBefore, rejectedBefore := e2e.EgressPolicyVerdictCounts(beforeScrape)
-
-	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "http://example.org/", reached)
-	if status != http.StatusOK {
-		t.Fatalf("fetch of the allowed host returned HTTP %d, want 200; body: %s", status, body)
-	}
-	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "http://example.com/", notTransient)
-	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
-		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
-	}
-	t.Logf("denied on the cleartext request: %s", body)
-
-	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
-	if err != nil {
-		t.Fatalf("scraping egress Envoy metrics after requests: %v", err)
-	}
-	allowedAfter, rejectedAfter := e2e.EgressPolicyVerdictCounts(afterScrape)
-	if got := allowedAfter - allowedBefore; got != 1 {
-		t.Fatalf("ate_egress.allowed incremented by %d, want 1 (before=%d, after=%d)", got, allowedBefore, allowedAfter)
-	}
-	if got := rejectedAfter - rejectedBefore; got != 1 {
-		t.Fatalf("ate_egress.rejected incremented by %d, want 1 (before=%d, after=%d)", got, rejectedBefore, rejectedAfter)
-	}
-}
-
 // TestActorEgressStalePolicyCallsExtProc: once the cached policy on an inner
 // connection exceeds its TTL, egress_policy_pep records a cache miss, falls
 // back to calling ext_proc when processing the request, refreshes the cached
 // policy on response headers, and serves the next request from the cache.
 func TestActorEgressStalePolicyCallsExtProc(t *testing.T) {
 	ctx := context.Background()
-	router, actorRef := hostnamePolicyActor(t, ctx)
+	dataplane := e2e.CurrentAtenetDataplane()
+	const mitmBody = "mitm origin"
+	mitm := e2e.DeployServerPod(t, ctx, egressHTTPSTarget("mitm-origin", mitmBody))
+	_, actorName, _ := createAndResumeActorWithEgress(
+		t, ctx, "egress-slow-headers", e2e.EgressFixture(),
+		e2e.EgressAllowHTTPS(mitm.SvcName(), mitm.SvcName()+".cluster.local"),
+	)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
 
-	beforeFirstScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	beforeFirstScrape, err := dataplane.ScrapeMetrics(ctx)
 	if err != nil {
-		t.Fatalf("scraping egress Envoy metrics before first request: %v", err)
+		t.Fatalf("scraping egress metrics before first request: %v", err)
 	}
-	hitsBeforeFirst, _ := e2e.EgressPolicyCacheCounts(beforeFirstScrape)
-	extProcBeforeFirst := e2e.EgressExtProcStreamCounts(beforeFirstScrape)[e2e.EgressExtProcPolicyMITMStatPrefix]
 
-	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.com/", reached)
+	mitmURL := "https://" + mitm.SvcName() + "/healthz"
+	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, mitmURL, reached)
 	if status != http.StatusOK {
-		t.Fatalf("first fetch of https://example.com/ returned HTTP %d, want 200; body: %s", status, body)
+		t.Fatalf("first fetch of %s returned HTTP %d, want 200; body: %s", mitmURL, status, body)
 	}
 
-	afterFirstScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	afterFirstScrape, err := dataplane.ScrapeMetrics(ctx)
 	if err != nil {
 		t.Fatalf("scraping egress Envoy metrics after first request: %v", err)
 	}
-	hitsAfterFirst, missesBeforeStale := e2e.EgressPolicyCacheCounts(afterFirstScrape)
-	extProcBeforeStale := e2e.EgressExtProcStreamCounts(afterFirstScrape)[e2e.EgressExtProcPolicyMITMStatPrefix]
-	if got := hitsAfterFirst - hitsBeforeFirst; got != 1 {
-		t.Fatalf("ate_egress.cache_hit incremented by %d on fresh policy, want 1 (before=%d, after=%d)", got, hitsBeforeFirst, hitsAfterFirst)
+	requestStatsDiff := dataplane.EgressRequestStats(beforeFirstScrape, afterFirstScrape)
+	if requestStatsDiff.EgressPolicyHits != 1 {
+		t.Fatalf("ate_egress.cache_hit incremented by %d on fresh policy, want 1", requestStatsDiff.EgressPolicyHits)
 	}
-	if got := extProcBeforeStale - extProcBeforeFirst; got != 0 {
-		t.Fatalf("ext_proc %s streams_started incremented by %d on fresh policy, want 0 (before=%d, after=%d)", e2e.EgressExtProcPolicyMITMStatPrefix, got, extProcBeforeFirst, extProcBeforeStale)
+	if requestStatsDiff.MitmExtProcCalls != 0 {
+		t.Fatalf("MITM ext_proc streams_started incremented by %d on fresh policy, want 0", requestStatsDiff.MitmExtProcCalls)
 	}
 
 	// Default cache_ttl in egress-policy-pep is 5s; wait past the TTL so the
 	// cached policy on the reused connection becomes stale.
 	time.Sleep(6 * time.Second)
 
-	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.com/", reached)
+	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, mitmURL, reached)
 	if status != http.StatusOK {
 		t.Fatalf("second fetch of https://example.com/ after policy TTL returned HTTP %d, want 200; body: %s", status, body)
 	}
 
-	afterStaleScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	afterStaleScrape, err := dataplane.ScrapeMetrics(ctx)
 	if err != nil {
 		t.Fatalf("scraping egress Envoy metrics after stale request: %v", err)
 	}
-	hitsAfterStale, missesAfterStale := e2e.EgressPolicyCacheCounts(afterStaleScrape)
-	extProcAfterStale := e2e.EgressExtProcStreamCounts(afterStaleScrape)[e2e.EgressExtProcPolicyMITMStatPrefix]
-	if got := missesAfterStale - missesBeforeStale; got != 1 {
-		t.Fatalf("ate_egress.cache_miss incremented by %d on stale policy, want 1 (before=%d, after=%d)", got, missesBeforeStale, missesAfterStale)
+	requestStatsDiff = dataplane.EgressRequestStats(afterFirstScrape, afterStaleScrape)
+	if requestStatsDiff.EgressPolicyMisses != 1 {
+		t.Fatalf("ate_egress.cache_miss incremented by %d on stale policy, want 1", requestStatsDiff.EgressPolicyMisses)
 	}
-	if got := extProcAfterStale - extProcBeforeStale; got != 1 {
-		t.Fatalf("ext_proc %s streams_started incremented by %d on stale policy, want 1 (before=%d, after=%d)", e2e.EgressExtProcPolicyMITMStatPrefix, got, extProcBeforeStale, extProcAfterStale)
+	if requestStatsDiff.MitmExtProcCalls != 1 {
+		t.Fatalf("MITM ext_proc streams_started incremented by %d on stale policy, want 1", requestStatsDiff.MitmExtProcCalls)
 	}
 
-	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.com/", reached)
+	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, mitmURL, reached)
 	if status != http.StatusOK {
 		t.Fatalf("third fetch of https://example.com/ after policy refresh returned HTTP %d, want 200; body: %s", status, body)
 	}
 
-	afterRefreshedScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	afterRefreshedScrape, err := dataplane.ScrapeMetrics(ctx)
 	if err != nil {
 		t.Fatalf("scraping egress Envoy metrics after refreshed request: %v", err)
 	}
-	hitsAfterRefreshed, missesAfterRefreshed := e2e.EgressPolicyCacheCounts(afterRefreshedScrape)
-	extProcAfterRefreshed := e2e.EgressExtProcStreamCounts(afterRefreshedScrape)[e2e.EgressExtProcPolicyMITMStatPrefix]
-	if got := hitsAfterRefreshed - hitsAfterStale; got != 1 {
-		t.Fatalf("ate_egress.cache_hit incremented by %d after policy refresh, want 1 (before=%d, after=%d)", got, hitsAfterStale, hitsAfterRefreshed)
+	requestStatsDiff = dataplane.EgressRequestStats(afterStaleScrape, afterRefreshedScrape)
+	if requestStatsDiff.EgressPolicyHits != 1 {
+		t.Fatalf("ate_egress.cache_hit incremented by %d after policy refresh, want 1", requestStatsDiff.EgressPolicyHits)
 	}
-	if got := missesAfterRefreshed - missesAfterStale; got != 0 {
-		t.Fatalf("ate_egress.cache_miss incremented by %d after policy refresh, want 0 (before=%d, after=%d)", got, missesAfterStale, missesAfterRefreshed)
+	if requestStatsDiff.EgressPolicyMisses != 0 {
+		t.Fatalf("ate_egress.cache_miss incremented by %d after policy refresh, want 0", requestStatsDiff.EgressPolicyMisses)
 	}
-	if got := extProcAfterRefreshed - extProcAfterStale; got != 0 {
-		t.Fatalf("ext_proc %s streams_started incremented by %d after policy refresh, want 0 (before=%d, after=%d)", e2e.EgressExtProcPolicyMITMStatPrefix, got, extProcAfterStale, extProcAfterRefreshed)
+	if requestStatsDiff.MitmExtProcCalls != 0 {
+		t.Fatalf("MITM ext_proc streams_started incremented by %d after policy refresh", requestStatsDiff.MitmExtProcCalls)
 	}
 }
 

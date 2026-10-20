@@ -44,7 +44,7 @@ pub const REJECTED_COUNTER_NAME: &str = "ate_egress.rejected";
 /// Counter name for requests matching a rule that has effects.
 pub const HAS_EFFECTS_COUNTER_NAME: &str = "ate_egress.has_effects";
 
-/// Deserialized configuration parameters for egress-policy-pep.
+/// Deserialized configuration parameters for egress-pep.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Config {

@@ -61,3 +61,37 @@ envoy_http_downstream_rq_xx{envoy_response_code_class="2",envoy_http_conn_manage
 		}
 	})
 }
+
+func TestAtenetDataplaneEgressRequestStats(t *testing.T) {
+	const before = `# TYPE envoy_http_ext_proc_egress_policy_mitm_streams_started counter
+envoy_http_ext_proc_egress_policy_mitm_streams_started{envoy_http_conn_manager_prefix="mitm_http"} 1
+# TYPE envoy_dynamicmodulescustom_ate_egress_cache_hit counter
+envoy_dynamicmodulescustom_ate_egress_cache_hit{} 4
+# TYPE envoy_dynamicmodulescustom_ate_egress_cache_miss counter
+envoy_dynamicmodulescustom_ate_egress_cache_miss{} 1
+`
+	const after = `# TYPE envoy_http_ext_proc_egress_policy_mitm_streams_started counter
+envoy_http_ext_proc_egress_policy_mitm_streams_started{envoy_http_conn_manager_prefix="mitm_http"} 3
+# TYPE envoy_dynamicmodulescustom_ate_egress_cache_hit counter
+envoy_dynamicmodulescustom_ate_egress_cache_hit{} 10
+# TYPE envoy_dynamicmodulescustom_ate_egress_cache_miss counter
+envoy_dynamicmodulescustom_ate_egress_cache_miss{} 4
+`
+
+	t.Run("envoy", func(t *testing.T) {
+		t.Setenv(AtenetDataplaneEnv, "")
+		got := CurrentAtenetDataplane().EgressRequestStats(before, after)
+		want := EgressRequestStats{MitmExtProcCalls: 2, EgressPolicyHits: 6, EgressPolicyMisses: 3}
+		if got != want {
+			t.Errorf("EgressRequestStats() = %+v, want %+v", got, want)
+		}
+	})
+	t.Run("agentgateway", func(t *testing.T) {
+		t.Setenv(AtenetDataplaneEnv, "agentgateway")
+		got := CurrentAtenetDataplane().EgressRequestStats(before, after)
+		want := EgressRequestStats{MitmExtProcCalls: -1, EgressPolicyHits: -1, EgressPolicyMisses: -1}
+		if got != want {
+			t.Errorf("EgressRequestStats() = %+v, want %+v", got, want)
+		}
+	})
+}
