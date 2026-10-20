@@ -38,7 +38,7 @@ When exposing the CSI Controller over the network, communication should be secur
 
 * `enabled: true`: Enables TLS/mTLS for gRPC communication between `ateapi` and the CSI Controller service. If `false` (or omitted), communication falls back to unencrypted plaintext gRPC.
 * `usePodIdentity: true`: Instructs `ateapi` to authenticate using Substrate's SPIFFE Pod Identity client certificate (`/run/podidentity.podcert.ate.dev/credential-bundle.pem`) and verify the controller's server certificate using Substrate's dynamic Service DNS CA trust bundle (`/run/servicedns.podcert.ate.dev/trust-bundle.pem`).
-* `serverName: <hostname-or-ip>`: Specifies the expected Subject Alternative Name (SAN) of the controller for TLS certificate verification. Required when `enabled` is `true`.
+* `serverName: <hostname-or-ip>`: Specifies the expected Subject Alternative Name (SAN) of the controller for TLS certificate verification. Required when `enabled` is `true`. With Substrate's Service DNS signer, set this to `<service>.<namespace>.svc`, the DNS name in the server certificate. The `controllerEndpoint` may use the full `.svc.cluster.local` address, but the certificate does not include that name.
 
 > [!IMPORTANT]
 > **What happens if `usePodIdentity` is `false`?**
@@ -273,7 +273,7 @@ spec:
   tls:
     enabled: true
     usePodIdentity: true
-    serverName: csi-nfs-controller.kube-system.svc.cluster.local
+    serverName: csi-nfs-controller.kube-system.svc
 ```
 
 ---
