@@ -31,7 +31,7 @@ func setupTestAuthorizer(t *testing.T) *Authorizer {
 	ctx := context.Background()
 	pool := startPostgres(t)
 
-	fgaServer, err := NewOpenFGAServer(pool)
+	fgaServer, err := NewOpenFGAServer(pool, 0)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestAccessPolicyRPCsAlwaysEnforced(t *testing.T) {
 func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgres(t)
-	fgaServer, err := NewOpenFGAServer(pool)
+	fgaServer, err := NewOpenFGAServer(pool, 0)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
@@ -482,7 +482,7 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgres(t)
-	fgaServer, err := NewOpenFGAServer(pool)
+	fgaServer, err := NewOpenFGAServer(pool, 0)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
@@ -674,7 +674,7 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgres(t)
-	fgaServer, err := NewOpenFGAServer(pool)
+	fgaServer, err := NewOpenFGAServer(pool, 0)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}

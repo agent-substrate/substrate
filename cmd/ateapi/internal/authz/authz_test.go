@@ -32,6 +32,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/grpc/codes"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
 	"go.ate.dev/substrate/internal/apierror"
@@ -127,7 +128,7 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 
 func newTestAuthz(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (*server.Server, string, string) {
 	t.Helper()
-	fgaSrv, err := NewOpenFGAServer(pool)
+	fgaSrv, err := NewOpenFGAServer(pool, 0)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
@@ -140,7 +141,7 @@ func newTestAuthz(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (*serve
 }
 
 func TestEnsureStoreAndModel_NilArgs(t *testing.T) {
-	if _, err := NewOpenFGAServer(nil); err == nil {
+	if _, err := NewOpenFGAServer(nil, 0); err == nil {
 		t.Fatal("expected error when pool is nil in NewOpenFGAServer")
 	}
 	if _, _, err := EnsureStoreAndModel(context.Background(), nil, nil); err == nil {
@@ -346,7 +347,7 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	}
 
 	// Closing fgaServer must not close the shared pool.
-	fgaSrv2, err := NewOpenFGAServer(pool)
+	fgaSrv2, err := NewOpenFGAServer(pool, 0)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
@@ -366,7 +367,7 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	}
 	t.Cleanup(singlePool.Close)
 
-	singleFGASrv, err := NewOpenFGAServer(singlePool)
+	singleFGASrv, err := NewOpenFGAServer(singlePool, 0)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer(singlePool) failed: %v", err)
 	}
@@ -440,7 +441,7 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 	pool := startPostgres(t)
 	ctx := context.Background()
 
-	fgaSrv, err := NewOpenFGAServer(pool)
+	fgaSrv, err := NewOpenFGAServer(pool, 0)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
@@ -544,6 +545,64 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 	if err := authorizer.Check(aliceCtx, "unknown_relation", GlobalRootObject); apierror.Code(err) != codes.Internal {
 		t.Errorf("expected Internal for unknown relation, got %v (%v)", apierror.Code(err), err)
 	}
+}
+
+func TestNewOpenFGAServer_CheckCache(t *testing.T) {
+	pool := startPostgres(t)
+	ctx := context.Background()
+	bobCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "bob", Kind: principal.KindJWT})
+
+	// grantCheckRevoke grants bob editor on atespace, checks that he passes
+	// can_get, then revokes the grant.
+	grantCheckRevoke := func(t *testing.T, ttl time.Duration, atespace string) *Authorizer {
+		t.Helper()
+		fgaSrv, err := NewOpenFGAServer(pool, ttl)
+		if err != nil {
+			t.Fatalf("NewOpenFGAServer(%s) failed: %v", ttl, err)
+		}
+		t.Cleanup(fgaSrv.Close)
+		authorizer, policyManager, err := New(ctx, pool, fgaSrv, nil, testSystemPrincipals())
+		if err != nil {
+			t.Fatalf("authz.New failed: %v", err)
+		}
+
+		writeTestTuple(t, ctx, pool, policyManager, "bob", "editor", AtespaceObject(atespace))
+		if err := authorizer.Check(bobCtx, RelationCanGet, AtespaceObject(atespace)); err != nil {
+			t.Fatalf("expected bob allowed can_get on %s after grant, got %v", atespace, err)
+		}
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("pool.Begin failed: %v", err)
+		}
+		if err := policyManager.DeleteAtespacePolicies(ctx, tx, atespace); err != nil {
+			t.Fatalf("DeleteAtespacePolicies failed: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("tx.Commit failed: %v", err)
+		}
+		return authorizer
+	}
+
+	if _, err := NewOpenFGAServer(pool, -time.Second); err == nil {
+		t.Error("expected error for a negative check cache TTL")
+	}
+
+	t.Run("revoke is served from cache within the TTL", func(t *testing.T) {
+		authorizer := grantCheckRevoke(t, time.Hour, "cache-hit")
+		if err := authorizer.Check(bobCtx, RelationCanGet, AtespaceObject("cache-hit")); err != nil {
+			t.Errorf("expected the cached allow within the TTL, got %v", err)
+		}
+	})
+
+	t.Run("revoke applies after the TTL", func(t *testing.T) {
+		authorizer := grantCheckRevoke(t, 50*time.Millisecond, "cache-expiry")
+		err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 10*time.Second, true, func(context.Context) (bool, error) {
+			return apierror.Code(authorizer.Check(bobCtx, RelationCanGet, AtespaceObject("cache-expiry"))) == codes.PermissionDenied, nil
+		})
+		if err != nil {
+			t.Errorf("expected bob denied once the cache expired: %v", err)
+		}
+	})
 }
 
 func TestFormatUser_NoCollision(t *testing.T) {
