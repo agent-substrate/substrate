@@ -75,6 +75,65 @@ func TestSetSysctlSerializesTheRemount(t *testing.T) {
 	}
 }
 
+func TestDisableForwardingClearsEveryFamily(t *testing.T) {
+	fake := &fakeProcSys{readOnly: true, values: map[string]string{
+		"/proc/sys/net/ipv4/conf/all/forwarding":     "1",
+		"/proc/sys/net/ipv4/conf/default/forwarding": "1",
+		"/proc/sys/net/ipv6/conf/all/forwarding":     "1",
+		"/proc/sys/net/ipv6/conf/default/forwarding": "1",
+	}}
+	if err := fake.procSys().disableForwarding(); err != nil {
+		t.Fatalf("disableForwarding: %v", err)
+	}
+	for key, v := range fake.values {
+		if v != "0" {
+			t.Errorf("%s = %q, want 0", key, v)
+		}
+	}
+}
+
+func TestDisableIPv4ForwardingWhenIPv6Disabled(t *testing.T) {
+	values := map[string]string{}
+	p := procSys{
+		readFile: func(path string) ([]byte, error) {
+			if strings.HasPrefix(path, "/proc/sys/net/ipv6/") {
+				return nil, &os.PathError{Op: "open", Path: path, Err: unix.ENOENT}
+			}
+			return []byte("1\n"), nil
+		},
+		writeFile: func(path string, data []byte) error {
+			if strings.HasPrefix(path, "/proc/sys/net/ipv6/") {
+				t.Errorf("wrote missing key %s", path)
+			}
+			values[path] = strings.TrimSpace(string(data))
+			return nil
+		},
+		remount: func(bool) error {
+			t.Error("remounted /proc/sys for a missing key")
+			return nil
+		},
+	}
+	if err := p.disableForwarding(); err != nil {
+		t.Fatalf("disableForwarding without IPv6: %v", err)
+	}
+	for _, key := range []string{"/proc/sys/net/ipv4/conf/all/forwarding", "/proc/sys/net/ipv4/conf/default/forwarding"} {
+		if values[key] != "0" {
+			t.Errorf("%s = %q, want 0", key, values[key])
+		}
+	}
+}
+
+func TestDisableForwardingReportsAMissingIPv4Key(t *testing.T) {
+	p := procSys{
+		readFile:  func(path string) ([]byte, error) { return nil, &os.PathError{Op: "open", Path: path, Err: unix.ENOENT} },
+		writeFile: func(path string, data []byte) error { return nil },
+		remount:   func(bool) error { return nil },
+	}
+	if err := p.disableForwarding(); !errors.Is(err, unix.ENOENT) {
+		t.Fatalf("disableForwarding with no IPv4 keys: got %v, want ENOENT", err)
+	}
+}
+
 // fakeProcSys is a read-only /proc/sys mount shared by all callers. Its
 // read-write remount is slow, so unserialized callers overlap inside it.
 type fakeProcSys struct {

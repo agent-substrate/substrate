@@ -19,6 +19,7 @@ package netns
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -31,6 +32,27 @@ import (
 // The sysctl is per-namespace and grants nothing outside it.
 func AllowUnprivilegedPorts() error {
 	return setSysctl("net/ipv4/ip_unprivileged_port_start", "0")
+}
+
+// DisableForwarding turns off IPv4 and IPv6 forwarding in this namespace, which
+// otherwise inherits the node's IPv4 setting. Missing IPv6 keys are skipped.
+func DisableForwarding() error {
+	return hostProcSys.disableForwarding()
+}
+
+func (p procSys) disableForwarding() error {
+	for _, key := range []string{
+		"net/ipv4/conf/all/forwarding",
+		"net/ipv4/conf/default/forwarding",
+		"net/ipv6/conf/all/forwarding",
+		"net/ipv6/conf/default/forwarding",
+	} {
+		err := p.set(key, "0")
+		if err != nil && !(strings.HasPrefix(key, "net/ipv6/") && errors.Is(err, fs.ErrNotExist)) {
+			return err
+		}
+	}
+	return nil
 }
 
 // procSysMu serializes setSysctl. Sandboxes are set up concurrently and share
@@ -72,8 +94,12 @@ func (p procSys) set(key, value string) error {
 	defer procSysMu.Unlock()
 
 	path := "/proc/sys/" + key
-	if b, err := p.readFile(path); err == nil && strings.TrimSpace(string(b)) == value {
+	b, err := p.readFile(path)
+	if err == nil && strings.TrimSpace(string(b)) == value {
 		return nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("while setting %s in the current netns: %w", key, err)
 	}
 	// Only EROFS is worth remounting for; any other error is returned as is.
 	if err := p.writeFile(path, []byte(value+"\n")); !errors.Is(err, unix.EROFS) {

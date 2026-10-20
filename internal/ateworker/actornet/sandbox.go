@@ -171,6 +171,10 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 
 	// gVisor imports these addresses and routes into its network stack.
 	if err := netns.Do(ctx, actorNS, func(context.Context) error {
+		// The runtime namespace has no reason to route.
+		if err := netns.DisableForwarding(); err != nil {
+			return err
+		}
 		// Loopback lets the actor reach its own address.
 		if err := linkUp("lo"); err != nil {
 			return err
@@ -209,6 +213,10 @@ func setupGatewaySide(ctx context.Context, ns netns.Handle, egressPort uint16) e
 		// atunnel answers the actor's DNS on 53, and the worker holds no
 		// CAP_NET_BIND_SERVICE.
 		if err := netns.AllowUnprivilegedPorts(); err != nil {
+			return err
+		}
+		// Actor packets end at atunnel, the DNS relay, or a drop; never route them.
+		if err := netns.DisableForwarding(); err != nil {
 			return err
 		}
 		return linkUp("lo")
@@ -252,6 +260,13 @@ func installEgressRules(ns netns.Handle, egressPort uint16) error {
 		if family.tableFamily == nftables.TableFamilyIPv4 {
 			ipv4Table = table
 		}
+		// Backs up the forwarding sysctls: nothing in this namespace is routed.
+		dropPolicy := nftables.ChainPolicyDrop
+		c.AddChain(&nftables.Chain{
+			Name: "forward", Table: table, Type: nftables.ChainTypeFilter,
+			Hooknum: nftables.ChainHookForward, Priority: nftables.ChainPriorityFilter,
+			Policy: &dropPolicy,
+		})
 		filter := c.AddChain(&nftables.Chain{
 			Name: "disallowed-egress", Table: table, Type: nftables.ChainTypeFilter,
 			Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityRaw,
