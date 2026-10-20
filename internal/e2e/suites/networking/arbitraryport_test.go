@@ -93,6 +93,41 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 		t.Logf("arbitrary-port access through CONNECT succeeded; body: %s", body)
 	})
 
+	t.Run("tunnels to different ports do not cross", func(t *testing.T) {
+		// Keep a tunnel to the default port open and idle. A tunnel to another
+		// port must not inherit its authority from it.
+		held, err := router.Connect(ctx, actorRef, 80)
+		if err != nil {
+			t.Fatalf("CONNECT to the default port: %v", err)
+		}
+		defer held.Close()
+		held.SetDeadline(time.Now().Add(time.Minute))
+		if _, err := fmt.Fprintf(held, "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", actorRef.Name); err != nil {
+			t.Fatalf("writing request on the held tunnel: %v", err)
+		}
+		heldResp, err := http.ReadResponse(bufio.NewReader(held), nil)
+		if err != nil {
+			t.Fatalf("reading response on the held tunnel: %v", err)
+		}
+		io.Copy(io.Discard, heldResp.Body)
+		heldResp.Body.Close()
+
+		for i := range 20 {
+			conn, err := router.Connect(ctx, actorRef, counterExtraPort)
+			if err != nil {
+				t.Fatalf("CONNECT %d to port %d: %v", i, counterExtraPort, err)
+			}
+			resp, body, err := requestTunneled(conn, actorRef.Name)
+			conn.Close()
+			if err != nil {
+				t.Fatalf("request %d through the tunnel to port %d: %v", i, counterExtraPort, err)
+			}
+			if resp.StatusCode != http.StatusOK || !strings.Contains(body, "extra port 9090") {
+				t.Fatalf("request %d through the tunnel to port %d got HTTP %d, body %q, want the extra port's response", i, counterExtraPort, resp.StatusCode, body)
+			}
+		}
+	})
+
 	t.Run("unlisted port rejected", func(t *testing.T) {
 		// Nothing on the actor listens here. The tunnel itself still
 		// establishes (see the doc comment above), so the failure has to
