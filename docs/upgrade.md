@@ -91,6 +91,9 @@ This deploys the new podcertificate-controller and waits until it publishes its 
 
 ### Step 2. Upgrade atelet
 
+> [!IMPORTANT]
+> If the new release changes the image cache layout, each node's atelet refuses its cache until you [rebuild it](#rebuild-a-nodes-image-cache). To keep the actors' work, first suspend each actor with `kubectl ate suspend actor --mode=sync`, and keep them suspended until every node is rebuilt. An asynchronous suspend can lose its snapshot.
+
 ```bash
 go run ./cmd/ate-setup deploy atelet --config ~/ate-upgrade/new.yaml --rollout-timeout 1h
 ```
@@ -258,14 +261,25 @@ Workers already removed still get their 30 minutes. Do not leave a pool paused, 
 
 ### Rebuild a node's image cache
 
-atelet refuses to start on an image cache whose layout version it does not support, and its log names both versions. The cache holds no unique state, but the actors on the node run from it, so delete it only once no actor runs on the node. atelet rebuilds it as actors start:
+Only a release that changes the image cache layout needs this. A normal upgrade does not.
+
+atelet refuses to start on an image cache whose layout version it does not support, and its log names both versions. The cache holds no unique state, but the actors on the node run from it, so delete it only once no actor runs on the node.
+
+While atelet is down, the node's actors keep running but cannot be suspended. Do not try to suspend them. The call fails and leaves the actor `SUSPENDING`, and it stops serving. To empty the node, delete its worker pods. Their actors become `CRASHED` and lose their work since their last snapshot.
 
 ```bash
 NODE=my-node   # change me
+kubectl delete pod -A -l ate.dev/worker-pool --field-selector spec.nodeName=$NODE
 kubectl debug node/$NODE -it --image=busybox -- rm -rf /host/var/lib/ate/image-cache
 kubectl delete pod -n ate-system -l app=atelet --field-selector spec.nodeName=$NODE
 # kubectl debug leaves its finished pod behind.
 kubectl get pods -o name | grep "^pod/node-debugger-$NODE-" | xargs kubectl delete
+```
+
+atelet rebuilds the cache as actors start. A crashed actor cannot be resumed until you revert it to its last snapshot:
+
+```bash
+kubectl ate revert actor my-actor -a my-atespace   # change me
 ```
 
 ### Roll back

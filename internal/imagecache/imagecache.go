@@ -75,8 +75,8 @@ import (
 )
 
 const (
-	// Version 2 layers were hashed against their diffID at unpack. Version 1
-	// layers never were, so a version 1 pool is refused.
+	// Version 1 layers may not have been hashed against their diffID, so a
+	// version 1 pool is refused.
 	layoutVersion   = "2"
 	versionFileName = "version"
 
@@ -340,7 +340,7 @@ func New(root string, opts ...Option) (*Store, error) {
 		if got := strings.TrimSpace(string(b)); got != layoutVersion {
 			// Fail loudly instead of silently mixing layouts; an operator can
 			// delete the cache dir to rebuild it (it holds no unique state).
-			return nil, fmt.Errorf("image cache at %q has layout version %q, this atelet supports %q: delete the directory once no actor on this node is running, and atelet rebuilds it", root, got, layoutVersion)
+			return nil, fmt.Errorf("image cache at %q has layout version %q, this atelet supports %q: see \"Rebuild a node's image cache\" in docs/upgrade.md", root, got, layoutVersion)
 		}
 	case errors.Is(err, os.ErrNotExist):
 		if err := os.WriteFile(versionPath, []byte(layoutVersion+"\n"), 0o600); err != nil {

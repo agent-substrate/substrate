@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -138,10 +139,16 @@ func assertPoolEmpty(t *testing.T, s *Store) {
 // captureLogs sends the default logger to a buffer until the test ends.
 func captureLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	// slog.SetDefault also points the log package at the handler, and setting
+	// slog back does not undo that, so restore all three.
+	prev, prevOut, prevFlags := slog.Default(), log.Writer(), log.Flags()
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
 	var buf bytes.Buffer
-	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
 	return &buf
 }
 
