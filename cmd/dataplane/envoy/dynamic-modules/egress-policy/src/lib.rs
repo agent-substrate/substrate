@@ -21,6 +21,7 @@ mod egress_policy_store;
 mod listener_filter;
 mod pep_config;
 mod pep_http_filter;
+mod policy_refresh_filter;
 mod policy_store_filter;
 
 use envoy_proxy_dynamic_modules_rust_sdk::{declare_all_init_functions, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilterConfig};
@@ -45,6 +46,7 @@ pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter
   match name {
     "envoy_substrate_egress_policy_store" => policy_store_filter::new_http_filter_config_fn(envoy_filter_config, name, config),
     "envoy_substrate_egress_pep" => pep_config::new_http_filter_config_fn(envoy_filter_config, name, config),
+    "envoy_substrate_egress_policy_refresh" => policy_refresh_filter::new_http_filter_config_fn(envoy_filter_config, name, config),
     _ => None,
   }
 }

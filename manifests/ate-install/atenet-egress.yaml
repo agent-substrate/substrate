@@ -638,6 +638,12 @@ data:
                                   dynamic_module_config:
                                     name: envoy_substrate_egress_policy
                                   filter_name: envoy_substrate_egress_policy_store
+              - name: envoy.filters.http.dynamic_modules
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
+                  dynamic_module_config:
+                    name: envoy_substrate_egress_policy
+                  filter_name: envoy_substrate_egress_policy_refresh
               # Envoy dials a port written in the Host unless the name to dial
               # comes from filter state too, so the name the request was
               # decided on goes there. Must stay after ext_proc.
