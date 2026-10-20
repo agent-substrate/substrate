@@ -213,11 +213,10 @@ func setupGatewaySide(ctx context.Context, ns netns.Handle, egressPort uint16) e
 		// atunnel answers the actor's DNS on 53 (requiring unprivileged port bind),
 		// and actor packets must never route. Configure both under a single
 		// /proc/sys remount.
-		if err := netns.SetSysctls(
-			netns.Sysctl{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"},
-			netns.Sysctl{Key: "net/ipv4/conf/all/forwarding", Value: "0"},
-			netns.Sysctl{Key: "net/ipv6/conf/all/forwarding", Value: "0"},
-		); err != nil {
+		sysctls := append([]netns.Sysctl{
+			{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"},
+		}, netns.ForwardingSysctls...)
+		if err := netns.SetSysctls(sysctls...); err != nil {
 			return err
 		}
 		return linkUp("lo")

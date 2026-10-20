@@ -40,11 +40,15 @@ func AllowUnprivilegedPorts() error {
 	return SetSysctls(Sysctl{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"})
 }
 
-// ForwardingSysctls disables IPv4 and IPv6 forwarding. Setting all/forwarding
-// also updates default/forwarding in the kernel.
+// ForwardingSysctls disables IPv4 and IPv6 forwarding across all interfaces
+// and default interface templates. Explicitly clearing default/forwarding
+// ensures interfaces created after namespace setup (such as microVM taps)
+// do not inherit forwarding on nodes where all=0 but default=1.
 var ForwardingSysctls = []Sysctl{
 	{Key: "net/ipv4/conf/all/forwarding", Value: "0"},
+	{Key: "net/ipv4/conf/default/forwarding", Value: "0"},
 	{Key: "net/ipv6/conf/all/forwarding", Value: "0"},
+	{Key: "net/ipv6/conf/default/forwarding", Value: "0"},
 }
 
 // DisableForwarding turns off IPv4 and IPv6 forwarding in this namespace, which

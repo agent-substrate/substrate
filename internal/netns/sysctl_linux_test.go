@@ -80,13 +80,14 @@ func TestSetSysctlsBatchesRemount(t *testing.T) {
 	fake := &fakeProcSys{readOnly: true, values: map[string]string{
 		"/proc/sys/net/ipv4/ip_unprivileged_port_start": "1024",
 		"/proc/sys/net/ipv4/conf/all/forwarding":        "1",
+		"/proc/sys/net/ipv4/conf/default/forwarding":    "1",
 		"/proc/sys/net/ipv6/conf/all/forwarding":        "1",
+		"/proc/sys/net/ipv6/conf/default/forwarding":    "1",
 	}}
-	if err := fake.procSys().set([]Sysctl{
+	sysctls := append([]Sysctl{
 		{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"},
-		{Key: "net/ipv4/conf/all/forwarding", Value: "0"},
-		{Key: "net/ipv6/conf/all/forwarding", Value: "0"},
-	}); err != nil {
+	}, ForwardingSysctls...)
+	if err := fake.procSys().set(sysctls); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if fake.remountCalls != 2 {
@@ -95,7 +96,9 @@ func TestSetSysctlsBatchesRemount(t *testing.T) {
 	for key, want := range map[string]string{
 		"/proc/sys/net/ipv4/ip_unprivileged_port_start": "0",
 		"/proc/sys/net/ipv4/conf/all/forwarding":        "0",
+		"/proc/sys/net/ipv4/conf/default/forwarding":    "0",
 		"/proc/sys/net/ipv6/conf/all/forwarding":        "0",
+		"/proc/sys/net/ipv6/conf/default/forwarding":    "0",
 	} {
 		if fake.values[key] != want {
 			t.Errorf("%s = %q, want %q", key, fake.values[key], want)
@@ -105,8 +108,10 @@ func TestSetSysctlsBatchesRemount(t *testing.T) {
 
 func TestDisableForwardingClearsEveryFamily(t *testing.T) {
 	fake := &fakeProcSys{readOnly: true, values: map[string]string{
-		"/proc/sys/net/ipv4/conf/all/forwarding": "1",
-		"/proc/sys/net/ipv6/conf/all/forwarding": "1",
+		"/proc/sys/net/ipv4/conf/all/forwarding":     "1",
+		"/proc/sys/net/ipv4/conf/default/forwarding": "1",
+		"/proc/sys/net/ipv6/conf/all/forwarding":     "1",
+		"/proc/sys/net/ipv6/conf/default/forwarding": "1",
 	}}
 	if err := fake.procSys().set(ForwardingSysctls); err != nil {
 		t.Fatalf("set: %v", err)
@@ -142,8 +147,10 @@ func TestDisableIPv4ForwardingWhenIPv6Disabled(t *testing.T) {
 	if err := p.set(ForwardingSysctls); err != nil {
 		t.Fatalf("set without IPv6: %v", err)
 	}
-	if values["/proc/sys/net/ipv4/conf/all/forwarding"] != "0" {
-		t.Errorf("net/ipv4/conf/all/forwarding = %q, want 0", values["/proc/sys/net/ipv4/conf/all/forwarding"])
+	for _, key := range []string{"/proc/sys/net/ipv4/conf/all/forwarding", "/proc/sys/net/ipv4/conf/default/forwarding"} {
+		if values[key] != "0" {
+			t.Errorf("%s = %q, want 0", key, values[key])
+		}
 	}
 }
 
