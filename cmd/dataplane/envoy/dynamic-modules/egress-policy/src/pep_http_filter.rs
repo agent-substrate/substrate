@@ -15,8 +15,9 @@
 //! The egress-policy-pep HTTP filter enforces egress policy on HTTP requests
 //! and responses.
 
-use std::{rc::Rc};
+use std::{rc::Rc, time::SystemTime};
 
+use chrono::{DateTime, Utc};
 use crate::constants::{ATE_POLICY_EGRESS_HASH, SNI_MODE_MITM};
 use crate::pep_config::{Config};
 use crate::egress_policy::{EgressPolicy, SniRule};
@@ -29,6 +30,9 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   envoy_log_trace, EnvoyCounterId,
   EnvoyHttpFilter, HttpFilter,
 };
+
+/// Filter state key holding the initial timestamp of the policy retrieval.
+pub const ATE_EGRESS_POLICY_CREATED_AT: &[u8] = b"dev.ate.egress.policy.created_at";
 
 /// Filter state key indicating that ext_proc callout should be skipped for the
 /// current request.
@@ -109,15 +113,20 @@ fn is_connect_request<EHF: EnvoyHttpFilter>(envoy_filter: &mut EHF) -> bool {
 
 impl EgressPolicyPepFilter {
   fn get_policy<EHF: EnvoyHttpFilter>(&self, envoy_filter: &mut EHF,) -> Option<Rc<EgressPolicy>> {
-    let Some(policy) = envoy_filter
+    let created_at = envoy_filter
+      .get_filter_state_bytes(ATE_EGRESS_POLICY_CREATED_AT)
+      .and_then(|value| std::str::from_utf8(value.as_slice()).ok()?.parse::<DateTime<Utc>>().ok())?;
+    if DateTime::<Utc>::from(SystemTime::now())
+      .signed_duration_since(created_at)
+      .to_std()
+      .is_ok_and(|age| age > self.config.cache_ttl)
+    {
+      return None;
+    }
+    envoy_filter
       .get_filter_state_bytes(ATE_POLICY_EGRESS_HASH)
       .and_then(|value| std::str::from_utf8(value.as_slice()).ok()?.parse::<u64>().ok())
-      .and_then(|hash| GlobalEgressPolicyStore::get_local_store().lookup(hash)) else {
-        let _ = envoy_filter.increment_counter(self.cache_miss_counter, 1);
-        return None;
-      };
-      let _ = envoy_filter.increment_counter(self.cache_hit_counter, 1);
-      Some(policy)
+      .and_then(|hash| GlobalEgressPolicyStore::get_local_store().lookup(hash))
   }
 
   fn apply_matched_rule<EHF: EnvoyHttpFilter>(
@@ -215,6 +224,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyPepFilter {
     }
     match self.get_policy(envoy_filter) {
       Some(policy) => {
+        let _ = envoy_filter.increment_counter(self.cache_hit_counter, 1);
         let status = self.enforce_egress_policy(envoy_filter, &policy);
         let counter = if status
           == envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
@@ -226,7 +236,10 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyPepFilter {
         let _ = envoy_filter.increment_counter(counter, 1);
         status
       }
-      None => envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue,
+      None => {
+        let _ = envoy_filter.increment_counter(self.cache_miss_counter, 1);
+        envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+      }
     }
   }
 }
@@ -288,5 +301,44 @@ mod tests {
       filter.enforce_egress_policy(&mut mock_filter, &policy),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
     );
+  }
+
+  #[test]
+  fn test_get_policy_fresh_and_stale() {
+    let filter = test_filter();
+    let policy = Rc::new(EgressPolicy {
+      rules: Vec::new(),
+      hash: 42,
+    });
+    GlobalEgressPolicyStore::get_local_store().store(42, &policy);
+
+    let fresh_timestamp = DateTime::<Utc>::from(SystemTime::now()).to_rfc3339();
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == ATE_EGRESS_POLICY_CREATED_AT)
+      .times(1)
+      .returning(move |_| Some(EnvoyBuffer::new(fresh_timestamp.as_bytes())));
+    mock_filter
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == ATE_POLICY_EGRESS_HASH)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"42")));
+    assert_eq!(filter.get_policy(&mut mock_filter), Some(Rc::clone(&policy)));
+
+    let stale_timestamp = DateTime::<Utc>::from(
+      SystemTime::now() - filter.config.cache_ttl - std::time::Duration::from_secs(1),
+    )
+    .to_rfc3339();
+    let mut stale_mock = MockEnvoyHttpFilter::new();
+    stale_mock
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == ATE_EGRESS_POLICY_CREATED_AT)
+      .times(1)
+      .returning(move |_| Some(EnvoyBuffer::new(stale_timestamp.as_bytes())));
+    stale_mock.expect_get_filter_state_bytes().times(0);
+    assert!(filter.get_policy(&mut stale_mock).is_none());
+
+    GlobalEgressPolicyStore::get_local_store().remove(42);
   }
 }

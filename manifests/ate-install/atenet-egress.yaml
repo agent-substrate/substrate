@@ -267,6 +267,14 @@ data:
                       text_format_source:
                         inline_string: "%FILTER_STATE(dev.ate.policy.egress.hash.not_shared:PLAIN)%"
                       omit_empty_values: true
+                  # Store initial timestamp of the policy retrieval. Does not affect pool selection.
+                  - object_key: dev.ate.egress.policy.created_at
+                    factory_key: envoy.string
+                    skip_if_empty: true
+                    shared_with_upstream: ONCE
+                    format_string:
+                      text_format_source:
+                        inline_string: "%EMIT_TIME%"
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
