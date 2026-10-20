@@ -75,7 +75,9 @@ import (
 )
 
 const (
-	layoutVersion   = "1"
+	// Version 2 layers were hashed against their diffID at unpack. Version 1
+	// layers never were, so a version 1 pool is refused.
+	layoutVersion   = "2"
 	versionFileName = "version"
 
 	layerFSDirName           = "fs"
@@ -338,7 +340,7 @@ func New(root string, opts ...Option) (*Store, error) {
 		if got := strings.TrimSpace(string(b)); got != layoutVersion {
 			// Fail loudly instead of silently mixing layouts; an operator can
 			// delete the cache dir to rebuild it (it holds no unique state).
-			return nil, fmt.Errorf("image cache at %q has layout version %q, this atelet supports %q", root, got, layoutVersion)
+			return nil, fmt.Errorf("image cache at %q has layout version %q, this atelet supports %q: delete the directory once no actor on this node is running, and atelet rebuilds it", root, got, layoutVersion)
 		}
 	case errors.Is(err, os.ErrNotExist):
 		if err := os.WriteFile(versionPath, []byte(layoutVersion+"\n"), 0o600); err != nil {
@@ -634,6 +636,11 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 			diffID := cfgFile.RootFS.DiffIDs[i]
 			dir, err := s.ensureLayer(gctx, diffID, layer)
 			if err != nil {
+				if errors.Is(err, errDiffIDMismatch) {
+					slog.WarnContext(gctx, "Image layer does not match its claimed diffID",
+						slog.String("ref", parsedRef.String()), slog.String("digest", digest.String()),
+						slog.String("diffid", diffID.String()), slog.Any("err", err))
+				}
 				return fmt.Errorf("while unpacking layer %s: %w", diffID, err)
 			}
 			layerDirs[i] = dir
