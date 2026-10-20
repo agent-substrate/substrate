@@ -5239,10 +5239,14 @@ type ResumeActorRequest struct {
 	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// Resume only if this is still the actor and checkpoint the caller observed.
 	// This guards the current restore source; it does not select an older one.
-	// The actor must be SUSPENDED or retryable RESUMING, with a matching completed
-	// durable checkpoint, even when restoring a local copy. A mismatch or invalid
-	// state returns FAILED_PRECONDITION; a matching pending upload returns
-	// UNAVAILABLE. Omit to retain unconditional resume, including RUNNING no-ops.
+	// Restoring requires SUSPENDED or retryable RESUMING and a matching completed
+	// durable checkpoint, even when restoring a local copy. A RUNNING actor with
+	// a matching UID and newest held checkpoint returns resumed=false.
+	// A UID or checkpoint mismatch returns FAILED_PRECONDITION: the caller's
+	// view is stale, so retrying the same request won't help. An invalid state
+	// also returns FAILED_PRECONDITION.
+	// A concurrent template change returns ABORTED and can be retried; a matching
+	// pending upload returns UNAVAILABLE. Omit for unconditional resume.
 	// +k8s:optional
 	Expected      *ExpectedSnapshot `protobuf:"bytes,2,opt,name=expected,proto3" json:"expected,omitempty"`
 	unknownFields protoimpl.UnknownFields

@@ -200,16 +200,20 @@ func validateExpectedSnapshot(actor *ateapi.Actor, expected *ateapi.ExpectedSnap
 		return nil
 	}
 	if actor.GetMetadata().GetUid() != expected.GetActorUid() {
-		return apierror.FailedPrecondition("actor incarnation does not match expected snapshot")
+		return apierror.FailedPrecondition("actor UID %q does not match expected actor UID %q", actor.GetMetadata().GetUid(), expected.GetActorUid())
 	}
 	switch actor.GetStatus().GetState() {
-	case ateapi.ActorState_ACTOR_STATE_SUSPENDED, ateapi.ActorState_ACTOR_STATE_RESUMING:
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDED, ateapi.ActorState_ACTOR_STATE_RESUMING, ateapi.ActorState_ACTOR_STATE_RUNNING:
 	default:
 		return apierror.FailedPrecondition("actor in state %s cannot resume an expected snapshot", actor.GetStatus().GetState())
 	}
 	latest := latestSnapshot(actor.GetStatus(), func(*ateapi.Snapshot) bool { return true })
 	if latest == nil || latest.GetUuid() != expected.GetSnapshotUuid() || latest.GetGeneration() != expected.GetGeneration() {
-		return apierror.FailedPrecondition("actor's newest held snapshot does not match expected snapshot")
+		return apierror.FailedPrecondition("actor's newest held snapshot %q generation %d does not match expected snapshot %q generation %d", latest.GetUuid(), latest.GetGeneration(), expected.GetSnapshotUuid(), expected.GetGeneration())
+	}
+	// An identical retry after a successful resume has no restore to prepare.
+	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING {
+		return nil
 	}
 	switch latest.GetDurableSnapshot().GetStatus() {
 	case ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING:
@@ -222,7 +226,7 @@ func validateExpectedSnapshot(actor *ateapi.Actor, expected *ateapi.ExpectedSnap
 	// durable snapshot is held. A condition must describe what will be restored.
 	if local := findLatestLocalSnapshot(actor.GetStatus()); local != nil &&
 		(local.GetUuid() != expected.GetSnapshotUuid() || local.GetGeneration() != expected.GetGeneration()) {
-		return apierror.FailedPrecondition("actor's local restore source does not match expected snapshot")
+		return apierror.FailedPrecondition("actor's local restore source %q generation %d does not match expected snapshot %q generation %d", local.GetUuid(), local.GetGeneration(), expected.GetSnapshotUuid(), expected.GetGeneration())
 	}
 	return nil
 }
@@ -601,7 +605,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		}
 		conditionErr := validateExpectedSnapshot(fresh, expected)
 		if conditionErr == nil && expected != nil && !proto.Equal(fresh.GetActorTemplate(), actor.GetActorTemplate()) {
-			conditionErr = apierror.FailedPrecondition("actor template changed during conditioned resume")
+			conditionErr = apierror.Aborted("actor template changed during conditioned resume, please retry")
 		}
 		if conditionErr != nil {
 			// A terminal rejection must not leave a claim for an unassigned actor.

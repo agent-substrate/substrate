@@ -502,7 +502,7 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 		{name: "node-1 full: detaches and resumes on node-2", wantNode: "node-2"},
 		{name: "node-1 has room: resumes there from the local copy", node1: true, wantNode: "node-1"},
 		{name: "expected checkpoint detaches and resumes", conditioned: true, wantNode: "node-2"},
-		{name: "template changes before detach", conditioned: true, change: func(a *ateapi.Actor) { a.ActorTemplate.Name = "other" }, want: codes.FailedPrecondition},
+		{name: "template changes before detach then identical retry succeeds", conditioned: true, change: func(a *ateapi.Actor) { a.ActorTemplate.Name = "other" }, want: codes.Aborted, wantNode: "node-2"},
 		{name: "snapshot changes before detach", conditioned: true, change: func(a *ateapi.Actor) { a.Status.Snapshots[0].Uuid = "other" }, want: codes.FailedPrecondition},
 	}
 	for _, tt := range tests {
@@ -551,9 +551,18 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					// Validate the condition even when no atelet is available.
-					if err := w.dialer.ateletIndexer.Replace(nil, ""); err != nil {
-						t.Fatal(err)
+					if tt.want == codes.Aborted {
+						if _, err := st.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+							Metadata:       &ateapi.ResourceMetadata{Atespace: "ns", Name: "other"},
+							SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: testStorageLocation},
+						}); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						// Validate the condition even when no atelet is available.
+						if err := w.dialer.ateletIndexer.Replace(nil, ""); err != nil {
+							t.Fatal(err)
+						}
 					}
 				}}
 			}
@@ -569,7 +578,14 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 				if atelet.detachRequest() != nil || restore != nil || run != nil || !proto.Equal(mustReadActor(t, ctx, st, actorRef), changed) {
 					t.Error("rejected resume called atelet or changed actor")
 				}
-				return
+				if tt.want != codes.Aborted {
+					return
+				}
+				w.store = st
+				got, resumed, err = w.ResumeActor(ctx, actorRef, expected)
+				if err != nil {
+					t.Fatalf("identical retry after template change: %v", err)
+				}
 			}
 			if !resumed || got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
 				t.Fatalf("ResumeActor = (state %v, resumed %v), want RUNNING and resumed", got.GetStatus().GetState(), resumed)
