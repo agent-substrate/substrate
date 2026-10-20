@@ -99,8 +99,8 @@ jobs:
       # that release left it. The suite's actors run on the counter demo.
       working-directory: old
       run: |
-        hack/install-ate-kind.sh --deploy-ate-system
-        hack/install-ate-kind.sh --deploy-demo-counter
+        go run ./cmd/ate-setup --kind deploy ate-system
+        go run ./cmd/ate-setup --kind deploy demo counter
     - name: Upgrade to ${{ github.ref_name }}
       if: steps.from.outputs.tag != ''
       # The suite performs the upgrade with this checkout's ate-setup, in the

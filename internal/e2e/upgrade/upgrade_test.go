@@ -25,7 +25,7 @@
 // The suite upgrades the cluster it runs on, so it lives outside
 // internal/e2e/suites and the default e2e run leaves it out. It runs on gVisor
 // only. The actors run on the counter demo the previous release installed
-// (hack/install-ate-kind.sh --deploy-demo-counter, from that checkout). From
+// (go run ./cmd/ate-setup --kind deploy demo counter, from that checkout). From
 // this checkout:
 //
 //	hack/run-e2e-kind.sh ./internal/e2e/upgrade -timeout 60m
