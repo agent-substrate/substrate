@@ -323,6 +323,15 @@ func TestSetupBundleRootfs_ImageVolumes(t *testing.T) {
 				}, nil)
 				layers = append(layers, dir)
 			}
+			// a submount in the layer, which only the bind arm carries along
+			nested := filepath.Join(layers[tc.layers-1], layerFSDirName, "sub")
+			if err := os.Mkdir(nested, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := unix.Mount("tmpfs", nested, "tmpfs", 0, ""); err != nil {
+				t.Fatalf("mounting nested tmpfs: %v", err)
+			}
+			t.Cleanup(func() { _ = unix.Unmount(nested, unix.MNT_DETACH) })
 
 			bundle := t.TempDir()
 			if err := WriteSpec(bundle, &OverlaySpec{
@@ -348,10 +357,12 @@ func TestSetupBundleRootfs_ImageVolumes(t *testing.T) {
 				t.Errorf("shadowed.txt = %q (%v), want %q", got, err, want)
 			}
 			// No upper on either arm, so there is nowhere for a write to go.
-			if err := os.WriteFile(filepath.Join(mnt, "nope.txt"), []byte("x"), 0o644); err == nil {
-				t.Error("write succeeded through a read-only image volume")
-			} else if !errors.Is(err, unix.EROFS) {
-				t.Errorf("write failed with %v, want EROFS", err)
+			for _, name := range []string{"nope.txt", "sub/nope.txt"} {
+				if err := os.WriteFile(filepath.Join(mnt, name), []byte("x"), 0o644); err == nil {
+					t.Errorf("write of %s succeeded through a read-only image volume", name)
+				} else if !errors.Is(err, unix.EROFS) {
+					t.Errorf("write of %s failed with %v, want EROFS", name, err)
+				}
 			}
 			// The shared pool must never see the attempt.
 			if _, err := os.Stat(filepath.Join(layers[tc.layers-1], layerFSDirName, "nope.txt")); err == nil {
