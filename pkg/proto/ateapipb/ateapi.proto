@@ -2636,6 +2636,37 @@ message ActorAssignment {
   Resources resources = 4;
 }
 
+// Authentication reports how ateapi authenticated the caller. It is separate
+// from Control because it operates on no resource.
+service Authentication {
+  // WhoAmI returns the principal ateapi authenticated the caller as. Any
+  // authenticated caller may call it.
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+}
+
+message WhoAmIRequest {}
+
+message WhoAmIResponse {
+  // The principal ID that authorization policies name: the subject of a
+  // bearer JWT, or the first URI SAN of an mTLS client certificate.
+  string id = 1;
+
+  // How the caller authenticated.
+  PrincipalKind kind = 2;
+
+  // The issuer of the caller's bearer JWT. Empty for mTLS callers.
+  string issuer = 3;
+}
+
+// PrincipalKind is the authentication method that established a principal.
+enum PrincipalKind {
+  PRINCIPAL_KIND_UNSPECIFIED = 0;
+  // A bearer JWT verified against a configured JWT provider.
+  PRINCIPAL_KIND_JWT = 1;
+  // An mTLS client certificate.
+  PRINCIPAL_KIND_MTLS = 2;
+}
+
 // WorkerService is how a Worker tells the control plane what it observes. It is
 // separate from Control because the two have different callers and different
 // authorization: Control is the client-facing API, while these RPCs are served

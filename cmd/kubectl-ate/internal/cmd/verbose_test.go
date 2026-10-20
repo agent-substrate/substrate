@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -289,11 +290,11 @@ func TestTopWorkersRunner_VerboseSurfacesMetricsIssues(t *testing.T) {
 }
 
 func TestWarnSharedIdentity(t *testing.T) {
-	t.Run("warns without a token file", func(t *testing.T) {
+	t.Run("warns without a credential", func(t *testing.T) {
 		var buf bytes.Buffer
-		warnSharedIdentity(&buf, "")
+		warnSharedIdentity(&buf, "", nil)
 		got := buf.String()
-		for _, want := range []string{"Warning:", "ate-client", "shared identity", "--token-file"} {
+		for _, want := range []string{"Warning:", "ate-client", "shared identity", "--credential-plugin", "--token-file"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("warning %q does not mention %q", got, want)
 			}
@@ -301,7 +302,14 @@ func TestWarnSharedIdentity(t *testing.T) {
 	})
 	t.Run("silent with a token file", func(t *testing.T) {
 		var buf bytes.Buffer
-		warnSharedIdentity(&buf, "/path/to/token")
+		warnSharedIdentity(&buf, "/path/to/token", nil)
+		if got := buf.String(); got != "" {
+			t.Errorf("warning = %q, want none", got)
+		}
+	})
+	t.Run("silent with a credential plugin", func(t *testing.T) {
+		var buf bytes.Buffer
+		warnSharedIdentity(&buf, "", &clientcmdapi.ExecConfig{Command: "plugin"})
 		if got := buf.String(); got != "" {
 			t.Errorf("warning = %q, want none", got)
 		}

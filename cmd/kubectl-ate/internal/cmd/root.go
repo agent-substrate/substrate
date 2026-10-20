@@ -28,14 +28,15 @@ import (
 )
 
 var (
-	kubeconfig   string
-	k8sContext   string
-	endpoint     string
-	tokenFile    string
-	outputFmt    string
-	traceEnabled bool
-	verbosity    int
-	usePreview   bool
+	kubeconfig       string
+	k8sContext       string
+	endpoint         string
+	tokenFile        string
+	credentialPlugin string
+	outputFmt        string
+	traceEnabled     bool
+	verbosity        int
+	usePreview       bool
 )
 
 var rootCmd = &cobra.Command{
@@ -107,6 +108,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&k8sContext, "context", "", "kubeconfig context to use")
 	rootCmd.PersistentFlags().StringVar(&endpoint, "endpoint", "", "manual override for the gRPC target (e.g., localhost:8080); if omitted, automatically port-forwards")
 	rootCmd.PersistentFlags().StringVar(&tokenFile, "token-file", "", "path to a bearer token for ate-api authentication, or - for stdin (defaults to a Kubernetes ServiceAccount token)")
+	rootCmd.PersistentFlags().StringVar(&credentialPlugin, "credential-plugin", "", "kubectl credential plugin that provides the ate-api credential: an executable's path, or a command line (defaults to $"+credentialPluginEnv+")")
 	rootCmd.PersistentFlags().StringVarP(&outputFmt, "output", "o", "table", "output format: table, json, or yaml")
 	rootCmd.PersistentFlags().BoolVar(&traceEnabled, "trace", false, "enable tracing for the request")
 	rootCmd.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "output verbosity; may be repeated (e.g. -v, -vv, -vvvvv)")
