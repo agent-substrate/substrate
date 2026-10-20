@@ -246,6 +246,68 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	}
 }
 
+// TestEnsureWorkerAssigned_MalformedSnapshotURIClaimsNoWorker verifies that a
+// snapshot URI that does not parse fails the resume before a worker is claimed,
+// so the actor stays SUSPENDED and the worker stays free.
+func TestEnsureWorkerAssigned_MalformedSnapshotURIClaimsNoWorker(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
+		WorkerNamespace: "worker-ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod-1",
+		WorkerPodUid:    testWorkerUID("pod-1"),
+		Status: &ateapipb.WorkerStatus{
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:       &ateapipb.WorkerResources{Actors: 1},
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
+		},
+	}
+	if _, err := persistence.CreateWorker(ctx, worker); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+
+	cacheCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	wc := workercache.New(persistence, time.Minute)
+	if err := wc.Start(cacheCtx); err != nil {
+		t.Fatalf("workercache.Start: %v", err)
+	}
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "not-a-valid-snapshot-uri", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		}
+	})
+	actor, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+
+	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	if _, _, err := w.ensureWorkerAssigned(ctx, actorRef, actor, &ateapipb.ActorTemplate{}); apierror.Code(err) != codes.DataLoss {
+		t.Fatalf("ensureWorkerAssigned() error = %v, want DataLoss", err)
+	}
+
+	if got := firstAssignment(t, persistence, testWorkerUID("pod-1")); got != nil {
+		t.Errorf("worker assignment = %v, want none", got)
+	}
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("stored state = %v, want SUSPENDED", got)
+	}
+	if got := stored.GetStatus().GetWorkerAssignment(); got != nil {
+		t.Errorf("stored WorkerAssignment = %v, want none", got)
+	}
+}
+
 // TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker verifies that a worker
 // claimed by a previous failed attempt whose pool is no longer eligible is
 // released back to the free pool, without failing the resume, while a fresh
@@ -935,103 +997,76 @@ func TestValidateAssignedWorker(t *testing.T) {
 	}
 }
 
-// A golden tag becoming ready after creation does not change an actor's source.
-func TestLoadActorForResume_DoesNotDefaultGolden(t *testing.T) {
-	ctx := context.Background()
-	persistence := newTestPersistence(t)
+// TestResolveResumeSource covers the boot source resolved for a pending
+// restore: a durable snapshot captured under a different template sets
+// TemplateReplaced so the restore downgrades to data-only, and a golden tag
+// that became ready after creation does not change the source.
+func TestResolveResumeSource(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
-	if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-		Status: &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-			GoldenTag: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
-		}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	w := &ActorWorkflow{store: persistence}
-	_, _, src, err := w.loadActorForResume(ctx, actorRef)
-	if err != nil || !src.SnapshotURI.IsZero() {
-		t.Fatalf("source = %+v, err = %v; want cold boot", src, err)
-	}
-}
-
-// TestLoadActorForResume_TemplateReplaced covers the detection of a repointed
-// actor: when ExternalSnapshot.actor_template_uid differs from the actor's
-// current template UID, TemplateReplaced is set so the external restore
-// downgrades to data-only.
-func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-
-	// "current" stands for the created template's own UID.
-	const current = "current"
+	const tmplUID = "tmpl-uid"
 
 	tests := []struct {
-		name        string
-		snapshotUID string
-		noSnapshot  bool
-		want        bool
+		name         string
+		snapshotUID  string
+		noSnapshot   bool
+		golden       bool
+		wantSource   bool
+		wantReplaced bool
 	}{
 		{
 			name:        "snapshot taken under the current template",
-			snapshotUID: current,
+			snapshotUID: tmplUID,
+			wantSource:  true,
 		},
 		{
-			name:        "snapshot taken under a replaced template",
-			snapshotUID: "some-other-uid",
-			want:        true,
+			name:         "snapshot taken under a replaced template",
+			snapshotUID:  "some-other-uid",
+			wantSource:   true,
+			wantReplaced: true,
 		},
 		{
 			name:        "snapshot without a recorded template UID",
 			snapshotUID: "",
+			wantSource:  true,
 		},
 		{
 			name:       "no durable snapshot",
 			noSnapshot: true,
 		},
+		{
+			name:       "golden tag ready after creation is not a source",
+			noSnapshot: true,
+			golden:     true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			persistence := newTestPersistence(t)
-
-			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
-			tmpl, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-			})
-			if err != nil {
-				t.Fatalf("create template: %v", err)
+			tmpl := &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1", Uid: tmplUID},
 			}
-			if tmpl.GetMetadata().GetUid() == "" {
-				t.Fatal("created template has no UID; the matching cases would be vacuous")
+			if tt.golden {
+				tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+					GoldenTag: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
+				}}
 			}
-			resolve := func(uid string) string {
-				if uid == current {
-					return tmpl.GetMetadata().GetUid()
-				}
-				return uid
-			}
-
-			var seedOpts []func(*ateapipb.Actor)
+			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}
 			if !tt.noSnapshot {
-				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
-					a.Status.LastAssignedGeneration = 1
-					a.Status.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, resolve(tt.snapshotUID), "snap-1", someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					}
-				})
+				actor.Status.LastAssignedGeneration = 1
+				actor.Status.Snapshots = []*ateapipb.Snapshot{
+					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tt.snapshotUID, "snap-1", someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+				}
 			}
-			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, seedOpts...)
 
-			w := &ActorWorkflow{store: persistence}
-			_, _, src, err := w.loadActorForResume(ctx, actorRef)
+			src, err := resolveResumeSource(actorRef, actor, tmpl)
 			if err != nil {
-				t.Fatalf("loadActorForResume: %v", err)
+				t.Fatalf("resolveResumeSource: %v", err)
 			}
-			if src.TemplateReplaced != tt.want {
-				t.Errorf("src.TemplateReplaced = %v, want %v", src.TemplateReplaced, tt.want)
+			if got := !src.SnapshotURI.IsZero(); got != tt.wantSource {
+				t.Errorf("has snapshot source = %v, want %v (src: %+v)", got, tt.wantSource, src)
+			}
+			if src.TemplateReplaced != tt.wantReplaced {
+				t.Errorf("src.TemplateReplaced = %v, want %v", src.TemplateReplaced, tt.wantReplaced)
 			}
 		})
 	}
@@ -1049,7 +1084,7 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 
 	w := &ActorWorkflow{store: persistence}
 
-	actor, tmpl, src, err := w.loadActorForResume(ctx, actorRef)
+	actor, tmpl, err := w.loadActorForResume(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("loadActorForResume() unexpected error = %v", err)
 	}
@@ -1058,9 +1093,6 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	}
 	if tmpl != nil {
 		t.Errorf("expected nil template, got %v", tmpl)
-	}
-	if !src.SnapshotURI.IsZero() {
-		t.Errorf("expected empty snapshot source, got %+v", src)
 	}
 }
 
@@ -1752,8 +1784,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		},
 		{
 			// A local restore names the pause snapshot's upload, so a record
-			// that cannot name it fails before a worker is claimed, as a
-			// malformed durable snapshot URI does.
+			// that cannot name it fails, as a malformed durable snapshot URI
+			// does.
 			name:  "26 local snapshot with no upload recorded fails with DataLoss",
 			actor: actorSeed{localSnapshot: localSnapWithUpload(localSnapshotName, fullScope, nil)},
 			want:  restoreWant{code: codes.DataLoss},
@@ -1845,9 +1877,13 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				a.Status.LastAssignedGeneration = gen
 			})
 
-			actor, loadedTmpl, src, err := w.loadActorForResume(ctx, actorRef)
+			actor, loadedTmpl, err := w.loadActorForResume(ctx, actorRef)
+			// Assignment checks the URI before it claims a worker.
 			if err == nil {
-				_, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil, src)
+				err = checkSnapshotURI(actorRef, actor)
+			}
+			if err == nil {
+				_, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
 			}
 			if got := apierror.Code(err); got != tt.want.code {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)

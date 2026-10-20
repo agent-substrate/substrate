@@ -37,8 +37,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-// resumeSnapshotSource is the boot source resolved once by loadActorForResume
-// and passed by value to the restore step — never mutated after resolution.
+// resumeSnapshotSource is the boot source for a pending restore, resolved by
+// resolveResumeSource from the actor and its template.
 type resumeSnapshotSource struct {
 	SnapshotUUID string
 	Generation   int32
@@ -111,8 +111,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	}
 	defer lease.Close()
 
-	var src resumeSnapshotSource
-	actor, actorTemplate, src, err = w.loadActorForResume(leaseCtx, actorRef)
+	actor, actorTemplate, err = w.loadActorForResume(leaseCtx, actorRef)
 	if err != nil {
 		return nil, false, err
 	}
@@ -133,10 +132,6 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			return nil, false, err
 		}
 		actor = detached
-		// Resolve the restore source again, from the uploaded snapshot.
-		if src, err = resolveResumeSource(actorRef, actor, actorTemplate); err != nil {
-			return nil, false, err
-		}
 		assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate)
 	}
 	if err != nil {
@@ -147,7 +142,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	if err != nil {
 		return nil, false, err
 	}
-	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts, src); err != nil {
+	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts); err != nil {
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
@@ -158,36 +153,31 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	return actor, true, nil
 }
 
-// loadActorForResume fetches the current actor record and its template, and
-// resolves the boot source for the pending restore.
-func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
+// loadActorForResume fetches the current actor record and its template.
+func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForResume")
 	defer func() { err = done(err) }()
 
-	var src resumeSnapshotSource
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, src, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
-		return nil, nil, src, fmt.Errorf("while getting actor from DB: %w", err)
+		return nil, nil, fmt.Errorf("while getting actor from DB: %w", err)
 	}
 
 	// If the actor is already running, there is no pending restore to prepare
-	// for. Short-circuit immediately to avoid unnecessary store reads for snapshots
-	// and template resolution on the hot resume path.
+	// for. Short-circuit immediately to avoid an unnecessary template read on
+	// the hot resume path.
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		return actor, nil, src, nil
+		return actor, nil, nil
 	}
 
 	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
 	if err != nil {
-		return nil, nil, src, err
+		return nil, nil, err
 	}
-	if src, err = resolveResumeSource(actorRef, actor, actorTemplate); err != nil {
-		return nil, nil, src, err
-	}
-	return actor, actorTemplate, src, nil
+	return actor, actorTemplate, nil
 }
 
 // resolveResumeSource resolves the boot source for the actor's pending restore.
@@ -206,14 +196,25 @@ func resolveResumeSource(actorRef resources.ActorRef, actor *ateapipb.Actor, act
 		src.Owner = snap.GetOwner()
 		src.TemplateReplaced = templateReplaced(snap, actorTemplate)
 	}
-	// A local restore also names the local snapshot's upload, so a URI that
-	// does not parse fails here too, before a worker is claimed.
-	if local := findLatestLocalSnapshot(actor.GetStatus()); local != nil {
-		if _, err = resources.ParseSnapshotURI(local.GetDurableSnapshot().GetObject().GetSnapshotUri()); err != nil {
-			return src, apierror.DataLoss("Actor %s local snapshot: %v", actorRef, err)
+	return src, nil
+}
+
+// checkSnapshotURI fails with DataLoss when a snapshot the resume may restore
+// has a URI that does not parse. A local restore also names the local
+// snapshot's upload, so its URI must parse too.
+func checkSnapshotURI(actorRef resources.ActorRef, actor *ateapipb.Actor) error {
+	for _, snap := range []*ateapipb.Snapshot{
+		findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		findLatestLocalSnapshot(actor.GetStatus()),
+	} {
+		if snap == nil {
+			continue
+		}
+		if _, err := resources.ParseSnapshotURI(snap.GetDurableSnapshot().GetObject().GetSnapshotUri()); err != nil {
+			return apierror.DataLoss("Actor %s snapshot %s: %v", actorRef, snap.GetUuid(), err)
 		}
 	}
-	return src, nil
+	return nil
 }
 
 // templateReplaced reports whether snap was captured under a different
@@ -502,6 +503,10 @@ func schedulerRecordable(err error) bool {
 // actor is returned along with the conflict so the caller retries with clean
 // inputs; any other status aborts the resume.
 func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, _ *ateapipb.Worker, err error) {
+	// Checked before a worker is claimed.
+	if err := checkSnapshotURI(actorRef, actor); err != nil {
+		return nil, nil, err
+	}
 	start := time.Now()
 	outcome := ateattr.SchedulerOutcomeError
 	poolNamespace := ""
@@ -809,9 +814,14 @@ func checkVolumesAttachable(volumes []*ateapipb.ExternalVolumeStatus) error {
 // the worker pod UID, so a re-entered workflow re-sends the same semantic
 // request; once atelet's Restore/Run are idempotent on those keys this step
 // becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, volumePublishContexts map[string]map[string]string, src resumeSnapshotSource) (tele restoreTelemetry, err error) {
+func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, volumePublishContexts map[string]map[string]string) (tele restoreTelemetry, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
+
+	src, err := resolveResumeSource(actorRef, actor, actorTemplate)
+	if err != nil {
+		return tele, err
+	}
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
