@@ -1103,7 +1103,9 @@ type capturingAtelet struct {
 	detachState *ateletpb.ActorSnapshotState
 	detachErr   error
 	// onDetach, when set, runs before DetachActor returns.
-	onDetach func()
+	onDetach     func()
+	terminateErr error
+	onTerminate  func()
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1161,6 +1163,22 @@ func (f *capturingAtelet) DetachActor(ctx context.Context, req *ateletpb.DetachA
 		return nil, f.detachErr
 	}
 	return &ateletpb.DetachActorResponse{State: proto.CloneOf(f.detachState)}, nil
+}
+
+func (f *capturingAtelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
+	f.mu.Lock()
+	hook := f.onTerminate
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	f.mu.Lock()
+	err := f.terminateErr
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return f.UnimplementedAteletServer.Terminate(ctx, req)
 }
 
 func (f *capturingAtelet) detachRequest() *ateletpb.DetachActorRequest {

@@ -48,7 +48,9 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/utils/ptr"
 )
 
 // TestCreateActor_Success tests the happy path for creating an actor.
@@ -4471,9 +4473,13 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 			wantFidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 		},
 		{
-			name:           "detach failure keeps the uploaded checkpoint pinned",
+			name:           "unreachable node uses the uploaded checkpoint",
 			compatibleNode: true,
 			failDetach:     true,
+			wantWorker:     "worker-2",
+			wantNode:       "node2",
+			wantRuntime:    rtA,
+			wantFidelity:   ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -4534,24 +4540,6 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 			}
 
 			resumed, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
-			if tt.failDetach {
-				if status.Code(err) != codes.Unavailable {
-					t.Fatalf("ResumeActor error = %v, want Unavailable", err)
-				}
-				stored, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got := stored.GetStatus(); got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED ||
-					got.GetAssignedNode() != "node1" || got.GetWorkerAssignment() != nil {
-					t.Fatalf("actor after failed detach = %v, want suspended on node1", got)
-				}
-				snap := localSnapshot(stored.GetStatus())
-				if snap.GetUuid() != paused.GetUuid() || snap.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
-					t.Fatalf("checkpoint after failed detach = %v, want the uploaded local checkpoint", snap)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("ResumeActor after runtime change: %v", err)
 			}
@@ -6380,6 +6368,112 @@ func TestRevertActor(t *testing.T) {
 	// The difference from suspend: the execution is discarded, not captured.
 	if tc.fakeAtelet.CheckpointCalled {
 		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")
+	}
+}
+
+func TestRevertActor_UnreachableNode(t *testing.T) {
+	const sourceNode = "node-revert-source"
+	const sourceAtelet = "atelet-revert-source"
+	for _, tt := range []struct {
+		name    string
+		missing bool
+		pending bool
+	}{
+		{name: "missing atelet", missing: true},
+		{name: "unavailable atelet"},
+		{name: "pending checkpoint remains pinned", pending: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-revert-unreachable")
+			tc := setupTest(t, ns)
+			t.Cleanup(tc.cleanup)
+			ctx := context.Background()
+			createTemplate(t, tc, ns)
+			worker := createWorkerPod(t, tc, ns, "worker-1", sourceNode, "pool1")
+			setupAteletOnNode(t, tc, sourceAtelet, sourceNode)
+			tc.fakeAtelet.Lock.Lock()
+			tc.fakeAtelet.KeepCheckpointLocal = true
+			tc.fakeAtelet.Lock.Unlock()
+			ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"}
+			if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: ref.GetName()},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+				t.Fatal(err)
+			}
+			mode := ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
+			if tt.pending {
+				mode = ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
+			}
+			suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+				Actor: ref, Options: &ateapipb.SuspendOptions{Mode: mode},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snap := proto.CloneOf(localSnapshot(suspended.GetActor().GetStatus()))
+			if snap == nil || suspended.GetActor().GetStatus().GetAssignedNode() != sourceNode {
+				t.Fatalf("suspended actor has no retained checkpoint: %v", suspended.GetActor().GetStatus())
+			}
+			waitForWorkerAvailable(t, tc, worker)
+			deleteWorkerPod(t, tc, ns, "worker-1")
+			if tt.missing {
+				if err := tc.k8sClient.CoreV1().Pods(ateletNamespace).Delete(ctx, sourceAtelet, metav1.DeleteOptions{GracePeriodSeconds: ptr.To[int64](0)}); err != nil {
+					t.Fatal(err)
+				}
+				if err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
+					pods, err := tc.ateletIndexer.ByIndex(byNode, sourceNode)
+					return len(pods) == 0, err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				tc.fakeAtelet.Lock.Lock()
+				tc.fakeAtelet.FailTerminate = status.Error(codes.Unavailable, "node unavailable")
+				tc.fakeAtelet.Lock.Unlock()
+			}
+			reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: ref})
+			if tt.pending {
+				if status.Code(err) != codes.Unavailable {
+					t.Fatalf("RevertActor = %v, want Unavailable", err)
+				}
+				stored, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_REVERTING ||
+					stored.GetStatus().GetAssignedNode() != sourceNode || !proto.Equal(localSnapshot(stored.GetStatus()), snap) {
+					t.Fatalf("pending checkpoint changed: %v", stored.GetStatus())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RevertActor on unreachable node: %v", err)
+			}
+			got := reverted.GetActor().GetStatus()
+			if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || got.GetAssignedNode() != "" ||
+				got.GetWorkerAssignment() != nil || localSnapshot(got) != nil {
+				t.Fatalf("reverted status = %v, want unbound SUSPENDED", got)
+			}
+			createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+			setupAteletOnNode(t, tc, "atelet-node2", "node2")
+			resumed, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref})
+			if err != nil {
+				t.Fatalf("ResumeActor after revert: %v", err)
+			}
+			if resumed.GetActor().GetStatus().GetAssignedNode() != "node2" {
+				t.Fatalf("resumed on wrong node: %v", resumed.GetActor().GetStatus())
+			}
+			restore := tc.fakeAtelet.lastRestoreRequest().GetSnapshot()
+			if restore.GetSnapshotUuid() != snap.GetUuid() || restore.GetGeneration() != snap.GetGeneration() ||
+				restore.GetObject().GetSnapshotUri() != snap.GetDurableSnapshot().GetObject().GetSnapshotUri() {
+				t.Fatalf("restored snapshot = %v, want retained checkpoint %v", restore, snap)
+			}
+			assertSnapshotPresent(t, tc, snap.GetDurableSnapshot().GetObject().GetSnapshotUri())
+		})
 	}
 }
 

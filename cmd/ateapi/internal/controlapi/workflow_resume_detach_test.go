@@ -119,6 +119,8 @@ func TestDetachFromFullNode(t *testing.T) {
 		snapRuntime *ateapipb.SandboxRuntime
 		// completed records the snapshot's upload COMPLETED.
 		completed bool
+		cancel    bool
+		noIPs     bool
 		// before updates the actor after it was read and before the step
 		// runs, and during while atelet detaches it.
 		before, during func(*ateapipb.Actor)
@@ -197,6 +199,52 @@ func TestDetachFromFullNode(t *testing.T) {
 		wantDetached: true,
 		wantCall:     true,
 	}, {
+		name:         "no atelet on the node, upload completed: detaches",
+		node:         "node-3",
+		otherNode:    true,
+		completed:    true,
+		wantDetached: true,
+	}, {
+		name:         "atelet unreachable, upload completed: detaches",
+		node:         "node-1",
+		otherNode:    true,
+		completed:    true,
+		detachErr:    apierror.Unavailable("connection refused"),
+		wantDetached: true,
+		wantCall:     true,
+	}, {
+		name:         "atelet deadline exceeded, upload completed: detaches",
+		node:         "node-1",
+		otherNode:    true,
+		completed:    true,
+		detachErr:    context.DeadlineExceeded,
+		wantDetached: true,
+		wantCall:     true,
+	}, {
+		name:      "actor updated while unreachable: Aborted, record unchanged",
+		node:      "node-1",
+		otherNode: true,
+		completed: true,
+		during:    func(*ateapipb.Actor) {},
+		detachErr: apierror.Unavailable("connection refused"),
+		wantCode:  codes.Aborted,
+		wantCall:  true,
+	}, {
+		name:      "workflow canceled during detach: actor stays on its node",
+		node:      "node-1",
+		otherNode: true,
+		completed: true,
+		cancel:    true,
+		detachErr: apierror.Unavailable("connection refused"),
+		wantCode:  codes.Canceled,
+	}, {
+		name:      "atelet missing IP: actor stays on its node",
+		node:      "node-1",
+		otherNode: true,
+		completed: true,
+		noIPs:     true,
+		wantCode:  codes.Unavailable,
+	}, {
 		name:      "no atelet on the node: Unavailable, actor stays on its node",
 		node:      "node-3",
 		otherNode: true,
@@ -240,7 +288,8 @@ func TestDetachFromFullNode(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
 			st := newTestPersistence(t)
 			fillWorker(t, st, seedRuntimeWorker(t, ctx, st, "pod-"+tt.node, tt.node, testSandboxRuntime()))
 			if tt.otherNode {
@@ -257,6 +306,12 @@ func TestDetachFromFullNode(t *testing.T) {
 			}
 			actor := seedActorWithSnapshot(t, ctx, st, suspended, tt.node, snap)
 			w, atelet := newDetachTestWorkflow(t, ctx, st)
+			if tt.noIPs {
+				w.dialer = NewAteletDialer(newTestAteletIndexer(t, &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Namespace: installdefaults.SystemNamespace, Name: "atelet-1", UID: "atelet-uid"},
+					Spec:       corev1.PodSpec{NodeName: tt.node},
+				}), installdefaults.SystemNamespace, "", "")
+			}
 			if tt.detachState != nil {
 				atelet.detachState = tt.detachState(snap)
 			}
@@ -281,6 +336,9 @@ func TestDetachFromFullNode(t *testing.T) {
 			if tt.during != nil {
 				atelet.onDetach = func() { update(tt.during) }
 			}
+			if tt.cancel {
+				atelet.onDetach = cancel
+			}
 			// The record unchanged by a failed step is the one as last written.
 			want, err := st.GetActor(ctx, actorRef)
 			if err != nil {
@@ -292,7 +350,7 @@ func TestDetachFromFullNode(t *testing.T) {
 				t.Fatalf("detachFromFullNode() = %v, want code %v", err, tt.wantCode)
 			}
 			req := atelet.detachRequest()
-			if (req != nil) != tt.wantCall {
+			if !tt.cancel && (req != nil) != tt.wantCall {
 				t.Fatalf("DetachActor request = %v, want a call: %v", req, tt.wantCall)
 			}
 			if req != nil {
@@ -302,7 +360,7 @@ func TestDetachFromFullNode(t *testing.T) {
 				}
 			}
 
-			after, err := st.GetActor(ctx, actorRef)
+			after, err := st.GetActor(context.Background(), actorRef)
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
