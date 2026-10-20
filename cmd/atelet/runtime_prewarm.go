@@ -145,7 +145,8 @@ func (p *runtimePrewarmer) wait() {
 	<-p.done
 }
 
-// process prewarms the item, requeueing with backoff on failure.
+// process prewarms the item, requeueing with backoff on failures a retry can
+// fix.
 func (p *runtimePrewarmer) process(ctx context.Context, item prewarmItem) {
 	defer p.queue.Done(item)
 	rt, ok := p.index.lookup(item.hash)
