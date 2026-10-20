@@ -30,14 +30,6 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   EnvoyHttpFilter, HttpFilter,
 };
 
-/// Filter state key holding the cached egress policy object on the inner
-/// connection.
-pub const ATE_POLICY_EGRESS_INNER: &[u8] = b"dev.ate.policy.egress.inner";
-
-/// Filter state key holding the refreshed egress policy JSON written after an
-/// ext_proc callout on the inner connection.
-pub const ATE_POLICY_EGRESS_REFRESH: &[u8] = b"dev.ate.policy.egress.refresh";
-
 /// Filter state key indicating that ext_proc callout should be skipped for the
 /// current request.
 pub const ATE_POLICY_EGRESS_SKIP_CALLOUT: &[u8] = b"dev.ate.policy.egress.skip_callout";
@@ -58,7 +50,12 @@ pub const EGRESS_DIAL_HOST_KEY: &str = "host";
 const WEBSOCKET_DENIED_BODY: &[u8] = b"WebSocket egress is not supported";
 
 /// Response body returned when SNI is missing for MITM policy enforcement.
-const MISSING_SNI_BODY: &[u8] = b"WebSocket egress is not supported";
+const MISSING_SNI_BODY: &[u8] = b"Missing SNI in TLS connection";
+
+/// Response body and details (for logs) returned when SNI does not match request authority.
+const SNI_AUTHORITY_MISMATCH_BODY: &[u8] = b"SNI does not match request authority";
+const SNI_AUTHORITY_MISMATCH_DETAILS: &str = "sni_authority_mismatch";
+
 
 /// Per-stream HTTP filter instance for egress policy enforcement.
 pub struct EgressPolicyPepFilter {
@@ -157,13 +154,13 @@ impl EgressPolicyPepFilter {
     // Check that hostname from :authority matches SNI
     let authority = envoy_filter.get_request_header_value(":authority");
     let matches = match (sni.as_ref(), authority.as_ref()) {
-      (Some(sni), Some(authority)) => {
-        sni.as_slice() == authority_hostname(authority.as_slice())
-      }
+      (Some(sni), Some(authority)) => sni
+        .as_slice()
+        .eq_ignore_ascii_case(authority_hostname(authority.as_slice())),
       _ => false,
     };
     if !matches {
-      envoy_filter.send_response(400, &[], None, None);
+      envoy_filter.send_response(400, &[], Some(SNI_AUTHORITY_MISMATCH_BODY), Some(SNI_AUTHORITY_MISMATCH_DETAILS));
       return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
     }
     if let Some(sni_host) = sni
