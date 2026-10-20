@@ -122,7 +122,7 @@ hack/create-kind-cluster.sh
 hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
 
 # install counter demo
-hack/install-ate-kind.sh deploy demo-counter
+hack/install-ate-kind.sh deploy demo counter
 
 # install kubectl-ate
 go install ./cmd/kubectl-ate
@@ -193,7 +193,7 @@ curl -X POST \
 
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash
-   go run ./cmd/ate-setup deploy demo demo-counter
+   go run ./cmd/ate-setup deploy demo counter
    ```
 
 #### Custom Setup and Deployment
