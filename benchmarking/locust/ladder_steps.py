@@ -102,6 +102,11 @@ def by_label(prom: str, q: str, t: int, label: str) -> dict[str, float]:
     return {r["metric"].get(label, ""): float(r["value"][1]) for r in query(prom, q, t)}
 
 
+# TODO: separate the test's metrics from the harness. summarize() and
+# memory() hardcode the cold resume test's queries (its request names,
+# containers and database), so each new ladder test means another copy.
+# The test should declare the metrics it reports, leaving this module the
+# step windows and the queries' execution.
 def summarize(prom: str, s: dict[str, Any]) -> dict[str, Any]:
     """One step's throughput, latency, CPU and Postgres figures over its
     steady window."""
