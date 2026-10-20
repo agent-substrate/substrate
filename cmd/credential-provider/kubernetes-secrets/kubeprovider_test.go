@@ -16,7 +16,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -460,17 +462,31 @@ func TestLoadNamespaceAuthorizerRejectsUnknownFields(t *testing.T) {
 // good policy while the file fails to load.
 func TestLoadNamespaceAuthorizerReloads(t *testing.T) {
 	dir := t.TempDir()
-	path := dir + "/policy.yaml"
-	// Each step replaces the file the way a ConfigMap volume update does: a
-	// new file is renamed over the old one.
+	path := filepath.Join(dir, "policy.yaml")
+	dataLink := filepath.Join(dir, "..data")
+	// path resolves through the ..data symlink, and each step swaps that
+	// symlink to a new directory, the way the kubelet updates a ConfigMap
+	// volume.
+	if err := os.Symlink(filepath.Join("..data", "policy.yaml"), path); err != nil {
+		t.Fatalf("link policy: %v", err)
+	}
+	version := 0
 	replace := func(t *testing.T, content string) {
 		t.Helper()
-		tmp := dir + "/next.yaml"
-		if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+		version++
+		target := fmt.Sprintf("..v%d", version)
+		if err := os.Mkdir(filepath.Join(dir, target), 0o700); err != nil {
+			t.Fatalf("create policy dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, target, "policy.yaml"), []byte(content), 0o600); err != nil {
 			t.Fatalf("write policy: %v", err)
 		}
-		if err := os.Rename(tmp, path); err != nil {
-			t.Fatalf("replace policy: %v", err)
+		tmp := filepath.Join(dir, "..data_tmp")
+		if err := os.Symlink(target, tmp); err != nil {
+			t.Fatalf("link policy dir: %v", err)
+		}
+		if err := os.Rename(tmp, dataLink); err != nil {
+			t.Fatalf("swap policy dir: %v", err)
 		}
 	}
 	replace(t, "policies:\n- atespace: team-a\n  allowedNamespaces: [ns1]\n")
@@ -519,7 +535,7 @@ func TestLoadNamespaceAuthorizerReloads(t *testing.T) {
 	}
 	for _, step := range steps {
 		if step.content == "" {
-			if err := os.Remove(path); err != nil {
+			if err := os.Remove(dataLink); err != nil {
 				t.Fatalf("%s: remove policy: %v", step.name, err)
 			}
 		} else {
