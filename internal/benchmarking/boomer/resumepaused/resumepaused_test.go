@@ -28,10 +28,10 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -42,10 +42,10 @@ import (
 // fakeControlClient keeps each actor's state, so a resume of a running actor
 // reports Resumed false the way ateapi does.
 type fakeControlClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 	mu     sync.Mutex
 	calls  []string // "<RPC> <actor>"
-	states map[string]ateapipb.ActorState
+	states map[string]ateapi.ActorState
 	// resumeErr, when set, fails every ResumeActor without changing state.
 	resumeErr error
 	// resumeFailures is how many ResumeActor calls fail with Unavailable,
@@ -71,7 +71,7 @@ type fakeControlClient struct {
 }
 
 func newFake() *fakeControlClient {
-	return &fakeControlClient{states: map[string]ateapipb.ActorState{}}
+	return &fakeControlClient{states: map[string]ateapi.ActorState{}}
 }
 
 // setTrailer fills the trailer a call asked for, as ate-api-server's
@@ -91,29 +91,29 @@ func (f *fakeControlClient) record(rpc, actor string) {
 	f.calls = append(f.calls, rpc+" "+actor)
 }
 
-func (f *fakeControlClient) setState(name string, s ateapipb.ActorState) {
+func (f *fakeControlClient) setState(name string, s ateapi.ActorState) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.states[name] = s
 }
 
-func (f *fakeControlClient) state(name string) ateapipb.ActorState {
+func (f *fakeControlClient) state(name string) ateapi.ActorState {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.states[name]
 }
 
-func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
+func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("CreateAtespace", in.GetAtespace().GetMetadata().GetName())
 	if f.atespaceErr != nil {
 		return nil, f.atespaceErr
 	}
-	return &ateapipb.Atespace{}, nil
+	return &ateapi.Atespace{}, nil
 }
 
-func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := in.GetActor().GetMetadata().GetName()
@@ -121,11 +121,11 @@ func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.Create
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
-	f.states[name] = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-	return &ateapipb.Actor{}, nil
+	f.states[name] = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+	return &ateapi.Actor{}, nil
 }
 
-func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := in.GetActor().GetName()
@@ -134,10 +134,10 @@ func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapipb.GetActorR
 	if !ok {
 		return nil, status.Error(codes.NotFound, "no such actor")
 	}
-	return &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: s}}, nil
+	return &ateapi.Actor{Status: &ateapi.ActorStatus{State: s}}, nil
 }
 
-func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 	if f.resumeGate != nil {
 		f.resumeEntered <- struct{}{}
 		select {
@@ -159,38 +159,38 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 		return nil, status.Error(codes.Unavailable, "down")
 	}
 	switch f.states[name] {
-	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
-		return &ateapipb.ResumeActorResponse{Resumed: false}, nil
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
-		f.states[name] = ateapipb.ActorState_ACTOR_STATE_RUNNING
-		return &ateapipb.ResumeActorResponse{Resumed: true}, nil
+	case ateapi.ActorState_ACTOR_STATE_RUNNING:
+		return &ateapi.ResumeActorResponse{Resumed: false}, nil
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
+		f.states[name] = ateapi.ActorState_ACTOR_STATE_RUNNING
+		return &ateapi.ResumeActorResponse{Resumed: true}, nil
 	}
 	return nil, status.Error(codes.Aborted, "actor crashed")
 }
 
 // SuspendActor fakes only an async suspend, which is how the user pauses.
-func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapi.SuspendActorRequest, opts ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.setTrailer(opts)
 	name := in.GetActor().GetName()
 	f.record("SuspendActor(async)", name)
-	if in.GetOptions().GetMode() != ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+	if in.GetOptions().GetMode() != ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
 		return nil, status.Error(codes.Unimplemented, "only async suspend is faked")
 	}
 	if f.pauseErr != nil {
 		return nil, f.pauseErr
 	}
-	if f.states[name] != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if f.states[name] != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		return nil, status.Error(codes.FailedPrecondition, "not running")
 	}
 	// A paused actor is SUSPENDED holding a node-local snapshot; the fake
 	// tracks only the state.
-	f.states[name] = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-	return &ateapipb.SuspendActorResponse{}, nil
+	f.states[name] = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+	return &ateapi.SuspendActorResponse{}, nil
 }
 
-func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := in.GetActor().GetName()
@@ -200,7 +200,7 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 		return nil, status.Error(codes.Aborted, "lease held")
 	}
 	delete(f.states, name)
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
 // callsTo returns the actors of every recorded call to rpc, in order.
@@ -316,7 +316,7 @@ func TestFirstIterationMakesTheUsersActorCold(t *testing.T) {
 	if !slices.Equal(fake.calls, want) {
 		t.Errorf("calls: got %v, want %v", fake.calls, want)
 	}
-	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := fake.state(name); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 	if got := trackedActors(r); !slices.Equal(got, actors) {
@@ -446,7 +446,7 @@ func TestSetupDeletesAnActorThatDoesNotWarmAndRetries(t *testing.T) {
 	if len(actors) != 1 || actors[0] == created[0] {
 		t.Fatalf("got user actors %v, want a new one", actors)
 	}
-	if got := fake.state(actors[0]); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := fake.state(actors[0]); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 }
@@ -489,7 +489,7 @@ func TestIterateFailsAResumeOfARunningActor(t *testing.T) {
 	r := newTestRuntime(fake)
 	r.iterate()
 	name := userActors(r)[0]
-	fake.setState(name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	fake.setState(name, ateapi.ActorState_ACTOR_STATE_RUNNING)
 	fake.resetCalls()
 	before := requestCount(t, "ResumeActorCold", "failure")
 	recoveries := requestCount(t, "SuspendActorAsyncRecovery", "success")
@@ -506,7 +506,7 @@ func TestIterateFailsAResumeOfARunningActor(t *testing.T) {
 	if !slices.Equal(fake.calls, want) {
 		t.Errorf("calls: got %v, want %v", fake.calls, want)
 	}
-	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := fake.state(name); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 }
@@ -522,7 +522,7 @@ func TestIterateKeepsTheActorAfterAFailedResume(t *testing.T) {
 	if got := userActors(r); !slices.Equal(got, []string{name}) {
 		t.Errorf("user actors: got %v, want [%s]", got, name)
 	}
-	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := fake.state(name); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 }
@@ -617,7 +617,7 @@ func TestShutdownRetriesAnAbortedDelete(t *testing.T) {
 	if got := fake.callsTo("DeleteActor"); len(got) != 3 {
 		t.Errorf("DeleteActor calls = %v, want 3 calls", got)
 	}
-	if _, err := fake.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: r.ref(name)}); status.Code(err) != codes.NotFound {
+	if _, err := fake.GetActor(context.Background(), &ateapi.GetActorRequest{Actor: r.ref(name)}); status.Code(err) != codes.NotFound {
 		t.Errorf("actor still exists after shutdown: err = %v", err)
 	}
 }
@@ -772,7 +772,7 @@ func TestShutdownCancelsACycleThatOutlastsItsShare(t *testing.T) {
 	if got := fake.callsTo("DeleteActor"); !slices.Equal(got, []string{name}) {
 		t.Errorf("deleted %v, want [%s]", got, name)
 	}
-	if _, err := fake.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: r.ref(name)}); status.Code(err) != codes.NotFound {
+	if _, err := fake.GetActor(context.Background(), &ateapi.GetActorRequest{Actor: r.ref(name)}); status.Code(err) != codes.NotFound {
 		t.Errorf("actor still exists after shutdown: err = %v", err)
 	}
 }

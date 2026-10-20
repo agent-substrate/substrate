@@ -20,8 +20,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/internal/pluginsocket"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -59,7 +59,7 @@ func (s *Atelet) fetchSnapshotFiles(ctx context.Context, actor actorRef, snapsho
 	if err != nil {
 		return pluginsocket.CallError(err)
 	}
-	_, err = s.objectStorePlugin.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
+	_, err = s.objectStorePlugin.FetchSnapshot(ctx, &objectstore.FetchSnapshotRequest{
 		SnapshotUri: snapshotURI,
 		WritePath:   dstDir,
 		Files:       files,
@@ -81,7 +81,7 @@ func (s *Atelet) uploadSnapshotFiles(ctx context.Context, actor actorRef, snapsh
 	if err != nil {
 		return err
 	}
-	_, err = s.objectStorePlugin.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
+	_, err = s.objectStorePlugin.UploadSnapshot(ctx, &objectstore.UploadSnapshotRequest{
 		SnapshotUri: snapshotURI,
 		LocalPath:   srcDir,
 		Files:       files,

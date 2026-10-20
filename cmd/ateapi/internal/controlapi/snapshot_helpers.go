@@ -15,14 +15,14 @@
 package controlapi
 
 import (
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/preview"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // findSnapshotByGeneration returns the Snapshot in snapshots with the given
 // generation, or nil if none exists.
-func findSnapshotByGeneration(snapshots []*ateapipb.Snapshot, gen int32) *ateapipb.Snapshot {
+func findSnapshotByGeneration(snapshots []*ateapi.Snapshot, gen int32) *ateapi.Snapshot {
 	for _, snap := range snapshots {
 		if snap.GetGeneration() == gen {
 			return snap
@@ -33,7 +33,7 @@ func findSnapshotByGeneration(snapshots []*ateapipb.Snapshot, gen int32) *ateapi
 
 // snapshotAtLatestGeneration returns the Snapshot at status.last_assigned_generation, or
 // nil if none exists.
-func snapshotAtLatestGeneration(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
+func snapshotAtLatestGeneration(status *ateapi.ActorStatus) *ateapi.Snapshot {
 	if status == nil {
 		return nil
 	}
@@ -42,8 +42,8 @@ func snapshotAtLatestGeneration(status *ateapipb.ActorStatus) *ateapipb.Snapshot
 
 // latestSnapshot returns the highest-generation Snapshot on status that
 // matches, or nil if none does.
-func latestSnapshot(status *ateapipb.ActorStatus, matches func(*ateapipb.Snapshot) bool) *ateapipb.Snapshot {
-	var latest *ateapipb.Snapshot
+func latestSnapshot(status *ateapi.ActorStatus, matches func(*ateapi.Snapshot) bool) *ateapi.Snapshot {
+	var latest *ateapi.Snapshot
 	for _, snap := range status.GetSnapshots() {
 		if matches(snap) && (latest == nil || snap.GetGeneration() >= latest.GetGeneration()) {
 			latest = snap
@@ -54,28 +54,28 @@ func latestSnapshot(status *ateapipb.ActorStatus, matches func(*ateapipb.Snapsho
 
 // findLatestDurableSnapshot returns the highest-generation Snapshot on status
 // whose DurableSnapshot matches storageStatus, or nil if none exists.
-func findLatestDurableSnapshot(status *ateapipb.ActorStatus, storageStatus ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
-	return latestSnapshot(status, func(snap *ateapipb.Snapshot) bool {
+func findLatestDurableSnapshot(status *ateapi.ActorStatus, storageStatus ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
+	return latestSnapshot(status, func(snap *ateapi.Snapshot) bool {
 		return snap.GetDurableSnapshot().GetStatus() == storageStatus
 	})
 }
 
 // findLatestLocalSnapshot returns the highest-generation snapshot with a local copy.
-func findLatestLocalSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
-	return latestSnapshot(status, func(snap *ateapipb.Snapshot) bool {
+func findLatestLocalSnapshot(status *ateapi.ActorStatus) *ateapi.Snapshot {
+	return latestSnapshot(status, func(snap *ateapi.Snapshot) bool {
 		return snap.GetLocality() != ""
 	})
 }
 
 // latestSnapshotIsLocal reports whether the latest generation has a local copy.
-func latestSnapshotIsLocal(status *ateapipb.ActorStatus) bool {
+func latestSnapshotIsLocal(status *ateapi.ActorStatus) bool {
 	return snapshotAtLatestGeneration(status).GetLocality() != ""
 }
 
 // clearLocalSnapshots clears Locality across all Snapshots in status.Snapshots
 // without dropping PENDING durable snapshots (so DeleteActor can still collect
 // an in-flight durable snapshot after releasing the worker).
-func clearLocalSnapshots(status *ateapipb.ActorStatus) {
+func clearLocalSnapshots(status *ateapi.ActorStatus) {
 	for _, snap := range status.GetSnapshots() {
 		snap.Locality = ""
 	}
@@ -103,11 +103,11 @@ func clearLocalSnapshots(status *ateapipb.ActorStatus) {
 // status.LastAssignedGeneration is not decreased so that we can keep track of
 // stale snapshots that need to be cleaned up and discarded generation numbers
 // are never reused.
-func pruneSnapshots(status *ateapipb.ActorStatus, local *ateapipb.Snapshot) {
+func pruneSnapshots(status *ateapi.ActorStatus, local *ateapi.Snapshot) {
 	if status == nil {
 		return
 	}
-	latestDurable := findLatestDurableSnapshot(status, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	latestDurable := findLatestDurableSnapshot(status, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	kept := status.Snapshots[:0]
 	for _, snap := range status.Snapshots {
 		if snap != local {
@@ -121,16 +121,16 @@ func pruneSnapshots(status *ateapipb.ActorStatus, local *ateapipb.Snapshot) {
 }
 
 // newDurableSnapshot constructs a Snapshot with DurableSnapshot populated.
-func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, uri string, storageStatus ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
-	return &ateapipb.Snapshot{
+func newDurableSnapshot(gen int32, owner ateapi.SnapshotOwner, fidelity ateapi.SnapshotFidelity, templateUID, uuid, uri string, storageStatus ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
+	return &ateapi.Snapshot{
 		Uuid:             uuid,
 		Generation:       gen,
 		Owner:            owner,
 		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
-		DurableSnapshot: &ateapipb.SnapshotStorage{
+		DurableSnapshot: &ateapi.SnapshotStorage{
 			Status: storageStatus,
-			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri},
+			Object: &ateapi.ObjectSnapshot{SnapshotUri: uri},
 		},
 	}
 }
@@ -138,9 +138,9 @@ func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapi
 // tagDurableSnapshotURI returns the durable snapshot URI on tag matching
 // storageStatus (or any status if storageStatus is UNSPECIFIED), or "" if none
 // exists.
-func tagDurableSnapshotURI(tag *ateapipb.Tag, storageStatus ateapipb.SnapshotStorageStatus) string {
+func tagDurableSnapshotURI(tag *ateapi.Tag, storageStatus ateapi.SnapshotStorageStatus) string {
 	st := tag.GetStatus().GetSnapshot().GetDurableSnapshot()
-	if storageStatus != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED && st.GetStatus() != storageStatus {
+	if storageStatus != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED && st.GetStatus() != storageStatus {
 		return ""
 	}
 	return st.GetObject().GetSnapshotUri()
@@ -154,7 +154,7 @@ func tagDurableSnapshotURI(tag *ateapipb.Tag, storageStatus ateapipb.SnapshotSto
 //
 // It reads the process-wide gate rather than preview.IsEnabledFor, so a
 // request's preview opt-out cannot move where an actor's snapshots live.
-func resolveSnapshotLocation(snapshotLocation string, actorTemplate *ateapipb.ActorTemplate) (string, error) {
+func resolveSnapshotLocation(snapshotLocation string, actorTemplate *ateapi.ActorTemplate) (string, error) {
 	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
 		if location := actorTemplate.GetSnapshotConfig().GetStorageLocation(); location != "" {
 			return location, nil

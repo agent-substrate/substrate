@@ -22,9 +22,9 @@ import (
 	"math/rand"
 	"slices"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -55,7 +55,7 @@ type Constraints struct {
 
 	// Limits are the actor's declared resource limits, in the units a Worker
 	// reports its capacity in, so the two subtract.
-	Limits *ateapipb.Resources
+	Limits *ateapi.Resources
 }
 
 // ErrNoCapacity is returned by Schedule when no worker that meets the
@@ -67,20 +67,20 @@ var ErrNoCapacity = errors.New("no worker that meets the constraints has room")
 type Scheduler interface {
 	// Schedule returns a worker that meets constraints and has room.
 	// Returns ErrNoCapacity when no worker that meets constraints has room.
-	Schedule(ctx context.Context, constraints Constraints) (*ateapipb.Worker, error)
+	Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error)
 
 	// Applies reports whether worker satisfies non-capacity constraints. Capacity
 	// is excluded so an existing assignment does not make its Worker ineligible.
-	Applies(worker *ateapipb.Worker, constraints Constraints) bool
+	Applies(worker *ateapi.Worker, constraints Constraints) bool
 
 	// HasRoom reports whether worker's remaining capacity admits one more actor
 	// of this size, in every dimension. Independent of Applies.
-	HasRoom(worker *ateapipb.Worker, constraints Constraints) bool
+	HasRoom(worker *ateapi.Worker, constraints Constraints) bool
 }
 
 // WorkerSource provides the whole fleet of workers.
 type WorkerSource interface {
-	Workers() ([]*ateapipb.Worker, error)
+	Workers() ([]*ateapi.Worker, error)
 }
 
 type scheduler struct {
@@ -112,7 +112,7 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 // random (power of two choices), and returns the less-loaded one, where load is
 // the higher of actor-slot and compute-resource utilization. Spreading across
 // the warm pool avoids hotspots until autoscaling reclaims idle workers.
-func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapipb.Worker, error) {
+func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error) {
 	workers, err := s.source.Workers()
 	if err != nil {
 		return nil, fmt.Errorf("while listing workers: %w", err)
@@ -148,7 +148,7 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 
 // candidate pairs an eligible worker with its cached compute utilization.
 type candidate struct {
-	worker *ateapipb.Worker
+	worker *ateapi.Worker
 	// resUtil is the worker's dominant compute-resource utilization in [0,1],
 	// or -1 if not yet computed.
 	resUtil float64
@@ -188,11 +188,11 @@ func lessLoaded(a, b *candidate) bool {
 
 // workerResourceUtilization returns the highest allocated/capacity ratio across
 // compute dimensions, or 1 when capacity is unreported.
-func workerResourceUtilization(w *ateapipb.Worker) float64 {
+func workerResourceUtilization(w *ateapi.Worker) float64 {
 	return utilization(w.GetStatus().GetCapacity(), w.GetStatus().GetAllocated())
 }
 
-func utilization(capacity, used *ateapipb.WorkerResources) float64 {
+func utilization(capacity, used *ateapi.WorkerResources) float64 {
 	var (
 		maxRatio    float64
 		hasPositive bool
@@ -216,11 +216,11 @@ func utilization(capacity, used *ateapipb.WorkerResources) float64 {
 // and reported its sandbox class and runtimes. The assignment records the
 // runtime and atelet requires it on Run/Restore, so a worker without one
 // cannot host anything yet.
-func Registered(worker *ateapipb.Worker) bool {
+func Registered(worker *ateapi.Worker) bool {
 	return worker.GetStatus().GetRegisteredEpoch() != 0 && hardware.SandboxClass(worker.GetStatus()) != ""
 }
 
-func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bool {
+func (s *scheduler) Applies(worker *ateapi.Worker, constraints Constraints) bool {
 	if !Registered(worker) {
 		return false
 	}
@@ -229,7 +229,7 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 		return false
 	}
 
-	if worker.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+	if worker.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_ACTIVE {
 		return false
 	}
 
@@ -251,12 +251,12 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 // HasRoom reports whether what the worker has left admits one more actor of
 // this size. A dimension the worker does not report is unconstrained, so
 // placement is never blocked by missing data.
-func (s *scheduler) HasRoom(worker *ateapipb.Worker, constraints Constraints) bool {
+func (s *scheduler) HasRoom(worker *ateapi.Worker, constraints Constraints) bool {
 	_, ok := checkRoom(worker, constraints.Limits)
 	return ok
 }
 
-func checkRoom(worker *ateapipb.Worker, want *ateapipb.Resources) (candidate, bool) {
+func checkRoom(worker *ateapi.Worker, want *ateapi.Resources) (candidate, bool) {
 	capacity := worker.GetStatus().GetCapacity()
 	used := worker.GetStatus().GetAllocated()
 

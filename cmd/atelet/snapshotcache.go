@@ -43,13 +43,13 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecachegc"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 var (
@@ -152,10 +152,10 @@ const (
 // every other restore too. A copy is still one download per snapshot per
 // node.
 func cacheModeFor(sandboxClass string) cacheMode {
-	switch atev1alpha1.SandboxClass(sandboxClass) {
-	case atev1alpha1.SandboxClassGvisor:
+	switch atev1.SandboxClass(sandboxClass) {
+	case atev1.SandboxClassGvisor:
 		return cacheModeLink
-	case atev1alpha1.SandboxClassMicroVM:
+	case atev1.SandboxClassMicroVM:
 		return cacheModeCopy
 	default:
 		return cacheModeOff

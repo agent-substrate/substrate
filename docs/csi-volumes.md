@@ -30,7 +30,7 @@ To discover and communicate with CSI drivers, Substrate uses dynamic discovery d
 `CSIDriverConfig` defines the gRPC connection parameters for a specific CSI driver. It bridges the Kubernetes `StorageClass` (referenced in the `ActorTemplate`) to the network endpoint of the CSI Controller service and the local socket path of the CSI Node plugin.
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: nfs.csi.k8s.io
@@ -132,7 +132,7 @@ mountOptions:
 ### Step 2: Register the CSIDriverConfig
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: nfs.csi.k8s.io
@@ -153,7 +153,7 @@ Refer to [ActorTemplate: The Workload Blueprint](api-guide.md#2-actortemplate-th
 The `WorkerPool` is a Kubernetes resource, applied with `kubectl apply`:
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: WorkerPool
 metadata:
   name: agent-pool
@@ -167,7 +167,7 @@ spec:
   - name: gvisor
 ```
 
-The `ActorTemplate` is a protojson-shaped `ateapipb.ActorTemplate`, created
+The `ActorTemplate` is a protojson-shaped `ateapi.ActorTemplate`, created
 through the ate API with `kubectl ate --preview create actor-template -f -` (the
 `ate-demo` atespace must exist):
 

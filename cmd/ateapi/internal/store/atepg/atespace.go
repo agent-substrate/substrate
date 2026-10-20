@@ -20,16 +20,16 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error) {
+func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapi.Atespace) (*ateapi.Atespace, error) {
 	name := atespace.GetMetadata().GetName()
 
-	dbAtespace := proto.Clone(atespace).(*ateapipb.Atespace)
+	dbAtespace := proto.Clone(atespace).(*ateapi.Atespace)
 	setCreateMetadata(dbAtespace.Metadata)
 
 	protoBytes, err := proto.Marshal(dbAtespace)
@@ -50,7 +50,7 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	return dbAtespace, nil
 }
 
-func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
+func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapi.Atespace, error) {
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
 	if err != nil {
@@ -59,22 +59,22 @@ func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.A
 		}
 		return nil, fmt.Errorf("getting atespace %q: %w", name, err)
 	}
-	out := &ateapipb.Atespace{}
+	out := &ateapi.Atespace{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling atespace: %w", err)
 	}
 	return out, nil
 }
 
-func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
+func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapi.Atespace], error) {
 	opts, err := store.NormalizeListOptions(opts)
 	if err != nil {
-		return store.ListResponse[*ateapipb.Atespace]{}, err
+		return store.ListResponse[*ateapi.Atespace]{}, err
 	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	token, err := decodePageToken(pageTokenStr, kindAtespace, "", 1)
 	if err != nil {
-		return store.ListResponse[*ateapipb.Atespace]{}, err
+		return store.ListResponse[*ateapi.Atespace]{}, err
 	}
 	var last *string
 	if len(token.Last) > 0 {
@@ -87,27 +87,27 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 		ORDER BY name
 		LIMIT $2`, last, int64(pageSize)+1)
 	if err != nil {
-		return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("listing atespaces: %w", err)
+		return store.ListResponse[*ateapi.Atespace]{}, fmt.Errorf("listing atespaces: %w", err)
 	}
 	defer rows.Close()
 
 	var names []string
-	var result []*ateapipb.Atespace
+	var result []*ateapi.Atespace
 	for rows.Next() {
 		var name string
 		var protoBytes []byte
 		if err := rows.Scan(&name, &protoBytes); err != nil {
-			return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("scanning atespace row: %w", err)
+			return store.ListResponse[*ateapi.Atespace]{}, fmt.Errorf("scanning atespace row: %w", err)
 		}
-		a := &ateapipb.Atespace{}
+		a := &ateapi.Atespace{}
 		if err := unmarshalRow(protoBytes, a, "atespace", name); err != nil {
-			return store.ListResponse[*ateapipb.Atespace]{}, err
+			return store.ListResponse[*ateapi.Atespace]{}, err
 		}
 		result = append(result, a)
 		names = append(names, name)
 	}
 	if err := rows.Err(); err != nil {
-		return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("listing atespaces: %w", err)
+		return store.ListResponse[*ateapi.Atespace]{}, fmt.Errorf("listing atespaces: %w", err)
 	}
 
 	var nextToken string
@@ -115,10 +115,10 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 		result = result[:pageSize]
 		nextToken = encodePageToken(kindAtespace, "", []string{names[pageSize-1]})
 	}
-	return store.ListResponse[*ateapipb.Atespace]{Items: result, NextPageToken: nextToken}, nil
+	return store.ListResponse[*ateapi.Atespace]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Atespace, error) {
+func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.Atespace, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning atespace delete: %w", err)
@@ -150,7 +150,7 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing atespace delete %q: %w", name, err)
 	}
-	out := &ateapipb.Atespace{}
+	out := &ateapi.Atespace{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted atespace: %w", err)
 	}

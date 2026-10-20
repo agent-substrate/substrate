@@ -20,9 +20,9 @@ import (
 	"fmt"
 	"slices"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // HostingNode is the node that holds the actor, and "" when no node does. The
@@ -42,7 +42,7 @@ import (
 //
 // WorkerService uses it to refuse a node that asks for credentials for an
 // actor it does not hold.
-func HostingNode(ctx context.Context, st store.Interface, actor *ateapipb.Actor) (string, error) {
+func HostingNode(ctx context.Context, st store.Interface, actor *ateapi.Actor) (string, error) {
 	status := actor.GetStatus()
 	// The branches below pick the field to trust within the states a node
 	// transfers in.
@@ -51,14 +51,14 @@ func HostingNode(ctx context.Context, st store.Interface, actor *ateapipb.Actor)
 	}
 	assignment := status.GetWorkerAssignment()
 	if assignment == nil {
-		if status.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		if status.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 			return "", nil
 		}
 		return status.GetAssignedNode(), nil
 	}
 	switch status.GetState() {
-	case ateapipb.ActorState_ACTOR_STATE_RESUMING, ateapipb.ActorState_ACTOR_STATE_RUNNING,
-		ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
+	case ateapi.ActorState_ACTOR_STATE_RESUMING, ateapi.ActorState_ACTOR_STATE_RUNNING,
+		ateapi.ActorState_ACTOR_STATE_SUSPENDING:
 	default:
 		return "", nil
 	}

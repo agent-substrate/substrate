@@ -20,16 +20,16 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 )
 
 // getWorkerForUpdate reads a Worker and holds its row until the caller's
 // transaction commits, which is what serializes updates to its allocation. The
 // caller supplies the transaction; this only takes the lock.
-func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapipb.Worker, error) {
+func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi.Worker, error) {
 	var protoBytes []byte
 	err := tx.QueryRow(ctx, `SELECT proto FROM workers WHERE name = $1 FOR UPDATE`, name).Scan(&protoBytes)
 	if err != nil {
@@ -38,7 +38,7 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapipb.
 		}
 		return nil, fmt.Errorf("locking worker %s: %w", name, err)
 	}
-	worker := &ateapipb.Worker{}
+	worker := &ateapi.Worker{}
 	if err := proto.Unmarshal(protoBytes, worker); err != nil {
 		return nil, fmt.Errorf("unmarshaling worker: %w", err)
 	}
@@ -47,7 +47,7 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapipb.
 
 // saveWorker writes back a Worker whose allocation just moved, at the next
 // version. This assumes the caller holds the row lock getWorkerForUpdate took.
-func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapipb.Worker) error {
+func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker) error {
 	read := proto.CloneOf(worker.GetMetadata())
 	setUpdateMetadata(worker.GetMetadata(), worker.GetMetadata())
 	protoBytes, err := proto.Marshal(worker)
@@ -69,7 +69,7 @@ func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapipb.Worker) error {
 	return nil
 }
 
-func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapipb.ActorAssignment, admit func(*ateapipb.Worker) error) error {
+func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error) error {
 	actorUID := assignment.GetActorUid()
 	if actorUID == "" {
 		return fmt.Errorf("binding an assignment with no actor_uid to worker %s", workerName)
@@ -77,16 +77,16 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	// The store assigns identity. atespace is empty because Workers are
 	// global-scoped; the name is the Actor's UID, which is also the row key.
 	// This is the identity a first bind gets; a rebind keeps the recorded one.
-	assignment.Metadata = &ateapipb.ResourceMetadata{Name: actorUID}
+	assignment.Metadata = &ateapi.ResourceMetadata{Name: actorUID}
 	setCreateMetadata(assignment.Metadata)
 
-	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
 		if err != nil {
 			return nil, err
 		}
 		if worker.Status == nil {
-			worker.Status = &ateapipb.WorkerStatus{}
+			worker.Status = &ateapi.WorkerStatus{}
 		}
 
 		assignmentBytes, err := proto.Marshal(assignment)
@@ -172,9 +172,9 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	return err
 }
 
-func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error) {
-	var released *ateapipb.Worker
-	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapi.Worker, error) {
+	var released *ateapi.Worker
+	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		released = nil
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
 		if err != nil {
@@ -192,13 +192,13 @@ func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName str
 		if err != nil {
 			return nil, fmt.Errorf("releasing actor %s from worker %s: %w", actorUID, workerName, err)
 		}
-		assignment := &ateapipb.ActorAssignment{}
+		assignment := &ateapi.ActorAssignment{}
 		if err := proto.Unmarshal(protoBytes, assignment); err != nil {
 			return nil, fmt.Errorf("unmarshaling released assignment: %w", err)
 		}
 
 		if worker.Status == nil {
-			worker.Status = &ateapipb.WorkerStatus{}
+			worker.Status = &ateapi.WorkerStatus{}
 		}
 		worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
 		if err := saveWorker(ctx, tx, worker); err != nil {
@@ -215,7 +215,7 @@ func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName str
 
 // getAssignmentRow reads the assignment for actorUID and names the worker
 // holding it.
-func getAssignmentRow(ctx context.Context, q querier, actorUID string) (*ateapipb.ActorAssignment, string, error) {
+func getAssignmentRow(ctx context.Context, q querier, actorUID string) (*ateapi.ActorAssignment, string, error) {
 	var (
 		protoBytes []byte
 		workerName string
@@ -228,14 +228,14 @@ func getAssignmentRow(ctx context.Context, q querier, actorUID string) (*ateapip
 		}
 		return nil, "", fmt.Errorf("getting assignment for actor %s: %w", actorUID, err)
 	}
-	assignment := &ateapipb.ActorAssignment{}
+	assignment := &ateapi.ActorAssignment{}
 	if err := proto.Unmarshal(protoBytes, assignment); err != nil {
 		return nil, "", fmt.Errorf("unmarshaling assignment: %w", err)
 	}
 	return assignment, workerName, nil
 }
 
-func (p *Persistence) GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error) {
+func (p *Persistence) GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapi.ActorAssignment, error) {
 	assignment, holder, err := getAssignmentRow(ctx, p.pool, actorUID)
 	if err != nil {
 		return nil, err
@@ -246,17 +246,17 @@ func (p *Persistence) GetWorkerAssignment(ctx context.Context, workerName, actor
 	return assignment, nil
 }
 
-func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error) {
+func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorAssignment], error) {
 	opts, err := store.NormalizeListOptions(opts)
 	if err != nil {
-		return store.ListResponse[*ateapipb.ActorAssignment]{}, err
+		return store.ListResponse[*ateapi.ActorAssignment]{}, err
 	}
 	pageSize := opts.PageSize
 	// The token is scoped to the Worker, so one cannot be replayed against
 	// another Worker's assignments.
 	token, err := decodePageToken(opts.PageToken, kindWorkerAssign, workerName, 1)
 	if err != nil {
-		return store.ListResponse[*ateapipb.ActorAssignment]{}, err
+		return store.ListResponse[*ateapi.ActorAssignment]{}, err
 	}
 	var last *string
 	if len(token.Last) > 0 {
@@ -269,27 +269,27 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 		ORDER BY actor_uid
 		LIMIT $3`, workerName, last, int64(pageSize)+1)
 	if err != nil {
-		return store.ListResponse[*ateapipb.ActorAssignment]{}, fmt.Errorf("listing assignments of worker %s: %w", workerName, err)
+		return store.ListResponse[*ateapi.ActorAssignment]{}, fmt.Errorf("listing assignments of worker %s: %w", workerName, err)
 	}
 	defer rows.Close()
 
 	var uids []string
-	var result []*ateapipb.ActorAssignment
+	var result []*ateapi.ActorAssignment
 	for rows.Next() {
 		var actorUID string
 		var protoBytes []byte
 		if err := rows.Scan(&actorUID, &protoBytes); err != nil {
-			return store.ListResponse[*ateapipb.ActorAssignment]{}, fmt.Errorf("scanning assignment of worker %s: %w", workerName, err)
+			return store.ListResponse[*ateapi.ActorAssignment]{}, fmt.Errorf("scanning assignment of worker %s: %w", workerName, err)
 		}
-		assignment := &ateapipb.ActorAssignment{}
+		assignment := &ateapi.ActorAssignment{}
 		if err := proto.Unmarshal(protoBytes, assignment); err != nil {
-			return store.ListResponse[*ateapipb.ActorAssignment]{}, fmt.Errorf("unmarshaling assignment of actor %s: %w", actorUID, err)
+			return store.ListResponse[*ateapi.ActorAssignment]{}, fmt.Errorf("unmarshaling assignment of actor %s: %w", actorUID, err)
 		}
 		result = append(result, assignment)
 		uids = append(uids, actorUID)
 	}
 	if err := rows.Err(); err != nil {
-		return store.ListResponse[*ateapipb.ActorAssignment]{}, fmt.Errorf("listing assignments of worker %s: %w", workerName, err)
+		return store.ListResponse[*ateapi.ActorAssignment]{}, fmt.Errorf("listing assignments of worker %s: %w", workerName, err)
 	}
 
 	var nextToken string
@@ -297,7 +297,7 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 		result = result[:pageSize]
 		nextToken = encodePageToken(kindWorkerAssign, workerName, []string{uids[pageSize-1]})
 	}
-	return store.ListResponse[*ateapipb.ActorAssignment]{Items: result, NextPageToken: nextToken}, nil
+	return store.ListResponse[*ateapi.ActorAssignment]{Items: result, NextPageToken: nextToken}, nil
 }
 
 func (p *Persistence) FindWorkerHostingActor(ctx context.Context, actorUID string) (string, error) {

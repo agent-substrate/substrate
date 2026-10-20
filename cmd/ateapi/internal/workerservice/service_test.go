@@ -18,10 +18,10 @@ import (
 	"context"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // The Worker every test in this package calls about, and the node its atelet
@@ -39,22 +39,22 @@ var testAteletSPIFFEID = installdefaults.SPIFFEID(installdefaults.SystemNamespac
 // point of most of the tests: whether the request reached the operation at
 // all.
 type fakeControl struct {
-	calls []*ateapipb.SuspendActorRequest
-	resp  *ateapipb.SuspendActorResponse
+	calls []*ateapi.SuspendActorRequest
+	resp  *ateapi.SuspendActorResponse
 	err   error
 
 	reports    []appliedReport
 	reportErr  error
 	crashCalls []crashCall
-	crashResp  *ateapipb.Actor
+	crashResp  *ateapi.Actor
 }
 
-func (f *fakeControl) SuspendActor(_ context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
+func (f *fakeControl) SuspendActor(_ context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error) {
 	f.calls = append(f.calls, req)
 	return f.resp, f.err
 }
 
-func (f *fakeControl) ApplyActorSnapshotState(_ context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error {
+func (f *fakeControl) ApplyActorSnapshotState(_ context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapi.ActorSnapshotState) error {
 	f.reports = append(f.reports, appliedReport{actorRef: actorRef, actorUID: actorUID, node: node, state: state})
 	return f.reportErr
 }
@@ -64,7 +64,7 @@ type appliedReport struct {
 	actorRef resources.ActorRef
 	actorUID string
 	node     string
-	state    *ateapipb.ActorSnapshotState
+	state    *ateapi.ActorSnapshotState
 }
 
 // crashCall is one CrashActorReportedByWorker call.
@@ -73,7 +73,7 @@ type crashCall struct {
 	ActorUID, WorkerName, Message string
 }
 
-func (f *fakeControl) CrashActorReportedByWorker(_ context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapipb.Actor, error) {
+func (f *fakeControl) CrashActorReportedByWorker(_ context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapi.Actor, error) {
 	f.crashCalls = append(f.crashCalls, crashCall{actorRef, actorUID, workerName, message})
 	return f.crashResp, f.err
 }
@@ -88,10 +88,10 @@ var testIPs = []string{"10.1.2.3"}
 // already registered with testEpoch, testIPs and capacity, and reported its
 // default runtime: identity from the pod, the way the syncer writes it, plus
 // the result of an earlier registration.
-func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capacity *ateapipb.WorkerResources) *ateapipb.Worker {
+func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capacity *ateapi.WorkerResources) *ateapi.Worker {
 	t.Helper()
-	return seedWorker(t, st, testWorkerName, nodeName, &ateapipb.WorkerStatus{
-		State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+	return seedWorker(t, st, testWorkerName, nodeName, &ateapi.WorkerStatus{
+		State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 		IssuedEpoch:     testEpoch,
 		RegisteredEpoch: testEpoch,
 		Ips:             testIPs,
@@ -102,10 +102,10 @@ func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capac
 
 // seedWorker registers a Worker named name on nodeName, with status already
 // recorded. name doubles as the pod UID, so it must be UUID-shaped.
-func seedWorker(t *testing.T, st store.Interface, name, nodeName string, status *ateapipb.WorkerStatus) *ateapipb.Worker {
+func seedWorker(t *testing.T, st store.Interface, name, nodeName string, status *ateapi.WorkerStatus) *ateapi.Worker {
 	t.Helper()
-	created, err := st.CreateWorker(context.Background(), &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: name},
+	created, err := st.CreateWorker(context.Background(), &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: name},
 		WorkerNamespace: "ate-system",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "worker-pod-1",

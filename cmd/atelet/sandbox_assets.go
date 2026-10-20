@@ -37,13 +37,13 @@ import (
 	"strings"
 	"time"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -428,7 +428,7 @@ func (s *Atelet) downloadAnonymous(ctx context.Context, entry assetEntry, shown,
 // signed URL or other credential in a form no scrubber can recognize.
 func (s *Atelet) fetchFromPlugin(ctx context.Context, entry assetEntry, shown, path string) codes.Code {
 	slog.DebugContext(ctx, "Fetching sandbox asset through the object-store plugin", slog.String("url", shown))
-	_, err := s.assetPlugin.FetchAsset(ctx, &objectstorev1.FetchAssetRequest{
+	_, err := s.assetPlugin.FetchAsset(ctx, &objectstore.FetchAssetRequest{
 		AssetUri:  entry.URL,
 		Sha256:    entry.SHA256,
 		WritePath: path,
@@ -446,7 +446,7 @@ func (s *Atelet) pluginError(ctx context.Context, entry assetEntry, shown string
 	switch code {
 	case codes.Unimplemented:
 		msg = fmt.Sprintf("the object-store plugin at %s does not serve %s; private sandbox assets need a plugin that implements it",
-			s.pluginSocket, objectstorev1.AssetProvider_ServiceDesc.ServiceName)
+			s.pluginSocket, objectstore.AssetProvider_ServiceDesc.ServiceName)
 	case codes.Unavailable:
 		newErr, msg = apierror.Unavailable, fmt.Sprintf("the object-store plugin at %s is unavailable", s.pluginSocket)
 	case codes.Canceled, codes.DeadlineExceeded:

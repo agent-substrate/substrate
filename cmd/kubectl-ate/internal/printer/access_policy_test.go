@@ -19,13 +19,13 @@ import (
 	"strings"
 	"testing"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 func TestPrintAccessPolicyTo(t *testing.T) {
-	policy := &ateapipb.AccessPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Name: "default", Uid: "u-1", Version: 2},
-		Bindings: []*ateapipb.Binding{
+	policy := &ateapi.AccessPolicy{
+		Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-1", Version: 2},
+		Bindings: []*ateapi.Binding{
 			{Role: "owner", Members: []string{"user:alice", "user:bob"}},
 			{Role: "viewer", Members: []string{"user:carol"}},
 		},
@@ -33,7 +33,7 @@ func TestPrintAccessPolicyTo(t *testing.T) {
 	tests := []struct {
 		name     string
 		atespace string
-		policy   *ateapipb.AccessPolicy
+		policy   *ateapi.AccessPolicy
 		format   string
 		want     []string
 		wantErr  bool
@@ -47,7 +47,7 @@ func TestPrintAccessPolicyTo(t *testing.T) {
 			want: []string{"<global>   owner"},
 		},
 		{
-			name: "no bindings", atespace: "team-a", policy: &ateapipb.AccessPolicy{}, format: "table",
+			name: "no bindings", atespace: "team-a", policy: &ateapi.AccessPolicy{}, format: "table",
 			want: []string{"team-a   <none>   <none>"},
 		},
 		{

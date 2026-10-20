@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/google/go-cmp/cmp"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -40,16 +40,16 @@ func TestActorTemplateCRUD(t *testing.T) {
 	defer tc.cleanup()
 	ctx := context.Background()
 
-	created, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
-		ActorTemplate: &ateapipb.ActorTemplate{
-			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
-			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
+	created, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
+		ActorTemplate: &ateapi.ActorTemplate{
+			Metadata:       &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
+			Containers:     []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+			SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+			Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
 			// Server-owned status on the request is ignored.
-			Status: &ateapipb.ActorTemplateStatus{
-				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "golden-tag"},
+			Status: &ateapi.ActorTemplateStatus{
+				GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{
+					GoldenTag: &ateapi.ObjectRef{Atespace: testAtespace, Name: "golden-tag"},
 				},
 			},
 		},
@@ -57,32 +57,32 @@ func TestActorTemplateCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
-	want := &ateapipb.ActorTemplate{
-		Metadata:   &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
-		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-		SnapshotConfig: &ateapipb.SnapshotConfig{
+	want := &ateapi.ActorTemplate{
+		Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
+		Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+		SnapshotConfig: &ateapi.SnapshotConfig{
 			StorageLocation:      "gs://my-bucket/snapshots",
-			PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+			PreferredFidelity:    ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		},
-		Resources: &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
-		Status:    &ateapipb.ActorTemplateStatus{},
+		Resources: &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
+		Status:    &ateapi.ActorTemplateStatus{},
 	}
 	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("CreateActorTemplate response mismatch (-want +got):\n%s", diff)
 	}
 
-	_, err = tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
-		ActorTemplate: &ateapipb.ActorTemplate{
-			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
-			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
+	_, err = tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
+		ActorTemplate: &ateapi.ActorTemplate{
+			Metadata:       &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
+			Containers:     []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+			SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+			Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 		},
 	})
 	assertGrpcError(t, err, codes.AlreadyExists, "ActorTemplate "+testAtespace+"/tmpl-a already exists")
 
-	got, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
+	got, err := tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
 	if err != nil {
 		t.Fatalf("GetActorTemplate failed: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 		t.Errorf("GetActorTemplate response mismatch (-created +got):\n%s", diff)
 	}
 
-	list, err := tc.client.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{})
+	list, err := tc.client.ListActorTemplates(ctx, &ateapi.ListActorTemplatesRequest{})
 	if err != nil {
 		t.Fatalf("ListActorTemplates failed: %v", err)
 	}
@@ -100,14 +100,14 @@ func TestActorTemplateCRUD(t *testing.T) {
 
 	// The atespace filter scopes the listing: a match returns the template, a
 	// different atespace returns nothing.
-	list, err = tc.client.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{Atespace: testAtespace})
+	list, err = tc.client.ListActorTemplates(ctx, &ateapi.ListActorTemplatesRequest{Atespace: testAtespace})
 	if err != nil {
 		t.Fatalf("ListActorTemplates(atespace) failed: %v", err)
 	}
 	if len(list.GetActorTemplates()) != 1 {
 		t.Errorf("ListActorTemplates(atespace=%s) = %v, want [tmpl-a]", testAtespace, list.GetActorTemplates())
 	}
-	list, err = tc.client.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{Atespace: "other-atespace"})
+	list, err = tc.client.ListActorTemplates(ctx, &ateapi.ListActorTemplatesRequest{Atespace: "other-atespace"})
 	if err != nil {
 		t.Fatalf("ListActorTemplates(other atespace) failed: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 		t.Errorf("ListActorTemplates(atespace=other-atespace) = %v, want []", list.GetActorTemplates())
 	}
 
-	deleted, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
+	deleted, err := tc.client.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
 	if err != nil {
 		t.Fatalf("DeleteActorTemplate failed: %v", err)
 	}
@@ -125,9 +125,9 @@ func TestActorTemplateCRUD(t *testing.T) {
 	if deleted.GetMetadata().GetDeleteTime() == nil {
 		t.Errorf("the deleted template carries no delete_time")
 	}
-	_, err = tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
+	_, err = tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
-	_, err = tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
+	_, err = tc.client.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
 }
 
@@ -138,27 +138,27 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
-	tmpl := createTemplateWithSelector(t, tc, "golden-template", &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}})
+	tmpl := createTemplateWithSelector(t, tc, "golden-template", &ateapi.Selector{MatchLabels: map[string]string{poolLabelKey: ns}})
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 	templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
 	// Created before readiness: a later golden tag must not change its source.
-	early, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "early"}, ActorTemplate: templateRef.ToObjectRef(),
+	early, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "early"}, ActorTemplate: templateRef.ToObjectRef(),
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	controlapi.NewActorTemplateReconciler(tc.persistence, tc.service, 7*time.Second).Start(ctx)
-	var goldenRef *ateapipb.ObjectRef
+	var goldenRef *ateapi.ObjectRef
 	err = wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		current, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()})
+		current, err := tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()})
 		goldenRef = current.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
 		return goldenRef != nil, err
 	})
 	if err != nil {
 		t.Fatalf("waiting for golden tag: %v", err)
 	}
-	golden, err := tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenRef})
+	golden, err := tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: goldenRef})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,12 +171,12 @@ func TestGoldenTagLifecycle(t *testing.T) {
 		t.Fatalf("golden snapshot %q is not under the golden tag's own prefix", uri)
 	}
 	assertSnapshotPresent(t, tc, uri)
-	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef})
+	_, err = tc.client.GetActor(ctx, &ateapi.GetActorRequest{Actor: goldenRef})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("golden actor was not deleted: %v", err)
 	}
-	late, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "late"}, ActorTemplate: templateRef.ToObjectRef(),
+	late, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "late"}, ActorTemplate: templateRef.ToObjectRef(),
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -188,39 +188,39 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	tc.fakeAtelet.Lock.Lock()
 	tc.fakeAtelet.RunCalled = false
 	tc.fakeAtelet.Lock.Unlock()
-	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: resources.ActorRefFromActor(early).ToObjectRef()}); err != nil {
+	if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: resources.ActorRefFromActor(early).ToObjectRef()}); err != nil {
 		t.Fatal(err)
 	}
 	if !tc.fakeAtelet.RunCalled {
 		t.Fatal("actor created before golden readiness did not cold boot")
 	}
-	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: resources.ActorRefFromActor(early).ToObjectRef()}); err != nil {
+	if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: resources.ActorRefFromActor(early).ToObjectRef()}); err != nil {
 		t.Fatal(err)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
-	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: resources.ActorRefFromActor(late).ToObjectRef()}); err != nil {
+	if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: resources.ActorRefFromActor(late).ToObjectRef()}); err != nil {
 		t.Fatal(err)
 	}
 	if !tc.fakeAtelet.RestoreCalled {
 		t.Fatal("actor did not restore golden tag")
 	}
-	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+	if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{
 		Actor:   resources.ActorRefFromActor(late).ToObjectRef(),
-		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	assertSnapshotPresent(t, tc, uri)
-	for _, actor := range []*ateapipb.Actor{early, late} {
-		if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: resources.ActorRefFromActor(actor).ToObjectRef()}); err != nil {
+	for _, actor := range []*ateapi.Actor{early, late} {
+		if _, err := tc.client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: resources.ActorRefFromActor(actor).ToObjectRef()}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}); err != nil {
+	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}); err != nil {
 		t.Fatal(err)
 	}
 	assertSnapshotCollected(t, tc, uri)
-	_, err = tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenRef})
+	_, err = tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: goldenRef})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("golden tag was not deleted: %v", err)
 	}
@@ -233,30 +233,30 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
-	tmpl, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "no-golden"},
-		SnapshotConfig: &ateapipb.SnapshotConfig{
+	tmpl, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: &ateapi.ActorTemplate{
+		Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "no-golden"},
+		SnapshotConfig: &ateapi.SnapshotConfig{
 			StorageLocation:      testStorageLocation,
-			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
+			GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
 		},
-		Containers:     []*ateapipb.Container{{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}}},
-		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}},
-		Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
+		Containers:     []*ateapi.Container{{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}}},
+		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{poolLabelKey: ns}},
+		Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() != ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() != ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 		t.Fatal("CreateActorTemplate did not preserve the golden snapshot opt-out")
 	}
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
-	controlTemplate := createTemplateWithSelector(t, tc, "golden-control", &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}})
-	goldenRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()}
+	controlTemplate := createTemplateWithSelector(t, tc, "golden-control", &ateapi.Selector{MatchLabels: map[string]string{poolLabelKey: ns}})
+	goldenRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()}
 	assertNoGolden := func(ctx context.Context) error {
-		if _, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef}); status.Code(err) != codes.NotFound {
+		if _, err := tc.client.GetActor(ctx, &ateapi.GetActorRequest{Actor: goldenRef}); status.Code(err) != codes.NotFound {
 			return fmt.Errorf("disabled template's golden actor: got %v, want NotFound", err)
 		}
-		if _, err := tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenRef}); status.Code(err) != codes.NotFound {
+		if _, err := tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: goldenRef}); status.Code(err) != codes.NotFound {
 			return fmt.Errorf("disabled template's golden tag: got %v, want NotFound", err)
 		}
 		return nil
@@ -267,7 +267,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 		if err := assertNoGolden(ctx); err != nil {
 			return false, err
 		}
-		current, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{
+		current, err := tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{
 			ActorTemplate: resources.ActorTemplateRefFromActorTemplate(controlTemplate).ToObjectRef(),
 		})
 		return current.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag() != nil, err
@@ -276,8 +276,8 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 		t.Fatalf("waiting for enabled template's golden tag: %v", err)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
-	actor, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "actor"},
+	actor, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "actor"},
 		ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
 	}})
 	if err != nil {
@@ -290,7 +290,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	tc.fakeAtelet.Lock.Lock()
 	tc.fakeAtelet.RunCalled, tc.fakeAtelet.RestoreCalled = false, false
 	tc.fakeAtelet.Lock.Unlock()
-	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+	if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatal(err)
 	}
 	tc.fakeAtelet.Lock.Lock()
@@ -299,7 +299,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if !ran || restored {
 		t.Fatal("first resume did not cold boot")
 	}
-	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
+	suspended, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref, Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	}
 	assertSnapshotPresent(t, tc, snapshotURI)
 	waitForWorkerAvailable(t, tc, workerName)
-	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+	if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatal(err)
 	}
 	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetObject().GetSnapshotUri(); got != snapshotURI {
@@ -318,13 +318,13 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if err := assertNoGolden(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+	if _, err := tc.client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}); err != nil {
+	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(controlTemplate).ToObjectRef()}); err != nil {
+	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(controlTemplate).ToObjectRef()}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -335,7 +335,7 @@ func TestListActorTemplates_InvalidPageToken(t *testing.T) {
 	defer tc.cleanup()
 
 	_, err := tc.client.ListActorTemplates(context.Background(),
-		&ateapipb.ListActorTemplatesRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
+		&ateapi.ListActorTemplatesRequest{Options: &ateapi.ListOptions{PageToken: "%%%"}})
 	assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 }
 
@@ -347,33 +347,33 @@ func TestDeleteActorTemplate_Preconditions(t *testing.T) {
 	tmpl := createTemplateWithSelector(t, tc, "tmpl1", nil)
 	templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
 	ref := templateRef.ToObjectRef()
-	del := func(opts *ateapipb.DeleteOptions) error {
-		_, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: ref, Options: opts})
+	del := func(opts *ateapi.DeleteOptions) error {
+		_, err := tc.client.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref, Options: opts})
 		return err
 	}
 
 	uid, version := tmpl.GetMetadata().GetUid(), tmpl.GetMetadata().GetVersion()
 
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "ActorTemplate "+templateRef.String()+" does not have uid "+foreignUID)
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "ActorTemplate "+templateRef.String()+" does not have uid "+foreignUID)
-	if _, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref}); err != nil {
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "ActorTemplate "+templateRef.String()+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "ActorTemplate "+templateRef.String()+" does not have uid "+foreignUID)
+	if _, err := tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: ref}); err != nil {
 		t.Fatalf("a refused delete removed the template: %v", err)
 	}
 
-	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Version: version}); err != nil {
 		t.Fatalf("DeleteActorTemplate with the matching version: %v", err)
 	}
 	tmpl = createTemplateWithSelector(t, tc, "tmpl1", nil)
-	if err := del(&ateapipb.DeleteOptions{Uid: tmpl.GetMetadata().GetUid()}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Uid: tmpl.GetMetadata().GetUid()}); err != nil {
 		t.Fatalf("DeleteActorTemplate with the matching uid: %v", err)
 	}
 	tmpl = createTemplateWithSelector(t, tc, "tmpl1", nil)
-	if err := del(&ateapipb.DeleteOptions{Uid: tmpl.GetMetadata().GetUid(), Version: tmpl.GetMetadata().GetVersion()}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Uid: tmpl.GetMetadata().GetUid(), Version: tmpl.GetMetadata().GetVersion()}); err != nil {
 		t.Fatalf("DeleteActorTemplate with both guards: %v", err)
 	}
-	_, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref})
+	_, err := tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: ref})
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+templateRef.String()+" not found")
 }
 
@@ -401,20 +401,20 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 			if tt.optIn {
 				ctx = metadata.AppendToOutgoingContext(ctx, preview.Header, "true")
 			}
-			_, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
-				ActorTemplate: &ateapipb.ActorTemplate{
-					Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("tmpl-ext-%d", i)},
-					Containers: []*ateapipb.Container{{
+			_, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
+				ActorTemplate: &ateapi.ActorTemplate{
+					Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("tmpl-ext-%d", i)},
+					Containers: []*ateapi.Container{{
 						Name:         "main",
 						Image:        "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-						VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
+						VolumeMounts: []*ateapi.VolumeMount{{Name: "data", MountPath: "/data"}},
 					}},
-					Volumes: []*ateapipb.Volume{{
+					Volumes: []*ateapi.Volume{{
 						Name:     "data",
-						External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 1 << 30}},
+						External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 1 << 30}},
 					}},
-					Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
-					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+					Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
+					SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
 				},
 			})
 			if status.Code(err) != tt.wantCode {
@@ -455,15 +455,15 @@ func TestCreateActorTemplate_PerTemplateSnapshotLocationPreview(t *testing.T) {
 			if tt.optIn {
 				ctx = metadata.AppendToOutgoingContext(ctx, preview.Header, "true")
 			}
-			_, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
-				ActorTemplate: &ateapipb.ActorTemplate{
-					Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("tmpl-loc-%d", i)},
-					Containers: []*ateapipb.Container{{
+			_, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
+				ActorTemplate: &ateapi.ActorTemplate{
+					Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("tmpl-loc-%d", i)},
+					Containers: []*ateapi.Container{{
 						Name:  "main",
 						Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 					}},
-					Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
-					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: tt.location},
+					Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
+					SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: tt.location},
 				},
 			})
 			if status.Code(err) != tt.wantCode {
@@ -498,26 +498,26 @@ func TestCreateActorTemplate_GoldenEgressPolicyPreview(t *testing.T) {
 			if tt.optIn {
 				client = tc.client
 			}
-			tmpl := proto.Clone(base).(*ateapipb.ActorTemplate)
-			tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("golden-egress-%d", i)}
+			tmpl := proto.Clone(base).(*ateapi.ActorTemplate)
+			tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("golden-egress-%d", i)}
 			tmpl.Status = nil
-			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: functionalEgressPolicy().Rules}
+			tmpl.GoldenEgressPolicy = &ateapi.EgressPolicyTemplate{Rules: functionalEgressPolicy().Rules}
 			if tt.snapshotsDisabled {
-				tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}
+				tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}
 			}
 			ref := resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()
-			created, err := client.CreateActorTemplate(t.Context(), &ateapipb.CreateActorTemplateRequest{ActorTemplate: tmpl})
+			created, err := client.CreateActorTemplate(t.Context(), &ateapi.CreateActorTemplateRequest{ActorTemplate: tmpl})
 			if tt.wantCode != codes.OK {
 				assertGrpcErrorRegex(t, err, tt.wantCode, "golden_egress_policy")
-				_, err = client.GetActorTemplate(t.Context(), &ateapipb.GetActorTemplateRequest{ActorTemplate: ref})
+				_, err = client.GetActorTemplate(t.Context(), &ateapi.GetActorTemplateRequest{ActorTemplate: ref})
 				assertGrpcErrorRegex(t, err, codes.NotFound, "not found")
 				return
 			}
 			if err != nil {
 				t.Fatalf("CreateActorTemplate: %v", err)
 			}
-			wantPolicy := &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{
-				Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
+			wantPolicy := &ateapi.EgressPolicyTemplate{Rules: []*ateapi.EgressRule{{
+				Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{80}}},
 			}}}
 			if diff := cmp.Diff(wantPolicy, created.GetGoldenEgressPolicy(), protocmp.Transform()); diff != "" {
 				t.Fatalf("golden policy (-want +got):\n%s", diff)
@@ -525,14 +525,14 @@ func TestCreateActorTemplate_GoldenEgressPolicyPreview(t *testing.T) {
 
 			// Opting out or disabling the gate must not strand existing templates.
 			preview.InitForTest(t)
-			got, err := tc.noOptInClient.GetActorTemplate(t.Context(), &ateapipb.GetActorTemplateRequest{ActorTemplate: ref})
+			got, err := tc.noOptInClient.GetActorTemplate(t.Context(), &ateapi.GetActorTemplateRequest{ActorTemplate: ref})
 			if err != nil {
 				t.Fatalf("GetActorTemplate with gate disabled: %v", err)
 			}
 			if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
 				t.Fatalf("template changed with gate disabled (-want +got):\n%s", diff)
 			}
-			if _, err := tc.noOptInClient.DeleteActorTemplate(t.Context(), &ateapipb.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil {
+			if _, err := tc.noOptInClient.DeleteActorTemplate(t.Context(), &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil {
 				t.Fatalf("DeleteActorTemplate with gate disabled: %v", err)
 			}
 		})

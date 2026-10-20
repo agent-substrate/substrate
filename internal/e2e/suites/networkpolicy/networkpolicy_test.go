@@ -33,12 +33,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/portforward"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -51,20 +51,20 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 	clients := e2e.GetClients()
 
 	wpName := "test-wp-netpol"
-	wp := &v1alpha1.WorkerPool{
+	wp := &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      wpName,
 			Namespace: nsObj.Name,
 		},
-		Spec: v1alpha1.WorkerPoolSpec{
+		Spec: atev1.WorkerPoolSpec{
 			Replicas:       1,
 			WorkerImage:    "worker:v1",
-			SandboxClasses: []v1alpha1.WorkerPoolSandboxClass{{Name: v1alpha1.SandboxClassGvisor}},
+			SandboxClasses: []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassGvisor}},
 		},
 	}
 
 	t.Logf("Creating WorkerPool %s/%s...", nsObj.Name, wpName)
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
+	if _, err := clients.SubstrateK8s.AteV1().WorkerPools(nsObj.Name).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("failed to create WorkerPool: %v", err)
 	}
 
@@ -123,7 +123,7 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 
 	// Verify Garbage Collection upon deletion
 	t.Logf("Deleting WorkerPool %s/%s and verifying NetworkPolicy GC...", nsObj.Name, wpName)
-	if err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Delete(ctx, wpName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+	if err := clients.SubstrateK8s.AteV1().WorkerPools(nsObj.Name).Delete(ctx, wpName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		t.Fatalf("failed to delete WorkerPool: %v", err)
 	}
 
@@ -156,24 +156,24 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 	// Create and Resume Actor
 	actorName := "netpol-dataplane-" + nsObj.Name
 	t.Logf("Creating Actor %q in Atespace %q...", actorName, nsObj.Name)
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: nsObj.Name, Name: actorName},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: nsObj.Name, Name: actorName},
 		ActorTemplate: e2e.TemplateRef(at),
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
 	defer func() {
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: nsObj.Name, Name: actorName},
 		})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
+		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: nsObj.Name, Name: actorName},
 		})
 	}()
 
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: nsObj.Name, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
@@ -355,7 +355,7 @@ func (c *probeClient) dial(t *testing.T, ctx context.Context, address string) di
 // the template. The template lives in an atespace named after the test's k8s
 // namespace, so its name needs no per-test suffix. SnapshotConfig is copied
 // from the source, as the CRD-era setup did.
-func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (string, *ateapipb.ActorTemplate) {
+func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (string, *ateapi.ActorTemplate) {
 	t.Helper()
 	const poolName = "counter"
 	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, ns, e2e.SubstrateTemplateOptions{
@@ -372,10 +372,10 @@ func waitForActorRunning(ctx context.Context, t *testing.T, clients *e2e.Clients
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
+		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: atespace, Name: actorName},
 		})
-		if err == nil && resp.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		if err == nil && resp.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING {
 			t.Logf("Actor %q reached RUNNING state", actorName)
 			return
 		}

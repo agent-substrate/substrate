@@ -25,7 +25,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -45,8 +45,8 @@ func formatAge(ts *timestamppb.Timestamp) string {
 	return duration.HumanDuration(TimeNow().Sub(ts.AsTime()))
 }
 
-func sortActors(actors []*ateapipb.Actor) {
-	slices.SortFunc(actors, func(a, b *ateapipb.Actor) int {
+func sortActors(actors []*ateapi.Actor) {
+	slices.SortFunc(actors, func(a, b *ateapi.Actor) int {
 		if c := cmp.Compare(a.GetMetadata().GetAtespace(), b.GetMetadata().GetAtespace()); c != 0 {
 			return c
 		}
@@ -59,17 +59,17 @@ func sortActors(actors []*ateapipb.Actor) {
 
 // actorTemplateDisplay renders the template an actor references, in
 // "<atespace>/<name>" form.
-func actorTemplateDisplay(a *ateapipb.Actor) string {
+func actorTemplateDisplay(a *ateapi.Actor) string {
 	ref := a.GetActorTemplate()
 	return ref.GetAtespace() + "/" + ref.GetName()
 }
 
 // PrintActorsTo prints a slice of actors to the provided writer.
-func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error {
+func PrintActorsTo(out io.Writer, actors []*ateapi.Actor, format string) error {
 	sortActors(actors)
 	switch format {
 	case "json", "yaml":
-		return printProto(out, &ateapipb.ListActorsResponse{Actors: actors}, format)
+		return printProto(out, &ateapi.ListActorsResponse{Actors: actors}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "ATESPACE\tNAME\tTEMPLATE\tSTATE\tWORKER POD\tWORKER IPS\tVERSION\tAGE")
@@ -98,7 +98,7 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 // WorkerOccupancy is how full a Worker is, as a count against its limit. A
 // count rather than the Actors themselves: a listing does not carry them, and
 // naming them all would be unreadable long before a Worker is full.
-func WorkerOccupancy(worker *ateapipb.Worker) string {
+func WorkerOccupancy(worker *ateapi.Worker) string {
 	hosted := worker.GetStatus().GetAllocated().GetActors()
 	if hosted == 0 {
 		return "FREE"
@@ -106,8 +106,8 @@ func WorkerOccupancy(worker *ateapipb.Worker) string {
 	return fmt.Sprintf("ASSIGNED(%d/%d)", hosted, worker.GetStatus().GetCapacity().GetActors())
 }
 
-func sortWorkers(workers []*ateapipb.Worker) {
-	slices.SortFunc(workers, func(a, b *ateapipb.Worker) int {
+func sortWorkers(workers []*ateapi.Worker) {
+	slices.SortFunc(workers, func(a, b *ateapi.Worker) int {
 		if c := cmp.Compare(a.GetWorkerNamespace(), b.GetWorkerNamespace()); c != 0 {
 			return c
 		}
@@ -120,7 +120,7 @@ func sortWorkers(workers []*ateapipb.Worker) {
 
 // workerActorsColumn renders a Worker's actor count as allocated/capacity
 // (e.g. "3/10").
-func workerActorsColumn(worker *ateapipb.Worker) string {
+func workerActorsColumn(worker *ateapi.Worker) string {
 	return fmt.Sprintf("%d/%d", worker.GetStatus().GetAllocated().GetActors(), worker.GetStatus().GetCapacity().GetActors())
 }
 
@@ -144,11 +144,11 @@ func formatInt(n int64) string {
 }
 
 // PrintWorkersTo prints a slice of workers to the provided writer.
-func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) error {
+func PrintWorkersTo(out io.Writer, workers []*ateapi.Worker, format string) error {
 	sortWorkers(workers)
 	switch format {
 	case "json", "yaml":
-		return printProto(out, &ateapipb.ListWorkersResponse{Workers: workers}, format)
+		return printProto(out, &ateapi.ListWorkersResponse{Workers: workers}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "NAME\tPOOL\tSTATE\tACTORS\tCPU(MILLICORES)\tMEMORY\tPOD\tAGE")
@@ -173,12 +173,12 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 }
 
 // PrintWorkerTo prints a single worker to the provided writer.
-func PrintWorkerTo(out io.Writer, worker *ateapipb.Worker, format string) error {
+func PrintWorkerTo(out io.Writer, worker *ateapi.Worker, format string) error {
 	if format == "json" || format == "yaml" {
 		return printProto(out, worker, format)
 	}
 	// table has no singular/plural distinction, so reuse the list renderer.
-	return PrintWorkersTo(out, []*ateapipb.Worker{worker}, format)
+	return PrintWorkersTo(out, []*ateapi.Worker{worker}, format)
 }
 
 // WorkerTopItem represents real-time hardware resource utilization for a worker pod.
@@ -265,16 +265,16 @@ func PrintWorkerTopYAML(out io.Writer, items []*WorkerTopItem) error {
 }
 
 // PrintActorTo prints a single actor to the provided writer.
-func PrintActorTo(out io.Writer, actor *ateapipb.Actor, format string) error {
+func PrintActorTo(out io.Writer, actor *ateapi.Actor, format string) error {
 	if format == "json" || format == "yaml" {
 		return printProto(out, actor, format)
 	}
 	// table has no singular/plural distinction, so reuse the list renderer.
-	return PrintActorsTo(out, []*ateapipb.Actor{actor}, format)
+	return PrintActorsTo(out, []*ateapi.Actor{actor}, format)
 }
 
-func sortActorTemplates(templates []*ateapipb.ActorTemplate) {
-	slices.SortFunc(templates, func(a, b *ateapipb.ActorTemplate) int {
+func sortActorTemplates(templates []*ateapi.ActorTemplate) {
+	slices.SortFunc(templates, func(a, b *ateapi.ActorTemplate) int {
 		if c := cmp.Compare(a.GetMetadata().GetAtespace(), b.GetMetadata().GetAtespace()); c != 0 {
 			return c
 		}
@@ -283,18 +283,18 @@ func sortActorTemplates(templates []*ateapipb.ActorTemplate) {
 }
 
 // PrintActorTemplatesTo prints a slice of actor templates to the provided writer.
-func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, format string) error {
+func PrintActorTemplatesTo(out io.Writer, templates []*ateapi.ActorTemplate, format string) error {
 	sortActorTemplates(templates)
 	switch format {
 	case "json", "yaml":
-		return printProto(out, &ateapipb.ListActorTemplatesResponse{ActorTemplates: templates}, format)
+		return printProto(out, &ateapi.ListActorTemplatesResponse{ActorTemplates: templates}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "ATESPACE\tNAME\tGOLDEN TAG\tERROR\tAGE")
 		for _, t := range templates {
 			gss := t.GetStatus().GetGoldenSnapshotStatus()
 			goldenTag := gss.GetGoldenTag().GetName()
-			if t.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+			if t.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 				goldenTag = "DISABLED"
 			}
 			// Error messages are too long for a table cell.
@@ -314,18 +314,18 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 }
 
 // PrintActorTemplateTo prints a single actor template to the provided writer.
-func PrintActorTemplateTo(out io.Writer, template *ateapipb.ActorTemplate, format string) error {
+func PrintActorTemplateTo(out io.Writer, template *ateapi.ActorTemplate, format string) error {
 	if format == "json" || format == "yaml" {
 		return printProto(out, template, format)
 	}
 	// table has no singular/plural distinction, so reuse the list renderer.
-	return PrintActorTemplatesTo(out, []*ateapipb.ActorTemplate{template}, format)
+	return PrintActorTemplatesTo(out, []*ateapi.ActorTemplate{template}, format)
 }
 
 // PrintTagsTo prints a slice of tags to the
 // provided writer.
-func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
-	slices.SortFunc(tags, func(a, b *ateapipb.Tag) int {
+func PrintTagsTo(out io.Writer, tags []*ateapi.Tag, format string) error {
+	slices.SortFunc(tags, func(a, b *ateapi.Tag) int {
 		if c := cmp.Compare(a.GetMetadata().GetAtespace(), b.GetMetadata().GetAtespace()); c != 0 {
 			return c
 		}
@@ -333,7 +333,7 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 	})
 	switch format {
 	case "json", "yaml":
-		return printProto(out, &ateapipb.ListTagsResponse{Tags: tags}, format)
+		return printProto(out, &ateapi.ListTagsResponse{Tags: tags}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "ATESPACE\tNAME\tSCOPE\tSTATE\tSNAPSHOT\tFIDELITY\tAGE")
@@ -357,9 +357,9 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 	}
 }
 
-func durableSnapshotStorage(snapshot *ateapipb.Snapshot) *ateapipb.SnapshotStorage {
+func durableSnapshotStorage(snapshot *ateapi.Snapshot) *ateapi.SnapshotStorage {
 	st := snapshot.GetDurableSnapshot()
-	if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+	if st.GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
 		st.GetObject().GetSnapshotUri() != "" {
 		return st
 	}
@@ -369,7 +369,7 @@ func durableSnapshotStorage(snapshot *ateapipb.Snapshot) *ateapipb.SnapshotStora
 // tagState reports whether a tag is usable. A tag is Pending until
 // the copy of its own snapshot lands; until then it names nothing an Actor can
 // be created from, and deleting it collects whatever the create stranded.
-func tagState(tag *ateapipb.Tag) string {
+func tagState(tag *ateapi.Tag) string {
 	if durableSnapshotStorage(tag.GetStatus().GetSnapshot()) == nil {
 		return "Pending"
 	}
@@ -377,26 +377,26 @@ func tagState(tag *ateapipb.Tag) string {
 }
 
 // PrintTagTo prints a single tag to the provided writer.
-func PrintTagTo(out io.Writer, tag *ateapipb.Tag, format string) error {
+func PrintTagTo(out io.Writer, tag *ateapi.Tag, format string) error {
 	if format == "json" || format == "yaml" {
 		return printProto(out, tag, format)
 	}
 	// table has no singular/plural distinction, so reuse the list renderer.
-	return PrintTagsTo(out, []*ateapipb.Tag{tag}, format)
+	return PrintTagsTo(out, []*ateapi.Tag{tag}, format)
 }
 
-func sortAtespaces(atespaces []*ateapipb.Atespace) {
-	slices.SortFunc(atespaces, func(a, b *ateapipb.Atespace) int {
+func sortAtespaces(atespaces []*ateapi.Atespace) {
+	slices.SortFunc(atespaces, func(a, b *ateapi.Atespace) int {
 		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())
 	})
 }
 
 // PrintAtespacesTo prints a slice of atespaces to the provided writer.
-func PrintAtespacesTo(out io.Writer, atespaces []*ateapipb.Atespace, format string) error {
+func PrintAtespacesTo(out io.Writer, atespaces []*ateapi.Atespace, format string) error {
 	sortAtespaces(atespaces)
 	switch format {
 	case "json", "yaml":
-		return printProto(out, &ateapipb.ListAtespacesResponse{Atespaces: atespaces}, format)
+		return printProto(out, &ateapi.ListAtespacesResponse{Atespaces: atespaces}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "NAME\tAGE")
@@ -410,12 +410,12 @@ func PrintAtespacesTo(out io.Writer, atespaces []*ateapipb.Atespace, format stri
 }
 
 // PrintAtespaceTo prints a single atespace to the provided writer.
-func PrintAtespaceTo(out io.Writer, atespace *ateapipb.Atespace, format string) error {
+func PrintAtespaceTo(out io.Writer, atespace *ateapi.Atespace, format string) error {
 	if format == "json" || format == "yaml" {
 		return printProto(out, atespace, format)
 	}
 	// table has no singular/plural distinction, so reuse the list renderer.
-	return PrintAtespacesTo(out, []*ateapipb.Atespace{atespace}, format)
+	return PrintAtespacesTo(out, []*ateapi.Atespace{atespace}, format)
 }
 
 func printProto(out io.Writer, msg proto.Message, format string) error {

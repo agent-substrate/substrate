@@ -19,18 +19,18 @@ import (
 	"errors"
 	"fmt"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // CrashActorReportedByWorker crashes a RUNNING actor whose sandbox the worker
 // hosting it saw die. It holds the actor's lease, so an operation in flight
 // keeps the actor and fails on its own if the sandbox is gone.
-func (w *ActorWorkflow) CrashActorReportedByWorker(ctx context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) CrashActorReportedByWorker(ctx context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapi.Actor, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
@@ -49,7 +49,7 @@ func (w *ActorWorkflow) CrashActorReportedByWorker(ctx context.Context, actorRef
 	if actor.GetMetadata().GetUid() != actorUID || actor.GetStatus().GetWorkerAssignment().GetWorker().GetName() != workerName {
 		return nil, apierror.NotFound("Actor %s not found", actorRef)
 	}
-	if state := actor.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if state := actor.GetStatus().GetState(); state != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		return nil, apierror.FailedPrecondition("actor %s is %s, not RUNNING", actorRef, state)
 	}
 	if err := crashActor(leaseCtx, w.store, actorRef, ateattr.OperationUnknown, message); err != nil {

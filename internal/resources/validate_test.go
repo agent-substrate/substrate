@@ -23,10 +23,10 @@ import (
 	"strings"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/operation"
@@ -77,8 +77,8 @@ func TestToAPIErrorEmpty(t *testing.T) {
 func TestDeepEqual(t *testing.T) {
 	// Proto messages carry internal state that reflect.DeepEqual would
 	// compare; proto.Equal compares only field values.
-	a := &ateapipb.ObjectRef{Atespace: "a", Name: "x"}
-	b := &ateapipb.ObjectRef{Atespace: "a", Name: "x"}
+	a := &ateapi.ObjectRef{Atespace: "a", Name: "x"}
+	b := &ateapi.ObjectRef{Atespace: "a", Name: "x"}
 	_ = a.String() // populates a's internal state, not b's
 
 	tests := []struct {
@@ -87,8 +87,8 @@ func TestDeepEqual(t *testing.T) {
 		want bool
 	}{
 		{name: "equal protos", got: DeepEqual(a, b), want: true},
-		{name: "different protos", got: DeepEqual(a, &ateapipb.ObjectRef{Atespace: "a", Name: "y"}), want: false},
-		{name: "nil protos", got: DeepEqual[*ateapipb.ObjectRef](nil, nil), want: true},
+		{name: "different protos", got: DeepEqual(a, &ateapi.ObjectRef{Atespace: "a", Name: "y"}), want: false},
+		{name: "nil protos", got: DeepEqual[*ateapi.ObjectRef](nil, nil), want: true},
 		{name: "equal non-protos", got: DeepEqual([]string{"a"}, []string{"a"}), want: true},
 		{name: "different non-protos", got: DeepEqual(1, 2), want: false},
 	}
@@ -668,13 +668,13 @@ func TestValidateSandboxAssetsDir(t *testing.T) {
 // be masked before the text is built.
 func TestValidationErrorsRedactDebugRedactFields(t *testing.T) {
 	const secret = "sk-do-not-log"
-	env := []*ateapipb.EnvVar{
+	env := []*ateapi.EnvVar{
 		{Name: "API_KEY", Value: secret},
 		{Name: "API_KEY", Value: secret},
 	}
 	errs := validate.PtrSliceUnique(context.Background(), operation.Operation{Type: operation.Create},
 		field.NewPath("env"), env, nil,
-		func(a, b *ateapipb.EnvVar) bool { return a.Name == b.Name })
+		func(a, b *ateapi.EnvVar) bool { return a.Name == b.Name })
 	if len(errs) == 0 {
 		t.Fatal("PtrSliceUnique found no duplicate")
 	}
@@ -700,7 +700,7 @@ func TestValidationErrorsRedactDebugRedactFields(t *testing.T) {
 			t.Errorf("%s: message for a nil-only list = %q", name, msg)
 		}
 	}
-	if got := errs[0].BadValue.(*ateapipb.EnvVar).GetValue(); got != secret {
+	if got := errs[0].BadValue.(*ateapi.EnvVar).GetValue(); got != secret {
 		t.Errorf("caller's error list was modified: value = %q", got)
 	}
 }

@@ -22,11 +22,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -37,14 +37,14 @@ const (
 // seedHostedActor stores an actor assigned to workerName, as the placement
 // path leaves one that is RUNNING. An empty workerName seeds an actor with no
 // assignment at all, which is how a SUSPENDED or CRASHED one looks.
-func seedHostedActor(t *testing.T, st store.Interface, workerName string) *ateapipb.Actor {
+func seedHostedActor(t *testing.T, st store.Interface, workerName string) *ateapi.Actor {
 	t.Helper()
-	actorStatus := &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}
+	actorStatus := &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED}
 	if workerName != "" {
-		actorStatus = &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			WorkerAssignment: &ateapipb.WorkerAssignment{
-				Worker:          &ateapipb.ObjectRef{Name: workerName},
+		actorStatus = &ateapi.ActorStatus{
+			State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapi.WorkerAssignment{
+				Worker:          &ateapi.ObjectRef{Name: workerName},
 				WorkerNamespace: "ate-system",
 				WorkerPool:      "pool-1",
 				WorkerPod:       "worker-pod-1",
@@ -52,16 +52,16 @@ func seedHostedActor(t *testing.T, st store.Interface, workerName string) *ateap
 			},
 		}
 	}
-	return storetest.MustCreateActor(t, context.Background(), st, &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: suspendAtespace, Name: suspendActor},
+	return storetest.MustCreateActor(t, context.Background(), st, &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Atespace: suspendAtespace, Name: suspendActor},
 		Status:   actorStatus,
 	})
 }
 
-func suspendRequest(actorUID string) *ateapipb.RequestActorSuspendRequest {
-	return &ateapipb.RequestActorSuspendRequest{
-		Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
-		Actor:    &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+func suspendRequest(actorUID string) *ateapi.RequestActorSuspendRequest {
+	return &ateapi.RequestActorSuspendRequest{
+		Worker:   &ateapi.ObjectRef{Name: testWorkerName},
+		Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
 		ActorUid: actorUID,
 	}
 }
@@ -71,13 +71,13 @@ func suspendRequest(actorUID string) *ateapipb.RequestActorSuspendRequest {
 func TestRequestActorSuspend(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 	actor := seedHostedActor(t, st, testWorkerName)
-	suspended := &ateapipb.Actor{
+	suspended := &ateapi.Actor{
 		Metadata: actor.GetMetadata(),
-		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	}
-	control := &fakeControl{resp: &ateapipb.SuspendActorResponse{Actor: suspended}}
+	control := &fakeControl{resp: &ateapi.SuspendActorResponse{Actor: suspended}}
 	s := New(st, control, testAteletSPIFFEID, nil, "", nil)
 
 	got, err := s.RequestActorSuspend(
@@ -86,8 +86,8 @@ func TestRequestActorSuspend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestActorSuspend() failed: %v", err)
 	}
-	want := []*ateapipb.SuspendActorRequest{{
-		Actor: &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+	want := []*ateapi.SuspendActorRequest{{
+		Actor: &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
 	}}
 	if diff := cmp.Diff(want, control.calls, protocmp.Transform()); diff != "" {
 		t.Errorf("suspend calls mismatch (-want +got):\n%s", diff)
@@ -123,7 +123,7 @@ func TestRequestActorSuspend_OnlyForHostedActors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st, cleanup := storetest.SetupTestStore(t)
 			defer cleanup()
-			seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+			seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 			actor := seedHostedActor(t, st, tc.assignedWorker)
 			control := &fakeControl{}
 			s := New(st, control, testAteletSPIFFEID, nil, "", nil)
@@ -148,7 +148,7 @@ func TestRequestActorSuspend_OnlyForHostedActors(t *testing.T) {
 func TestRequestActorSuspend_Errors(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 	actor := seedHostedActor(t, st, testWorkerName)
 	uid := actor.GetMetadata().GetUid()
 	control := &fakeControl{}
@@ -158,40 +158,40 @@ func TestRequestActorSuspend_Errors(t *testing.T) {
 	tests := []struct {
 		name string
 		ctx  context.Context
-		req  *ateapipb.RequestActorSuspendRequest
+		req  *ateapi.RequestActorSuspendRequest
 		want codes.Code
 	}{
 		{"unauthenticated", ateletauthtest.ContextWith(nil), suspendRequest(uid), codes.Unauthenticated},
-		{"no worker ref", authed, &ateapipb.RequestActorSuspendRequest{
-			Actor:    &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+		{"no worker ref", authed, &ateapi.RequestActorSuspendRequest{
+			Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
 			ActorUid: uid,
 		}, codes.InvalidArgument},
-		{"atespaced worker ref", authed, &ateapipb.RequestActorSuspendRequest{
-			Worker:   &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: testWorkerName},
-			Actor:    &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+		{"atespaced worker ref", authed, &ateapi.RequestActorSuspendRequest{
+			Worker:   &ateapi.ObjectRef{Atespace: suspendAtespace, Name: testWorkerName},
+			Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
 			ActorUid: uid,
 		}, codes.InvalidArgument},
-		{"no actor ref", authed, &ateapipb.RequestActorSuspendRequest{
-			Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
+		{"no actor ref", authed, &ateapi.RequestActorSuspendRequest{
+			Worker:   &ateapi.ObjectRef{Name: testWorkerName},
 			ActorUid: uid,
 		}, codes.InvalidArgument},
-		{"actor ref without atespace", authed, &ateapipb.RequestActorSuspendRequest{
-			Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
-			Actor:    &ateapipb.ObjectRef{Name: suspendActor},
+		{"actor ref without atespace", authed, &ateapi.RequestActorSuspendRequest{
+			Worker:   &ateapi.ObjectRef{Name: testWorkerName},
+			Actor:    &ateapi.ObjectRef{Name: suspendActor},
 			ActorUid: uid,
 		}, codes.InvalidArgument},
 		// Without a UID the request could outlive the actor it was made about
 		// and suspend whatever took its name, so an absent one is refused
 		// rather than treated as "whichever is there now".
 		{"no actor uid", authed, suspendRequest(""), codes.InvalidArgument},
-		{"absent worker", authed, &ateapipb.RequestActorSuspendRequest{
-			Worker:   &ateapipb.ObjectRef{Name: "5c7e2a91-3d4b-4f60-8a1c-2e9b7d0f4a63"},
-			Actor:    &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+		{"absent worker", authed, &ateapi.RequestActorSuspendRequest{
+			Worker:   &ateapi.ObjectRef{Name: "5c7e2a91-3d4b-4f60-8a1c-2e9b7d0f4a63"},
+			Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
 			ActorUid: uid,
 		}, codes.NotFound},
-		{"absent actor", authed, &ateapipb.RequestActorSuspendRequest{
-			Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
-			Actor:    &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: "no-such-actor"},
+		{"absent actor", authed, &ateapi.RequestActorSuspendRequest{
+			Worker:   &ateapi.ObjectRef{Name: testWorkerName},
+			Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: "no-such-actor"},
 			ActorUid: uid,
 		}, codes.NotFound},
 	}
@@ -214,7 +214,7 @@ func TestRequestActorSuspend_Errors(t *testing.T) {
 func TestRequestActorSuspend_PassesThroughTheWorkflowsRefusal(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 	actor := seedHostedActor(t, st, testWorkerName)
 	control := &fakeControl{err: apierror.FailedPrecondition("Actor is RESUMING")}
 	s := New(st, control, testAteletSPIFFEID, nil, "", nil)

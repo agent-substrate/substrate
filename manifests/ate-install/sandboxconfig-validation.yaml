@@ -26,7 +26,7 @@ spec:
   matchConstraints:
     resourceRules:
     - apiGroups:   ["ate.dev"]
-      apiVersions: ["v1alpha1"]
+      apiVersions: ["v1"]
       operations:  ["CREATE", "UPDATE"]
       resources:   ["sandboxconfigs"]
   validations:

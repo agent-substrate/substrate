@@ -22,54 +22,54 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
 
 // testCompat is a compatibility version whose identity is a single
 // architecture attribute, which is enough to tell two runtimes apart.
-func testCompat(arch string) *ateapipb.VersionedSandboxCompat {
-	return &ateapipb.VersionedSandboxCompat{
+func testCompat(arch string) *ateapi.VersionedSandboxCompat {
+	return &ateapi.VersionedSandboxCompat{
 		SchemaVersion: "v1",
-		Attributes:    []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}},
+		Attributes:    []*ateapi.AttributeEntry{{Key: "architecture", Value: arch}},
 	}
 }
 
 // testClass is one reported sandbox class: def as its default runtime and
 // restorable as the others.
-func testClass(name string, def *ateapipb.VersionedSandboxCompat, restorable ...*ateapipb.VersionedSandboxCompat) *ateapipb.WorkerSandboxClass {
-	c := &ateapipb.WorkerSandboxClass{SandboxClass: name, DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: def}}
+func testClass(name string, def *ateapi.VersionedSandboxCompat, restorable ...*ateapi.VersionedSandboxCompat) *ateapi.WorkerSandboxClass {
+	c := &ateapi.WorkerSandboxClass{SandboxClass: name, DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: def}}
 	for _, r := range restorable {
-		c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapipb.WorkerSandboxRuntime{Version: r})
+		c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapi.WorkerSandboxRuntime{Version: r})
 	}
 	return c
 }
 
 // testSandboxClasses is what seedReportedWorker records as already reported:
 // the class it gives the Worker.
-var testSandboxClasses = []*ateapipb.WorkerSandboxClass{testClass("gvisor", testCompat("amd64"))}
+var testSandboxClasses = []*ateapi.WorkerSandboxClass{testClass("gvisor", testCompat("amd64"))}
 
-func registerRequest(epoch int64, actors int32) *ateapipb.RegisterWorkerRequest {
-	return &ateapipb.RegisterWorkerRequest{
-		Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
+func registerRequest(epoch int64, actors int32) *ateapi.RegisterWorkerRequest {
+	return &ateapi.RegisterWorkerRequest{
+		Worker:   &ateapi.ObjectRef{Name: testWorkerName},
 		Epoch:    epoch,
 		Ips:      testIPs,
-		Capacity: &ateapipb.WorkerResources{Actors: actors},
+		Capacity: &ateapi.WorkerResources{Actors: actors},
 	}
 }
 
-func runtimesRequest(epoch int64) *ateapipb.SetWorkerSandboxRuntimesRequest {
-	return &ateapipb.SetWorkerSandboxRuntimesRequest{
-		Worker:         &ateapipb.ObjectRef{Name: testWorkerName},
+func runtimesRequest(epoch int64) *ateapi.SetWorkerSandboxRuntimesRequest {
+	return &ateapi.SetWorkerSandboxRuntimesRequest{
+		Worker:         &ateapi.ObjectRef{Name: testWorkerName},
 		Epoch:          epoch,
 		SandboxClasses: testSandboxClasses,
 	}
 }
 
-func mustGetWorker(t *testing.T, s *Server, name string) *ateapipb.Worker {
+func mustGetWorker(t *testing.T, s *Server, name string) *ateapi.Worker {
 	t.Helper()
 	w, err := s.store.GetWorker(context.Background(), name)
 	if err != nil {
@@ -85,11 +85,11 @@ func TestAcquireWorkerEpoch(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
 	for want := int64(testEpoch + 1); want <= testEpoch+2; want++ {
-		got, err := s.AcquireWorkerEpoch(authed, &ateapipb.AcquireWorkerEpochRequest{Worker: &ateapipb.ObjectRef{Name: testWorkerName}})
+		got, err := s.AcquireWorkerEpoch(authed, &ateapi.AcquireWorkerEpochRequest{Worker: &ateapi.ObjectRef{Name: testWorkerName}})
 		if err != nil {
 			t.Fatalf("AcquireWorkerEpoch() failed: %v", err)
 		}
@@ -110,10 +110,10 @@ func TestAcquireWorkerEpoch_NewWorker(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
-	seedWorker(t, st, testWorkerName, testNode, &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE})
+	seedWorker(t, st, testWorkerName, testNode, &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
-	got, err := s.AcquireWorkerEpoch(authed, &ateapipb.AcquireWorkerEpochRequest{Worker: &ateapipb.ObjectRef{Name: testWorkerName}})
+	got, err := s.AcquireWorkerEpoch(authed, &ateapi.AcquireWorkerEpochRequest{Worker: &ateapi.ObjectRef{Name: testWorkerName}})
 	if err != nil {
 		t.Fatalf("AcquireWorkerEpoch() failed: %v", err)
 	}
@@ -126,20 +126,20 @@ func TestAcquireWorkerEpoch_Errors(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
-	ref := &ateapipb.ObjectRef{Name: testWorkerName}
+	ref := &ateapi.ObjectRef{Name: testWorkerName}
 
 	tests := []struct {
 		name string
 		ctx  context.Context
-		req  *ateapipb.AcquireWorkerEpochRequest
+		req  *ateapi.AcquireWorkerEpochRequest
 		want codes.Code
 	}{
-		{"unauthenticated", ateletauthtest.ContextWith(nil), &ateapipb.AcquireWorkerEpochRequest{Worker: ref}, codes.Unauthenticated},
-		{"no worker ref", authed, &ateapipb.AcquireWorkerEpochRequest{}, codes.InvalidArgument},
-		{"other node", ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), &ateapipb.AcquireWorkerEpochRequest{Worker: ref}, codes.NotFound},
-		{"absent worker", authed, &ateapipb.AcquireWorkerEpochRequest{Worker: &ateapipb.ObjectRef{Name: "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"}}, codes.NotFound},
+		{"unauthenticated", ateletauthtest.ContextWith(nil), &ateapi.AcquireWorkerEpochRequest{Worker: ref}, codes.Unauthenticated},
+		{"no worker ref", authed, &ateapi.AcquireWorkerEpochRequest{}, codes.InvalidArgument},
+		{"other node", ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), &ateapi.AcquireWorkerEpochRequest{Worker: ref}, codes.NotFound},
+		{"absent worker", authed, &ateapi.AcquireWorkerEpochRequest{Worker: &ateapi.ObjectRef{Name: "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"}}, codes.NotFound},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -161,10 +161,10 @@ func TestRegisterWorker(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 2000, MemoryBytes: 0})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1, CpuMillicores: 2000, MemoryBytes: 0})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
-	acquired, err := s.AcquireWorkerEpoch(authed, &ateapipb.AcquireWorkerEpochRequest{Worker: &ateapipb.ObjectRef{Name: testWorkerName}})
+	acquired, err := s.AcquireWorkerEpoch(authed, &ateapi.AcquireWorkerEpochRequest{Worker: &ateapi.ObjectRef{Name: testWorkerName}})
 	if err != nil {
 		t.Fatalf("AcquireWorkerEpoch() failed: %v", err)
 	}
@@ -207,13 +207,13 @@ func TestRegisterWorker_Epochs(t *testing.T) {
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
-	seeded := func() *ateapipb.WorkerStatus {
-		return &ateapipb.WorkerStatus{
-			State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+	seeded := func() *ateapi.WorkerStatus {
+		return &ateapi.WorkerStatus{
+			State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 			IssuedEpoch:     testEpoch + 2,
 			RegisteredEpoch: testEpoch,
 			Ips:             testIPs,
-			Capacity:        &ateapipb.WorkerResources{Actors: 1},
+			Capacity:        &ateapi.WorkerResources{Actors: 1},
 			SandboxClasses:  testSandboxClasses,
 		}
 	}
@@ -274,11 +274,11 @@ func TestRegisterWorker_Epochs(t *testing.T) {
 			name := fmt.Sprintf("1a7e4c83-6d20-4f95-b3c8-%012d", i)
 			before := seedWorker(t, st, name, testNode, seeded())
 
-			_, err := s.RegisterWorker(authed, &ateapipb.RegisterWorkerRequest{
-				Worker:   &ateapipb.ObjectRef{Name: name},
+			_, err := s.RegisterWorker(authed, &ateapi.RegisterWorkerRequest{
+				Worker:   &ateapi.ObjectRef{Name: name},
 				Epoch:    tt.epoch,
 				Ips:      tt.ips,
-				Capacity: &ateapipb.WorkerResources{Actors: 1},
+				Capacity: &ateapi.WorkerResources{Actors: 1},
 			})
 			if code := apierror.Code(err); code != tt.wantCode {
 				t.Fatalf("code = %v (err %v), want %v", code, err, tt.wantCode)
@@ -309,7 +309,7 @@ func TestRegisterWorker_OtherNodeIsNotFound(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 
 	_, err := s.RegisterWorker(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), registerRequest(testEpoch, 4094))
 	if got := apierror.Code(err); got != codes.NotFound {
@@ -330,9 +330,9 @@ func TestRegisterWorker_Errors(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
-	without := func(mutate func(*ateapipb.RegisterWorkerRequest)) *ateapipb.RegisterWorkerRequest {
+	without := func(mutate func(*ateapi.RegisterWorkerRequest)) *ateapi.RegisterWorkerRequest {
 		req := registerRequest(testEpoch, 2)
 		mutate(req)
 		return req
@@ -341,16 +341,16 @@ func TestRegisterWorker_Errors(t *testing.T) {
 	tests := []struct {
 		name string
 		ctx  context.Context
-		req  *ateapipb.RegisterWorkerRequest
+		req  *ateapi.RegisterWorkerRequest
 		want codes.Code
 	}{
 		{"unauthenticated", ateletauthtest.ContextWith(nil), registerRequest(testEpoch, 2), codes.Unauthenticated},
-		{"no worker ref", authed, without(func(r *ateapipb.RegisterWorkerRequest) { r.Worker = nil }), codes.InvalidArgument},
-		{"no epoch", authed, without(func(r *ateapipb.RegisterWorkerRequest) { r.Epoch = 0 }), codes.InvalidArgument},
-		{"no ips", authed, without(func(r *ateapipb.RegisterWorkerRequest) { r.Ips = nil }), codes.InvalidArgument},
-		{"no capacity", authed, without(func(r *ateapipb.RegisterWorkerRequest) { r.Capacity = nil }), codes.InvalidArgument},
-		{"absent worker", authed, without(func(r *ateapipb.RegisterWorkerRequest) {
-			r.Worker = &ateapipb.ObjectRef{Name: "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"}
+		{"no worker ref", authed, without(func(r *ateapi.RegisterWorkerRequest) { r.Worker = nil }), codes.InvalidArgument},
+		{"no epoch", authed, without(func(r *ateapi.RegisterWorkerRequest) { r.Epoch = 0 }), codes.InvalidArgument},
+		{"no ips", authed, without(func(r *ateapi.RegisterWorkerRequest) { r.Ips = nil }), codes.InvalidArgument},
+		{"no capacity", authed, without(func(r *ateapi.RegisterWorkerRequest) { r.Capacity = nil }), codes.InvalidArgument},
+		{"absent worker", authed, without(func(r *ateapi.RegisterWorkerRequest) {
+			r.Worker = &ateapi.ObjectRef{Name: "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"}
 		}), codes.NotFound},
 	}
 	for _, tc := range tests {
@@ -370,16 +370,16 @@ func TestRegisterWorker_RejectsNonsense(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
-	seeded := seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 4094})
+	seeded := seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 4094})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
 	for _, tc := range []struct {
 		name     string
-		capacity *ateapipb.WorkerResources
+		capacity *ateapi.WorkerResources
 	}{
-		{"negative ceiling", &ateapipb.WorkerResources{Actors: -1}},
-		{"int32 underflow", &ateapipb.WorkerResources{Actors: -2147483648}},
-		{"negative quantity", &ateapipb.WorkerResources{CpuMillicores: -1, MemoryBytes: 0}},
+		{"negative ceiling", &ateapi.WorkerResources{Actors: -1}},
+		{"int32 underflow", &ateapi.WorkerResources{Actors: -2147483648}},
+		{"negative quantity", &ateapi.WorkerResources{CpuMillicores: -1, MemoryBytes: 0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := registerRequest(testEpoch, 0)
@@ -413,13 +413,13 @@ func TestSetWorkerSandboxRuntimes(t *testing.T) {
 	v8, v9 := testCompat("arm64-v8"), testCompat("arm64-v9")
 	// Every Worker here has registered testEpoch and reported gvisor with
 	// amd64 as its default and v8 and v9 restorable, in that order.
-	seeded := func() *ateapipb.WorkerStatus {
-		return &ateapipb.WorkerStatus{
-			State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+	seeded := func() *ateapi.WorkerStatus {
+		return &ateapi.WorkerStatus{
+			State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 			IssuedEpoch:     testEpoch + 1,
 			RegisteredEpoch: testEpoch,
-			Capacity:        &ateapipb.WorkerResources{Actors: 1},
-			SandboxClasses:  []*ateapipb.WorkerSandboxClass{testClass("gvisor", amd64, v8, v9)},
+			Capacity:        &ateapi.WorkerResources{Actors: 1},
+			SandboxClasses:  []*ateapi.WorkerSandboxClass{testClass("gvisor", amd64, v8, v9)},
 		}
 	}
 
@@ -430,26 +430,26 @@ func TestSetWorkerSandboxRuntimes(t *testing.T) {
 		unreported bool
 		// epoch defaults to testEpoch.
 		epoch    int64
-		classes  []*ateapipb.WorkerSandboxClass
+		classes  []*ateapi.WorkerSandboxClass
 		wantCode codes.Code
 		// wantWrite is whether the report changes the record.
 		wantWrite bool
 	}{{
 		name:    "identical report writes nothing",
-		classes: []*ateapipb.WorkerSandboxClass{testClass("gvisor", amd64, v8, v9)},
+		classes: []*ateapi.WorkerSandboxClass{testClass("gvisor", amd64, v8, v9)},
 	}, {
 		name:      "changed default runtime writes",
-		classes:   []*ateapipb.WorkerSandboxClass{testClass("gvisor", arm64, v8, v9)},
+		classes:   []*ateapi.WorkerSandboxClass{testClass("gvisor", arm64, v8, v9)},
 		wantWrite: true,
 	}, {
 		name:      "changed restorable runtime writes",
-		classes:   []*ateapipb.WorkerSandboxClass{testClass("gvisor", amd64, v8, arm64)},
+		classes:   []*ateapi.WorkerSandboxClass{testClass("gvisor", amd64, v8, arm64)},
 		wantWrite: true,
 	}, {
 		// A report is compared as sent: the list is atomic, so a new order
 		// is a new report.
 		name:      "reordered restorable runtimes write",
-		classes:   []*ateapipb.WorkerSandboxClass{testClass("gvisor", amd64, v9, v8)},
+		classes:   []*ateapi.WorkerSandboxClass{testClass("gvisor", amd64, v9, v8)},
 		wantWrite: true,
 	}, {
 		// Runtimes are replaced like capacity: a report that lists no
@@ -457,38 +457,38 @@ func TestSetWorkerSandboxRuntimes(t *testing.T) {
 		// default, as when a version is disabled, and the record must not
 		// keep advertising them.
 		name:      "dropped restorable runtimes write",
-		classes:   []*ateapipb.WorkerSandboxClass{testClass("gvisor", amd64)},
+		classes:   []*ateapi.WorkerSandboxClass{testClass("gvisor", amd64)},
 		wantWrite: true,
 	}, {
 		// A report from a worker process that has since been replaced, or
 		// one that has not registered yet, describes no running process.
 		name:     "older epoch is refused",
 		epoch:    testEpoch - 1,
-		classes:  []*ateapipb.WorkerSandboxClass{testClass("gvisor", arm64)},
+		classes:  []*ateapi.WorkerSandboxClass{testClass("gvisor", arm64)},
 		wantCode: codes.FailedPrecondition,
 	}, {
 		name:     "acquired but unregistered epoch is refused",
 		epoch:    testEpoch + 1,
-		classes:  []*ateapipb.WorkerSandboxClass{testClass("gvisor", arm64)},
+		classes:  []*ateapi.WorkerSandboxClass{testClass("gvisor", arm64)},
 		wantCode: codes.FailedPrecondition,
 	}, {
 		// Once the worker process has reported a sandbox class, an entry of
 		// another class contradicts its recorded state and is refused.
 		name:     "another class is refused",
-		classes:  []*ateapipb.WorkerSandboxClass{testClass("microvm", amd64, v8, v9)},
+		classes:  []*ateapi.WorkerSandboxClass{testClass("microvm", amd64, v8, v9)},
 		wantCode: codes.FailedPrecondition,
 	}, {
 		// A pool declares one class, so does a Worker: the list's size is an
 		// API rule, checked before the recorded class is.
 		name:     "a second class is refused",
-		classes:  []*ateapipb.WorkerSandboxClass{testClass("gvisor", amd64, v8, v9), testClass("microvm", amd64)},
+		classes:  []*ateapi.WorkerSandboxClass{testClass("gvisor", amd64, v8, v9), testClass("microvm", amd64)},
 		wantCode: codes.InvalidArgument,
 	}, {
 		// A worker process that has not reported yet sets the class on its
 		// first report.
 		name:       "unreported Worker takes a class of any name",
 		unreported: true,
-		classes:    []*ateapipb.WorkerSandboxClass{testClass("microvm", amd64)},
+		classes:    []*ateapi.WorkerSandboxClass{testClass("microvm", amd64)},
 		wantWrite:  true,
 	}, {
 		name:     "a report of no classes is refused",
@@ -507,8 +507,8 @@ func TestSetWorkerSandboxRuntimes(t *testing.T) {
 				epoch = testEpoch
 			}
 
-			got, err := s.SetWorkerSandboxRuntimes(authed, &ateapipb.SetWorkerSandboxRuntimesRequest{
-				Worker:         &ateapipb.ObjectRef{Name: name},
+			got, err := s.SetWorkerSandboxRuntimes(authed, &ateapi.SetWorkerSandboxRuntimesRequest{
+				Worker:         &ateapi.ObjectRef{Name: name},
 				Epoch:          epoch,
 				SandboxClasses: tt.classes,
 			})
@@ -542,20 +542,20 @@ func TestSetWorkerSandboxRuntimes_SortsAttributes(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
-	compatWith := func(keys ...string) *ateapipb.VersionedSandboxCompat {
-		c := &ateapipb.VersionedSandboxCompat{SchemaVersion: "v1"}
+	compatWith := func(keys ...string) *ateapi.VersionedSandboxCompat {
+		c := &ateapi.VersionedSandboxCompat{SchemaVersion: "v1"}
 		for _, k := range keys {
-			c.Attributes = append(c.Attributes, &ateapipb.AttributeEntry{Key: k, Value: "v"})
+			c.Attributes = append(c.Attributes, &ateapi.AttributeEntry{Key: k, Value: "v"})
 		}
 		return c
 	}
-	report := func(def, restorable *ateapipb.VersionedSandboxCompat) *ateapipb.Worker {
+	report := func(def, restorable *ateapi.VersionedSandboxCompat) *ateapi.Worker {
 		t.Helper()
 		req := runtimesRequest(testEpoch)
-		req.SandboxClasses = []*ateapipb.WorkerSandboxClass{testClass("gvisor", def, restorable)}
+		req.SandboxClasses = []*ateapi.WorkerSandboxClass{testClass("gvisor", def, restorable)}
 		got, err := s.SetWorkerSandboxRuntimes(authed, req)
 		if err != nil {
 			t.Fatalf("SetWorkerSandboxRuntimes() failed: %v", err)
@@ -564,7 +564,7 @@ func TestSetWorkerSandboxRuntimes_SortsAttributes(t *testing.T) {
 	}
 
 	first := report(compatWith("cpu_features", "architecture"), compatWith("sandbox_bundle_hash", "architecture"))
-	want := []*ateapipb.WorkerSandboxClass{testClass("gvisor", compatWith("architecture", "cpu_features"), compatWith("architecture", "sandbox_bundle_hash"))}
+	want := []*ateapi.WorkerSandboxClass{testClass("gvisor", compatWith("architecture", "cpu_features"), compatWith("architecture", "sandbox_bundle_hash"))}
 	if diff := cmp.Diff(want, first.GetStatus().GetSandboxClasses(), protocmp.Transform()); diff != "" {
 		t.Errorf("sandbox_classes not stored sorted by key (-want +got):\n%s", diff)
 	}
@@ -579,9 +579,9 @@ func TestSetWorkerSandboxRuntimes_Errors(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
-	without := func(mutate func(*ateapipb.SetWorkerSandboxRuntimesRequest)) *ateapipb.SetWorkerSandboxRuntimesRequest {
+	without := func(mutate func(*ateapi.SetWorkerSandboxRuntimesRequest)) *ateapi.SetWorkerSandboxRuntimesRequest {
 		req := runtimesRequest(testEpoch)
 		mutate(req)
 		return req
@@ -590,22 +590,22 @@ func TestSetWorkerSandboxRuntimes_Errors(t *testing.T) {
 	tests := []struct {
 		name string
 		ctx  context.Context
-		req  *ateapipb.SetWorkerSandboxRuntimesRequest
+		req  *ateapi.SetWorkerSandboxRuntimesRequest
 		want codes.Code
 	}{
 		{"unauthenticated", ateletauthtest.ContextWith(nil), runtimesRequest(testEpoch), codes.Unauthenticated},
-		{"no worker ref", authed, without(func(r *ateapipb.SetWorkerSandboxRuntimesRequest) { r.Worker = nil }), codes.InvalidArgument},
-		{"no epoch", authed, without(func(r *ateapipb.SetWorkerSandboxRuntimesRequest) { r.Epoch = 0 }), codes.InvalidArgument},
-		{"no sandbox classes", authed, without(func(r *ateapipb.SetWorkerSandboxRuntimesRequest) { r.SandboxClasses = nil }), codes.InvalidArgument},
-		{"class without a default runtime", authed, without(func(r *ateapipb.SetWorkerSandboxRuntimesRequest) {
-			r.SandboxClasses = []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}}
+		{"no worker ref", authed, without(func(r *ateapi.SetWorkerSandboxRuntimesRequest) { r.Worker = nil }), codes.InvalidArgument},
+		{"no epoch", authed, without(func(r *ateapi.SetWorkerSandboxRuntimesRequest) { r.Epoch = 0 }), codes.InvalidArgument},
+		{"no sandbox classes", authed, without(func(r *ateapi.SetWorkerSandboxRuntimesRequest) { r.SandboxClasses = nil }), codes.InvalidArgument},
+		{"class without a default runtime", authed, without(func(r *ateapi.SetWorkerSandboxRuntimesRequest) {
+			r.SandboxClasses = []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}}
 		}), codes.InvalidArgument},
-		{"class that is not a sandbox class", authed, without(func(r *ateapipb.SetWorkerSandboxRuntimesRequest) {
-			r.SandboxClasses = []*ateapipb.WorkerSandboxClass{testClass("plain", testCompat("amd64"))}
+		{"class that is not a sandbox class", authed, without(func(r *ateapi.SetWorkerSandboxRuntimesRequest) {
+			r.SandboxClasses = []*ateapi.WorkerSandboxClass{testClass("plain", testCompat("amd64"))}
 		}), codes.InvalidArgument},
 		{"other node", ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), runtimesRequest(testEpoch), codes.NotFound},
-		{"absent worker", authed, without(func(r *ateapipb.SetWorkerSandboxRuntimesRequest) {
-			r.Worker = &ateapipb.ObjectRef{Name: "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"}
+		{"absent worker", authed, without(func(r *ateapi.SetWorkerSandboxRuntimesRequest) {
+			r.Worker = &ateapi.ObjectRef{Name: "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"}
 		}), codes.NotFound},
 	}
 	for _, tc := range tests {

@@ -21,8 +21,8 @@ import (
 	"strings"
 	"testing"
 
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -77,14 +77,14 @@ var substrateFixtures = []struct {
 // depth yields YAML that still parses but hangs the field off the wrong parent
 // — which strict mode reports as an unknown field instead of silently applying
 // a WorkerPool that never gets a micro-VM worker.
-func renderPool(t *testing.T, relPath string) *v1alpha1.WorkerPool {
+func renderPool(t *testing.T, relPath string) *atev1.WorkerPool {
 	t.Helper()
 	raw, err := os.ReadFile(RenderFixtureManifest(t, relPath, "test-bucket", "render"))
 	if err != nil {
 		t.Fatalf("reading the rendered %s: %v", relPath, err)
 	}
 
-	pool := &v1alpha1.WorkerPool{}
+	pool := &atev1.WorkerPool{}
 	for doc := range strings.SplitSeq(string(raw), "\n---\n") {
 		if strings.TrimSpace(doc) == "" {
 			continue
@@ -113,7 +113,7 @@ func renderPool(t *testing.T, relPath string) *v1alpha1.WorkerPool {
 // same misplaced-placeholder tripwire renderPool's strict mode does. A
 // placeholder that values does not fill fails the test, since it would reach
 // the cluster as literal text.
-func renderTemplates(t *testing.T, relPath string, values map[string]string) []*ateapipb.ActorTemplate {
+func renderTemplates(t *testing.T, relPath string, values map[string]string) []*ateapi.ActorTemplate {
 	t.Helper()
 	inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", nil)
 	maps.Copy(inline, values)
@@ -139,7 +139,7 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateworker-gvisor") {
 				t.Errorf("WorkerPool workerImage = %q, want the gVisor worker", pool.Spec.WorkerImage)
 			}
-			if pool.Spec.DefaultSandboxClass() != v1alpha1.SandboxClassGvisor {
+			if pool.Spec.DefaultSandboxClass() != atev1.SandboxClassGvisor {
 				t.Errorf("WorkerPool runtime = class %q, want gvisor", pool.Spec.DefaultSandboxClass())
 			}
 

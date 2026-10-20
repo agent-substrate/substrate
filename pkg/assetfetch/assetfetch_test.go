@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/internal/resources"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -279,7 +279,7 @@ func TestStagerFetch(t *testing.T) {
 	t.Run("verified content replaces the caller's file", func(t *testing.T) {
 		f := newStagerFixture(t)
 		o := &opener{content: kernel}
-		err := f.stager.Fetch(t.Context(), &objectstorev1.FetchAssetRequest{
+		err := f.stager.Fetch(t.Context(), &objectstore.FetchAssetRequest{
 			Sha256: sum(kernel), WritePath: f.dst, MaxBytes: int64(len(kernel)),
 		}, "gs://bucket/vmlinux", o.open, testStatus)
 		if err != nil {
@@ -291,21 +291,21 @@ func TestStagerFetch(t *testing.T) {
 
 	for _, tc := range []struct {
 		name      string
-		req       func(f *stagerFixture) *objectstorev1.FetchAssetRequest
+		req       func(f *stagerFixture) *objectstore.FetchAssetRequest
 		opener    *opener
 		want      codes.Code
 		wantOpens int
 	}{
 		{
 			name:      "sha256 mismatch",
-			req:       func(f *stagerFixture) *objectstorev1.FetchAssetRequest { return req(sum("other"), f.dst, 1<<20) },
+			req:       func(f *stagerFixture) *objectstore.FetchAssetRequest { return req(sum("other"), f.dst, 1<<20) },
 			opener:    &opener{content: kernel},
 			want:      codes.FailedPrecondition,
 			wantOpens: 1,
 		},
 		{
 			name: "one byte over max_bytes",
-			req: func(f *stagerFixture) *objectstorev1.FetchAssetRequest {
+			req: func(f *stagerFixture) *objectstore.FetchAssetRequest {
 				return req(sum(kernel), f.dst, int64(len(kernel)-1))
 			},
 			opener:    &opener{content: kernel},
@@ -314,7 +314,7 @@ func TestStagerFetch(t *testing.T) {
 		},
 		{
 			name: "reported size over max_bytes fails before reading",
-			req: func(f *stagerFixture) *objectstorev1.FetchAssetRequest {
+			req: func(f *stagerFixture) *objectstore.FetchAssetRequest {
 				return req(sum(kernel), f.dst, int64(len(kernel)-1))
 			},
 			opener:    &opener{content: kernel, sized: true, size: int64(len(kernel))},
@@ -323,28 +323,28 @@ func TestStagerFetch(t *testing.T) {
 		},
 		{
 			name:      "reported size over the staging capacity fails before reading",
-			req:       func(f *stagerFixture) *objectstorev1.FetchAssetRequest { return req(sum(kernel), f.dst, 1<<40) },
+			req:       func(f *stagerFixture) *objectstore.FetchAssetRequest { return req(sum(kernel), f.dst, 1<<40) },
 			opener:    &opener{content: kernel, sized: true, size: 1 << 31},
 			want:      codes.FailedPrecondition,
 			wantOpens: 1,
 		},
 		{
 			name:      "object longer than its reported size",
-			req:       func(f *stagerFixture) *objectstorev1.FetchAssetRequest { return req(sum(kernel), f.dst, 1<<20) },
+			req:       func(f *stagerFixture) *objectstore.FetchAssetRequest { return req(sum(kernel), f.dst, 1<<20) },
 			opener:    &opener{content: kernel, sized: true, size: int64(len(kernel) - 1)},
 			want:      codes.Unavailable,
 			wantOpens: 1,
 		},
 		{
 			name:      "open error goes through toStatus",
-			req:       func(f *stagerFixture) *objectstorev1.FetchAssetRequest { return req(sum(kernel), f.dst, 1<<20) },
+			req:       func(f *stagerFixture) *objectstore.FetchAssetRequest { return req(sum(kernel), f.dst, 1<<20) },
 			opener:    &opener{err: errBackend},
 			want:      codes.Unavailable,
 			wantOpens: 1,
 		},
 		{
 			name: "upper-case sha256",
-			req: func(f *stagerFixture) *objectstorev1.FetchAssetRequest {
+			req: func(f *stagerFixture) *objectstore.FetchAssetRequest {
 				return req(strings.ToUpper(sum(kernel)), f.dst, 1<<20)
 			},
 			opener: &opener{content: kernel},
@@ -352,13 +352,13 @@ func TestStagerFetch(t *testing.T) {
 		},
 		{
 			name:   "zero max_bytes",
-			req:    func(f *stagerFixture) *objectstorev1.FetchAssetRequest { return req(sum(kernel), f.dst, 0) },
+			req:    func(f *stagerFixture) *objectstore.FetchAssetRequest { return req(sum(kernel), f.dst, 0) },
 			opener: &opener{content: kernel},
 			want:   codes.InvalidArgument,
 		},
 		{
 			name: "relative write path",
-			req: func(f *stagerFixture) *objectstorev1.FetchAssetRequest {
+			req: func(f *stagerFixture) *objectstore.FetchAssetRequest {
 				return req(sum(kernel), "static-files/x", 1<<20)
 			},
 			opener: &opener{content: kernel},
@@ -366,7 +366,7 @@ func TestStagerFetch(t *testing.T) {
 		},
 		{
 			name: "write path outside root",
-			req: func(f *stagerFixture) *objectstorev1.FetchAssetRequest {
+			req: func(f *stagerFixture) *objectstore.FetchAssetRequest {
 				return req(sum(kernel), filepath.Join(f.staging, "x"), 1<<20)
 			},
 			opener: &opener{content: kernel},
@@ -374,7 +374,7 @@ func TestStagerFetch(t *testing.T) {
 		},
 		{
 			name: "missing write path",
-			req: func(f *stagerFixture) *objectstorev1.FetchAssetRequest {
+			req: func(f *stagerFixture) *objectstore.FetchAssetRequest {
 				return req(sum(kernel), f.dst+"-missing", 1<<20)
 			},
 			opener: &opener{content: kernel},
@@ -382,7 +382,7 @@ func TestStagerFetch(t *testing.T) {
 		},
 		{
 			name: "write path is a directory",
-			req: func(f *stagerFixture) *objectstorev1.FetchAssetRequest {
+			req: func(f *stagerFixture) *objectstore.FetchAssetRequest {
 				return req(sum(kernel), filepath.Dir(f.dst), 1<<20)
 			},
 			opener: &opener{content: kernel},
@@ -390,7 +390,7 @@ func TestStagerFetch(t *testing.T) {
 		},
 		{
 			name: "write path is a symlink",
-			req: func(f *stagerFixture) *objectstorev1.FetchAssetRequest {
+			req: func(f *stagerFixture) *objectstore.FetchAssetRequest {
 				link := f.dst + "-link"
 				if err := os.Symlink(f.dst, link); err != nil {
 					panic(err)
@@ -402,7 +402,7 @@ func TestStagerFetch(t *testing.T) {
 		},
 		{
 			name: "write path is a FIFO",
-			req: func(f *stagerFixture) *objectstorev1.FetchAssetRequest {
+			req: func(f *stagerFixture) *objectstore.FetchAssetRequest {
 				fifo := f.dst + "-fifo"
 				if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 					panic(err)
@@ -454,8 +454,8 @@ func TestStagerFetch(t *testing.T) {
 	})
 }
 
-func req(sha string, writePath string, maxBytes int64) *objectstorev1.FetchAssetRequest {
-	return &objectstorev1.FetchAssetRequest{Sha256: sha, WritePath: writePath, MaxBytes: maxBytes}
+func req(sha string, writePath string, maxBytes int64) *objectstore.FetchAssetRequest {
+	return &objectstore.FetchAssetRequest{Sha256: sha, WritePath: writePath, MaxBytes: maxBytes}
 }
 
 func TestNewStagerRejectsStagingBelowRoot(t *testing.T) {

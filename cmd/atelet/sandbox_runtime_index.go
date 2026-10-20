@@ -23,11 +23,11 @@ import (
 	"os"
 	"sync"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // runtimeIndex is this node's view of the sandbox runtimes its workers
@@ -88,7 +88,7 @@ type indexedRuntime struct {
 // config's runtimes. A pool runs one class today, so a worker advertises
 // one; the shape admits the several a pool will be allowed to run.
 type workerRuntime struct {
-	classes map[v1alpha1.SandboxClass]*classRuntime
+	classes map[atev1.SandboxClass]*classRuntime
 }
 
 // classRuntime is what a worker advertises for one sandbox class.
@@ -100,7 +100,7 @@ type classRuntime struct {
 }
 
 // class returns what the worker advertises for c.
-func (w *workerRuntime) class(c v1alpha1.SandboxClass) (*classRuntime, bool) {
+func (w *workerRuntime) class(c atev1.SandboxClass) (*classRuntime, bool) {
 	cr, ok := w.classes[c]
 	return cr, ok
 }
@@ -108,7 +108,7 @@ func (w *workerRuntime) class(c v1alpha1.SandboxClass) (*classRuntime, bool) {
 // advertisedClass is one sandbox class a worker advertises: the config its
 // pool runs for the class, with the config's versions hashed.
 type advertisedClass struct {
-	class  v1alpha1.SandboxClass
+	class  atev1.SandboxClass
 	config string
 	hashed []hashedVersion
 }
@@ -191,7 +191,7 @@ func (x *runtimeIndex) writeIndex(extraHash string, extra *indexedRuntime) error
 func (x *runtimeIndex) register(podUID string, advertised ...advertisedClass) error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	wr := &workerRuntime{classes: make(map[v1alpha1.SandboxClass]*classRuntime, len(advertised))}
+	wr := &workerRuntime{classes: make(map[atev1.SandboxClass]*classRuntime, len(advertised))}
 	for _, a := range advertised {
 		cr := &classRuntime{config: a.config}
 		seen := make(map[string]bool, len(a.hashed))

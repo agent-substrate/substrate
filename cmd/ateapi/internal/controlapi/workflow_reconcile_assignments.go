@@ -19,15 +19,15 @@ import (
 	"errors"
 	"fmt"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // needsAssignmentReconcile reports whether worker's registered epoch has risen
 // past the last one its earlier Actors were released for.
-func needsAssignmentReconcile(worker *ateapipb.Worker) bool {
+func needsAssignmentReconcile(worker *ateapi.Worker) bool {
 	return worker.GetStatus().GetRegisteredEpoch() > worker.GetStatus().GetObservedEpoch()
 }
 
@@ -84,7 +84,7 @@ func (w *WorkerWorkflow) recordObservedEpoch(ctx context.Context, name, uid stri
 		if err != nil {
 			return fmt.Errorf("while re-fetching worker %s: %w", name, err)
 		}
-		_, err = w.store.UpdateWorker(ctx, name, store.Precondition{UID: uid, Version: worker.GetMetadata().GetVersion()}, func(toUpdate *ateapipb.Worker) error {
+		_, err = w.store.UpdateWorker(ctx, name, store.Precondition{UID: uid, Version: worker.GetMetadata().GetVersion()}, func(toUpdate *ateapi.Worker) error {
 			toUpdate.Status.ObservedEpoch = max(toUpdate.GetStatus().GetObservedEpoch(), epoch)
 			return nil
 		})
@@ -106,7 +106,7 @@ var errActorBusy = errors.New("actor has an operation in progress")
 // releaseAssignmentsBefore releases every assignment on worker whose Actor ran
 // under an epoch before epoch. An assignment whose Actor is busy is skipped
 // until the rest are released, then reported, so the pass is retried.
-func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *ateapipb.Worker, epoch int64) error {
+func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *ateapi.Worker, epoch int64) error {
 	name := worker.GetMetadata().GetName()
 	busy := 0
 	// Releasing deletes rows mid-scan, which paging tolerates: the cursor is
@@ -146,7 +146,7 @@ func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *a
 // CRASHED. A row whose Actor does not point here names nothing that ran on the
 // Worker, so the restart lost nothing of it and it is left alone: it is a claim
 // a resume is still recording, or one the Actor's next resume recovers.
-func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment, epoch int64) error {
+func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *ateapi.Worker, assignment *ateapi.ActorAssignment, epoch int64) error {
 	name := worker.GetMetadata().GetName()
 	release := func() error {
 		if _, err := w.store.ReleaseActorFromWorker(ctx, name, assignment.GetActorUid()); err != nil {
@@ -186,14 +186,14 @@ func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *a
 	if actor.GetStatus().GetWorkerAssignment().GetWorkerEpoch() >= epoch {
 		return nil
 	}
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RESUMING {
+	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RESUMING {
 		// A RESUMING Actor is left to its resume, which records the epoch of
 		// the worker process that restores it, and restores it again if that
 		// process is gone, whether finalizeRunning finds it replaced or the
 		// Restore was cut short by the restart.
 		return nil
 	}
-	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if actor.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		if err := w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a restarted worker", crashMessageWorkerRestarted); err != nil {
 			return err
 		}

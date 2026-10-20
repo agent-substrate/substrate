@@ -34,6 +34,9 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
@@ -65,12 +68,9 @@ import (
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/internal/volume/csi"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
@@ -378,7 +378,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
 	}
 	defer ateapiConn.Close()
-	workerService := ateapipb.NewWorkerServiceClient(ateapiConn)
+	workerService := ateapi.NewWorkerServiceClient(ateapiConn)
 
 	bootID, err := readBootID(bootIDPath)
 	if err != nil {
@@ -413,8 +413,8 @@ func main() {
 		ctx,
 		workerDialer,
 		wrappedAnonGCS,
-		objectstorev1.NewNodeProviderClient(objectStorePluginConn),
-		objectstorev1.NewAssetProviderClient(objectStorePluginConn),
+		objectstore.NewNodeProviderClient(objectStorePluginConn),
+		objectstore.NewAssetProviderClient(objectStorePluginConn),
 		*objectStorePluginSocket,
 		imageCache,
 		sandboxAssetCache,
@@ -483,8 +483,8 @@ func main() {
 	// rewritten when the config changes.
 	_, err = startWorkerSandboxSyncer(ctx,
 		workerPodFactory.Core().V1().Pods(),
-		ateFactory.Api().V1alpha1().WorkerPools(),
-		ateFactory.Api().V1alpha1().SandboxConfigs(),
+		ateFactory.Ate().V1().WorkerPools(),
+		ateFactory.Ate().V1().SandboxConfigs(),
 		wmService,
 		nodepath.WorkersDir(), runtimes, prewarmer)
 	if err != nil {
@@ -516,7 +516,7 @@ func main() {
 
 	ateletpb.RegisterWorkerSupportServer(workerFacingSrv, &workerSupportServer{
 		workers: workerService,
-		control: ateapipb.NewControlClient(ateapiConn),
+		control: ateapi.NewControlClient(ateapiConn),
 	})
 	go func() {
 		if err := workerFacingSrv.Serve(workerFacingLis); err != nil {
@@ -676,8 +676,8 @@ type directCSIDriverConfigGetter struct {
 	client versioned.Interface
 }
 
-func (g *directCSIDriverConfigGetter) Get(name string) (*atev1alpha1.CSIDriverConfig, error) {
-	return g.client.ApiV1alpha1().CSIDriverConfigs().Get(context.Background(), name, metav1.GetOptions{})
+func (g *directCSIDriverConfigGetter) Get(name string) (*atev1.CSIDriverConfig, error) {
+	return g.client.AteV1().CSIDriverConfigs().Get(context.Background(), name, metav1.GetOptions{})
 }
 
 // Atelet is a service that allows controlling workloads on individual
@@ -704,10 +704,10 @@ type Atelet struct {
 	// anonGCSClient reads gs:// assets the plugin cannot serve, without credentials.
 	anonGCSClient objectstorage.ObjectStorage
 	// objectStorePlugin moves external snapshot files between the node and storage.
-	objectStorePlugin objectstorev1.NodeProviderClient
+	objectStorePlugin objectstore.NodeProviderClient
 	// assetPlugin fetches every sandbox asset first; anonGCSClient reads a gs://
 	// asset it cannot serve.
-	assetPlugin objectstorev1.AssetProviderClient
+	assetPlugin objectstore.AssetProviderClient
 	// pluginSocket is the object-store plugin's socket, for error messages.
 	pluginSocket string
 	// snapshotScratchDir holds short-lived manifest directories; it must be
@@ -759,8 +759,8 @@ func NewService(
 	ctx context.Context,
 	workerDialer *WorkerDialer,
 	anonGCSClient objectstorage.ObjectStorage,
-	objectStorePlugin objectstorev1.NodeProviderClient,
-	assetPlugin objectstorev1.AssetProviderClient,
+	objectStorePlugin objectstore.NodeProviderClient,
+	assetPlugin objectstore.AssetProviderClient,
 	pluginSocket string,
 	imageCache *imagecache.Store,
 	sandboxAssetCache *filecache.Store,
@@ -771,7 +771,7 @@ func NewService(
 	csiDriverConfigGetter csi.CSIDriverConfigGetter,
 	systemInfoVolumes *systemInfoVolumeRefresher,
 	snapshots *snapshottracker.Tracker,
-	workers ateapipb.WorkerServiceClient,
+	workers ateapi.WorkerServiceClient,
 	bootID string,
 ) *Atelet {
 	wms := &Atelet{

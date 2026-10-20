@@ -19,16 +19,16 @@ import (
 	"testing"
 	"time"
 
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // TemplateRef builds the substrate template reference an Actor carries.
-func TemplateRef(at *ateapipb.ActorTemplate) *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: at.GetMetadata().GetAtespace(), Name: at.GetMetadata().GetName()}
+func TemplateRef(at *ateapi.ActorTemplate) *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: at.GetMetadata().GetAtespace(), Name: at.GetMetadata().GetName()}
 }
 
 // SubstrateTemplateOptions shapes CreateSubstrateTemplateFrom.
@@ -46,15 +46,15 @@ type SubstrateTemplateOptions struct {
 	// pool's workers invisible to other namespaces' actors.
 	Labels map[string]string
 	// SnapshotConfig for the new template; nil copies the source's.
-	SnapshotConfig *ateapipb.SnapshotConfig
+	SnapshotConfig *ateapi.SnapshotConfig
 	// Modify, when set, edits the template before it is created.
-	Modify func(*ateapipb.ActorTemplate)
+	Modify func(*ateapi.ActorTemplate)
 }
 
 // CreateSubstrateCounterTemplate creates a per-test WorkerPool CRD plus a
 // substrate ActorTemplate copying the resolved runtime from the substrate
 // counter demo for the sandbox class under test.
-func CreateSubstrateCounterTemplate(ctx context.Context, t *testing.T, clients *Clients, namespace string, opts SubstrateTemplateOptions) *ateapipb.ActorTemplate {
+func CreateSubstrateCounterTemplate(ctx context.Context, t *testing.T, clients *Clients, namespace string, opts SubstrateTemplateOptions) *ateapi.ActorTemplate {
 	t.Helper()
 	return CreateSubstrateTemplateFrom(ctx, t, clients, namespace, SubstrateCounterFixture(), opts)
 }
@@ -64,38 +64,38 @@ func CreateSubstrateCounterTemplate(ctx context.Context, t *testing.T, clients *
 // container images, sandbox size) from the installed fixture src. It
 // registers cleanup of the template (which does not ride the k8s namespace GC
 // the CRD templates did) and blocks until the golden snapshot exists.
-func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Clients, namespace string, src SubstrateFixture, opts SubstrateTemplateOptions) *ateapipb.ActorTemplate {
+func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Clients, namespace string, src SubstrateFixture, opts SubstrateTemplateOptions) *ateapi.ActorTemplate {
 	t.Helper()
 
-	existingWp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(src.PoolNamespace).Get(ctx, src.PoolName, metav1.GetOptions{})
+	existingWp, err := clients.SubstrateK8s.AteV1().WorkerPools(src.PoolNamespace).Get(ctx, src.PoolName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("failed to get WorkerPool %s/%s (deploy with: %s): %v", src.PoolNamespace, src.PoolName, src.DeployWith, err)
 	}
-	srcTmpl, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: src.Atespace, Name: src.Name},
+	srcTmpl, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{
+		ActorTemplate: &ateapi.ObjectRef{Atespace: src.Atespace, Name: src.Name},
 	})
 	if err != nil {
 		t.Fatalf("failed to get ActorTemplate %s/%s (deploy with: %s): %v", src.Atespace, src.Name, src.DeployWith, err)
 	}
 
-	wp := &v1alpha1.WorkerPool{
+	wp := &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      opts.PoolName,
 			Namespace: namespace,
 			Labels:    opts.Labels,
 		},
-		Spec: v1alpha1.WorkerPoolSpec{
+		Spec: atev1.WorkerPoolSpec{
 			Replicas:       opts.PoolReplicas,
 			WorkerImage:    existingWp.Spec.WorkerImage,
 			SandboxClasses: existingWp.Spec.SandboxClasses,
 		},
 	}
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
+	if _, err := clients.SubstrateK8s.AteV1().WorkerPools(namespace).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("failed to create WorkerPool: %v", err)
 	}
 
 	// CreateActorTemplate requires the atespace to exist first.
-	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: opts.Atespace}}}); err != nil && status.Code(err) != codes.AlreadyExists {
+	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: opts.Atespace}}}); err != nil && status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("failed to create atespace %q: %v", opts.Atespace, err)
 	}
 
@@ -103,9 +103,9 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 	if snapshots == nil {
 		snapshots = srcTmpl.GetSnapshotConfig()
 	}
-	tmpl := &ateapipb.ActorTemplate{
-		Metadata:       &ateapipb.ResourceMetadata{Atespace: opts.Atespace, Name: opts.Name},
-		WorkerSelector: &ateapipb.Selector{MatchLabels: opts.Labels},
+	tmpl := &ateapi.ActorTemplate{
+		Metadata:       &ateapi.ResourceMetadata{Atespace: opts.Atespace, Name: opts.Name},
+		WorkerSelector: &ateapi.Selector{MatchLabels: opts.Labels},
 		Containers:     srcTmpl.GetContainers(),
 		// The source's limits size the sandbox, and the API requires them.
 		Resources:      srcTmpl.GetResources(),
@@ -115,7 +115,7 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 	if opts.Modify != nil {
 		opts.Modify(tmpl)
 	}
-	created, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: tmpl})
+	created, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: tmpl})
 	if err != nil {
 		t.Fatalf("failed to create ActorTemplate %s/%s: %v", opts.Atespace, opts.Name, err)
 	}
@@ -125,8 +125,8 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if _, err := clients.SubstrateAPI.DeleteActorTemplate(cleanupCtx, &ateapipb.DeleteActorTemplateRequest{
-			ActorTemplate: &ateapipb.ObjectRef{Atespace: opts.Atespace, Name: opts.Name},
+		if _, err := clients.SubstrateAPI.DeleteActorTemplate(cleanupCtx, &ateapi.DeleteActorTemplateRequest{
+			ActorTemplate: &ateapi.ObjectRef{Atespace: opts.Atespace, Name: opts.Name},
 		}); err != nil && status.Code(err) != codes.NotFound {
 			t.Logf("failed to delete ActorTemplate %s/%s: %v", opts.Atespace, opts.Name, err)
 		}
@@ -151,13 +151,13 @@ func WaitForSubstrateTemplateReady(ctx context.Context, t *testing.T, clients *C
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var lastStatus *ateapipb.GoldenSnapshotStatus
+	var lastStatus *ateapi.GoldenSnapshotStatus
 	for {
-		at, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{
-			ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: name},
+		at, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{
+			ActorTemplate: &ateapi.ObjectRef{Atespace: atespace, Name: name},
 		})
 		if err == nil {
-			if at.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+			if at.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 				// The template opted out: no golden snapshot will ever appear,
 				// and none is needed.
 				return

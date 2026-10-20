@@ -88,7 +88,7 @@ groups:
         note: >
           Logs only. It is bounded, but it is only ever recorded beside actor
           identity, which no metric may carry. The values mirror
-          ateapipb.ActorState with the ACTOR_STATE_ prefix dropped, so the log
+          ateapi.ActorState with the ACTOR_STATE_ prefix dropped, so the log
           vocabulary and the state machine cannot fork.
         type:
           members:
@@ -770,7 +770,7 @@ groups:
         stability: stable
         type: string
         brief: The gRPC method of the request.
-        examples: ["ateapi.Control/ResumeActor"]
+        examples: ["substrate.ateapi.v1.Control/ResumeActor"]
       - id: rpc.response.status_code
         stability: stable
         type: string

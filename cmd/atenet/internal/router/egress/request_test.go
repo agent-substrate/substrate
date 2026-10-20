@@ -26,8 +26,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // testActorSPIFFEID is the identity filter state the CONNECT chain shares.
@@ -42,30 +42,30 @@ func testDialed(leg string) string {
 	return "93.184.216.34:80"
 }
 
-func sampleEffects() *ateapipb.HttpRuleEffects {
-	return &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{{
+func sampleEffects() *ateapi.HttpRuleEffects {
+	return &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{{
 		Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token",
 	}}}
 }
 
 // credentialInjectionPolicySample is an https rule for pattern that replaces
 // the authorization header, which only the MITM leg can honor.
-func credentialInjectionPolicySample(pattern string) *ateapipb.EgressPolicy {
-	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Https: &ateapipb.HttpsRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
+func credentialInjectionPolicySample(pattern string) *ateapi.EgressPolicy {
+	return &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{
+		Https: &ateapi.HttpsRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
 	}}}
 }
 
 // cleartextInjectionPolicy is the same replacement on an http rule.
-func cleartextInjectionPolicy(pattern string) *ateapipb.EgressPolicy {
-	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Http: &ateapipb.HttpRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
+func cleartextInjectionPolicy(pattern string) *ateapi.EgressPolicy {
+	return &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{
+		Http: &ateapi.HttpRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
 	}}}
 }
 
 // policyHandler builds a Handler for an actor whose policy is policy (nil
 // means none) with the cache disabled, so each callout sees the mock as is.
-func policyHandler(policy *ateapipb.EgressPolicy) *Handler {
+func policyHandler(policy *ateapi.EgressPolicy) *Handler {
 	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, nil, "")
 }
 
@@ -130,8 +130,8 @@ func TestHandleRequestHeadersRefusesUnknownFilterChain(t *testing.T) {
 }
 
 // combined is one policy with the rules of policies, in order.
-func combined(policies ...*ateapipb.EgressPolicy) *ateapipb.EgressPolicy {
-	out := &ateapipb.EgressPolicy{}
+func combined(policies ...*ateapi.EgressPolicy) *ateapi.EgressPolicy {
+	out := &ateapi.EgressPolicy{}
 	for _, p := range policies {
 		out.Rules = append(out.Rules, p.Rules...)
 	}
@@ -205,7 +205,7 @@ func TestRequestLegAnswersTheNameToDial(t *testing.T) {
 func TestRequestLegDecidesHostAndDialedPort(t *testing.T) {
 	tests := []struct {
 		name        string
-		policy      *ateapipb.EgressPolicy
+		policy      *ateapi.EgressPolicy
 		authority   string
 		attrs       map[string]string
 		noAuthority bool                  // a dataplane that does not share the CONNECT authority
@@ -267,7 +267,7 @@ func TestMITMLegDecidesSNIThenAuthority(t *testing.T) {
 	two := combined(httpsPolicy("api.example.com"), httpsPolicy("cdn.example.com"))
 	tests := []struct {
 		name      string
-		policy    *ateapipb.EgressPolicy
+		policy    *ateapi.EgressPolicy
 		sni       string
 		authority string
 		want      envoy_type.StatusCode // 0 means allowed
@@ -309,7 +309,7 @@ func TestRequestLegServesBothDecryptedChains(t *testing.T) {
 // http rules and the MITM chain by the https rules, never the other way.
 func TestRequestLegPicksRulesByLeg(t *testing.T) {
 	for _, tc := range []struct {
-		policy *ateapipb.EgressPolicy
+		policy *ateapi.EgressPolicy
 		leg    string
 		want   envoy_type.StatusCode // 0 means allowed
 	}{
@@ -345,7 +345,7 @@ func TestRequestLegDeniesHTTP1WebSocketUpgrade(t *testing.T) {
 }
 
 func TestRequestLegDeniesConnect(t *testing.T) {
-	for name, policy := range map[string]*ateapipb.EgressPolicy{
+	for name, policy := range map[string]*ateapi.EgressPolicy{
 		"allow-all policy": allowAllPolicy(),
 		"no policy":        nil,
 	} {
@@ -414,7 +414,7 @@ func TestRequestLegPolicyLookup(t *testing.T) {
 		want   envoy_type.StatusCode
 	}{
 		{name: "no policy", client: &egressMockClient{}, want: envoy_type.StatusCode_Forbidden},
-		{name: "policy with no rules", client: &egressMockClient{policy: &ateapipb.EgressPolicy{}}, want: envoy_type.StatusCode_Forbidden},
+		{name: "policy with no rules", client: &egressMockClient{policy: &ateapi.EgressPolicy{}}, want: envoy_type.StatusCode_Forbidden},
 		{name: "control plane unavailable", client: &egressMockClient{policyErr: status.Error(codes.Unavailable, "down")}, want: envoy_type.StatusCode_ServiceUnavailable},
 		{name: "control plane refuses", client: &egressMockClient{policyErr: status.Error(codes.PermissionDenied, "no")}, want: envoy_type.StatusCode_ServiceUnavailable},
 	}
@@ -441,7 +441,7 @@ func TestConnectLegRequiresAPolicy(t *testing.T) {
 		{name: "policy present", client: &egressMockClient{actor: runningActor(), policy: allowAllPolicy()}},
 		{name: "http-only policy still opens the tunnel", client: &egressMockClient{actor: runningActor(), policy: httpPolicy("api.example.com")}},
 		{name: "no policy", client: &egressMockClient{actor: runningActor()}, want: envoy_type.StatusCode_Forbidden},
-		{name: "policy with no rules", client: &egressMockClient{actor: runningActor(), policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{}}}, want: envoy_type.StatusCode_Forbidden},
+		{name: "policy with no rules", client: &egressMockClient{actor: runningActor(), policy: &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{}}}, want: envoy_type.StatusCode_Forbidden},
 		{name: "control plane unavailable", client: &egressMockClient{actor: runningActor(), policyErr: status.Error(codes.Unavailable, "down")}, want: envoy_type.StatusCode_ServiceUnavailable},
 	}
 	for _, tc := range tests {

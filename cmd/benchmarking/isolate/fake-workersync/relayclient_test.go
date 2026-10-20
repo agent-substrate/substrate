@@ -26,10 +26,10 @@ import (
 	"sync"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker/fakeworkertest"
 	"go.ate.dev/substrate/internal/credbundle"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -48,55 +48,55 @@ const stubEpoch = 9
 // stubRelay is a stand-in fake-atelet relay: it records each request and
 // answers with err.
 type stubRelay struct {
-	ateapipb.UnimplementedWorkerServiceServer
+	ateapi.UnimplementedWorkerServiceServer
 
 	mu          sync.Mutex
-	acquireGot  []*ateapipb.AcquireWorkerEpochRequest
-	got         []*ateapipb.RegisterWorkerRequest
-	runtimesGot []*ateapipb.SetWorkerSandboxRuntimesRequest
+	acquireGot  []*ateapi.AcquireWorkerEpochRequest
+	got         []*ateapi.RegisterWorkerRequest
+	runtimesGot []*ateapi.SetWorkerSandboxRuntimesRequest
 	err         error
 }
 
-func (s *stubRelay) AcquireWorkerEpoch(_ context.Context, in *ateapipb.AcquireWorkerEpochRequest) (*ateapipb.AcquireWorkerEpochResponse, error) {
+func (s *stubRelay) AcquireWorkerEpoch(_ context.Context, in *ateapi.AcquireWorkerEpochRequest) (*ateapi.AcquireWorkerEpochResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.acquireGot = append(s.acquireGot, in)
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &ateapipb.AcquireWorkerEpochResponse{Epoch: stubEpoch}, nil
+	return &ateapi.AcquireWorkerEpochResponse{Epoch: stubEpoch}, nil
 }
 
-func (s *stubRelay) RegisterWorker(_ context.Context, in *ateapipb.RegisterWorkerRequest) (*ateapipb.RegisterWorkerResponse, error) {
+func (s *stubRelay) RegisterWorker(_ context.Context, in *ateapi.RegisterWorkerRequest) (*ateapi.RegisterWorkerResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.got = append(s.got, in)
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &ateapipb.RegisterWorkerResponse{}, nil
+	return &ateapi.RegisterWorkerResponse{}, nil
 }
 
-func (s *stubRelay) SetWorkerSandboxRuntimes(_ context.Context, in *ateapipb.SetWorkerSandboxRuntimesRequest) (*ateapipb.SetWorkerSandboxRuntimesResponse, error) {
+func (s *stubRelay) SetWorkerSandboxRuntimes(_ context.Context, in *ateapi.SetWorkerSandboxRuntimesRequest) (*ateapi.SetWorkerSandboxRuntimesResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runtimesGot = append(s.runtimesGot, in)
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &ateapipb.SetWorkerSandboxRuntimesResponse{}, nil
+	return &ateapi.SetWorkerSandboxRuntimesResponse{}, nil
 }
 
 // relayServer serves svc with a certificate for serverID from ca, requiring
 // fake-workersync's certificate from ca, and returns its address.
-func relayServer(t *testing.T, ca *fakeworkertest.CA, serverID string, svc ateapipb.WorkerServiceServer) string {
+func relayServer(t *testing.T, ca *fakeworkertest.CA, serverID string, svc ateapi.WorkerServiceServer) string {
 	t.Helper()
 	return relayServerTrusting(t, ca, ca, serverID, svc)
 }
 
 // relayServerTrusting is relayServer with its certificate from ca and
 // fake-workersync's required to chain to clientCA.
-func relayServerTrusting(t *testing.T, ca, clientCA *fakeworkertest.CA, serverID string, svc ateapipb.WorkerServiceServer) string {
+func relayServerTrusting(t *testing.T, ca, clientCA *fakeworkertest.CA, serverID string, svc ateapi.WorkerServiceServer) string {
 	t.Helper()
 	pem, err := os.ReadFile(clientCA.TrustBundle)
 	if err != nil {
@@ -116,7 +116,7 @@ func relayServerTrusting(t *testing.T, ca, clientCA *fakeworkertest.CA, serverID
 			return fakeworker.VerifyPeerID(cs, testWorkerSyncID)
 		},
 	})))
-	ateapipb.RegisterWorkerServiceServer(srv, svc)
+	ateapi.RegisterWorkerServiceServer(srv, svc)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	return lis.Addr().String()
@@ -132,12 +132,12 @@ func newTestRelay(t *testing.T, ca *fakeworkertest.CA) *grpcRelay {
 	return relay
 }
 
-func testClasses() []*ateapipb.WorkerSandboxClass {
-	return []*ateapipb.WorkerSandboxClass{{
+func testClasses() []*ateapi.WorkerSandboxClass {
+	return []*ateapi.WorkerSandboxClass{{
 		SandboxClass: "gvisor",
-		DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: &ateapipb.VersionedSandboxCompat{
+		DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: &ateapi.VersionedSandboxCompat{
 			SchemaVersion: "v1",
-			Attributes:    []*ateapipb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+			Attributes:    []*ateapi.AttributeEntry{{Key: "architecture", Value: "amd64"}},
 		}},
 	}}
 }
@@ -146,7 +146,7 @@ func capacityReport() workerReport {
 	return workerReport{
 		Name:           "fake-r1-c52b9bd3-0",
 		IPs:            []string{"10.0.0.7"},
-		Capacity:       &ateapipb.WorkerResources{Actors: 1000},
+		Capacity:       &ateapi.WorkerResources{Actors: 1000},
 		SandboxClasses: testClasses(),
 	}
 }
@@ -163,15 +163,15 @@ func TestRelayClientSendsTheReport(t *testing.T) {
 			t.Fatalf("Report: %v", err)
 		}
 	}
-	ref := &ateapipb.ObjectRef{Name: "fake-r1-c52b9bd3-0"}
-	wantAcquire := &ateapipb.AcquireWorkerEpochRequest{Worker: ref}
-	wantRegister := &ateapipb.RegisterWorkerRequest{
+	ref := &ateapi.ObjectRef{Name: "fake-r1-c52b9bd3-0"}
+	wantAcquire := &ateapi.AcquireWorkerEpochRequest{Worker: ref}
+	wantRegister := &ateapi.RegisterWorkerRequest{
 		Worker:   ref,
 		Epoch:    stubEpoch,
 		Ips:      []string{"10.0.0.7"},
-		Capacity: &ateapipb.WorkerResources{Actors: 1000},
+		Capacity: &ateapi.WorkerResources{Actors: 1000},
 	}
-	wantRuntimes := &ateapipb.SetWorkerSandboxRuntimesRequest{Worker: ref, Epoch: stubEpoch, SandboxClasses: testClasses()}
+	wantRuntimes := &ateapi.SetWorkerSandboxRuntimesRequest{Worker: ref, Epoch: stubEpoch, SandboxClasses: testClasses()}
 	if len(svc.acquireGot) != 2 || !proto.Equal(svc.acquireGot[0], wantAcquire) {
 		t.Errorf("relay received acquires %v, want %v twice", svc.acquireGot, wantAcquire)
 	}

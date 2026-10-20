@@ -19,21 +19,21 @@ import (
 	"testing"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
 
 // validAtespace returns a minimal Atespace which should pass input validation.
-func validAtespace(mods ...func(*ateapipb.Atespace)) *ateapipb.Atespace {
-	a := &ateapipb.Atespace{
-		Metadata: &ateapipb.ResourceMetadata{Name: "team1"},
+func validAtespace(mods ...func(*ateapi.Atespace)) *ateapi.Atespace {
+	a := &ateapi.Atespace{
+		Metadata: &ateapi.ResourceMetadata{Name: "team1"},
 	}
 	for _, m := range mods {
 		m(a)
@@ -43,8 +43,8 @@ func validAtespace(mods ...func(*ateapipb.Atespace)) *ateapipb.Atespace {
 
 // withAtespaceMetadata returns a modifier func (see validAtespace) which sets
 // the atespace's resource metadata to a valid value.
-func withAtespaceMetadata(mutate func(*ateapipb.ResourceMetadata)) func(*ateapipb.Atespace) {
-	return func(a *ateapipb.Atespace) { mutate(a.Metadata) }
+func withAtespaceMetadata(mutate func(*ateapi.ResourceMetadata)) func(*ateapi.Atespace) {
+	return func(a *ateapi.Atespace) { mutate(a.Metadata) }
 }
 
 func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
@@ -85,37 +85,37 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	aliceCtx := asUser("alice")
 	bobCtx := asUser("bob")
 
-	callCreate := func(c context.Context, name string) (*ateapipb.Atespace, error) {
-		req := &ateapipb.CreateAtespaceRequest{
-			Atespace: validAtespace(withAtespaceMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = name })),
+	callCreate := func(c context.Context, name string) (*ateapi.Atespace, error) {
+		req := &ateapi.CreateAtespaceRequest{
+			Atespace: validAtespace(withAtespaceMetadata(func(m *ateapi.ResourceMetadata) { m.Name = name })),
 		}
-		resp, err := interceptor(c, req, &grpc.UnaryServerInfo{FullMethod: ateapipb.Control_CreateAtespace_FullMethodName}, func(hc context.Context, r any) (any, error) {
-			return svc.CreateAtespace(hc, r.(*ateapipb.CreateAtespaceRequest))
+		resp, err := interceptor(c, req, &grpc.UnaryServerInfo{FullMethod: ateapi.Control_CreateAtespace_FullMethodName}, func(hc context.Context, r any) (any, error) {
+			return svc.CreateAtespace(hc, r.(*ateapi.CreateAtespaceRequest))
 		})
 		if err != nil {
 			return nil, err
 		}
-		return resp.(*ateapipb.Atespace), nil
+		return resp.(*ateapi.Atespace), nil
 	}
-	callGet := func(c context.Context, name string) (*ateapipb.Atespace, error) {
-		req := &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: name}}
-		resp, err := interceptor(c, req, &grpc.UnaryServerInfo{FullMethod: ateapipb.Control_GetAtespace_FullMethodName}, func(hc context.Context, r any) (any, error) {
-			return svc.GetAtespace(hc, r.(*ateapipb.GetAtespaceRequest))
+	callGet := func(c context.Context, name string) (*ateapi.Atespace, error) {
+		req := &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: name}}
+		resp, err := interceptor(c, req, &grpc.UnaryServerInfo{FullMethod: ateapi.Control_GetAtespace_FullMethodName}, func(hc context.Context, r any) (any, error) {
+			return svc.GetAtespace(hc, r.(*ateapi.GetAtespaceRequest))
 		})
 		if err != nil {
 			return nil, err
 		}
-		return resp.(*ateapipb.Atespace), nil
+		return resp.(*ateapi.Atespace), nil
 	}
-	callDelete := func(c context.Context, name string) (*ateapipb.Atespace, error) {
-		req := &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: name}}
-		resp, err := interceptor(c, req, &grpc.UnaryServerInfo{FullMethod: ateapipb.Control_DeleteAtespace_FullMethodName}, func(hc context.Context, r any) (any, error) {
-			return svc.DeleteAtespace(hc, r.(*ateapipb.DeleteAtespaceRequest))
+	callDelete := func(c context.Context, name string) (*ateapi.Atespace, error) {
+		req := &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: name}}
+		resp, err := interceptor(c, req, &grpc.UnaryServerInfo{FullMethod: ateapi.Control_DeleteAtespace_FullMethodName}, func(hc context.Context, r any) (any, error) {
+			return svc.DeleteAtespace(hc, r.(*ateapi.DeleteAtespaceRequest))
 		})
 		if err != nil {
 			return nil, err
 		}
-		return resp.(*ateapipb.Atespace), nil
+		return resp.(*ateapi.Atespace), nil
 	}
 
 	grantObjectRole := func(user, role, object string) {
@@ -180,8 +180,8 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	}
 
 	// --- Scenario 2: Non-empty DeleteAtespace fails with FailedPrecondition and preserves permissions ---
-	tmpl, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-1", Name: "tmpl-1"},
+	tmpl, err := persistence.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-1", Name: "tmpl-1"},
 	})
 	if err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)

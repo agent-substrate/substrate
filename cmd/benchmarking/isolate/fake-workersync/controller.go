@@ -28,10 +28,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
 	"go.ate.dev/substrate/internal/hardware"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -42,16 +42,16 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-// workerClient is the part of ateapipb.ControlClient the controller uses.
+// workerClient is the part of ateapi.ControlClient the controller uses.
 type workerClient interface {
-	CreateWorker(ctx context.Context, in *ateapipb.CreateWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
-	DeleteWorker(ctx context.Context, in *ateapipb.DeleteWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
-	DrainWorker(ctx context.Context, in *ateapipb.DrainWorkerRequest, opts ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error)
-	MarkWorkerAvailable(ctx context.Context, in *ateapipb.MarkWorkerAvailableRequest, opts ...grpc.CallOption) (*ateapipb.MarkWorkerAvailableResponse, error)
-	GetWorker(ctx context.Context, in *ateapipb.GetWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
-	UpdateWorker(ctx context.Context, in *ateapipb.UpdateWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
-	ListWorkers(ctx context.Context, in *ateapipb.ListWorkersRequest, opts ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error)
-	ListWorkerActorAssignments(ctx context.Context, in *ateapipb.ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ateapipb.ListWorkerActorAssignmentsResponse, error)
+	CreateWorker(ctx context.Context, in *ateapi.CreateWorkerRequest, opts ...grpc.CallOption) (*ateapi.Worker, error)
+	DeleteWorker(ctx context.Context, in *ateapi.DeleteWorkerRequest, opts ...grpc.CallOption) (*ateapi.Worker, error)
+	DrainWorker(ctx context.Context, in *ateapi.DrainWorkerRequest, opts ...grpc.CallOption) (*ateapi.DrainWorkerResponse, error)
+	MarkWorkerAvailable(ctx context.Context, in *ateapi.MarkWorkerAvailableRequest, opts ...grpc.CallOption) (*ateapi.MarkWorkerAvailableResponse, error)
+	GetWorker(ctx context.Context, in *ateapi.GetWorkerRequest, opts ...grpc.CallOption) (*ateapi.Worker, error)
+	UpdateWorker(ctx context.Context, in *ateapi.UpdateWorkerRequest, opts ...grpc.CallOption) (*ateapi.Worker, error)
+	ListWorkers(ctx context.Context, in *ateapi.ListWorkersRequest, opts ...grpc.CallOption) (*ateapi.ListWorkersResponse, error)
+	ListWorkerActorAssignments(ctx context.Context, in *ateapi.ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ateapi.ListWorkerActorAssignmentsResponse, error)
 }
 
 // workerReport is what a fake worker process registers and reports.
@@ -62,8 +62,8 @@ type workerReport struct {
 	// epoch, which would make ate-api-server crash every Actor on the Worker.
 	Epoch          int64
 	IPs            []string
-	Capacity       *ateapipb.WorkerResources
-	SandboxClasses []*ateapipb.WorkerSandboxClass
+	Capacity       *ateapi.WorkerResources
+	SandboxClasses []*ateapi.WorkerSandboxClass
 }
 
 // capacityRelay registers a fake worker process through the fake-atelet relay
@@ -83,13 +83,13 @@ type node struct {
 // cluster is what the controller reads from and writes to Kubernetes.
 type cluster interface {
 	// Pools returns every WorkerPool.
-	Pools() ([]*atev1alpha1.WorkerPool, error)
+	Pools() ([]*atev1.WorkerPool, error)
 	// Nodes returns the nodes that run a fake-atelet pod, sorted by name.
 	Nodes(ctx context.Context) ([]node, error)
 	// Relays returns the fake-atelet relay address on each node that has one.
 	Relays(ctx context.Context) (map[string]string, error)
 	// UpdateStatus writes a WorkerPool's status.
-	UpdateStatus(ctx context.Context, wp *atev1alpha1.WorkerPool) error
+	UpdateStatus(ctx context.Context, wp *atev1.WorkerPool) error
 }
 
 // fakeWorker is a fake Worker the controller has registered.
@@ -116,7 +116,7 @@ type fakeWorker struct {
 	tmpl *template
 	// capacity is fixed when the Worker is made, as worker reads its limits
 	// once at startup; reported is whether ate-api-server has accepted it.
-	capacity *ateapipb.WorkerResources
+	capacity *ateapi.WorkerResources
 	reported bool
 	draining bool
 	// drainedAt is when the controller drained the Worker, or adopted it
@@ -198,7 +198,7 @@ func (c *controller) adopt(ctx context.Context) error {
 	prefix := fakeworker.Prefix(c.run)
 	var token string
 	for {
-		page, err := c.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: token}})
+		page, err := c.client.ListWorkers(ctx, &ateapi.ListWorkersRequest{Options: &ateapi.ListOptions{PageSize: 1000, PageToken: token}})
 		if err != nil {
 			return fmt.Errorf("while listing Workers: %w", err)
 		}
@@ -226,8 +226,8 @@ func (c *controller) adopt(ctx context.Context) error {
 				reported: len(w.GetStatus().GetSandboxClasses()) > 0,
 				// One never marked available goes back through create, which
 				// marks it.
-				created:  w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
-				draining: w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING,
+				created:  w.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE,
+				draining: w.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_DRAINING,
 			}
 			if c.workers[name].draining {
 				// When it was drained is not recorded, so its grace restarts.
@@ -244,7 +244,7 @@ func (c *controller) adopt(ctx context.Context) error {
 
 // desiredWorker is a fake Worker some WorkerPool wants.
 type desiredWorker struct {
-	pool  *atev1alpha1.WorkerPool
+	pool  *atev1.WorkerPool
 	index int
 }
 
@@ -429,7 +429,7 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	if addr == "" {
 		return fmt.Errorf("no fake-atelet on node %s yet for Worker %s", w.node, name)
 	}
-	current, err := c.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: &ateapipb.ObjectRef{Name: name}})
+	current, err := c.client.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{Name: name}})
 	if err != nil {
 		return fmt.Errorf("while reading Worker %s: %w", name, err)
 	}
@@ -445,9 +445,9 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 		Epoch:    epoch,
 		IPs:      ips,
 		Capacity: fixed,
-		SandboxClasses: []*ateapipb.WorkerSandboxClass{{
+		SandboxClasses: []*ateapi.WorkerSandboxClass{{
 			SandboxClass:   string(d.pool.Spec.DefaultSandboxClass()),
-			DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: hostCompat()},
+			DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: hostCompat()},
 		}},
 	}); err != nil {
 		return fmt.Errorf("while reporting capacity for Worker %s: %w", name, err)
@@ -458,11 +458,11 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	return nil
 }
 
-func hostCompat() *ateapipb.VersionedSandboxCompat {
+func hostCompat() *ateapi.VersionedSandboxCompat {
 	in := hardware.ProbeHost()
-	out := &ateapipb.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
+	out := &ateapi.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
 	for _, a := range in.GetAttributes() {
-		out.Attributes = append(out.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+		out.Attributes = append(out.Attributes, &ateapi.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
 	}
 	return out
 }
@@ -470,10 +470,10 @@ func hostCompat() *ateapipb.VersionedSandboxCompat {
 // create registers the Worker with the fields the worker syncer would copy
 // from the pool and its pod, then marks it available as the syncer does once
 // the pod is Ready.
-func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.WorkerPool) error {
+func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1.WorkerPool) error {
 	name := w.name
-	_, err := c.client.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: name},
+	_, err := c.client.CreateWorker(ctx, &ateapi.CreateWorkerRequest{Worker: &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: name},
 		WorkerNamespace: wp.Namespace,
 		WorkerPool:      wp.Name,
 		WorkerPod:       w.pod,
@@ -484,7 +484,7 @@ func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.
 	if err != nil && status.Code(err) != codes.AlreadyExists {
 		return fmt.Errorf("while creating Worker %s: %w", name, err)
 	}
-	if _, err := c.client.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: &ateapipb.ObjectRef{Name: name}}); err != nil {
+	if _, err := c.client.MarkWorkerAvailable(ctx, &ateapi.MarkWorkerAvailableRequest{Worker: &ateapi.ObjectRef{Name: name}}); err != nil {
 		return fmt.Errorf("while marking Worker %s available: %w", name, err)
 	}
 	return nil
@@ -496,13 +496,13 @@ func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.
 // the Worker is read first; a conflicting write fails the call and the next
 // pass retries it.
 func (c *controller) updateLabels(ctx context.Context, name string, w *fakeWorker, want map[string]string) error {
-	got, err := c.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: &ateapipb.ObjectRef{Name: name}})
+	got, err := c.client.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{Name: name}})
 	if err != nil {
 		return fmt.Errorf("while reading Worker %s: %w", name, err)
 	}
 	if !maps.Equal(got.GetLabels(), want) {
 		got.Labels = maps.Clone(want)
-		if _, err := c.client.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{Worker: got}); err != nil {
+		if _, err := c.client.UpdateWorker(ctx, &ateapi.UpdateWorkerRequest{Worker: got}); err != nil {
 			return fmt.Errorf("while updating Worker %s labels: %w", name, err)
 		}
 	}
@@ -523,9 +523,9 @@ func (c *controller) retire(ctx context.Context, name string) error {
 	c.mu.Lock()
 	w := c.workers[name]
 	c.mu.Unlock()
-	ref := &ateapipb.ObjectRef{Name: name}
+	ref := &ateapi.ObjectRef{Name: name}
 	if !w.draining {
-		if _, err := c.client.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{Worker: ref}); err != nil {
+		if _, err := c.client.DrainWorker(ctx, &ateapi.DrainWorkerRequest{Worker: ref}); err != nil {
 			if status.Code(err) == codes.NotFound {
 				c.forget(name)
 				return nil
@@ -537,7 +537,7 @@ func (c *controller) retire(ctx context.Context, name string) error {
 		w.drainedAt = c.now()
 		c.mu.Unlock()
 	}
-	assigned, err := c.client.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: ref, Options: &ateapipb.ListOptions{PageSize: 1}})
+	assigned, err := c.client.ListWorkerActorAssignments(ctx, &ateapi.ListWorkerActorAssignmentsRequest{Worker: ref, Options: &ateapi.ListOptions{PageSize: 1}})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			c.forget(name)
@@ -548,7 +548,7 @@ func (c *controller) retire(ctx context.Context, name string) error {
 	if len(assigned.GetActorAssignments()) > 0 && c.now().Sub(w.drainedAt) < c.drainGrace {
 		return nil
 	}
-	if _, err := c.client.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: ref}); err != nil && status.Code(err) != codes.NotFound {
+	if _, err := c.client.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{Worker: ref}); err != nil && status.Code(err) != codes.NotFound {
 		return fmt.Errorf("while deleting Worker %s: %w", name, err)
 	}
 	c.forget(name)
@@ -564,8 +564,8 @@ func (c *controller) forget(name string) {
 // syncStatus writes the pool's status as the WorkerPool controller does from
 // its Deployment: a replica is a registered Worker, ready once its capacity
 // is reported, and the selector is the one worker pods would carry.
-func (c *controller) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool, onFakeAteletNode func(*fakeWorker) bool, allocatable map[string]corev1.ResourceList) error {
-	want := atev1alpha1.WorkerPoolStatus{
+func (c *controller) syncStatus(ctx context.Context, wp *atev1.WorkerPool, onFakeAteletNode func(*fakeWorker) bool, allocatable map[string]corev1.ResourceList) error {
+	want := atev1.WorkerPoolStatus{
 		Selector: labels.SelectorFromSet(labels.Set{fakeworker.WorkerPoolLabel: wp.Name}).String(),
 	}
 	c.mu.Lock()
@@ -604,7 +604,7 @@ func (c *controller) deleteAll(ctx context.Context) error {
 	errs := make([]error, len(names))
 	for i, name := range names {
 		g.Go(func() error {
-			_, err := c.client.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: &ateapipb.ObjectRef{Name: name}})
+			_, err := c.client.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{Worker: &ateapi.ObjectRef{Name: name}})
 			if err != nil && status.Code(err) != codes.NotFound {
 				errs[i] = fmt.Errorf("while deleting Worker %s: %w", name, err)
 				return nil
@@ -632,7 +632,7 @@ type template struct {
 
 // templateOf reads wp's template; it fails only on a bad max-actors
 // annotation.
-func templateOf(wp *atev1alpha1.WorkerPool) (template, error) {
+func templateOf(wp *atev1.WorkerPool) (template, error) {
 	actors, err := maxActors(wp)
 	if err != nil {
 		return template{}, err
@@ -650,7 +650,7 @@ func templateOf(wp *atev1alpha1.WorkerPool) (template, error) {
 // cpu and memory from its limits, or, with no limit set, the node's
 // allocatable, which is what the downward API projects into worker for an
 // unset limit.
-func (t template) capacity(allocatable corev1.ResourceList) *ateapipb.WorkerResources {
+func (t template) capacity(allocatable corev1.ResourceList) *ateapi.WorkerResources {
 	cpu, memory := t.cpuMilli, t.memoryBytes
 	if cpu == 0 {
 		cpu = allocatable.Cpu().MilliValue()
@@ -658,7 +658,7 @@ func (t template) capacity(allocatable corev1.ResourceList) *ateapipb.WorkerReso
 	if memory == 0 {
 		memory = allocatable.Memory().Value()
 	}
-	return &ateapipb.WorkerResources{Actors: int32(t.actors), CpuMillicores: cpu, MemoryBytes: memory}
+	return &ateapi.WorkerResources{Actors: int32(t.actors), CpuMillicores: cpu, MemoryBytes: memory}
 }
 
 // fits reports whether w was made from wp's current template, so a real pool
@@ -667,7 +667,7 @@ func (t template) capacity(allocatable corev1.ResourceList) *ateapipb.WorkerReso
 // its node now; one whose node's allocatable changed while fake-workersync was
 // down is replaced too. A held pool's Workers fit, since they are left as they
 // are.
-func fits(w *fakeWorker, wp *atev1alpha1.WorkerPool, allocatable map[string]corev1.ResourceList) bool {
+func fits(w *fakeWorker, wp *atev1.WorkerPool, allocatable map[string]corev1.ResourceList) bool {
 	t, err := templateOf(wp)
 	if err != nil {
 		return true
@@ -684,7 +684,7 @@ func fits(w *fakeWorker, wp *atev1alpha1.WorkerPool, allocatable map[string]core
 
 // maxActors is the pool's actor capacity per Worker: worker's default, unless
 // the pool's annotation overrides it.
-func maxActors(wp *atev1alpha1.WorkerPool) (int, error) {
+func maxActors(wp *atev1.WorkerPool) (int, error) {
 	v, ok := wp.Annotations[fakeworker.MaxActorsAnnotation]
 	if !ok {
 		return fakeworker.DefaultMaxActors, nil

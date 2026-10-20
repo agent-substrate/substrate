@@ -48,7 +48,7 @@ Apply all areas that are touched. Most issues need one or two; a few need more.
 
 | Label | Scope |
 |---|---|
-| `area/api` | User-facing Substrate API (`pkg/proto/ateapipb/`, proto definitions, API semantics, versioning) |
+| `area/api` | User-facing Substrate API (`api/ateapi/v1/`, proto definitions, API semantics, versioning) |
 | `area/api-machinery` | API server internals: RPC handlers, storage layer, syncer, controllers (`cmd/ateapi/`, `cmd/atecontroller/`) |
 | `area/network` | Networking: atenet-router, Envoy, ext_proc, DNS, xDS, ingress (`cmd/atenet/`) |
 | `area/node` | Node agent and worker lifecycle: atelet, sandbox launch, OCI, cgroups (`cmd/atelet/`) |

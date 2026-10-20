@@ -17,9 +17,9 @@ package boomerutil
 import (
 	"fmt"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateapiauth"
 	_ "go.ate.dev/substrate/internal/k8sresolver"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
@@ -45,7 +45,7 @@ const (
 // certificate — the same client auth the base install gives ate-controller
 // and atenet-router. ClientCredBundle re-reads the bundle on every handshake,
 // so rotations are picked up without a restart.
-func DialControl(endpoint string) (*grpc.ClientConn, ateapipb.ControlClient, error) {
+func DialControl(endpoint string) (*grpc.ClientConn, ateapi.ControlClient, error) {
 	k8sConfig, err := rest.InClusterConfig()
 	if err != nil {
 		loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
@@ -75,5 +75,5 @@ func DialControl(endpoint string) (*grpc.ClientConn, ateapipb.ControlClient, err
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial %s: %w", endpoint, err)
 	}
-	return conn, ateapipb.NewControlClient(conn), nil
+	return conn, ateapi.NewControlClient(conn), nil
 }

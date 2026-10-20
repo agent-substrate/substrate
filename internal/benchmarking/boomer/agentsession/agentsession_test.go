@@ -31,11 +31,11 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -637,13 +637,13 @@ func TestThinkScaling(t *testing.T) {
 // fakeControlClient records control-plane calls and fails ResumeActor /
 // SuspendActor with queued errors, in order, until each queue drains.
 type fakeControlClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 	mu          sync.Mutex
 	calls       []string
 	resumeErrs  []error
 	suspendErrs []error
 	// suspendReqs holds every SuspendActor request, in arrival order.
-	suspendReqs []*ateapipb.SuspendActorRequest
+	suspendReqs []*ateapi.SuspendActorRequest
 	// sawDeadline is set when a call arrived with a context deadline.
 	sawDeadline bool
 	// templateMemory is the memory limit GetActorTemplate reports in bytes; 0 means
@@ -679,21 +679,21 @@ func (f *fakeControlClient) record(ctx context.Context, name string) {
 	}
 }
 
-func (f *fakeControlClient) GetActorTemplate(ctx context.Context, in *ateapipb.GetActorTemplateRequest, opts ...grpc.CallOption) (*ateapipb.ActorTemplate, error) {
+func (f *fakeControlClient) GetActorTemplate(ctx context.Context, in *ateapi.GetActorTemplateRequest, opts ...grpc.CallOption) (*ateapi.ActorTemplate, error) {
 	f.record(ctx, "GetActorTemplate")
-	tmpl := &ateapipb.ActorTemplate{}
+	tmpl := &ateapi.ActorTemplate{}
 	if f.templateMemory != 0 {
-		tmpl.Resources = &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{MemoryBytes: f.templateMemory}}
+		tmpl.Resources = &ateapi.ResourceRequirements{Limits: &ateapi.Resources{MemoryBytes: f.templateMemory}}
 	}
 	return tmpl, nil
 }
 
-func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
+func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
 	f.record(ctx, "CreateAtespace")
-	return &ateapipb.Atespace{}, nil
+	return &ateapi.Atespace{}, nil
 }
 
-func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.record(ctx, "CreateActor")
 	if f.createStarted != nil {
 		select {
@@ -704,20 +704,20 @@ func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.Create
 	if f.createGate != nil {
 		<-f.createGate
 	}
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
-func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 	f.record(ctx, "ResumeActor")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := nextErr(&f.resumeErrs); err != nil {
 		return nil, err
 	}
-	return &ateapipb.ResumeActorResponse{}, nil
+	return &ateapi.ResumeActorResponse{}, nil
 }
 
-func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapi.SuspendActorRequest, opts ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
 	f.record(ctx, "SuspendActor")
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -725,10 +725,10 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	if err := nextErr(&f.suspendErrs); err != nil {
 		return nil, err
 	}
-	return &ateapipb.SuspendActorResponse{}, nil
+	return &ateapi.SuspendActorResponse{}, nil
 }
 
-func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.record(ctx, "DeleteActor")
 	n := f.inFlight.Add(1)
 	defer f.inFlight.Add(-1)
@@ -741,13 +741,13 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 	if f.deleteDelay > 0 {
 		time.Sleep(f.deleteDelay)
 	}
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
-func (f *fakeControlClient) recordedSuspendReqs() []*ateapipb.SuspendActorRequest {
+func (f *fakeControlClient) recordedSuspendReqs() []*ateapi.SuspendActorRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]*ateapipb.SuspendActorRequest(nil), f.suspendReqs...)
+	return append([]*ateapi.SuspendActorRequest(nil), f.suspendReqs...)
 }
 
 func (f *fakeControlClient) recordedCalls() []string {
@@ -822,34 +822,34 @@ func TestRunStep_RetriesStrandedHibernate(t *testing.T) {
 // A step ends with an async SuspendActor in async LifecycleMode and a sync
 // one in sync LifecycleMode.
 func TestRunStep_HibernateMode(t *testing.T) {
-	ref := &ateapipb.ObjectRef{Atespace: "benchmark", Name: "agent-test"}
+	ref := &ateapi.ObjectRef{Atespace: "benchmark", Name: "agent-test"}
 	for _, tt := range []struct {
 		name          string
 		lifecycleMode string
-		want          *ateapipb.SuspendActorRequest
+		want          *ateapi.SuspendActorRequest
 	}{
 		{
 			name:          "default",
 			lifecycleMode: "",
-			want: &ateapipb.SuspendActorRequest{
+			want: &ateapi.SuspendActorRequest{
 				Actor:   ref,
-				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 			},
 		},
 		{
 			name:          "async",
 			lifecycleMode: dynconfig.LifecycleModeAsync,
-			want: &ateapipb.SuspendActorRequest{
+			want: &ateapi.SuspendActorRequest{
 				Actor:   ref,
-				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 			},
 		},
 		{
 			name:          "sync",
 			lifecycleMode: dynconfig.LifecycleModeSync,
-			want: &ateapipb.SuspendActorRequest{
+			want: &ateapi.SuspendActorRequest{
 				Actor:   ref,
-				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 			},
 		},
 	} {
@@ -1376,9 +1376,9 @@ func TestSnapshotSteps(t *testing.T) {
 			t.Fatalf("step %d failed", i+1)
 		}
 	}
-	wantSuspend := &ateapipb.SuspendActorRequest{
+	wantSuspend := &ateapi.SuspendActorRequest{
 		Actor:   session.ref(),
-		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 	}
 	gotSuspends := ctl.recordedSuspendReqs()
 	if len(gotSuspends) != 2 {

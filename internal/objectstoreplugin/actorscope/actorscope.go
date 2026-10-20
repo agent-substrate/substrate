@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"sort"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // Access is what a grant permits under its prefix.
@@ -72,7 +72,7 @@ type Grant struct {
 // The status is taken as ate-api-server wrote it. An owner this code does not
 // know is an error, so a new kind is never silently dropped. Local-only
 // generations have no URI and contribute nothing.
-func FromActor(actor *ateapipb.Actor) ([]Grant, error) {
+func FromActor(actor *ateapi.Actor) ([]Grant, error) {
 	meta := actor.GetMetadata()
 	self := resources.ActorSnapshotOwner(meta.GetAtespace(), meta.GetUid())
 	seen := map[Grant]bool{}
@@ -100,10 +100,10 @@ func FromActor(actor *ateapipb.Actor) ([]Grant, error) {
 		}
 		add(own, ReadWrite)
 		switch gen.GetOwner() {
-		case ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR:
+		case ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR:
 			// Its own prefix is already granted above.
-		case ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG:
-			if durable.GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		case ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG:
+			if durable.GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 				continue
 			}
 			add(parsed.OwnerPrefix(), ReadOnly)

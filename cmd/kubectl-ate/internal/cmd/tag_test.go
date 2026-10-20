@@ -19,7 +19,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -28,22 +28,22 @@ import (
 // fakeTagClient serves GetTag from a stored tag and records the
 // update it is asked to make.
 type fakeTagClient struct {
-	tag *ateapipb.Tag
+	tag *ateapi.Tag
 
 	getCalls  int
-	updateReq *ateapipb.UpdateTagRequest
+	updateReq *ateapi.UpdateTagRequest
 }
 
-func (f *fakeTagClient) GetTag(_ context.Context, _ *ateapipb.GetTagRequest, _ ...grpc.CallOption) (*ateapipb.Tag, error) {
+func (f *fakeTagClient) GetTag(_ context.Context, _ *ateapi.GetTagRequest, _ ...grpc.CallOption) (*ateapi.Tag, error) {
 	f.getCalls++
-	return proto.Clone(f.tag).(*ateapipb.Tag), nil
+	return proto.Clone(f.tag).(*ateapi.Tag), nil
 }
 
-func (f *fakeTagClient) UpdateTag(_ context.Context, in *ateapipb.UpdateTagRequest, _ ...grpc.CallOption) (*ateapipb.Tag, error) {
+func (f *fakeTagClient) UpdateTag(_ context.Context, in *ateapi.UpdateTagRequest, _ ...grpc.CallOption) (*ateapi.Tag, error) {
 	f.updateReq = in
 	// Bump the version the way a real server does, so the returned tag is
 	// distinguishable from the one the caller sent.
-	updated := proto.Clone(in.GetTag()).(*ateapipb.Tag)
+	updated := proto.Clone(in.GetTag()).(*ateapi.Tag)
 	updated.Metadata.Version++
 	return updated, nil
 }
@@ -51,28 +51,28 @@ func (f *fakeTagClient) UpdateTag(_ context.Context, in *ateapipb.UpdateTagReque
 // TestUpdateTagScope checks the read-modify-write wiring: the scope
 // change is written against the uid and version that were just read.
 func TestUpdateTagScope(t *testing.T) {
-	testTag := &ateapipb.Tag{
-		Metadata: &ateapipb.ResourceMetadata{
+	testTag := &ateapi.Tag{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace: "space-1",
 			Name:     "tag-1",
 			Uid:      "8ba9b6ee-2e1a-4c0f-9f4e-2f0a0f1c3d55",
 			Version:  1,
 		},
-		Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
-		Status: &ateapipb.TagStatus{
-			Snapshot: &ateapipb.Snapshot{
-				Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-				DurableSnapshot: &ateapipb.SnapshotStorage{
-					Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-					Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/space-1/tags/tag-1"},
+		Scope: ateapi.TagScope_TAG_SCOPE_ATESPACE,
+		Status: &ateapi.TagStatus{
+			Snapshot: &ateapi.Snapshot{
+				Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				DurableSnapshot: &ateapi.SnapshotStorage{
+					Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/space-1/tags/tag-1"},
 				},
 			},
 		},
 	}
 
 	client := &fakeTagClient{tag: testTag}
-	ref := &ateapipb.ObjectRef{Atespace: "space-1", Name: "tag-1"}
-	want := ateapipb.TagScope_TAG_SCOPE_PUBLISHED
+	ref := &ateapi.ObjectRef{Atespace: "space-1", Name: "tag-1"}
+	want := ateapi.TagScope_TAG_SCOPE_PUBLISHED
 
 	resp, err := updateTagScope(context.Background(), client, ref, want)
 	if err != nil {
@@ -92,7 +92,7 @@ func TestUpdateTagScope(t *testing.T) {
 }
 
 func TestParseTagScope(t *testing.T) {
-	if got, err := parseTagScope("published"); err != nil || got != ateapipb.TagScope_TAG_SCOPE_PUBLISHED {
+	if got, err := parseTagScope("published"); err != nil || got != ateapi.TagScope_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("parseTagScope(published) = (%v, %v)", got, err)
 	}
 	if _, err := parseTagScope("global"); err == nil {

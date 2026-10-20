@@ -39,12 +39,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"go.ate.dev/substrate/api/credprovider/v1"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 const serviceName = "credprovider"
@@ -123,7 +123,7 @@ func run(ctx context.Context) error {
 	)
 	reflection.Register(srv)
 	provider := NewServer(client, nsAuth)
-	credproviderpb.RegisterCredentialProviderServer(srv, provider)
+	credprovider.RegisterCredentialProviderServer(srv, provider)
 
 	lis, err := (&net.ListenConfig{}).Listen(ctx, "tcp", *listenAddr)
 	if err != nil {

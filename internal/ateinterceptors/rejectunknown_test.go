@@ -25,8 +25,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // unknownField encodes a varint field that no descriptor in this binary
@@ -52,11 +52,11 @@ func TestFindUnknownFields(t *testing.T) {
 		{
 			name: "no unknown fields",
 			in: func() proto.Message {
-				return &ateapipb.CreateActorRequest{
-					Actor: &ateapipb.Actor{
-						Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-						ActorTemplate:  &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl1"},
-						WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+				return &ateapi.CreateActorRequest{
+					Actor: &ateapi.Actor{
+						Metadata:       &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+						ActorTemplate:  &ateapi.ObjectRef{Atespace: "team-a", Name: "tmpl1"},
+						WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 					},
 				}
 			},
@@ -65,23 +65,23 @@ func TestFindUnknownFields(t *testing.T) {
 		{
 			name: "nil message",
 			in: func() proto.Message {
-				return (*ateapipb.CreateActorRequest)(nil)
+				return (*ateapi.CreateActorRequest)(nil)
 			},
 			want: nil,
 		},
 		{
 			name: "unknown field on the request itself",
 			in: func() proto.Message {
-				return withUnknown(&ateapipb.CreateActorRequest{}, 9999)
+				return withUnknown(&ateapi.CreateActorRequest{}, 9999)
 			},
 			want: field.ErrorList{field.Invalid(field.NewPath("request"), field.OmitValueType{}, "")},
 		},
 		{
 			name: "unknown field on a nested message",
 			in: func() proto.Message {
-				return &ateapipb.CreateActorRequest{
-					Actor: &ateapipb.Actor{
-						Metadata: withUnknown(&ateapipb.ResourceMetadata{Name: "actor-1"}, 9999),
+				return &ateapi.CreateActorRequest{
+					Actor: &ateapi.Actor{
+						Metadata: withUnknown(&ateapi.ResourceMetadata{Name: "actor-1"}, 9999),
 					},
 				}
 			},
@@ -90,10 +90,10 @@ func TestFindUnknownFields(t *testing.T) {
 		{
 			name: "unknown fields on several messages",
 			in: func() proto.Message {
-				return withUnknown(&ateapipb.CreateActorRequest{
-					Actor: &ateapipb.Actor{
-						Metadata:       withUnknown(&ateapipb.ResourceMetadata{Name: "actor-1"}, 9998),
-						WorkerSelector: withUnknown(&ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}, 9997),
+				return withUnknown(&ateapi.CreateActorRequest{
+					Actor: &ateapi.Actor{
+						Metadata:       withUnknown(&ateapi.ResourceMetadata{Name: "actor-1"}, 9998),
+						WorkerSelector: withUnknown(&ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}}, 9997),
 					},
 				}, 9999)
 			},
@@ -106,7 +106,7 @@ func TestFindUnknownFields(t *testing.T) {
 		{
 			name: "several unknown fields on one message collapse to a single error",
 			in: func() proto.Message {
-				m := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl1"}}
+				m := &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Name: "tmpl1"}}
 				m.ProtoReflect().SetUnknown(append(unknownField(9998), unknownField(9999)...))
 				return m
 			},
@@ -115,10 +115,10 @@ func TestFindUnknownFields(t *testing.T) {
 		{
 			name: "unknown field inside a repeated message element",
 			in: func() proto.Message {
-				return &ateapipb.ListActorsResponse{
-					Actors: []*ateapipb.Actor{
-						{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl1"}},
-						withUnknown(&ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl2"}}, 9999),
+				return &ateapi.ListActorsResponse{
+					Actors: []*ateapi.Actor{
+						{ActorTemplate: &ateapi.ObjectRef{Name: "tmpl1"}},
+						withUnknown(&ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Name: "tmpl2"}}, 9999),
 					},
 				}
 			},
@@ -138,7 +138,7 @@ func TestFindUnknownFields(t *testing.T) {
 		{
 			name: "scalar map values cannot carry unknown fields",
 			in: func() proto.Message {
-				return &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid", "region": "us"}}
+				return &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid", "region": "us"}}
 			},
 			want: nil,
 		},
@@ -159,7 +159,7 @@ func TestRejectUnknownFieldsUnaryInterceptor(t *testing.T) {
 
 	t.Run("clean request reaches the handler", func(t *testing.T) {
 		resp, err := RejectUnknownFieldsUnaryInterceptor(context.Background(),
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl1"}}}, info, handler)
+			&ateapi.CreateActorRequest{Actor: &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Name: "tmpl1"}}}, info, handler)
 		if err != nil {
 			t.Fatalf("interceptor error = %v, want nil", err)
 		}
@@ -171,7 +171,7 @@ func TestRejectUnknownFieldsUnaryInterceptor(t *testing.T) {
 	t.Run("unknown field is rejected before the handler", func(t *testing.T) {
 		called := false
 		_, err := RejectUnknownFieldsUnaryInterceptor(context.Background(),
-			withUnknown(&ateapipb.CreateActorRequest{}, 9999), info,
+			withUnknown(&ateapi.CreateActorRequest{}, 9999), info,
 			func(ctx context.Context, req any) (any, error) {
 				called = true
 				return nil, nil

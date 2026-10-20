@@ -21,9 +21,9 @@ import (
 	"strings"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker/fakeworkertest"
 	"go.ate.dev/substrate/internal/credbundle"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -34,45 +34,45 @@ import (
 // recordingWorkerService records the last request of each kind and answers
 // with err.
 type recordingWorkerService struct {
-	got         *ateapipb.RegisterWorkerRequest
-	acquireGot  *ateapipb.AcquireWorkerEpochRequest
-	runtimesGot *ateapipb.SetWorkerSandboxRuntimesRequest
+	got         *ateapi.RegisterWorkerRequest
+	acquireGot  *ateapi.AcquireWorkerEpochRequest
+	runtimesGot *ateapi.SetWorkerSandboxRuntimesRequest
 	err         error
 }
 
-func (f *recordingWorkerService) AcquireWorkerEpoch(_ context.Context, in *ateapipb.AcquireWorkerEpochRequest, _ ...grpc.CallOption) (*ateapipb.AcquireWorkerEpochResponse, error) {
+func (f *recordingWorkerService) AcquireWorkerEpoch(_ context.Context, in *ateapi.AcquireWorkerEpochRequest, _ ...grpc.CallOption) (*ateapi.AcquireWorkerEpochResponse, error) {
 	f.acquireGot = in
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &ateapipb.AcquireWorkerEpochResponse{Epoch: 4}, nil
+	return &ateapi.AcquireWorkerEpochResponse{Epoch: 4}, nil
 }
 
-func (f *recordingWorkerService) RegisterWorker(_ context.Context, in *ateapipb.RegisterWorkerRequest, _ ...grpc.CallOption) (*ateapipb.RegisterWorkerResponse, error) {
+func (f *recordingWorkerService) RegisterWorker(_ context.Context, in *ateapi.RegisterWorkerRequest, _ ...grpc.CallOption) (*ateapi.RegisterWorkerResponse, error) {
 	f.got = in
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &ateapipb.RegisterWorkerResponse{}, nil
+	return &ateapi.RegisterWorkerResponse{}, nil
 }
 
-func (f *recordingWorkerService) SetWorkerSandboxRuntimes(_ context.Context, in *ateapipb.SetWorkerSandboxRuntimesRequest, _ ...grpc.CallOption) (*ateapipb.SetWorkerSandboxRuntimesResponse, error) {
+func (f *recordingWorkerService) SetWorkerSandboxRuntimes(_ context.Context, in *ateapi.SetWorkerSandboxRuntimesRequest, _ ...grpc.CallOption) (*ateapi.SetWorkerSandboxRuntimesResponse, error) {
 	f.runtimesGot = in
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &ateapipb.SetWorkerSandboxRuntimesResponse{}, nil
+	return &ateapi.SetWorkerSandboxRuntimesResponse{}, nil
 }
 
-func runtimesReport() *ateapipb.SetWorkerSandboxRuntimesRequest {
-	return &ateapipb.SetWorkerSandboxRuntimesRequest{
-		Worker: &ateapipb.ObjectRef{Name: "fake-r1-c52b9bd3-0"},
+func runtimesReport() *ateapi.SetWorkerSandboxRuntimesRequest {
+	return &ateapi.SetWorkerSandboxRuntimesRequest{
+		Worker: &ateapi.ObjectRef{Name: "fake-r1-c52b9bd3-0"},
 		Epoch:  4,
-		SandboxClasses: []*ateapipb.WorkerSandboxClass{{
+		SandboxClasses: []*ateapi.WorkerSandboxClass{{
 			SandboxClass: "gvisor",
-			DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: &ateapipb.VersionedSandboxCompat{
+			DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: &ateapi.VersionedSandboxCompat{
 				SchemaVersion: "v1",
-				Attributes:    []*ateapipb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+				Attributes:    []*ateapi.AttributeEntry{{Key: "architecture", Value: "amd64"}},
 			}},
 		}},
 	}
@@ -80,7 +80,7 @@ func runtimesReport() *ateapipb.SetWorkerSandboxRuntimesRequest {
 
 func TestRelayForwardsTheAcquireUnchanged(t *testing.T) {
 	svc := &recordingWorkerService{}
-	in := &ateapipb.AcquireWorkerEpochRequest{Worker: &ateapipb.ObjectRef{Name: "fake-r1-c52b9bd3-0"}}
+	in := &ateapi.AcquireWorkerEpochRequest{Worker: &ateapi.ObjectRef{Name: "fake-r1-c52b9bd3-0"}}
 	resp, err := (&relay{client: svc}).AcquireWorkerEpoch(context.Background(), in)
 	if err != nil {
 		t.Fatalf("AcquireWorkerEpoch: %v", err)
@@ -103,10 +103,10 @@ func TestRelayForwardsTheRuntimesUnchanged(t *testing.T) {
 	}
 }
 
-func report() *ateapipb.RegisterWorkerRequest {
-	return &ateapipb.RegisterWorkerRequest{
-		Worker: &ateapipb.ObjectRef{Name: "fake-r1-c52b9bd3-0"},
-		Capacity: &ateapipb.WorkerResources{
+func report() *ateapi.RegisterWorkerRequest {
+	return &ateapi.RegisterWorkerRequest{
+		Worker: &ateapi.ObjectRef{Name: "fake-r1-c52b9bd3-0"},
+		Capacity: &ateapi.WorkerResources{
 			Actors:        1000,
 			CpuMillicores: 64000, MemoryBytes: 256 << 30,
 		},
@@ -152,7 +152,7 @@ func TestRelayRecordsTheRegisteredEpoch(t *testing.T) {
 func TestRelayPassesThroughAteAPIServersStatus(t *testing.T) {
 	calls := map[string]func(*relay) error{
 		"AcquireWorkerEpoch": func(r *relay) error {
-			_, err := r.AcquireWorkerEpoch(context.Background(), &ateapipb.AcquireWorkerEpochRequest{})
+			_, err := r.AcquireWorkerEpoch(context.Background(), &ateapi.AcquireWorkerEpochRequest{})
 			return err
 		},
 		"RegisterWorker": func(r *relay) error {
@@ -182,7 +182,7 @@ func TestRelayPassesThroughAteAPIServersStatus(t *testing.T) {
 // nothing but capacity reports: a minted actor certificate, say, would hand
 // fake-workersync an identity it does not hold.
 func TestRelayServesOnlyCapacityReports(t *testing.T) {
-	_, err := (&relay{client: &recordingWorkerService{}}).MintWorkerActorCertificate(context.Background(), &ateapipb.MintWorkerActorCertificateRequest{})
+	_, err := (&relay{client: &recordingWorkerService{}}).MintWorkerActorCertificate(context.Background(), &ateapi.MintWorkerActorCertificateRequest{})
 	if got := status.Code(err); got != codes.Unimplemented {
 		t.Errorf("MintWorkerActorCertificate code = %v, want Unimplemented", got)
 	}
@@ -202,7 +202,7 @@ func TestRelayTLSAdmitsOnlyTheAllowedID(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverCfg)))
-	ateapipb.RegisterWorkerServiceServer(srv, &relay{client: &recordingWorkerService{}})
+	ateapi.RegisterWorkerServiceServer(srv, &relay{client: &recordingWorkerService{}})
 	go func() { _ = srv.Serve(lis) }()
 	defer srv.Stop()
 
@@ -215,7 +215,7 @@ func TestRelayTLSAdmitsOnlyTheAllowedID(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer conn.Close()
-		_, err = ateapipb.NewWorkerServiceClient(conn).RegisterWorker(context.Background(), report())
+		_, err = ateapi.NewWorkerServiceClient(conn).RegisterWorker(context.Background(), report())
 		return err
 	}
 	if err := call(ca.Issue(t, allowed)); err != nil {
@@ -244,7 +244,7 @@ func TestRelayTLSFollowsATrustBundleRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverCfg)))
-	ateapipb.RegisterWorkerServiceServer(srv, &relay{client: &recordingWorkerService{}})
+	ateapi.RegisterWorkerServiceServer(srv, &relay{client: &recordingWorkerService{}})
 	go func() { _ = srv.Serve(lis) }()
 	defer srv.Stop()
 
@@ -258,7 +258,7 @@ func TestRelayTLSFollowsATrustBundleRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if _, err := ateapipb.NewWorkerServiceClient(conn).RegisterWorker(context.Background(), report()); err != nil {
+	if _, err := ateapi.NewWorkerServiceClient(conn).RegisterWorker(context.Background(), report()); err != nil {
 		t.Errorf("a certificate from the rotated-in CA was refused: %v", err)
 	}
 }

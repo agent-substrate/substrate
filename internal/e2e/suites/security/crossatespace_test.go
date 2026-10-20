@@ -37,10 +37,10 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -130,12 +130,12 @@ func TestCrossAtespaceIsolation(t *testing.T) {
 
 	// Suspend the victim to free the worker. The durable marker stays on the
 	// worker; the snapshot goes to object storage.
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: ns.b, Name: victim},
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: ns.b, Name: victim},
 	}); err != nil {
 		t.Fatalf("SuspendActor %s/%s: %v", ns.b, victim, err)
 	}
-	waitForActorState(t, ctx, clients, ns.b, victim, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	waitForActorState(t, ctx, clients, ns.b, victim, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Attacker: the actor in atespace A takes the freed worker.
 	const attacker = "attacker"
@@ -219,9 +219,9 @@ func actorHostPath(actorUID string, elem ...string) string {
 func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Clients, rc *e2e.RouterClient, ns atespaces, source string) {
 	t.Helper()
 
-	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor:   &ateapipb.ObjectRef{Atespace: ns.a, Name: source},
-		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor:   &ateapi.ObjectRef{Atespace: ns.a, Name: source},
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	})
 	if err != nil {
 		t.Fatalf("SuspendActor %s/%s: %v", ns.a, source, err)
@@ -230,18 +230,18 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 		t.Fatalf("suspended actor %s/%s has no external snapshot, so there is nothing for a tag to capture", ns.a, source)
 	}
 
-	tagRef := &ateapipb.ObjectRef{Atespace: ns.a, Name: "atespace-a-tag"}
+	tagRef := &ateapi.ObjectRef{Atespace: ns.a, Name: "atespace-a-tag"}
 	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef})
+		_, _ = clients.SubstrateAPI.DeleteTag(context.Background(), &ateapi.DeleteTagRequest{Tag: tagRef})
 	})
 	// Tags outlive the fixture namespace, so an interrupted run can leave one
 	// behind and wedge reruns on AlreadyExists. Clear it first, best-effort.
-	_, _ = clients.SubstrateAPI.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef})
-	tag, err := clients.SubstrateAPI.CreateTag(ctx, &ateapipb.CreateTagRequest{
-		Tag: &ateapipb.Tag{
-			Metadata:    &ateapipb.ResourceMetadata{Atespace: ns.a, Name: tagRef.GetName()},
-			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
-			SourceActor: &ateapipb.ObjectRef{Atespace: ns.a, Name: source},
+	_, _ = clients.SubstrateAPI.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef})
+	tag, err := clients.SubstrateAPI.CreateTag(ctx, &ateapi.CreateTagRequest{
+		Tag: &ateapi.Tag{
+			Metadata:    &ateapi.ResourceMetadata{Atespace: ns.a, Name: tagRef.GetName()},
+			Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
+			SourceActor: &ateapi.ObjectRef{Atespace: ns.a, Name: source},
 		},
 	})
 	if err != nil {
@@ -253,13 +253,13 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 	}
 
 	// The boundary: the other atespace may not name this tag.
-	crossRef := &ateapipb.ObjectRef{Atespace: ns.b, Name: "cross-atespace-clone"}
+	crossRef := &ateapi.ObjectRef{Atespace: ns.b, Name: "cross-atespace-clone"}
 	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: crossRef})
+		_, _ = clients.SubstrateAPI.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{Actor: crossRef})
 	})
-	_, err = clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: ns.b, Name: crossRef.GetName()},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: ns.b, Name: templateName},
+	_, err = clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: ns.b, Name: crossRef.GetName()},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: ns.b, Name: templateName},
 		SourceTag:     tagRef,
 	}})
 	switch {
@@ -279,24 +279,24 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 	// clone carries the source's durable data. Otherwise an unusable tag would
 	// make the rejection above look like enforcement.
 	const clone = "same-atespace-clone"
-	cloneRef := &ateapipb.ObjectRef{Atespace: ns.a, Name: clone}
+	cloneRef := &ateapi.ObjectRef{Atespace: ns.a, Name: clone}
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: cloneRef})
-		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: cloneRef})
+		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapi.SuspendActorRequest{Actor: cloneRef})
+		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{Actor: cloneRef})
 	})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: ns.a, Name: clone},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: ns.a, Name: templateName},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: ns.a, Name: clone},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: ns.a, Name: templateName},
 		SourceTag:     tagRef,
 	}}); err != nil {
 		t.Fatalf("control: CreateActor %s/%s from tag %s in its own atespace: %v — the tag is unusable, so the cross-atespace rejection above proves nothing",
 			ns.a, clone, tagRef.GetName(), err)
 	}
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: cloneRef}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: cloneRef}); err != nil {
 		t.Fatalf("control: ResumeActor %s/%s: %v", ns.a, clone, err)
 	}
-	waitForActorState(t, ctx, clients, ns.a, clone, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(t, ctx, clients, ns.a, clone, ateapi.ActorState_ACTOR_STATE_RUNNING)
 	if got := readFile(t, ctx, rc, resources.ActorRef{Atespace: ns.a, Name: clone}, markerA); got.Content != writtenByProbe {
 		t.Fatalf("control: actor %s/%s restored from tag %s reads %s = %q (error %q), want %q — the tag carries no durable data, so the cross-atespace rejection above proves nothing",
 			ns.a, clone, tagRef.GetName(), markerA, got.Content, got.Error, writtenByProbe)
@@ -337,8 +337,8 @@ func requireReusedWorker(t *testing.T, ctx context.Context, clients *e2e.Clients
 
 func assignedWorker(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) string {
 	t.Helper()
-	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: name},
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: atespace, Name: name},
 	})
 	if err != nil {
 		t.Fatalf("GetActor %s/%s: %v", atespace, name, err)
@@ -352,8 +352,8 @@ func assignedWorker(t *testing.T, ctx context.Context, clients *e2e.Clients, ate
 
 func actorUID(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) string {
 	t.Helper()
-	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: name},
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: atespace, Name: name},
 	})
 	if err != nil {
 		t.Fatalf("GetActor %s/%s: %v", atespace, name, err)
@@ -369,38 +369,38 @@ func actorUID(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace,
 // it from the golden snapshot, removing it when the test ends.
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) {
 	t.Helper()
-	ref := &ateapipb.ObjectRef{Atespace: atespace, Name: name}
+	ref := &ateapi.ObjectRef{Atespace: atespace, Name: name}
 	// Actor records outlive the fixture namespace, so an interrupted run can
 	// leave one behind and wedge reruns on AlreadyExists. DeleteActor needs
 	// SUSPENDED or CRASHED, hence the suspend; both are best-effort.
-	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
-	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: templateName},
+	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
+	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref})
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: atespace, Name: name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: atespace, Name: templateName},
 	}}); err != nil {
 		t.Fatalf("CreateActor %s/%s: %v", atespace, name, err)
 	}
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: ref})
-		if _, err := clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapi.SuspendActorRequest{Actor: ref})
+		if _, err := clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{Actor: ref}); err != nil {
 			t.Logf("cleanup: DeleteActor %s/%s failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", atespace, name, name, atespace, err)
 		}
 	})
 
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %s/%s: %v", atespace, name, err)
 	}
-	waitForActorState(t, ctx, clients, atespace, name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(t, ctx, clients, atespace, name, ateapi.ActorState_ACTOR_STATE_RUNNING)
 }
 
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string, want ateapipb.ActorState) {
+func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string, want ateapi.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: name},
+		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: atespace, Name: name},
 		})
 		if err == nil && resp.GetStatus().GetState() == want {
 			return
@@ -453,8 +453,8 @@ func probeFileOp(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor 
 	return out
 }
 
-func durableSnapshotURI(status *ateapipb.ActorStatus) string {
-	var best *ateapipb.Snapshot
+func durableSnapshotURI(status *ateapi.ActorStatus) string {
+	var best *ateapi.Snapshot
 	for _, snap := range status.GetSnapshots() {
 		if uri := snapshotURI(snap); uri != "" {
 			if best == nil || snap.GetGeneration() > best.GetGeneration() {
@@ -465,9 +465,9 @@ func durableSnapshotURI(status *ateapipb.ActorStatus) string {
 	return snapshotURI(best)
 }
 
-func snapshotURI(snap *ateapipb.Snapshot) string {
+func snapshotURI(snap *ateapi.Snapshot) string {
 	st := snap.GetDurableSnapshot()
-	if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+	if st.GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 		return st.GetObject().GetSnapshotUri()
 	}
 	return ""

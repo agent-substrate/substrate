@@ -32,34 +32,34 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/sandboxruntimes"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // multiVersionConfig is a gVisor config whose default version "v2" is listed
 // after an Enabled "v1", a Disabled "v0", and an Enabled "other-arch" with no
 // assets for this node.
-func multiVersionConfig() *v1alpha1.SandboxConfig {
-	version := func(name, sha string, state *v1alpha1.SandboxVersionState) v1alpha1.SandboxVersionConfig {
-		return v1alpha1.SandboxVersionConfig{
+func multiVersionConfig() *atev1.SandboxConfig {
+	version := func(name, sha string, state *atev1.SandboxVersionState) atev1.SandboxVersionConfig {
+		return atev1.SandboxVersionConfig{
 			Name:  name,
 			State: state,
-			Assets: map[string]map[string]v1alpha1.AssetFile{
+			Assets: map[string]map[string]atev1.AssetFile{
 				runtime.GOARCH: {gvisorAssetName: {URL: "gs://bucket/" + name, SHA256: sha}},
 			},
 		}
 	}
 	otherArch := version("other-arch", "sha-other", nil)
-	otherArch.Assets = map[string]map[string]v1alpha1.AssetFile{"other-arch": otherArch.Assets[runtime.GOARCH]}
-	return &v1alpha1.SandboxConfig{
+	otherArch.Assets = map[string]map[string]atev1.AssetFile{"other-arch": otherArch.Assets[runtime.GOARCH]}
+	return &atev1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-release"},
-		Spec: v1alpha1.SandboxConfigSpec{
-			SandboxClass:   v1alpha1.SandboxClassGvisor,
+		Spec: atev1.SandboxConfigSpec{
+			SandboxClass:   atev1.SandboxClassGvisor,
 			DefaultVersion: "v2",
-			Versions: []v1alpha1.SandboxVersionConfig{
-				version("v0", "sha-v0", ptr.To(v1alpha1.SandboxVersionStateDisabled)),
-				version("v1", "sha-v1", ptr.To(v1alpha1.SandboxVersionStateEnabled)),
+			Versions: []atev1.SandboxVersionConfig{
+				version("v0", "sha-v0", ptr.To(atev1.SandboxVersionStateDisabled)),
+				version("v1", "sha-v1", ptr.To(atev1.SandboxVersionStateEnabled)),
 				otherArch,
 				version("v2", "sha-v2", nil),
 			},
@@ -71,18 +71,18 @@ func TestRecordForArch(t *testing.T) {
 	sha := fmt.Sprintf("%x", sha256.Sum256([]byte("gvisor release")))
 	tests := []struct {
 		name   string
-		assets map[string]map[string]v1alpha1.AssetFile
+		assets map[string]map[string]atev1.AssetFile
 		want   *sandboxAssetsRecord
 	}{{
 		name:   "assets for this architecture",
-		assets: map[string]map[string]v1alpha1.AssetFile{runtime.GOARCH: {gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}}},
+		assets: map[string]map[string]atev1.AssetFile{runtime.GOARCH: {gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}}},
 		want: &sandboxAssetsRecord{
-			SandboxClass: string(v1alpha1.SandboxClassGvisor),
+			SandboxClass: string(atev1.SandboxClassGvisor),
 			Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}},
 		},
 	}, {
 		name:   "assets for another architecture only",
-		assets: map[string]map[string]v1alpha1.AssetFile{"other-arch": {gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}}},
+		assets: map[string]map[string]atev1.AssetFile{"other-arch": {gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}}},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -179,9 +179,9 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 		// A pending config is one the atecontroller has claimed but not yet
 		// confirmed exists and is not being deleted.
 		name: "pool is only switching to a config",
-		objs: []any{func() *v1alpha1.WorkerPool {
+		objs: []any{func() *atev1.WorkerPool {
 			pool := resolvedPool("pool", "")
-			pool.Status.SandboxClasses[0].PendingConfigRef = &v1alpha1.SandboxConfigReference{Name: "gvisor-default"}
+			pool.Status.SandboxClasses[0].PendingConfigRef = &atev1.SandboxConfigReference{Name: "gvisor-default"}
 			return pool
 		}(), cfg},
 		pod:            workerPod("pod-a", "pool"),
@@ -190,9 +190,9 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 	}, {
 		// The class comes from the pool's spec, not from the status entry.
 		name: "status resolved another class than the pool's",
-		objs: []any{func() *v1alpha1.WorkerPool {
+		objs: []any{func() *atev1.WorkerPool {
 			pool := resolvedPool("pool", "gvisor-default")
-			pool.Spec.SandboxClasses[0].Name = v1alpha1.SandboxClassMicroVM
+			pool.Spec.SandboxClasses[0].Name = atev1.SandboxClassMicroVM
 			return pool
 		}(), cfg},
 		pod:            workerPod("pod-a", "pool"),
@@ -245,7 +245,7 @@ func wantRuntimeWithFeatures(name, cpuFeatures string) sandboxruntimes.Attribute
 
 // classFile is the file content of a worker in a pool of the given class:
 // one entry, with the given default and restorable runtimes.
-func classFile(class v1alpha1.SandboxClass, def sandboxruntimes.Attributes, restorable ...sandboxruntimes.Attributes) *sandboxruntimes.File {
+func classFile(class atev1.SandboxClass, def sandboxruntimes.Attributes, restorable ...sandboxruntimes.Attributes) *sandboxruntimes.File {
 	c := sandboxruntimes.Class{SandboxClass: string(class), DefaultRuntime: sandboxruntimes.Runtime{Version: def}}
 	for _, r := range restorable {
 		c.RestorableRuntimes = append(c.RestorableRuntimes, sandboxruntimes.Runtime{Version: r})
@@ -255,7 +255,7 @@ func classFile(class v1alpha1.SandboxClass, def sandboxruntimes.Attributes, rest
 
 // gvisorFile is classFile for a gVisor pool.
 func gvisorFile(def sandboxruntimes.Attributes, restorable ...sandboxruntimes.Attributes) *sandboxruntimes.File {
-	return classFile(v1alpha1.SandboxClassGvisor, def, restorable...)
+	return classFile(atev1.SandboxClassGvisor, def, restorable...)
 }
 
 // wantVersions is the file content for multiVersionConfig.
@@ -274,7 +274,7 @@ func planAndBuild(s *workerSandboxSyncer, pod *corev1.Pod) (*sandboxruntimes.Fil
 
 func TestPlanAndBuild(t *testing.T) {
 	defaultNoArch := multiVersionConfig()
-	defaultNoArch.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{"other-arch": defaultNoArch.Spec.Versions[3].Assets[runtime.GOARCH]}
+	defaultNoArch.Spec.Versions[3].Assets = map[string]map[string]atev1.AssetFile{"other-arch": defaultNoArch.Spec.Versions[3].Assets[runtime.GOARCH]}
 
 	onlyDefault := gvisorFile(wantRuntime("v2"))
 
@@ -292,13 +292,13 @@ func TestPlanAndBuild(t *testing.T) {
 	unsupportedClass.Spec.SandboxClass = "unknown"
 
 	noGVisorAsset := multiVersionConfig()
-	noGVisorAsset.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{
+	noGVisorAsset.Spec.Versions[3].Assets = map[string]map[string]atev1.AssetFile{
 		runtime.GOARCH: {"other": {URL: "gs://bucket/other", SHA256: "sha-other"}},
 	}
 
 	tests := []struct {
 		name          string
-		cfg           *v1alpha1.SandboxConfig
+		cfg           *atev1.SandboxConfig
 		want          *sandboxruntimes.File
 		wantErr       bool
 		wantPermanent bool
@@ -359,21 +359,21 @@ func TestPlanAndBuild(t *testing.T) {
 }
 
 func TestPlanAndBuildMicroVM(t *testing.T) {
-	pool := resolvedPoolOf(v1alpha1.SandboxClassMicroVM, "microvm-pool", "microvm-release")
-	version := func(name, sha string) v1alpha1.SandboxVersionConfig {
-		return v1alpha1.SandboxVersionConfig{
+	pool := resolvedPoolOf(atev1.SandboxClassMicroVM, "microvm-pool", "microvm-release")
+	version := func(name, sha string) atev1.SandboxVersionConfig {
+		return atev1.SandboxVersionConfig{
 			Name: name,
-			Assets: map[string]map[string]v1alpha1.AssetFile{
+			Assets: map[string]map[string]atev1.AssetFile{
 				runtime.GOARCH: {"kernel": {URL: "gs://bucket/kernel-" + name, SHA256: sha}},
 			},
 		}
 	}
-	cfg := &v1alpha1.SandboxConfig{
+	cfg := &atev1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "microvm-release"},
-		Spec: v1alpha1.SandboxConfigSpec{
-			SandboxClass:   v1alpha1.SandboxClassMicroVM,
+		Spec: atev1.SandboxConfigSpec{
+			SandboxClass:   atev1.SandboxClassMicroVM,
 			DefaultVersion: "v2",
-			Versions: []v1alpha1.SandboxVersionConfig{
+			Versions: []atev1.SandboxVersionConfig{
 				version("v1", "sha-v1"),
 				version("v2", "sha-v2"),
 			},
@@ -414,7 +414,7 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 
 	// Once a probe succeeds, every later sync reuses it.
 	probeErr = nil
-	want := classFile(v1alpha1.SandboxClassMicroVM, wantMicroVM("sha-v2"), wantMicroVM("sha-v1"))
+	want := classFile(atev1.SandboxClassMicroVM, wantMicroVM("sha-v2"), wantMicroVM("sha-v1"))
 	for _, uid := range []string{"pod-a", "pod-b"} {
 		got, err := planAndBuild(s, workerPod(uid, "microvm-pool"))
 		if err != nil {
@@ -438,7 +438,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 		cfg := multiVersionConfig()
 		v3 := *cfg.Spec.Versions[1].DeepCopy()
 		v3.Name = "v3"
-		v3.Assets[runtime.GOARCH][gvisorAssetName] = v1alpha1.AssetFile{URL: "gs://other-bucket/v1", SHA256: "sha-v1"}
+		v3.Assets[runtime.GOARCH][gvisorAssetName] = atev1.AssetFile{URL: "gs://other-bucket/v1", SHA256: "sha-v1"}
 		cfg.Spec.Versions = append(cfg.Spec.Versions, v3)
 
 		s := newTestSyncer(t, resolvedPool("pool", "gvisor-release"), cfg)
@@ -466,7 +466,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 		// uses the same runsc binary.
 		v3 := *cfg.Spec.Versions[1].DeepCopy()
 		v3.Name = "v3"
-		v3.Assets[runtime.GOARCH]["extra"] = v1alpha1.AssetFile{URL: "gs://bucket/extra", SHA256: "sha-extra"}
+		v3.Assets[runtime.GOARCH]["extra"] = atev1.AssetFile{URL: "gs://bucket/extra", SHA256: "sha-extra"}
 		cfg.Spec.Versions = append(cfg.Spec.Versions, v3)
 
 		s := newTestSyncer(t, resolvedPool("pool", "gvisor-release"), cfg)
@@ -652,7 +652,7 @@ func TestSyncPodAdvertisesWhatItWrote(t *testing.T) {
 		if !ok {
 			t.Fatal("pod-a has no index entry")
 		}
-		cr, ok := wr.class(v1alpha1.SandboxClassGvisor)
+		cr, ok := wr.class(atev1.SandboxClassGvisor)
 		if !ok {
 			t.Fatal("pod-a advertises nothing for gvisor")
 		}

@@ -37,7 +37,7 @@ CODEGEN_DIR="benchmarking/locust/codegen"
 OUT_DIR="${OUT_DIR:-benchmarking/locust/common}"
 
 if [[ $# -eq 0 ]]; then
-    set -- pkg/proto/ateapipb/ateapi.proto internal/proto/glutton/glutton.proto
+    set -- api/ateapi/v1/ateapi.proto internal/proto/glutton/glutton.proto
 fi
 
 if [[ -z "${PYTHON:-}" ]]; then

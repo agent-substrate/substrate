@@ -37,6 +37,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/e2e"
@@ -45,7 +46,6 @@ import (
 	"go.ate.dev/substrate/internal/portforward"
 	"go.ate.dev/substrate/internal/preview"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const probeTemplate = "probe"
@@ -107,13 +107,13 @@ func newSigner(t *testing.T, ctx context.Context, clients *e2e.Clients) *signer 
 type claims struct {
 	kind     actoridjwt.Kind
 	audience string
-	actor    *ateapipb.Actor
+	actor    *ateapi.Actor
 	uid      string
 	node     string
 }
 
 // forActor is the token ate-api-server would mint for the node hosting actor.
-func forActor(actor *ateapipb.Actor) claims {
+func forActor(actor *ateapi.Actor) claims {
 	return claims{
 		kind: actoridjwt.KindWorkerForActor, audience: exchange.ActorJWTAudience,
 		actor: actor, uid: actor.GetMetadata().GetUid(), node: actor.GetStatus().GetAssignedNode(),
@@ -196,10 +196,10 @@ func expectGCS(t *testing.T, ctx context.Context, what, token, method, uri, body
 
 // durableURI is the prefix of the actor's generation with the given owner,
 // which must be COMPLETED in object storage.
-func durableURI(t *testing.T, actor *ateapipb.Actor, owner ateapipb.SnapshotOwner) string {
+func durableURI(t *testing.T, actor *ateapi.Actor, owner ateapi.SnapshotOwner) string {
 	t.Helper()
 	for _, snap := range actor.GetStatus().GetSnapshots() {
-		if snap.GetOwner() == owner && snap.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		if snap.GetOwner() == owner && snap.GetDurableSnapshot().GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 			return snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 		}
 	}
@@ -207,16 +207,16 @@ func durableURI(t *testing.T, actor *ateapipb.Actor, owner ateapipb.SnapshotOwne
 	return ""
 }
 
-func getActor(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) *ateapipb.Actor {
+func getActor(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) *ateapi.Actor {
 	t.Helper()
-	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: name}})
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: &ateapi.ObjectRef{Atespace: atespace, Name: name}})
 	if err != nil {
 		t.Fatalf("GetActor %s: %v", name, err)
 	}
 	return actor
 }
 
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string, want ateapipb.ActorState) *ateapipb.Actor {
+func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string, want ateapi.ActorState) *ateapi.Actor {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
@@ -234,14 +234,14 @@ func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 // createAndResume creates an actor from the probe template and resumes it
 // from the golden snapshot. The record outlives the fixture namespace, so a
 // leftover from a failed run is cleared first.
-func createAndResume(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) *ateapipb.Actor {
+func createAndResume(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) *ateapi.Actor {
 	t.Helper()
-	ref := &ateapipb.ObjectRef{Atespace: atespace, Name: name}
-	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
-	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: probeTemplate},
+	ref := &ateapi.ObjectRef{Atespace: atespace, Name: name}
+	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
+	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref})
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: atespace, Name: name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: atespace, Name: probeTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %s: %v", name, err)
 	}
@@ -250,26 +250,26 @@ func createAndResume(t *testing.T, ctx context.Context, clients *e2e.Clients, at
 		// actor left running crashes when the fixture's worker pool goes.
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
-		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
+		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref}); err != nil {
 			t.Logf("cleanup: DeleteActor %s failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", name, name, atespace, err)
 		}
 	})
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %s: %v", name, err)
 	}
-	return waitForActorState(t, ctx, clients, atespace, name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	return waitForActorState(t, ctx, clients, atespace, name, ateapi.ActorState_ACTOR_STATE_RUNNING)
 }
 
 // suspendSync suspends the actor and waits for its snapshot to be durable.
-func suspendSync(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) *ateapipb.Actor {
+func suspendSync(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) *ateapi.Actor {
 	t.Helper()
-	ref := &ateapipb.ObjectRef{Atespace: atespace, Name: name}
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref,
-		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}); err != nil {
+	ref := &ateapi.ObjectRef{Atespace: atespace, Name: name}
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref,
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}); err != nil {
 		t.Fatalf("SuspendActor %s: %v", name, err)
 	}
-	return waitForActorState(t, ctx, clients, atespace, name, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	return waitForActorState(t, ctx, clients, atespace, name, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 }
 
 // TestExchangeScopesTheTokenToTheActor walks the exchange and the boundary
@@ -296,7 +296,7 @@ func TestExchangeScopesTheTokenToTheActor(t *testing.T) {
 	// scheduler picks.
 	alpha := createAndResume(t, ctx, clients, atespace, "creds-alpha")
 	beta := createAndResume(t, ctx, clients, atespace, "creds-beta")
-	goldenURI := durableURI(t, alpha, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG)
+	goldenURI := durableURI(t, alpha, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG)
 
 	// A token for alpha, as its node would present it.
 	resp, err := xchg.ExchangeActorJwt(ctx, &exchangepb.ExchangeActorJwtRequest{ActorJwt: sign.jwt(t, forActor(alpha))})
@@ -356,10 +356,10 @@ func TestExchangeScopesTheTokenToTheActor(t *testing.T) {
 	if _, err := xchg.ExchangeActorJwt(ctx, &exchangepb.ExchangeActorJwtRequest{ActorJwt: sign.jwt(t, withNode(forActor(beta), "any-node"))}); status.Code(err) != codes.PermissionDenied {
 		t.Errorf("exchange for a suspended actor held by no node = %v, want PermissionDenied", err)
 	}
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: "creds-alpha"}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: atespace, Name: "creds-alpha"}}); err != nil {
 		t.Fatalf("ResumeActor creds-alpha: %v", err)
 	}
-	alpha = waitForActorState(t, ctx, clients, atespace, "creds-alpha", ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	alpha = waitForActorState(t, ctx, clients, atespace, "creds-alpha", ateapi.ActorState_ACTOR_STATE_RUNNING)
 
 	// The forced exchange re-derives the grants: the golden is gone from
 	// alpha's status, its own snapshot is in.
@@ -368,15 +368,15 @@ func TestExchangeScopesTheTokenToTheActor(t *testing.T) {
 		t.Fatalf("forced exchange after the first suspend: %v", err)
 	}
 	token = resp.GetAccessToken()
-	expectGCS(t, ctx, "own snapshot manifest read", token, http.MethodGet, durableURI(t, alpha, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR)+"/manifest.json", "", http.StatusOK)
-	expectGCS(t, ctx, "sibling snapshot manifest refused", token, http.MethodGet, durableURI(t, beta, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR)+"/manifest.json", "", http.StatusForbidden)
+	expectGCS(t, ctx, "own snapshot manifest read", token, http.MethodGet, durableURI(t, alpha, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR)+"/manifest.json", "", http.StatusOK)
+	expectGCS(t, ctx, "sibling snapshot manifest refused", token, http.MethodGet, durableURI(t, beta, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR)+"/manifest.json", "", http.StatusForbidden)
 	expectGCS(t, ctx, "golden read dropped with the tag generation", token, http.MethodGet, goldenURI+"/manifest.json", "", http.StatusForbidden)
 }
 
 // ownPrefix is the actor's own prefix at the location its golden lives in,
 // the read-write grant the exchange derives before the actor has a snapshot
 // of its own: <location>/atespaces/<atespace>/actors/<uid>.
-func ownPrefix(goldenURI string, actor *ateapipb.Actor) string {
+func ownPrefix(goldenURI string, actor *ateapi.Actor) string {
 	location, _, _ := strings.Cut(goldenURI, "/atespaces/")
 	return location + "/atespaces/" + actor.GetMetadata().GetAtespace() + "/actors/" + actor.GetMetadata().GetUid()
 }
@@ -390,7 +390,7 @@ func locationOf(snapshotURI string) string {
 
 // ownPrefixAt is ownPrefix for a location given directly, for a template
 // whose location differs from the golden's.
-func ownPrefixAt(location string, actor *ateapipb.Actor) string {
+func ownPrefixAt(location string, actor *ateapi.Actor) string {
 	return strings.TrimSuffix(location, "/") + "/atespaces/" + actor.GetMetadata().GetAtespace() + "/actors/" + actor.GetMetadata().GetUid()
 }
 
@@ -425,16 +425,16 @@ func TestRepointMovesTheGrant(t *testing.T) {
 	// next snapshot goes under B's location.
 	const nameB = "probe-repoint"
 	locationB := "gs://" + env["BUCKET_NAME"] + "/ate-e2e-repoint-" + stamp + "/"
-	templateB := proto.Clone(probe).(*ateapipb.ActorTemplate)
-	templateB.Metadata = &ateapipb.ResourceMetadata{Atespace: atespace, Name: nameB}
+	templateB := proto.Clone(probe).(*ateapi.ActorTemplate)
+	templateB.Metadata = &ateapi.ResourceMetadata{Atespace: atespace, Name: nameB}
 	templateB.Status = nil
-	templateB.SnapshotConfig = proto.Clone(probe.GetSnapshotConfig()).(*ateapipb.SnapshotConfig)
+	templateB.SnapshotConfig = proto.Clone(probe.GetSnapshotConfig()).(*ateapi.SnapshotConfig)
 	templateB.SnapshotConfig.StorageLocation = locationB
-	if _, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: templateB}); err != nil {
+	if _, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: templateB}); err != nil {
 		t.Fatalf("CreateActorTemplate %s: %v", nameB, err)
 	}
 	t.Cleanup(func() {
-		if _, err := clients.SubstrateAPI.DeleteActorTemplate(context.Background(), &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: nameB}}); err != nil {
+		if _, err := clients.SubstrateAPI.DeleteActorTemplate(context.Background(), &ateapi.DeleteActorTemplateRequest{ActorTemplate: &ateapi.ObjectRef{Atespace: atespace, Name: nameB}}); err != nil {
 			t.Logf("cleanup: DeleteActorTemplate %s failed: %v", nameB, err)
 		}
 	})
@@ -443,7 +443,7 @@ func TestRepointMovesTheGrant(t *testing.T) {
 	// Running from template A, the token writes under A's location only.
 	const name = "creds-repoint"
 	actor := createAndResume(t, ctx, clients, atespace, name)
-	locationA := locationOf(durableURI(t, actor, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG))
+	locationA := locationOf(durableURI(t, actor, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG))
 	first, err := xchg.ExchangeActorJwt(ctx, &exchangepb.ExchangeActorJwtRequest{ActorJwt: sign.jwt(t, forActor(actor))})
 	if err != nil {
 		t.Fatalf("exchange before the repoint: %v", err)
@@ -454,19 +454,19 @@ func TestRepointMovesTheGrant(t *testing.T) {
 
 	// A repoint needs a suspended actor that owns no snapshot, so the actor
 	// is reverted to its golden rather than suspended.
-	ref := &ateapipb.ObjectRef{Atespace: atespace, Name: name}
-	if _, err := clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: ref}); err != nil {
+	ref := &ateapi.ObjectRef{Atespace: atespace, Name: name}
+	if _, err := clients.SubstrateAPI.RevertActor(ctx, &ateapi.RevertActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("RevertActor %s: %v", name, err)
 	}
-	actor = waitForActorState(t, ctx, clients, atespace, name, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-	actor.ActorTemplate = &ateapipb.ObjectRef{Atespace: atespace, Name: nameB}
-	if _, err := clients.SubstrateAPI.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: actor}); err != nil {
+	actor = waitForActorState(t, ctx, clients, atespace, name, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+	actor.ActorTemplate = &ateapi.ObjectRef{Atespace: atespace, Name: nameB}
+	if _, err := clients.SubstrateAPI.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("UpdateActor %s to template %s: %v", name, nameB, err)
 	}
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %s after the repoint: %v", name, err)
 	}
-	actor = waitForActorState(t, ctx, clients, atespace, name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	actor = waitForActorState(t, ctx, clients, atespace, name, ateapi.ActorState_ACTOR_STATE_RUNNING)
 
 	// The actor's status still names only A's location, so the exchange
 	// still grants A and not B, whatever it serves from its cache.
@@ -483,7 +483,7 @@ func TestRepointMovesTheGrant(t *testing.T) {
 	// cached for the resume, and one forced re-exchange, now granting B,
 	// carries the upload. The snapshot lands under B's location.
 	actor = suspendSync(t, ctx, clients, atespace, name)
-	snapshot := durableURI(t, actor, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR)
+	snapshot := durableURI(t, actor, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR)
 	if !strings.HasPrefix(snapshot, ownPrefixAt(locationB, actor)) {
 		t.Fatalf("snapshot after the repoint is at %s, want it under %s", snapshot, ownPrefixAt(locationB, actor))
 	}
@@ -492,10 +492,10 @@ func TestRepointMovesTheGrant(t *testing.T) {
 	// once it runs again. Now the status names B, so an exchange without
 	// force must not serve the old token, whose grants no longer cover the
 	// actor.
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %s after the suspend: %v", name, err)
 	}
-	actor = waitForActorState(t, ctx, clients, atespace, name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	actor = waitForActorState(t, ctx, clients, atespace, name, ateapi.ActorState_ACTOR_STATE_RUNNING)
 	after, err := xchg.ExchangeActorJwt(ctx, &exchangepb.ExchangeActorJwtRequest{ActorJwt: sign.jwt(t, forActor(actor))})
 	if err != nil {
 		t.Fatalf("exchange after the suspend: %v", err)

@@ -63,9 +63,9 @@ func TestImportsOnlySubstratePublicPackages(t *testing.T) {
 			}
 			switch {
 			case imp == self || strings.HasPrefix(imp, self+"/"):
-			case strings.HasPrefix(imp, substrateModule+"/pkg/"):
+			case strings.HasPrefix(imp, substrateModule+"/api/"), strings.HasPrefix(imp, substrateModule+"/pkg/"):
 			case imp == substrateModule || strings.HasPrefix(imp, substrateModule+"/"):
-				t.Errorf("%s imports %s; this module may import only %s/pkg/...", path, imp, substrateModule)
+				t.Errorf("%s imports %s; this module may import only %s/api/... and %s/pkg/...", path, imp, substrateModule, substrateModule)
 			}
 		}
 		return nil

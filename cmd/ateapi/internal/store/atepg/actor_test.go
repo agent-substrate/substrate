@@ -20,19 +20,19 @@ import (
 	"fmt"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
-	created, err := s.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-a"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	created, err := s.CreateActor(ctx, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "template-a"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -40,15 +40,15 @@ func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 	actorRef := resources.ActorRefFromActor(created)
 
 	mutations := 0
-	_, err = s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
+	_, err = s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(toUpdate *ateapi.Actor) error {
 		mutations++
-		if _, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(concurrent *ateapipb.Actor) error {
-			concurrent.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+		if _, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(concurrent *ateapi.Actor) error {
+			concurrent.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 			return nil
 		}); err != nil {
 			return fmt.Errorf("concurrent actor update: %w", err)
 		}
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	})
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -61,7 +61,7 @@ func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if stored.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED: losing update was persisted", stored.GetStatus().GetState())
 	}
 	if got := stored.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
@@ -80,10 +80,10 @@ func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 
-	actor := &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: "no-such-atespace"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	actor := &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Name: "id1", Atespace: "no-such-atespace"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 	if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("CreateActor with missing atespace = %v, want ErrFailedPrecondition", err)
@@ -110,7 +110,7 @@ func TestListActors_CrossScopePageToken(t *testing.T) {
 		t.Fatalf("CreateAtespace(team-b) failed: %v", err)
 	}
 	for _, name := range []string{"a1", "a2"} {
-		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: name, Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
+		if _, err := s.CreateActor(ctx, &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: name, Atespace: "team-a"}, Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 	}

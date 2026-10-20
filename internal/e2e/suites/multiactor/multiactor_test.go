@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const multiactorTemplate = "probe-multiactor"
@@ -94,9 +94,9 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 
 func createActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: multiactorNamespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: multiactorTemplate},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: multiactorNamespace, Name: name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: multiactorNamespace, Name: multiactorTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", name, err)
 	}
@@ -104,25 +104,25 @@ func createActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name s
 		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(cctx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}})
-		_, _ = clients.SubstrateAPI.DeleteActor(cctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}})
+		_, _ = clients.SubstrateAPI.SuspendActor(cctx, &ateapi.SuspendActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: multiactorNamespace, Name: name}})
+		_, _ = clients.SubstrateAPI.DeleteActor(cctx, &ateapi.DeleteActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: multiactorNamespace, Name: name}})
 	})
 }
 
 func resumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) {
 	t.Helper()
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: multiactorNamespace, Name: name}}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", name, err)
 	}
 }
 
 func suspendActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}}); err != nil {
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: multiactorNamespace, Name: name}}); err != nil {
 		t.Fatalf("SuspendActor %q: %v", name, err)
 	}
 }
@@ -130,12 +130,12 @@ func suspendActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name 
 // workerPodOf is the pod the actor was placed on, once it is RUNNING.
 func workerPodOf(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) string {
 	t.Helper()
-	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}})
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: multiactorNamespace, Name: name}})
 	if err != nil {
 		t.Fatalf("GetActor %q: %v", name, err)
 	}
-	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if got := actor.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Fatalf("actor %q is %v, want RUNNING", name, got)
 	}
 	pod := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()

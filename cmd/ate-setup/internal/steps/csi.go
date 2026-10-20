@@ -271,7 +271,7 @@ spec:
 
 	log.Infof("Creating the hostpath.csi.k8s.io CSIDriverConfig...")
 	if err := e.applyInline(ctx, `
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: hostpath.csi.k8s.io
@@ -457,7 +457,7 @@ spec:
 
 // csiNFSDriverConfig registers the NFS driver; its serverName is the one DNS name servicednssigner issues, <service>.<namespace>.svc.
 const csiNFSDriverConfig = `
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: nfs.csi.k8s.io

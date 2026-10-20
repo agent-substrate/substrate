@@ -20,47 +20,47 @@ import (
 	"net/url"
 	"strings"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/egresspolicy"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func ValidateCreateActorEgressPolicyRequest(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest) field.ErrorList {
+func ValidateCreateActorEgressPolicyRequest(ctx context.Context, req *ateapi.CreateActorEgressPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_CreateActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateGetActorEgressPolicyRequest(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest) field.ErrorList {
+func ValidateGetActorEgressPolicyRequest(ctx context.Context, req *ateapi.GetActorEgressPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_GetActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateUpdateActorEgressPolicyRequest(ctx context.Context, req *ateapipb.UpdateActorEgressPolicyRequest) field.ErrorList {
+func ValidateUpdateActorEgressPolicyRequest(ctx context.Context, req *ateapi.UpdateActorEgressPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_UpdateActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateDeleteActorEgressPolicyRequest(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest) field.ErrorList {
+func ValidateDeleteActorEgressPolicyRequest(ctx context.Context, req *ateapi.DeleteActorEgressPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_DeleteActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateEgressPolicyUpdate(ctx context.Context, p *field.Path, newVal, oldVal *ateapipb.EgressPolicy) field.ErrorList {
+func ValidateEgressPolicyUpdate(ctx context.Context, p *field.Path, newVal, oldVal *ateapi.EgressPolicy) field.ErrorList {
 	op := MakeUpdateOp(ctx)
 	return Validate_EgressPolicy(ctx, op, p, newVal, oldVal)
 }
 
-func ValidateCustom_CreateActorEgressPolicyRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateActorEgressPolicyRequest) field.ErrorList {
+func ValidateCustom_CreateActorEgressPolicyRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapi.CreateActorEgressPolicyRequest) field.ErrorList {
 	return validateEgressPolicyParentAtespace(req.GetActor(), req.GetEgressPolicy(), p)
 }
 
-func ValidateCustom_UpdateActorEgressPolicyRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.UpdateActorEgressPolicyRequest) field.ErrorList {
+func ValidateCustom_UpdateActorEgressPolicyRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapi.UpdateActorEgressPolicyRequest) field.ErrorList {
 	return validateEgressPolicyParentAtespace(req.GetActor(), req.GetEgressPolicy(), p)
 }
 
-func validateEgressPolicyParentAtespace(actor *ateapipb.ObjectRef, policy *ateapipb.EgressPolicy, p *field.Path) field.ErrorList {
+func validateEgressPolicyParentAtespace(actor *ateapi.ObjectRef, policy *ateapi.EgressPolicy, p *field.Path) field.ErrorList {
 	if actor == nil || actor.Atespace == "" {
 		return nil // regular DV will handle it
 	}
@@ -77,7 +77,7 @@ func validateEgressPolicyParentAtespace(actor *ateapipb.ObjectRef, policy *ateap
 	return nil
 }
 
-func ValidateCustom_EgressPolicy_Metadata(_ context.Context, _ operation.Operation, root *field.Path, meta, _ *ateapipb.ResourceMetadata) field.ErrorList {
+func ValidateCustom_EgressPolicy_Metadata(_ context.Context, _ operation.Operation, root *field.Path, meta, _ *ateapi.ResourceMetadata) field.ErrorList {
 	return validateSingletonName(root.Child("name"), meta.GetName())
 }
 
@@ -93,7 +93,7 @@ func ValidateCustom_DeleteActorEgressPolicyRequest_Name(_ context.Context, _ ope
 // and a port, whatever their protocols: the gateway would have no way to pick
 // one. Defaults are applied before validation, so an http rule left on 80
 // and an https rule left on 443 never tie.
-func ValidateCustom_EgressPolicy_Rules(_ context.Context, _ operation.Operation, p *field.Path, rules, _ []*ateapipb.EgressRule) field.ErrorList {
+func ValidateCustom_EgressPolicy_Rules(_ context.Context, _ operation.Operation, p *field.Path, rules, _ []*ateapi.EgressRule) field.ErrorList {
 	type key struct {
 		pattern string
 		port    portKey
@@ -126,13 +126,13 @@ func ValidateCustom_EgressPolicy_Rules(_ context.Context, _ operation.Operation,
 	return errs
 }
 
-func ValidateCustom_EgressPolicyTemplate_Rules(ctx context.Context, op operation.Operation, p *field.Path, rules, oldRules []*ateapipb.EgressRule) field.ErrorList {
+func ValidateCustom_EgressPolicyTemplate_Rules(ctx context.Context, op operation.Operation, p *field.Path, rules, oldRules []*ateapi.EgressRule) field.ErrorList {
 	return ValidateCustom_EgressPolicy_Rules(ctx, op, p, rules, oldRules)
 }
 
 // ruleMatchFields is what a rule matches on: the union member, its hostnames,
 // and its ports. Everything is empty for a rule that sets no member.
-func ruleMatchFields(rule *ateapipb.EgressRule) (member string, hostnames []string, ports *ateapipb.Ports) {
+func ruleMatchFields(rule *ateapi.EgressRule) (member string, hostnames []string, ports *ateapi.Ports) {
 	switch {
 	case rule.GetHttp() != nil:
 		return "http", rule.GetHttp().GetHostnames(), rule.GetHttp().GetPorts()
@@ -151,7 +151,7 @@ type portKey struct {
 	all    bool
 }
 
-func portKeysOf(ports *ateapipb.Ports) []portKey {
+func portKeysOf(ports *ateapi.Ports) []portKey {
 	if ports.GetAll() != nil {
 		return []portKey{{all: true}}
 	}
@@ -181,7 +181,7 @@ func ValidateCustom_TlsPassthroughRule_Hostnames(_ context.Context, _ operation.
 	return validateHostnamePatterns(patterns, p)
 }
 
-func ValidateCustom_HttpRuleEffects(_ context.Context, _ operation.Operation, p *field.Path, effects, _ *ateapipb.HttpRuleEffects) field.ErrorList {
+func ValidateCustom_HttpRuleEffects(_ context.Context, _ operation.Operation, p *field.Path, effects, _ *ateapi.HttpRuleEffects) field.ErrorList {
 	var errs field.ErrorList
 	if len(effects.GetReplaceHeaders()) == 0 {
 		errs = append(errs, field.Required(p, "at least one effect must be specified"))
@@ -189,7 +189,7 @@ func ValidateCustom_HttpRuleEffects(_ context.Context, _ operation.Operation, p 
 	return errs
 }
 
-func ValidateCustom_HttpRuleEffects_ReplaceHeaders(_ context.Context, _ operation.Operation, p *field.Path, injections, _ []*ateapipb.CredentialHeader) field.ErrorList {
+func ValidateCustom_HttpRuleEffects_ReplaceHeaders(_ context.Context, _ operation.Operation, p *field.Path, injections, _ []*ateapi.CredentialHeader) field.ErrorList {
 	var errs field.ErrorList
 	seenHeaders := map[string]bool{}
 	for i, inj := range injections {

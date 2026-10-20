@@ -18,8 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // testBasicFlow runs an actor's whole lifecycle as users granted access
@@ -41,20 +41,20 @@ func testBasicFlow(t *testing.T, ctx context.Context, f *fixture) {
 		return
 	}
 
-	actor := &ateapipb.ObjectRef{Atespace: f.atespace, Name: "flow-actor"}
-	if _, err := alice.api.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actor.GetAtespace(), Name: actor.GetName()},
+	actor := &ateapi.ObjectRef{Atespace: f.atespace, Name: "flow-actor"}
+	if _, err := alice.api.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actor.GetAtespace(), Name: actor.GetName()},
 		ActorTemplate: f.template,
 	}}); err != nil {
 		t.Fatalf("CreateActor as alice: %v", err)
 	}
 	t.Cleanup(func() {
 		// Best effort, in case a step below failed partway.
-		_, _ = f.clients.SubstrateAPI.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actor})
-		_, _ = f.clients.SubstrateAPI.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actor})
+		_, _ = f.clients.SubstrateAPI.SuspendActor(context.Background(), &ateapi.SuspendActorRequest{Actor: actor})
+		_, _ = f.clients.SubstrateAPI.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{Actor: actor})
 	})
 
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, &e2e.Clients{SubstrateAPI: alice.api}, &ateapipb.ResumeActorRequest{Actor: actor}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, &e2e.Clients{SubstrateAPI: alice.api}, &ateapi.ResumeActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("ResumeActor as alice: %v", err)
 	}
 
@@ -68,11 +68,11 @@ func testBasicFlow(t *testing.T, ctx context.Context, f *fixture) {
 		return
 	}
 
-	if _, err := alice.api.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actor}); err != nil {
+	if _, err := alice.api.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("SuspendActor as alice: %v", err)
 	}
-	waitForActorState(t, ctx, f.clients, actor, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-	if _, err := alice.api.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actor}); err != nil {
+	waitForActorState(t, ctx, f.clients, actor, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+	if _, err := alice.api.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("DeleteActor as alice: %v", err)
 	}
 }

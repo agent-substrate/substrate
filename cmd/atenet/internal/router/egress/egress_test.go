@@ -42,10 +42,10 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -166,19 +166,19 @@ func xfccHeaderDER(chain ...[]byte) string {
 
 // egressHandler builds a Handler with an allow-everything policy, so the
 // identity tests are about identity alone.
-func egressHandler(loadRoots func() (*x509.CertPool, error), actor *ateapipb.Actor, err error) *Handler {
+func egressHandler(loadRoots func() (*x509.CertPool, error), actor *ateapi.Actor, err error) *Handler {
 	return New(&egressMockClient{actor: actor, err: err, policy: allowAllPolicy()}, loadRoots, DefaultPolicyCacheTTL, nil, "")
 }
 
 // egressMockClient is the slice of ateapi the egress handler talks to.
 type egressMockClient struct {
-	ateapipb.ControlClient
-	actor *ateapipb.Actor
+	ateapi.ControlClient
+	actor *ateapi.Actor
 	err   error
 
 	// policy is what GetActorEgressPolicy returns; nil answers NotFound.
 	// policyErr, when set, is returned instead.
-	policy    *ateapipb.EgressPolicy
+	policy    *ateapi.EgressPolicy
 	policyErr error
 	// policyCalls counts GetActorEgressPolicy calls, for the cache tests.
 	policyCalls atomic.Int32
@@ -189,18 +189,18 @@ type egressMockClient struct {
 	// The nth MintActorJwt call returns "jwt-<n>", expiring
 	// expiration_seconds from now. mintErr, when set, is returned instead.
 	mintCalls atomic.Int32
-	lastMint  atomic.Pointer[ateapipb.MintActorJwtRequest]
+	lastMint  atomic.Pointer[ateapi.MintActorJwtRequest]
 	mintErr   error
 }
 
-func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (m *egressMockClient) GetActor(context.Context, *ateapi.GetActorRequest, ...grpc.CallOption) (*ateapi.Actor, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
 	return m.actor, nil
 }
 
-func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, req *ateapi.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
 	m.policyCalls.Add(1)
 	if req.GetName() != resources.SingletonName {
 		return nil, status.Errorf(codes.InvalidArgument, "name must be %q", resources.SingletonName)
@@ -221,13 +221,13 @@ func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, req *ateapi
 	return m.policy, nil
 }
 
-func (m *egressMockClient) MintActorJwt(_ context.Context, req *ateapipb.MintActorJwtRequest, _ ...grpc.CallOption) (*ateapipb.MintActorJwtResponse, error) {
+func (m *egressMockClient) MintActorJwt(_ context.Context, req *ateapi.MintActorJwtRequest, _ ...grpc.CallOption) (*ateapi.MintActorJwtResponse, error) {
 	n := m.mintCalls.Add(1)
 	m.lastMint.Store(req)
 	if m.mintErr != nil {
 		return nil, m.mintErr
 	}
-	return &ateapipb.MintActorJwtResponse{
+	return &ateapi.MintActorJwtResponse{
 		ActorJwt:   fmt.Sprintf("jwt-%d", n),
 		ExpireTime: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
 	}, nil
@@ -235,52 +235,52 @@ func (m *egressMockClient) MintActorJwt(_ context.Context, req *ateapipb.MintAct
 
 // allowAllPolicy allows every name and address: cleartext HTTP on any port
 // and HTTPS on 443.
-func allowAllPolicy() *ateapipb.EgressPolicy {
+func allowAllPolicy() *ateapi.EgressPolicy {
 	return combined(httpPolicyOnPorts(allPorts(), "*"), httpsPolicy("*"))
 }
 
-func httpPolicy(patterns ...string) *ateapipb.EgressPolicy {
-	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Http: &ateapipb.HttpRule{Hostnames: patterns},
+func httpPolicy(patterns ...string) *ateapi.EgressPolicy {
+	return &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{
+		Http: &ateapi.HttpRule{Hostnames: patterns},
 	}}}
 }
 
-func httpPolicyOnPorts(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressPolicy {
-	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Http: &ateapipb.HttpRule{Hostnames: patterns, Ports: ports},
+func httpPolicyOnPorts(ports *ateapi.Ports, patterns ...string) *ateapi.EgressPolicy {
+	return &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{
+		Http: &ateapi.HttpRule{Hostnames: patterns, Ports: ports},
 	}}}
 }
 
-func httpsPolicy(patterns ...string) *ateapipb.EgressPolicy {
-	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Https: &ateapipb.HttpsRule{Hostnames: patterns},
+func httpsPolicy(patterns ...string) *ateapi.EgressPolicy {
+	return &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{
+		Https: &ateapi.HttpsRule{Hostnames: patterns},
 	}}}
 }
 
-func httpsPolicyOnPorts(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressPolicy {
-	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Https: &ateapipb.HttpsRule{Hostnames: patterns, Ports: ports},
+func httpsPolicyOnPorts(ports *ateapi.Ports, patterns ...string) *ateapi.EgressPolicy {
+	return &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{
+		Https: &ateapi.HttpsRule{Hostnames: patterns, Ports: ports},
 	}}}
 }
 
-func passthroughPolicy(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressPolicy {
-	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: patterns, Ports: ports},
+func passthroughPolicy(ports *ateapi.Ports, patterns ...string) *ateapi.EgressPolicy {
+	return &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{
+		TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: patterns, Ports: ports},
 	}}}
 }
 
-func ports(numbers ...int32) *ateapipb.Ports { return &ateapipb.Ports{Numbers: numbers} }
+func ports(numbers ...int32) *ateapi.Ports { return &ateapi.Ports{Numbers: numbers} }
 
-func allPorts() *ateapipb.Ports { return &ateapipb.Ports{All: &ateapipb.AllPorts{}} }
+func allPorts() *ateapi.Ports { return &ateapi.Ports{All: &ateapi.AllPorts{}} }
 
-func runningActor() *ateapipb.Actor {
-	return &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{
+func runningActor() *ateapi.Actor {
+	return &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace: testEgressAtespace,
 			Name:     testEgressActor,
 			Uid:      testEgressActorUID,
 		},
-		Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING},
 	}
 }
 
@@ -382,7 +382,7 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 	}
 	tests := []struct {
 		name   string
-		policy *ateapipb.EgressPolicy
+		policy *ateapi.EgressPolicy
 		// dialed is the CONNECT authority; port 443 unless set.
 		dialed string
 		want   []egresspolicy.SNIRule
@@ -716,19 +716,19 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		actor *ateapipb.Actor
+		actor *ateapi.Actor
 		err   error
 		want  envoy_type.StatusCode
 	}{
 		{
 			name: "actor is suspended",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{
+			actor: &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{
 					Atespace: testEgressAtespace,
 					Name:     testEgressActor,
 					Uid:      testEgressActorUID,
 				},
-				Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+				Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},
@@ -759,13 +759,13 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 // state has left its worker or is leaving it.
 func TestHandleRequestHeadersActorState(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
-	allowed := map[ateapipb.ActorState]bool{
-		ateapipb.ActorState_ACTOR_STATE_RESUMING: true,
-		ateapipb.ActorState_ACTOR_STATE_RUNNING:  true,
+	allowed := map[ateapi.ActorState]bool{
+		ateapi.ActorState_ACTOR_STATE_RESUMING: true,
+		ateapi.ActorState_ACTOR_STATE_RUNNING:  true,
 	}
-	for value := range ateapipb.ActorState_name {
-		state := ateapipb.ActorState(value)
-		if state == ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED {
+	for value := range ateapi.ActorState_name {
+		state := ateapi.ActorState(value)
+		if state == ateapi.ActorState_ACTOR_STATE_UNSPECIFIED {
 			continue
 		}
 		t.Run(state.String(), func(t *testing.T) {

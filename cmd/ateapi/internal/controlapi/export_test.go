@@ -18,11 +18,11 @@ import (
 	"context"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
 
@@ -49,19 +49,19 @@ type ConflictingUpdateStore = conflictingUpdateStore
 type ReleaseWindowWorkflow struct {
 	Name string
 	// State is the actor's state while the worker holds it.
-	State ateapipb.ActorState
+	State ateapi.ActorState
 	// Snapshot, when set, is the actor's latest snapshot.
-	Snapshot func(t *testing.T) *ateapipb.Snapshot
+	Snapshot func(t *testing.T) *ateapi.Snapshot
 	// Finalize runs the workflow or step that releases the worker and then
 	// records the actor's new state against st. Async and sync suspend reach the
 	// fake atelet newWireCaptureWorkflow serves for the worker
 	// WireTestAssignment names, so the actor must be assigned that worker
 	// and run from the template SeedSuspendTemplate stores.
-	Finalize func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, actor *ateapipb.Actor) error
+	Finalize func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, actor *ateapi.Actor) error
 	// WantRetry is the code of Finalize retried against the real store.
 	WantRetry codes.Code
 	// WantFinalState is the actor's state once the retry commits.
-	WantFinalState ateapipb.ActorState
+	WantFinalState ateapi.ActorState
 }
 
 // ReleaseWindowWorkflows returns async suspend ("pause"), sync suspend, crash,
@@ -72,63 +72,63 @@ type ReleaseWindowWorkflow struct {
 func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 	// The workers these tests create carry no labels, so a template
 	// selecting a pool makes any of them ineligible.
-	ineligibleTemplate := &ateapipb.ActorTemplate{
-		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"pool": "other"}},
+	ineligibleTemplate := &ateapi.ActorTemplate{
+		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"pool": "other"}},
 	}
 	return []ReleaseWindowWorkflow{
 		{
 			Name:  "pause",
-			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			Snapshot: func(t *testing.T) *ateapipb.Snapshot {
+			State: ateapi.ActorState_ACTOR_STATE_SUSPENDING,
+			Snapshot: func(t *testing.T) *ateapi.Snapshot {
 				// An async suspend in progress: a PENDING durable copy, not yet captured.
-				return newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "local-snap-1")
+				return newInProgressSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "local-snap-1")
 			},
 			// The actor is seeded SUSPENDING, so the suspend skips its mark step
 			// and its first actor update is the finalize commit.
-			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
+			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapi.Actor) error {
 				w, _ := newWireCaptureWorkflow(t, st)
 				_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
 				return err
 			},
 			WantRetry:      codes.OK,
-			WantFinalState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			WantFinalState: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 		{
 			Name:  "suspend",
-			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			Snapshot: func(t *testing.T) *ateapipb.Snapshot {
-				return newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+			State: ateapi.ActorState_ACTOR_STATE_SUSPENDING,
+			Snapshot: func(t *testing.T) *ateapi.Snapshot {
+				return newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
 			},
 			// As for the async suspend, the finalize commit is the first actor update.
-			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
+			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapi.Actor) error {
 				w, _ := newWireCaptureWorkflow(t, st)
 				_, err := w.SuspendActor(ctx, actorRef, suspendSync)
 				return err
 			},
 			WantRetry:      codes.OK,
-			WantFinalState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			WantFinalState: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 		{
 			Name:  "crash",
-			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			Finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
+			State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+			Finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapi.Actor) error {
 				return crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash")
 			},
 			WantRetry:      codes.OK,
-			WantFinalState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			WantFinalState: ateapi.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
 			// A resume that finds its worker ineligible releases it, then
 			// crashes the actor. The retry finds the worker no longer hosts
 			// the actor and crashes it.
 			Name:  "resume onto an ineligible worker",
-			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
-			Finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, actor *ateapipb.Actor) error {
+			State: ateapi.ActorState_ACTOR_STATE_RESUMING,
+			Finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, actor *ateapi.Actor) error {
 				_, err := (&ActorWorkflow{store: st, scheduler: scheduling.New(nil)}).validateAssignedWorker(ctx, actorRef, actor, ineligibleTemplate)
 				return err
 			},
 			WantRetry:      codes.Aborted,
-			WantFinalState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			WantFinalState: ateapi.ActorState_ACTOR_STATE_CRASHED,
 		},
 	}
 }

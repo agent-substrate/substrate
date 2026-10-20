@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
@@ -29,7 +30,6 @@ import (
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
@@ -54,16 +54,16 @@ func newDetachTestWorkflow(t *testing.T, ctx context.Context, st store.Interface
 }
 
 // fillWorker binds another actor to worker, using up its one place.
-func fillWorker(t *testing.T, st store.Interface, worker *ateapipb.Worker) {
+func fillWorker(t *testing.T, st store.Interface, worker *ateapi.Worker) {
 	t.Helper()
-	seedAssignment(t, st, worker.GetMetadata().GetName(), &ateapipb.ActorAssignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "other"},
+	seedAssignment(t, st, worker.GetMetadata().GetName(), &ateapi.ActorAssignment{
+		Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "other"},
 		ActorUid: "other-uid",
 	})
 }
 
 // detachedState is atelet's state after detaching snap.
-func detachedState(snap *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+func detachedState(snap *ateapi.Snapshot) *ateletpb.ActorSnapshotState {
 	return &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
 		SnapshotUuid: snap.GetUuid(),
 		Generation:   snap.GetGeneration(),
@@ -74,21 +74,21 @@ func detachedState(snap *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
 
 func TestShouldDetachFromNode(t *testing.T) {
 	noRoom := apierror.ResourceExhausted("%w", errNoWorkerRoom)
-	pinned := func(state ateapipb.ActorState, node string) *ateapipb.Actor {
-		return &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: state, AssignedNode: node}}
+	pinned := func(state ateapi.ActorState, node string) *ateapi.Actor {
+		return &ateapi.Actor{Status: &ateapi.ActorStatus{State: state, AssignedNode: node}}
 	}
 	tests := []struct {
 		name  string
-		actor *ateapipb.Actor
+		actor *ateapi.Actor
 		err   error
 		want  bool
 	}{
-		{"pinned suspended actor with no room", pinned(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), noRoom, true},
-		{"no room wrapped by a step", pinned(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), errors.Join(noRoom), true},
-		{"assigned", pinned(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), nil, false},
-		{"another error", pinned(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), apierror.Aborted("conflict"), false},
-		{"not pinned", pinned(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ""), noRoom, false},
-		{"resuming", pinned(ateapipb.ActorState_ACTOR_STATE_RESUMING, "node-1"), noRoom, false},
+		{"pinned suspended actor with no room", pinned(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), noRoom, true},
+		{"no room wrapped by a step", pinned(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), errors.Join(noRoom), true},
+		{"assigned", pinned(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), nil, false},
+		{"another error", pinned(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), apierror.Aborted("conflict"), false},
+		{"not pinned", pinned(ateapi.ActorState_ACTOR_STATE_SUSPENDED, ""), noRoom, false},
+		{"resuming", pinned(ateapi.ActorState_ACTOR_STATE_RESUMING, "node-1"), noRoom, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -102,7 +102,7 @@ func TestShouldDetachFromNode(t *testing.T) {
 // TestDetachFromFullNode runs the step for an actor pinned to a full node.
 func TestDetachFromFullNode(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	suspended := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	suspended := ateapi.ActorState_ACTOR_STATE_SUSPENDED
 	const uuid = "pause-snap-1"
 	noRoom := apierror.ResourceExhausted("%w", errNoWorkerRoom)
 	amd64RT := testRuntime("amd64", "")
@@ -115,9 +115,9 @@ func TestDetachFromFullNode(t *testing.T) {
 		// otherNode adds a free worker on node-2 with otherRuntime, or the
 		// test runtime when unset.
 		otherNode    bool
-		otherRuntime *ateapipb.ActorSandboxRuntime
+		otherRuntime *ateapi.ActorSandboxRuntime
 		// snapRuntime stamps the MEMORY snapshot.
-		snapRuntime *ateapipb.ActorSandboxRuntime
+		snapRuntime *ateapi.ActorSandboxRuntime
 		// completed records the snapshot's upload COMPLETED.
 		completed bool
 		cancel    bool
@@ -131,9 +131,9 @@ func TestDetachFromFullNode(t *testing.T) {
 		completeOnNodeLookup bool
 		// before updates the actor after it was read and before the step
 		// runs, and during while atelet detaches it.
-		before, during func(*ateapipb.Actor)
+		before, during func(*ateapi.Actor)
 		// detachState builds DetachActor's reply from the snapshot.
-		detachState  func(*ateapipb.Snapshot) *ateletpb.ActorSnapshotState
+		detachState  func(*ateapi.Snapshot) *ateletpb.ActorSnapshotState
 		detachErr    error
 		wantDetached bool
 		// wantReleased expects the node released with the snapshot unchanged.
@@ -162,7 +162,7 @@ func TestDetachFromFullNode(t *testing.T) {
 		name:         "actor updated after it was read: detaches",
 		node:         "node-1",
 		otherNode:    true,
-		before:       func(*ateapipb.Actor) {},
+		before:       func(*ateapi.Actor) {},
 		detachState:  detachedState,
 		wantDetached: true,
 		wantCall:     true,
@@ -170,15 +170,15 @@ func TestDetachFromFullNode(t *testing.T) {
 		name:      "selector changed after the actor was read: no room under the new one",
 		node:      "node-1",
 		otherNode: true,
-		before: func(a *ateapipb.Actor) {
-			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+		before: func(a *ateapi.Actor) {
+			a.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 		},
 		wantCode: codes.ResourceExhausted,
 	}, {
 		name:        "actor updated while atelet detaches: Aborted, record unchanged",
 		node:        "node-1",
 		otherNode:   true,
-		during:      func(*ateapipb.Actor) {},
+		during:      func(*ateapi.Actor) {},
 		detachState: detachedState,
 		wantCode:    codes.Aborted,
 		wantCall:    true,
@@ -187,14 +187,14 @@ func TestDetachFromFullNode(t *testing.T) {
 		node:         "node-1",
 		otherNode:    true,
 		completed:    true,
-		detachState:  func(*ateapipb.Snapshot) *ateletpb.ActorSnapshotState { return &ateletpb.ActorSnapshotState{} },
+		detachState:  func(*ateapi.Snapshot) *ateletpb.ActorSnapshotState { return &ateletpb.ActorSnapshotState{} },
 		wantDetached: true,
 		wantCall:     true,
 	}, {
 		name:        "atelet holds no entry, upload PENDING: FailedPrecondition, record unchanged",
 		node:        "node-1",
 		otherNode:   true,
-		detachState: func(*ateapipb.Snapshot) *ateletpb.ActorSnapshotState { return &ateletpb.ActorSnapshotState{} },
+		detachState: func(*ateapi.Snapshot) *ateletpb.ActorSnapshotState { return &ateletpb.ActorSnapshotState{} },
 		wantCode:    codes.FailedPrecondition,
 		wantCall:    true,
 	}, {
@@ -237,7 +237,7 @@ func TestDetachFromFullNode(t *testing.T) {
 		node:      "node-1",
 		otherNode: true,
 		completed: true,
-		during:    func(*ateapipb.Actor) {},
+		during:    func(*ateapi.Actor) {},
 		detachErr: apierror.Unavailable("connection refused"),
 		wantCode:  codes.Aborted,
 		wantCall:  true,
@@ -290,8 +290,8 @@ func TestDetachFromFullNode(t *testing.T) {
 		otherNode: true,
 		completed: true,
 		nodeGone:  true,
-		before: func(a *ateapipb.Actor) {
-			a.Status.Crash = &ateapipb.ActorCrash{Message: "restore failed"}
+		before: func(a *ateapi.Actor) {
+			a.Status.Crash = &ateapi.ActorCrash{Message: "restore failed"}
 		},
 		wantCode: codes.Unavailable,
 	}, {
@@ -327,7 +327,7 @@ func TestDetachFromFullNode(t *testing.T) {
 		name:      "atelet keeps a local copy: Internal, actor stays on its node",
 		node:      "node-1",
 		otherNode: true,
-		detachState: func(snap *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+		detachState: func(snap *ateapi.Snapshot) *ateletpb.ActorSnapshotState {
 			st := detachedState(snap)
 			st.LatestLocal = st.GetLatestDurable()
 			return st
@@ -338,7 +338,7 @@ func TestDetachFromFullNode(t *testing.T) {
 		name:      "returned state conflicts with the record: Internal, actor stays on its node",
 		node:      "node-1",
 		otherNode: true,
-		detachState: func(snap *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+		detachState: func(snap *ateapi.Snapshot) *ateletpb.ActorSnapshotState {
 			st := detachedState(snap)
 			st.LatestDurable.Snapshot.Object.SnapshotUri = someActorSnapshotURI(t, testStorageLocation, "team-a", "other")
 			return st
@@ -359,10 +359,10 @@ func TestDetachFromFullNode(t *testing.T) {
 				}
 				seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", otherRuntime)
 			}
-			snap := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", uuid, tt.node)
+			snap := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", uuid, tt.node)
 			snap.SandboxRuntime = tt.snapRuntime
 			if tt.completed {
-				snap.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				snap.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 			}
 			actor := seedActorWithSnapshot(t, ctx, st, suspended, tt.node, snap)
 			w, atelet := newDetachTestWorkflow(t, ctx, st)
@@ -389,8 +389,8 @@ func TestDetachFromFullNode(t *testing.T) {
 					cur, err := st.GetActor(ctx, actorRef)
 					if err != nil {
 						t.Errorf("GetActor: %v", err)
-					} else if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(cur), func(a *ateapipb.Actor) error {
-						a.Status.Snapshots[0].DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+					} else if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(cur), func(a *ateapi.Actor) error {
+						a.Status.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 						return nil
 					}); err != nil {
 						t.Errorf("UpdateActor: %v", err)
@@ -404,13 +404,13 @@ func TestDetachFromFullNode(t *testing.T) {
 			}
 			atelet.detachErr = tt.detachErr
 			// update writes mutate to the stored actor, moving its version on.
-			update := func(mutate func(*ateapipb.Actor)) {
+			update := func(mutate func(*ateapi.Actor)) {
 				t.Helper()
 				cur, err := st.GetActor(ctx, actorRef)
 				if err != nil {
 					t.Fatalf("GetActor: %v", err)
 				}
-				if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(cur), func(toUpdate *ateapipb.Actor) error {
+				if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(cur), func(toUpdate *ateapi.Actor) error {
 					mutate(toUpdate)
 					return nil
 				}); err != nil {
@@ -432,7 +432,7 @@ func TestDetachFromFullNode(t *testing.T) {
 				t.Fatalf("GetActor: %v", err)
 			}
 
-			stored, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapipb.ActorTemplate{}, noRoom)
+			stored, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapi.ActorTemplate{}, noRoom)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("detachFromFullNode() = %v, want code %v", err, tt.wantCode)
 			}
@@ -481,7 +481,7 @@ func TestDetachFromFullNode(t *testing.T) {
 			}
 			got := after.GetStatus().GetSnapshots()
 			if len(got) != 1 || got[0].GetLocality() != "" ||
-				got[0].GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+				got[0].GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 				t.Errorf("snapshots = %v, want %s durable only and COMPLETED", got, uuid)
 			}
 		})
@@ -506,24 +506,24 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
 			storetest.MustCreateAtespace(t, ctx, st, "ns")
-			if _, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-				Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-				SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+			if _, err := st.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+				Metadata:       &ateapi.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+				SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: testStorageLocation},
 			}); err != nil {
 				t.Fatalf("create template: %v", err)
 			}
-			workers := map[string]*ateapipb.Worker{
+			workers := map[string]*ateapi.Worker{
 				"node-1": seedRuntimeWorker(t, ctx, st, "pod-1", "node-1", testSandboxRuntime()),
 				"node-2": seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", testSandboxRuntime()),
 			}
 			if !tt.node1 {
 				fillWorker(t, st, workers["node-1"])
 			}
-			snap := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")
-			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+			snap := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")
+			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
 				a.Status.AssignedNode = "node-1"
 				a.Status.LastAssignedGeneration = 1
-				a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(snap)}
+				a.Status.Snapshots = []*ateapi.Snapshot{proto.CloneOf(snap)}
 			})
 			w, atelet := newDetachTestWorkflow(t, ctx, st)
 			addAteletOnNode(t, w, "node-2")
@@ -533,7 +533,7 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResumeActor: %v", err)
 			}
-			if !resumed || got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+			if !resumed || got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
 				t.Fatalf("ResumeActor = (state %v, resumed %v), want RUNNING and resumed", got.GetStatus().GetState(), resumed)
 			}
 			detached := atelet.detachRequest() != nil
@@ -596,9 +596,9 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
 			storetest.MustCreateAtespace(t, ctx, st, "ns")
-			if _, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-				Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-				SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+			if _, err := st.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+				Metadata:       &ateapi.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+				SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: testStorageLocation},
 			}); err != nil {
 				t.Fatalf("create template: %v", err)
 			}
@@ -609,17 +609,17 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 				wantFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 			}
 			worker := seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", workerRuntime)
-			memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-			durable := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "durable-1",
-				someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+			durable := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "durable-1",
+				someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1"), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 			pending := newPausedSnapshot(t, 2, memory, "", "pending-2", "node-3")
 			if tt.otherRuntime {
 				pending.SandboxRuntime = testRuntime("amd64", "")
 			}
-			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
 				a.Status.AssignedNode = tt.assignedNode
 				a.Status.LastAssignedGeneration = 2
-				a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(durable), proto.CloneOf(pending)}
+				a.Status.Snapshots = []*ateapi.Snapshot{proto.CloneOf(durable), proto.CloneOf(pending)}
 			})
 			w, atelet := newDetachTestWorkflow(t, ctx, st)
 			addAteletOnNode(t, w, "node-2")
@@ -642,12 +642,12 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 					t.Fatalf("ResumeActor: %v", err)
 				}
 				s := got.GetStatus()
-				if !resumed || s.GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || s.GetAssignedNode() != "node-2" {
+				if !resumed || s.GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING || s.GetAssignedNode() != "node-2" {
 					t.Fatalf("ResumeActor = (state %v, node %q, resumed %v), want RUNNING on node-2", s.GetState(), s.GetAssignedNode(), resumed)
 				}
 				// The restore proved the upload complete.
 				snap := findSnapshotByGeneration(s.GetSnapshots(), 2)
-				if snap.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED || snap.GetLocality() != "" {
+				if snap.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED || snap.GetLocality() != "" {
 					t.Errorf("generation 2 = %v, want COMPLETED with no locality", snap)
 				}
 				return
@@ -661,7 +661,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 				t.Fatalf("GetActor: %v", err)
 			}
 			s := crashed.GetStatus()
-			if s.GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED || !strings.Contains(s.GetCrash().GetMessage(), crashMessageLocalSnapshotNodeGone) {
+			if s.GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED || !strings.Contains(s.GetCrash().GetMessage(), crashMessageLocalSnapshotNodeGone) {
 				t.Fatalf("after resume: state %v, crash %v, want CRASHED with %q", s.GetState(), s.GetCrash(), crashMessageLocalSnapshotNodeGone)
 			}
 			// Both snapshots stay, so a revert can delete the partial upload
@@ -676,7 +676,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RevertActor: %v", err)
 			}
-			if s := reverted.GetStatus(); s.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || s.GetAssignedNode() != "" {
+			if s := reverted.GetStatus(); s.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED || s.GetAssignedNode() != "" {
 				t.Fatalf("after revert: state %v, assigned node %q, want SUSPENDED with no node", s.GetState(), s.GetAssignedNode())
 			}
 			atelet.mu.Lock()
@@ -719,8 +719,8 @@ func TestDetachFromFullNode_ReentryRecordsAfterConflict(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 	fillWorker(t, st, seedRuntimeWorker(t, ctx, st, "pod-node-1", "node-1", testSandboxRuntime()))
 	seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", testSandboxRuntime())
-	snap := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")
-	actor := seedActorWithSnapshot(t, ctx, st, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", snap)
+	snap := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")
+	actor := seedActorWithSnapshot(t, ctx, st, ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1", snap)
 	w, atelet := newDetachTestWorkflow(t, ctx, st)
 	atelet.detachState = detachedState(snap)
 	noRoom := apierror.ResourceExhausted("%w", errNoWorkerRoom)
@@ -732,16 +732,16 @@ func TestDetachFromFullNode_ReentryRecordsAfterConflict(t *testing.T) {
 			t.Errorf("GetActor: %v", err)
 			return
 		}
-		if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(cur), func(*ateapipb.Actor) error { return nil }); err != nil {
+		if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(cur), func(*ateapi.Actor) error { return nil }); err != nil {
 			t.Errorf("UpdateActor: %v", err)
 		}
 	}
-	if _, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapipb.ActorTemplate{}, noRoom); apierror.Code(err) != codes.Aborted {
+	if _, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapi.ActorTemplate{}, noRoom); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("first detachFromFullNode() = %v, want Aborted", err)
 	}
 
 	atelet.onDetach = nil
-	stored, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapipb.ActorTemplate{}, noRoom)
+	stored, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapi.ActorTemplate{}, noRoom)
 	if err != nil {
 		t.Fatalf("second detachFromFullNode() = %v, want success", err)
 	}
@@ -749,7 +749,7 @@ func TestDetachFromFullNode_ReentryRecordsAfterConflict(t *testing.T) {
 		t.Errorf("AssignedNode = %q, want none", got)
 	}
 	if got := stored.GetStatus().GetSnapshots(); len(got) != 1 || got[0].GetLocality() != "" ||
-		got[0].GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		got[0].GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 		t.Errorf("snapshots = %v, want pause-snap-1 durable only and COMPLETED", got)
 	}
 }

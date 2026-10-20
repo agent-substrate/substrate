@@ -19,9 +19,9 @@ import (
 	"errors"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -109,21 +109,21 @@ func TestSchedule(t *testing.T) {
 		{
 			name: "draining workers never scheduled",
 			fleet: fleet{
-				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
+				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapi.WorkerState_WORKER_STATE_DRAINING)),
 			},
 			constraints: Constraints{},
 		},
 		{
 			name: "unspecified workers never scheduled",
 			fleet: fleet{
-				worker("w-unspecified", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED)),
+				worker("w-unspecified", "gvisor", "node-a", tierTwo, withState(ateapi.WorkerState_WORKER_STATE_UNSPECIFIED)),
 			},
 			constraints: Constraints{},
 		},
 		{
 			name: "picks active worker over draining one",
 			fleet: fleet{
-				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
+				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapi.WorkerState_WORKER_STATE_DRAINING)),
 				worker("w-active", "gvisor", "node-a", tierTwo),
 			},
 			constraints: Constraints{},
@@ -369,13 +369,13 @@ func TestSchedule(t *testing.T) {
 func TestRegistered(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*ateapipb.Worker)
+		mutate func(*ateapi.Worker)
 		want   bool
 	}{
-		{name: "registered with runtimes", mutate: func(*ateapipb.Worker) {}, want: true},
-		{name: "no registered epoch", mutate: func(w *ateapipb.Worker) { w.Status.RegisteredEpoch = 0 }},
-		{name: "no sandbox class", mutate: func(w *ateapipb.Worker) { w.Status.SandboxClasses = nil }},
-		{name: "no status", mutate: func(w *ateapipb.Worker) { w.Status = nil }},
+		{name: "registered with runtimes", mutate: func(*ateapi.Worker) {}, want: true},
+		{name: "no registered epoch", mutate: func(w *ateapi.Worker) { w.Status.RegisteredEpoch = 0 }},
+		{name: "no sandbox class", mutate: func(w *ateapi.Worker) { w.Status.SandboxClasses = nil }},
+		{name: "no status", mutate: func(w *ateapi.Worker) { w.Status = nil }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -392,7 +392,7 @@ func TestApplies(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		worker      *ateapipb.Worker
+		worker      *ateapi.Worker
 		constraints Constraints
 		want        bool
 	}{
@@ -417,7 +417,7 @@ func TestApplies(t *testing.T) {
 		},
 		{
 			name: "worker process not registered",
-			worker: worker("w", "gvisor", "node-a", nil, func(w *ateapipb.Worker) {
+			worker: worker("w", "gvisor", "node-a", nil, func(w *ateapi.Worker) {
 				w.Status.RegisteredEpoch = 0
 			}),
 			constraints: Constraints{},
@@ -477,19 +477,19 @@ func TestApplies(t *testing.T) {
 		},
 		{
 			name:        "skips draining worker",
-			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapi.WorkerState_WORKER_STATE_DRAINING)),
 			constraints: Constraints{},
 			want:        false,
 		},
 		{
 			name:        "skips unavailable worker",
-			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)),
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)),
 			constraints: Constraints{},
 			want:        false,
 		},
 		{
 			name:        "skips unspecified worker",
-			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED)),
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapi.WorkerState_WORKER_STATE_UNSPECIFIED)),
 			constraints: Constraints{},
 			want:        false,
 		},
@@ -530,20 +530,20 @@ func TestApplies(t *testing.T) {
 	}
 }
 
-type fleet []*ateapipb.Worker
+type fleet []*ateapi.Worker
 
-func (f fleet) Workers() ([]*ateapipb.Worker, error) { return f, nil }
+func (f fleet) Workers() ([]*ateapi.Worker, error) { return f, nil }
 
-func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateapipb.Worker)) *ateapipb.Worker {
-	w := &ateapipb.Worker{
+func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateapi.Worker)) *ateapi.Worker {
+	w := &ateapi.Worker{
 		WorkerPod: pod,
 		NodeName:  node,
 		Labels:    lbls,
 		// A stored Worker always carries a ceiling; CreateWorker reifies one.
-		Status: &ateapipb.WorkerStatus{
-			State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		Status: &ateapi.WorkerStatus{
+			State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 			RegisteredEpoch: 1,
-			Capacity:        &ateapipb.WorkerResources{Actors: 1},
+			Capacity:        &ateapi.WorkerResources{Actors: 1},
 		},
 	}
 	if class != "" {
@@ -555,14 +555,14 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 	return w
 }
 
-func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.ActorSandboxRuntime {
-	attrs := []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}}
+func sandboxRuntime(class, arch string, bundleHash ...string) *ateapi.ActorSandboxRuntime {
+	attrs := []*ateapi.AttributeEntry{{Key: "architecture", Value: arch}}
 	if len(bundleHash) > 0 && bundleHash[0] != "" {
-		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "sandbox_bundle_hash", Value: bundleHash[0]})
+		attrs = append(attrs, &ateapi.AttributeEntry{Key: "sandbox_bundle_hash", Value: bundleHash[0]})
 	}
-	return &ateapipb.ActorSandboxRuntime{
+	return &ateapi.ActorSandboxRuntime{
 		SandboxClass: class,
-		Version: &ateapipb.VersionedSandboxCompat{
+		Version: &ateapi.VersionedSandboxCompat{
 			SchemaVersion: "v1",
 			Attributes:    attrs,
 		},
@@ -571,32 +571,32 @@ func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.ActorSan
 
 // sandboxClass is the WorkerSandboxClass entry of def's class, with def as
 // its default runtime and restorable as the others.
-func sandboxClass(def *ateapipb.ActorSandboxRuntime, restorable ...*ateapipb.ActorSandboxRuntime) *ateapipb.WorkerSandboxClass {
-	c := &ateapipb.WorkerSandboxClass{SandboxClass: def.GetSandboxClass(), DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: def.GetVersion()}}
+func sandboxClass(def *ateapi.ActorSandboxRuntime, restorable ...*ateapi.ActorSandboxRuntime) *ateapi.WorkerSandboxClass {
+	c := &ateapi.WorkerSandboxClass{SandboxClass: def.GetSandboxClass(), DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: def.GetVersion()}}
 	for _, r := range restorable {
-		c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapipb.WorkerSandboxRuntime{Version: r.GetVersion()})
+		c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapi.WorkerSandboxRuntime{Version: r.GetVersion()})
 	}
 	return c
 }
 
 // withRuntimes gives the worker one sandbox class, def's. A nil def leaves
 // the worker as before it registered: no class at all.
-func withRuntimes(def *ateapipb.ActorSandboxRuntime, restorable ...*ateapipb.ActorSandboxRuntime) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) {
+func withRuntimes(def *ateapi.ActorSandboxRuntime, restorable ...*ateapi.ActorSandboxRuntime) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
 		w.Status.SandboxClasses = nil
 		if def != nil {
-			w.Status.SandboxClasses = []*ateapipb.WorkerSandboxClass{sandboxClass(def, restorable...)}
+			w.Status.SandboxClasses = []*ateapi.WorkerSandboxClass{sandboxClass(def, restorable...)}
 		}
 	}
 }
 
-func withState(state ateapipb.WorkerState) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) {
+func withState(state ateapi.WorkerState) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
 		w.Status.State = state
 	}
 }
 
-func assigned(atespace, name string) func(*ateapipb.Worker) {
+func assigned(atespace, name string) func(*ateapi.Worker) {
 	return assignedFor(atespace, name, nil)
 }
 
@@ -604,32 +604,32 @@ func assigned(atespace, name string) func(*ateapipb.Worker) {
 // place against what is left rather than against the whole capacity. Only the
 // allocation total, which is all placement reads: the assignments themselves are
 // their own records and never on the worker.
-func assignedFor(atespace, name string, took *ateapipb.Resources) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) {
+func assignedFor(atespace, name string, took *ateapi.Resources) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
 		if w.Status == nil {
-			w.Status = &ateapipb.WorkerStatus{}
+			w.Status = &ateapi.WorkerStatus{}
 		}
 		w.Status.Allocated = resources.AddToAllocated(w.Status.Allocated,
-			&ateapipb.ActorAssignment{ActorUid: atespace + "/" + name, Resources: took}, +1)
+			&ateapi.ActorAssignment{ActorUid: atespace + "/" + name, Resources: took}, +1)
 	}
 }
 
-func withMaxActors(n int32) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) {
+func withMaxActors(n int32) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
 		if w.Status == nil {
-			w.Status = &ateapipb.WorkerStatus{}
+			w.Status = &ateapi.WorkerStatus{}
 		}
 		if w.Status.Capacity == nil {
-			w.Status.Capacity = &ateapipb.WorkerResources{}
+			w.Status.Capacity = &ateapi.WorkerResources{}
 		}
 		w.Status.Capacity.Actors = n
 	}
 }
 
-func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) {
+func withCapacity(cpuMilli, memBytes int64) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
 		if w.Status.Capacity == nil {
-			w.Status.Capacity = &ateapipb.WorkerResources{}
+			w.Status.Capacity = &ateapi.WorkerResources{}
 		}
 		w.Status.Capacity.CpuMillicores = cpuMilli
 		w.Status.Capacity.MemoryBytes = memBytes

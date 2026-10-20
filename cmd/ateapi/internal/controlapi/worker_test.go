@@ -21,10 +21,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -38,9 +38,9 @@ const (
 
 // validWorker returns a Worker in the shape CreateWorker accepts: named, with
 // its pod coordinates filled in and no status — status is output-only.
-func validWorker(name string, mods ...func(*ateapipb.Worker)) *ateapipb.Worker {
-	w := &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: name},
+func validWorker(name string, mods ...func(*ateapi.Worker)) *ateapi.Worker {
+	w := &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: name},
 		WorkerNamespace: "ate-system",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "worker-pod-1",
@@ -53,9 +53,9 @@ func validWorker(name string, mods ...func(*ateapipb.Worker)) *ateapipb.Worker {
 	return w
 }
 
-func newAPIAssignment(actorUID string) *ateapipb.ActorAssignment {
-	return &ateapipb.ActorAssignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+func newAPIAssignment(actorUID string) *ateapi.ActorAssignment {
+	return &ateapi.ActorAssignment{
+		Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "actor-1"},
 		ActorUid: actorUID,
 	}
 }
@@ -77,14 +77,14 @@ func newWorkerAPIService(t *testing.T) (*RPCService, store.Interface) {
 
 // seedAPIWorker registers a worker directly through the store and returns it as
 // stored, so tests start from a known uid and version.
-func seedAPIWorker(t *testing.T, ctx context.Context, persistence store.Interface, worker *ateapipb.Worker) *ateapipb.Worker {
+func seedAPIWorker(t *testing.T, ctx context.Context, persistence store.Interface, worker *ateapi.Worker) *ateapi.Worker {
 	t.Helper()
-	worker = proto.Clone(worker).(*ateapipb.Worker)
+	worker = proto.Clone(worker).(*ateapi.Worker)
 	if worker.GetStatus() == nil {
 		// A seeded Worker stands in for one that registered: ACTIVE, with the
 		// gvisor default runtime its class is read from.
-		worker.Status = &ateapipb.WorkerStatus{
-			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		worker.Status = &ateapi.WorkerStatus{
+			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		}
 	}
@@ -97,7 +97,7 @@ func seedAPIWorker(t *testing.T, ctx context.Context, persistence store.Interfac
 
 // assignAPIWorker binds an Actor to a worker the way the resume workflow does:
 // in-process, through the store. There is no AssignWorker RPC to go through.
-func assignAPIWorker(t *testing.T, ctx context.Context, persistence store.Interface, name, actorUID string) *ateapipb.Worker {
+func assignAPIWorker(t *testing.T, ctx context.Context, persistence store.Interface, name, actorUID string) *ateapi.Worker {
 	t.Helper()
 	if err := persistence.BindActorToWorker(ctx, name, newAPIAssignment(actorUID), nil); err != nil {
 		t.Fatalf("assigning worker %s: %v", name, err)
@@ -109,8 +109,8 @@ func assignAPIWorker(t *testing.T, ctx context.Context, persistence store.Interf
 	return assigned
 }
 
-func workerRef(name string) *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Name: name}
+func workerRef(name string) *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Name: name}
 }
 
 // updateFrom builds the body of an UpdateWorker request the way a client does:
@@ -118,8 +118,8 @@ func workerRef(name string) *ateapipb.ObjectRef {
 // The metadata comes along as the uid and version guards every update requires,
 // and so does everything else — an update replaces the stored worker, so an
 // immutable field the request drops reads as a request to clear it.
-func updateFrom(observed *ateapipb.Worker, mutate func(*ateapipb.Worker)) *ateapipb.Worker {
-	worker := proto.Clone(observed).(*ateapipb.Worker)
+func updateFrom(observed *ateapi.Worker, mutate func(*ateapi.Worker)) *ateapi.Worker {
+	worker := proto.Clone(observed).(*ateapi.Worker)
 	if mutate != nil {
 		mutate(worker)
 	}
@@ -135,7 +135,7 @@ func TestListWorkerAssignments(t *testing.T) {
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-2")
 
-	page, err := svc.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: workerRef(apiWorkerName)})
+	page, err := svc.ListWorkerActorAssignments(ctx, &ateapi.ListWorkerActorAssignmentsRequest{Worker: workerRef(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("ListWorkerActorAssignments() failed: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestListWorkerAssignments_AbsentWorker(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newWorkerAPIService(t)
 
-	_, err := svc.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{
+	_, err := svc.ListWorkerActorAssignments(ctx, &ateapi.ListWorkerActorAssignmentsRequest{
 		Worker: workerRef("3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"),
 	})
 	if got := apierror.Code(err); got != codes.NotFound {
@@ -181,9 +181,9 @@ func TestUpdateWorker_CannotChangeCapacity(t *testing.T) {
 	seeded := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	before := seeded.GetStatus().GetCapacity()
 
-	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-		Worker: updateFrom(seeded, func(w *ateapipb.Worker) {
-			w.Status.Capacity = &ateapipb.WorkerResources{Actors: 4094}
+	got, err := svc.UpdateWorker(ctx, &ateapi.UpdateWorkerRequest{
+		Worker: updateFrom(seeded, func(w *ateapi.Worker) {
+			w.Status.Capacity = &ateapi.WorkerResources{Actors: 4094}
 		}),
 	})
 	if err != nil {
@@ -201,15 +201,15 @@ func TestGetWorker_Errors(t *testing.T) {
 
 	tests := []struct {
 		name string
-		req  *ateapipb.GetWorkerRequest
+		req  *ateapi.GetWorkerRequest
 		want codes.Code
 	}{
-		{"absent", &ateapipb.GetWorkerRequest{Worker: workerRef(apiOtherWorkerName)}, codes.NotFound},
-		{"no ref", &ateapipb.GetWorkerRequest{}, codes.InvalidArgument},
-		{"no name", &ateapipb.GetWorkerRequest{Worker: &ateapipb.ObjectRef{}}, codes.InvalidArgument},
+		{"absent", &ateapi.GetWorkerRequest{Worker: workerRef(apiOtherWorkerName)}, codes.NotFound},
+		{"no ref", &ateapi.GetWorkerRequest{}, codes.InvalidArgument},
+		{"no name", &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{}}, codes.InvalidArgument},
 		// Workers are global-scoped, so naming an atespace is a client bug
 		// rather than a lookup that happens to miss.
-		{"atespace set", &ateapipb.GetWorkerRequest{Worker: &ateapipb.ObjectRef{Atespace: "team-a", Name: apiWorkerName}}, codes.InvalidArgument},
+		{"atespace set", &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{Atespace: "team-a", Name: apiWorkerName}}, codes.InvalidArgument},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,7 +225,7 @@ func TestCreateWorker(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
 
-	got, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: validWorker(apiWorkerName)})
+	got, err := svc.CreateWorker(ctx, &ateapi.CreateWorkerRequest{Worker: validWorker(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("CreateWorker() failed: %v", err)
 	}
@@ -236,8 +236,8 @@ func TestCreateWorker(t *testing.T) {
 		t.Error("created worker has no uid; the store is meant to assign one")
 	}
 	// A Worker takes no Actors until it is marked available.
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-		t.Errorf("created worker state = %v, want %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	if got.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Errorf("created worker state = %v, want %v", got.GetStatus().GetState(), ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 	}
 
 	stored, err := persistence.GetWorker(ctx, apiWorkerName)
@@ -256,13 +256,13 @@ func TestCreateWorker_IgnoresRequestStatus(t *testing.T) {
 	svc, _ := newWorkerAPIService(t)
 
 	in := validWorker(apiWorkerName)
-	in.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING, Allocated: &ateapipb.WorkerResources{Actors: 9}}
+	in.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_DRAINING, Allocated: &ateapi.WorkerResources{Actors: 9}}
 
-	got, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: in})
+	got, err := svc.CreateWorker(ctx, &ateapi.CreateWorkerRequest{Worker: in})
 	if err != nil {
 		t.Fatalf("CreateWorker() failed: %v", err)
 	}
-	want := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
+	want := &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE}
 	if diff := cmp.Diff(want, got.GetStatus(), protocmp.Transform()); diff != "" {
 		t.Errorf("created worker status mismatch (-want +got):\n%s", diff)
 	}
@@ -273,7 +273,7 @@ func TestCreateWorker_AlreadyExists(t *testing.T) {
 	svc, persistence := newWorkerAPIService(t)
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 
-	_, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: validWorker(apiWorkerName)})
+	_, err := svc.CreateWorker(ctx, &ateapi.CreateWorkerRequest{Worker: validWorker(apiWorkerName)})
 	if got := apierror.Code(err); got != codes.AlreadyExists {
 		t.Errorf("CreateWorker() code = %v (err %v), want %v", got, err, codes.AlreadyExists)
 	}
@@ -285,19 +285,19 @@ func TestCreateWorker_InvalidArgument(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		mutate func(*ateapipb.Worker) // nil sends no worker at all
+		mutate func(*ateapi.Worker) // nil sends no worker at all
 	}{
 		{name: "no worker"},
-		{name: "no name", mutate: func(w *ateapipb.Worker) { w.Metadata = &ateapipb.ResourceMetadata{} }},
-		{name: "atespace set", mutate: func(w *ateapipb.Worker) { w.Metadata.Atespace = "team-a" }},
-		{name: "no node", mutate: func(w *ateapipb.Worker) { w.NodeName = "" }},
-		{name: "no pool", mutate: func(w *ateapipb.Worker) { w.WorkerPool = "" }},
-		{name: "no pod", mutate: func(w *ateapipb.Worker) { w.WorkerPod = "" }},
-		{name: "pod uid not a uuid", mutate: func(w *ateapipb.Worker) { w.WorkerPodUid = "not-a-uuid" }},
+		{name: "no name", mutate: func(w *ateapi.Worker) { w.Metadata = &ateapi.ResourceMetadata{} }},
+		{name: "atespace set", mutate: func(w *ateapi.Worker) { w.Metadata.Atespace = "team-a" }},
+		{name: "no node", mutate: func(w *ateapi.Worker) { w.NodeName = "" }},
+		{name: "no pool", mutate: func(w *ateapi.Worker) { w.WorkerPool = "" }},
+		{name: "no pod", mutate: func(w *ateapi.Worker) { w.WorkerPod = "" }},
+		{name: "pod uid not a uuid", mutate: func(w *ateapi.Worker) { w.WorkerPodUid = "not-a-uuid" }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &ateapipb.CreateWorkerRequest{}
+			req := &ateapi.CreateWorkerRequest{}
 			if tc.mutate != nil {
 				worker := validWorker(apiWorkerName)
 				tc.mutate(worker)
@@ -316,8 +316,8 @@ func TestUpdateWorker(t *testing.T) {
 	svc, persistence := newWorkerAPIService(t)
 	seeded := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 
-	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-		Worker: updateFrom(seeded, func(w *ateapipb.Worker) {
+	got, err := svc.UpdateWorker(ctx, &ateapi.UpdateWorkerRequest{
+		Worker: updateFrom(seeded, func(w *ateapi.Worker) {
 			w.Labels = map[string]string{"tier": "batch"}
 		}),
 	})
@@ -325,7 +325,7 @@ func TestUpdateWorker(t *testing.T) {
 		t.Fatalf("UpdateWorker() failed: %v", err)
 	}
 
-	want := proto.Clone(seeded).(*ateapipb.Worker)
+	want := proto.Clone(seeded).(*ateapi.Worker)
 	want.Labels = map[string]string{"tier": "batch"}
 	want.Metadata = got.GetMetadata()
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
@@ -346,8 +346,8 @@ func TestUpdateWorker_OmittedMutableFieldIsCleared(t *testing.T) {
 	labelled.Labels = map[string]string{"tier": "batch"}
 	seeded := seedAPIWorker(t, ctx, persistence, labelled)
 
-	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-		Worker: updateFrom(seeded, func(w *ateapipb.Worker) {
+	got, err := svc.UpdateWorker(ctx, &ateapi.UpdateWorkerRequest{
+		Worker: updateFrom(seeded, func(w *ateapi.Worker) {
 			w.Labels = nil
 		}),
 	})
@@ -368,12 +368,12 @@ func TestUpdateWorker_LeavesStatusAlone(t *testing.T) {
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	assigned := assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
 
-	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-		Worker: updateFrom(assigned, func(w *ateapipb.Worker) {
+	got, err := svc.UpdateWorker(ctx, &ateapi.UpdateWorkerRequest{
+		Worker: updateFrom(assigned, func(w *ateapi.Worker) {
 			w.Labels = map[string]string{"tier": "batch"}
 			// A forged status: drained, and with the Actor released out from
 			// under the workflow that bound it. Neither may land.
-			w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
+			w.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_DRAINING}
 		}),
 	})
 	if err != nil {
@@ -389,9 +389,9 @@ func TestUpdateWorker_Preconditions(t *testing.T) {
 	svc, persistence := newWorkerAPIService(t)
 	seeded := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 
-	update := func(bend func(*ateapipb.ResourceMetadata)) error {
-		_, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-			Worker: updateFrom(seeded, func(w *ateapipb.Worker) {
+	update := func(bend func(*ateapi.ResourceMetadata)) error {
+		_, err := svc.UpdateWorker(ctx, &ateapi.UpdateWorkerRequest{
+			Worker: updateFrom(seeded, func(w *ateapi.Worker) {
 				w.Labels = map[string]string{"tier": "batch"}
 				bend(w.Metadata)
 			}),
@@ -400,14 +400,14 @@ func TestUpdateWorker_Preconditions(t *testing.T) {
 	}
 
 	t.Run("stale version", func(t *testing.T) {
-		err := update(func(md *ateapipb.ResourceMetadata) { md.Version += 7 })
+		err := update(func(md *ateapi.ResourceMetadata) { md.Version += 7 })
 		if got := apierror.Code(err); got != codes.Aborted {
 			t.Errorf("UpdateWorker() code = %v, want %v", got, codes.Aborted)
 		}
 	})
 
 	t.Run("foreign uid", func(t *testing.T) {
-		err := update(func(md *ateapipb.ResourceMetadata) { md.Uid = apiOtherWorkerName })
+		err := update(func(md *ateapi.ResourceMetadata) { md.Uid = apiOtherWorkerName })
 		if got := apierror.Code(err); got != codes.Aborted {
 			t.Errorf("UpdateWorker() code = %v, want %v", got, codes.Aborted)
 		}
@@ -416,21 +416,21 @@ func TestUpdateWorker_Preconditions(t *testing.T) {
 	// Both guards are required: an update that pins neither is a blind write,
 	// which is rejected before it reaches the store.
 	t.Run("missing uid", func(t *testing.T) {
-		err := update(func(md *ateapipb.ResourceMetadata) { md.Uid = "" })
+		err := update(func(md *ateapi.ResourceMetadata) { md.Uid = "" })
 		if got := apierror.Code(err); got != codes.InvalidArgument {
 			t.Errorf("UpdateWorker() code = %v, want %v", got, codes.InvalidArgument)
 		}
 	})
 
 	t.Run("missing version", func(t *testing.T) {
-		err := update(func(md *ateapipb.ResourceMetadata) { md.Version = 0 })
+		err := update(func(md *ateapi.ResourceMetadata) { md.Version = 0 })
 		if got := apierror.Code(err); got != codes.InvalidArgument {
 			t.Errorf("UpdateWorker() code = %v, want %v", got, codes.InvalidArgument)
 		}
 	})
 
 	t.Run("matching", func(t *testing.T) {
-		if err := update(func(*ateapipb.ResourceMetadata) {}); err != nil {
+		if err := update(func(*ateapi.ResourceMetadata) {}); err != nil {
 			t.Errorf("UpdateWorker() with matching preconditions failed: %v", err)
 		}
 	})
@@ -445,29 +445,29 @@ func TestUpdateWorker_Errors(t *testing.T) {
 	// stored, so the rule it is named for is the one that rejects it.
 	tests := []struct {
 		name   string
-		mutate func(*ateapipb.Worker) // nil sends no worker at all
+		mutate func(*ateapi.Worker) // nil sends no worker at all
 		want   codes.Code
 	}{
 		{"no worker", nil, codes.InvalidArgument},
-		{"atespace set", func(w *ateapipb.Worker) { w.Metadata.Atespace = "team-a" }, codes.InvalidArgument},
-		{"absent", func(w *ateapipb.Worker) {
+		{"atespace set", func(w *ateapi.Worker) { w.Metadata.Atespace = "team-a" }, codes.InvalidArgument},
+		{"absent", func(w *ateapi.Worker) {
 			w.Metadata.Name = "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63"
 		}, codes.NotFound},
 		// Immutable fields, changed. A replacement update carries the whole
 		// worker, so these are the cases where it carries a different one.
-		{"worker_pod changed", func(w *ateapipb.Worker) { w.WorkerPod = "worker-pod-2" }, codes.InvalidArgument},
-		{"node_name changed", func(w *ateapipb.Worker) { w.NodeName = "node-2" }, codes.InvalidArgument},
+		{"worker_pod changed", func(w *ateapi.Worker) { w.WorkerPod = "worker-pod-2" }, codes.InvalidArgument},
+		{"node_name changed", func(w *ateapi.Worker) { w.NodeName = "node-2" }, codes.InvalidArgument},
 		// capacity is deliberately absent here: it may change (the pool's actor
 		// ceiling moves, a pod can be resized, a Worker may report its own).
 		// TestUpdateWorker_CapacityChanges covers that.
 		//
 		// And immutable fields dropped, which a replacement update reads as a
 		// request to clear them. Rejected rather than silently applied.
-		{"node_name omitted", func(w *ateapipb.Worker) { w.NodeName = "" }, codes.InvalidArgument},
+		{"node_name omitted", func(w *ateapi.Worker) { w.NodeName = "" }, codes.InvalidArgument},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &ateapipb.UpdateWorkerRequest{}
+			req := &ateapi.UpdateWorkerRequest{}
 			if tc.mutate != nil {
 				req.Worker = updateFrom(seeded, tc.mutate)
 			}
@@ -485,13 +485,13 @@ func TestUpdateWorker_DrainingWorkerKeepsLabelsMutable(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-	drained, err := svc.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
+	drained, err := svc.DrainWorker(ctx, &ateapi.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
 
-	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-		Worker: updateFrom(drained.GetWorker(), func(w *ateapipb.Worker) { w.Labels = map[string]string{"tier": "batch"} }),
+	got, err := svc.UpdateWorker(ctx, &ateapi.UpdateWorkerRequest{
+		Worker: updateFrom(drained.GetWorker(), func(w *ateapi.Worker) { w.Labels = map[string]string{"tier": "batch"} }),
 	})
 	if err != nil {
 		t.Fatalf("UpdateWorker() failed: %v", err)
@@ -499,8 +499,8 @@ func TestUpdateWorker_DrainingWorkerKeepsLabelsMutable(t *testing.T) {
 	if got.GetLabels()["tier"] != "batch" {
 		t.Errorf("labels = %v, want tier=batch", got.GetLabels())
 	}
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
-		t.Errorf("state = %v, want it still %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_DRAINING)
+	if got.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("state = %v, want it still %v", got.GetStatus().GetState(), ateapi.WorkerState_WORKER_STATE_DRAINING)
 	}
 }
 
@@ -509,7 +509,7 @@ func TestDeleteWorker(t *testing.T) {
 	svc, persistence := newWorkerAPIService(t)
 	seeded := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 
-	got, err := svc.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)})
+	got, err := svc.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}
@@ -518,11 +518,11 @@ func TestDeleteWorker(t *testing.T) {
 	if got.GetMetadata().GetDeleteTime() == nil {
 		t.Error("DeleteWorker() returned a worker without delete_time")
 	}
-	want := proto.Clone(seeded).(*ateapipb.Worker)
+	want := proto.Clone(seeded).(*ateapi.Worker)
 	want.Metadata.Version = seeded.GetMetadata().GetVersion() + 1
 	want.Metadata.UpdateTime = got.GetMetadata().GetUpdateTime()
 	want.Metadata.DeleteTime = got.GetMetadata().GetDeleteTime()
-	want.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+	want.Status.State = ateapi.WorkerState_WORKER_STATE_DRAINING
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("DeleteWorker() returned something other than the worker it removed (-want +got):\n%s", diff)
 	}
@@ -538,7 +538,7 @@ func TestDeleteWorker_Absent(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newWorkerAPIService(t)
 
-	_, err := svc.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)})
+	_, err := svc.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)})
 	if got := apierror.Code(err); got != codes.NotFound {
 		t.Errorf("DeleteWorker() code = %v (err %v), want %v", got, err, codes.NotFound)
 	}
@@ -552,7 +552,7 @@ func TestDeleteWorker_AssignedWorkerDeletesAnyway(t *testing.T) {
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
 
-	got, err := svc.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)})
+	got, err := svc.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}
@@ -568,9 +568,9 @@ func TestDeleteWorker_Preconditions(t *testing.T) {
 	seeded := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 
 	t.Run("stale version", func(t *testing.T) {
-		_, err := svc.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{
+		_, err := svc.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{
 			Worker:  workerRef(apiWorkerName),
-			Options: &ateapipb.DeleteOptions{Version: seeded.GetMetadata().GetVersion() + 7},
+			Options: &ateapi.DeleteOptions{Version: seeded.GetMetadata().GetVersion() + 7},
 		})
 		if got := apierror.Code(err); got != codes.Aborted {
 			t.Errorf("DeleteWorker() code = %v (err %v), want %v", got, err, codes.Aborted)
@@ -578,9 +578,9 @@ func TestDeleteWorker_Preconditions(t *testing.T) {
 	})
 
 	t.Run("foreign uid", func(t *testing.T) {
-		_, err := svc.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{
+		_, err := svc.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{
 			Worker:  workerRef(apiWorkerName),
-			Options: &ateapipb.DeleteOptions{Uid: apiOtherWorkerName},
+			Options: &ateapi.DeleteOptions{Uid: apiOtherWorkerName},
 		})
 		if got := apierror.Code(err); got != codes.Aborted {
 			t.Errorf("DeleteWorker() code = %v (err %v), want %v", got, err, codes.Aborted)
@@ -593,9 +593,9 @@ func TestDeleteWorker_Preconditions(t *testing.T) {
 	}
 
 	t.Run("matching", func(t *testing.T) {
-		if _, err := svc.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{
+		if _, err := svc.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{
 			Worker: workerRef(apiWorkerName),
-			Options: &ateapipb.DeleteOptions{
+			Options: &ateapi.DeleteOptions{
 				Uid:     seeded.GetMetadata().GetUid(),
 				Version: seeded.GetMetadata().GetVersion(),
 			},
@@ -610,12 +610,12 @@ func TestDrainWorker(t *testing.T) {
 	svc, persistence := newWorkerAPIService(t)
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 
-	got, err := svc.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
+	got, err := svc.DrainWorker(ctx, &ateapi.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
-	if got.GetWorker().GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
-		t.Errorf("state = %v, want %v", got.GetWorker().GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_DRAINING)
+	if got.GetWorker().GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("state = %v, want %v", got.GetWorker().GetStatus().GetState(), ateapi.WorkerState_WORKER_STATE_DRAINING)
 	}
 	if got.GetWorker().GetMetadata().GetVersion() != 2 {
 		t.Errorf("version = %d, want 2", got.GetWorker().GetMetadata().GetVersion())
@@ -623,7 +623,7 @@ func TestDrainWorker(t *testing.T) {
 
 	// Draining again is a no-op, and specifically must not bump the version:
 	// callers re-drive drain on every pod event.
-	again, err := svc.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
+	again, err := svc.DrainWorker(ctx, &ateapi.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("second DrainWorker() failed: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestDrainWorker_KeepsAssignment(t *testing.T) {
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
 
-	got, err := svc.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
+	got, err := svc.DrainWorker(ctx, &ateapi.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
@@ -655,13 +655,13 @@ func TestDrainWorker_Errors(t *testing.T) {
 
 	tests := []struct {
 		name string
-		req  *ateapipb.DrainWorkerRequest
+		req  *ateapi.DrainWorkerRequest
 		want codes.Code
 	}{
-		{"absent", &ateapipb.DrainWorkerRequest{Worker: workerRef(apiWorkerName)}, codes.NotFound},
-		{"no ref", &ateapipb.DrainWorkerRequest{}, codes.InvalidArgument},
-		{"no name", &ateapipb.DrainWorkerRequest{Worker: &ateapipb.ObjectRef{}}, codes.InvalidArgument},
-		{"atespace set", &ateapipb.DrainWorkerRequest{Worker: &ateapipb.ObjectRef{Atespace: "team-a", Name: apiWorkerName}}, codes.InvalidArgument},
+		{"absent", &ateapi.DrainWorkerRequest{Worker: workerRef(apiWorkerName)}, codes.NotFound},
+		{"no ref", &ateapi.DrainWorkerRequest{}, codes.InvalidArgument},
+		{"no name", &ateapi.DrainWorkerRequest{Worker: &ateapi.ObjectRef{}}, codes.InvalidArgument},
+		{"atespace set", &ateapi.DrainWorkerRequest{Worker: &ateapi.ObjectRef{Atespace: "team-a", Name: apiWorkerName}}, codes.InvalidArgument},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -679,31 +679,31 @@ func TestDrainWorker_Errors(t *testing.T) {
 func TestMarkWorkerAvailability(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newWorkerAPIService(t)
-	created, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: validWorker(apiWorkerName)})
+	created, err := svc.CreateWorker(ctx, &ateapi.CreateWorkerRequest{Worker: validWorker(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("CreateWorker() failed: %v", err)
 	}
 
-	markAvailable := func() (*ateapipb.Worker, error) {
-		resp, err := svc.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: workerRef(apiWorkerName)})
+	markAvailable := func() (*ateapi.Worker, error) {
+		resp, err := svc.MarkWorkerAvailable(ctx, &ateapi.MarkWorkerAvailableRequest{Worker: workerRef(apiWorkerName)})
 		return resp.GetWorker(), err
 	}
-	markUnavailable := func() (*ateapipb.Worker, error) {
-		resp, err := svc.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName)})
+	markUnavailable := func() (*ateapi.Worker, error) {
+		resp, err := svc.MarkWorkerUnavailable(ctx, &ateapi.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName)})
 		return resp.GetWorker(), err
 	}
 	version := created.GetMetadata().GetVersion()
 	for i, step := range []struct {
 		name    string
-		mark    func() (*ateapipb.Worker, error)
-		want    ateapipb.WorkerState
+		mark    func() (*ateapi.Worker, error)
+		want    ateapi.WorkerState
 		changed bool
 	}{
-		{"available", markAvailable, ateapipb.WorkerState_WORKER_STATE_ACTIVE, true},
-		{"available again", markAvailable, ateapipb.WorkerState_WORKER_STATE_ACTIVE, false},
-		{"unavailable", markUnavailable, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE, true},
-		{"unavailable again", markUnavailable, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE, false},
-		{"available once more", markAvailable, ateapipb.WorkerState_WORKER_STATE_ACTIVE, true},
+		{"available", markAvailable, ateapi.WorkerState_WORKER_STATE_ACTIVE, true},
+		{"available again", markAvailable, ateapi.WorkerState_WORKER_STATE_ACTIVE, false},
+		{"unavailable", markUnavailable, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE, true},
+		{"unavailable again", markUnavailable, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE, false},
+		{"available once more", markAvailable, ateapi.WorkerState_WORKER_STATE_ACTIVE, true},
 	} {
 		got, err := step.mark()
 		if err != nil {
@@ -728,7 +728,7 @@ func TestMarkWorkerUnavailable_KeepsAssignment(t *testing.T) {
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
 
-	got, err := svc.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName)})
+	got, err := svc.MarkWorkerUnavailable(ctx, &ateapi.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("MarkWorkerUnavailable() failed: %v", err)
 	}
@@ -743,16 +743,16 @@ func TestMarkWorker_Draining(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-	drained, err := svc.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
+	drained, err := svc.DrainWorker(ctx, &ateapi.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
 
-	_, err = svc.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName)})
+	_, err = svc.MarkWorkerUnavailable(ctx, &ateapi.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName)})
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Errorf("MarkWorkerUnavailable() on a draining worker code = %v (err %v), want %v", got, err, codes.FailedPrecondition)
 	}
-	_, err = svc.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: workerRef(apiWorkerName)})
+	_, err = svc.MarkWorkerAvailable(ctx, &ateapi.MarkWorkerAvailableRequest{Worker: workerRef(apiWorkerName)})
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Errorf("MarkWorkerAvailable() on a draining worker code = %v (err %v), want %v", got, err, codes.FailedPrecondition)
 	}
@@ -772,21 +772,21 @@ func TestMarkWorker_Errors(t *testing.T) {
 
 	refs := []struct {
 		name string
-		ref  *ateapipb.ObjectRef
+		ref  *ateapi.ObjectRef
 		want codes.Code
 	}{
 		{"absent", workerRef(apiWorkerName), codes.NotFound},
 		{"no ref", nil, codes.InvalidArgument},
-		{"no name", &ateapipb.ObjectRef{}, codes.InvalidArgument},
-		{"atespace set", &ateapipb.ObjectRef{Atespace: "team-a", Name: apiWorkerName}, codes.InvalidArgument},
+		{"no name", &ateapi.ObjectRef{}, codes.InvalidArgument},
+		{"atespace set", &ateapi.ObjectRef{Atespace: "team-a", Name: apiWorkerName}, codes.InvalidArgument},
 	}
 	for _, tc := range refs {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := svc.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: tc.ref})
+			_, err := svc.MarkWorkerAvailable(ctx, &ateapi.MarkWorkerAvailableRequest{Worker: tc.ref})
 			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("MarkWorkerAvailable() code = %v (err %v), want %v", got, err, tc.want)
 			}
-			_, err = svc.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: tc.ref})
+			_, err = svc.MarkWorkerUnavailable(ctx, &ateapi.MarkWorkerUnavailableRequest{Worker: tc.ref})
 			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("MarkWorkerUnavailable() code = %v (err %v), want %v", got, err, tc.want)
 			}
@@ -811,18 +811,18 @@ func TestServiceImplUpdateWorker_ImmutableFields(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		field  string
-		mutate func(*ateapipb.Worker)
+		mutate func(*ateapi.Worker)
 	}{
-		{"worker_namespace", "worker_namespace", func(w *ateapipb.Worker) { w.WorkerNamespace = "other-ns" }},
-		{"worker_pool", "worker_pool", func(w *ateapipb.Worker) { w.WorkerPool = "other-pool" }},
-		{"worker_pod", "worker_pod", func(w *ateapipb.Worker) { w.WorkerPod = "other-pod" }},
-		{"worker_pod_uid", "worker_pod_uid", func(w *ateapipb.Worker) { w.WorkerPodUid = apiOtherWorkerName }},
-		{"node_name", "node_name", func(w *ateapipb.Worker) { w.NodeName = "other-node" }},
+		{"worker_namespace", "worker_namespace", func(w *ateapi.Worker) { w.WorkerNamespace = "other-ns" }},
+		{"worker_pool", "worker_pool", func(w *ateapi.Worker) { w.WorkerPool = "other-pool" }},
+		{"worker_pod", "worker_pod", func(w *ateapi.Worker) { w.WorkerPod = "other-pod" }},
+		{"worker_pod_uid", "worker_pod_uid", func(w *ateapi.Worker) { w.WorkerPodUid = apiOtherWorkerName }},
+		{"node_name", "node_name", func(w *ateapi.Worker) { w.NodeName = "other-node" }},
 		// capacity is absent: it is reported into status, which a client
 		// cannot write. See TestUpdateWorker_CannotChangeCapacity.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := impl.UpdateWorker(ctx, apiWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+			_, err := impl.UpdateWorker(ctx, apiWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapi.Worker) error {
 				tc.mutate(toUpdate)
 				return nil
 			})
@@ -854,7 +854,7 @@ func TestCreateWorker_IgnoresRequestMetadataServerFields(t *testing.T) {
 	in.Metadata.Uid = "not-a-uuid"
 	in.Metadata.Version = -5
 
-	got, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: in})
+	got, err := svc.CreateWorker(ctx, &ateapi.CreateWorkerRequest{Worker: in})
 	if err != nil {
 		t.Fatalf("CreateWorker() failed: %v", err)
 	}
@@ -873,7 +873,7 @@ func TestCreateWorker_HoldsNoCapacityUntilReported(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newWorkerAPIService(t)
 
-	got, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: validWorker(apiWorkerName)})
+	got, err := svc.CreateWorker(ctx, &ateapi.CreateWorkerRequest{Worker: validWorker(apiWorkerName)})
 	if err != nil {
 		t.Fatalf("CreateWorker() failed: %v", err)
 	}
@@ -884,8 +884,8 @@ func TestCreateWorker_HoldsNoCapacityUntilReported(t *testing.T) {
 	// Capacity is status, so a request cannot bring its own: a Worker only
 	// gets one by reporting it.
 	carried := validWorker("11111111-2222-3333-4444-555555555555")
-	carried.Status = &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 4094}}
-	got, err = svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: carried})
+	carried.Status = &ateapi.WorkerStatus{Capacity: &ateapi.WorkerResources{Actors: 4094}}
+	got, err = svc.CreateWorker(ctx, &ateapi.CreateWorkerRequest{Worker: carried})
 	if err != nil {
 		t.Fatalf("CreateWorker() carrying a capacity failed: %v", err)
 	}

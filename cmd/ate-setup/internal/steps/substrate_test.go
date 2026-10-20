@@ -24,10 +24,10 @@ import (
 
 	"google.golang.org/grpc"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestActorTemplateFromManifestDemos parses the protojson ActorTemplate
@@ -152,11 +152,11 @@ func TestActorTemplateFromManifestErrors(t *testing.T) {
 
 // failingControlClient fails every GetActorTemplate with a fixed error.
 type failingControlClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 	err error
 }
 
-func (f failingControlClient) GetActorTemplate(ctx context.Context, in *ateapipb.GetActorTemplateRequest, opts ...grpc.CallOption) (*ateapipb.ActorTemplate, error) {
+func (f failingControlClient) GetActorTemplate(ctx context.Context, in *ateapi.GetActorTemplateRequest, opts ...grpc.CallOption) (*ateapi.ActorTemplate, error) {
 	return nil, f.err
 }
 
@@ -179,13 +179,13 @@ func TestWaitActorTemplateGoldenTimeoutIncludesLastError(t *testing.T) {
 // disabledTemplateClient serves one ActorTemplate that opted out of the
 // golden snapshot and has no golden status.
 type disabledTemplateClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 }
 
-func (disabledTemplateClient) GetActorTemplate(_ context.Context, in *ateapipb.GetActorTemplateRequest, _ ...grpc.CallOption) (*ateapipb.ActorTemplate, error) {
-	return &ateapipb.ActorTemplate{
-		Metadata:       &ateapipb.ResourceMetadata{Atespace: in.GetActorTemplate().GetAtespace(), Name: in.GetActorTemplate().GetName()},
-		SnapshotConfig: &ateapipb.SnapshotConfig{GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}},
+func (disabledTemplateClient) GetActorTemplate(_ context.Context, in *ateapi.GetActorTemplateRequest, _ ...grpc.CallOption) (*ateapi.ActorTemplate, error) {
+	return &ateapi.ActorTemplate{
+		Metadata:       &ateapi.ResourceMetadata{Atespace: in.GetActorTemplate().GetAtespace(), Name: in.GetActorTemplate().GetName()},
+		SnapshotConfig: &ateapi.SnapshotConfig{GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}},
 	}, nil
 }
 

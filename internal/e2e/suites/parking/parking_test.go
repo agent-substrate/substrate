@@ -30,9 +30,9 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // parkingAtespace is where deployParkingFixture applies the fixture, and the
@@ -73,7 +73,7 @@ func TestRequestParking(t *testing.T) {
 	t.Run("ParkThenServed", func(t *testing.T) {
 		// Occupy the only worker with actor A.
 		resumeActor(ctx, t, clients, actorA)
-		waitForActorState(ctx, t, clients, actorA, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		waitForActorState(ctx, t, clients, actorA, ateapi.ActorState_ACTOR_STATE_RUNNING)
 
 		// Request actor B: the pool is full, so the request parks. Freeing
 		// the worker is asynchronous — SuspendActor(A) returns before the
@@ -139,7 +139,7 @@ func TestRequestParking(t *testing.T) {
 		// The flake's root cause stranded actors in RESUMING with the worker
 		// claimed (#675): pin that B really converges and a follow-up request
 		// is served warm — a stranded actor would 503 it.
-		waitForActorState(ctx, t, clients, actorB, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		waitForActorState(ctx, t, clients, actorB, ateapi.ActorState_ACTOR_STATE_RUNNING)
 		followUp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorB}, "/whoami")
 		if err != nil {
 			t.Fatalf("follow-up request failed transport-level: %v", err)
@@ -197,7 +197,7 @@ func TestRequestParking(t *testing.T) {
 // class under test and waits for its golden snapshot. The fixture declares
 // both halves of the oversubscription: one worker, sized to one of its own
 // actors (see probe-parking.yaml.tmpl).
-func deployParkingFixture(t *testing.T, ctx context.Context, clients *e2e.Clients) *ateapipb.ActorTemplate {
+func deployParkingFixture(t *testing.T, ctx context.Context, clients *e2e.Clients) *ateapi.ActorTemplate {
 	t.Helper()
 	env, err := e2e.CheckEnv("BUCKET_NAME")
 	if err != nil {
@@ -210,10 +210,10 @@ func deployParkingFixture(t *testing.T, ctx context.Context, clients *e2e.Client
 	return templates[0]
 }
 
-func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, at *ateapipb.ActorTemplate, name string) {
+func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, at *ateapi.ActorTemplate, name string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: parkingAtespace, Name: name},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: parkingAtespace, Name: name},
 		ActorTemplate: e2e.TemplateRef(at),
 	}}); err != nil {
 		t.Fatalf("failed to create actor %q: %v", name, err)
@@ -223,19 +223,19 @@ func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, at *at
 		defer cancel()
 		// Deletion requires the actor to be suspended first; both are
 		// best-effort so one failed cleanup doesn't mask the test result.
-		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name},
+		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapi.SuspendActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: parkingAtespace, Name: name},
 		})
-		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name},
+		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: parkingAtespace, Name: name},
 		})
 	})
 }
 
 func resumeActor(ctx context.Context, t *testing.T, clients *e2e.Clients, name string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name},
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: parkingAtespace, Name: name},
 	}); err != nil {
 		t.Fatalf("failed to resume actor %q: %v", name, err)
 	}
@@ -243,19 +243,19 @@ func resumeActor(ctx context.Context, t *testing.T, clients *e2e.Clients, name s
 
 func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, name string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name},
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: parkingAtespace, Name: name},
 	}); err != nil {
 		t.Fatalf("failed to suspend actor %q: %v", name, err)
 	}
 }
 
-func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, name string, want ateapipb.ActorState) {
+func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, name string, want ateapi.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name},
+		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: parkingAtespace, Name: name},
 		})
 		if err == nil && resp.GetStatus().GetState() == want {
 			return

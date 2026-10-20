@@ -20,15 +20,15 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 )
 
-func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error) {
-	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
+func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapi.Worker) (*ateapi.Worker, error) {
+	dbWorker := proto.Clone(worker).(*ateapi.Worker)
 	if dbWorker.Metadata == nil {
-		dbWorker.Metadata = &ateapipb.ResourceMetadata{}
+		dbWorker.Metadata = &ateapi.ResourceMetadata{}
 	}
 	setCreateMetadata(dbWorker.Metadata)
 
@@ -37,7 +37,7 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 		return nil, fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	created, err := p.writeAndAppendEvent(ctx, store.WorkerEventCreated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+	created, err := p.writeAndAppendEvent(ctx, store.WorkerEventCreated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO workers (name, uid, version, proto)
 			VALUES ($1, $2, $3, $4)`,
@@ -56,7 +56,7 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 	return created, nil
 }
 
-func getWorkerRow(ctx context.Context, q querier, name string) (*ateapipb.Worker, error) {
+func getWorkerRow(ctx context.Context, q querier, name string) (*ateapi.Worker, error) {
 	var protoBytes []byte
 	err := q.QueryRow(ctx, `SELECT proto FROM workers WHERE name = $1`, name).Scan(&protoBytes)
 	if err != nil {
@@ -65,21 +65,21 @@ func getWorkerRow(ctx context.Context, q querier, name string) (*ateapipb.Worker
 		}
 		return nil, fmt.Errorf("getting worker %s: %w", name, err)
 	}
-	out := &ateapipb.Worker{}
+	out := &ateapi.Worker{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling worker: %w", err)
 	}
 	return out, nil
 }
 
-func (p *Persistence) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
+func (p *Persistence) GetWorker(ctx context.Context, name string) (*ateapi.Worker, error) {
 	return getWorkerRow(ctx, p.pool, name)
 }
 
 // getWorkerRowForUpdate reads the worker and holds its row lock for the rest of
 // tx, so nothing else can write the row between this read and the write that
 // follows it.
-func getWorkerRowForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapipb.Worker, error) {
+func getWorkerRowForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi.Worker, error) {
 	var protoBytes []byte
 	if err := tx.QueryRow(ctx, `SELECT proto FROM workers WHERE name = $1 FOR UPDATE`, name).Scan(&protoBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -87,7 +87,7 @@ func getWorkerRowForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi
 		}
 		return nil, fmt.Errorf("locking worker %s for update: %w", name, err)
 	}
-	out := &ateapipb.Worker{}
+	out := &ateapi.Worker{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling worker: %w", err)
 	}
@@ -99,19 +99,19 @@ func getWorkerRowForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi
 // interleaving. That is what makes an occupancy test inside mutate a
 // compare-and-set. The predicate cannot be pushed into SQL: the row stores an
 // opaque marshaled proto, so assignment is not addressable in a WHERE clause.
-func (p *Persistence) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+func (p *Persistence) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
 	return p.updateWorker(ctx, name, store.DeletePreconditions(precondition), mutate, false)
 }
 
-func (p *Persistence) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+func (p *Persistence) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
 	return p.updateWorker(ctx, name, precondition, mutate, true)
 }
 
-func (p *Persistence) updateWorker(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapipb.Worker) error, markForDeletion bool) (*ateapipb.Worker, error) {
-	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+func (p *Persistence) updateWorker(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapi.Worker) error, markForDeletion bool) (*ateapi.Worker, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		dbWorker, err := getWorkerRowForUpdate(ctx, tx, name)
 		if err != nil {
 			return nil, err
@@ -156,8 +156,8 @@ func (p *Persistence) updateWorker(ctx context.Context, name string, preconditio
 	})
 }
 
-func (p *Persistence) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
-	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+func (p *Persistence) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.Worker, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		// Locked rather than plainly read so the incarnation precondition was evaluated
 		// against is the one the DELETE removes.
 		deleted, err := getWorkerRowForUpdate(ctx, tx, name)
@@ -178,15 +178,15 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string, preconditio
 	})
 }
 
-func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
+func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapi.Worker], error) {
 	opts, err := store.NormalizeListOptions(opts)
 	if err != nil {
-		return store.ListResponse[*ateapipb.Worker]{}, err
+		return store.ListResponse[*ateapi.Worker]{}, err
 	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	token, err := decodePageToken(pageTokenStr, kindWorker, "", 1)
 	if err != nil {
-		return store.ListResponse[*ateapipb.Worker]{}, err
+		return store.ListResponse[*ateapi.Worker]{}, err
 	}
 	var last *string
 	if len(token.Last) > 0 {
@@ -199,27 +199,27 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 		ORDER BY name
 		LIMIT $2`, last, int64(pageSize)+1)
 	if err != nil {
-		return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("listing workers: %w", err)
+		return store.ListResponse[*ateapi.Worker]{}, fmt.Errorf("listing workers: %w", err)
 	}
 	defer rows.Close()
 
 	var names []string
-	var result []*ateapipb.Worker
+	var result []*ateapi.Worker
 	for rows.Next() {
 		var name string
 		var protoBytes []byte
 		if err := rows.Scan(&name, &protoBytes); err != nil {
-			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("scanning worker row: %w", err)
+			return store.ListResponse[*ateapi.Worker]{}, fmt.Errorf("scanning worker row: %w", err)
 		}
-		w := &ateapipb.Worker{}
+		w := &ateapi.Worker{}
 		if err := unmarshalRow(protoBytes, w, "worker", name); err != nil {
-			return store.ListResponse[*ateapipb.Worker]{}, err
+			return store.ListResponse[*ateapi.Worker]{}, err
 		}
 		result = append(result, w)
 		names = append(names, name)
 	}
 	if err := rows.Err(); err != nil {
-		return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("listing workers: %w", err)
+		return store.ListResponse[*ateapi.Worker]{}, fmt.Errorf("listing workers: %w", err)
 	}
 
 	var nextToken string
@@ -227,5 +227,5 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 		result = result[:pageSize]
 		nextToken = encodePageToken(kindWorker, "", []string{names[pageSize-1]})
 	}
-	return store.ListResponse[*ateapipb.Worker]{Items: result, NextPageToken: nextToken}, nil
+	return store.ListResponse[*ateapi.Worker]{Items: result, NextPageToken: nextToken}, nil
 }

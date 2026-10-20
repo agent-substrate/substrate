@@ -19,11 +19,11 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -35,22 +35,22 @@ import (
 // fakeReportService is a WorkerServiceClient that records the snapshot state
 // reports it receives, and fails them with err.
 type fakeReportService struct {
-	ateapipb.WorkerServiceClient
+	ateapi.WorkerServiceClient
 
-	reports chan *ateapipb.ReportActorSnapshotStateRequest
+	reports chan *ateapi.ReportActorSnapshotStateRequest
 	err     error
 }
 
 func newFakeReportService() *fakeReportService {
-	return &fakeReportService{reports: make(chan *ateapipb.ReportActorSnapshotStateRequest, 10)}
+	return &fakeReportService{reports: make(chan *ateapi.ReportActorSnapshotStateRequest, 10)}
 }
 
-func (s *fakeReportService) ReportActorSnapshotState(_ context.Context, in *ateapipb.ReportActorSnapshotStateRequest, _ ...grpc.CallOption) (*ateapipb.ReportActorSnapshotStateResponse, error) {
+func (s *fakeReportService) ReportActorSnapshotState(_ context.Context, in *ateapi.ReportActorSnapshotStateRequest, _ ...grpc.CallOption) (*ateapi.ReportActorSnapshotStateResponse, error) {
 	s.reports <- in
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &ateapipb.ReportActorSnapshotStateResponse{}, nil
+	return &ateapi.ReportActorSnapshotStateResponse{}, nil
 }
 
 // TestTrackerReporterSendsState reports the actor's state as the control
@@ -68,12 +68,12 @@ func TestTrackerReporterSendsState(t *testing.T) {
 	}
 	durable := local("s1", 1)
 	durable.DurableCompleteTime = upload
-	reported := func(name string, generation int32) *ateapipb.SnapshotReport {
-		return &ateapipb.SnapshotReport{
+	reported := func(name string, generation int32) *ateapi.SnapshotReport {
+		return &ateapi.SnapshotReport{
 			Uuid:            name,
 			Generation:      generation,
-			Fidelity:        ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-			Object:          &ateapipb.ObjectSnapshot{SnapshotUri: "gs://test-bucket/atespaces/ate-demo/actors/" + pluginActorUID + "/snapshots/" + name},
+			Fidelity:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			Object:          &ateapi.ObjectSnapshot{SnapshotUri: "gs://test-bucket/atespaces/ate-demo/actors/" + pluginActorUID + "/snapshots/" + name},
 			LocalCommitTime: commit,
 		}
 	}
@@ -83,7 +83,7 @@ func TestTrackerReporterSendsState(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		state *ateletpb.ActorSnapshotState
-		want  *ateapipb.ActorSnapshotState
+		want  *ateapi.ActorSnapshotState
 	}{
 		{
 			name: "every snapshot",
@@ -93,7 +93,7 @@ func TestTrackerReporterSendsState(t *testing.T) {
 				LatestDurable: durable,
 				UploadDueTime: due,
 			},
-			want: &ateapipb.ActorSnapshotState{
+			want: &ateapi.ActorSnapshotState{
 				LatestLocal:   reported("s3", 3),
 				Uploading:     reported("s2", 2),
 				LatestDurable: reportedDurable,
@@ -103,7 +103,7 @@ func TestTrackerReporterSendsState(t *testing.T) {
 		{
 			name:  "detached",
 			state: &ateletpb.ActorSnapshotState{LatestDurable: durable},
-			want:  &ateapipb.ActorSnapshotState{LatestDurable: reportedDurable},
+			want:  &ateapi.ActorSnapshotState{LatestDurable: reportedDurable},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -112,8 +112,8 @@ func TestTrackerReporterSendsState(t *testing.T) {
 			if err := (&trackerReporter{workers: workers}).ReportActorSnapshotState(t.Context(), pluginActorUID, actor, tc.state); err != nil {
 				t.Fatalf("ReportActorSnapshotState: %v", err)
 			}
-			want := &ateapipb.ReportActorSnapshotStateRequest{
-				Actor:    &ateapipb.ObjectRef{Atespace: "ate-demo", Name: "counter"},
+			want := &ateapi.ReportActorSnapshotStateRequest{
+				Actor:    &ateapi.ObjectRef{Atespace: "ate-demo", Name: "counter"},
 				ActorUid: pluginActorUID,
 				State:    tc.want,
 			}
@@ -146,7 +146,7 @@ func TestToAteAPIFidelity(t *testing.T) {
 			t.Errorf("toAteAPIFidelity(%s) = %s, want the public fidelity of the same name", name, got)
 		}
 	}
-	if got := toAteAPIFidelity(ateletpb.SnapshotFidelity(99)); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+	if got := toAteAPIFidelity(ateletpb.SnapshotFidelity(99)); got != ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		t.Errorf("toAteAPIFidelity(99) = %s, want UNSPECIFIED", got)
 	}
 }
@@ -155,9 +155,9 @@ func TestToAteAPIFidelity(t *testing.T) {
 // and returns it. The tracker's queues arm their timers from a clock reading
 // taken just before, so a step that lands in between leaves the timer late;
 // further steps get past it.
-func nextReport(t *testing.T, clk *clocktesting.FakeClock, workers *fakeReportService) *ateapipb.ReportActorSnapshotStateRequest {
+func nextReport(t *testing.T, clk *clocktesting.FakeClock, workers *fakeReportService) *ateapi.ReportActorSnapshotStateRequest {
 	t.Helper()
-	var got *ateapipb.ReportActorSnapshotStateRequest
+	var got *ateapi.ReportActorSnapshotStateRequest
 	waitFor(t, "a snapshot state report", func() bool {
 		select {
 		case got = <-workers.reports:
@@ -193,7 +193,7 @@ func TestBackgroundUploadAndDetachAreReported(t *testing.T) {
 	if _, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	wantActor := &ateapipb.ObjectRef{Atespace: "ate-demo", Name: "counter"}
+	wantActor := &ateapi.ObjectRef{Atespace: "ate-demo", Name: "counter"}
 
 	uploaded := nextReport(t, clk, workers)
 	if !proto.Equal(uploaded.GetActor(), wantActor) || uploaded.GetActorUid() != pluginActorUID {

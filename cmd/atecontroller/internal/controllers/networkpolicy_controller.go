@@ -27,8 +27,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/resources"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 const (
@@ -52,7 +52,7 @@ type NetworkPolicyReconciler struct {
 func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	wp := &atev1alpha1.WorkerPool{}
+	wp := &atev1.WorkerPool{}
 	if err := r.Get(ctx, req.NamespacedName, wp); err != nil {
 		if k8errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -75,7 +75,7 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return ctrl.Result{}, nil
 }
 
-func (r *NetworkPolicyReconciler) reconcileImpl(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
+func (r *NetworkPolicyReconciler) reconcileImpl(ctx context.Context, wp *atev1.WorkerPool) error {
 	log := log.FromContext(ctx)
 
 	npAC := r.buildNetworkPolicyApplyConfig(wp)
@@ -90,13 +90,13 @@ func (r *NetworkPolicyReconciler) reconcileImpl(ctx context.Context, wp *atev1al
 	return nil
 }
 
-func (r *NetworkPolicyReconciler) buildNetworkPolicyApplyConfig(wp *atev1alpha1.WorkerPool) *networkingv1ac.NetworkPolicyApplyConfiguration {
+func (r *NetworkPolicyReconciler) buildNetworkPolicyApplyConfig(wp *atev1.WorkerPool) *networkingv1ac.NetworkPolicyApplyConfiguration {
 	np := networkingv1ac.NetworkPolicy(resources.NetworkPolicyName(wp.Name), wp.Namespace).
 		WithLabels(map[string]string{
 			"ate.dev/worker-pool": wp.Name,
 		}).
 		WithOwnerReferences(metav1ac.OwnerReference().
-			WithAPIVersion(atev1alpha1.GroupVersion.String()).
+			WithAPIVersion(atev1.GroupVersion.String()).
 			WithKind("WorkerPool").
 			WithName(wp.Name).
 			WithUID(wp.UID).
@@ -130,7 +130,7 @@ func (r *NetworkPolicyReconciler) buildNetworkPolicyApplyConfig(wp *atev1alpha1.
 func (r *NetworkPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("networkpolicy").
-		For(&atev1alpha1.WorkerPool{}).
+		For(&atev1.WorkerPool{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Complete(r)
 }

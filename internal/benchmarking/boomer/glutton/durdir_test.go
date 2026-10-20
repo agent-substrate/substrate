@@ -24,12 +24,12 @@ import (
 	"slices"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
 	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func TestDurDirLoopSequence(t *testing.T) {
@@ -39,21 +39,21 @@ func TestDurDirLoopSequence(t *testing.T) {
 		lifecycleMode string
 		wantGRPCCall  []string
 		wantHTTPCall  []string
-		wantMode      ateapipb.DurabilityMode
+		wantMode      ateapi.DurabilityMode
 	}{
 		{
 			name:         "explicit resume mode",
 			resumeMode:   dynconfig.ResumeModeExplicit,
 			wantGRPCCall: []string{"SuspendActor(async)", "ResumeActor"},
 			wantHTTPCall: []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
-			wantMode:     ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
+			wantMode:     ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
 		},
 		{
 			name:         "implicit resume mode",
 			resumeMode:   dynconfig.ResumeModeImplicit,
 			wantGRPCCall: []string{"SuspendActor(async)"}, // No ResumeActor RPC!
 			wantHTTPCall: []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
-			wantMode:     ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
+			wantMode:     ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
 		},
 		{
 			name:          "sync lifecycle mode",
@@ -61,7 +61,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 			resumeMode:    dynconfig.ResumeModeExplicit,
 			wantGRPCCall:  []string{"SuspendActor", "ResumeActor"},
 			wantHTTPCall:  []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
-			wantMode:      ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
+			wantMode:      ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
 		},
 		{
 			name:          "async lifecycle mode",
@@ -69,7 +69,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 			resumeMode:    dynconfig.ResumeModeExplicit,
 			wantGRPCCall:  []string{"SuspendActor(async)", "ResumeActor"},
 			wantHTTPCall:  []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
-			wantMode:      ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
+			wantMode:      ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
 		},
 	}
 
@@ -257,7 +257,7 @@ func TestDurDirBootstrapFailureSuspendsBeforeDelete(t *testing.T) {
 	if len(suspends) == 0 {
 		t.Fatalf("got no SuspendActor requests")
 	}
-	if got, want := suspends[len(suspends)-1].GetOptions().GetMode(), ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS; got != want {
+	if got, want := suspends[len(suspends)-1].GetOptions().GetMode(), ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS; got != want {
 		t.Errorf("suspend mode = %v, want %v", got, want)
 	}
 }
@@ -267,24 +267,24 @@ func TestDurDirShutdownHibernatesBeforeDelete(t *testing.T) {
 		name          string
 		lifecycleMode string
 		wantCalls     []string
-		wantMode      ateapipb.DurabilityMode
+		wantMode      ateapi.DurabilityMode
 	}{
 		{
 			name:      "default lifecycle mode",
 			wantCalls: []string{"SuspendActor(async)", "DeleteActor"},
-			wantMode:  ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
+			wantMode:  ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
 		},
 		{
 			name:          "sync lifecycle mode",
 			lifecycleMode: dynconfig.LifecycleModeSync,
 			wantCalls:     []string{"SuspendActor", "DeleteActor"},
-			wantMode:      ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
+			wantMode:      ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
 		},
 		{
 			name:          "async lifecycle mode",
 			lifecycleMode: dynconfig.LifecycleModeAsync,
 			wantCalls:     []string{"SuspendActor(async)", "DeleteActor"},
-			wantMode:      ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
+			wantMode:      ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
 		},
 	}
 	for _, tc := range tests {

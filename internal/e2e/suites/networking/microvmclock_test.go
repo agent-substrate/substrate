@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -42,7 +42,7 @@ func TestMicroVMClockAfterDelayedRestore(t *testing.T) {
 	actorName, router, actorRef := prepareProtocolActor(t, ctx, "clock")
 	clients := e2e.GetClients()
 	t.Logf("clock evidence host_utc_before_suspend=%s actor=%s/%s", time.Now().UTC().Format(time.RFC3339Nano), actorRef.Atespace, actorName)
-	beforeSuspend, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
+	beforeSuspend, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: actorRef.ToObjectRef()})
 	if err != nil {
 		t.Fatalf("GetActor before SuspendActor: %v", err)
 	}
@@ -50,11 +50,11 @@ func TestMicroVMClockAfterDelayedRestore(t *testing.T) {
 		t.Fatalf("actor had no worker assignment before SuspendActor: %v", assignment)
 	}
 	suspendBoundary := time.Now().UTC()
-	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
+	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
 	if err != nil {
 		t.Fatalf("SuspendActor: %v", err)
 	}
-	if actor := suspended.GetActor(); actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if actor := suspended.GetActor(); actor.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("SuspendActor returned state %s, want SUSPENDED", actor.GetStatus().GetState())
 	} else if actor.GetStatus().GetWorkerAssignment() != nil {
 		t.Fatalf("SuspendActor returned worker assignment %v, want it cleared", actor.GetStatus().GetWorkerAssignment())
@@ -79,7 +79,7 @@ func TestMicroVMClockAfterDelayedRestore(t *testing.T) {
 	}, true)
 	logOriginCertificateValidity(t, ctx, target, rootCA, suspendBoundary)
 
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}
 	waitForRouteReady(t, "restored actor ingress readiness", func() (*http.Response, error) {

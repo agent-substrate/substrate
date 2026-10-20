@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -45,7 +45,7 @@ const resumeCapacityWait = 90 * time.Second
 // constants under cmd/*/internal with different names, plus literals in three
 // binaries. This label should be unified under internal/ first, rather than
 // adding another copy here.
-func ResumeActorAwaitCapacity(t *testing.T, ctx context.Context, clients *Clients, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+func ResumeActorAwaitCapacity(t *testing.T, ctx context.Context, clients *Clients, req *ateapi.ResumeActorRequest) (*ateapi.ResumeActorResponse, error) {
 	t.Helper()
 	deadline := time.Now().Add(resumeCapacityWait)
 	for {

@@ -119,7 +119,7 @@ kubectl rollout status statefulset/csi-hostpath-socat -n default --timeout=120s
 # 8. Create the CSIDriverConfig for Substrate
 echo "Creating hostpath.csi.k8s.io CSIDriverConfig..."
 cat <<EOF | kubectl apply -f -
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: hostpath.csi.k8s.io

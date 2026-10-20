@@ -16,7 +16,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.25.3
-// source: ateworker.proto
+// source: internal/proto/ateworkerpb/ateworker.proto
 
 package ateworkerpb
 
@@ -469,5 +469,5 @@ var Worker_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "ateworker.proto",
+	Metadata: "internal/proto/ateworkerpb/ateworker.proto",
 }

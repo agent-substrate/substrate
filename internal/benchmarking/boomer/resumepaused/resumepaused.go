@@ -36,12 +36,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
@@ -220,10 +220,10 @@ const (
 // create creates one actor from the template.
 func (r *runtime) create(ctx context.Context, name string) error {
 	return r.call(ctx, "CreateActor", func(ctx context.Context, trailer grpc.CallOption) error {
-		_, err := r.cfg.APIStub.CreateActor(ctx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: r.cfg.Atespace, Name: name},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
+		_, err := r.cfg.APIStub.CreateActor(ctx, &ateapi.CreateActorRequest{
+			Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: r.cfg.Atespace, Name: name},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateAtespace, Name: templateName},
 			},
 		}, trailer)
 		return err
@@ -266,9 +266,9 @@ func (r *runtime) cycle(name string) {
 // actor is cold, which is all recovery wants, so that counts as a success.
 func (r *runtime) recover(ctx context.Context, name string) {
 	_ = r.call(ctx, "SuspendActorAsyncRecovery", func(ctx context.Context, trailer grpc.CallOption) error {
-		_, err := r.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		_, err := r.cfg.APIStub.SuspendActor(ctx, &ateapi.SuspendActorRequest{
 			Actor:   r.ref(name),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		}, trailer)
 		if status.Code(err) == codes.FailedPrecondition {
 			return nil
@@ -310,7 +310,7 @@ var errAlreadyRunning = errors.New("actor was already running: not a cold resume
 // the sample with errAlreadyRunning.
 func (r *runtime) resume(ctx context.Context, metricName, name string) error {
 	return r.call(ctx, metricName, func(ctx context.Context, trailer grpc.CallOption) error {
-		resp, err := r.cfg.APIStub.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+		resp, err := r.cfg.APIStub.ResumeActor(ctx, &ateapi.ResumeActorRequest{
 			Actor: r.ref(name),
 		}, trailer)
 		if err == nil && !resp.GetResumed() {
@@ -324,9 +324,9 @@ func (r *runtime) resume(ctx context.Context, metricName, name string) error {
 // suffix keeps warm-up calls apart from the measured ones.
 func (r *runtime) pause(ctx context.Context, suffix, name string) error {
 	return r.call(ctx, "SuspendActorAsync"+suffix, func(ctx context.Context, trailer grpc.CallOption) error {
-		_, err := r.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		_, err := r.cfg.APIStub.SuspendActor(ctx, &ateapi.SuspendActorRequest{
 			Actor:   r.ref(name),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		}, trailer)
 		return err
 	})
@@ -409,7 +409,7 @@ func (r *runtime) delete(ctx context.Context, name string) error {
 			}
 		}
 		err = r.call(ctx, "DeleteActor", func(ctx context.Context, trailer grpc.CallOption) error {
-			_, err := r.cfg.APIStub.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+			_, err := r.cfg.APIStub.DeleteActor(ctx, &ateapi.DeleteActorRequest{
 				Actor: r.ref(name),
 			}, trailer)
 			return err
@@ -421,15 +421,15 @@ func (r *runtime) delete(ctx context.Context, name string) error {
 	return err
 }
 
-func (r *runtime) ref(name string) *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: r.cfg.Atespace, Name: name}
+func (r *runtime) ref(name string) *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: r.cfg.Atespace, Name: name}
 }
 
 func (r *runtime) ensureAtespace(ctx context.Context) error {
 	return r.call(ctx, "CreateAtespace", func(ctx context.Context, trailer grpc.CallOption) error {
-		_, err := r.cfg.APIStub.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{Name: r.cfg.Atespace},
+		_, err := r.cfg.APIStub.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{
+			Atespace: &ateapi.Atespace{
+				Metadata: &ateapi.ResourceMetadata{Name: r.cfg.Atespace},
 			},
 		}, trailer)
 		if status.Code(err) == codes.AlreadyExists {

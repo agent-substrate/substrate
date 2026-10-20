@@ -49,6 +49,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
@@ -57,7 +58,6 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton"
 	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
@@ -344,8 +344,8 @@ func (r *runtime) checkTemplateMemory(ctx context.Context, script *Script) error
 	if r.templateErr != nil && r.templateErrFor == script && time.Since(r.templateErrAt) < templateRecheckInterval {
 		return r.templateErr
 	}
-	ref := &ateapipb.ObjectRef{Atespace: templateNS, Name: templateName}
-	tmpl, err := r.cfg.APIStub.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref})
+	ref := &ateapi.ObjectRef{Atespace: templateNS, Name: templateName}
+	tmpl, err := r.cfg.APIStub.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: ref})
 	if err != nil {
 		// Not a verdict: the next startUser asks again.
 		return fmt.Errorf("GetActorTemplate %s/%s: %w", templateNS, templateName, err)
@@ -373,7 +373,7 @@ func (r *runtime) checkTemplateMemory(ctx context.Context, script *Script) error
 
 // memoryLimit reads the template's memory limit in bytes. found is false
 // when the template sets none.
-func memoryLimit(tmpl *ateapipb.ActorTemplate) (limit int64, found bool, err error) {
+func memoryLimit(tmpl *ateapi.ActorTemplate) (limit int64, found bool, err error) {
 	limit = tmpl.GetResources().GetLimits().GetMemoryBytes()
 	return limit, limit != 0, nil
 }
@@ -708,8 +708,8 @@ func (u *sessionUser) noteSuccess() {
 	u.consecutiveFailures = 0
 }
 
-func (u *sessionUser) ref() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
+func (u *sessionUser) ref() *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
 }
 
 // shouldHibernateAtStart reports whether a freshly started session should be
@@ -1017,9 +1017,9 @@ func (u *sessionUser) postProto(ctx context.Context, route string, req, resp pro
 // success so concurrent sessions racing the first creation all proceed.
 func (u *sessionUser) ensureAtespace(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
-			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{Name: u.cfg.Atespace},
+		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapi.CreateAtespaceRequest{
+			Atespace: &ateapi.Atespace{
+				Metadata: &ateapi.ResourceMetadata{Name: u.cfg.Atespace},
 			},
 		}, grpc.Trailer(tr))
 		if s, ok := status.FromError(err); ok && s.Code() == codes.AlreadyExists {
@@ -1031,10 +1031,10 @@ func (u *sessionUser) ensureAtespace(ctx context.Context) error {
 
 func (u *sessionUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateNS, Name: templateName},
+		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapi.CreateActorRequest{
+			Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
 			},
 		}, grpc.Trailer(tr))
 		return err
@@ -1068,7 +1068,7 @@ func (u *sessionUser) waitServing(ctx context.Context) error {
 func (u *sessionUser) resume(ctx context.Context) error {
 	err := u.tracedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
 		return boomerutil.RetryOnConflict(callCtx, func() error {
-			_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
+			_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapi.ResumeActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
 			return err
 		})
 	})
@@ -1099,12 +1099,12 @@ func (u *sessionUser) hibernate(ctx context.Context) {
 	var err error
 	if mode == dynconfig.LifecycleModeSync {
 		err = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
-			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: u.ref(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}, grpc.Trailer(tr))
+			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{Actor: u.ref(), Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}, grpc.Trailer(tr))
 			return err
 		})
 	} else {
 		err = u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
-			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: u.ref(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}, grpc.Trailer(tr))
+			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{Actor: u.ref(), Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}, grpc.Trailer(tr))
 			return err
 		})
 	}
@@ -1124,10 +1124,10 @@ func (u *sessionUser) suspendAndDelete(ctx context.Context) {
 		return
 	}
 	suspendCtx, cancel := context.WithTimeout(ctx, controlRPCTimeout)
-	_, _ = u.cfg.APIStub.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{Actor: u.ref()})
+	_, _ = u.cfg.APIStub.SuspendActor(suspendCtx, &ateapi.SuspendActorRequest{Actor: u.ref()})
 	cancel()
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
+		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapi.DeleteActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
 		return err
 	})
 	bmetrics.UpdateUsers(agentSessionUserClass, -1)

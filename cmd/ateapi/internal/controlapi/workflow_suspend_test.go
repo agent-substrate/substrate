@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
@@ -29,7 +30,6 @@ import (
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -44,25 +44,25 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 		err       error
 		cancel    bool
 		wantCode  codes.Code
-		wantState ateapipb.ActorState
+		wantState ateapi.ActorState
 	}{
-		{"snapshot conflict", apierror.Aborted("checkpoint rejected"), false, codes.Aborted, ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
-		{"failed precondition", apierror.FailedPrecondition("checkpoint rejected"), false, codes.Internal, ateapipb.ActorState_ACTOR_STATE_CRASHED},
-		{"caller cancellation", apierror.Aborted("checkpoint rejected"), true, codes.Canceled, ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+		{"snapshot conflict", apierror.Aborted("checkpoint rejected"), false, codes.Aborted, ateapi.ActorState_ACTOR_STATE_SUSPENDING},
+		{"failed precondition", apierror.FailedPrecondition("checkpoint rejected"), false, codes.Internal, ateapi.ActorState_ACTOR_STATE_CRASHED},
+		{"caller cancellation", apierror.Aborted("checkpoint rejected"), true, codes.Canceled, ateapi.ActorState_ACTOR_STATE_SUSPENDING},
 	}
 	for _, tt := range tests {
 		for _, mode := range suspendModes {
 			t.Run(tt.name+"/"+mode.name, func(t *testing.T) {
 				ctx := context.Background()
 				persistence := newTestPersistence(t)
-				seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY})
+				seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY})
 				w, atelet := newWireCaptureWorkflow(t, persistence)
 				actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-				actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-					Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+					Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 					ActorTemplate: suspendTestTemplateRef(),
-					Status: &ateapipb.ActorStatus{
-						State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					Status: &ateapi.ActorStatus{
+						State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
 						AssignedNode:     wireTestAssignment().GetNodeName(),
 						WorkerAssignment: wireTestAssignment(),
 					},
@@ -95,7 +95,7 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 				if err != nil {
 					t.Fatalf("GetWorker: %v", err)
 				}
-				if tt.wantState == ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				if tt.wantState == ateapi.ActorState_ACTOR_STATE_CRASHED {
 					if st.GetCrash() == nil || st.GetWorkerAssignment() != nil || worker.GetStatus().GetAllocated().GetActors() != 0 {
 						t.Errorf("checkpoint failure did not crash the actor and release its worker: actor %v, worker %v", st, worker.GetStatus())
 					}
@@ -108,7 +108,7 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 					t.Errorf("worker allocated actors = %d, want 1", got)
 				}
 				pending := snapshotAtLatestGeneration(st)
-				if pending.GetUuid() == "" || pending.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
+				if pending.GetUuid() == "" || pending.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
 					t.Fatalf("snapshot = %v, want a persisted pending snapshot", pending)
 				}
 				first := atelet.checkpointRequest().GetSnapshot()
@@ -128,7 +128,7 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 				if diff := cmp.Diff(first, atelet.checkpointRequest().GetSnapshot(), protocmp.Transform()); diff != "" {
 					t.Errorf("retry changed the snapshot (-first +retry):\n%s", diff)
 				}
-				if finished.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || finished.GetStatus().GetWorkerAssignment() != nil {
+				if finished.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED || finished.GetStatus().GetWorkerAssignment() != nil {
 					t.Errorf("retry did not suspend the actor and clear its assignment: %v", finished.GetStatus())
 				}
 				latest := snapshotAtLatestGeneration(finished.GetStatus())
@@ -143,12 +143,12 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root/"})
-	wantRuntime := &ateapipb.ActorSandboxRuntime{
+	seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: "gs://bucket/root/"})
+	wantRuntime := &ateapi.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
-		Version: &ateapipb.VersionedSandboxCompat{
+		Version: &ateapi.VersionedSandboxCompat{
 			SchemaVersion: "v1",
-			Attributes: []*ateapipb.AttributeEntry{
+			Attributes: []*ateapi.AttributeEntry{
 				{Key: "architecture", Value: "amd64"},
 			},
 		},
@@ -156,11 +156,11 @@ func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 	assignment := wireTestAssignment()
 	assignment.SandboxRuntime = wantRuntime
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+	storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		ActorTemplate: suspendTestTemplateRef(),
-		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		Status: &ateapi.ActorStatus{
+			State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
 			WorkerAssignment: assignment,
 		},
 	})
@@ -169,7 +169,7 @@ func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 	assertStoppedAtDial(t, err)
 	marked := mustReadActor(t, ctx, persistence, actorRef)
 
-	inProgressSnap := findLatestDurableSnapshot(marked.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	inProgressSnap := findLatestDurableSnapshot(marked.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
 	uri := mustParseSnapshotURI(t, inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri())
 	if !resources.IsValidResourceName(uri.Name()) {
 		t.Errorf("in-progress snapshot name = %q, want a valid resource name", uri.Name())
@@ -193,15 +193,15 @@ func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 // the same shape, so the retry's mode may differ from the first attempt's.
 func TestSuspendActor_MarkedSuspending_ReentryKeepsPersistedSnapshotLocation(t *testing.T) {
 	const firstAttempt = "gs://bucket/root/atespaces/team-a/actors/actor-uid/snapshots/first-attempt"
-	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	pending := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 
 	tests := []struct {
 		name           string
 		mode           suspendMode
 		wantUploadMode ateletpb.UploadMode
 		wantLocality   string
-		wantDurable    ateapipb.SnapshotStorageStatus
+		wantDurable    ateapi.SnapshotStorageStatus
 		wantNode       string
 	}{
 		{"sync", suspendSync, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE, "", completed, ""},
@@ -211,19 +211,19 @@ func TestSuspendActor_MarkedSuspending_ReentryKeepsPersistedSnapshotLocation(t *
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation})
+			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation})
 			w, atelet := newWireCaptureWorkflow(t, persistence)
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: suspendTestTemplateRef(),
-				Status: &ateapipb.ActorStatus{
-					State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+				Status: &ateapi.ActorStatus{
+					State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDING,
 					AssignedNode:           "node-1",
 					WorkerAssignment:       wireTestAssignment(),
 					LastAssignedGeneration: 1,
-					Snapshots: []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "first-attempt", firstAttempt, pending),
+					Snapshots: []*ateapi.Snapshot{
+						newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "first-attempt", firstAttempt, pending),
 					},
 				},
 			})
@@ -264,21 +264,21 @@ func TestSuspendActor_MarkedSuspending_ReentryKeepsPersistedSnapshotLocation(t *
 // locality, and assigned node included, is left exactly as seeded.
 func TestSuspendActorWorkflow_SuspendedReturnsAsIs(t *testing.T) {
 	durableURI := someActorSnapshotURI(t, "gs://snapshots", "team-a", "durable-snap")
-	withDurable := func(a *ateapipb.Actor) {
+	withDurable := func(a *ateapi.Actor) {
 		a.Status.LastAssignedGeneration = 1
-		a.Status.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "durable-snap", durableURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		a.Status.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "durable-snap", durableURI, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		}
 	}
 
 	tests := []struct {
 		name     string
-		seedOpts []func(*ateapipb.Actor)
+		seedOpts []func(*ateapi.Actor)
 	}{
 		{name: "newly created, no snapshot"},
-		{name: "durable snapshot", seedOpts: []func(*ateapipb.Actor){withDurable}},
-		{name: "paused, upload pending", seedOpts: []func(*ateapipb.Actor){withPausedShape(t, "node-1")}},
-		{name: "paused, uploaded", seedOpts: []func(*ateapipb.Actor){withUploadedPausedShape(t, "node-1")}},
+		{name: "durable snapshot", seedOpts: []func(*ateapi.Actor){withDurable}},
+		{name: "paused, upload pending", seedOpts: []func(*ateapi.Actor){withPausedShape(t, "node-1")}},
+		{name: "paused, uploaded", seedOpts: []func(*ateapi.Actor){withUploadedPausedShape(t, "node-1")}},
 	}
 	for _, tc := range tests {
 		for _, mode := range suspendModes {
@@ -289,7 +289,7 @@ func TestSuspendActorWorkflow_SuspendedReturnsAsIs(t *testing.T) {
 				w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 				actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
-				seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, tc.seedOpts...)
+				seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, tc.seedOpts...)
 				seeded := mustReadActor(t, ctx, st, actorRef)
 
 				returned, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
@@ -318,30 +318,30 @@ func TestSuspendActor_MarkedSuspending_StateMatrix(t *testing.T) {
 		t.Run(mode.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"})
+			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: "gs://snapshots"})
 			w := newMarkOnlyWorkflow(persistence)
 
 			for _, seedState := range allActorStates {
 				actorRef := resources.ActorRef{Atespace: "team-a", Name: fmt.Sprintf("id%d", seedState)}
-				seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", seedState, func(a *ateapipb.Actor) {
+				seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", seedState, func(a *ateapi.Actor) {
 					a.Status.WorkerAssignment = wireTestAssignment()
 				})
 
 				_, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
 				stored := mustReadActor(t, ctx, persistence, actorRef)
 				switch seedState {
-				case ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
+				case ateapi.ActorState_ACTOR_STATE_RUNNING, ateapi.ActorState_ACTOR_STATE_SUSPENDING:
 					assertStoppedAtDial(t, err)
-					if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+					if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDING {
 						t.Errorf("state %v: stored state = %v, want SUSPENDING", seedState, got)
 					}
-					if seedState == ateapipb.ActorState_ACTOR_STATE_RUNNING {
+					if seedState == ateapi.ActorState_ACTOR_STATE_RUNNING {
 						latest := snapshotAtLatestGeneration(stored.GetStatus())
-						if latest.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING || latest.GetLocality() != "" {
+						if latest.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING || latest.GetLocality() != "" {
 							t.Errorf("state %v: latest snapshot = %v, want a PENDING durable copy and no locality", seedState, latest)
 						}
 					}
-				case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
+				case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
 					if err != nil {
 						t.Errorf("state %v: SuspendActor = %v, want it returned as it is", seedState, err)
 					}
@@ -371,7 +371,7 @@ func TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod(t *testing.T) {
 	defer cleanup()
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
+	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDING)
 
 	_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendSync)
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
@@ -382,8 +382,8 @@ func TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_CRASHED)
 	}
 	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageWorkerAssignmentMissing; msg != want {
 		t.Errorf("crash message = %q, want %q", msg, want)
@@ -427,19 +427,19 @@ func TestSuspendActor_AteletSuspended_DialFailureLeavesActorRetryable(t *testing
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation})
-			var snapshots []*ateapipb.Snapshot
+			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation})
+			var snapshots []*ateapi.Snapshot
 			if tt.prevSnapshot != "" {
-				snapshots = append(snapshots, newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "prev-snapshot", tt.prevSnapshot, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
+				snapshots = append(snapshots, newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "prev-snapshot", tt.prevSnapshot, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
 			}
-			snapshots = append(snapshots, newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "never-written", neverWritten, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
+			snapshots = append(snapshots, newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "never-written", neverWritten, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
 
-			actor := &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+			actor := &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 				ActorTemplate: suspendTestTemplateRef(),
-				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{
+				Status: &ateapi.ActorStatus{
+					State: ateapi.ActorState_ACTOR_STATE_SUSPENDING,
+					WorkerAssignment: &ateapi.WorkerAssignment{
 						WorkerNamespace: "worker-ns",
 						WorkerPool:      "pool",
 						WorkerPod:       "pod-gone",
@@ -462,13 +462,13 @@ func TestSuspendActor_AteletSuspended_DialFailureLeavesActorRetryable(t *testing
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
-			if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+			if stored.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDING {
 				t.Errorf("state = %v, want unchanged SUSPENDING", stored.GetStatus().GetState())
 			}
-			if gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING); gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri() != neverWritten {
+			if gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING); gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri() != neverWritten {
 				t.Errorf("in-progress durable snapshot URI = %q, want preserved for debugging", gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri())
 			}
-			gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 			if got := gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got != tt.prevSnapshot {
 				t.Errorf("SnapshotUri = %q, want %q", got, tt.prevSnapshot)
 			}
@@ -482,7 +482,7 @@ func TestSuspendActor_AteletSuspended_DialFailureLeavesActorRetryable(t *testing
 func TestSuspendActor_AteletSuspended_WireRequest(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY})
+	seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY})
 	w, atelet := newWireCaptureWorkflow(t, persistence)
 	inst, reader := newTestInstruments(t)
 	w.instruments = inst
@@ -490,16 +490,16 @@ func TestSuspendActor_AteletSuspended_WireRequest(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 	snapshotName := "2026-01-01t00-00-00z-abc"
 	snapshotURI := someActorSnapshotURI(t, testStorageLocation, "team-a", snapshotName)
-	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+	storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		ActorTemplate: suspendTestTemplateRef(),
-		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+		Status: &ateapi.ActorStatus{
+			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDING,
 			AssignedNode:           "node-1",
 			WorkerAssignment:       wireTestAssignment(),
 			LastAssignedGeneration: 1,
-			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "tmpl-uid-1", snapshotName, snapshotURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			Snapshots: []*ateapi.Snapshot{
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "tmpl-uid-1", snapshotName, snapshotURI, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 			},
 		},
 	})
@@ -564,31 +564,31 @@ func TestSuspendActor_Finalized_ReleasesReplacedSnapshot(t *testing.T) {
 			w, _, objects := newWireFinalizeWorkflow(t, persistence)
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-				Status: &ateapipb.ActorStatus{
-					State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status: &ateapi.ActorStatus{
+					State:            ateapi.ActorState_ACTOR_STATE_SUSPENDING,
 					AssignedNode:     "node-1",
 					WorkerAssignment: wireTestAssignment(),
 				},
 			})
 
 			previous := mustActorSnapshotURI(t, template, actor, "old")
-			prevType := ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR
+			prevType := ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR
 			if tt.tagOwnedSnapshot {
 				previous = mustTagSnapshotURI(t, template, "team-a", "v1-snapshot")
-				prevType = ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG
+				prevType = ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG
 			}
 			fresh := mustActorSnapshotURI(t, template, actor, snapshotName)
 			objects.PutSnapshot(t, previous, "manifest.json")
 			objects.PutSnapshot(t, fresh, "manifest.json")
 
-			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.LastAssignedGeneration = 2
-				s.Snapshots = []*ateapipb.Snapshot{
-					newDurableSnapshot(1, prevType, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", fresh.Name(), fresh.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+				s.Snapshots = []*ateapi.Snapshot{
+					newDurableSnapshot(1, prevType, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", fresh.Name(), fresh.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 				}
 			})
 
@@ -598,7 +598,7 @@ func TestSuspendActor_Finalized_ReleasesReplacedSnapshot(t *testing.T) {
 			}
 			// Whichever way the previous snapshot went, the actor now owns the
 			// one it just wrote and is no longer borrowing.
-			gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 			if got := gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got != fresh.String() {
 				t.Errorf("external snapshot = %q, want the one this suspend wrote, %q", got, fresh)
 			}
@@ -619,9 +619,9 @@ func TestSuspendActor_Finalized_ReleasesReplacedSnapshot(t *testing.T) {
 // report.
 func TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot(t *testing.T) {
 	const node = "node-1"
-	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	pending := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
 	for _, tc := range []struct {
 		name string
 		// reported records the upload before the suspend, as atelet's report
@@ -638,11 +638,11 @@ func TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot(t *testing.T) {
 			w, atelet, objects := newWireFinalizeWorkflow(t, persistence)
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-				Status: &ateapipb.ActorStatus{
-					State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status: &ateapi.ActorStatus{
+					State:            ateapi.ActorState_ACTOR_STATE_SUSPENDING,
 					AssignedNode:     node,
 					WorkerAssignment: wireTestAssignment(),
 				},
@@ -656,18 +656,18 @@ func TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot(t *testing.T) {
 			pausing := mustActorSnapshotURI(t, template, actor, "snap-3")
 			objects.PutSnapshot(t, old, "manifest.json")
 			objects.PutSnapshot(t, paused, "manifest.json")
-			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				previousStatus := pending
 				if tc.reported {
 					previousStatus = completed
 				}
-				previous := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", paused.Name(), paused.String(), previousStatus)
+				previous := newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", paused.Name(), paused.String(), previousStatus)
 				previous.Locality = node
 				s.LastAssignedGeneration = 3
-				s.Snapshots = []*ateapipb.Snapshot{
-					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", old.Name(), old.String(), completed),
+				s.Snapshots = []*ateapi.Snapshot{
+					newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", old.Name(), old.String(), completed),
 					previous,
-					newDurableSnapshot(3, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", pausing.Name(), pausing.String(), pending),
+					newDurableSnapshot(3, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", pausing.Name(), pausing.String(), pending),
 				}
 			})
 			atelet.checkpointState = &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
@@ -713,10 +713,10 @@ func TestSnapshotLocationChange_LeavesNothingBehind(t *testing.T) {
 	w, objects := newFinalizeWorkflow(persistence)
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDING},
 	})
 	previous, err := resources.NewActorSnapshotURI(oldLocation, actorRef.Atespace, actor.GetMetadata().GetUid(), "old")
 	if err != nil {
@@ -728,11 +728,11 @@ func TestSnapshotLocationChange_LeavesNothingBehind(t *testing.T) {
 	}
 	objects.PutSnapshot(t, previous, "manifest.json")
 	objects.PutSnapshot(t, fresh, "manifest.json")
-	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 2
-		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-			newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", fresh.Name(), fresh.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		s.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", fresh.Name(), fresh.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 		}
 	})
 
@@ -778,11 +778,11 @@ func TestSuspendActor_Finalized_CommitsDespiteObjectStoreFailure(t *testing.T) {
 
 	const snapshotName = "2026-01-01t00-00-00z-new"
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status: &ateapi.ActorStatus{
+			State:            ateapi.ActorState_ACTOR_STATE_SUSPENDING,
 			AssignedNode:     "node-1",
 			WorkerAssignment: wireTestAssignment(),
 		},
@@ -793,11 +793,11 @@ func TestSuspendActor_Finalized_CommitsDespiteObjectStoreFailure(t *testing.T) {
 	objects.PutSnapshot(t, previous, "manifest.json")
 	objects.PutSnapshot(t, fresh, "manifest.json")
 
-	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 2
-		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-			newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", fresh.Name(), fresh.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		s.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", fresh.Name(), fresh.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 		}
 	})
 
@@ -806,14 +806,14 @@ func TestSuspendActor_Finalized_CommitsDespiteObjectStoreFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SuspendActor: %v", err)
 	}
-	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got)
 	}
-	gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	if got := gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got != fresh.String() {
 		t.Errorf("actor snapshot uri = %q, want the one this suspend wrote, %q", got, fresh)
 	}
-	if got := findLatestDurableSnapshot(stored.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING); got != nil {
+	if got := findLatestDurableSnapshot(stored.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING); got != nil {
 		t.Errorf("in-progress durable snapshot = %v, want cleared", got)
 	}
 	if len(objects.Snapshot(t, previous)) == 0 {
@@ -837,11 +837,11 @@ func TestSuspendActor_Finalized_KeepsReplacedSnapshotOnConflict(t *testing.T) {
 	w, atelet, objects := newWireFinalizeWorkflow(t, &conflictingUpdateStore{Interface: persistence})
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status: &ateapi.ActorStatus{
+			State:            ateapi.ActorState_ACTOR_STATE_SUSPENDING,
 			AssignedNode:     "node-1",
 			WorkerAssignment: wireTestAssignment(),
 		},
@@ -851,11 +851,11 @@ func TestSuspendActor_Finalized_KeepsReplacedSnapshotOnConflict(t *testing.T) {
 	fresh := mustActorSnapshotURI(t, template, actor, "2026-01-01t00-00-00z-new")
 	objects.PutSnapshot(t, previous, "manifest.json")
 	objects.PutSnapshot(t, fresh, "manifest.json")
-	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 2
-		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-			newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", fresh.Name(), fresh.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		s.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", fresh.Name(), fresh.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 		}
 	})
 
@@ -878,7 +878,7 @@ type conflictingUpdateStore struct {
 	store.Interface
 }
 
-func (conflictingUpdateStore) UpdateActor(context.Context, resources.ActorRef, store.Precondition, func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+func (conflictingUpdateStore) UpdateActor(context.Context, resources.ActorRef, store.Precondition, func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	return nil, store.ErrVersionConflict
 }
 
@@ -889,19 +889,19 @@ func (conflictingUpdateStore) UpdateActor(context.Context, resources.ActorRef, s
 func TestSuspendActor_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation})
+	seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation})
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
-	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+	created := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		ActorTemplate: suspendTestTemplateRef(),
-		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+		Status: &ateapi.ActorStatus{
+			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDING,
 			AssignedNode:           "node-1",
 			WorkerAssignment:       wireTestAssignment(),
 			LastAssignedGeneration: 1,
-			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			Snapshots: []*ateapi.Snapshot{
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 			},
 		},
 	})
@@ -941,18 +941,18 @@ func TestSuspendActor_Finalized_ReleasesOnlyOwnWorker(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation})
+			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation})
 			w, _ := newWireCaptureWorkflow(t, persistence)
-			actor := &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
+			actor := &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "shared"},
 				ActorTemplate: suspendTestTemplateRef(),
-				Status: &ateapipb.ActorStatus{
-					State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+				Status: &ateapi.ActorStatus{
+					State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDING,
 					AssignedNode:           "node-1",
 					WorkerAssignment:       wireTestAssignment(),
 					LastAssignedGeneration: 1,
-					Snapshots: []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+					Snapshots: []*ateapi.Snapshot{
+						newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 					},
 				},
 			}
@@ -962,8 +962,8 @@ func TestSuspendActor_Finalized_ReleasesOnlyOwnWorker(t *testing.T) {
 			if tt.assignmentAtespace != "team-a" || tt.mismatchedUID {
 				uid = "other-actor-uid-b"
 			}
-			seedWireWorker(t, ctx, persistence, &ateapipb.ActorAssignment{
-				Actor:    &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
+			seedWireWorker(t, ctx, persistence, &ateapi.ActorAssignment{
+				Actor:    &ateapi.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
 				ActorUid: uid,
 			})
 
@@ -986,26 +986,26 @@ func TestSuspendActor_Finalized_ReleasesOnlyOwnWorker(t *testing.T) {
 func TestSuspendActor_Finalized_MissingDurableSnapshotClearsAssignment(t *testing.T) {
 	ctx := context.Background()
 	st := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, st, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation})
+	seedSuspendTemplate(t, ctx, st, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation})
 	w, atelet := newWireCaptureWorkflow(t, st)
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 	records := crashRecords(t)
 
-	created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+	created := storetest.MustCreateActor(t, ctx, st, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		ActorTemplate: suspendTestTemplateRef(),
-		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+		Status: &ateapi.ActorStatus{
+			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDING,
 			AssignedNode:           "node-1",
 			WorkerAssignment:       wireTestAssignment(),
 			LastAssignedGeneration: 1,
-			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			Snapshots: []*ateapi.Snapshot{
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 			},
 		},
 	})
 	seedWireWorker(t, ctx, st, assignmentOf(created))
-	updateDuringCheckpoint(t, atelet, st, actorRef, func(s *ateapipb.ActorStatus) {
+	updateDuringCheckpoint(t, atelet, st, actorRef, func(s *ateapi.ActorStatus) {
 		s.Snapshots = nil
 	})
 
@@ -1016,7 +1016,7 @@ func TestSuspendActor_Finalized_MissingDurableSnapshotClearsAssignment(t *testin
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
 	}
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
 	}
 	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageDurableSnapshotMissing; msg != want {
@@ -1044,13 +1044,13 @@ var suspendModes = []struct {
 func TestSuspendModeFromOptions(t *testing.T) {
 	tests := []struct {
 		name string
-		opts *ateapipb.SuspendOptions
+		opts *ateapi.SuspendOptions
 		want suspendMode
 	}{
 		{"no options", nil, suspendAsync},
-		{"mode unspecified", &ateapipb.SuspendOptions{}, suspendAsync},
-		{"synchronous", &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}, suspendSync},
-		{"asynchronous", &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}, suspendAsync},
+		{"mode unspecified", &ateapi.SuspendOptions{}, suspendAsync},
+		{"synchronous", &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}, suspendSync},
+		{"asynchronous", &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}, suspendAsync},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1066,7 +1066,7 @@ func TestSuspendModeFromOptions(t *testing.T) {
 type suspendOutcome struct {
 	code         codes.Code
 	atelet       ateletCall
-	state        ateapipb.ActorState
+	state        ateapi.ActorState
 	assignedNode string
 	// workerHeld is whether the worker wireTestAssignment names still holds
 	// the actor's assignment.
@@ -1088,10 +1088,10 @@ type ateletCall struct {
 // snapshotOutcome is the part of a stored snapshot the matrix pins.
 type snapshotOutcome struct {
 	generation int32
-	fidelity   ateapipb.SnapshotFidelity
+	fidelity   ateapi.SnapshotFidelity
 	locality   string
 	// durable is the durable copy's status, UNSPECIFIED when there is none.
-	durable ateapipb.SnapshotStorageStatus
+	durable ateapi.SnapshotStorageStatus
 }
 
 // TestSuspendAndPause_CharacteristicMatrix pins, for each actor shape either
@@ -1100,16 +1100,16 @@ type snapshotOutcome struct {
 // actor's worker was released.
 func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 	const node = "node-1"
-	volumes := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-	durable := func(gen int32, status ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
+	volumes := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	durable := func(gen int32, status ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
 		name := fmt.Sprintf("snap-%d", gen)
-		return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, volumes, "", name, someActorSnapshotURI(t, testStorageLocation, "team-a", name), status)
+		return newDurableSnapshot(gen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, volumes, "", name, someActorSnapshotURI(t, testStorageLocation, "team-a", name), status)
 	}
-	local := func(gen int32, locality string) *ateapipb.Snapshot {
+	local := func(gen int32, locality string) *ateapi.Snapshot {
 		return newPausedSnapshot(t, gen, volumes, "", fmt.Sprintf("snap-%d", gen), locality)
 	}
-	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	pending := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
 
 	ateletVolumes := ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	immediate := ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE
@@ -1121,79 +1121,79 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 		want.code = codes.FailedPrecondition
 		return want
 	}
-	suspended := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	suspended := ateapi.ActorState_ACTOR_STATE_SUSPENDED
 
 	tests := []struct {
 		name string
 		// atespace defaults to team-a.
 		atespace    string
-		status      *ateapipb.ActorStatus
+		status      *ateapi.ActorStatus
 		sync, async suspendOutcome
 	}{
 		{
 			name:   "RUNNING",
-			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment()},
+			status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment()},
 			sync:   suspendOutcome{code: codes.OK, atelet: checkpointSync, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", completed}}},
 			async:  suspendOutcome{code: codes.OK, atelet: checkpointAsync, state: suspended, assignedNode: node, generation: 1, snapshots: []snapshotOutcome{{1, volumes, node, pending}}},
 		},
 		{
 			name: "RUNNING resumed from pause",
-			status: &ateapipb.ActorStatus{
-				State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
-				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{local(1, node)},
+			status: &ateapi.ActorStatus{
+				State: ateapi.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
+				LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{local(1, node)},
 			},
 			sync:  suspendOutcome{code: codes.OK, atelet: checkpointSync, state: suspended, generation: 2, snapshots: []snapshotOutcome{{2, volumes, "", completed}}},
 			async: suspendOutcome{code: codes.OK, atelet: checkpointAsync, state: suspended, assignedNode: node, generation: 2, snapshots: []snapshotOutcome{{2, volumes, node, pending}}},
 		},
 		{
 			name: "RUNNING resumed from a durable snapshot",
-			status: &ateapipb.ActorStatus{
-				State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
-				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, completed)},
+			status: &ateapi.ActorStatus{
+				State: ateapi.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
+				LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{durable(1, completed)},
 			},
 			sync:  suspendOutcome{code: codes.OK, atelet: checkpointSync, state: suspended, generation: 2, snapshots: []snapshotOutcome{{2, volumes, "", completed}}},
 			async: suspendOutcome{code: codes.OK, atelet: checkpointAsync, state: suspended, assignedNode: node, generation: 2, snapshots: []snapshotOutcome{{1, volumes, "", completed}, {2, volumes, node, pending}}},
 		},
 		{
 			name:   "SUSPENDED with a durable snapshot",
-			status: &ateapipb.ActorStatus{State: suspended, LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, completed)}},
+			status: &ateapi.ActorStatus{State: suspended, LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{durable(1, completed)}},
 			sync:   suspendOutcome{code: codes.OK, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", completed}}},
 			async:  suspendOutcome{code: codes.OK, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", completed}}},
 		},
 		{
 			// Neither mode promotes the node-local snapshot.
 			name:   "paused",
-			status: &ateapipb.ActorStatus{State: suspended, AssignedNode: node, LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{local(1, node)}},
+			status: &ateapi.ActorStatus{State: suspended, AssignedNode: node, LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{local(1, node)}},
 			sync:   suspendOutcome{code: codes.OK, state: suspended, assignedNode: node, generation: 1, snapshots: []snapshotOutcome{{1, volumes, node, pending}}},
 			async:  suspendOutcome{code: codes.OK, state: suspended, assignedNode: node, generation: 1, snapshots: []snapshotOutcome{{1, volumes, node, pending}}},
 		},
 		{
 			// Both modes mark this shape, and a retry finishes in its own mode.
 			name: "suspend in progress",
-			status: &ateapipb.ActorStatus{
-				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
-				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, pending)},
+			status: &ateapi.ActorStatus{
+				State: ateapi.ActorState_ACTOR_STATE_SUSPENDING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
+				LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{durable(1, pending)},
 			},
 			sync:  suspendOutcome{code: codes.OK, atelet: checkpointSync, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", completed}}},
 			async: suspendOutcome{code: codes.OK, atelet: checkpointAsync, state: suspended, assignedNode: node, generation: 1, snapshots: []snapshotOutcome{{1, volumes, node, pending}}},
 		},
 		{
 			name:   "RESUMING",
-			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RESUMING},
-			sync:   rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_RESUMING}),
-			async:  rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_RESUMING}),
+			status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RESUMING},
+			sync:   rejected(suspendOutcome{state: ateapi.ActorState_ACTOR_STATE_RESUMING}),
+			async:  rejected(suspendOutcome{state: ateapi.ActorState_ACTOR_STATE_RESUMING}),
 		},
 		{
 			name:   "CRASHED",
-			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED},
-			sync:   rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_CRASHED}),
-			async:  rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_CRASHED}),
+			status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_CRASHED},
+			sync:   rejected(suspendOutcome{state: ateapi.ActorState_ACTOR_STATE_CRASHED}),
+			async:  rejected(suspendOutcome{state: ateapi.ActorState_ACTOR_STATE_CRASHED}),
 		},
 		{
 			name:   "DELETING",
-			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
-			sync:   rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_DELETING}),
-			async:  rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_DELETING}),
+			status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_DELETING},
+			sync:   rejected(suspendOutcome{state: ateapi.ActorState_ACTOR_STATE_DELETING}),
+			async:  rejected(suspendOutcome{state: ateapi.ActorState_ACTOR_STATE_DELETING}),
 		},
 	}
 
@@ -1213,14 +1213,14 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 					// wireTestAssignment names.
 					ctx := context.Background()
 					persistence := newTestPersistence(t)
-					tmpl := seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: volumes})
+					tmpl := seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: volumes})
 					actorRef := resources.ActorRef{Atespace: atespace, Name: fmt.Sprintf("row%d-%s", i, mode.name)}
-					created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-						Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+					created := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+						Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 						ActorTemplate: suspendTestTemplateRef(),
 						Status:        proto.CloneOf(tc.status),
 					})
-					var assignment *ateapipb.ActorAssignment
+					var assignment *ateapi.ActorAssignment
 					if tc.status.GetWorkerAssignment() != nil {
 						assignment = assignmentOf(created)
 					}
@@ -1241,7 +1241,7 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 					if diff := cmp.Diff(want, got, cmp.AllowUnexported(suspendOutcome{}, ateletCall{}, snapshotOutcome{})); diff != "" {
 						t.Errorf("outcome mismatch (-want +got):\n%s (err: %v)", diff, err)
 					}
-					if got.state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && stored.GetStatus().GetWorkerAssignment() != nil {
+					if got.state == ateapi.ActorState_ACTOR_STATE_SUSPENDED && stored.GetStatus().GetWorkerAssignment() != nil {
 						t.Errorf("WorkerAssignment = %v, want cleared on SUSPENDED", stored.GetStatus().GetWorkerAssignment())
 					}
 					assertRequestNamesLatestSnapshot(t, atelet, tmpl, stored)
@@ -1259,14 +1259,14 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 		t.Run(mode.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation})
+			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation})
 			w, atelet := newWireCaptureWorkflow(t, persistence)
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: suspendTestTemplateRef(),
-				Status: &ateapipb.ActorStatus{
-					State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+				Status: &ateapi.ActorStatus{
+					State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
 					AssignedNode:     "node-1",
 					WorkerAssignment: wireTestAssignment(),
 				},
@@ -1275,8 +1275,8 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 			// crash recorded and the assignment cleared, landing after the
 			// atelet call and before finalize re-reads the actor.
 			originalCrash := newActorCrash(ateattr.OperationDelete, "original crash reason")
-			updateDuringCheckpoint(t, atelet, persistence, actorRef, func(s *ateapipb.ActorStatus) {
-				s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+			updateDuringCheckpoint(t, atelet, persistence, actorRef, func(s *ateapi.ActorStatus) {
+				s.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 				s.Crash = originalCrash
 				s.WorkerAssignment = nil
 			})
@@ -1289,7 +1289,7 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 				t.Errorf("%s: returned actor = %v, want nil", mode.name, returned)
 			}
 			stored := mustReadActor(t, ctx, persistence, actorRef)
-			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+			if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 				t.Errorf("%s: stored state = %v, want CRASHED", mode.name, got)
 			}
 			if got, want := stored.GetStatus().GetCrash().GetMessage(), originalCrash.GetMessage(); got != want {
@@ -1307,14 +1307,14 @@ func TestSuspendAndPause_InvalidStorageLocationRejected(t *testing.T) {
 		t.Run(mode.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: "not-a-uri"})
+			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: "not-a-uri"})
 			w := newMarkOnlyWorkflow(persistence)
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: suspendTestTemplateRef(),
-				Status: &ateapipb.ActorStatus{
-					State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+				Status: &ateapi.ActorStatus{
+					State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
 					AssignedNode:     "node-1",
 					WorkerAssignment: wireTestAssignment(),
 				},
@@ -1324,7 +1324,7 @@ func TestSuspendAndPause_InvalidStorageLocationRejected(t *testing.T) {
 				t.Fatalf("%s: expected error for invalid storage location, got nil", mode.name)
 			}
 			stored := mustReadActor(t, ctx, persistence, actorRef)
-			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+			if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 				t.Errorf("%s: stored state = %v, want RUNNING untouched", mode.name, got)
 			}
 			if got := stored.GetStatus().GetLastAssignedGeneration(); got != 0 {
@@ -1356,7 +1356,7 @@ func describeAteletCall(atelet *capturingAtelet) ateletCall {
 
 // describeSnapshots summarizes each stored snapshot as its generation,
 // fidelity, locality, and durable copy's status.
-func describeSnapshots(status *ateapipb.ActorStatus) []snapshotOutcome {
+func describeSnapshots(status *ateapi.ActorStatus) []snapshotOutcome {
 	var out []snapshotOutcome
 	for _, snap := range status.GetSnapshots() {
 		out = append(out, snapshotOutcome{
@@ -1372,7 +1372,7 @@ func describeSnapshots(status *ateapipb.ActorStatus) []snapshotOutcome {
 // assertRequestNamesLatestSnapshot verifies the suspend RPC atelet received,
 // if any, names the snapshot at the stored actor's latest generation and its
 // object storage URI.
-func assertRequestNamesLatestSnapshot(t *testing.T, atelet *capturingAtelet, tmpl *ateapipb.ActorTemplate, stored *ateapipb.Actor) {
+func assertRequestNamesLatestSnapshot(t *testing.T, atelet *capturingAtelet, tmpl *ateapi.ActorTemplate, stored *ateapi.Actor) {
 	t.Helper()
 	var snap *ateletpb.Snapshot
 	if req := atelet.checkpointRequest(); req != nil {
@@ -1400,12 +1400,12 @@ func assertRequestNamesLatestSnapshot(t *testing.T, atelet *capturingAtelet, tmp
 // that conflicts with the record crashes the actor.
 func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 	const node = "node-1"
-	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	durable := func(gen int32, status ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
+	memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	pending := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	durable := func(gen int32, status ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
 		name := fmt.Sprintf("snap-%d", gen)
-		return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", name, someActorSnapshotURI(t, testStorageLocation, "team-a", name), status)
+		return newDurableSnapshot(gen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", name, someActorSnapshotURI(t, testStorageLocation, "team-a", name), status)
 	}
 	report := func(gen int32, uri string, fidelity ateletpb.SnapshotFidelity) *ateletpb.SnapshotReport {
 		return &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
@@ -1423,7 +1423,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 		name string
 		mode suspendMode
 		// status is the RUNNING actor's status before the suspend.
-		status *ateapipb.ActorStatus
+		status *ateapi.ActorStatus
 		// state builds what Checkpoint returns, from the request it got.
 		state         func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState
 		wantSnapshots []snapshotOutcome
@@ -1438,7 +1438,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 		// again. The case pins that finalize applies the state before it prunes.
 		name:   "async: an older upload atelet finished is kept as COMPLETED",
 		mode:   suspendAsync,
-		status: &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, pending)}},
+		status: &ateapi.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{durable(1, pending)}},
 		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
 			return &ateletpb.ActorSnapshotState{
 				LatestLocal:   &ateletpb.SnapshotReport{Snapshot: req.GetSnapshot()},
@@ -1452,7 +1452,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 		// in the background, and the next async suspend records that.
 		name:   "async: the previous pause's upload atelet finished is recorded as COMPLETED",
 		mode:   suspendAsync,
-		status: &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{newPausedSnapshot(t, 1, memory, "", "snap-1", node)}},
+		status: &ateapi.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{newPausedSnapshot(t, 1, memory, "", "snap-1", node)}},
 		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
 			return &ateletpb.ActorSnapshotState{
 				LatestLocal:   &ateletpb.SnapshotReport{Snapshot: req.GetSnapshot()},
@@ -1463,7 +1463,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 	}, {
 		name:   "async: without a state, the PENDING upload is pruned",
 		mode:   suspendAsync,
-		status: &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, pending)}},
+		status: &ateapi.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{durable(1, pending)}},
 		state: func(*ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
 			return nil
 		},
@@ -1476,7 +1476,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 		// on any node.
 		name:   "async: a snapshot atelet already detached is recorded without locality",
 		mode:   suspendAsync,
-		status: &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, completed)}},
+		status: &ateapi.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{durable(1, completed)}},
 		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
 			return &ateletpb.ActorSnapshotState{
 				LatestDurable: &ateletpb.SnapshotReport{Snapshot: req.GetSnapshot()},
@@ -1489,7 +1489,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 		// the retry is async. An older snapshot's upload is still running.
 		name:   "async: a durable snapshot atelet kept no copy of is recorded without locality",
 		mode:   suspendAsync,
-		status: &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, pending)}},
+		status: &ateapi.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{durable(1, pending)}},
 		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
 			return &ateletpb.ActorSnapshotState{
 				Uploading:     report(1, uriOf(1), ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
@@ -1506,7 +1506,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 			snap.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 			return &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: snap}}
 		},
-		wantSnapshots: []snapshotOutcome{{generation: 1, fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, durable: completed}},
+		wantSnapshots: []snapshotOutcome{{generation: 1, fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, durable: completed}},
 	}, {
 		name: "sync: a state that conflicts with the record crashes the actor",
 		mode: suspendSync,
@@ -1520,7 +1520,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 	}, {
 		name:   "async: a state that conflicts with the record crashes the actor",
 		mode:   suspendAsync,
-		status: &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, pending)}},
+		status: &ateapi.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapi.Snapshot{durable(1, pending)}},
 		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
 			return &ateletpb.ActorSnapshotState{
 				LatestLocal:   &ateletpb.SnapshotReport{Snapshot: req.GetSnapshot()},
@@ -1533,17 +1533,17 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: memory})
+			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: memory})
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 			status := proto.CloneOf(tt.status)
 			if status == nil {
-				status = &ateapipb.ActorStatus{}
+				status = &ateapi.ActorStatus{}
 			}
-			status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+			status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 			status.AssignedNode = node
 			status.WorkerAssignment = wireTestAssignment()
-			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			created := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: suspendTestTemplateRef(),
 				Status:        status,
 			})
@@ -1563,7 +1563,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 				if got := apierror.Code(err); got != tt.wantCode {
 					t.Fatalf("suspend = %v, want code %v", err, tt.wantCode)
 				}
-				if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 					t.Errorf("state = %v, want CRASHED", got)
 				}
 				if got, want := stored.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageSnapshotStateConflict; got != want {
@@ -1574,7 +1574,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 			if err != nil {
 				t.Fatalf("suspend: %v", err)
 			}
-			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+			if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 				t.Errorf("state = %v, want SUSPENDED", got)
 			}
 			wantNode := node
@@ -1593,8 +1593,8 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 
 func TestSuspendActor_Finalized_RecordsLocalCopyWhenKept(t *testing.T) {
 	const node = "node-1"
-	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	localReport := func(snap *ateletpb.Snapshot) *ateletpb.ActorSnapshotState {
 		return &ateletpb.ActorSnapshotState{LatestLocal: &ateletpb.SnapshotReport{Snapshot: snap}}
 	}
@@ -1640,13 +1640,13 @@ func TestSuspendActor_Finalized_RecordsLocalCopyWhenKept(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: memory})
+			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: memory})
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			created := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: suspendTestTemplateRef(),
-				Status: &ateapipb.ActorStatus{
-					State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+				Status: &ateapi.ActorStatus{
+					State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
 					AssignedNode:     node,
 					WorkerAssignment: wireTestAssignment(),
 				},
@@ -1665,7 +1665,7 @@ func TestSuspendActor_Finalized_RecordsLocalCopyWhenKept(t *testing.T) {
 				t.Fatalf("suspend: %v", err)
 			}
 			stored := mustReadActor(t, ctx, persistence, actorRef)
-			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+			if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 				t.Errorf("state = %v, want SUSPENDED", got)
 			}
 			if got := stored.GetStatus().GetAssignedNode(); got != tt.wantLocality {

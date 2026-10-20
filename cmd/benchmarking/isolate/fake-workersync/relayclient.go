@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
 	"go.ate.dev/substrate/internal/credbundle"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -95,17 +95,17 @@ func (g *grpcRelay) Report(ctx context.Context, addr string, report workerReport
 	}
 	ctx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	client := ateapipb.NewWorkerServiceClient(conn)
-	ref := &ateapipb.ObjectRef{Name: report.Name}
+	client := ateapi.NewWorkerServiceClient(conn)
+	ref := &ateapi.ObjectRef{Name: report.Name}
 	epoch := report.Epoch
 	if epoch == 0 {
-		resp, err := client.AcquireWorkerEpoch(ctx, &ateapipb.AcquireWorkerEpochRequest{Worker: ref})
+		resp, err := client.AcquireWorkerEpoch(ctx, &ateapi.AcquireWorkerEpochRequest{Worker: ref})
 		if err != nil {
 			return err
 		}
 		epoch = resp.GetEpoch()
 	}
-	if _, err := client.RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{
+	if _, err := client.RegisterWorker(ctx, &ateapi.RegisterWorkerRequest{
 		Worker:   ref,
 		Epoch:    epoch,
 		Ips:      report.IPs,
@@ -113,7 +113,7 @@ func (g *grpcRelay) Report(ctx context.Context, addr string, report workerReport
 	}); err != nil {
 		return err
 	}
-	_, err = client.SetWorkerSandboxRuntimes(ctx, &ateapipb.SetWorkerSandboxRuntimesRequest{
+	_, err = client.SetWorkerSandboxRuntimes(ctx, &ateapi.SetWorkerSandboxRuntimesRequest{
 		Worker:         ref,
 		Epoch:          epoch,
 		SandboxClasses: report.SandboxClasses,

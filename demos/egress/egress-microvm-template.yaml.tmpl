@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Substrate ActorTemplate resource (protojson-shaped ateapipb.ActorTemplate,
-# NOT the ate.dev/v1alpha1 CRD) for the micro-VM egress demo. The actor's
+# Substrate ActorTemplate resource (protojson-shaped ateapi.ActorTemplate,
+# NOT the ate.dev/v1 CRD) for the micro-VM egress demo. The actor's
 # outbound TCP is redirected into atunnel by nftables in the ateworker
 # (prepareActorEgress), which the micro-VM ateworker implements the same way the
 # gVisor one does — this fixture is what proves it end to end. Delivery of the

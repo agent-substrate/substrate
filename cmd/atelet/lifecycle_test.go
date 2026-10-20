@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
@@ -44,7 +45,6 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -2690,7 +2690,7 @@ func advertiseRuntime(t *testing.T, s *Atelet, rec *sandboxAssetsRecord) {
 	}
 	hash := bundleHash(rec)
 	s.runtimes.register("test-worker-pod", advertisedClass{
-		class:  v1alpha1.SandboxClass(rec.SandboxClass),
+		class:  atev1.SandboxClass(rec.SandboxClass),
 		config: "test-config",
 		hashed: []hashedVersion{{versionPlan: versionPlan{name: "v1", isDefault: true, rec: rec}, hash: hash}},
 	})

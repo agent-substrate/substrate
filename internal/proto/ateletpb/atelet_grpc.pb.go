@@ -16,7 +16,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.25.3
-// source: atelet.proto
+// source: internal/proto/ateletpb/atelet.proto
 
 package ateletpb
 
@@ -429,7 +429,7 @@ var WorkerSupport_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "atelet.proto",
+	Metadata: "internal/proto/ateletpb/atelet.proto",
 }
 
 const (
@@ -823,5 +823,5 @@ var Atelet_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "atelet.proto",
+	Metadata: "internal/proto/ateletpb/atelet.proto",
 }

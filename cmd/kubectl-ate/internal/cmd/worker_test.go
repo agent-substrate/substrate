@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
@@ -43,37 +43,37 @@ func TestWorkerCommandArgs(t *testing.T) {
 }
 
 type mockWorkerLister struct {
-	workers []*ateapipb.Worker
+	workers []*ateapi.Worker
 	err     error
 }
 
-func (m *mockWorkerLister) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest, opts ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error) {
+func (m *mockWorkerLister) ListWorkers(ctx context.Context, req *ateapi.ListWorkersRequest, opts ...grpc.CallOption) (*ateapi.ListWorkersResponse, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &ateapipb.ListWorkersResponse{Workers: m.workers}, nil
+	return &ateapi.ListWorkersResponse{Workers: m.workers}, nil
 }
 
 // mockActorLister serves the actors of one atespace at a time, as the real
 // listing does, so an atespace filter sees only that atespace's placements.
 type mockActorLister struct {
-	byAtespace map[string][]*ateapipb.Actor
+	byAtespace map[string][]*ateapi.Actor
 	err        error
 }
 
-func (m *mockActorLister) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest, opts ...grpc.CallOption) (*ateapipb.ListActorsResponse, error) {
+func (m *mockActorLister) ListActors(ctx context.Context, req *ateapi.ListActorsRequest, opts ...grpc.CallOption) (*ateapi.ListActorsResponse, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &ateapipb.ListActorsResponse{Actors: m.byAtespace[req.GetAtespace()]}, nil
+	return &ateapi.ListActorsResponse{Actors: m.byAtespace[req.GetAtespace()]}, nil
 }
 
 // actorOn is an actor of atespace placed on the named worker.
-func actorOn(atespace, name, workerName string) *ateapipb.Actor {
-	return &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-		Status: &ateapipb.ActorStatus{
-			WorkerAssignment: &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: workerName}},
+func actorOn(atespace, name, workerName string) *ateapi.Actor {
+	return &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Atespace: atespace, Name: name},
+		Status: &ateapi.ActorStatus{
+			WorkerAssignment: &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: workerName}},
 		},
 	}
 }
@@ -93,11 +93,11 @@ func (m *mockPodMetricsLister) ListPodMetrics(ctx context.Context, namespace str
 // mockWorkerGetter serves GetWorker calls from a name-keyed map, as the
 // GetWorkersRunner requires when getting workers by name.
 type mockWorkerGetter struct {
-	workers map[string]*ateapipb.Worker
+	workers map[string]*ateapi.Worker
 	err     error
 }
 
-func (m *mockWorkerGetter) GetWorker(ctx context.Context, req *ateapipb.GetWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (m *mockWorkerGetter) GetWorker(ctx context.Context, req *ateapi.GetWorkerRequest, opts ...grpc.CallOption) (*ateapi.Worker, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -119,46 +119,46 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinTime(t, now)
 
-	workers := []*ateapipb.Worker{
+	workers := []*ateapi.Worker{
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-1", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status: &ateapipb.WorkerStatus{
-				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity:       &ateapipb.WorkerResources{Actors: 1},
-				Allocated:      &ateapipb.WorkerResources{Actors: 1},
-				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "microvm"}},
+			Status: &ateapi.WorkerStatus{
+				State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity:       &ateapi.WorkerResources{Actors: 1},
+				Allocated:      &ateapi.WorkerResources{Actors: 1},
+				SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "microvm"}},
 			},
 		},
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-2", CreateTime: timestamppb.New(now.Add(-3 * time.Hour))},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-2", CreateTime: timestamppb.New(now.Add(-3 * time.Hour))},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "other",
 			WorkerPod:       "pod-2",
 			Labels:          map[string]string{"ate.dev/worker-pool": "other"},
-			Status: &ateapipb.WorkerStatus{
-				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+			Status: &ateapi.WorkerStatus{
+				State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
+				SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 			},
 		},
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-3", CreateTime: timestamppb.New(now.Add(-72 * time.Hour))},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-3", CreateTime: timestamppb.New(now.Add(-72 * time.Hour))},
 			WorkerNamespace: "ns-2",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-3",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status: &ateapipb.WorkerStatus{
-				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity:       &ateapipb.WorkerResources{Actors: 1},
-				Allocated:      &ateapipb.WorkerResources{Actors: 1},
-				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+			Status: &ateapi.WorkerStatus{
+				State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity:       &ateapi.WorkerResources{Actors: 1},
+				Allocated:      &ateapi.WorkerResources{Actors: 1},
+				SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 			},
 		},
 	}
-	actors := &mockActorLister{byAtespace: map[string][]*ateapipb.Actor{
+	actors := &mockActorLister{byAtespace: map[string][]*ateapi.Actor{
 		"space-a": {actorOn("space-a", "actor-a", "worker-1")},
 		"space-b": {actorOn("space-b", "actor-b", "worker-3")},
 	}}
@@ -225,24 +225,24 @@ func TestGetWorkersRunner_GetByName(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinTime(t, now)
 
-	getter := &mockWorkerGetter{workers: map[string]*ateapipb.Worker{
+	getter := &mockWorkerGetter{workers: map[string]*ateapi.Worker{
 		"worker-1": {
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-1", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
-			Status: &ateapipb.WorkerStatus{
-				State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity:  &ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
-				Allocated: &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 1 << 30},
+			Status: &ateapi.WorkerStatus{
+				State:     ateapi.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity:  &ateapi.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
+				Allocated: &ateapi.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 1 << 30},
 			},
 		},
 		"worker-2": {
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-2", CreateTime: timestamppb.New(now.Add(-72 * time.Hour))},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-2", CreateTime: timestamppb.New(now.Add(-72 * time.Hour))},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-2",
-			Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING},
+			Status:          &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_DRAINING},
 		},
 	}}
 
@@ -266,8 +266,8 @@ func TestGetWorkersRunner_GetByName(t *testing.T) {
 }
 
 func TestGetWorkersRunner_GetByName_Single(t *testing.T) {
-	getter := &mockWorkerGetter{workers: map[string]*ateapipb.Worker{
-		"worker-1": {Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}},
+	getter := &mockWorkerGetter{workers: map[string]*ateapi.Worker{
+		"worker-1": {Metadata: &ateapi.ResourceMetadata{Name: "worker-1"}},
 	}}
 
 	var buf bytes.Buffer
@@ -324,16 +324,16 @@ func TestGetWorkersRunner_GetByName_RejectsFilters(t *testing.T) {
 }
 
 func TestTopWorkersRunner_Success(t *testing.T) {
-	workers := []*ateapipb.Worker{
+	workers := []*ateapi.Worker{
 		{
 			WorkerNamespace: "ate-demo-counter",
 			WorkerPool:      "counter",
 			WorkerPod:       "counter-worker-pool-7b9f8-x123",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status: &ateapipb.WorkerStatus{
-				Capacity:       &ateapipb.WorkerResources{Actors: 1},
-				Allocated:      &ateapipb.WorkerResources{Actors: 1},
-				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+			Status: &ateapi.WorkerStatus{
+				Capacity:       &ateapi.WorkerResources{Actors: 1},
+				Allocated:      &ateapi.WorkerResources{Actors: 1},
+				SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 			},
 		},
 		{
@@ -341,8 +341,8 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			WorkerPool:      "counter",
 			WorkerPod:       "counter-worker-pool-7b9f8-y456",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status: &ateapipb.WorkerStatus{
-				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "microvm"}},
+			Status: &ateapi.WorkerStatus{
+				SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "microvm"}},
 			},
 		},
 	}
@@ -402,13 +402,13 @@ counter-worker-pool-7b9f8-y456   counter   microvm   FREE            2m         
 }
 
 func TestTopWorkersRunner_FilterNamespace(t *testing.T) {
-	workers := []*ateapipb.Worker{
+	workers := []*ateapi.Worker{
 		{
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Status: &ateapipb.WorkerStatus{
-				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+			Status: &ateapi.WorkerStatus{
+				SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 			},
 		},
 		{
@@ -440,31 +440,31 @@ pod-1   pool-1   gvisor   FREE     metrics unavailable   metrics unavailable
 }
 
 func TestTopWorkersRunner_FilterAtespace(t *testing.T) {
-	workers := []*ateapipb.Worker{
+	workers := []*ateapi.Worker{
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1"},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-1"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Status: &ateapipb.WorkerStatus{
-				Capacity:       &ateapipb.WorkerResources{Actors: 1},
-				Allocated:      &ateapipb.WorkerResources{Actors: 1},
-				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "microvm"}},
+			Status: &ateapi.WorkerStatus{
+				Capacity:       &ateapi.WorkerResources{Actors: 1},
+				Allocated:      &ateapi.WorkerResources{Actors: 1},
+				SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "microvm"}},
 			},
 		},
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-2"},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-2"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-2",
-			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
+			Status:          &ateapi.WorkerStatus{Capacity: &ateapi.WorkerResources{Actors: 1}, Allocated: &ateapi.WorkerResources{Actors: 1}},
 		},
 	}
 
 	var buf bytes.Buffer
 	runner := &TopWorkersRunner{
 		workerLister: &mockWorkerLister{workers: workers},
-		actorLister: &mockActorLister{byAtespace: map[string][]*ateapipb.Actor{
+		actorLister: &mockActorLister{byAtespace: map[string][]*ateapi.Actor{
 			"space-a": {actorOn("space-a", "actor-a", "worker-1")},
 			"space-b": {actorOn("space-b", "actor-b", "worker-2")},
 		}},
@@ -487,14 +487,14 @@ pod-1   pool-1   microvm   ASSIGNED(1/1)   metrics unavailable   metrics unavail
 }
 
 func TestTopWorkersRunner_FilterSelector(t *testing.T) {
-	workers := []*ateapipb.Worker{
+	workers := []*ateapi.Worker{
 		{
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status: &ateapipb.WorkerStatus{
-				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+			Status: &ateapi.WorkerStatus{
+				SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 			},
 		},
 		{
@@ -527,7 +527,7 @@ pod-1   counter   gvisor   FREE     metrics unavailable   metrics unavailable
 }
 
 func TestTopWorkersRunner_MetricsUnavailable(t *testing.T) {
-	workers := []*ateapipb.Worker{
+	workers := []*ateapi.Worker{
 		{
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",

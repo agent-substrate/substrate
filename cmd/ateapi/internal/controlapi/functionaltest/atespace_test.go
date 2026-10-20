@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -32,9 +32,9 @@ func TestCreateAtespace_Success(t *testing.T) {
 	defer tc.cleanup()
 	createTemplate(t, tc, ns)
 
-	resp, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{
-			Metadata: &ateapipb.ResourceMetadata{
+	resp, err := tc.client.CreateAtespace(context.Background(), &ateapi.CreateAtespaceRequest{
+		Atespace: &ateapi.Atespace{
+			Metadata: &ateapi.ResourceMetadata{
 				Name:       "team-a",
 				Uid:        "caller-supplied-uid",
 				Version:    999,
@@ -60,12 +60,12 @@ func TestCreateAtespace_Success(t *testing.T) {
 		t.Errorf("uid = %q, want a server-generated value", md.GetUid())
 	}
 
-	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata: &ateapipb.ResourceMetadata{
+	if _, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata: &ateapi.ResourceMetadata{
 				Atespace: "team-a",
 				Name:     "id1"},
-			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		}}); err != nil {
 		t.Errorf("CreateActor into freshly created atespace failed: %v", err)
 	}
@@ -76,10 +76,10 @@ func TestCreateAtespace_AlreadyExists(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	if _, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}}); err != nil {
+	if _, err := tc.client.CreateAtespace(context.Background(), &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "team-a"}}}); err != nil {
 		t.Fatalf("first CreateAtespace failed: %v", err)
 	}
-	_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}})
+	_, err := tc.client.CreateAtespace(context.Background(), &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "team-a"}}})
 	assertGrpcError(t, err, codes.AlreadyExists, "Atespace team-a already exists")
 }
 
@@ -88,11 +88,11 @@ func TestGetAtespace_Found(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	created, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}})
+	created, err := tc.client.CreateAtespace(context.Background(), &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "team-a"}}})
 	if err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
-	resp, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}})
+	resp, err := tc.client.GetAtespace(context.Background(), &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}})
 	if err != nil {
 		t.Fatalf("GetAtespace failed: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestGetAtespace_NotFound(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	_, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "nope"}})
+	_, err := tc.client.GetAtespace(context.Background(), &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "nope"}})
 	assertGrpcError(t, err, codes.NotFound, "Atespace nope not found")
 }
 
@@ -116,11 +116,11 @@ func TestListAtespaces(t *testing.T) {
 	defer tc.cleanup()
 
 	for _, n := range []string{"team-a", "team-b"} {
-		if _, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: n}}}); err != nil {
+		if _, err := tc.client.CreateAtespace(context.Background(), &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: n}}}); err != nil {
 			t.Fatalf("CreateAtespace(%s) failed: %v", n, err)
 		}
 	}
-	resp, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{})
+	resp, err := tc.client.ListAtespaces(context.Background(), &ateapi.ListAtespacesRequest{})
 	if err != nil {
 		t.Fatalf("ListAtespaces failed: %v", err)
 	}
@@ -141,10 +141,10 @@ func TestDeleteAtespace_Empty_Success(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	if _, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}}); err != nil {
+	if _, err := tc.client.CreateAtespace(context.Background(), &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "team-a"}}}); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
-	deleted, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}})
+	deleted, err := tc.client.DeleteAtespace(context.Background(), &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}})
 	if err != nil {
 		t.Fatalf("DeleteAtespace failed: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestDeleteAtespace_Empty_Success(t *testing.T) {
 		t.Errorf("the deleted atespace carries no delete_time")
 	}
 
-	_, err = tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}})
+	_, err = tc.client.GetAtespace(context.Background(), &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}})
 	assertGrpcError(t, err, codes.NotFound, "Atespace team-a not found")
 }
 
@@ -166,19 +166,19 @@ func TestDeleteAtespace_NonEmpty_Rejected(t *testing.T) {
 	defer tc.cleanup()
 	createTemplate(t, tc, ns)
 
-	if _, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}}); err != nil {
+	if _, err := tc.client.CreateAtespace(context.Background(), &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "team-a"}}}); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
-	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	if _, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}})
+	_, err := tc.client.DeleteAtespace(context.Background(), &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}})
 	assertGrpcError(t, err, codes.FailedPrecondition, "Atespace team-a is not empty")
 	// The atespace must survive a rejected delete.
-	if _, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}}); err != nil {
+	if _, err := tc.client.GetAtespace(context.Background(), &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}}); err != nil {
 		t.Errorf("atespace should survive a rejected delete, got %v", err)
 	}
 }
@@ -195,19 +195,19 @@ func TestDeleteAtespace_ScopedToTargetAtespace(t *testing.T) {
 	createAtespace(t, tc, "team-b")
 
 	// Actor only in team-b.
-	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-b", Name: "id1"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	if _, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-b", Name: "id1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
 	// Empty team-a deletes fine despite team-b holding an actor.
-	if _, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}}); err != nil {
+	if _, err := tc.client.DeleteAtespace(context.Background(), &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}}); err != nil {
 		t.Errorf("DeleteAtespace(team-a, empty) failed: %v", err)
 	}
 	// team-b is still non-empty → rejected.
-	_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-b"}})
+	_, err := tc.client.DeleteAtespace(context.Background(), &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-b"}})
 	assertGrpcError(t, err, codes.FailedPrecondition, "Atespace team-b is not empty")
 }
 
@@ -216,7 +216,7 @@ func TestDeleteAtespace_NotFound(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "nope"}})
+	_, err := tc.client.DeleteAtespace(context.Background(), &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "nope"}})
 	assertGrpcError(t, err, codes.NotFound, "Atespace nope not found")
 }
 
@@ -226,27 +226,27 @@ func TestValidation_Atespace(t *testing.T) {
 	defer tc.cleanup()
 
 	t.Run("ListAtespaces", func(t *testing.T) {
-		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{Options: &ateapipb.ListOptions{PageSize: -1}})
+		_, err := tc.client.ListAtespaces(context.Background(), &ateapi.ListAtespacesRequest{Options: &ateapi.ListOptions{PageSize: -1}})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListAtespaces invalid token", func(t *testing.T) {
-		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
+		_, err := tc.client.ListAtespaces(context.Background(), &ateapi.ListAtespacesRequest{Options: &ateapi.ListOptions{PageToken: "%%%"}})
 		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 	})
 
 	t.Run("CreateAtespace", func(t *testing.T) {
-		_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{})
+		_, err := tc.client.CreateAtespace(context.Background(), &ateapi.CreateAtespaceRequest{})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
 	})
 
 	t.Run("GetAtespace", func(t *testing.T) {
-		_, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{})
+		_, err := tc.client.GetAtespace(context.Background(), &ateapi.GetAtespaceRequest{})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
 	})
 
 	t.Run("DeleteAtespace", func(t *testing.T) {
-		_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{})
+		_, err := tc.client.DeleteAtespace(context.Background(), &ateapi.DeleteAtespaceRequest{})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
 	})
 }
@@ -256,41 +256,41 @@ func TestDeleteAtespace_Preconditions(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 	ctx := context.Background()
-	ref := &ateapipb.ObjectRef{Name: "team-a"}
-	create := func() *ateapipb.Atespace {
-		created, err := tc.client.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: ref.GetName()}}})
+	ref := &ateapi.ObjectRef{Name: "team-a"}
+	create := func() *ateapi.Atespace {
+		created, err := tc.client.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: ref.GetName()}}})
 		if err != nil {
 			t.Fatalf("CreateAtespace failed: %v", err)
 		}
 		return created
 	}
-	del := func(opts *ateapipb.DeleteOptions) error {
-		_, err := tc.client.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: ref, Options: opts})
+	del := func(opts *ateapi.DeleteOptions) error {
+		_, err := tc.client.DeleteAtespace(ctx, &ateapi.DeleteAtespaceRequest{Atespace: ref, Options: opts})
 		return err
 	}
 
 	atespace := create()
 	uid, version := atespace.GetMetadata().GetUid(), atespace.GetMetadata().GetVersion()
 
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Atespace team-a does not have uid "+foreignUID)
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Atespace team-a does not have uid "+foreignUID)
-	if _, err := tc.client.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: ref}); err != nil {
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Atespace team-a does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Atespace team-a does not have uid "+foreignUID)
+	if _, err := tc.client.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: ref}); err != nil {
 		t.Fatalf("a refused delete removed the atespace: %v", err)
 	}
 
-	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Version: version}); err != nil {
 		t.Fatalf("DeleteAtespace with the matching version: %v", err)
 	}
 	atespace = create()
-	if err := del(&ateapipb.DeleteOptions{Uid: atespace.GetMetadata().GetUid()}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Uid: atespace.GetMetadata().GetUid()}); err != nil {
 		t.Fatalf("DeleteAtespace with the matching uid: %v", err)
 	}
 	atespace = create()
-	if err := del(&ateapipb.DeleteOptions{Uid: atespace.GetMetadata().GetUid(), Version: atespace.GetMetadata().GetVersion()}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Uid: atespace.GetMetadata().GetUid(), Version: atespace.GetMetadata().GetVersion()}); err != nil {
 		t.Fatalf("DeleteAtespace with both guards: %v", err)
 	}
-	_, err := tc.client.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: ref})
+	_, err := tc.client.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: ref})
 	assertGrpcError(t, err, codes.NotFound, "Atespace team-a not found")
 }

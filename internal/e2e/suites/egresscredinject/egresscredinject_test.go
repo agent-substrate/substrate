@@ -33,10 +33,10 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -128,9 +128,9 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 
 	const id = "probe-credinject"
 	createAndResumeActor(t, ctx, clients, id, echoHost)
-	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
-	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id},
+	waitForActorState(t, ctx, clients, id, ateapi.ActorState_ACTOR_STATE_RUNNING)
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: probeNamespace, Name: id},
 	})
 	if err != nil {
 		t.Fatalf("GetActor %q: %v", id, err)
@@ -274,7 +274,7 @@ func assertEchoedHeaders(t *testing.T, step string, resp fetchResponse) map[stri
 
 // checkActorJWT checks the claims of an injected actor JWT against the actor
 // and the echo rules' actor_jwt source. It does not verify the signature.
-func checkActorJWT(t *testing.T, jwt string, actor *ateapipb.ResourceMetadata) {
+func checkActorJWT(t *testing.T, jwt string, actor *ateapi.ResourceMetadata) {
 	t.Helper()
 	parts := strings.Split(jwt, ".")
 	if len(parts) != 3 {
@@ -361,26 +361,26 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 // name, whose rules inject a credential the provider resolves.
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id, echoHost string) {
 	t.Helper()
-	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
+	ref := &ateapi.ObjectRef{Atespace: probeNamespace, Name: id}
 	// NotFound is the normal case on a fresh run. Other errors don't stop the
 	// test, but they are logged in case CreateActor then fails.
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil && status.Code(err) != codes.NotFound {
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref}); err != nil && status.Code(err) != codes.NotFound {
 		t.Logf("removing leftover actor %q: SuspendActor: %v", id, err)
 	}
-	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil && status.Code(err) != codes.NotFound {
+	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref}); err != nil && status.Code(err) != codes.NotFound {
 		t.Logf("removing leftover actor %q: DeleteActor: %v", id, err)
 	}
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: probeNamespace, Name: id},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
 	t.Cleanup(func() {
-		if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
+		if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref}); err != nil {
 			t.Logf("cleanup: SuspendActor %q: %v", id, err)
 		}
-		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref}); err != nil {
 			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
 		}
 	})
@@ -390,7 +390,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	echoHTTPSRule.Https.Effects.ReplaceHeaders = append(echoHTTPSRule.Https.Effects.ReplaceHeaders, actorJWTInjection())
 	echoHTTPRule := e2e.EgressInjectHeaderHTTP("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost, echoHost+".cluster.local")
 	echoHTTPRule.Http.Effects.ReplaceHeaders = append(echoHTTPRule.Http.Effects.ReplaceHeaders, actorJWTInjection())
-	rules := []*ateapipb.EgressRule{echoHTTPSRule, echoHTTPRule}
+	rules := []*ateapi.EgressRule{echoHTTPSRule, echoHTTPRule}
 	for _, credential := range []struct {
 		host string
 		uri  string
@@ -406,27 +406,27 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	}
 	e2e.EnsureEgressPolicy(t, ctx, clients, ref, rules...)
 
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }
 
-func actorJWTInjection() *ateapipb.CredentialHeader {
-	return &ateapipb.CredentialHeader{
+func actorJWTInjection() *ateapi.CredentialHeader {
+	return &ateapi.CredentialHeader{
 		Header: actorJWTHeader,
-		ActorJwt: &ateapipb.ActorJwtSource{
+		ActorJwt: &ateapi.ActorJwtSource{
 			Audiences:         []string{actorJWTAudience},
 			ExpirationSeconds: actorJWTLifetime,
 		},
 	}
 }
 
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actorName string, want ateapipb.ActorState) {
+func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actorName string, want ateapi.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: actorName},
+		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: probeNamespace, Name: actorName},
 		})
 		if err == nil && resp.GetStatus().GetState() == want {
 			return

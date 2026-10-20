@@ -35,22 +35,22 @@ import (
 	kubeinformers "k8s.io/client-go/informers"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 )
 
-func gvisorConfig(name, url, sha string) *v1alpha1.SandboxConfig {
-	return &v1alpha1.SandboxConfig{
+func gvisorConfig(name, url, sha string) *atev1.SandboxConfig {
+	return &atev1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: v1alpha1.SandboxConfigSpec{
-			SandboxClass:   v1alpha1.SandboxClassGvisor,
+		Spec: atev1.SandboxConfigSpec{
+			SandboxClass:   atev1.SandboxClassGvisor,
 			DefaultVersion: "v1",
-			Versions: []v1alpha1.SandboxVersionConfig{{
+			Versions: []atev1.SandboxVersionConfig{{
 				Name: "v1",
-				Assets: map[string]map[string]v1alpha1.AssetFile{
+				Assets: map[string]map[string]atev1.AssetFile{
 					runtime.GOARCH: {
 						gvisorAssetName: {URL: url, SHA256: sha},
 					},
@@ -86,7 +86,7 @@ func indexedTestRuntimeAt(t *testing.T, index *runtimeIndex, url string, content
 		Assets:       map[string]assetEntry{gvisorAssetName: {URL: url, SHA256: fmt.Sprintf("%x", sha256.Sum256(content))}},
 	}
 	hash := bundleHash(rec)
-	index.register("pod-a", advertisedClass{class: v1alpha1.SandboxClassGvisor, config: "gvisor-release", hashed: []hashedVersion{{
+	index.register("pod-a", advertisedClass{class: atev1.SandboxClassGvisor, config: "gvisor-release", hashed: []hashedVersion{{
 		versionPlan: versionPlan{name: "v1", isDefault: true, rec: rec}, hash: hash,
 	}}})
 	return hash
@@ -323,7 +323,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if !ok {
 		t.Fatal("pod-a not indexed")
 	}
-	cr, _ := wr.class(v1alpha1.SandboxClassGvisor)
+	cr, _ := wr.class(atev1.SandboxClassGvisor)
 	want := []prewarmItem{{hash: cr.defaultHash, dir: s.defaultRuntimeDir("pod-a", cr.defaultHash)}}
 	if got := rec.items(); !slices.Equal(got, want) {
 		t.Errorf("prewarm handed %+v, want %+v", got, want)
@@ -456,8 +456,8 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 
 	s, err := startWorkerSandboxSyncer(ctx,
 		podFactory.Core().V1().Pods(),
-		ateFactory.Api().V1alpha1().WorkerPools(),
-		ateFactory.Api().V1alpha1().SandboxConfigs(),
+		ateFactory.Ate().V1().WorkerPools(),
+		ateFactory.Ate().V1().SandboxConfigs(),
 		newScriptAssetFetcher(t), // the syncer's runsc probe; prewarm goes through herder
 		workersDir, index, p)
 	if err != nil {
@@ -483,7 +483,7 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 		return err == nil && len(left) == 0
 	})
 	wr, _ := index.worker("pod-a")
-	cr, _ := wr.class(v1alpha1.SandboxClassGvisor)
+	cr, _ := wr.class(atev1.SandboxClassGvisor)
 	linked := filepath.Join(s.defaultRuntimeDir("pod-a", cr.defaultHash), gvisorAssetName, "runsc")
 	waitFor(t, "the worker's default runtime to be linked under its directory", func() bool { return exists(linked) })
 	if dirs, err := os.ReadDir(filepath.Join(s.podDir("pod-a"), defaultRuntimeDirsName)); err != nil || len(dirs) != 1 {

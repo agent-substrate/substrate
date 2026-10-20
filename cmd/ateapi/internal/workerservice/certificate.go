@@ -24,18 +24,18 @@ import (
 	"path"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/substratex509"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // MintWorkerActorCertificate mints a Substrate-issued SPIFFE certificate that asserts
 // a worker acting on behalf of a particular actor.
-func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapipb.MintWorkerActorCertificateRequest) (*ateapipb.MintWorkerActorCertificateResponse, error) {
+func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapi.MintWorkerActorCertificateRequest) (*ateapi.MintWorkerActorCertificateResponse, error) {
 	if errs := apivalidation.ValidateMintWorkerActorCertificateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -123,7 +123,7 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapipb.M
 		return nil, fmt.Errorf("while signing certificate: %w", err)
 	}
 
-	return &ateapipb.MintWorkerActorCertificateResponse{
+	return &ateapi.MintWorkerActorCertificateResponse{
 		ActorCertificates: chain,
 	}, nil
 }

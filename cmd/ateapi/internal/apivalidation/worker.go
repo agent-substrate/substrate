@@ -17,37 +17,37 @@ package apivalidation
 import (
 	"context"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func ValidateListWorkerActorAssignmentsRequest(ctx context.Context, req *ateapipb.ListWorkerActorAssignmentsRequest) field.ErrorList {
+func ValidateListWorkerActorAssignmentsRequest(ctx context.Context, req *ateapi.ListWorkerActorAssignmentsRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_ListWorkerActorAssignmentsRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateListWorkersRequest(ctx context.Context, req *ateapipb.ListWorkersRequest) field.ErrorList {
+func ValidateListWorkersRequest(ctx context.Context, req *ateapi.ListWorkersRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_ListWorkersRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateGetWorkerRequest(ctx context.Context, req *ateapipb.GetWorkerRequest) field.ErrorList {
+func ValidateGetWorkerRequest(ctx context.Context, req *ateapi.GetWorkerRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_GetWorkerRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateCreateWorkerRequest(ctx context.Context, req *ateapipb.CreateWorkerRequest) field.ErrorList {
+func ValidateCreateWorkerRequest(ctx context.Context, req *ateapi.CreateWorkerRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_CreateWorkerRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateUpdateWorkerRequest(ctx context.Context, req *ateapipb.UpdateWorkerRequest) field.ErrorList {
+func ValidateUpdateWorkerRequest(ctx context.Context, req *ateapi.UpdateWorkerRequest) field.ErrorList {
 	// Call the generated validation.
 	// We model this as a create rather than an update because updates assume
 	// the existence of a "current" value, which we do not have yet.  This is
@@ -57,7 +57,7 @@ func ValidateUpdateWorkerRequest(ctx context.Context, req *ateapipb.UpdateWorker
 	return Validate_UpdateWorkerRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateDeleteWorkerRequest(ctx context.Context, req *ateapipb.DeleteWorkerRequest) field.ErrorList {
+func ValidateDeleteWorkerRequest(ctx context.Context, req *ateapi.DeleteWorkerRequest) field.ErrorList {
 	// Call the generated validation. The preconditions in options are each
 	// optional: a zero value waives that guard, so only non-zero values are
 	// checked for shape.
@@ -65,50 +65,50 @@ func ValidateDeleteWorkerRequest(ctx context.Context, req *ateapipb.DeleteWorker
 	return Validate_DeleteWorkerRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateDrainWorkerRequest(ctx context.Context, req *ateapipb.DrainWorkerRequest) field.ErrorList {
+func ValidateDrainWorkerRequest(ctx context.Context, req *ateapi.DrainWorkerRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_DrainWorkerRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateAcquireWorkerEpochRequest(ctx context.Context, req *ateapipb.AcquireWorkerEpochRequest) field.ErrorList {
+func ValidateAcquireWorkerEpochRequest(ctx context.Context, req *ateapi.AcquireWorkerEpochRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_AcquireWorkerEpochRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateRegisterWorkerRequest(ctx context.Context, req *ateapipb.RegisterWorkerRequest) field.ErrorList {
+func ValidateRegisterWorkerRequest(ctx context.Context, req *ateapi.RegisterWorkerRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_RegisterWorkerRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateSetWorkerSandboxRuntimesRequest(ctx context.Context, req *ateapipb.SetWorkerSandboxRuntimesRequest) field.ErrorList {
+func ValidateSetWorkerSandboxRuntimesRequest(ctx context.Context, req *ateapi.SetWorkerSandboxRuntimesRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_SetWorkerSandboxRuntimesRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapipb.RequestActorSuspendRequest) field.ErrorList {
+func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapi.RequestActorSuspendRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_RequestActorSuspendRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateReportActorCrashedRequest(ctx context.Context, req *ateapipb.ReportActorCrashedRequest) field.ErrorList {
+func ValidateReportActorCrashedRequest(ctx context.Context, req *ateapi.ReportActorCrashedRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
 	return Validate_ReportActorCrashedRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateMarkWorkerAvailableRequest(ctx context.Context, req *ateapipb.MarkWorkerAvailableRequest) field.ErrorList {
+func ValidateMarkWorkerAvailableRequest(ctx context.Context, req *ateapi.MarkWorkerAvailableRequest) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}
 	return Validate_MarkWorkerAvailableRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateMarkWorkerUnavailableRequest(ctx context.Context, req *ateapipb.MarkWorkerUnavailableRequest) field.ErrorList {
+func ValidateMarkWorkerUnavailableRequest(ctx context.Context, req *ateapi.MarkWorkerUnavailableRequest) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}
 	return Validate_MarkWorkerUnavailableRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateReportActorSnapshotStateRequest(ctx context.Context, req *ateapipb.ReportActorSnapshotStateRequest) field.ErrorList {
+func ValidateReportActorSnapshotStateRequest(ctx context.Context, req *ateapi.ReportActorSnapshotStateRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
 	errs := Validate_ReportActorSnapshotStateRequest(ctx, op, nil, req, nil)
 	// A report with neither latest_local nor uploading is a detach, which
@@ -122,7 +122,7 @@ func ValidateReportActorSnapshotStateRequest(ctx context.Context, req *ateapipb.
 // validateWorkerUpdate validates a Worker against the previous stored value.
 // It is what enforces the immutable fields, which need an old value to compare
 // against.
-func ValidateWorkerUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Worker, requireStatus bool) field.ErrorList {
+func ValidateWorkerUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.Worker, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
 	op := MakeUpdateOp(ctx)
 	errs := Validate_Worker(ctx, op, fldPath, newVal, oldVal)
@@ -159,7 +159,7 @@ func ValidateCustom_Worker_WorkerSpiffeId(_ context.Context, _ operation.Operati
 }
 
 // This exists only because nested subfield tags are not supported yet.
-func ValidateCustom_UpdateWorkerRequest_Worker(ctx context.Context, op operation.Operation, fldPath *field.Path, worker, _ *ateapipb.Worker) field.ErrorList {
+func ValidateCustom_UpdateWorkerRequest_Worker(ctx context.Context, op operation.Operation, fldPath *field.Path, worker, _ *ateapi.Worker) field.ErrorList {
 	if worker == nil || worker.Metadata == nil {
 		return nil // handled by DV
 	}

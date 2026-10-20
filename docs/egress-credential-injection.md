@@ -306,7 +306,7 @@ serve (see the note in `k8s-credential-provider.yaml`).
 ### The plugin API
 
 The provider is a plugin: any gRPC service that implements
-`CredentialProvider.FetchSecret` (`pkg/proto/credproviderpb/credprovider.proto`)
+`CredentialProvider.FetchSecret` (`api/credprovider/v1/credprovider.proto`)
 can back injection. To bring your own — reading HashiCorp Vault, Google Secret
 Manager, or any other secret store — implement the API under your own provider
 class (the URI host, e.g. `ate-secret://vault.example.com/...`), then have a
@@ -353,7 +353,7 @@ may only resolve Secrets in namespaces explicitly granted to it.
   projection needed for HTTPS injection.
 * `demos/egress/README.md` — how tunneled egress, actor identity, and policy
   authorization fit together.
-* `pkg/proto/credproviderpb/credprovider.proto` — the provider plugin API and
+* `api/credprovider/v1/credprovider.proto` — the provider plugin API and
   its trust model.
 * `cmd/credential-provider/kubernetes-secrets` — the reference provider.
 * `internal/e2e/suites/egresscredinject` — the e2e suite that proves the

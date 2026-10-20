@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -58,18 +58,18 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	actors := []*ateapipb.Actor{
+	actors := []*ateapi.Actor{
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Name:       "id-1",
 				Atespace:   "team-a",
 				Version:    2,
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
-			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-1"},
-			Status: &ateapipb.ActorStatus{
-				State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-				WorkerAssignment: &ateapipb.WorkerAssignment{
+			ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "template-1"},
+			Status: &ateapi.ActorStatus{
+				State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+				WorkerAssignment: &ateapi.WorkerAssignment{
 					WorkerNamespace: "worker-ns",
 					WorkerPod:       "pod-1",
 					WorkerPodIps:    []string{"1.2.3.4", "fd00::1"},
@@ -93,9 +93,9 @@ team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   worker-ns/pod-1   1
 
 func TestPrintActorsTo_JSON(t *testing.T) {
 	var buf bytes.Buffer
-	actors := []*ateapipb.Actor{
+	actors := []*ateapi.Actor{
 		{
-			Metadata: &ateapipb.ResourceMetadata{Name: "id-1", Version: 2},
+			Metadata: &ateapi.ResourceMetadata{Name: "id-1", Version: 2},
 		},
 	}
 
@@ -122,9 +122,9 @@ func TestPrintActorsTo_JSON(t *testing.T) {
 
 func TestPrintActorsTo_YAML(t *testing.T) {
 	var buf bytes.Buffer
-	actors := []*ateapipb.Actor{
+	actors := []*ateapi.Actor{
 		{
-			Metadata: &ateapipb.ResourceMetadata{Name: "id-1", Version: 2},
+			Metadata: &ateapi.ResourceMetadata{Name: "id-1", Version: 2},
 		},
 	}
 
@@ -148,33 +148,33 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	actors := []*ateapipb.Actor{
+	actors := []*ateapi.Actor{
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Name:       "zebra",
 				Atespace:   "team-b",
 				CreateTime: timestamppb.New(now.Add(-72 * time.Hour)),
 			},
-			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-1"},
-			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "template-1"},
+			Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 		},
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Name:       "alpha",
 				Atespace:   "team-a",
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
-			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-1"},
-			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "template-1"},
+			Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING},
 		},
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Name:       "beta",
 				Atespace:   "team-a",
 				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
 			},
-			ActorTemplate: &ateapipb.ObjectRef{Atespace: "other", Name: "template-2"},
-			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: "other", Name: "template-2"},
+			Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 		},
 	}
 
@@ -198,18 +198,18 @@ func TestPrintActorsTo_Table_TemplateRef(t *testing.T) {
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	actors := []*ateapipb.Actor{
+	actors := []*ateapi.Actor{
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Name:       "id-1",
 				Atespace:   "team-a",
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
-			ActorTemplate: &ateapipb.ObjectRef{
+			ActorTemplate: &ateapi.ObjectRef{
 				Atespace: "ate-demo-counter-substrate",
 				Name:     "counter",
 			},
-			Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 		},
 	}
 
@@ -235,7 +235,7 @@ func TestPrintActorsTo_Invalid(t *testing.T) {
 
 func TestPrintActorTo_JSON(t *testing.T) {
 	var buf bytes.Buffer
-	actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id-1", Version: 2}}
+	actor := &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: "id-1", Version: 2}}
 
 	if err := PrintActorTo(&buf, actor, "json"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -255,7 +255,7 @@ func TestPrintActorTo_JSON(t *testing.T) {
 
 func TestPrintActorTo_YAML(t *testing.T) {
 	var buf bytes.Buffer
-	actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id-1", Version: 2}}
+	actor := &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: "id-1", Version: 2}}
 
 	if err := PrintActorTo(&buf, actor, "yaml"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -275,16 +275,16 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	workers := []*ateapipb.Worker{
+	workers := []*ateapi.Worker{
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1", CreateTime: timestamppb.New(now.Add(-72 * time.Hour))},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-1", CreateTime: timestamppb.New(now.Add(-72 * time.Hour))},
 			WorkerNamespace: "default",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Status: &ateapipb.WorkerStatus{
-				State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity:  &ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
-				Allocated: &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 1 << 30},
+			Status: &ateapi.WorkerStatus{
+				State:     ateapi.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity:  &ateapi.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
+				Allocated: &ateapi.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 1 << 30},
 			},
 		},
 	}
@@ -312,7 +312,7 @@ func TestPrintWorkersTo_Table_Free(t *testing.T) {
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	workers := []*ateapipb.Worker{
+	workers := []*ateapi.Worker{
 		{
 			WorkerNamespace: "default",
 			WorkerPool:      "pool-1",
@@ -338,21 +338,21 @@ func TestPrintWorkersTo_Table_Sorted(t *testing.T) {
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	workers := []*ateapipb.Worker{
+	workers := []*ateapi.Worker{
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-z", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-z", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
 			WorkerNamespace: "default",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-z",
 		},
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-a", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-a", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
 			WorkerNamespace: "default",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-a",
 		},
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-o", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-o", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
 			WorkerNamespace: "other",
 			WorkerPool:      "pool-2",
 			WorkerPod:       "pod-1",
@@ -383,7 +383,7 @@ func TestPrintWorkersTo_Invalid(t *testing.T) {
 
 func TestPrintWorkerTo_JSON(t *testing.T) {
 	var buf bytes.Buffer
-	worker := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}}
+	worker := &ateapi.Worker{Metadata: &ateapi.ResourceMetadata{Name: "worker-1"}}
 
 	if err := PrintWorkerTo(&buf, worker, "json"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -402,7 +402,7 @@ func TestPrintWorkerTo_JSON(t *testing.T) {
 
 func TestPrintWorkerTo_YAML(t *testing.T) {
 	var buf bytes.Buffer
-	worker := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}}
+	worker := &ateapi.Worker{Metadata: &ateapi.ResourceMetadata{Name: "worker-1"}}
 
 	if err := PrintWorkerTo(&buf, worker, "yaml"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -421,35 +421,35 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	templates := []*ateapipb.ActorTemplate{
+	templates := []*ateapi.ActorTemplate{
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Atespace:   "ate-demo-counter-substrate",
 				Name:       "counter",
 				Version:    1,
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
-			Status: &ateapipb.ActorTemplateStatus{
-				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-demo-counter-substrate", Name: "golden-tag"},
+			Status: &ateapi.ActorTemplateStatus{
+				GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{
+					GoldenTag: &ateapi.ObjectRef{Atespace: "ate-demo-counter-substrate", Name: "golden-tag"},
 				},
 			},
 		},
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Atespace:   "ate-demo-counter-substrate-microvm",
 				Name:       "counter-microvm",
 				Version:    1,
 				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
 			},
-			Status: &ateapipb.ActorTemplateStatus{
-				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+			Status: &ateapi.ActorTemplateStatus{
+				GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{
 					ErrorMessage: "golden actor failed to start",
 				},
 			},
 		},
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Atespace:   "ate-demo-counter-substrate",
 				Name:       "counter-2",
 				Version:    1,
@@ -457,13 +457,13 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 			},
 		},
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Atespace:   "ate-demo-counter-substrate",
 				Name:       "counter-3",
 				CreateTime: timestamppb.New(now.Add(-15 * time.Minute)),
 			},
-			SnapshotConfig: &ateapipb.SnapshotConfig{
-				GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
+			SnapshotConfig: &ateapi.SnapshotConfig{
+				GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
 			},
 		},
 	}
@@ -487,8 +487,8 @@ ate-demo-counter-substrate-microvm   counter-microvm                ERROR   5h
 
 func TestPrintActorTemplatesTo_JSON(t *testing.T) {
 	var buf bytes.Buffer
-	templates := []*ateapipb.ActorTemplate{
-		{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}},
+	templates := []*ateapi.ActorTemplate{
+		{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}},
 	}
 
 	if err := PrintActorTemplatesTo(&buf, templates, "json"); err != nil {
@@ -514,8 +514,8 @@ func TestPrintActorTemplatesTo_JSON(t *testing.T) {
 
 func TestPrintActorTemplatesTo_YAML(t *testing.T) {
 	var buf bytes.Buffer
-	templates := []*ateapipb.ActorTemplate{
-		{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}},
+	templates := []*ateapi.ActorTemplate{
+		{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}},
 	}
 
 	if err := PrintActorTemplatesTo(&buf, templates, "yaml"); err != nil {
@@ -542,7 +542,7 @@ func TestPrintActorTemplatesTo_Invalid(t *testing.T) {
 
 func TestPrintActorTemplateTo_JSON(t *testing.T) {
 	var buf bytes.Buffer
-	template := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}}
+	template := &ateapi.ActorTemplate{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}}
 
 	if err := PrintActorTemplateTo(&buf, template, "json"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -563,7 +563,7 @@ func TestPrintActorTemplateTo_JSON(t *testing.T) {
 
 func TestPrintActorTemplateTo_YAML(t *testing.T) {
 	var buf bytes.Buffer
-	template := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}}
+	template := &ateapi.ActorTemplate{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}}
 
 	if err := PrintActorTemplateTo(&buf, template, "yaml"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -584,37 +584,37 @@ func TestPrintTagsTo_Table(t *testing.T) {
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	tags := []*ateapipb.Tag{
+	tags := []*ateapi.Tag{
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Atespace:   "team-a",
 				Name:       "v2",
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
-			Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
-			Status: &ateapipb.TagStatus{
-				Snapshot: &ateapipb.Snapshot{
-					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-					DurableSnapshot: &ateapipb.SnapshotStorage{
-						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2"},
+			Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED,
+			Status: &ateapi.TagStatus{
+				Snapshot: &ateapi.Snapshot{
+					Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapi.SnapshotStorage{
+						Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2"},
 					},
 				},
 			},
 		},
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Atespace:   "team-a",
 				Name:       "v1",
 				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
 			},
-			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
-			Status: &ateapipb.TagStatus{
-				Snapshot: &ateapipb.Snapshot{
-					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-					DurableSnapshot: &ateapipb.SnapshotStorage{
-						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1"},
+			Scope: ateapi.TagScope_TAG_SCOPE_ATESPACE,
+			Status: &ateapi.TagStatus{
+				Snapshot: &ateapi.Snapshot{
+					Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapi.SnapshotStorage{
+						Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1"},
 					},
 				},
 			},
@@ -622,18 +622,18 @@ func TestPrintTagsTo_Table(t *testing.T) {
 		{
 			// A tag whose create never finished: it names nothing an Actor can
 			// be created from yet, which the STATE column is there to say.
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Atespace:   "team-a",
 				Name:       "v3",
 				CreateTime: timestamppb.New(now.Add(-30 * time.Second)),
 			},
-			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
-			Status: &ateapipb.TagStatus{
-				Snapshot: &ateapipb.Snapshot{
-					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-					DurableSnapshot: &ateapipb.SnapshotStorage{
-						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
-						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v3"},
+			Scope: ateapi.TagScope_TAG_SCOPE_ATESPACE,
+			Status: &ateapi.TagStatus{
+				Snapshot: &ateapi.Snapshot{
+					Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapi.SnapshotStorage{
+						Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+						Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v3"},
 					},
 				},
 			},
@@ -664,7 +664,7 @@ func TestPrintTagsTo_Invalid(t *testing.T) {
 
 func TestPrintTagTo_JSON(t *testing.T) {
 	var buf bytes.Buffer
-	tag := &ateapipb.Tag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "v1"}}
+	tag := &ateapi.Tag{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "v1"}}
 
 	if err := PrintTagTo(&buf, tag, "json"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -684,7 +684,7 @@ func TestPrintTagTo_JSON(t *testing.T) {
 
 func TestPrintTagTo_YAML(t *testing.T) {
 	var buf bytes.Buffer
-	tag := &ateapipb.Tag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "v1"}}
+	tag := &ateapi.Tag{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "v1"}}
 
 	if err := PrintTagTo(&buf, tag, "yaml"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -704,8 +704,8 @@ func TestPrintAtespacesTo_Table(t *testing.T) {
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	atespaces := []*ateapipb.Atespace{
-		{Metadata: &ateapipb.ResourceMetadata{
+	atespaces := []*ateapi.Atespace{
+		{Metadata: &ateapi.ResourceMetadata{
 			Name:       "team-a",
 			CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 		}},
@@ -725,8 +725,8 @@ team-a   5m
 
 func TestPrintAtespacesTo_JSON(t *testing.T) {
 	var buf bytes.Buffer
-	atespaces := []*ateapipb.Atespace{
-		{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}},
+	atespaces := []*ateapi.Atespace{
+		{Metadata: &ateapi.ResourceMetadata{Name: "team-a"}},
 	}
 
 	if err := PrintAtespacesTo(&buf, atespaces, "json"); err != nil {
@@ -750,8 +750,8 @@ func TestPrintAtespacesTo_JSON(t *testing.T) {
 
 func TestPrintAtespacesTo_YAML(t *testing.T) {
 	var buf bytes.Buffer
-	atespaces := []*ateapipb.Atespace{
-		{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}},
+	atespaces := []*ateapi.Atespace{
+		{Metadata: &ateapi.ResourceMetadata{Name: "team-a"}},
 	}
 
 	if err := PrintAtespacesTo(&buf, atespaces, "yaml"); err != nil {
@@ -772,10 +772,10 @@ func TestPrintAtespacesTo_Table_Sorted(t *testing.T) {
 	pinNow(t, now)
 
 	var buf bytes.Buffer
-	atespaces := []*ateapipb.Atespace{
-		{Metadata: &ateapipb.ResourceMetadata{Name: "team-c", CreateTime: timestamppb.New(now.Add(-72 * time.Hour))}},
-		{Metadata: &ateapipb.ResourceMetadata{Name: "team-a", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))}},
-		{Metadata: &ateapipb.ResourceMetadata{Name: "team-b", CreateTime: timestamppb.New(now.Add(-5 * time.Hour))}},
+	atespaces := []*ateapi.Atespace{
+		{Metadata: &ateapi.ResourceMetadata{Name: "team-c", CreateTime: timestamppb.New(now.Add(-72 * time.Hour))}},
+		{Metadata: &ateapi.ResourceMetadata{Name: "team-a", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))}},
+		{Metadata: &ateapi.ResourceMetadata{Name: "team-b", CreateTime: timestamppb.New(now.Add(-5 * time.Hour))}},
 	}
 
 	if err := PrintAtespacesTo(&buf, atespaces, "table"); err != nil {
@@ -802,7 +802,7 @@ func TestPrintAtespacesTo_Invalid(t *testing.T) {
 
 func TestPrintAtespaceTo_JSON(t *testing.T) {
 	var buf bytes.Buffer
-	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}
+	atespace := &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "team-a"}}
 
 	if err := PrintAtespaceTo(&buf, atespace, "json"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -821,7 +821,7 @@ func TestPrintAtespaceTo_JSON(t *testing.T) {
 
 func TestPrintAtespaceTo_YAML(t *testing.T) {
 	var buf bytes.Buffer
-	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}
+	atespace := &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "team-a"}}
 
 	if err := PrintAtespaceTo(&buf, atespace, "yaml"); err != nil {
 		t.Fatalf("unexpected error: %v", err)

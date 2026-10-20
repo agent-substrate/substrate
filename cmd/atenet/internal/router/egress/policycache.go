@@ -26,9 +26,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // DefaultPolicyCacheTTL is how long a fetched policy stays usable, and so how
@@ -47,7 +47,7 @@ var errNoPolicy = errors.New("actor has no egress policy")
 // policyCache holds each actor's compiled EgressPolicy for one TTL. Every leg
 // reads through it, so the CONNECT warms the entry for the requests inside.
 type policyCache struct {
-	client ateapipb.ControlClient
+	client ateapi.ControlClient
 	// ttl of 0 disables caching: every call fetches.
 	ttl time.Duration
 	now func() time.Time
@@ -73,7 +73,7 @@ type policyEntry struct {
 	expires time.Time
 }
 
-func newPolicyCache(client ateapipb.ControlClient, ttl time.Duration) *policyCache {
+func newPolicyCache(client ateapi.ControlClient, ttl time.Duration) *policyCache {
 	return &policyCache{
 		client:    client,
 		ttl:       ttl,
@@ -137,7 +137,7 @@ func (c *policyCache) cached(ref resources.ActorRef) (*egresspolicy.Policy, bool
 // fetch loads and compiles one actor's policy and stores the result. A nil
 // policy with a nil error is the stored form of "no policy".
 func (c *policyCache) fetch(ctx context.Context, ref resources.ActorRef) (*egresspolicy.Policy, error) {
-	resp, err := c.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref.ToObjectRef(), Name: resources.SingletonName})
+	resp, err := c.client.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: ref.ToObjectRef(), Name: resources.SingletonName})
 	var policy *egresspolicy.Policy
 	switch {
 	case err == nil:

@@ -16,7 +16,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.25.3
-// source: glutton.proto
+// source: internal/proto/glutton/glutton.proto
 
 package glutton
 
@@ -585,5 +585,5 @@ var Glutton_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "glutton.proto",
+	Metadata: "internal/proto/glutton/glutton.proto",
 }

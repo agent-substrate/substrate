@@ -17,14 +17,14 @@ package controlapi
 import (
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func TestToStoreListOptions(t *testing.T) {
 	tests := []struct {
 		name string
-		opts *ateapipb.ListOptions
+		opts *ateapi.ListOptions
 		want store.ListOptions
 	}{{
 		name: "nil options default the page size",
@@ -32,15 +32,15 @@ func TestToStoreListOptions(t *testing.T) {
 		want: store.ListOptions{PageSize: 1000},
 	}, {
 		name: "unset page size defaults",
-		opts: &ateapipb.ListOptions{PageToken: "tok"},
+		opts: &ateapi.ListOptions{PageToken: "tok"},
 		want: store.ListOptions{PageSize: 1000, PageToken: "tok"},
 	}, {
 		name: "page size within the cap is kept",
-		opts: &ateapipb.ListOptions{PageSize: 10, PageToken: "tok"},
+		opts: &ateapi.ListOptions{PageSize: 10, PageToken: "tok"},
 		want: store.ListOptions{PageSize: 10, PageToken: "tok"},
 	}, {
 		name: "page size above the cap is coerced",
-		opts: &ateapipb.ListOptions{PageSize: 5000},
+		opts: &ateapi.ListOptions{PageSize: 5000},
 		want: store.ListOptions{PageSize: 1000},
 	}}
 	for _, tt := range tests {

@@ -48,7 +48,7 @@ Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each w
 ### Example
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: WorkerPool
 metadata:
   name: agent-pool
@@ -351,7 +351,7 @@ If `wakeupProbe` is omitted from a container, `ResumeActor` returns as soon as t
 
 ### Example
 
-A protojson-shaped `ateapipb.ActorTemplate`, created through the ate API with
+A protojson-shaped `ateapi.ActorTemplate`, created through the ate API with
 `kubectl ate create actor-template -f secret-agent.yaml` (the `ate-demo`
 atespace must exist):
 
@@ -425,7 +425,7 @@ a `Snapshot` with the following fields:
   it restores. A snapshot captured under a replaced template restores volume
   data and boots fresh.
 - `locality`: The node holding the snapshot's local files. For attachment rules,
-  see `ActorStatus.assigned_node` in the [API schema](../pkg/proto/ateapipb/ateapi.proto).
+  see `ActorStatus.assigned_node` in the [API schema](../api/ateapi/v1/ateapi.proto).
 - `durableSnapshot`: The copy in object storage, with its URI in
   `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
   written and `COMPLETED` once it can be restored from. A synchronous suspend
@@ -534,7 +534,7 @@ atecontroller alone adds and releases the finalizer. While it is down, `kubectl 
 ### Example
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: SandboxConfig
 metadata:
   name: gvisor-default
@@ -642,7 +642,7 @@ The node can cut the 30 minutes short. GKE node upgrades and cluster autoscaler 
 
 The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for managing actors and workers. This is the primary API used by the `kubectl-ate` CLI and higher-level frameworks.
 
-### Service: `ateapi.Control`
+### Service: `substrate.ateapi.v1.Control`
 
 #### `CreateActor`
 Registers a new logical actor in the system.
@@ -728,7 +728,7 @@ Query the physical resource pool.
 
 ate-api-server mints credentials that identify an actor to services outside Substrate. They name the logical actor, so they stay the same as the actor moves between workers. This is distinct from the `actorMetadata` data source described under [SystemInfo Volumes](#systeminfo-volumes), which only tells an actor its own identity fields (name, atespace, uid).
 
-Both RPCs are on `ateapi.Control`. Only the egress gateway may call them; see [authorization.md](authorization.md). It calls `MintActorJwt` when an egress policy injects an actor JWT into a request.
+Both RPCs are on `substrate.ateapi.v1.Control`. Only the egress gateway may call them; see [authorization.md](authorization.md). It calls `MintActorJwt` when an egress policy injects an actor JWT into a request.
 
 ### `MintActorJwt`
 

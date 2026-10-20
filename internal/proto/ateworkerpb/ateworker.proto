@@ -609,7 +609,7 @@ message WorkloadStatsSample {
   string actor_template_name = 5;
 
   // The sandbox runtime family that produced this sample, in the
-  // ate.dev/v1alpha1 SandboxClass form: "gvisor" (cmd/ateworker-gvisor) or
+  // ate.dev/v1 SandboxClass form: "gvisor" (cmd/ateworker-gvisor) or
   // "microvm" (cmd/ateworker-microvm). A worker binary only ever reports its own.
   string sandbox_class = 6;
 

@@ -20,20 +20,20 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // noWorkers is a workerWatcher that never delivers a Worker.
 type noWorkers struct{}
 
-func (noWorkers) AddHandler(func(*ateapipb.Worker)) {}
+func (noWorkers) AddHandler(func(*ateapi.Worker)) {}
 
-func epochWorker(name string, registered, observed int64) *ateapipb.Worker {
-	return &ateapipb.Worker{
-		Metadata: &ateapipb.ResourceMetadata{Name: name},
-		Status:   &ateapipb.WorkerStatus{RegisteredEpoch: registered, ObservedEpoch: observed},
+func epochWorker(name string, registered, observed int64) *ateapi.Worker {
+	return &ateapi.Worker{
+		Metadata: &ateapi.ResourceMetadata{Name: name},
+		Status:   &ateapi.WorkerStatus{RegisteredEpoch: registered, ObservedEpoch: observed},
 	}
 }
 
@@ -41,7 +41,7 @@ func TestWorkerAssignmentReconciler_QueuesUnobservedWorkers(t *testing.T) {
 	r := NewWorkerAssignmentReconciler(nil, noWorkers{})
 	defer r.queue.ShutDown()
 
-	for _, w := range []*ateapipb.Worker{
+	for _, w := range []*ateapi.Worker{
 		epochWorker("observed", 2, 2),
 		epochWorker("restarted", 3, 2),
 		epochWorker("unreported", 0, 0),
@@ -82,7 +82,7 @@ func TestWorkerAssignmentReconciler_SkipsWorkerLeasedElsewhere(t *testing.T) {
 	if err := r.reconcileOne(ctx, apiWorkerName); !errors.Is(err, errWorkerLeased) {
 		t.Fatalf("reconcileOne() = %v, want errWorkerLeased", err)
 	}
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state = %v, want RUNNING: the lease holder releases it", got)
 	}
 }
@@ -123,7 +123,7 @@ func TestWorkerAssignmentReconciler_ReleasesRestartedWorker(t *testing.T) {
 	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	waitForObservedEpoch(t, ctx, persistence, 2)
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state = %v, want CRASHED", got)
 	}
 	if a := firstAssignment(t, persistence, apiWorkerName); a != nil {
@@ -150,7 +150,7 @@ func TestWorkerAssignmentReconciler_RetriesAfterLeaseFrees(t *testing.T) {
 	lease.Close()
 
 	waitForObservedEpoch(t, ctx, persistence, 2)
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state = %v, want CRASHED", got)
 	}
 }
@@ -167,7 +167,7 @@ func TestWorkerAssignmentReconciler_ReleasesWorkerRaisedBeforeStart(t *testing.T
 	startAssignmentReconciler(t, ctx, persistence)
 
 	waitForObservedEpoch(t, ctx, persistence, 2)
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state = %v, want CRASHED", got)
 	}
 }

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -33,7 +34,6 @@ import (
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
 
@@ -53,7 +53,7 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 		t.Run(wf.Name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := controlapi.NewTestPersistence(t)
-			controlapi.SeedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: controlapi.TestStorageLocation})
+			controlapi.SeedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: controlapi.TestStorageLocation})
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 			// wa's worker hosts the actor; the neighbor is another worker on
 			// its node.
@@ -63,41 +63,41 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 				{workerName, wa.GetWorkerPod(), wa.GetWorkerPodUid()},
 				{neighborName, "neighbor-pod", "neighbor-pod-uid"},
 			} {
-				if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
-					Metadata:        &ateapipb.ResourceMetadata{Name: w.name},
+				if _, err := persistence.CreateWorker(ctx, &ateapi.Worker{
+					Metadata:        &ateapi.ResourceMetadata{Name: w.name},
 					WorkerNamespace: wa.GetWorkerNamespace(),
 					WorkerPool:      wa.GetWorkerPool(),
 					WorkerPod:       w.pod,
 					WorkerPodUid:    w.podUID,
 					NodeName:        node,
 					// Registered, with a sandbox class, so the scheduler takes it.
-					Status: &ateapipb.WorkerStatus{
-						State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+					Status: &ateapi.WorkerStatus{
+						State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 						RegisteredEpoch: 1,
-						Capacity:        &ateapipb.WorkerResources{Actors: 1},
-						SandboxClasses:  []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+						Capacity:        &ateapi.WorkerResources{Actors: 1},
+						SandboxClasses:  []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 					},
 				}); err != nil {
 					t.Fatalf("CreateWorker(%s): %v", w.name, err)
 				}
 			}
-			status := &ateapipb.ActorStatus{
+			status := &ateapi.ActorStatus{
 				State:                  wf.State,
 				AssignedNode:           node,
 				WorkerAssignment:       controlapi.WireTestAssignment(),
 				LastAssignedGeneration: 1,
 			}
 			if wf.Snapshot != nil {
-				status.Snapshots = []*ateapipb.Snapshot{wf.Snapshot(t)}
+				status.Snapshots = []*ateapi.Snapshot{wf.Snapshot(t)}
 			}
-			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			created := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: controlapi.SuspendTestTemplateRef(),
 				Status:        status,
 			})
 			uid := created.GetMetadata().GetUid()
-			controlapi.SeedAssignment(t, persistence, workerName, &ateapipb.ActorAssignment{
-				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			controlapi.SeedAssignment(t, persistence, workerName, &ateapi.ActorAssignment{
+				Actor:    &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorUid: uid,
 			})
 
@@ -107,18 +107,18 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 			// atelet on node.
 			mintAs := func(worker string) codes.Code {
 				t.Helper()
-				_, err := minter.MintWorkerActorCertificate(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, node)), &ateapipb.MintWorkerActorCertificateRequest{
-					Actor:                     &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				_, err := minter.MintWorkerActorCertificate(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, node)), &ateapi.MintWorkerActorCertificateRequest{
+					Actor:                     &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 					ActorUid:                  uid,
 					CertificateSigningRequest: csr,
-					Worker:                    &ateapipb.ObjectRef{Name: worker},
+					Worker:                    &ateapi.ObjectRef{Name: worker},
 				})
 				return apierror.Code(err)
 			}
 			// mint asks for the actor's certificate as the worker that the
 			// actor is assigned to and returns the actor as the mint saw it
 			// and the mint's code.
-			mint := func(stage string) (*ateapipb.Actor, codes.Code) {
+			mint := func(stage string) (*ateapi.Actor, codes.Code) {
 				t.Helper()
 				code := mintAs(workerName)
 				actor, gerr := persistence.GetActor(ctx, actorRef)
@@ -154,8 +154,8 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 			}
 
 			// The worker takes another actor.
-			controlapi.SeedAssignment(t, persistence, workerName, &ateapipb.ActorAssignment{
-				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: "actor-2"},
+			controlapi.SeedAssignment(t, persistence, workerName, &ateapi.ActorAssignment{
+				Actor:    &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: "actor-2"},
 				ActorUid: "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
 			})
 			if _, got := mint("worker rebooked for another actor"); got != codes.NotFound {

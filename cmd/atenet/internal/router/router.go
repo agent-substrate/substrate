@@ -35,6 +35,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/api/credprovider/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/egress"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
@@ -43,8 +45,6 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 // dataPlaneTraceRatio is the default root sampling fraction for parentless
@@ -57,7 +57,7 @@ type RouterServer struct {
 
 	Cmd       *cobra.Command
 	clientset kubernetes.Interface
-	apiClient ateapipb.ControlClient
+	apiClient ateapi.ControlClient
 	// extprocSrv is the ext_proc mux. Which handler it carries, ingress or
 	// egress, follows cfg.Mode.
 	extprocSrv *extproc.Server
@@ -183,7 +183,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to establish grpc channel to ateapi client: %w", err)
 	}
 	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr))
-	s.apiClient = ateapipb.NewControlClient(conn)
+	s.apiClient = ateapi.NewControlClient(conn)
 
 	slog.InfoContext(ctx, "Starting substrate router subsystem",
 		slog.String("mode", string(s.cfg.Mode)),
@@ -220,7 +220,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		// is set: dial the provider over mTLS and hand the client to the handler.
 		// With no address the handler gets no provider, and a request matching
 		// an injection-requiring rule is denied (see egress.applyEffects).
-		var provider credproviderpb.CredentialProviderClient
+		var provider credprovider.CredentialProviderClient
 		var providerName string
 		if s.cfg.CredentialProvider.Address != "" {
 			providerName, err = egress.ProviderName(s.cfg.CredentialProvider.Name)
@@ -238,7 +238,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				return fmt.Errorf("dial credential provider: %w", err)
 			}
 			defer providerConn.Close()
-			provider = credproviderpb.NewCredentialProviderClient(providerConn)
+			provider = credprovider.NewCredentialProviderClient(providerConn)
 			slog.InfoContext(ctx, "egress credential injection enabled",
 				slog.String("provider", s.cfg.CredentialProvider.Address),
 				slog.String("provider_name", s.cfg.CredentialProvider.Name))

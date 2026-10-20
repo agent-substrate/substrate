@@ -25,10 +25,10 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
 	"go.ate.dev/substrate/internal/hardware"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -46,7 +46,7 @@ const (
 // fakeControl is an in-memory Worker registry.
 type fakeControl struct {
 	mu          sync.Mutex
-	workers     map[string]*ateapipb.Worker
+	workers     map[string]*ateapi.Worker
 	assignments map[string]int // actors assigned, by Worker name
 	creates     int
 	updates     int
@@ -65,10 +65,10 @@ type fakeControl struct {
 }
 
 func newFakeControl() *fakeControl {
-	return &fakeControl{workers: map[string]*ateapipb.Worker{}, assignments: map[string]int{}}
+	return &fakeControl{workers: map[string]*ateapi.Worker{}, assignments: map[string]int{}}
 }
 
-func (f *fakeControl) CreateWorker(_ context.Context, in *ateapipb.CreateWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) CreateWorker(_ context.Context, in *ateapi.CreateWorkerRequest, _ ...grpc.CallOption) (*ateapi.Worker, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.creates++
@@ -79,7 +79,7 @@ func (f *fakeControl) CreateWorker(_ context.Context, in *ateapipb.CreateWorkerR
 	w := proto.CloneOf(in.GetWorker())
 	// Like ate-api-server: a Worker takes no Actors until it is marked
 	// available.
-	w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
+	w.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE}
 	f.workers[name] = w
 	if f.lostReply != nil {
 		return nil, f.lostReply
@@ -87,7 +87,7 @@ func (f *fakeControl) CreateWorker(_ context.Context, in *ateapipb.CreateWorkerR
 	return w, nil
 }
 
-func (f *fakeControl) MarkWorkerAvailable(_ context.Context, in *ateapipb.MarkWorkerAvailableRequest, _ ...grpc.CallOption) (*ateapipb.MarkWorkerAvailableResponse, error) {
+func (f *fakeControl) MarkWorkerAvailable(_ context.Context, in *ateapi.MarkWorkerAvailableRequest, _ ...grpc.CallOption) (*ateapi.MarkWorkerAvailableResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.markErr != nil {
@@ -97,23 +97,23 @@ func (f *fakeControl) MarkWorkerAvailable(_ context.Context, in *ateapipb.MarkWo
 	if !ok {
 		return nil, status.Error(codes.NotFound, "no such Worker")
 	}
-	if w.Status.State == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	if w.Status.State == ateapi.WorkerState_WORKER_STATE_DRAINING {
 		return nil, status.Error(codes.FailedPrecondition, "Worker is draining")
 	}
-	w.Status.State = ateapipb.WorkerState_WORKER_STATE_ACTIVE
-	return &ateapipb.MarkWorkerAvailableResponse{Worker: proto.CloneOf(w)}, nil
+	w.Status.State = ateapi.WorkerState_WORKER_STATE_ACTIVE
+	return &ateapi.MarkWorkerAvailableResponse{Worker: proto.CloneOf(w)}, nil
 }
 
 // state returns the state of the Worker registered for pod, as worker picks
 // it.
-func (f *fakeControl) state(pod string) ateapipb.WorkerState {
+func (f *fakeControl) state(pod string) ateapi.WorkerState {
 	w := f.worker(pod)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return w.GetStatus().GetState()
 }
 
-func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapi.DeleteWorkerRequest, _ ...grpc.CallOption) (*ateapi.Worker, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := in.GetWorker().GetName()
@@ -127,7 +127,7 @@ func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerR
 	return w, nil
 }
 
-func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error) {
+func (f *fakeControl) DrainWorker(_ context.Context, in *ateapi.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapi.DrainWorkerResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.drainErr != nil {
@@ -137,11 +137,11 @@ func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerReq
 	if !ok {
 		return nil, status.Error(codes.NotFound, "no such Worker")
 	}
-	w.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
-	return &ateapipb.DrainWorkerResponse{Worker: w}, nil
+	w.Status.State = ateapi.WorkerState_WORKER_STATE_DRAINING
+	return &ateapi.DrainWorkerResponse{Worker: w}, nil
 }
 
-func (f *fakeControl) GetWorker(_ context.Context, in *ateapipb.GetWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) GetWorker(_ context.Context, in *ateapi.GetWorkerRequest, _ ...grpc.CallOption) (*ateapi.Worker, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	w, ok := f.workers[in.GetWorker().GetName()]
@@ -153,7 +153,7 @@ func (f *fakeControl) GetWorker(_ context.Context, in *ateapipb.GetWorkerRequest
 
 // UpdateWorker allows only the labels to change, as ate-api-server's
 // immutable-field validation does for the fields the controller sets.
-func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapi.UpdateWorkerRequest, _ ...grpc.CallOption) (*ateapi.Worker, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.updates++
@@ -172,7 +172,7 @@ func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerR
 	return w, nil
 }
 
-func (f *fakeControl) ListWorkers(_ context.Context, _ *ateapipb.ListWorkersRequest, _ ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error) {
+func (f *fakeControl) ListWorkers(_ context.Context, _ *ateapi.ListWorkersRequest, _ ...grpc.CallOption) (*ateapi.ListWorkersResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.listFailures > 0 {
@@ -182,19 +182,19 @@ func (f *fakeControl) ListWorkers(_ context.Context, _ *ateapipb.ListWorkersRequ
 		}
 		return nil, status.Error(codes.Unavailable, "no ready endpoints")
 	}
-	return &ateapipb.ListWorkersResponse{Workers: slices.Collect(maps.Values(f.workers))}, nil
+	return &ateapi.ListWorkersResponse{Workers: slices.Collect(maps.Values(f.workers))}, nil
 }
 
-func (f *fakeControl) ListWorkerActorAssignments(_ context.Context, in *ateapipb.ListWorkerActorAssignmentsRequest, _ ...grpc.CallOption) (*ateapipb.ListWorkerActorAssignmentsResponse, error) {
+func (f *fakeControl) ListWorkerActorAssignments(_ context.Context, in *ateapi.ListWorkerActorAssignmentsRequest, _ ...grpc.CallOption) (*ateapi.ListWorkerActorAssignmentsResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := in.GetWorker().GetName()
 	if _, ok := f.workers[name]; !ok {
 		return nil, status.Error(codes.NotFound, "no such Worker")
 	}
-	resp := &ateapipb.ListWorkerActorAssignmentsResponse{}
+	resp := &ateapi.ListWorkerActorAssignmentsResponse{}
 	for range f.assignments[name] {
-		resp.ActorAssignments = append(resp.ActorAssignments, &ateapipb.ActorAssignment{})
+		resp.ActorAssignments = append(resp.ActorAssignments, &ateapi.ActorAssignment{})
 	}
 	return resp, nil
 }
@@ -214,15 +214,15 @@ func (f *fakeControl) names() []string {
 
 // worker returns the Worker registered for pod: the one not draining, if
 // there is one.
-func (f *fakeControl) worker(pod string) *ateapipb.Worker {
+func (f *fakeControl) worker(pod string) *ateapi.Worker {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var found *ateapipb.Worker
+	var found *ateapi.Worker
 	for _, w := range f.workers {
 		if w.GetWorkerPod() != pod {
 			continue
 		}
-		if found == nil || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		if found == nil || w.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
 			found = w
 		}
 	}
@@ -230,18 +230,18 @@ func (f *fakeControl) worker(pod string) *ateapipb.Worker {
 }
 
 // all returns every registered Worker.
-func (f *fakeControl) all() []*ateapipb.Worker {
+func (f *fakeControl) all() []*ateapi.Worker {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Collect(maps.Values(f.workers))
 }
 
 // draining returns the draining Worker registered for pod, if any.
-func (f *fakeControl) draining(pod string) *ateapipb.Worker {
+func (f *fakeControl) draining(pod string) *ateapi.Worker {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, w := range f.workers {
-		if w.GetWorkerPod() == pod && w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		if w.GetWorkerPod() == pod && w.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_DRAINING {
 			return w
 		}
 	}
@@ -261,12 +261,12 @@ func (f *fakeControl) uid(pod string) string {
 type fakeRelay struct {
 	control  *fakeControl
 	mu       sync.Mutex
-	reported map[string]*ateapipb.WorkerResources      // by Worker name
-	classes  map[string][]*ateapipb.WorkerSandboxClass // sandbox classes, by Worker name
-	via      map[string]string                         // relay address, by Worker name
-	ips      map[string][]string                       // by Worker name
-	epochs   map[string]int64                          // registered epoch, by Worker name
-	acquired map[string]int                            // epochs acquired, by Worker name
+	reported map[string]*ateapi.WorkerResources      // by Worker name
+	classes  map[string][]*ateapi.WorkerSandboxClass // sandbox classes, by Worker name
+	via      map[string]string                       // relay address, by Worker name
+	ips      map[string][]string                     // by Worker name
+	epochs   map[string]int64                        // registered epoch, by Worker name
+	acquired map[string]int                          // epochs acquired, by Worker name
 	reject   map[string]codes.Code
 	calls    int
 	live     map[string]string // as last pruned to
@@ -274,8 +274,8 @@ type fakeRelay struct {
 
 func newFakeRelay() *fakeRelay {
 	return &fakeRelay{
-		reported: map[string]*ateapipb.WorkerResources{},
-		classes:  map[string][]*ateapipb.WorkerSandboxClass{},
+		reported: map[string]*ateapi.WorkerResources{},
+		classes:  map[string][]*ateapi.WorkerSandboxClass{},
 		via:      map[string]string{},
 		ips:      map[string][]string{},
 		epochs:   map[string]int64{},
@@ -322,14 +322,14 @@ func (f *fakeRelay) Prune(live map[string]string) {
 // fakeCluster is the controller's Kubernetes, in memory.
 type fakeCluster struct {
 	mu       sync.Mutex
-	pools    []*atev1alpha1.WorkerPool
+	pools    []*atev1.WorkerPool
 	nodes    []node
 	relays   map[string]string
-	statuses map[string]atev1alpha1.WorkerPoolStatus // by pool name
+	statuses map[string]atev1.WorkerPoolStatus // by pool name
 	updates  int
 }
 
-func (f *fakeCluster) Pools() ([]*atev1alpha1.WorkerPool, error) {
+func (f *fakeCluster) Pools() ([]*atev1.WorkerPool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.pools), nil
@@ -343,12 +343,12 @@ func (f *fakeCluster) Relays(context.Context) (map[string]string, error) {
 	return maps.Clone(f.relays), nil
 }
 
-func (f *fakeCluster) UpdateStatus(_ context.Context, wp *atev1alpha1.WorkerPool) error {
+func (f *fakeCluster) UpdateStatus(_ context.Context, wp *atev1.WorkerPool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.updates++
 	if f.statuses == nil {
-		f.statuses = map[string]atev1alpha1.WorkerPoolStatus{}
+		f.statuses = map[string]atev1.WorkerPoolStatus{}
 	}
 	f.statuses[wp.Name] = wp.Status
 	// Like the API server: the next List returns the written status.
@@ -361,7 +361,7 @@ func (f *fakeCluster) UpdateStatus(_ context.Context, wp *atev1alpha1.WorkerPool
 }
 
 // editPool replaces the named pool with a copy edit has changed.
-func (f *fakeCluster) editPool(name string, edit func(*atev1alpha1.WorkerPool)) {
+func (f *fakeCluster) editPool(name string, edit func(*atev1.WorkerPool)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i, p := range f.pools {
@@ -385,13 +385,13 @@ func (f *fakeCluster) setReplicas(pool string, n int32) {
 	}
 }
 
-func pool(name string, replicas int32, limits corev1.ResourceList) *atev1alpha1.WorkerPool {
-	wp := &atev1alpha1.WorkerPool{
+func pool(name string, replicas int32, limits corev1.ResourceList) *atev1.WorkerPool {
+	wp := &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "benchmark-workloads", Name: name, Labels: map[string]string{"workload": name}},
-		Spec:       atev1alpha1.WorkerPoolSpec{Replicas: replicas, SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}}},
+		Spec:       atev1.WorkerPoolSpec{Replicas: replicas, SandboxClasses: []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassGvisor}}},
 	}
 	if limits != nil {
-		wp.Spec.Template = &atev1alpha1.WorkerPoolPodTemplate{Resources: &corev1.ResourceRequirements{Limits: limits}}
+		wp.Spec.Template = &atev1.WorkerPoolPodTemplate{Resources: &corev1.ResourceRequirements{Limits: limits}}
 	}
 	return wp
 }
@@ -403,7 +403,7 @@ func testNodes() []node {
 	return []node{{name: "node-a", allocatable: alloc("86", "160Gi")}, {name: "node-b", allocatable: alloc("44", "80Gi")}}
 }
 
-func newTestController(pools ...*atev1alpha1.WorkerPool) (*controller, *fakeControl, *fakeRelay, *fakeCluster) {
+func newTestController(pools ...*atev1.WorkerPool) (*controller, *fakeControl, *fakeRelay, *fakeCluster) {
 	ctl, rel := newFakeControl(), newFakeRelay()
 	rel.control = ctl
 	cl := &fakeCluster{pools: pools, nodes: testNodes(), relays: map[string]string{"node-a": "10.0.0.1:8086", "node-b": "10.0.0.2:8086"}}
@@ -435,9 +435,9 @@ func poolNames(name string, n int) []string {
 	return out
 }
 
-func wantCapacity(actors int32, cpu, mem string) *ateapipb.WorkerResources {
+func wantCapacity(actors int32, cpu, mem string) *ateapi.WorkerResources {
 	c, m := resource.MustParse(cpu), resource.MustParse(mem)
-	return &ateapipb.WorkerResources{Actors: actors, CpuMillicores: c.MilliValue(), MemoryBytes: m.Value()}
+	return &ateapi.WorkerResources{Actors: actors, CpuMillicores: c.MilliValue(), MemoryBytes: m.Value()}
 }
 
 func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
@@ -479,11 +479,11 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 	if got, want := rel.reported[ctl.uid(name)], wantCapacity(1000, "1500m", "4Gi"); !proto.Equal(got, want) {
 		t.Errorf("reported %v, want %v from the pool's limits", got, want)
 	}
-	wantClass := &ateapipb.WorkerSandboxClass{SandboxClass: "gvisor", DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: hostCompat()}}
+	wantClass := &ateapi.WorkerSandboxClass{SandboxClass: "gvisor", DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: hostCompat()}}
 	if got := rel.classes[ctl.uid(name)]; len(got) != 1 || !proto.Equal(got[0], wantClass) {
 		t.Errorf("sandbox classes %v, want one, %v: the pool's class on this host, which ate-api-server requires", got, wantClass)
 	}
-	if got, want := cl.statuses["bench"], (atev1alpha1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); !reflect.DeepEqual(got, want) {
+	if got, want := cl.statuses["bench"], (atev1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("status = %+v, want %+v", got, want)
 	}
 }
@@ -680,7 +680,7 @@ func TestPoolLimitsChangeReplacesWorkers(t *testing.T) {
 	ctl.assignments[old] = 1
 	reports := rel.calls
 
-	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
+	cl.editPool("bench", func(wp *atev1.WorkerPool) {
 		wp.Spec.Template.Resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}
 	})
 	if err := reconcile(t, c); err != nil {
@@ -715,7 +715,7 @@ func TestMaxActorsAnnotationChangeReplacesWorkers(t *testing.T) {
 	}
 	pod := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
 	old := ctl.uid(pod)
-	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
+	cl.editPool("bench", func(wp *atev1.WorkerPool) {
 		wp.Annotations = map[string]string{fakeworker.MaxActorsAnnotation: "5"}
 	})
 	if err := reconcile(t, c); err != nil {
@@ -771,7 +771,7 @@ func TestScaleDownDrainsThenDeletes(t *testing.T) {
 	if slices.Contains(ctl.names(), idle) {
 		t.Errorf("idle Worker %s not deleted", idle)
 	}
-	if w := ctl.worker(busy); w == nil || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	if w := ctl.worker(busy); w == nil || w.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
 		t.Fatalf("busy Worker %s = %v, want kept and draining", busy, w)
 	}
 	if got := cl.statuses["bench"]; got.Replicas != 2 || got.ReadyReplicas != 2 {
@@ -840,7 +840,7 @@ func TestScaleDownThenUpReplacesTheDrainingWorker(t *testing.T) {
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("scale-up reconcile: %v", err)
 	}
-	if w := ctl.worker(busy); w.GetMetadata().GetName() == old || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+	if w := ctl.worker(busy); w.GetMetadata().GetName() == old || w.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_ACTIVE {
 		t.Errorf("Worker for %s = %s/%v, want a new active one", busy, w.GetMetadata().GetName(), w.GetStatus().GetState())
 	}
 	if got := cl.statuses["bench"]; got.Replicas != 2 || got.ReadyReplicas != 2 {
@@ -904,8 +904,8 @@ func TestReconcileMarksWorkersAvailable(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	for _, name := range poolNames("bench", 2) {
-		if got := ctl.state(name); got != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-			t.Errorf("Worker %s state = %v, want %v", name, got, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+		if got := ctl.state(name); got != ateapi.WorkerState_WORKER_STATE_ACTIVE {
+			t.Errorf("Worker %s state = %v, want %v", name, got, ateapi.WorkerState_WORKER_STATE_ACTIVE)
 		}
 	}
 }
@@ -919,8 +919,8 @@ func TestUnmarkedWorkerIsMarkedByTheNextPass(t *testing.T) {
 		t.Fatal("reconcile succeeded with every mark failing")
 	}
 	name := poolNames("bench", 1)[0]
-	if got := ctl.state(name); got != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-		t.Fatalf("Worker %s state = %v after a failed mark, want %v", name, got, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	if got := ctl.state(name); got != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Fatalf("Worker %s state = %v after a failed mark, want %v", name, got, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 	}
 	ctl.markErr = nil
 
@@ -931,8 +931,8 @@ func TestUnmarkedWorkerIsMarkedByTheNextPass(t *testing.T) {
 	if err := reconcile(t, restarted); err != nil {
 		t.Fatalf("reconcile after restart: %v", err)
 	}
-	if got := ctl.state(name); got != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		t.Errorf("Worker %s state = %v after restart, want %v", name, got, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+	if got := ctl.state(name); got != ateapi.WorkerState_WORKER_STATE_ACTIVE {
+		t.Errorf("Worker %s state = %v after restart, want %v", name, got, ateapi.WorkerState_WORKER_STATE_ACTIVE)
 	}
 	if got, want := ctl.names(), poolNames("bench", 1); !slices.Equal(got, want) {
 		t.Errorf("registered %v, want %v: the adopted Worker, not a replacement", got, want)
@@ -947,7 +947,7 @@ func TestPoolLabelChangeUpdatesWorkers(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	relabel := func(v string) {
-		cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) { wp.Labels = map[string]string{"workload": v} })
+		cl.editPool("bench", func(wp *atev1.WorkerPool) { wp.Labels = map[string]string{"workload": v} })
 	}
 
 	relabel("v2")
@@ -994,15 +994,15 @@ func TestPoolSandboxClassChangeReplacesWorkers(t *testing.T) {
 	oldBusy := ctl.uid(busy)
 	ctl.assignments[oldBusy] = 1
 
-	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
-		wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassMicroVM}}
+	cl.editPool("bench", func(wp *atev1.WorkerPool) {
+		wp.Spec.SandboxClasses = []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassMicroVM}}
 	})
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile after the class change: %v", err)
 	}
 	for _, pod := range []string{idle, busy} {
 		w := ctl.worker(pod)
-		if hardware.SandboxClass(w.GetStatus()) != "microvm" || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+		if hardware.SandboxClass(w.GetStatus()) != "microvm" || w.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_ACTIVE {
 			t.Errorf("Worker for %s = %q/%v, want microvm and active", pod, hardware.SandboxClass(w.GetStatus()), w.GetStatus().GetState())
 		}
 		if w.GetWorkerPodUid() != w.GetMetadata().GetName() {
@@ -1035,14 +1035,14 @@ func TestFailedDrainOfAReplacedWorkerIsNoReplica(t *testing.T) {
 	pod := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
 	old := ctl.worker(pod)
 	ctl.drainErr = status.Error(codes.Unavailable, "connection reset")
-	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
-		wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassMicroVM}}
+	cl.editPool("bench", func(wp *atev1.WorkerPool) {
+		wp.Spec.SandboxClasses = []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassMicroVM}}
 		wp.Labels = map[string]string{"workload": "v2"}
 	})
 	if err := reconcile(t, c); err == nil {
 		t.Error("reconcile succeeded with a failed drain")
 	}
-	var replacement *ateapipb.Worker
+	var replacement *ateapi.Worker
 	for _, w := range ctl.all() {
 		if hardware.SandboxClass(w.GetStatus()) == "microvm" {
 			replacement = w
@@ -1087,8 +1087,8 @@ func TestAdoptAfterRestart(t *testing.T) {
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	real := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "0c4f6c2e-real-pod-uid"}, WorkerNamespace: "benchmark-workloads", WorkerPool: "bench", WorkerPod: "bench-7d9f8c-x2x4k", Status: &ateapipb.WorkerStatus{}}
-	otherRun := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "9a1e0d3b-other-run"}, WorkerNamespace: "benchmark-workloads", WorkerPool: "bench", WorkerPod: fakeworker.Name("r2", "benchmark-workloads", "bench", 0), Status: &ateapipb.WorkerStatus{}}
+	real := &ateapi.Worker{Metadata: &ateapi.ResourceMetadata{Name: "0c4f6c2e-real-pod-uid"}, WorkerNamespace: "benchmark-workloads", WorkerPool: "bench", WorkerPod: "bench-7d9f8c-x2x4k", Status: &ateapi.WorkerStatus{}}
+	otherRun := &ateapi.Worker{Metadata: &ateapi.ResourceMetadata{Name: "9a1e0d3b-other-run"}, WorkerNamespace: "benchmark-workloads", WorkerPool: "bench", WorkerPod: fakeworker.Name("r2", "benchmark-workloads", "bench", 0), Status: &ateapi.WorkerStatus{}}
 	ctl.workers[real.Metadata.Name] = real
 	ctl.workers[otherRun.Metadata.Name] = otherRun
 
@@ -1174,7 +1174,7 @@ func TestAdoptReplacesWorkersOfAPoolEditedWhileDown(t *testing.T) {
 	}
 	pod := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
 	old := ctl.uid(pod)
-	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
+	cl.editPool("bench", func(wp *atev1.WorkerPool) {
 		wp.Spec.Template.Resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}
 	})
 
@@ -1232,7 +1232,7 @@ func TestReportReusesTheRegisteredEpoch(t *testing.T) {
 	tests := []struct {
 		name         string
 		ip           string
-		capacity     *ateapipb.WorkerResources
+		capacity     *ateapi.WorkerResources
 		wantAcquired int
 		wantEpoch    int64
 	}{
@@ -1284,7 +1284,7 @@ func TestDeleteAll(t *testing.T) {
 }
 
 func TestCapacityFormatsLikeWorker(t *testing.T) {
-	capacity := func(wp *atev1alpha1.WorkerPool) *ateapipb.WorkerResources {
+	capacity := func(wp *atev1.WorkerPool) *ateapi.WorkerResources {
 		t.Helper()
 		tmpl, err := templateOf(wp)
 		if err != nil {

@@ -19,9 +19,9 @@ import (
 	"slices"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -40,32 +40,32 @@ func TestResumeActor_RetriedAfterWorkerRestartDuringRestore(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
-	ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
-	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	ref := &ateapi.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
 	const newEpoch = reportedEpoch + 1
 	newIPs := []string{"127.0.0.2"}
-	updateWorker := func(mutate func(*ateapipb.WorkerStatus)) {
+	updateWorker := func(mutate func(*ateapi.WorkerStatus)) {
 		t.Helper()
 		worker, err := tc.persistence.GetWorker(ctx, podUID)
 		if err != nil {
 			t.Fatalf("GetWorker: %v", err)
 		}
-		if _, err := tc.persistence.UpdateWorker(ctx, podUID, store.PreconditionFrom(worker), func(w *ateapipb.Worker) error {
+		if _, err := tc.persistence.UpdateWorker(ctx, podUID, store.PreconditionFrom(worker), func(w *ateapi.Worker) error {
 			mutate(w.Status)
 			return nil
 		}); err != nil {
 			t.Fatalf("UpdateWorker: %v", err)
 		}
 	}
-	getActor := func() *ateapipb.Actor {
+	getActor := func() *ateapi.Actor {
 		t.Helper()
-		actor, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+		actor, err := tc.client.GetActor(ctx, &ateapi.GetActorRequest{Actor: ref})
 		if err != nil {
 			t.Fatalf("GetActor failed: %v", err)
 		}
@@ -79,7 +79,7 @@ func TestResumeActor_RetriedAfterWorkerRestartDuringRestore(t *testing.T) {
 	tc.fakeAtelet.RestoreWorkerEpoch = func() int64 {
 		restores++
 		if restores == 1 {
-			updateWorker(func(s *ateapipb.WorkerStatus) {
+			updateWorker(func(s *ateapi.WorkerStatus) {
 				s.RegisteredEpoch = newEpoch
 				s.Ips = newIPs
 				s.SandboxClasses = nil
@@ -89,11 +89,11 @@ func TestResumeActor_RetriedAfterWorkerRestartDuringRestore(t *testing.T) {
 		return newEpoch
 	}
 
-	_, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref})
+	_, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref})
 	if got := status.Code(err); got != codes.Unavailable {
 		t.Fatalf("first ResumeActor = %v (err %v), want Unavailable", got, err)
 	}
-	if got := getActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+	if got := getActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RESUMING {
 		t.Fatalf("actor state after the first resume = %v, want RESUMING", got)
 	}
 
@@ -102,13 +102,13 @@ func TestResumeActor_RetriedAfterWorkerRestartDuringRestore(t *testing.T) {
 	if err := controlapi.NewWorkerWorkflow(tc.persistence, nil).ReconcileAssignments(ctx, podUID); err != nil {
 		t.Fatalf("ReconcileAssignments: %v", err)
 	}
-	if got := getActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+	if got := getActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RESUMING {
 		t.Fatalf("actor state after reconcile = %v, want RESUMING", got)
 	}
 
 	// Until the new process reports its runtimes the retry waits, without
 	// restoring or crashing anything.
-	_, err = tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref})
+	_, err = tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref})
 	if got := status.Code(err); got != codes.Unavailable {
 		t.Fatalf("ResumeActor before runtimes are reported = %v (err %v), want Unavailable", got, err)
 	}
@@ -116,10 +116,10 @@ func TestResumeActor_RetriedAfterWorkerRestartDuringRestore(t *testing.T) {
 		t.Fatalf("restores = %d before runtimes are reported, want 1", restores)
 	}
 
-	updateWorker(func(s *ateapipb.WorkerStatus) {
+	updateWorker(func(s *ateapi.WorkerStatus) {
 		s.SandboxClasses = workerSandboxClasses(defaultWorkerRuntime("gvisor"))
 	})
-	resp, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref})
+	resp, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref})
 	if err != nil {
 		t.Fatalf("ResumeActor after the restart: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestResumeActor_RetriedAfterWorkerRestartDuringRestore(t *testing.T) {
 		t.Errorf("restores = %d, want the retry to restore again", restores)
 	}
 	actor := resp.GetActor()
-	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if got := actor.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Fatalf("actor state = %v, want RUNNING", got)
 	}
 	assignment := actor.GetStatus().GetWorkerAssignment()
@@ -143,7 +143,7 @@ func TestResumeActor_RetriedAfterWorkerRestartDuringRestore(t *testing.T) {
 	if err := controlapi.NewWorkerWorkflow(tc.persistence, nil).ReconcileAssignments(ctx, podUID); err != nil {
 		t.Fatalf("ReconcileAssignments: %v", err)
 	}
-	if got := getActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if got := getActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state after a later reconcile = %v, want RUNNING", got)
 	}
 	worker, err := tc.persistence.GetWorker(ctx, podUID)

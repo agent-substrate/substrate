@@ -69,6 +69,7 @@ See `hack/install-ate.sh` and `tools/setup-gcp` for provisioning and deploying c
 ## Repository Layout
 
 ```
+api/          # Public APIs: protos and CRD types, one directory per API and version
 cmd/          # One subdirectory per binary (ateapi, atelet, atenet, …)
 internal/     # Shared packages, internal to this module only
 pkg/          # Shared packages intended for external import
@@ -87,11 +88,12 @@ tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 | Only used by one binary | `cmd/<binary>/internal/<pkg>` |
 | Shared across binaries, not for external import | `internal/<pkg>` |
 | Public API for external consumers | `pkg/<pkg>` |
-| Public proto (control-plane gRPC API) | `pkg/proto/<name>` |
+| Public gRPC API | `api/<name>/<version>` |
+| Kubernetes CRD types | `api/infra/k8s/<group>/<version>` |
 | Internal proto (atelet / ateworker) | `internal/proto/<name>` |
 | Dev/CI scripts | `hack/` |
 | Standalone Go dev/CI tools | `tools/<name>` with its own `go.mod` |
-| Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `pkg/`; see `internal/plugins/README.md` |
+| Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `api/` and `pkg/`; see `internal/plugins/README.md` |
 
 See `docs/dev/code-layout.md` for the full rationale and per-directory details.
 

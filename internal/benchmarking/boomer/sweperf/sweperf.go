@@ -36,13 +36,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -551,8 +551,8 @@ type sweperfUser struct {
 }
 
 // ref is the control-plane reference to this user's actor.
-func (u *sweperfUser) ref() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
+func (u *sweperfUser) ref() *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
 }
 
 // setActorRouting names the actor the atenet router should route this request
@@ -566,9 +566,9 @@ func (u *sweperfUser) setActorRouting(req *http.Request) {
 // success so concurrent users racing the first creation all proceed.
 func (u *sweperfUser) ensureAtespace(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
-			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{
+		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapi.CreateAtespaceRequest{
+			Atespace: &ateapi.Atespace{
+				Metadata: &ateapi.ResourceMetadata{
 					Name: u.cfg.Atespace,
 				},
 			},
@@ -588,10 +588,10 @@ func (u *sweperfUser) ensureAtespace(ctx context.Context) error {
 // (see pollLiveness).
 func (u *sweperfUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateNS, Name: u.templateName},
+		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapi.CreateActorRequest{
+			Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateNS, Name: u.templateName},
 			},
 		}, grpc.Trailer(tr))
 		return err
@@ -603,7 +603,7 @@ func (u *sweperfUser) create(ctx context.Context) error {
 // to abandon the cycle rather than talk to a sandbox that is not running.
 func (u *sweperfUser) resume(ctx context.Context) (time.Duration, bool) {
 	latency, err := u.tracedCallRecord(ctx, "ResumeActor", !u.awake, func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
+		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapi.ResumeActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
@@ -620,14 +620,14 @@ func (u *sweperfUser) resume(ctx context.Context) (time.Duration, bool) {
 // the suspend is asynchronous and recorded as SuspendActorAsync; in sync
 // lifecycle mode it is synchronous and recorded as SuspendActor.
 func (u *sweperfUser) suspend(ctx context.Context) bool {
-	name, mode := "SuspendActorAsync", ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
+	name, mode := "SuspendActorAsync", ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
 	if dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModeSync {
-		name, mode = "SuspendActor", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
+		name, mode = "SuspendActor", ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
 	}
 	err := u.tracedCall(ctx, name, func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
+		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{
 			Actor:   u.ref(),
-			Options: &ateapipb.SuspendOptions{Mode: mode},
+			Options: &ateapi.SuspendOptions{Mode: mode},
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -642,7 +642,7 @@ func (u *sweperfUser) suspend(ctx context.Context) bool {
 // and returned so the caller can retry.
 func (u *sweperfUser) delete(ctx context.Context) error {
 	return u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
+		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapi.DeleteActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err

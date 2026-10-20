@@ -22,8 +22,8 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/utils/lru"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/objectstoreplugin/exchange"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // actorRef identifies the actor a transfer is for, as atelet's RPCs carry it.
@@ -50,12 +50,12 @@ type cachedWorkerActorJWT struct {
 // them per actor UID. The node plugin trades one for storage credentials
 // scoped to the actor, so atelet sends one with every snapshot transfer.
 type workerActorJWTs struct {
-	workers ateapipb.WorkerServiceClient
+	workers ateapi.WorkerServiceClient
 	now     func() time.Time
 	cache   *lru.Cache
 }
 
-func newWorkerActorJWTs(workers ateapipb.WorkerServiceClient) *workerActorJWTs {
+func newWorkerActorJWTs(workers ateapi.WorkerServiceClient) *workerActorJWTs {
 	return &workerActorJWTs{workers: workers, now: time.Now, cache: lru.New(workerActorJWTCacheSize)}
 }
 
@@ -75,8 +75,8 @@ func (j *workerActorJWTs) get(ctx context.Context, actor actorRef) (string, erro
 			return c.jwt, nil
 		}
 	}
-	resp, err := j.workers.MintWorkerActorJwt(ctx, &ateapipb.MintWorkerActorJwtRequest{
-		Actor:     &ateapipb.ObjectRef{Atespace: actor.atespace, Name: actor.name},
+	resp, err := j.workers.MintWorkerActorJwt(ctx, &ateapi.MintWorkerActorJwtRequest{
+		Actor:     &ateapi.ObjectRef{Atespace: actor.atespace, Name: actor.name},
 		ActorUid:  actor.uid,
 		Audiences: []string{exchange.ActorJWTAudience},
 	})

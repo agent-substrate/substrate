@@ -21,8 +21,8 @@ import (
 	"log/slog"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
 )
@@ -36,7 +36,7 @@ var errWorkerLeased = errors.New("worker is being reconciled by another replica"
 // workerWatcher delivers every Worker change to a handler. *workercache.Cache
 // satisfies it.
 type workerWatcher interface {
-	AddHandler(handler func(*ateapipb.Worker))
+	AddHandler(handler func(*ateapi.Worker))
 }
 
 // WorkerAssignmentReconciler keeps the Actors assigned to a Worker in line with
@@ -76,7 +76,7 @@ func (r *WorkerAssignmentReconciler) Start(ctx context.Context) {
 }
 
 // enqueue queues worker if its epoch has not been observed.
-func (r *WorkerAssignmentReconciler) enqueue(worker *ateapipb.Worker) {
+func (r *WorkerAssignmentReconciler) enqueue(worker *ateapi.Worker) {
 	if needsAssignmentReconcile(worker) {
 		r.queue.Add(worker.GetMetadata().GetName())
 	}

@@ -24,10 +24,10 @@ import (
 	"strings"
 	"sync"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/portforward"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -106,7 +106,7 @@ const (
 
 // Client wraps the gRPC ControlClient and ensures the port-forward connection is closed when done.
 type Client struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 	conn           *grpc.ClientConn
 	cancel         func()
 	tracerProvider *sdktrace.TracerProvider
@@ -136,8 +136,8 @@ func (c *Client) Close() {
 // WorkerService returns a WorkerService client on the same connection. Only
 // atelet is permitted to call WorkerService; this exists so tests can check
 // that other callers are rejected.
-func (c *Client) WorkerService() ateapipb.WorkerServiceClient {
-	return ateapipb.NewWorkerServiceClient(c.conn)
+func (c *Client) WorkerService() ateapi.WorkerServiceClient {
+	return ateapi.NewWorkerServiceClient(c.conn)
 }
 
 // NewClient creates a new Ate API client. If endpoint is empty, it automatically
@@ -209,7 +209,7 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 		return nil, fmt.Errorf("failed to dial manual endpoint: %w", err)
 	}
 	return &Client{
-		ControlClient: ateapipb.NewControlClient(conn),
+		ControlClient: ateapi.NewControlClient(conn),
 		conn:          conn,
 		cancel:        func() {},
 	}, nil
@@ -274,7 +274,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 	}
 
 	return &Client{
-		ControlClient: ateapipb.NewControlClient(conn),
+		ControlClient: ateapi.NewControlClient(conn),
 		conn:          conn,
 		cancel:        stopForward,
 	}, nil

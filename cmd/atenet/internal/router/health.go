@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/kubernetes"
@@ -63,12 +63,12 @@ type routerHealth struct {
 
 	interval        time.Duration
 	clientset       kubernetes.Interface
-	apiClient       ateapipb.ControlClient
+	apiClient       ateapi.ControlClient
 	cfg             routerConfig
 	dataplaneClient *http.Client
 }
 
-func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, apiClient ateapipb.ControlClient, cfg routerConfig) *routerHealth {
+func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, apiClient ateapi.ControlClient, cfg routerConfig) *routerHealth {
 	if interval <= 0 {
 		interval = time.Second
 	}
@@ -229,7 +229,7 @@ func (rh *routerHealth) checkAteAPI(ctx context.Context) (bool, string) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
 	defer cancel()
 
-	_, err := rh.apiClient.ListActors(timeoutCtx, &ateapipb.ListActorsRequest{Options: &ateapipb.ListOptions{PageSize: 1}})
+	_, err := rh.apiClient.ListActors(timeoutCtx, &ateapi.ListActorsRequest{Options: &ateapi.ListOptions{PageSize: 1}})
 	if err != nil {
 		return false, err.Error()
 	}

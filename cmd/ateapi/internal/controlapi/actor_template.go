@@ -19,17 +19,17 @@ import (
 	"errors"
 	"fmt"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
+func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapi.CreateActorTemplateRequest) (*ateapi.ActorTemplate, error) {
 	// First scrub any fields that users are not allowed to set, then fill the
 	// defaults so validation sees the final resource state.
 	in := req.GetActorTemplate()
@@ -60,10 +60,10 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 	return stored, nil
 }
 
-func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
+func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateapi.ActorTemplate) (*ateapi.ActorTemplate, error) {
 	// Build the stored object: status is server-owned and starts empty.
-	outTemplate := proto.Clone(inTemplate).(*ateapipb.ActorTemplate)
-	outTemplate.Status = &ateapipb.ActorTemplateStatus{}
+	outTemplate := proto.Clone(inTemplate).(*ateapi.ActorTemplate)
+	outTemplate.Status = &ateapi.ActorTemplateStatus{}
 
 	// Validate the final value before storing it.
 	if errs := apivalidation.ValidateActorTemplateUpdate(ctx, field.NewPath("actor_template"), outTemplate, inTemplate); len(errs) > 0 {
@@ -79,7 +79,7 @@ func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateap
 	return s.store.CreateActorTemplate(ctx, outTemplate)
 }
 
-func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
+func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapi.GetActorTemplateRequest) (*ateapi.ActorTemplate, error) {
 	if errs := apivalidation.ValidateGetActorTemplateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -95,12 +95,12 @@ func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActo
 	return template, nil
 }
 
-func (s *ServiceImpl) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+func (s *ServiceImpl) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapi.ActorTemplate, error) {
 	// TODO: implement this
 	return s.store.GetActorTemplate(ctx, templateRef)
 }
 
-func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {
+func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapi.ListActorTemplatesRequest) (*ateapi.ListActorTemplatesResponse, error) {
 	if errs := apivalidation.ValidateListActorTemplatesRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -109,34 +109,34 @@ func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListA
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actor templates in db: %w", err))
 	}
-	return &ateapipb.ListActorTemplatesResponse{
+	return &ateapi.ListActorTemplatesResponse{
 		ActorTemplates: page.Items,
 		NextPageToken:  page.NextPageToken,
 	}, nil
 }
 
-func (s *ServiceImpl) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
+func (s *ServiceImpl) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorTemplate], error) {
 	// TODO: implement this
 	return s.store.ListActorTemplates(ctx, atespace, opts)
 }
 
-func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
+func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapi.DeleteActorTemplateRequest) (*ateapi.ActorTemplate, error) {
 	if errs := apivalidation.ValidateDeleteActorTemplateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 	return s.actorWorkflow.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate()), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+func (s *ServiceImpl) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
 	return s.store.MarkActorTemplateForDeletion(ctx, templateRef, precondition, mutate)
 }
 
-func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error) {
+func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapi.ActorTemplate, error) {
 	// TODO: implement this
 	return s.store.DeleteActorTemplate(ctx, templateRef, precondition)
 }
 
-func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
 	// ActorTemplates are immutable to clients: there is no update RPC, and
 	// the only writer is the template reconciler, which updates status
 	// against the store directly. The store enforces metadata immutability,
@@ -146,7 +146,7 @@ func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resou
 
 // actorTemplateGetter is the storage subset template resolution needs.
 type actorTemplateGetter interface {
-	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
+	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapi.ActorTemplate, error)
 }
 
 // errActorTemplateNotFound matches (via errors.Is) resolution failures where
@@ -158,7 +158,7 @@ var errActorTemplateNotFound = apierror.FailedPrecondition("actor template not f
 // resolveActorTemplate resolves the substrate ActorTemplate the actor's
 // actor_template ref names. A missing template surfaces as
 // errActorTemplateNotFound.
-func resolveActorTemplate(ctx context.Context, st actorTemplateGetter, actor *ateapipb.Actor) (*ateapipb.ActorTemplate, error) {
+func resolveActorTemplate(ctx context.Context, st actorTemplateGetter, actor *ateapi.Actor) (*ateapi.ActorTemplate, error) {
 	templateRef := resources.ActorTemplateRefFromObjectRef(actor.GetActorTemplate())
 	template, err := st.GetActorTemplate(ctx, templateRef)
 	if errors.Is(err, store.ErrNotFound) {

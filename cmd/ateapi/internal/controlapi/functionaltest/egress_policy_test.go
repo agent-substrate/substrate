@@ -20,43 +20,43 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func setupEgressPolicyActor(t *testing.T, testName string) (*testContext, *ateapipb.ObjectRef) {
+func setupEgressPolicyActor(t *testing.T, testName string) (*testContext, *ateapi.ObjectRef) {
 	t.Helper()
 	ns := namespaceForTest(testName)
 	tc := setupTest(t, ns)
 	t.Cleanup(tc.cleanup)
 	createTemplate(t, tc, ns)
 
-	actor := &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "egress-actor"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	actor := &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "egress-actor"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}
-	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: actor}); err != nil {
+	if _, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	return tc, &ateapipb.ObjectRef{Atespace: testAtespace, Name: "egress-actor"}
+	return tc, &ateapi.ObjectRef{Atespace: testAtespace, Name: "egress-actor"}
 }
 
-func functionalEgressPolicy() *ateapipb.EgressPolicy {
-	return &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
-		Rules: []*ateapipb.EgressRule{{
-			Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}},
+func functionalEgressPolicy() *ateapi.EgressPolicy {
+	return &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "default"},
+		Rules: []*ateapi.EgressRule{{
+			Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}},
 		}},
 	}
 }
 
-func createEgressPolicy(t *testing.T, tc *testContext, actor *ateapipb.ObjectRef) *ateapipb.EgressPolicy {
+func createEgressPolicy(t *testing.T, tc *testContext, actor *ateapi.ObjectRef) *ateapi.EgressPolicy {
 	t.Helper()
-	created, err := tc.client.CreateActorEgressPolicy(context.Background(), &ateapipb.CreateActorEgressPolicyRequest{
+	created, err := tc.client.CreateActorEgressPolicy(context.Background(), &ateapi.CreateActorEgressPolicyRequest{
 		Actor:        actor,
 		EgressPolicy: functionalEgressPolicy(),
 	})
@@ -74,7 +74,7 @@ func TestCreateActorEgressPolicy_Success(t *testing.T) {
 	policy.Metadata.CreateTime = timestamppb.New(time.Unix(1, 0))
 	policy.Metadata.UpdateTime = timestamppb.New(time.Unix(1, 0))
 
-	created, err := tc.client.CreateActorEgressPolicy(context.Background(), &ateapipb.CreateActorEgressPolicyRequest{
+	created, err := tc.client.CreateActorEgressPolicy(context.Background(), &ateapi.CreateActorEgressPolicyRequest{
 		Actor:        actor,
 		EgressPolicy: policy,
 	})
@@ -95,7 +95,7 @@ func TestCreateActorEgressPolicy_Success(t *testing.T) {
 		t.Errorf("timestamps = (%v, %v), want server-generated values", md.GetCreateTime(), md.GetUpdateTime())
 	}
 
-	got, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
+	got, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("GetActorEgressPolicy failed: %v", err)
 	}
@@ -108,14 +108,14 @@ func TestCreateActorEgressPolicy_Errors(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-create-egress-policy-errors")
 	createEgressPolicy(t, tc, actor)
 
-	_, err := tc.client.CreateActorEgressPolicy(context.Background(), &ateapipb.CreateActorEgressPolicyRequest{
+	_, err := tc.client.CreateActorEgressPolicy(context.Background(), &ateapi.CreateActorEgressPolicyRequest{
 		Actor:        actor,
 		EgressPolicy: functionalEgressPolicy(),
 	})
 	assertGrpcError(t, err, codes.AlreadyExists, "EgressPolicy already exists")
 
-	_, err = tc.client.CreateActorEgressPolicy(context.Background(), &ateapipb.CreateActorEgressPolicyRequest{
-		Actor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "missing-actor"},
+	_, err = tc.client.CreateActorEgressPolicy(context.Background(), &ateapi.CreateActorEgressPolicyRequest{
+		Actor:        &ateapi.ObjectRef{Atespace: testAtespace, Name: "missing-actor"},
 		EgressPolicy: functionalEgressPolicy(),
 	})
 	assertGrpcError(t, err, codes.FailedPrecondition, "parent Actor does not exist")
@@ -123,17 +123,17 @@ func TestCreateActorEgressPolicy_Errors(t *testing.T) {
 
 func TestGetActorEgressPolicy_NotFound(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-get-egress-policy-missing")
-	_, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
+	_, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	assertGrpcError(t, err, codes.NotFound, "EgressPolicy for actor "+actor.GetAtespace()+"/"+actor.GetName()+" not found")
 }
 
 func TestUpdateActorEgressPolicy(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-update-egress-policy")
 	created := createEgressPolicy(t, tc, actor)
-	toUpdate := proto.Clone(created).(*ateapipb.EgressPolicy)
-	toUpdate.Rules = []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
+	toUpdate := proto.Clone(created).(*ateapi.EgressPolicy)
+	toUpdate.Rules = []*ateapi.EgressRule{{TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapi.Ports{Numbers: []int32{443}}}}}
 
-	updated, err := tc.client.UpdateActorEgressPolicy(context.Background(), &ateapipb.UpdateActorEgressPolicyRequest{
+	updated, err := tc.client.UpdateActorEgressPolicy(context.Background(), &ateapi.UpdateActorEgressPolicyRequest{
 		Actor:        actor,
 		EgressPolicy: toUpdate,
 	})
@@ -153,7 +153,7 @@ func TestUpdateActorEgressPolicy(t *testing.T) {
 		t.Errorf("updated rules = %v, want one tls_passthrough rule", updated.GetRules())
 	}
 
-	got, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
+	got, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("GetActorEgressPolicy failed: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestUpdateActorEgressPolicy(t *testing.T) {
 		t.Errorf("persisted policy mismatch (-updated +got):\n%s", diff)
 	}
 
-	_, err = tc.client.UpdateActorEgressPolicy(context.Background(), &ateapipb.UpdateActorEgressPolicyRequest{
+	_, err = tc.client.UpdateActorEgressPolicy(context.Background(), &ateapi.UpdateActorEgressPolicyRequest{
 		Actor:        actor,
 		EgressPolicy: toUpdate,
 	})
@@ -172,18 +172,18 @@ func TestUpdateActorEgressPolicy_Preconditions(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-update-egress-policy-preconditions")
 	created := createEgressPolicy(t, tc, actor)
 
-	unguarded := proto.Clone(created).(*ateapipb.EgressPolicy)
+	unguarded := proto.Clone(created).(*ateapi.EgressPolicy)
 	unguarded.Metadata.Uid, unguarded.Metadata.Version = "", 0
-	_, err := tc.client.UpdateActorEgressPolicy(context.Background(), &ateapipb.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: unguarded})
+	_, err := tc.client.UpdateActorEgressPolicy(context.Background(), &ateapi.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: unguarded})
 	assertGrpcError(t, err, codes.InvalidArgument, "EgressPolicy UID and version are required")
 
-	wrongUID := proto.Clone(created).(*ateapipb.EgressPolicy)
+	wrongUID := proto.Clone(created).(*ateapi.EgressPolicy)
 	wrongUID.Metadata.Uid = "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
-	_, err = tc.client.UpdateActorEgressPolicy(context.Background(), &ateapipb.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: wrongUID})
+	_, err = tc.client.UpdateActorEgressPolicy(context.Background(), &ateapi.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: wrongUID})
 	assertGrpcError(t, err, codes.Aborted, "EgressPolicy UID conflict")
 
-	missingActor := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "missing-actor"}
-	_, err = tc.client.UpdateActorEgressPolicy(context.Background(), &ateapipb.UpdateActorEgressPolicyRequest{Actor: missingActor, EgressPolicy: created})
+	missingActor := &ateapi.ObjectRef{Atespace: testAtespace, Name: "missing-actor"}
+	_, err = tc.client.UpdateActorEgressPolicy(context.Background(), &ateapi.UpdateActorEgressPolicyRequest{Actor: missingActor, EgressPolicy: created})
 	assertGrpcError(t, err, codes.NotFound, "EgressPolicy not found")
 }
 
@@ -191,17 +191,17 @@ func TestDeleteActorEgressPolicy(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-delete-egress-policy")
 	created := createEgressPolicy(t, tc, actor)
 
-	deleted, err := tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
+	deleted, err := tc.client.DeleteActorEgressPolicy(context.Background(), &ateapi.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("DeleteActorEgressPolicy failed: %v", err)
 	}
-	if diff := cmp.Diff(created, deleted, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "delete_time")); diff != "" {
+	if diff := cmp.Diff(created, deleted, protocmp.Transform(), protocmp.IgnoreFields(&ateapi.ResourceMetadata{}, "delete_time")); diff != "" {
 		t.Errorf("deleted policy mismatch (-created +deleted):\n%s", diff)
 	}
 	if deleted.GetMetadata().GetDeleteTime() == nil {
 		t.Errorf("the deleted policy carries no delete_time")
 	}
-	_, err = tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
+	_, err = tc.client.DeleteActorEgressPolicy(context.Background(), &ateapi.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	assertGrpcError(t, err, codes.NotFound, "EgressPolicy not found")
 }
 
@@ -209,10 +209,10 @@ func TestDeleteActor_CascadesEgressPolicy(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-delete-actor-egress-policy")
 	createEgressPolicy(t, tc, actor)
 
-	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actor}); err != nil {
+	if _, err := tc.client.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("DeleteActor failed: %v", err)
 	}
-	_, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
+	_, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	assertGrpcError(t, err, codes.NotFound, "EgressPolicy for actor "+actor.GetAtespace()+"/"+actor.GetName()+" not found")
 }
 
@@ -220,46 +220,46 @@ func TestValidation_ActorEgressPolicy(t *testing.T) {
 	tc, _ := setupEgressPolicyActor(t, "ns-validation-egress-policy")
 	ctx := context.Background()
 
-	_, err := tc.client.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{})
+	_, err := tc.client.CreateActorEgressPolicy(ctx, &ateapi.CreateActorEgressPolicyRequest{})
 	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
-	_, err = tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{})
+	_, err = tc.client.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{})
 	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
-	_, err = tc.client.UpdateActorEgressPolicy(ctx, &ateapipb.UpdateActorEgressPolicyRequest{})
+	_, err = tc.client.UpdateActorEgressPolicy(ctx, &ateapi.UpdateActorEgressPolicyRequest{})
 	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
-	_, err = tc.client.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{})
+	_, err = tc.client.DeleteActorEgressPolicy(ctx, &ateapi.DeleteActorEgressPolicyRequest{})
 	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 }
 
 func TestDeleteActorEgressPolicy_Preconditions(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-delete-egress-policy-preconditions")
 	ctx := context.Background()
-	del := func(opts *ateapipb.DeleteOptions) error {
-		_, err := tc.client.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: opts})
+	del := func(opts *ateapi.DeleteOptions) error {
+		_, err := tc.client.DeleteActorEgressPolicy(ctx, &ateapi.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: opts})
 		return err
 	}
 
 	policy := createEgressPolicy(t, tc, actor)
 	uid, version := policy.GetMetadata().GetUid(), policy.GetMetadata().GetVersion()
 
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "EgressPolicy version conflict")
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "EgressPolicy version conflict")
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "EgressPolicy UID conflict")
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "EgressPolicy UID conflict")
-	if _, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName}); err != nil {
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "EgressPolicy version conflict")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "EgressPolicy version conflict")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "EgressPolicy UID conflict")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "EgressPolicy UID conflict")
+	if _, err := tc.client.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName}); err != nil {
 		t.Fatalf("a refused delete removed the policy: %v", err)
 	}
 
-	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Version: version}); err != nil {
 		t.Fatalf("DeleteActorEgressPolicy with the matching version: %v", err)
 	}
 	policy = createEgressPolicy(t, tc, actor)
-	if err := del(&ateapipb.DeleteOptions{Uid: policy.GetMetadata().GetUid()}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Uid: policy.GetMetadata().GetUid()}); err != nil {
 		t.Fatalf("DeleteActorEgressPolicy with the matching uid: %v", err)
 	}
 	policy = createEgressPolicy(t, tc, actor)
-	if err := del(&ateapipb.DeleteOptions{Uid: policy.GetMetadata().GetUid(), Version: policy.GetMetadata().GetVersion()}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Uid: policy.GetMetadata().GetUid(), Version: policy.GetMetadata().GetVersion()}); err != nil {
 		t.Fatalf("DeleteActorEgressPolicy with both guards: %v", err)
 	}
-	_, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
+	_, err := tc.client.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	assertGrpcError(t, err, codes.NotFound, "EgressPolicy for actor "+actor.GetAtespace()+"/"+actor.GetName()+" not found")
 }

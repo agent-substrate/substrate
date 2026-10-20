@@ -40,6 +40,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
 	"go.ate.dev/substrate/internal/ateapiauth"
 	"go.ate.dev/substrate/internal/atelet"
@@ -50,7 +51,6 @@ import (
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -132,7 +132,7 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
-	workers := ateapipb.NewWorkerServiceClient(ateapiConn)
+	workers := ateapi.NewWorkerServiceClient(ateapiConn)
 	epochs := newWorkerEpochs()
 	h := &herder{delays: callDelays, storage: storage, epochs: epochs}
 	if *mintActorCertificate {
@@ -155,7 +155,7 @@ func main() {
 	// Its own server and listener, so each port admits only its own caller:
 	// ate-api-server on the herder's, fake-workersync on the relay's.
 	relaySrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(relayTLS)))
-	ateapipb.RegisterWorkerServiceServer(relaySrv, &relay{client: workers, epochs: epochs})
+	ateapi.RegisterWorkerServiceServer(relaySrv, &relay{client: workers, epochs: epochs})
 	health := &http.Server{Addr: *healthListenAddr, Handler: healthHandler(), ReadHeaderTimeout: 10 * time.Second}
 
 	slog.WarnContext(ctx, "Serving the fake atelet: actor lifecycle calls succeed without running any workload",

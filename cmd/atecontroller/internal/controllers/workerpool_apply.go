@@ -26,12 +26,12 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/deviceplugin"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/workercapacity"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // workerOTelResourceAttributes mirrors atelet.yaml; service.instance.id is the pod
@@ -108,7 +108,7 @@ const (
 // Deployment managed by a WorkerPool. Only fields owned by this controller
 // are declared here. otel is propagated to the worker container (see
 // workerContainerEnv).
-func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel workerOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount, dnsEgressPolicy string) *appsv1ac.DeploymentApplyConfiguration {
+func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount, dnsEgressPolicy string) *appsv1ac.DeploymentApplyConfiguration {
 	labels := map[string]string{}
 	annotations := map[string]string{}
 	if wp.Spec.Template != nil {
@@ -267,7 +267,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel workerOTelSetti
 		WithLabels(labels).
 		WithAnnotations(annotations).
 		WithOwnerReferences(metav1ac.OwnerReference().
-			WithAPIVersion(atev1alpha1.GroupVersion.String()).
+			WithAPIVersion(atev1.GroupVersion.String()).
 			WithKind("WorkerPool").
 			WithName(wp.Name).
 			WithUID(wp.UID).
@@ -406,7 +406,7 @@ var workerMicroVMCapabilities = slices.Concat(workerGvisorCapabilities, []corev1
 // class. Neither class runs privileged; they differ in their capability set.
 // Both declare seccomp Unconfined because their sandbox child pivot_root()s,
 // which the default profile denies. An empty class defaults to gVisor.
-func workerSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
+func workerSecurityContext(class atev1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
 	// Both runtimes mount inside the worker — runsc pivots root and the worker
 	// remounts /sys/fs/cgroup to nest per-actor cgroups; the micro-VM worker
 	// shares /run/kata-containers and remounts /proc/sys — and the default
@@ -421,7 +421,7 @@ func workerSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCon
 		WithAppArmorProfile(corev1ac.AppArmorProfile().
 			WithType(corev1.AppArmorProfileTypeUnconfined))
 
-	if class == atev1alpha1.SandboxClassMicroVM {
+	if class == atev1.SandboxClassMicroVM {
 		// Give up the default seccomp profile so virtiofsd keeps its own sandbox,
 		// which pivot_root()s — a syscall the profile denies whatever capabilities
 		// the worker holds. The trade favors containing the guest: virtiofsd parses
@@ -462,9 +462,9 @@ func workerSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCon
 func maybeApplyMicroVMPodShape(
 	podSpecAC *corev1ac.PodSpecApplyConfiguration,
 	containerAC *corev1ac.ContainerApplyConfiguration,
-	sandboxClass atev1alpha1.SandboxClass,
+	sandboxClass atev1.SandboxClass,
 ) {
-	if sandboxClass != atev1alpha1.SandboxClassMicroVM {
+	if sandboxClass != atev1.SandboxClassMicroVM {
 		return
 	}
 
@@ -528,10 +528,10 @@ const sandboxClassTaintKey = "ate.dev/sandboxClass"
 // which is what the CRD's defaulting produces on the server.
 func applySandboxClassToleration(
 	podSpecAC *corev1ac.PodSpecApplyConfiguration,
-	sandboxClass atev1alpha1.SandboxClass,
+	sandboxClass atev1.SandboxClass,
 ) {
 	if sandboxClass == "" {
-		sandboxClass = atev1alpha1.SandboxClassGvisor
+		sandboxClass = atev1.SandboxClassGvisor
 	}
 	podSpecAC.WithTolerations(corev1ac.Toleration().
 		WithKey(sandboxClassTaintKey).
@@ -565,7 +565,7 @@ func addDeviceResourceLimits(containerAC *corev1ac.ContainerApplyConfiguration, 
 func applyWorkerPoolPodTemplate(
 	podSpecAC *corev1ac.PodSpecApplyConfiguration,
 	containerAC *corev1ac.ContainerApplyConfiguration,
-	tmpl *atev1alpha1.WorkerPoolPodTemplate,
+	tmpl *atev1.WorkerPoolPodTemplate,
 ) {
 	podSpecAC.NodeSelector = map[string]string{}
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}

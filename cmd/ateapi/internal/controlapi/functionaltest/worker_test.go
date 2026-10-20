@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -40,9 +40,9 @@ const testWorkerName = "5f2c1a90-7b34-4e6d-8a11-0c3e9d5b7f42"
 // CRUD API — only the atelet dialer resolves a Worker to a pod, and nothing in
 // ate-api reconciles the two now that the syncer runs in ate-controller. Tests
 // that need both use createWorkerPod.
-func newTestWorker(ns string) *ateapipb.Worker {
-	return &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
+func newTestWorker(ns string) *ateapi.Worker {
+	return &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: testWorkerName},
 		WorkerNamespace: ns,
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-api-1",
@@ -52,23 +52,23 @@ func newTestWorker(ns string) *ateapipb.Worker {
 }
 
 // registerWorker registers newTestWorker over the API and returns it as stored.
-func registerWorker(t *testing.T, tc *testContext, ns string) *ateapipb.Worker {
+func registerWorker(t *testing.T, tc *testContext, ns string) *ateapi.Worker {
 	t.Helper()
-	created, err := tc.client.CreateWorker(context.Background(), &ateapipb.CreateWorkerRequest{Worker: newTestWorker(ns)})
+	created, err := tc.client.CreateWorker(context.Background(), &ateapi.CreateWorkerRequest{Worker: newTestWorker(ns)})
 	if err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
 	return created
 }
 
-func workerRef(name string) *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Name: name}
+func workerRef(name string) *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Name: name}
 }
 
 // waitForWorkerState waits for a state committed by an RPC to reach the worker
 // cache, which follows the store through a PostgreSQL watch and so lands
 // shortly after the call returns rather than with it.
-func waitForWorkerState(t *testing.T, tc *testContext, name string, want ateapipb.WorkerState) {
+func waitForWorkerState(t *testing.T, tc *testContext, name string, want ateapi.WorkerState) {
 	t.Helper()
 	err := wait.PollUntilContextTimeout(context.Background(), 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
 		worker, err := tc.workerCache.Worker(name)
@@ -82,7 +82,7 @@ func waitForWorkerState(t *testing.T, tc *testContext, name string, want ateapip
 	}
 }
 
-func containsWorker(workers []*ateapipb.Worker, name string) bool {
+func containsWorker(workers []*ateapi.Worker, name string) bool {
 	for _, w := range workers {
 		if w.GetMetadata().GetName() == name {
 			return true
@@ -103,7 +103,7 @@ func TestCreateAndGetWorker(t *testing.T) {
 
 	want := newTestWorker(ns)
 	want.Metadata.Version = 1
-	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
+	want.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE}
 	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("CreateWorker response mismatch (-want +got):\n%s", diff)
 	}
@@ -111,7 +111,7 @@ func TestCreateAndGetWorker(t *testing.T) {
 		t.Errorf("CreateWorker returned no uid, which every later guard needs")
 	}
 
-	got, err := tc.client.GetWorker(context.Background(), &ateapipb.GetWorkerRequest{Worker: workerRef(testWorkerName)})
+	got, err := tc.client.GetWorker(context.Background(), &ateapi.GetWorkerRequest{Worker: workerRef(testWorkerName)})
 	if err != nil {
 		t.Fatalf("GetWorker failed: %v", err)
 	}
@@ -136,21 +136,21 @@ func TestListWorkers(t *testing.T) {
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{"foo": "bar"})
 	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
-	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
+	listResp, err := tc.client.ListWorkers(context.Background(), &ateapi.ListWorkersRequest{})
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
 
-	var filteredWorkers []*ateapipb.Worker
+	var filteredWorkers []*ateapi.Worker
 	for _, w := range listResp.GetWorkers() {
 		if w.GetWorkerNamespace() == ns {
 			filteredWorkers = append(filteredWorkers, w)
 		}
 	}
 
-	want := []*ateapipb.Worker{
+	want := []*ateapi.Worker{
 		{
-			Metadata: &ateapipb.ResourceMetadata{
+			Metadata: &ateapi.ResourceMetadata{
 				Name: podUID,
 				// Three writes: the registration, marking it available, then
 				// the capacity report.
@@ -162,11 +162,11 @@ func TestListWorkers(t *testing.T) {
 			WorkerPodUid:    podUID,
 			NodeName:        "node1",
 			Labels:          map[string]string{"foo": "bar"},
-			Status: &ateapipb.WorkerStatus{
-				State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Status: &ateapi.WorkerStatus{
+				State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 				RegisteredEpoch: reportedEpoch,
 				Ips:             []string{"127.0.0.1"},
-				Capacity:        &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 512 << 20},
+				Capacity:        &ateapi.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 512 << 20},
 				SandboxClasses:  workerSandboxClasses(defaultWorkerRuntime("gvisor")),
 			},
 		},
@@ -192,7 +192,7 @@ func TestListWorkerActorAssignments(t *testing.T) {
 	createTemplate(t, tc, ns)
 	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
-	empty, err := tc.client.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: workerRef(podUID)})
+	empty, err := tc.client.ListWorkerActorAssignments(ctx, &ateapi.ListWorkerActorAssignmentsRequest{Worker: workerRef(podUID)})
 	if err != nil {
 		t.Fatalf("ListWorkerActorAssignments on an empty worker failed: %v", err)
 	}
@@ -200,26 +200,26 @@ func TestListWorkerActorAssignments(t *testing.T) {
 		t.Errorf("worker hosting nothing lists %d assignments, want 0", got)
 	}
 
-	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	if _, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	}); err != nil {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
 
-	listed, err := tc.client.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: workerRef(podUID)})
+	listed, err := tc.client.ListWorkerActorAssignments(ctx, &ateapi.ListWorkerActorAssignmentsRequest{Worker: workerRef(podUID)})
 	if err != nil {
 		t.Fatalf("ListWorkerActorAssignments failed: %v", err)
 	}
 	if len(listed.GetActorAssignments()) != 1 {
 		t.Fatalf("worker hosting one actor lists %d assignments, want 1", len(listed.GetActorAssignments()))
 	}
-	want := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	want := &ateapi.ObjectRef{Atespace: testAtespace, Name: "id1"}
 	if diff := cmp.Diff(want, listed.GetActorAssignments()[0].GetActor(), protocmp.Transform()); diff != "" {
 		t.Errorf("assignment names the wrong actor (-want +got):\n%s", diff)
 	}
@@ -237,7 +237,7 @@ func TestUpdateWorker(t *testing.T) {
 	worker := registerWorker(t, tc, ns)
 	worker.Labels = map[string]string{"tier": "batch"}
 
-	updated, err := tc.client.UpdateWorker(context.Background(), &ateapipb.UpdateWorkerRequest{Worker: worker})
+	updated, err := tc.client.UpdateWorker(context.Background(), &ateapi.UpdateWorkerRequest{Worker: worker})
 	if err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestUpdateWorker(t *testing.T) {
 	want := newTestWorker(ns)
 	want.Metadata.Version = 2
 	want.Labels = map[string]string{"tier": "batch"}
-	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
+	want.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE}
 	if diff := cmp.Diff(want, updated, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("UpdateWorker response mismatch (-want +got):\n%s", diff)
 	}
@@ -260,22 +260,22 @@ func TestDrainWorker(t *testing.T) {
 	defer tc.cleanup()
 
 	registerWorker(t, tc, ns)
-	waitForWorkerState(t, tc, testWorkerName, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	waitForWorkerState(t, tc, testWorkerName, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 
-	drained, err := tc.client.DrainWorker(context.Background(), &ateapipb.DrainWorkerRequest{Worker: workerRef(testWorkerName)})
+	drained, err := tc.client.DrainWorker(context.Background(), &ateapi.DrainWorkerRequest{Worker: workerRef(testWorkerName)})
 	if err != nil {
 		t.Fatalf("DrainWorker failed: %v", err)
 	}
 
 	wantWorker := newTestWorker(ns)
 	wantWorker.Metadata.Version = 2
-	wantWorker.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
-	want := &ateapipb.DrainWorkerResponse{Worker: wantWorker}
+	wantWorker.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_DRAINING}
+	want := &ateapi.DrainWorkerResponse{Worker: wantWorker}
 	if diff := cmp.Diff(want, drained, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("DrainWorker response mismatch (-want +got):\n%s", diff)
 	}
 
-	waitForWorkerState(t, tc, testWorkerName, ateapipb.WorkerState_WORKER_STATE_DRAINING)
+	waitForWorkerState(t, tc, testWorkerName, ateapi.WorkerState_WORKER_STATE_DRAINING)
 }
 
 // TestMarkWorkerAvailability moves a Worker between ACTIVE and UNAVAILABLE, and
@@ -287,30 +287,30 @@ func TestMarkWorkerAvailability(t *testing.T) {
 	ctx := context.Background()
 
 	registerWorker(t, tc, ns)
-	waitForWorkerState(t, tc, testWorkerName, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	waitForWorkerState(t, tc, testWorkerName, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 
-	available, err := tc.client.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: workerRef(testWorkerName)})
+	available, err := tc.client.MarkWorkerAvailable(ctx, &ateapi.MarkWorkerAvailableRequest{Worker: workerRef(testWorkerName)})
 	if err != nil {
 		t.Fatalf("MarkWorkerAvailable failed: %v", err)
 	}
 	want := newTestWorker(ns)
 	want.Metadata.Version = 2
-	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	want.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_ACTIVE}
 	if diff := cmp.Diff(want, available.GetWorker(), protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("MarkWorkerAvailable response mismatch (-want +got):\n%s", diff)
 	}
-	waitForWorkerState(t, tc, testWorkerName, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+	waitForWorkerState(t, tc, testWorkerName, ateapi.WorkerState_WORKER_STATE_ACTIVE)
 
-	unavailable, err := tc.client.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: workerRef(testWorkerName)})
+	unavailable, err := tc.client.MarkWorkerUnavailable(ctx, &ateapi.MarkWorkerUnavailableRequest{Worker: workerRef(testWorkerName)})
 	if err != nil {
 		t.Fatalf("MarkWorkerUnavailable failed: %v", err)
 	}
 	want.Metadata.Version = 3
-	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
+	want.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE}
 	if diff := cmp.Diff(want, unavailable.GetWorker(), protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("MarkWorkerUnavailable response mismatch (-want +got):\n%s", diff)
 	}
-	waitForWorkerState(t, tc, testWorkerName, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	waitForWorkerState(t, tc, testWorkerName, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 }
 
 // TestDeleteWorker deregisters a Worker and checks it is gone. The delete
@@ -325,13 +325,13 @@ func TestDeleteWorker(t *testing.T) {
 
 	registerWorker(t, tc, ns)
 
-	deleted, err := tc.client.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: workerRef(testWorkerName)})
+	deleted, err := tc.client.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{Worker: workerRef(testWorkerName)})
 	if err != nil {
 		t.Fatalf("DeleteWorker failed: %v", err)
 	}
 	want := newTestWorker(ns)
 	want.Metadata.Version = 2
-	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
+	want.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_DRAINING}
 	if diff := cmp.Diff(want, deleted, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("DeleteWorker response mismatch (-want +got):\n%s", diff)
 	}
@@ -339,7 +339,7 @@ func TestDeleteWorker(t *testing.T) {
 		t.Error("DeleteWorker returned a worker without delete_time")
 	}
 
-	listed, err := tc.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
+	listed, err := tc.client.ListWorkers(ctx, &ateapi.ListWorkersRequest{})
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestDeleteWorker(t *testing.T) {
 		t.Errorf("ListWorkers still returns worker %s after DeleteWorker", testWorkerName)
 	}
 
-	_, err = tc.client.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: workerRef(testWorkerName)})
+	_, err = tc.client.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{Worker: workerRef(testWorkerName)})
 	assertGrpcError(t, err, codes.NotFound, fmt.Sprintf("Worker %s not found", testWorkerName))
 }
 
@@ -357,12 +357,12 @@ func TestValidation_Worker(t *testing.T) {
 	defer tc.cleanup()
 
 	t.Run("ListWorkers", func(t *testing.T) {
-		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageSize: -1}})
+		_, err := tc.client.ListWorkers(context.Background(), &ateapi.ListWorkersRequest{Options: &ateapi.ListOptions{PageSize: -1}})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListWorkers invalid token", func(t *testing.T) {
-		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
+		_, err := tc.client.ListWorkers(context.Background(), &ateapi.ListWorkersRequest{Options: &ateapi.ListOptions{PageToken: "%%%"}})
 		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 	})
 }
@@ -373,35 +373,35 @@ func TestDeleteWorker_Preconditions(t *testing.T) {
 	defer tc.cleanup()
 	ctx := context.Background()
 	ref := workerRef(testWorkerName)
-	del := func(opts *ateapipb.DeleteOptions) error {
-		_, err := tc.client.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: ref, Options: opts})
+	del := func(opts *ateapi.DeleteOptions) error {
+		_, err := tc.client.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{Worker: ref, Options: opts})
 		return err
 	}
 
 	worker := registerWorker(t, tc, ns)
 	uid, version := worker.GetMetadata().GetUid(), worker.GetMetadata().GetVersion()
 
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Worker "+testWorkerName+" does not have uid "+foreignUID)
-	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Worker "+testWorkerName+" does not have uid "+foreignUID)
-	if _, err := tc.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: ref}); err != nil {
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Worker "+testWorkerName+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Worker "+testWorkerName+" does not have uid "+foreignUID)
+	if _, err := tc.client.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: ref}); err != nil {
 		t.Fatalf("a refused delete removed the worker: %v", err)
 	}
 
 	// The delete drains the worker first, which moves the version; the guard
 	// is checked against the record the caller read.
-	if err := del(&ateapipb.DeleteOptions{Version: version}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Version: version}); err != nil {
 		t.Fatalf("DeleteWorker with the matching version: %v", err)
 	}
 	worker = registerWorker(t, tc, ns)
-	if err := del(&ateapipb.DeleteOptions{Uid: worker.GetMetadata().GetUid()}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Uid: worker.GetMetadata().GetUid()}); err != nil {
 		t.Fatalf("DeleteWorker with the matching uid: %v", err)
 	}
 	worker = registerWorker(t, tc, ns)
-	if err := del(&ateapipb.DeleteOptions{Uid: worker.GetMetadata().GetUid(), Version: worker.GetMetadata().GetVersion()}); err != nil {
+	if err := del(&ateapi.DeleteOptions{Uid: worker.GetMetadata().GetUid(), Version: worker.GetMetadata().GetVersion()}); err != nil {
 		t.Fatalf("DeleteWorker with both guards: %v", err)
 	}
-	_, err := tc.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: ref})
+	_, err := tc.client.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: ref})
 	assertGrpcError(t, err, codes.NotFound, "Worker "+testWorkerName+" not found")
 }

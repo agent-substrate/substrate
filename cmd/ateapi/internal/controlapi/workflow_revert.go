@@ -22,12 +22,12 @@ import (
 	"slices"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -36,17 +36,17 @@ import (
 // discards the node-local copy and returns the actor to its latest durable
 // snapshot, which is that same snapshot once atelet's upload of it is
 // recorded. See isRevertable.
-var revertableStates = []ateapipb.ActorState{
-	ateapipb.ActorState_ACTOR_STATE_RUNNING,
-	ateapipb.ActorState_ACTOR_STATE_CRASHED,
+var revertableStates = []ateapi.ActorState{
+	ateapi.ActorState_ACTOR_STATE_RUNNING,
+	ateapi.ActorState_ACTOR_STATE_CRASHED,
 }
 
 // isRevertable reports whether a revert is accepted from the actor's current
 // state and snapshot shape.
-func isRevertable(actor *ateapipb.Actor) bool {
+func isRevertable(actor *ateapi.Actor) bool {
 	state := actor.GetStatus().GetState()
 	return slices.Contains(revertableStates, state) ||
-		(state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocal(actor.GetStatus()))
+		(state == ateapi.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocal(actor.GetStatus()))
 }
 
 // RevertActor executes the workflow to discard an actor's current execution and
@@ -57,11 +57,11 @@ func isRevertable(actor *ateapipb.Actor) bool {
 // Idempotent: each step keys on a persisted field rather than on the state the
 // actor was reverted from, so a re-entered workflow fast-forwards to wherever
 // the previous attempt stopped.
-func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
-	var actor *ateapipb.Actor
-	var actorTemplate *ateapipb.ActorTemplate
+	var actor *ateapi.Actor
+	var actorTemplate *ateapi.ActorTemplate
 	// Set just before finalize; nil until then, so earlier exits label
 	// themselves from the record they hold.
 	var finalAttrs []attribute.KeyValue
@@ -85,7 +85,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 		return nil, err
 	}
 
-	var marked *ateapipb.Actor
+	var marked *ateapi.Actor
 	if marked, err = w.ensureMarkedReverting(leaseCtx, actorRef, actor); err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 	// FinalizeReverted clears the WorkerAssignment the labels read, so snapshot
 	// them here, as suspend and crash.go do.
 	finalAttrs = lifecycleOpAttrs(actor, "", "")
-	var finalized *ateapipb.Actor
+	var finalized *ateapi.Actor
 	if finalized, err = w.ensureRevertedFinalized(leaseCtx, actorRef); err != nil {
 		return nil, err
 	}
@@ -113,7 +113,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 }
 
 // loadActorForRevert fetches the current actor record and its template.
-func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, err error) {
+func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForRevert")
 	defer func() { err = done(err) }()
 
@@ -142,21 +142,21 @@ func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resourc
 // ensureMarkedReverting transitions the actor to REVERTING and persists the
 // change. Skips when a previous attempt already marked it, which is what makes
 // the rest of the workflow re-enterable.
-func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkReverting")
 	defer func() { err = done(err) }()
 
 	st := actor.GetStatus().GetState()
-	if st == ateapipb.ActorState_ACTOR_STATE_REVERTING {
+	if st == ateapi.ActorState_ACTOR_STATE_REVERTING {
 		markSkipped(ctx, "actor already REVERTING")
 		return actor, nil
 	}
 	if !isRevertable(actor) {
-		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v, or %s with a node-local snapshot)", actorRef, st, revertableStates, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v, or %s with a node-local snapshot)", actorRef, st, revertableStates, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_REVERTING
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_REVERTING
 		return nil
 	})
 	if err != nil {
@@ -181,7 +181,7 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 // worker. An assignment commits before the actor is updated to point at it, so
 // a crash in between leaves a row nothing references — and a CRASHED actor is
 // the likeliest holder of one. Absence is the ordinary case, not an error.
-func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
+func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "DiscardWorker")
 	defer func() { err = done(err) }()
 
@@ -213,14 +213,14 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 
 // ensureInProgressSnapshotDiscarded removes pending uploads of the discarded execution.
 // The actor keeps its latest completed durable snapshot.
-func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, actor *ateapipb.Actor) (err error) {
+func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, actor *ateapi.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "DiscardInProgressSnapshot")
 	defer func() { err = done(err) }()
 
 	var inProgress []string
 	for _, snap := range actor.GetStatus().GetSnapshots() {
 		storage := snap.GetDurableSnapshot()
-		if storage.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING && storage.GetObject().GetSnapshotUri() != "" {
+		if storage.GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING && storage.GetObject().GetSnapshotUri() != "" {
 			inProgress = append(inProgress, storage.GetObject().GetSnapshotUri())
 		}
 	}
@@ -264,7 +264,7 @@ func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, a
 // external snapshots the update dropped.
 // It re-reads the actor first so an out-of-band transition is not overwritten,
 // and so the version precondition guards what was actually observed.
-func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeReverted")
 	defer func() { err = done(err) }()
 
@@ -272,12 +272,12 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 	if err != nil {
 		return nil, err
 	}
-	if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_REVERTING {
-		return nil, apierror.FailedPrecondition("FinalizeReverted prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_REVERTING)
+	if got := latestActor.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_REVERTING {
+		return nil, apierror.FailedPrecondition("FinalizeReverted prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapi.ActorState_ACTOR_STATE_REVERTING)
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
+		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.AssignedNode = ""
 		// We revert back to the latest durable snapshot, so all local snapshots

@@ -26,10 +26,10 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/substratex509"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -86,42 +86,42 @@ func workerCertificate(t *testing.T, podUID, nodeName string) *x509.Certificate 
 //
 // https://google.github.io/styleguide/go/best-practices.html#use-real-transports
 type fakeWorkerService struct {
-	ateapipb.WorkerServiceClient
+	ateapi.WorkerServiceClient
 
-	got         []*ateapipb.RegisterWorkerRequest
-	acquireGot  []*ateapipb.AcquireWorkerEpochRequest
-	runtimesGot []*ateapipb.SetWorkerSandboxRuntimesRequest
+	got         []*ateapi.RegisterWorkerRequest
+	acquireGot  []*ateapi.AcquireWorkerEpochRequest
+	runtimesGot []*ateapi.SetWorkerSandboxRuntimesRequest
 	epoch       int64
-	mintGot     []*ateapipb.MintWorkerActorCertificateRequest
-	mintResp    *ateapipb.MintWorkerActorCertificateResponse
+	mintGot     []*ateapi.MintWorkerActorCertificateRequest
+	mintResp    *ateapi.MintWorkerActorCertificateResponse
 	err         error
 }
 
-func (s *fakeWorkerService) AcquireWorkerEpoch(_ context.Context, in *ateapipb.AcquireWorkerEpochRequest, _ ...grpc.CallOption) (*ateapipb.AcquireWorkerEpochResponse, error) {
+func (s *fakeWorkerService) AcquireWorkerEpoch(_ context.Context, in *ateapi.AcquireWorkerEpochRequest, _ ...grpc.CallOption) (*ateapi.AcquireWorkerEpochResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
 	s.acquireGot = append(s.acquireGot, in)
-	return &ateapipb.AcquireWorkerEpochResponse{Epoch: s.epoch}, nil
+	return &ateapi.AcquireWorkerEpochResponse{Epoch: s.epoch}, nil
 }
 
-func (s *fakeWorkerService) RegisterWorker(_ context.Context, in *ateapipb.RegisterWorkerRequest, _ ...grpc.CallOption) (*ateapipb.RegisterWorkerResponse, error) {
+func (s *fakeWorkerService) RegisterWorker(_ context.Context, in *ateapi.RegisterWorkerRequest, _ ...grpc.CallOption) (*ateapi.RegisterWorkerResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
 	s.got = append(s.got, in)
-	return &ateapipb.RegisterWorkerResponse{}, nil
+	return &ateapi.RegisterWorkerResponse{}, nil
 }
 
-func (s *fakeWorkerService) SetWorkerSandboxRuntimes(_ context.Context, in *ateapipb.SetWorkerSandboxRuntimesRequest, _ ...grpc.CallOption) (*ateapipb.SetWorkerSandboxRuntimesResponse, error) {
+func (s *fakeWorkerService) SetWorkerSandboxRuntimes(_ context.Context, in *ateapi.SetWorkerSandboxRuntimesRequest, _ ...grpc.CallOption) (*ateapi.SetWorkerSandboxRuntimesResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
 	s.runtimesGot = append(s.runtimesGot, in)
-	return &ateapipb.SetWorkerSandboxRuntimesResponse{}, nil
+	return &ateapi.SetWorkerSandboxRuntimesResponse{}, nil
 }
 
-func (s *fakeWorkerService) MintWorkerActorCertificate(_ context.Context, in *ateapipb.MintWorkerActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintWorkerActorCertificateResponse, error) {
+func (s *fakeWorkerService) MintWorkerActorCertificate(_ context.Context, in *ateapi.MintWorkerActorCertificateRequest, _ ...grpc.CallOption) (*ateapi.MintWorkerActorCertificateResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -129,7 +129,7 @@ func (s *fakeWorkerService) MintWorkerActorCertificate(_ context.Context, in *at
 	if s.mintResp != nil {
 		return s.mintResp, nil
 	}
-	return &ateapipb.MintWorkerActorCertificateResponse{}, nil
+	return &ateapi.MintWorkerActorCertificateResponse{}, nil
 }
 
 func TestAcquireWorkerEpoch(t *testing.T) {
@@ -139,12 +139,12 @@ func TestAcquireWorkerEpoch(t *testing.T) {
 		serviceErr      error
 		wantCode        codes.Code
 		wantEpoch       int64
-		wantForwarded   []*ateapipb.AcquireWorkerEpochRequest
+		wantForwarded   []*ateapi.AcquireWorkerEpochRequest
 	}{{
 		// The Worker is named after the worker pod UID from the certificate.
 		name:          "acquires for the calling worker",
 		wantEpoch:     7,
-		wantForwarded: []*ateapipb.AcquireWorkerEpochRequest{{Worker: &ateapipb.ObjectRef{Name: "pod-a"}}},
+		wantForwarded: []*ateapi.AcquireWorkerEpochRequest{{Worker: &ateapi.ObjectRef{Name: "pod-a"}}},
 	}, {
 		name:            "requires a certificate",
 		unauthenticated: true,
@@ -179,12 +179,12 @@ func TestAcquireWorkerEpoch(t *testing.T) {
 
 func TestRegisterWorker(t *testing.T) {
 	ips := []string{"10.0.0.1"}
-	forwarded := func(capacity *ateapipb.WorkerResources) []*ateapipb.RegisterWorkerRequest {
+	forwarded := func(capacity *ateapi.WorkerResources) []*ateapi.RegisterWorkerRequest {
 		// The Worker is named after the worker pod UID, taken from the
 		// certificate rather than the request; epoch, IPs and capacity come
 		// from what the worker reported.
-		return []*ateapipb.RegisterWorkerRequest{{
-			Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
+		return []*ateapi.RegisterWorkerRequest{{
+			Worker:   &ateapi.ObjectRef{Name: "pod-a"},
 			Epoch:    3,
 			Ips:      ips,
 			Capacity: capacity,
@@ -199,7 +199,7 @@ func TestRegisterWorker(t *testing.T) {
 		serviceErr    error
 		req           *ateletpb.RegisterWorkerRequest
 		wantCode      codes.Code
-		wantForwarded []*ateapipb.RegisterWorkerRequest
+		wantForwarded []*ateapi.RegisterWorkerRequest
 	}{{
 		name: "records what the worker says",
 		req: &ateletpb.RegisterWorkerRequest{
@@ -207,15 +207,15 @@ func TestRegisterWorker(t *testing.T) {
 			Ips:      ips,
 			Capacity: &ateletpb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
 		},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4294967296}),
+		wantForwarded: forwarded(&ateapi.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4294967296}),
 	}, {
 		name:          "omits undetermined compute",
 		req:           &ateletpb.RegisterWorkerRequest{Epoch: 3, Ips: ips, Capacity: &ateletpb.WorkerResources{Actors: 1}},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}),
+		wantForwarded: forwarded(&ateapi.WorkerResources{Actors: 1}),
 	}, {
 		name:          "forwards empty capacity",
 		req:           &ateletpb.RegisterWorkerRequest{Epoch: 3, Ips: ips, Capacity: &ateletpb.WorkerResources{}},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{}),
+		wantForwarded: forwarded(&ateapi.WorkerResources{}),
 	}, {
 		name: "rejects invalid capacity without forwarding",
 		req: &ateletpb.RegisterWorkerRequest{
@@ -272,10 +272,10 @@ func TestSetWorkerSandboxRuntimes(t *testing.T) {
 			},
 		}
 	}
-	wantCompat := func(hash string) *ateapipb.VersionedSandboxCompat {
-		return &ateapipb.VersionedSandboxCompat{
+	wantCompat := func(hash string) *ateapi.VersionedSandboxCompat {
+		return &ateapi.VersionedSandboxCompat{
 			SchemaVersion: "v1",
-			Attributes: []*ateapipb.AttributeEntry{
+			Attributes: []*ateapi.AttributeEntry{
 				{Key: "architecture", Value: "amd64"},
 				{Key: "sandbox_bundle_hash", Value: hash},
 			},
@@ -294,21 +294,21 @@ func TestSetWorkerSandboxRuntimes(t *testing.T) {
 		}
 		return []*ateletpb.WorkerSandboxClass{c}
 	}
-	forwarded := func(restorable ...*ateapipb.VersionedSandboxCompat) []*ateapipb.SetWorkerSandboxRuntimesRequest {
+	forwarded := func(restorable ...*ateapi.VersionedSandboxCompat) []*ateapi.SetWorkerSandboxRuntimesRequest {
 		// The Worker is named after the worker pod UID, taken from the
 		// certificate rather than the request; epoch and sandbox classes come
 		// from what the worker reported.
-		c := &ateapipb.WorkerSandboxClass{
+		c := &ateapi.WorkerSandboxClass{
 			SandboxClass:   "gvisor",
-			DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: wantDefault},
+			DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: wantDefault},
 		}
 		for _, r := range restorable {
-			c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapipb.WorkerSandboxRuntime{Version: r})
+			c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapi.WorkerSandboxRuntime{Version: r})
 		}
-		return []*ateapipb.SetWorkerSandboxRuntimesRequest{{
-			Worker:         &ateapipb.ObjectRef{Name: "pod-a"},
+		return []*ateapi.SetWorkerSandboxRuntimesRequest{{
+			Worker:         &ateapi.ObjectRef{Name: "pod-a"},
 			Epoch:          3,
-			SandboxClasses: []*ateapipb.WorkerSandboxClass{c},
+			SandboxClasses: []*ateapi.WorkerSandboxClass{c},
 		}}
 	}
 
@@ -320,7 +320,7 @@ func TestSetWorkerSandboxRuntimes(t *testing.T) {
 		serviceErr    error
 		req           *ateletpb.SetWorkerSandboxRuntimesRequest
 		wantCode      codes.Code
-		wantForwarded []*ateapipb.SetWorkerSandboxRuntimesRequest
+		wantForwarded []*ateapi.SetWorkerSandboxRuntimesRequest
 	}{{
 		name:          "records what the worker says",
 		req:           &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: reqClasses()},
@@ -391,27 +391,27 @@ func TestSetWorkerSandboxRuntimes(t *testing.T) {
 }
 
 type fakeSuspendService struct {
-	ateapipb.WorkerServiceClient
+	ateapi.WorkerServiceClient
 
-	got        []*ateapipb.RequestActorSuspendRequest
-	gotCrashed []*ateapipb.ReportActorCrashedRequest
+	got        []*ateapi.RequestActorSuspendRequest
+	gotCrashed []*ateapi.ReportActorCrashedRequest
 	err        error
 }
 
-func (s *fakeSuspendService) ReportActorCrashed(_ context.Context, in *ateapipb.ReportActorCrashedRequest, _ ...grpc.CallOption) (*ateapipb.ReportActorCrashedResponse, error) {
+func (s *fakeSuspendService) ReportActorCrashed(_ context.Context, in *ateapi.ReportActorCrashedRequest, _ ...grpc.CallOption) (*ateapi.ReportActorCrashedResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
 	s.gotCrashed = append(s.gotCrashed, in)
-	return &ateapipb.ReportActorCrashedResponse{}, nil
+	return &ateapi.ReportActorCrashedResponse{}, nil
 }
 
-func (s *fakeSuspendService) RequestActorSuspend(_ context.Context, in *ateapipb.RequestActorSuspendRequest, _ ...grpc.CallOption) (*ateapipb.RequestActorSuspendResponse, error) {
+func (s *fakeSuspendService) RequestActorSuspend(_ context.Context, in *ateapi.RequestActorSuspendRequest, _ ...grpc.CallOption) (*ateapi.RequestActorSuspendResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
 	s.got = append(s.got, in)
-	return &ateapipb.RequestActorSuspendResponse{}, nil
+	return &ateapi.RequestActorSuspendResponse{}, nil
 }
 
 func TestRequestActorSuspendNamesTheCallingWorker(t *testing.T) {
@@ -427,12 +427,12 @@ func TestRequestActorSuspendNamesTheCallingWorker(t *testing.T) {
 		t.Fatalf("RequestActorSuspend() failed: %v", err)
 	}
 
-	want := []*ateapipb.RequestActorSuspendRequest{{
+	want := []*ateapi.RequestActorSuspendRequest{{
 		// The Worker is named after the worker pod UID, taken from the
 		// certificate rather than the request: a worker may speak for the
 		// actors it hosts, and only the control plane knows which those are.
-		Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		Worker:   &ateapi.ObjectRef{Name: "pod-a"},
+		Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "actor-1"},
 		ActorUid: "01234567-89ab-cdef-0123-456789abcdef",
 	}}
 	if diff := cmp.Diff(want, workers.got, protocmp.Transform()); diff != "" {
@@ -477,7 +477,7 @@ func TestRequestActorSuspendSurfacesRefusal(t *testing.T) {
 func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
 	wantCerts := [][]byte{[]byte("cert-der-bytes")}
 	workers := &fakeWorkerService{
-		mintResp: &ateapipb.MintWorkerActorCertificateResponse{
+		mintResp: &ateapi.MintWorkerActorCertificateResponse{
 			ActorCertificates: wantCerts,
 		},
 	}
@@ -494,10 +494,10 @@ func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
 		t.Fatalf("MintActorCertificate() failed: %v", err)
 	}
 
-	want := []*ateapipb.MintWorkerActorCertificateRequest{{
+	want := []*ateapi.MintWorkerActorCertificateRequest{{
 		// The worker comes from the caller's certificate.
-		Worker: &ateapipb.ObjectRef{Name: "pod-a"},
-		Actor: &ateapipb.ObjectRef{
+		Worker: &ateapi.ObjectRef{Name: "pod-a"},
+		Actor: &ateapi.ObjectRef{
 			Atespace: "team-a",
 			Name:     "actor-1",
 		},
@@ -531,14 +531,14 @@ func TestMintActorCertificateRequiresCertificate(t *testing.T) {
 }
 
 type fakeEgressPolicyControl struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 
-	got  []*ateapipb.GetActorEgressPolicyRequest
-	resp *ateapipb.EgressPolicy
+	got  []*ateapi.GetActorEgressPolicyRequest
+	resp *ateapi.EgressPolicy
 	err  error
 }
 
-func (c *fakeEgressPolicyControl) GetActorEgressPolicy(_ context.Context, in *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (c *fakeEgressPolicyControl) GetActorEgressPolicy(_ context.Context, in *ateapi.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
 	c.got = append(c.got, in)
 	if c.err != nil {
 		return nil, c.err
@@ -547,11 +547,11 @@ func (c *fakeEgressPolicyControl) GetActorEgressPolicy(_ context.Context, in *at
 }
 
 func TestGetActorEgressPolicy(t *testing.T) {
-	policy := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"},
-		Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{
+	policy := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default"},
+		Rules: []*ateapi.EgressRule{{Http: &ateapi.HttpRule{
 			Hostnames: []string{"api.example.com"},
-			Ports:     &ateapipb.Ports{Numbers: []int32{80}},
+			Ports:     &ateapi.Ports{Numbers: []int32{80}},
 		}}},
 	}
 	// The copy toAteletEgressPolicy makes; TestToAteletEgressPolicy covers it.
@@ -560,8 +560,8 @@ func TestGetActorEgressPolicy(t *testing.T) {
 		Ports:     &ateletpb.EgressPorts{Numbers: []int32{80}},
 	}}}}
 	req := &ateletpb.GetActorEgressPolicyRequest{ActorAtespace: "team-a", ActorName: "actor-1"}
-	forwarded := []*ateapipb.GetActorEgressPolicyRequest{{
-		Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+	forwarded := []*ateapi.GetActorEgressPolicyRequest{{
+		Actor: &ateapi.ObjectRef{Atespace: "team-a", Name: "actor-1"},
 		Name:  resources.SingletonName,
 	}}
 
@@ -571,10 +571,10 @@ func TestGetActorEgressPolicy(t *testing.T) {
 		unauthenticated bool
 		req             *ateletpb.GetActorEgressPolicyRequest
 		// resp and serviceErr are what the control plane answers with.
-		resp          *ateapipb.EgressPolicy
+		resp          *ateapi.EgressPolicy
 		serviceErr    error
 		wantCode      codes.Code
-		wantForwarded []*ateapipb.GetActorEgressPolicyRequest
+		wantForwarded []*ateapi.GetActorEgressPolicyRequest
 		// wantPolicy is the policy the worker gets back; nil means unset.
 		wantPolicy *ateletpb.EgressPolicy
 	}{{
@@ -647,9 +647,9 @@ func TestReportActorCrashedNamesTheCallingWorker(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ReportActorCrashed() failed: %v", err)
 	}
-	want := []*ateapipb.ReportActorCrashedRequest{{
-		Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+	want := []*ateapi.ReportActorCrashedRequest{{
+		Worker:   &ateapi.ObjectRef{Name: "pod-a"},
+		Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "actor-1"},
 		ActorUid: "01234567-89ab-cdef-0123-456789abcdef",
 		Message:  "cloud-hypervisor exited",
 	}}

@@ -33,8 +33,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var testActor = resources.ActorRef{Atespace: "default", Name: "my-actor"}
@@ -43,14 +43,14 @@ var testActor = resources.ActorRef{Atespace: "default", Name: "my-actor"}
 // expiration_seconds from now. err, when set, is returned instead, and gate,
 // when non-nil, blocks each call until it is closed.
 type fakeControl struct {
-	ateapipb.UnimplementedControlServer
+	ateapi.UnimplementedControlServer
 	calls atomic.Int32
-	last  atomic.Pointer[ateapipb.MintActorJwtRequest]
+	last  atomic.Pointer[ateapi.MintActorJwtRequest]
 	err   error
 	gate  chan struct{}
 }
 
-func (f *fakeControl) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJwtRequest) (*ateapipb.MintActorJwtResponse, error) {
+func (f *fakeControl) MintActorJwt(ctx context.Context, req *ateapi.MintActorJwtRequest) (*ateapi.MintActorJwtResponse, error) {
 	n := f.calls.Add(1)
 	f.last.Store(req)
 	if f.gate != nil {
@@ -63,7 +63,7 @@ func (f *fakeControl) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJ
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &ateapipb.MintActorJwtResponse{
+	return &ateapi.MintActorJwtResponse{
 		ActorJwt:   fmt.Sprintf("jwt-%d", n),
 		ExpireTime: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
 	}, nil
@@ -75,7 +75,7 @@ func newMinter(t *testing.T, ctl *fakeControl) *Minter {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
-	ateapipb.RegisterControlServer(srv, ctl)
+	ateapi.RegisterControlServer(srv, ctl)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
@@ -86,15 +86,15 @@ func newMinter(t *testing.T, ctl *fakeControl) *Minter {
 		t.Fatalf("grpc.NewClient: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return New(ateapipb.NewControlClient(conn))
+	return New(ateapi.NewControlClient(conn))
 }
 
-func jwtSource(lifetime int64, audiences ...string) *ateapipb.ActorJwtSource {
-	return &ateapipb.ActorJwtSource{Audiences: audiences, ExpirationSeconds: lifetime}
+func jwtSource(lifetime int64, audiences ...string) *ateapi.ActorJwtSource {
+	return &ateapi.ActorJwtSource{Audiences: audiences, ExpirationSeconds: lifetime}
 }
 
 // wantToken calls m.Token and fails the test unless it returns want.
-func wantToken(t *testing.T, m *Minter, ref resources.ActorRef, src *ateapipb.ActorJwtSource, want string) {
+func wantToken(t *testing.T, m *Minter, ref resources.ActorRef, src *ateapi.ActorJwtSource, want string) {
 	t.Helper()
 	got, err := m.Token(context.Background(), ref, src)
 	if err != nil {
@@ -112,8 +112,8 @@ func TestReuseTokenUntilAThirdOfItsLifetimeRemains(t *testing.T) {
 		src := jwtSource(900, "https://b.example", "https://a.example")
 
 		wantToken(t, m, testActor, src, "jwt-1")
-		want := &ateapipb.MintActorJwtRequest{
-			Actor:             &ateapipb.ObjectRef{Atespace: "default", Name: "my-actor"},
+		want := &ateapi.MintActorJwtRequest{
+			Actor:             &ateapi.ObjectRef{Atespace: "default", Name: "my-actor"},
 			Audiences:         []string{"https://a.example", "https://b.example"},
 			ExpirationSeconds: 900,
 		}

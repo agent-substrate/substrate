@@ -41,7 +41,7 @@ rule, are answered `NXDOMAIN`.
 Add a `systemInfo` volume with a `trustBundle` data source, and mount it:
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: ActorTemplate
 metadata:
   name: my-actor

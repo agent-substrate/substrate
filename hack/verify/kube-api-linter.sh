@@ -23,4 +23,4 @@ cd "${ROOT}"
 # Same GOOS=linux override as golangci-lint.sh: analyze the code the same
 # way the Linux CI runners do.
 BIN="$("${ROOT}"/hack/run-tool.sh --print-bin-path golangci-lint-kube-api-linter)"
-exec env GOOS=linux "${BIN}" run --config .golangci-kal.yaml ./pkg/api/... | { grep -v '^0 issues.$' || true; }
+exec env GOOS=linux "${BIN}" run --config .golangci-kal.yaml ./api/infra/... | { grep -v '^0 issues.$' || true; }

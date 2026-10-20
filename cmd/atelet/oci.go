@@ -33,7 +33,7 @@ import (
 
 const (
 	// capabilityAll is the sentinel a template may put in drop to clear the
-	// whole default set. It is rejected in add (see v1alpha1.Capabilities).
+	// whole default set. It is rejected in add (see ateapi.Capabilities).
 	capabilityAll = "ALL"
 )
 

@@ -30,12 +30,12 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -96,7 +96,7 @@ func recordedSince(t *testing.T, before map[statKey]statSample, name, status str
 }
 
 type fakeControlClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 	mu             sync.Mutex
 	calls          []string
 	createSpaceErr error
@@ -104,7 +104,7 @@ type fakeControlClient struct {
 	resumeErr      error
 	suspendErr     error
 	deleteErr      error
-	suspendReqs    []*ateapipb.SuspendActorRequest
+	suspendReqs    []*ateapi.SuspendActorRequest
 	// Make ResumeActor take time and report a smaller server-side elapsed.
 	resumeDelay     time.Duration
 	resumeElapsedUs string
@@ -112,27 +112,27 @@ type fakeControlClient struct {
 	beforeDelete func()
 }
 
-func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
+func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateAtespace")
 	if f.createSpaceErr != nil {
 		return nil, f.createSpaceErr
 	}
-	return &ateapipb.Atespace{}, nil
+	return &ateapi.Atespace{}, nil
 }
 
-func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateActor")
 	if f.createActorErr != nil {
 		return nil, f.createActorErr
 	}
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
-func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
@@ -143,7 +143,7 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	if f.resumeErr != nil {
 		return nil, f.resumeErr
 	}
-	return &ateapipb.ResumeActorResponse{}, nil
+	return &ateapi.ResumeActorResponse{}, nil
 }
 
 // setTrailer fills the metadata that grpc.Trailer asked the call to populate.
@@ -155,7 +155,7 @@ func setTrailer(opts []grpc.CallOption, md metadata.MD) {
 	}
 }
 
-func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapi.SuspendActorRequest, opts ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "SuspendActor")
@@ -163,10 +163,10 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	if f.suspendErr != nil {
 		return nil, f.suspendErr
 	}
-	return &ateapipb.SuspendActorResponse{}, nil
+	return &ateapi.SuspendActorResponse{}, nil
 }
 
-func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	if f.beforeDelete != nil {
 		f.beforeDelete()
 	}
@@ -179,7 +179,7 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 	if f.deleteErr != nil {
 		return nil, f.deleteErr
 	}
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
 func (f *fakeControlClient) recordedCalls() []string {
@@ -407,8 +407,8 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 	suspendReqs := fakeCtrl.suspendReqs
 	fakeCtrl.mu.Unlock()
 	for _, req := range suspendReqs {
-		if got := req.GetOptions().GetMode(); got != ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
-			t.Errorf("suspend mode = %v, want %v", got, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS)
+		if got := req.GetOptions().GetMode(); got != ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+			t.Errorf("suspend mode = %v, want %v", got, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS)
 		}
 	}
 
@@ -425,12 +425,12 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 func TestSuspendLifecycleMode(t *testing.T) {
 	for _, tt := range []struct {
 		mode       string
-		want       ateapipb.DurabilityMode
+		want       ateapi.DurabilityMode
 		wantMetric string
 	}{
-		{"", ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
-		{dynconfig.LifecycleModeSync, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, "SuspendActor"},
-		{dynconfig.LifecycleModeAsync, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
+		{"", ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
+		{dynconfig.LifecycleModeSync, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, "SuspendActor"},
+		{dynconfig.LifecycleModeAsync, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
 	} {
 		t.Run("mode="+tt.mode, func(t *testing.T) {
 			cfg, _, fakeCtrl := newTestConfig(t, http.NotFoundHandler())

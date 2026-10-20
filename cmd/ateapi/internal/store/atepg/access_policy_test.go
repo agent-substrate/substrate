@@ -21,9 +21,9 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -35,9 +35,9 @@ func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
 		t.Fatalf("GetGlobalAccessPolicy before create = %v, want ErrNotFound", err)
 	}
 
-	policy := &ateapipb.AccessPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Name: "default"},
-		Bindings: []*ateapipb.Binding{
+	policy := &ateapi.AccessPolicy{
+		Metadata: &ateapi.ResourceMetadata{Name: "default"},
+		Bindings: []*ateapi.Binding{
 			{Role: authz.RoleViewer, Members: []string{"user:bob"}},
 			{Role: authz.RoleOwner, Members: []string{"user:alice"}},
 		},
@@ -62,18 +62,18 @@ func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
 		t.Fatalf("GetGlobalAccessPolicy = %v, %v; want %v", got, err, created)
 	}
 
-	if _, err := p.UpdateGlobalAccessPolicy(ctx, store.Precondition{}, func(*ateapipb.AccessPolicy) error { return nil }); !errors.Is(err, store.ErrPreconditionRequired) {
+	if _, err := p.UpdateGlobalAccessPolicy(ctx, store.Precondition{}, func(*ateapi.AccessPolicy) error { return nil }); !errors.Is(err, store.ErrPreconditionRequired) {
 		t.Fatalf("UpdateGlobalAccessPolicy without precondition = %v, want ErrPreconditionRequired", err)
 	}
-	if _, err := p.UpdateGlobalAccessPolicy(ctx, store.Precondition{UID: created.GetMetadata().GetUid(), Version: 99}, func(*ateapipb.AccessPolicy) error { return nil }); !errors.Is(err, store.ErrVersionConflict) {
+	if _, err := p.UpdateGlobalAccessPolicy(ctx, store.Precondition{UID: created.GetMetadata().GetUid(), Version: 99}, func(*ateapi.AccessPolicy) error { return nil }); !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("UpdateGlobalAccessPolicy wrong version = %v, want ErrVersionConflict", err)
 	}
-	if _, err := p.UpdateGlobalAccessPolicy(ctx, store.Precondition{UID: "wrong-uid", Version: 1}, func(*ateapipb.AccessPolicy) error { return nil }); !errors.Is(err, store.ErrUIDConflict) {
+	if _, err := p.UpdateGlobalAccessPolicy(ctx, store.Precondition{UID: "wrong-uid", Version: 1}, func(*ateapi.AccessPolicy) error { return nil }); !errors.Is(err, store.ErrUIDConflict) {
 		t.Fatalf("UpdateGlobalAccessPolicy wrong uid = %v, want ErrUIDConflict", err)
 	}
 
-	updated, err := p.UpdateGlobalAccessPolicy(ctx, store.PreconditionFrom(created), func(toUpdate *ateapipb.AccessPolicy) error {
-		toUpdate.Bindings = []*ateapipb.Binding{
+	updated, err := p.UpdateGlobalAccessPolicy(ctx, store.PreconditionFrom(created), func(toUpdate *ateapi.AccessPolicy) error {
+		toUpdate.Bindings = []*ateapi.Binding{
 			{Role: authz.RoleOwner, Members: []string{"user:alice", "user:carol"}},
 		}
 		return nil
@@ -87,9 +87,9 @@ func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
 	p := setupPostgresPersistence(t)
 	ctx := t.Context()
 
-	policy := &ateapipb.AccessPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Name: "default"},
-		Bindings: []*ateapipb.Binding{
+	policy := &ateapi.AccessPolicy{
+		Metadata: &ateapi.ResourceMetadata{Name: "default"},
+		Bindings: []*ateapi.Binding{
 			{Role: authz.RoleEditor, Members: []string{"user:bob"}},
 		},
 	}
@@ -112,8 +112,8 @@ func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
 		t.Fatalf("second CreateAtespaceAccessPolicy = %v, want ErrAlreadyExists", err)
 	}
 
-	updated, err := p.UpdateAtespaceAccessPolicy(ctx, "team-a", store.PreconditionFrom(created), func(toUpdate *ateapipb.AccessPolicy) error {
-		toUpdate.Bindings = []*ateapipb.Binding{
+	updated, err := p.UpdateAtespaceAccessPolicy(ctx, "team-a", store.PreconditionFrom(created), func(toUpdate *ateapi.AccessPolicy) error {
+		toUpdate.Bindings = []*ateapi.Binding{
 			{Role: authz.RoleViewer, Members: []string{"user:dave"}},
 		}
 		return nil
@@ -133,7 +133,7 @@ func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
 		UID:     updated.GetMetadata().GetUid(),
 		Version: updated.GetMetadata().GetVersion(),
 	})
-	if err != nil || !cmp.Equal(deleted, updated, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "delete_time")) {
+	if err != nil || !cmp.Equal(deleted, updated, protocmp.Transform(), protocmp.IgnoreFields(&ateapi.ResourceMetadata{}, "delete_time")) {
 		t.Fatalf("DeleteAtespaceAccessPolicy = %v, %v; want %v", deleted, err, updated)
 	}
 	if deleted.GetMetadata().GetDeleteTime() == nil {
@@ -185,9 +185,9 @@ func TestGlobalAccessPolicy_UpdateIsAtomic(t *testing.T) {
 	p := setupPostgresPersistence(t)
 	ctx := t.Context()
 
-	created, err := p.CreateGlobalAccessPolicy(ctx, &ateapipb.AccessPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Name: "default"},
-		Bindings: []*ateapipb.Binding{{Role: authz.RoleOwner, Members: []string{"user:alice"}}},
+	created, err := p.CreateGlobalAccessPolicy(ctx, &ateapi.AccessPolicy{
+		Metadata: &ateapi.ResourceMetadata{Name: "default"},
+		Bindings: []*ateapi.Binding{{Role: authz.RoleOwner, Members: []string{"user:alice"}}},
 	})
 	if err != nil {
 		t.Fatalf("CreateGlobalAccessPolicy failed: %v", err)
@@ -201,8 +201,8 @@ func TestGlobalAccessPolicy_UpdateIsAtomic(t *testing.T) {
 	t.Run("failed tuple write rolls back the row and earlier tuple deletes", func(t *testing.T) {
 		// Reconciling deletes alice's tuple and then fails writing a relation
 		// the model does not define, after the row UPDATE has run.
-		_, err := p.UpdateGlobalAccessPolicy(ctx, pre, func(ap *ateapipb.AccessPolicy) error {
-			ap.Bindings = []*ateapipb.Binding{{Role: "not-a-relation", Members: []string{"user:bob"}}}
+		_, err := p.UpdateGlobalAccessPolicy(ctx, pre, func(ap *ateapi.AccessPolicy) error {
+			ap.Bindings = []*ateapi.Binding{{Role: "not-a-relation", Members: []string{"user:bob"}}}
 			return nil
 		})
 		if err == nil {
@@ -228,8 +228,8 @@ func TestGlobalAccessPolicy_UpdateIsAtomic(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, errs[i] = p.UpdateGlobalAccessPolicy(ctx, pre, func(ap *ateapipb.AccessPolicy) error {
-					ap.Bindings = []*ateapipb.Binding{{Role: authz.RoleOwner, Members: []string{member}}}
+				_, errs[i] = p.UpdateGlobalAccessPolicy(ctx, pre, func(ap *ateapi.AccessPolicy) error {
+					ap.Bindings = []*ateapi.Binding{{Role: authz.RoleOwner, Members: []string{member}}}
 					return nil
 				})
 			}()

@@ -19,8 +19,8 @@ import (
 	"errors"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestSaveWorker_RejectsAStaleWrite proves the precondition saveWorker states
@@ -38,8 +38,8 @@ func TestSaveWorker_RejectsAStaleWrite(t *testing.T) {
 	defer p.Close()
 	clearAll(t, p)
 
-	created, err := p.CreateWorker(ctx, &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: "stale-write-worker"},
+	created, err := p.CreateWorker(ctx, &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: "stale-write-worker"},
 		WorkerNamespace: "ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "pod",
@@ -49,7 +49,7 @@ func TestSaveWorker_RejectsAStaleWrite(t *testing.T) {
 	}
 
 	// Move the stored Worker on, so the copy above is a version behind.
-	if _, err := p.UpdateWorker(ctx, created.GetMetadata().GetName(), store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+	if _, err := p.UpdateWorker(ctx, created.GetMetadata().GetName(), store.PreconditionFrom(created), func(toUpdate *ateapi.Worker) error {
 		toUpdate.Labels = map[string]string{"tier": "batch"}
 		return nil
 	}); err != nil {
@@ -80,8 +80,8 @@ func TestSaveWorker_RejectsAVanishedWorker(t *testing.T) {
 	defer p.Close()
 	clearAll(t, p)
 
-	created, err := p.CreateWorker(ctx, &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: "vanished-worker"},
+	created, err := p.CreateWorker(ctx, &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: "vanished-worker"},
 		WorkerNamespace: "ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "pod",

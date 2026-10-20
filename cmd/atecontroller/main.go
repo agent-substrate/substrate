@@ -21,6 +21,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atecontroller/internal/controllers"
 	"go.ate.dev/substrate/cmd/atecontroller/internal/workersync"
 	"go.ate.dev/substrate/internal/ateapiauth"
@@ -29,10 +31,8 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
-	clientv1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
@@ -101,7 +101,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(clientv1alpha1.AddToScheme(scheme)) // Register our CRD
+	utilruntime.Must(atev1.AddToScheme(scheme)) // Register our CRD
 }
 
 const (
@@ -229,7 +229,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ateapiClient := ateapipb.NewControlClient(ateapiConn)
+	ateapiClient := ateapi.NewControlClient(ateapiConn)
 
 	// Empty ServiceAccounts would not fail here: path.Join drops the empty
 	// segment, yielding identities that parse but match nothing, so every
@@ -316,7 +316,7 @@ func main() {
 	// informer, so asking the shared cache for one would impose it on every other
 	// controller here too.
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	workerPoolInformer := ateFactory.Api().V1alpha1().WorkerPools()
+	workerPoolInformer := ateFactory.Ate().V1().WorkerPools()
 	workerPodInformerFactory, workerPodInformer := workersync.WorkerPodInformer(k8sClient)
 
 	// Start registers the informer event handlers, so it has to run before the

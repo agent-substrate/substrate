@@ -20,15 +20,15 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
-	dbPolicy := proto.Clone(policy).(*ateapipb.EgressPolicy)
+func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapi.EgressPolicy) (*ateapi.EgressPolicy, error) {
+	dbPolicy := proto.Clone(policy).(*ateapi.EgressPolicy)
 	setCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
@@ -49,13 +49,13 @@ func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources
 	return dbPolicy, nil
 }
 
-func (p *Persistence) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error) {
+func (p *Persistence) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapi.EgressPolicy, error) {
 	return getEgressPolicyRow(ctx, p.pool, `
 		SELECT uid, version, proto FROM actor_egress_policies
 		WHERE atespace = $1 AND actor_name = $2`, actorRef.Atespace, actorRef.Name)
 }
 
-func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.EgressPolicy) error) (*ateapipb.EgressPolicy, error) {
+func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.EgressPolicy) error) (*ateapi.EgressPolicy, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources
 	return dbPolicy, nil
 }
 
-func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.EgressPolicy, error) {
+func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.EgressPolicy, error) {
 	var version int64
 	var uid string
 	var protoBytes []byte
@@ -121,7 +121,7 @@ func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources
 	return deleted, nil
 }
 
-func getEgressPolicyRow(ctx context.Context, q querier, query string, args ...any) (*ateapipb.EgressPolicy, error) {
+func getEgressPolicyRow(ctx context.Context, q querier, query string, args ...any) (*ateapi.EgressPolicy, error) {
 	var uid string
 	var version int64
 	var protoBytes []byte
@@ -134,8 +134,8 @@ func getEgressPolicyRow(ctx context.Context, q querier, query string, args ...an
 	return unmarshalEgressPolicy(uid, version, protoBytes)
 }
 
-func unmarshalEgressPolicy(uid string, version int64, protoBytes []byte) (*ateapipb.EgressPolicy, error) {
-	policy := &ateapipb.EgressPolicy{}
+func unmarshalEgressPolicy(uid string, version int64, protoBytes []byte) (*ateapi.EgressPolicy, error) {
+	policy := &ateapi.EgressPolicy{}
 	if err := unmarshalStored(protoBytes, policy); err != nil {
 		return nil, fmt.Errorf("unmarshaling egress policy: %w", err)
 	}

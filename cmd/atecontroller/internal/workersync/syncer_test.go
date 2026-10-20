@@ -22,10 +22,10 @@ import (
 	"testing"
 	"time"
 
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	appsv1 "k8s.io/api/apps/v1"
@@ -83,18 +83,18 @@ func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 	return pod
 }
 
-func workerPool(ns, name string, labels map[string]string) *atev1alpha1.WorkerPool {
-	return &atev1alpha1.WorkerPool{
+func workerPool(ns, name string, labels map[string]string) *atev1.WorkerPool {
+	return &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
-		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}}},
+		Spec:       atev1.WorkerPoolSpec{SandboxClasses: []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassGvisor}}},
 	}
 }
 
 // registeredWorker is a Worker in the shape the syncer would have registered
 // for the given pod, for seeding the fake API before a test runs.
-func registeredWorker(ns, poolName, podName, uid string) *ateapipb.Worker {
-	return &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: uid},
+func registeredWorker(ns, poolName, podName, uid string) *ateapi.Worker {
+	return &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: uid},
 		WorkerNamespace: ns,
 		WorkerPool:      poolName,
 		WorkerPod:       podName,
@@ -106,7 +106,7 @@ func registeredWorker(ns, poolName, podName, uid string) *ateapipb.Worker {
 // newWorkerPoolInformer builds the WorkerPool informer the syncer reads, backed
 // by a fake clientset that holds initPools. Nothing is cached until the factory
 // starts.
-func newWorkerPoolInformer(initPools ...*atev1alpha1.WorkerPool) (*atefake.Clientset, externalversions.SharedInformerFactory, cache.SharedIndexInformer) {
+func newWorkerPoolInformer(initPools ...*atev1.WorkerPool) (*atefake.Clientset, externalversions.SharedInformerFactory, cache.SharedIndexInformer) {
 	objs := make([]runtime.Object, 0, len(initPools))
 	for _, pool := range initPools {
 		objs = append(objs, pool)
@@ -114,13 +114,13 @@ func newWorkerPoolInformer(initPools ...*atev1alpha1.WorkerPool) (*atefake.Clien
 	//nolint:staticcheck // NewSimpleClientset is the only available fake clientset for versioned CRDs.
 	client := atefake.NewSimpleClientset(objs...)
 	factory := externalversions.NewSharedInformerFactory(client, 0)
-	return client, factory, factory.Api().V1alpha1().WorkerPools().Informer()
+	return client, factory, factory.Ate().V1().WorkerPools().Informer()
 }
 
 // setupSyncerTest wires a running syncer to a fake Control API and a fake
 // Kubernetes, driving it end to end through pod and pool events and the queue.
 // It returns the fake Kubernetes and the fake clientset the pools live in.
-func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPools ...*atev1alpha1.WorkerPool) (*fake.Clientset, *atefake.Clientset) {
+func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPools ...*atev1.WorkerPool) (*fake.Clientset, *atefake.Clientset) {
 	t.Helper()
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
@@ -144,7 +144,7 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 // factories or worker goroutines. It returns those caches alongside the syncer.
 // The syncer's pod and apps clients are a fake clientset that the caches do not
 // watch.
-func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha1.WorkerPool) (*WorkerPoolSyncer, cache.Indexer, cache.Indexer) {
+func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1.WorkerPool) (*WorkerPoolSyncer, cache.Indexer, cache.Indexer) {
 	t.Helper()
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
@@ -180,9 +180,9 @@ func mustReconcile(t *testing.T, ctx context.Context, s *WorkerPoolSyncer, key w
 }
 
 // waitForWorker polls the registry until the named worker satisfies cond.
-func waitForWorker(t *testing.T, ctx context.Context, api *fakeControl, name string, cond func(*ateapipb.Worker) bool) *ateapipb.Worker {
+func waitForWorker(t *testing.T, ctx context.Context, api *fakeControl, name string, cond func(*ateapi.Worker) bool) *ateapi.Worker {
 	t.Helper()
-	var got *ateapipb.Worker
+	var got *ateapi.Worker
 	err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
 		got = api.get(name)
 		return cond(got), nil
@@ -196,8 +196,8 @@ func waitForWorker(t *testing.T, ctx context.Context, api *fakeControl, name str
 // workerActive reports whether w is registered and ACTIVE. The syncer registers
 // a Worker UNAVAILABLE and marks it available in a later call, so a Worker that
 // exists is not yet one that takes Actors.
-func workerActive(w *ateapipb.Worker) bool {
-	return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE
+func workerActive(w *ateapi.Worker) bool {
+	return w.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_ACTIVE
 }
 
 func TestSyncer_Lifecycle(t *testing.T) {
@@ -241,7 +241,7 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	if err := fakeK8s.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("delete pod: %v", err)
 	}
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w == nil })
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool { return w == nil })
 }
 
 // A pool that sets no labels registers a worker carrying none, rather than one
@@ -260,7 +260,7 @@ func TestSyncer_OmittedFields(t *testing.T) {
 		t.Fatalf("create pod: %v", err)
 	}
 
-	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
+	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool { return w != nil })
 	if len(got.GetLabels()) != 0 {
 		t.Errorf("worker labels = %v, want none", got.GetLabels())
 	}
@@ -295,7 +295,7 @@ func TestSyncer_DoesNotInferCapacityFromThePod(t *testing.T) {
 	// The registry here is a fake, so what it holds is exactly what the syncer
 	// sent. The syncer writes no capacity: it comes from the Worker's own
 	// report, which is the worker's to make.
-	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
+	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool { return w != nil })
 	if got.GetStatus().GetCapacity() != nil {
 		t.Errorf("worker capacity = %v, want none", got.GetStatus().GetCapacity())
 	}
@@ -320,7 +320,7 @@ func TestSyncer_SoftDelete_MarksDraining(t *testing.T) {
 	if w == nil {
 		t.Fatal("worker should still exist while draining")
 	}
-	if w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	if w.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("worker state = %v, want DRAINING", w.GetStatus().GetState())
 	}
 }
@@ -340,7 +340,7 @@ func TestSyncer_SoftDelete_NoPodIP(t *testing.T) {
 	pod.DeletionTimestamp = &metav1.Time{Time: time.Unix(1, 0)}
 	mustReconcile(t, ctx, s, seedPod(t, pods, pod))
 
-	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapi.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("worker state = %v, want DRAINING", got)
 	}
 }
@@ -363,7 +363,7 @@ func TestMarkWorkerDraining(t *testing.T) {
 	t.Run("already draining returns nil without a write", func(t *testing.T) {
 		api := newFakeControl()
 		w := registeredWorker(ns, poolName, podName, testPodUID)
-		w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
+		w.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_DRAINING}
 		seeded := api.put(w)
 
 		s := &WorkerPoolSyncer{client: api}
@@ -385,7 +385,7 @@ func TestMarkWorkerDraining(t *testing.T) {
 		if err := s.markWorkerDraining(ctx, key); err != nil {
 			t.Fatalf("markWorkerDraining = %v, want nil", err)
 		}
-		if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		if got := api.get(testPodUID).GetStatus().GetState(); got != ateapi.WorkerState_WORKER_STATE_DRAINING {
 			t.Errorf("worker state = %v, want DRAINING", got)
 		}
 	})
@@ -464,7 +464,7 @@ func TestSyncer_EnqueueRegisteredWorkers_RetriesTransientListError(t *testing.T)
 	api.put(registeredWorker("ns-enq-retry", "pool1", "worker-1", testPodUID))
 
 	failsLeft := 1
-	api.setListHook(func(*ateapipb.ListWorkersRequest) error {
+	api.setListHook(func(*ateapi.ListWorkersRequest) error {
 		if failsLeft > 0 {
 			failsLeft--
 			return status.Error(codes.Unavailable, "transient failure")
@@ -489,7 +489,7 @@ func TestSyncer_EnqueueRegisteredWorkers_RetriesTransientListError(t *testing.T)
 // cancelled, rather than spinning forever, when the API stays unavailable.
 func TestSyncer_ListWorkersPageWithRetry_StopsOnContextCancel(t *testing.T) {
 	api := newFakeControl()
-	api.setListHook(func(*ateapipb.ListWorkersRequest) error {
+	api.setListHook(func(*ateapi.ListWorkersRequest) error {
 		return status.Error(codes.Unavailable, "still down")
 	})
 	s, _, _ := setupReconcileTest(t, api)
@@ -522,7 +522,7 @@ func TestSyncer_EnqueueRegisteredWorkers_StreamsPagesAndRetriesLatePage(t *testi
 
 	// The second page fails once before serving.
 	failed := false
-	api.setListHook(func(req *ateapipb.ListWorkersRequest) error {
+	api.setListHook(func(req *ateapi.ListWorkersRequest) error {
 		if req.GetOptions().GetPageToken() == "1" && !failed {
 			failed = true
 			return status.Error(codes.Unavailable, "transient failure on page")
@@ -562,8 +562,8 @@ func TestSyncer_CreateWorker_BeforePodIP(t *testing.T) {
 	if got.GetNodeName() != "node1" {
 		t.Errorf("worker node = %q, want node1", got.GetNodeName())
 	}
-	if state := got.GetStatus().GetState(); state != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-		t.Errorf("worker state = %v, want %v", state, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	if state := got.GetStatus().GetState(); state != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Errorf("worker state = %v, want %v", state, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 	}
 	if ips := got.GetStatus().GetIps(); len(ips) != 0 {
 		t.Errorf("worker ips = %q, want none until its worker process registers", ips)
@@ -619,7 +619,7 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	conflicted := false
 	api.setUpdateHookOnce(func(name string) {
 		conflicted = true
-		if _, err := api.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{Worker: &ateapipb.ObjectRef{Name: name}}); err != nil {
+		if _, err := api.DrainWorker(ctx, &ateapi.DrainWorkerRequest{Worker: &ateapi.ObjectRef{Name: name}}); err != nil {
 			t.Errorf("injecting conflict: drain worker: %v", err)
 		}
 	})
@@ -641,7 +641,7 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	if got.GetLabels()["foo"] != "baz" {
 		t.Errorf("worker labels = %v, want foo=baz", got.GetLabels())
 	}
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	if got.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("worker state = %v, want the concurrently injected DRAINING to survive the retry", got.GetStatus().GetState())
 	}
 }
@@ -798,9 +798,9 @@ func TestSyncer_DeletedWorkerPool(t *testing.T) {
 			if gone := apierrors.IsNotFound(err); gone != tc.deleted {
 				t.Errorf("pod deleted = %v, want %v", gone, tc.deleted)
 			}
-			wantState := ateapipb.WorkerState_WORKER_STATE_ACTIVE
+			wantState := ateapi.WorkerState_WORKER_STATE_ACTIVE
 			if tc.deleted {
-				wantState = ateapipb.WorkerState_WORKER_STATE_DRAINING
+				wantState = ateapi.WorkerState_WORKER_STATE_DRAINING
 			}
 			if state := got.GetStatus().GetState(); state != wantState {
 				t.Errorf("worker state = %v, want %v", state, wantState)
@@ -829,7 +829,7 @@ func TestSyncer_DeletedWorkerPool_NotReadyPod(t *testing.T) {
 	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("get pod = %v, want NotFound", err)
 	}
-	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapi.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("worker state = %v, want DRAINING", got)
 	}
 }
@@ -860,7 +860,7 @@ func TestSyncer_DeletedWorkerPool_Errors(t *testing.T) {
 	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); err != nil {
 		t.Errorf("get pod: %v, want it left alone", err)
 	}
-	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapi.WorkerState_WORKER_STATE_ACTIVE {
 		t.Errorf("worker state = %v, want ACTIVE", got)
 	}
 }
@@ -906,14 +906,14 @@ func TestSyncer_OrphanedPodsOfDeletedPool_ViaInformer(t *testing.T) {
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod: %v", err)
 	}
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool {
-		return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool {
+		return w.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_ACTIVE
 	})
 
-	if err := poolClient.ApiV1alpha1().WorkerPools(ns).Delete(ctx, poolName, metav1.DeleteOptions{}); err != nil {
+	if err := poolClient.AteV1().WorkerPools(ns).Delete(ctx, poolName, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("delete pool: %v", err)
 	}
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w == nil })
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool { return w == nil })
 
 	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("get pod = %v, want NotFound", err)
@@ -945,7 +945,7 @@ func TestSyncer_StartWaitsForWorkerPoolCache(t *testing.T) {
 	// The pod cache is warm and the pool cache is not. There is no state to wait
 	// for, so this gives the syncer a window to get it wrong in.
 	err := wait.PollUntilContextTimeout(ctx, 20*time.Millisecond, 300*time.Millisecond, true, func(context.Context) (bool, error) {
-		if api.get(testPodUID).GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+		if api.get(testPodUID).GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_ACTIVE {
 			return false, errors.New("worker shut down before the WorkerPool cache synced")
 		}
 		return false, nil
@@ -957,7 +957,7 @@ func TestSyncer_StartWaitsForWorkerPoolCache(t *testing.T) {
 	// Once the pool cache syncs, the pod is reconciled against the pool, which
 	// copies the pool's labels onto the surviving Worker.
 	poolFactory.Start(ctx.Done())
-	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool {
+	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool {
 		return w != nil && maps.Equal(w.GetLabels(), poolLabels)
 	})
 	if got == nil {
@@ -1042,8 +1042,8 @@ func TestSyncer_SoftDelete_ViaInformer(t *testing.T) {
 		t.Fatalf("update pod: %v", err)
 	}
 
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool {
-		return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool {
+		return w.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_DRAINING
 	})
 }
 
@@ -1082,7 +1082,7 @@ func TestSyncer_TerminalPod_DeletesPod(t *testing.T) {
 			if got := deletes[0].GetDeleteOptions().Preconditions; got == nil || got.UID == nil || *got.UID != testPodUID {
 				t.Errorf("delete preconditions = %+v, want UID %s", got, testPodUID)
 			}
-			if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+			if got := api.get(testPodUID).GetStatus().GetState(); got != ateapi.WorkerState_WORKER_STATE_DRAINING {
 				t.Errorf("worker state = %v, want DRAINING", got)
 			}
 		})
@@ -1145,7 +1145,7 @@ func TestSyncer_TerminalPod_ViaInformer(t *testing.T) {
 		t.Fatalf("update pod status: %v", err)
 	}
 
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w == nil })
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool { return w == nil })
 	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("get pod = %v, want NotFound", err)
 	}
@@ -1255,8 +1255,8 @@ func TestSyncer_PodWithIPButNotReadyIsUnavailable(t *testing.T) {
 			if got == nil {
 				t.Fatalf("worker not registered for a not-Ready pod with an IP; registry holds %v", api.names())
 			}
-			if state := got.GetStatus().GetState(); state != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-				t.Errorf("state = %v, want %v", state, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+			if state := got.GetStatus().GetState(); state != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+				t.Errorf("state = %v, want %v", state, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 			}
 		})
 	}
@@ -1275,8 +1275,8 @@ func TestSyncer_DeleteNeverReadyPod(t *testing.T) {
 	key := seedPod(t, pods, pod)
 
 	mustReconcile(t, ctx, s, key)
-	if got := api.get(testPodUID); got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-		t.Fatalf("worker = %v, want it registered %v", got, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	if got := api.get(testPodUID); got.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Fatalf("worker = %v, want it registered %v", got, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 	}
 	if err := pods.Delete(pod); err != nil {
 		t.Fatalf("deleting pod: %v", err)
@@ -1303,8 +1303,8 @@ func TestSyncer_RegisteredPodWithoutIPIsUnavailable(t *testing.T) {
 	}
 	mustReconcile(t, ctx, s, key)
 	got := api.get(testPodUID)
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	if got.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 	}
 }
 
@@ -1337,8 +1337,8 @@ func TestSyncer_ReadinessFlapDoesNotDeregister(t *testing.T) {
 	if got == nil {
 		t.Fatalf("worker deregistered on a readiness flap; registry holds %v", api.names())
 	}
-	if state := got.GetStatus().GetState(); state != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-		t.Errorf("state = %v on a readiness flap, want %v", state, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	if state := got.GetStatus().GetState(); state != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Errorf("state = %v on a readiness flap, want %v", state, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 	}
 
 	if err := pods.Update(pod); err != nil {
@@ -1346,8 +1346,8 @@ func TestSyncer_ReadinessFlapDoesNotDeregister(t *testing.T) {
 	}
 	mustReconcile(t, ctx, s, key)
 	got = api.get(testPodUID)
-	if state := got.GetStatus().GetState(); state != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		t.Errorf("state = %v once Ready again, want %v", state, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+	if state := got.GetStatus().GetState(); state != ateapi.WorkerState_WORKER_STATE_ACTIVE {
+		t.Errorf("state = %v once Ready again, want %v", state, ateapi.WorkerState_WORKER_STATE_ACTIVE)
 	}
 }
 
@@ -1370,7 +1370,7 @@ func TestSyncer_ReconcileErrorsAreClassified(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeControl()
-			api.setCreateHook(func(*ateapipb.Worker) error {
+			api.setCreateHook(func(*ateapi.Worker) error {
 				return status.Error(tc.code, "rejected")
 			})
 			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))

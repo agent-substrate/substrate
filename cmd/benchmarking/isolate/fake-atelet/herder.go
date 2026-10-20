@@ -26,10 +26,10 @@ import (
 	"strings"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/objectstore"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -43,9 +43,9 @@ type objectWriter interface {
 	PutObject(ctx context.Context, bucket, object string, reader io.Reader) error
 }
 
-// actorCertMinter is the part of ateapipb.WorkerServiceClient the herder uses.
+// actorCertMinter is the part of ateapi.WorkerServiceClient the herder uses.
 type actorCertMinter interface {
-	MintWorkerActorCertificate(ctx context.Context, in *ateapipb.MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*ateapipb.MintWorkerActorCertificateResponse, error)
+	MintWorkerActorCertificate(ctx context.Context, in *ateapi.MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*ateapi.MintWorkerActorCertificateResponse, error)
 }
 
 // delays is how long each Atelet call takes before it succeeds: the
@@ -103,12 +103,12 @@ func (h *herder) mintActorCertificate(ctx context.Context, workerPodUID, atespac
 	if h.minter == nil || gateway == nil {
 		return nil
 	}
-	if _, err := h.minter.MintWorkerActorCertificate(ctx, &ateapipb.MintWorkerActorCertificateRequest{
-		Actor:                     &ateapipb.ObjectRef{Atespace: atespace, Name: name},
+	if _, err := h.minter.MintWorkerActorCertificate(ctx, &ateapi.MintWorkerActorCertificateRequest{
+		Actor:                     &ateapi.ObjectRef{Atespace: atespace, Name: name},
 		ActorUid:                  uid,
 		CertificateSigningRequest: h.csr,
 		// Workers are global-scoped and named by their pod UID.
-		Worker: &ateapipb.ObjectRef{Name: workerPodUID},
+		Worker: &ateapi.ObjectRef{Name: workerPodUID},
 	}); err != nil {
 		return fmt.Errorf("while minting the certificate of actor %s/%s: %w", atespace, name, err)
 	}
