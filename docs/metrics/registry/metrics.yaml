@@ -104,14 +104,14 @@ groups:
               stability: development
               value: suspending
               brief: >
-                ateapi is writing a snapshot: durable for a suspend,
-                node-local for a pause.
+                ateapi is writing a snapshot: node-local for an asynchronous
+                suspend, durable for a synchronous suspend.
             - id: suspended
               stability: development
               value: suspended
               brief: >
                 The actor holds no worker. Its latest snapshot is durable, or
-                node-local after a pause.
+                node-local after an asynchronous suspend.
             - id: crashed
               stability: development
               value: crashed
@@ -298,7 +298,10 @@ groups:
             - id: local
               stability: development
               value: local
-              brief: A snapshot on the node. A pause writes it.
+              brief: >
+                The copy on the node. An asynchronous suspend writes it, and a
+                resume reads it while the node still has it, including after
+                its upload has finished.
             - id: latest
               stability: development
               value: latest

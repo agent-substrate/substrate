@@ -323,7 +323,7 @@ For the `ate.filecache.*` instruments, one series per cache under `ate.filecache
 **No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_capacity` outcome, names no pool. No instrument sends the pair with both keys empty.
 
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
-* `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a suspend whose upload to durable storage has not finished), `latest` (a durable snapshot, including a template's golden snapshot), or `boot` (from scratch, so it never appears on the atelet histograms).
+* `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (the copy on the node: an asynchronous suspend writes it, and a resume reads it while the node still has it, whether or not its upload to durable storage has finished), `latest` (a durable snapshot, including a template's golden snapshot), or `boot` (from scratch, so it never appears on the atelet histograms).
 * `ate.snapshot.fidelity`: what state it holds. `volumes`, `rootfs`, or `memory`.
 * `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `worker_restore` on restore; `sandbox_assets`, `worker_checkpoint`, `persist`, `cleanup` on checkpoint; `total` on both.
 
@@ -469,9 +469,9 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 | Logs | pod stdout; the [actor events](#the-same-records-over-otlp), ateapi's lifecycle records and the ateworkers' usage samples, also to the collector's `debug` exporter | pod stdout. No OTLP logs: `OTEL_LOGS_EXPORTER` is unset |
 | Dashboards | Not supported | Google Cloud Monitoring (see [Dashboards](#5-dashboards)) |
 
-> In Kind, `ateapi`, `atelet`, `ate-controller`, `atenet-router`, and `atenet-egress` are pointed at the in-cluster collector, and the controller propagates the endpoint to the worker pods it creates, so all component telemetry lands locally.
+> In Kind, `ateapi`, `atelet`, `ate-controller`, `atenet-router`, and `atenet-egress` are pointed at the in-cluster collector, and the controller propagates the endpoint to the worker pods it creates, so the telemetry of these components and of the workers lands locally. The Kubernetes credential provider is the exception: it does not read the endpoint (see the [note on the Kind Prometheus](#2-metrics)).
 >
-> Every component reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
+> Each of these components reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
 >
 > Workers don't read the ConfigMap at all. They normally export through the [`atelet` relay](#the-ateworker-otlp-relay), which forwards to `atelet`'s own endpoint, so restarting `atelet` moves the relayed workers to a new endpoint. `ate-controller` also copies the value into each worker pod at creation, for the direct fallback. That copy changes only once the controller itself restarts, and that restart then rolls every WorkerPool Deployment, replacing the running workers along with the actors on them.
 
