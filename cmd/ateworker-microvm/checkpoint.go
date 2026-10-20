@@ -167,7 +167,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	tPause := time.Now()
 	dPrep = tPause.Sub(tStart)
-	pauseErr := client.Pause(ctx)
+	pauseErr := pauseGuest(ctx, client.Pause)
 	dPause = time.Since(tPause)
 	if pauseErr != nil {
 		return nil, fmt.Errorf("while pausing guest: %w", pauseErr)
@@ -267,6 +267,24 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", actorUID), slog.Any("err", err))
 	}
 	return resp, nil
+}
+
+// pauseAttempts bounds the vm.pause calls of one checkpoint. Cloud Hypervisor
+// fails the call when a vCPU thread does not acknowledge its pause signal
+// within 1 s, which a saturated host produces. The guest stays Running with
+// the pause flagged, so the next call finds those vCPUs parked and signals
+// the late one again.
+const pauseAttempts = 3
+
+// pauseGuest calls pause until it succeeds, pauseAttempts times at most.
+func pauseGuest(ctx context.Context, pause func(context.Context) error) error {
+	for attempt := 1; ; attempt++ {
+		err := pause(ctx)
+		if err == nil || attempt >= pauseAttempts || ctx.Err() != nil {
+			return err
+		}
+		slog.WarnContext(ctx, "vm.pause failed; retrying", slog.Int("attempt", attempt), slog.Any("err", err))
+	}
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
