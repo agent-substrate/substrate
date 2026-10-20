@@ -117,7 +117,6 @@ The dev entry points are the scripts under `hack/` and the `cmd/ate-setup` insta
 - **Modularity**: Submit small, focused Pull Requests that touch a limited part of the codebase for easier reviews and rebasing.
 - **Go Modules**: Ensure `go.mod` is clean. Run `go mod tidy` if adding or removing dependencies.
 - **Spelling**: American English. `golangci-lint` runs `misspell` with `locale: US`, so British spellings fail lint.
-- **Shell Code**: Never write inline bash within any other file. Put all bash in standalone scripts, so linters such as `shellcheck` (`hack/verify/shellcheck.sh`) run against it. This includes config files such as YAML (a GitHub workflow's `run:` blocks) and JSON, and source code written in another language, such as Go or Python. Follow this rule unless breaking it is absolutely necessary; only the human operator decides that necessity.
 
 ## Backward Compatibility
 
