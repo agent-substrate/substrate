@@ -759,6 +759,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
 
+	// A re-entered resume skips assignWorkerAttempt, which checks this too.
+	if err := checkSnapshotURI(actorRef, actor); err != nil {
+		return tele, err
+	}
+
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {

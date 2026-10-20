@@ -1862,10 +1862,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			})
 
 			actor, loadedTmpl, err := w.loadActorForResume(ctx, actorRef)
-			// Assignment checks the URI before it claims a worker.
-			if err == nil {
-				err = checkSnapshotURI(actorRef, actor)
-			}
 			var tele restoreTelemetry
 			if err == nil {
 				tele, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
