@@ -610,6 +610,62 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 	}
 }
 
+// TestPromoteSnapshotError covers the context branch of the mapping; the rows
+// of TestTagActorSnapshot_PromotesLocalSnapshot cover atelet's own codes.
+func TestPromoteSnapshotError(t *testing.T) { testAteletCallError(t, promoteSnapshotError) }
+
+// testAteletCallError checks mapErr, which maps an error from an atelet call
+// to the error the step fails with: the caller's ended context wins over
+// atelet's error, and a deadline passed by the clock counts as ended.
+func testAteletCallError(t *testing.T, mapErr func(context.Context, error) error) {
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		err      error
+		wantCode codes.Code
+		// wantCtxErr is the context error the result wraps, if any.
+		wantCtxErr error
+	}{
+		{
+			name:     "atelet's DeadlineExceeded with a live caller is Unavailable",
+			ctx:      context.Background(),
+			err:      status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
+			wantCode: codes.Unavailable,
+		},
+		{
+			name:       "cancelled caller gets Canceled",
+			ctx:        ended,
+			err:        status.Error(codes.Unavailable, "connection closing"),
+			wantCode:   codes.Canceled,
+			wantCtxErr: context.Canceled,
+		},
+		{
+			name:       "caller deadline passed by the clock before its timer fired gets DeadlineExceeded",
+			ctx:        deadlinePassedContext{context.Background()},
+			err:        status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
+			wantCode:   codes.DeadlineExceeded,
+			wantCtxErr: context.DeadlineExceeded,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := mapErr(tt.ctx, tt.err)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
+			}
+			if !errors.Is(err, tt.err) {
+				t.Errorf("original atelet error was lost: %v", err)
+			}
+			if tt.wantCtxErr != nil && !errors.Is(err, tt.wantCtxErr) {
+				t.Errorf("error does not wrap %v: %v", tt.wantCtxErr, err)
+			}
+		})
+	}
+}
+
 // TestTagActorSnapshot_RecreateAfterCopyFailure verifies what a create that
 // dies mid-copy leaves behind, and how a client gets past it. The row survives
 // as a pending tag naming the prefix the copy was writing into, so the objects
