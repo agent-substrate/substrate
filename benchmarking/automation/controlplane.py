@@ -14,7 +14,7 @@
 
 """Shapes the control plane for a capacity run, as a test entry's
 `controlPlane:` block asks: an `apiServer:` section for ate-api-server
-(see API_SERVER_DEFAULTS) and a `postgres:` section (see POSTGRES_DEFAULTS).
+(see API_SERVER_KNOBS) and a `postgres:` section (see POSTGRES_DEFAULTS).
 
 A test type validates the block with validate() and calls shape() from its
 pre_test. Isolation from the load is the install's: --cordon-control-plane
@@ -29,17 +29,18 @@ from util import run, run_no_check
 
 NAMESPACE = "ate-system"
 
-# Knobs of the `apiServer:` section. `cpu` has no default: it is the
-# independent variable of the run.
-API_SERVER_DEFAULTS = {
-    # ate-api-server replicas, each with requests = limits of cpu and
-    # memory. Go sizes GOMAXPROCS from the CPU limit.
-    "replicas": 1,
-    "memory": "4Gi",
+# Knobs of the `apiServer:` section. None has a default here: the install
+# defines ate-api-server's shape, and a run overrides only the knobs it sets.
+API_SERVER_KNOBS = {
+    # Required, the independent variable of the run. CPU request and limit
+    # of each replica; Go sizes GOMAXPROCS from the limit.
+    "cpu",
+    # Memory request and limit of each replica.
+    "memory",
+    "replicas",
     # pgxpool max connections per replica, set through ateapi's env
-    # ConfigMap (see set_pool_max_conns). None keeps the installed value (64
-    # on size10).
-    "poolMaxConns": None,
+    # ConfigMap (see set_pool_max_conns).
+    "poolMaxConns",
 }
 
 # Knobs of the `postgres:` section.
@@ -54,10 +55,10 @@ POSTGRES_DEFAULTS = {
 
 
 def config(block: dict[str, Any]) -> dict[str, Any]:
-    """The `controlPlane:` block with each section merged over its
-    defaults."""
+    """The `controlPlane:` block with `postgres:` merged over its defaults.
+    `apiServer:` holds only the knobs the block sets."""
     return {
-        "apiServer": {**API_SERVER_DEFAULTS, **block.get("apiServer", {})},
+        "apiServer": dict(block.get("apiServer", {})),
         "postgres": {**POSTGRES_DEFAULTS, **block.get("postgres", {})},
     }
 
@@ -69,17 +70,17 @@ def validate(block: Any) -> None:
     _check_knobs("controlPlane", block, {"apiServer", "postgres"})
     if "apiServer" not in block:
         raise ValueError("needs controlPlane.apiServer")
-    _check_knobs("controlPlane.apiServer", block["apiServer"], set(API_SERVER_DEFAULTS) | {"cpu"})
+    _check_knobs("controlPlane.apiServer", block["apiServer"], API_SERVER_KNOBS)
     _check_knobs("controlPlane.postgres", block.get("postgres", {}), set(POSTGRES_DEFAULTS))
     cfg = config(block)
     api, pg = cfg["apiServer"], cfg["postgres"]
-    if "cpu" not in block["apiServer"] or not _is_quantity(api["cpu"]):
+    if "cpu" not in api or not _is_quantity(api["cpu"]):
         raise ValueError("needs controlPlane.apiServer.cpu, as in 2 or 1500m")
-    if not _is_quantity(api["memory"]):
+    if "memory" in api and not _is_quantity(api["memory"]):
         raise ValueError("invalid controlPlane.apiServer.memory")
-    if not _is_positive_int(api["replicas"]):
+    if "replicas" in api and not _is_positive_int(api["replicas"]):
         raise ValueError("controlPlane.apiServer.replicas must be an int >= 1")
-    if api["poolMaxConns"] is not None and not _is_positive_int(api["poolMaxConns"]):
+    if "poolMaxConns" in api and not _is_positive_int(api["poolMaxConns"]):
         raise ValueError("controlPlane.apiServer.poolMaxConns must be an int >= 1")
     if not isinstance(pg["stats"], bool):
         raise ValueError("controlPlane.postgres.stats must be a bool")
@@ -145,7 +146,7 @@ def shape(cfg: dict[str, Any]) -> None:
     api, pg = cfg["apiServer"], cfg["postgres"]
     if pg["stats"]:
         enable_postgres_stats(pg["args"])
-    if api["poolMaxConns"] is not None:
+    if "poolMaxConns" in api:
         set_pool_max_conns(api["poolMaxConns"])
     resize_api_server(api)
     # The placement of the run, for comparing runs: a step compares across
@@ -239,18 +240,23 @@ def set_pool_max_conns(n: int) -> None:
 
 
 def api_server_patch(api: dict[str, Any]) -> dict[str, Any]:
+    """A strategic merge patch that sets only the knobs api holds, so the
+    rest of the Deployment keeps the install's values."""
+    resources = {"cpu": str(api["cpu"])}
+    if "memory" in api:
+        resources["memory"] = api["memory"]
     pod_spec = {
         "containers": [
             {
                 "name": "ate-api-server",
-                "resources": {
-                    "requests": {"cpu": str(api["cpu"]), "memory": api["memory"]},
-                    "limits": {"cpu": str(api["cpu"]), "memory": api["memory"]},
-                },
+                "resources": {"requests": resources, "limits": dict(resources)},
             }
         ]
     }
-    return {"spec": {"replicas": api["replicas"], "template": {"spec": pod_spec}}}
+    spec: dict[str, Any] = {"template": {"spec": pod_spec}}
+    if "replicas" in api:
+        spec["replicas"] = api["replicas"]
+    return {"spec": spec}
 
 
 def resize_api_server(api: dict[str, Any]) -> None:

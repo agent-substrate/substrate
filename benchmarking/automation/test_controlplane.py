@@ -37,8 +37,9 @@ API = {"apiServer": {"cpu": 2}}
 class ConfigTest(unittest.TestCase):
     def test_defaults(self):
         cfg = controlplane.config(API)
-        self.assertEqual(
-            cfg["apiServer"], {"cpu": 2, "replicas": 1, "memory": "4Gi", "poolMaxConns": None})
+        # The install defines ate-api-server's shape; only what the block
+        # sets is overridden.
+        self.assertEqual(cfg["apiServer"], {"cpu": 2})
         self.assertEqual(cfg["postgres"], {"stats": True, "args": []})
 
 
@@ -95,8 +96,12 @@ class ValidateTest(unittest.TestCase):
 
 
 class ApiServerPatchTest(unittest.TestCase):
-    def test_guaranteed(self):
-        patch = controlplane.api_server_patch(controlplane.config(API)["apiServer"])
+    def patch(self, **knobs):
+        return controlplane.api_server_patch(
+            controlplane.config({"apiServer": {"cpu": 2, **knobs}})["apiServer"])
+
+    def test_sets_the_knobs_given(self):
+        patch = self.patch(memory="4Gi", replicas=1)
         self.assertEqual(patch["spec"]["replicas"], 1)
         pod = patch["spec"]["template"]["spec"]
         resources = pod["containers"][0]["resources"]
@@ -104,6 +109,12 @@ class ApiServerPatchTest(unittest.TestCase):
         self.assertEqual(resources["limits"], resources["requests"])
         # Placement is the install's.
         self.assertNotIn("affinity", pod)
+
+    def test_unset_knobs_keep_the_install(self):
+        patch = self.patch()
+        self.assertNotIn("replicas", patch["spec"])
+        resources = patch["spec"]["template"]["spec"]["containers"][0]["resources"]
+        self.assertEqual(resources, {"requests": {"cpu": "2"}, "limits": {"cpu": "2"}})
 
 
 class ShapeTest(unittest.TestCase):
@@ -120,6 +131,16 @@ class ShapeTest(unittest.TestCase):
             [c for c in calls if c != "run_no_check"],
             ["enable_postgres_stats", "set_pool_max_conns", "resize_api_server"],
         )
+
+    def test_unset_pool_size_keeps_the_install(self):
+        calls = []
+        stub(self,
+             enable_postgres_stats=lambda *_: None,
+             set_pool_max_conns=lambda n: calls.append(n),
+             resize_api_server=lambda *_: None,
+             run_no_check=lambda *_: None)
+        controlplane.shape(controlplane.config(API))
+        self.assertEqual(calls, [])
 
     def test_passes_the_settings(self):
         got = []

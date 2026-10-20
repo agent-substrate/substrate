@@ -117,11 +117,11 @@
 # is required, sizes ate-api-server:
 #   cpu            Required. CPU of each replica, set as both request and
 #                  limit (e.g. 2 or "1500m").
-#   memory         Optional (default "4Gi"). Memory request and limit.
-#   replicas       Optional (default 1).
+#   memory         Optional. Memory request and limit of each replica.
+#   replicas       Optional.
 #   poolMaxConns   Optional. pgxpool max connections per replica, set
-#                  through ateapi's env ConfigMap. Unset keeps the installed
-#                  value.
+#                  through ateapi's env ConfigMap.
+# An optional knob left unset keeps the installed value.
 # Its optional `postgres:` section:
 #   stats          Optional (default true). Load pg_stat_statements and add
 #                  a postgres_exporter sidecar, scraped by monitoring.yaml.
@@ -709,6 +709,7 @@ tests:
       - "--cordon-control-plane"
     controlPlane:
       apiServer:
+        replicas: 1
         cpu: 2
         memory: 4Gi
         poolMaxConns: 64
@@ -736,6 +737,7 @@ tests:
       - "--cordon-control-plane"
     controlPlane:
       apiServer:
+        replicas: 1
         cpu: 2
         memory: 4Gi
         poolMaxConns: 64
