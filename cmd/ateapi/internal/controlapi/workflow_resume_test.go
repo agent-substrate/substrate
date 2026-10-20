@@ -2874,12 +2874,13 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 	})
 }
 
-// TestRequiredSnapshotRuntime pins which snapshot a resume takes its runtime
-// constraint from, and when it takes none.
+// TestRequiredSnapshotRuntime pins which snapshot a resume takes its sandbox
+// class and runtime constraint from, and when it takes no runtime constraint.
 func TestRequiredSnapshotRuntime(t *testing.T) {
 	const tmplUID = "tmpl-uid"
 	tmpl := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Uid: tmplUID}}
 	localRT := testRuntime("amd64", "paused-under")
+	localRT.SandboxClass = "microvm"
 	durableRT := testRuntime("amd64", "suspended-under")
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	rootfs := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
@@ -2902,29 +2903,35 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 		name      string
 		snapshots []*ateapipb.Snapshot
 		want      *ateapipb.ActorSandboxRuntime
+		wantClass string
 	}{
 		{name: "no snapshot cold-boots unconstrained"},
 		{
 			name:      "completed MEMORY durable snapshot requires its runtime",
 			snapshots: []*ateapipb.Snapshot{durable(1, memory, tmplUID, completed, durableRT)},
 			want:      durableRT,
+			wantClass: "gvisor",
 		},
 		{
 			name:      "completed ROOTFS durable snapshot restores no memory state",
 			snapshots: []*ateapipb.Snapshot{durable(1, rootfs, tmplUID, completed, durableRT)},
+			wantClass: "gvisor",
 		},
 		{
 			name:      "VOLUMES durable snapshot restores no memory state",
 			snapshots: []*ateapipb.Snapshot{durable(1, volumes, tmplUID, completed, durableRT)},
+			wantClass: "gvisor",
 		},
 		{
 			name:      "durable snapshot captured under a replaced template is not restored",
 			snapshots: []*ateapipb.Snapshot{durable(1, memory, "old-tmpl-uid", completed, durableRT)},
+			wantClass: "gvisor",
 		},
 		{
 			name:      "durable snapshot with no template uid keeps its runtime",
 			snapshots: []*ateapipb.Snapshot{durable(1, memory, "", completed, durableRT)},
 			want:      durableRT,
+			wantClass: "gvisor",
 		},
 		{
 			name:      "unstamped durable snapshot imposes no constraint",
@@ -2938,26 +2945,36 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			name:      "local checkpoint requires its runtime",
 			snapshots: []*ateapipb.Snapshot{local(1, memory, tmplUID, localRT)},
 			want:      localRT,
+			wantClass: "microvm",
 		},
 		{
 			name:      "local checkpoint with no template uid keeps its runtime",
 			snapshots: []*ateapipb.Snapshot{local(1, memory, "", localRT)},
 			want:      localRT,
+			wantClass: "microvm",
 		},
 		{
 			name:      "local checkpoint captured under a replaced template is not restored",
 			snapshots: []*ateapipb.Snapshot{local(1, memory, "old-tmpl-uid", localRT)},
+			wantClass: "microvm",
 		},
 		{
-			// ensureAteletRestored restores a local checkpoint before any
-			// durable snapshot, so the constraint follows it regardless of
-			// which is newer.
-			name: "local checkpoint takes precedence over a newer durable snapshot",
+			name: "newer durable snapshot takes precedence over an older local checkpoint",
 			snapshots: []*ateapipb.Snapshot{
 				local(1, memory, tmplUID, localRT),
 				durable(2, memory, tmplUID, completed, durableRT),
 			},
-			want: localRT,
+			want:      durableRT,
+			wantClass: "gvisor",
+		},
+		{
+			name: "newer local checkpoint takes precedence over an older durable snapshot",
+			snapshots: []*ateapipb.Snapshot{
+				local(2, memory, tmplUID, localRT),
+				durable(1, memory, tmplUID, completed, durableRT),
+			},
+			want:      localRT,
+			wantClass: "microvm",
 		},
 		{
 			name: "ROOTFS local checkpoint imposes no constraint beside a stamped durable snapshot",
@@ -2965,6 +2982,7 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 				local(2, rootfs, tmplUID, localRT),
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
+			wantClass: "microvm",
 		},
 		{
 			name: "VOLUMES local checkpoint imposes no constraint beside a stamped durable snapshot",
@@ -2972,6 +2990,7 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 				local(2, volumes, tmplUID, localRT),
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
+			wantClass: "microvm",
 		},
 		{
 			// Restore uses the newer local snapshot's template.
@@ -2980,14 +2999,18 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 				durable(1, memory, "old-tmpl-uid", completed, durableRT),
 				local(2, memory, tmplUID, localRT),
 			},
-			want: localRT,
+			want:      localRT,
+			wantClass: "microvm",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{Snapshots: tc.snapshots}}
-			if diff := cmp.Diff(tc.want, requiredSnapshotRuntime(actor, tmpl), protocmp.Transform()); diff != "" {
+			if diff := cmp.Diff(tc.want, requiredSnapshotRuntime(snapshotToResume(actor.GetStatus()), tmpl), protocmp.Transform()); diff != "" {
 				t.Errorf("requiredSnapshotRuntime mismatch (-want +got):\n%s", diff)
+			}
+			if got := snapshotSandboxClass(actor); got != tc.wantClass {
+				t.Errorf("snapshotSandboxClass = %q, want %q", got, tc.wantClass)
 			}
 		})
 	}

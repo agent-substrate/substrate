@@ -619,13 +619,14 @@ func toAteletSandboxRuntime(in *ateapipb.ActorSandboxRuntime) *ateletpb.ActorSan
 }
 
 func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) scheduling.Constraints {
+	snap := snapshotToResume(actor.GetStatus())
 	var requiredNodes []string
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}
 	c := scheduling.Constraints{
-		SandboxClass:    snapshotSandboxClass(actor),
-		RequiredRuntime: hardware.NewRequirement(requiredSnapshotRuntime(actor, tmpl)),
+		SandboxClass:    snap.GetSandboxRuntime().GetSandboxClass(),
+		RequiredRuntime: hardware.NewRequirement(requiredSnapshotRuntime(snap, tmpl)),
 		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes:   requiredNodes,
 		Limits:          tmpl.GetResources().GetLimits(),
@@ -645,46 +646,22 @@ func snapshotToResume(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 	})
 }
 
-// snapshotSandboxClass returns the sandbox class of the snapshot ResumeActor
-// will restore from, the actor's local snapshot or else its latest durable
-// one (a golden tag borrowed at creation included), or "" when the actor has
-// none and cold-boots. Unlike requiredSnapshotRuntime it does not depend on
-// fidelity: a worker of another class cannot read the snapshot's files even
-// for a volumes-only restore.
+// snapshotSandboxClass returns the sandbox class of snapshotToResume, or ""
+// when the actor has none and cold-boots. Unlike requiredSnapshotRuntime it
+// does not depend on fidelity: a worker of another class cannot read the
+// snapshot's files even for a volumes-only restore.
 func snapshotSandboxClass(actor *ateapipb.Actor) string {
-	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
-		return localSnap.GetSandboxRuntime().GetSandboxClass()
-	}
-	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
-		return snap.GetSandboxRuntime().GetSandboxClass()
-	}
-	return ""
+	return snapshotToResume(actor.GetStatus()).GetSandboxRuntime().GetSandboxClass()
 }
 
-// requiredSnapshotRuntime returns the ActorSandboxRuntime stamped on the snapshot
-// that ResumeActor will restore memory state from, or nil when the resume does
-// not restore memory state (cold boot, ROOTFS or VOLUMES fidelity, or replaced
-// template).
-func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) *ateapipb.ActorSandboxRuntime {
-	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
-		if localSnap.GetFidelity() != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
-			return nil
-		}
-		if templateReplaced(localSnap, tmpl) {
-			return nil
-		}
-		return localSnap.GetSandboxRuntime()
+// requiredSnapshotRuntime returns the ActorSandboxRuntime stamped on snap, the
+// snapshotToResume, when the resume restores its memory state, or nil when it
+// does not (cold boot, ROOTFS or VOLUMES fidelity, or replaced template).
+func requiredSnapshotRuntime(snap *ateapipb.Snapshot, tmpl *ateapipb.ActorTemplate) *ateapipb.ActorSandboxRuntime {
+	if snap.GetFidelity() != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY || templateReplaced(snap, tmpl) {
+		return nil
 	}
-	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
-		if snap.GetFidelity() != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
-			return nil
-		}
-		if templateReplaced(snap, tmpl) {
-			return nil
-		}
-		return snap.GetSandboxRuntime()
-	}
-	return nil
+	return snap.GetSandboxRuntime()
 }
 
 // canRelaxRuntime reports whether scheduling may drop its runtime requirement.
@@ -835,7 +812,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	// Exclusive by construction: requiredSnapshotRuntime returns nil when the
 	// template changed, so runtimeIncompatible is false when templateReplaced
 	// is true.
-	requiredRuntime := requiredSnapshotRuntime(actor, actorTemplate)
+	requiredRuntime := requiredSnapshotRuntime(snap, actorTemplate)
 	runtimeIncompatible := requiredRuntime != nil && !hardware.Matches(assignment.GetSandboxRuntime(), requiredRuntime)
 
 	fidelity := fidelityToAtelet(snap.GetFidelity())
