@@ -71,7 +71,7 @@ func createSingleVolumeActor(t *testing.T, tc *testContext, ns, name string) str
 		Name: "vol1",
 		External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 			StorageClassName: "standard",
-			Capacity:         "10Gi",
+			CapacityBytes:    10 << 30,
 		}},
 	}}
 	mounts := []*ateapipb.VolumeMount{{Name: "vol1", MountPath: "/mnt/vol1"}}
