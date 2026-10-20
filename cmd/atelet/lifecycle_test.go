@@ -87,6 +87,9 @@ type fakeWorker struct {
 	// onCheckpoint, if non-nil, runs inside CheckpointWorkload after snapshot
 	// files are written.
 	onCheckpoint func()
+	// onTerminate, if non-nil, runs inside TerminateWorkload, which fails with
+	// the error it returns.
+	onTerminate func() error
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
@@ -147,6 +150,11 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 
 func (f *fakeWorker) TerminateWorkload(_ context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
 	f.recordActorDirs("TerminateWorkload", req.GetActorDirs())
+	if f.onTerminate != nil {
+		if err := f.onTerminate(); err != nil {
+			return nil, err
+		}
+	}
 	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
@@ -2028,7 +2036,8 @@ func runtimeFor(t *testing.T, rec *sandboxAssetsRecord) *ateletpb.SandboxRuntime
 }
 
 type gatingTrackerStore struct {
-	inner   snapshottracker.Store
+	inner snapshottracker.Store
+	// objects, if set, fails every upload after the first gated one.
 	objects *recordingObjectStorage
 	started chan struct{}
 	release chan struct{}
@@ -2042,6 +2051,9 @@ func (s *gatingTrackerStore) UploadLocalSnapshot(ctx context.Context, actorUID s
 		return false, ctx.Err()
 	}
 	uploaded, err := s.inner.UploadLocalSnapshot(ctx, actorUID, ref)
+	if s.objects == nil {
+		return uploaded, err
+	}
 	// Fail any second upload attempt so PromoteSnapshot proves it skips
 	// re-uploading once the background upload made the snapshot durable.
 	s.objects.mu.Lock()
@@ -2179,6 +2191,114 @@ func TestCheckpointKeepsSnapshotBeingUploaded(t *testing.T) {
 	})
 	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2")); err != nil {
 		t.Errorf("pause-snap-2 after the upload of pause-snap-1: stat = %v, want it kept", err)
+	}
+}
+
+// resumedWithPendingUpload runs a plugin actor, pauses it into pause-snap-1
+// with a deferred upload, and resumes it from that snapshot's local copy
+// before the upload is due. It returns the actor, its gated tracker store, and
+// a func that steps the clock past the upload's due time and reports whether
+// the upload starts within a moment.
+func resumedWithPendingUpload(t *testing.T) (*pluginActor, *gatingTrackerStore, func() bool) {
+	t.Helper()
+	a := runPluginActor(t)
+	clk := clocktesting.NewFakeClock(time.Now())
+	store := &gatingTrackerStore{
+		inner:   &trackerStore{s: a.s},
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	a.s.snapshots = snapshottracker.New(t.Context(), store, clk,
+		snapshottracker.WithUploadDelay(time.Second),
+		snapshottracker.WithDetachDelay(time.Hour))
+	a.s.snapshots.Start()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := a.s.snapshots.Wait(ctx); err != nil {
+			t.Errorf("Wait: %v", err)
+		}
+	})
+	// An upload that starts holds on until released; release it before Wait.
+	t.Cleanup(func() { close(store.release) })
+
+	cpResp, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+	if err != nil {
+		t.Fatalf("Checkpoint (pause-snap-1): %v", err)
+	}
+	due := cpResp.GetState().GetUploadDueTime().AsTime()
+	a.restoreLocal(t, "pause-snap-1", 1)
+	// Step on in one-second steps past the due time, in case the queue's timer
+	// was armed late (see stepToUpload).
+	stepPastDue := func() bool {
+		clk.Step(due.Sub(clk.Now()))
+		for range 5 {
+			select {
+			case <-store.started:
+				return true
+			case <-time.After(20 * time.Millisecond):
+				clk.Step(time.Second)
+			}
+		}
+		return false
+	}
+	return a, store, stepPastDue
+}
+
+// TestTerminateHoldsOffBackgroundUpload terminates an actor resumed from its
+// pause snapshot, whose background upload comes due while the worker tears the
+// actor down: the upload does not start, since Terminate would only cancel it.
+// When the worker fails to tear the actor down, Terminate fails before it
+// forgets the actor, and the upload, still due, starts once Terminate returns.
+func TestTerminateHoldsOffBackgroundUpload(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// teardownErr is what the worker's TerminateWorkload fails with.
+		teardownErr error
+	}{
+		{name: "Terminate succeeds"},
+		{name: "Terminate fails", teardownErr: status.Error(codes.Internal, "teardown failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, store, stepPastDue := resumedWithPendingUpload(t)
+			var started atomic.Bool
+			a.worker.onTerminate = func() error {
+				started.Store(stepPastDue())
+				return tc.teardownErr
+			}
+
+			_, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+				Atespace:              "ate-demo",
+				ActorName:             "counter",
+				ActorUid:              pluginActorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          pluginWorkerPodUID,
+				Spec:                  a.spec,
+			})
+			switch {
+			case tc.teardownErr == nil && err != nil:
+				t.Fatalf("Terminate: %v", err)
+			case tc.teardownErr != nil && err == nil:
+				t.Fatal("Terminate succeeded, want it to fail with the worker's teardown")
+			}
+			if started.Load() {
+				t.Error("background upload of pause-snap-1 started during Terminate, want none")
+			}
+			if tc.teardownErr == nil {
+				select {
+				case <-store.started:
+					t.Error("background upload of pause-snap-1 started during Terminate, want none")
+				default:
+				}
+				return
+			}
+			select {
+			case <-store.started:
+			case <-time.After(10 * time.Second):
+				t.Fatal("background upload of pause-snap-1 did not start once Terminate failed")
+			}
+		})
 	}
 }
 

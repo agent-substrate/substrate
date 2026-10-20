@@ -161,9 +161,9 @@ type actorSnapshotsRecord struct {
 	//
 	// It is not updated, but the actor is queued again, when a worker pulls
 	// the actor out of the workqueue and:
-	//   - A Run, Restore, Checkpoint, or PromoteSnapshot of the actor is in
-	//     progress (BeginStart, BeginCheckpoint, or BeginPromote). Its end
-	//     queues the actor again.
+	//   - A Run, Restore, Checkpoint, PromoteSnapshot, or Terminate of the
+	//     actor is in progress (BeginStart, BeginCheckpoint, BeginPromote, or
+	//     BeginTerminate). Its end queues the actor again.
 	//   - Another operation on the actor, such as a Detach call, is in
 	//     progress. Its end queues the actor again.
 	//   - The detach is not due yet. The worker queues the actor again for
@@ -189,7 +189,15 @@ const (
 	holdStart               // Run or Restore
 	holdCheckpoint          // Checkpoint
 	holdPromote             // PromoteSnapshot
+	holdTerminate           // Terminate
 )
+
+// blocksUploads reports whether no background upload of the actor starts while
+// an RPC of kind k holds it: PromoteSnapshot, which makes a snapshot durable
+// itself, or Terminate, which forgets the actor.
+func (k holdKind) blocksUploads() bool {
+	return k == holdPromote || k == holdTerminate
+}
 
 // actorSnapshots is what atelet tracks of one actor's snapshots on this node.
 // Its fields are guarded by the actor's lock in Tracker.locks.
@@ -204,10 +212,10 @@ type actorSnapshots struct {
 	// A background worker or an RPC call such as Detach runs it; an actor has
 	// at most one. The entry stays in memory while op is set.
 	op *actorOp
-	// hold records the Run, Restore, Checkpoint, or PromoteSnapshot of the
-	// actor in progress on this node. While set, atelet does not detach the
-	// actor or report its state (nor start a background upload during a
-	// promote), and the entry stays in memory.
+	// hold records the Run, Restore, Checkpoint, PromoteSnapshot, or Terminate
+	// of the actor in progress on this node. While set, atelet does not detach
+	// the actor or report its state (nor start a background upload when
+	// hold.blocksUploads), and the entry stays in memory.
 	hold holdKind
 	// reportDeferred is set when a report of the actor's state is held back
 	// while hold is set, so holdLocked queues it once the RPC ends.
@@ -487,8 +495,8 @@ func (a *actorSnapshots) markStarted() bool {
 // detachScheduled reports whether a detach of the actor is scheduled: atelet
 // holds a local snapshot of the actor, and no Run or Restore of the actor has
 // begun since that snapshot was committed. A scheduled detach runs once it is
-// due (see detachDue) and no Run, Restore, Checkpoint, or PromoteSnapshot of
-// the actor is in progress.
+// due (see detachDue) and no Run, Restore, Checkpoint, PromoteSnapshot, or
+// Terminate of the actor is in progress.
 func (a *actorSnapshots) detachScheduled() bool {
 	return a.LatestLocal != nil && !a.DetachAt.IsZero()
 }

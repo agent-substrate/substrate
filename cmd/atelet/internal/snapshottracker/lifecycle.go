@@ -233,12 +233,24 @@ func (t *Tracker) BeginPromote(ctx context.Context, actorUID string, snap Snapsh
 	return alreadyDurable, t.holdLocked(actorUID, a, holdPromote), nil
 }
 
-// holdLocked records a Run, Restore, Checkpoint, or PromoteSnapshot of the
-// actor in progress on its entry a, which holds detaches and state reports of
-// the actor off (and background uploads during a promote), and returns the
-// func that ends it and queues the actor again. An actor atelet tracks nothing
-// of yet (a nil a) is held too, so no detach or report can begin on a snapshot
-// its first Checkpoint commits before it ends.
+// BeginTerminate records that a Terminate of the actor is in progress on this
+// node, and returns the func to call when the terminate ends, whether or not it
+// succeeded. Until then, atelet starts no background work on the actor; Forget
+// cancels an upload or detach already in progress. If the terminate fails
+// before Forget, its end lets the actor's background work resume.
+func (t *Tracker) BeginTerminate(actorUID string) (end func()) {
+	t.lock(actorUID)
+	defer t.unlock(actorUID)
+	return t.holdLocked(actorUID, t.findLocked(actorUID), holdTerminate)
+}
+
+// holdLocked records a Run, Restore, Checkpoint, PromoteSnapshot, or Terminate
+// of the actor in progress on its entry a, which holds detaches and state
+// reports of the actor off (and background uploads when kind.blocksUploads),
+// and returns the func that ends it and queues the actor again, unless Forget
+// has dropped the actor meanwhile. An actor atelet tracks nothing of yet (a
+// nil a) is held too, so no detach or report can begin on a snapshot its first
+// Checkpoint commits before it ends.
 func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots, kind holdKind) (end func()) {
 	if a == nil {
 		a = &actorSnapshots{actorUID: actorUID}
@@ -248,6 +260,11 @@ func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots, kind holdKind) 
 	return func() {
 		t.lock(actorUID)
 		defer t.unlock(actorUID)
+		if t.findLocked(actorUID) != a {
+			// Forget dropped the actor, as a Terminate does while it holds
+			// the actor.
+			return
+		}
 		a.hold = holdNone
 		if a.reportDeferred {
 			t.queueReportLocked(a)
@@ -256,14 +273,23 @@ func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots, kind holdKind) 
 	}
 }
 
-// Forget drops the actor's state, in memory and on disk. It does not wait for
-// the actor's operation in progress, an upload or a detach: it cancels it, and
-// the operation finds itself abandoned when it ends.
+// Forget drops the actor's state, in memory and on disk. It first cancels any
+// background upload or detach of the actor in progress and waits for it to
+// end, releasing the actor's lock meanwhile.
 func (t *Tracker) Forget(actorUID string) error {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
-	t.abandonOpLocked(actorUID)
-	// Start the actor's backoff over; its entry, and any hold, goes below.
+	if a := t.findLocked(actorUID); a != nil {
+		t.addLocked(a)
+		a.hold = holdTerminate
+		for a.op != nil {
+			op := a.op
+			op.cancel()
+			t.unlock(actorUID)
+			<-op.done
+			t.lock(actorUID)
+		}
+	}
 	t.retries.Forget(actorUID)
 	t.reporting.retries.Forget(actorUID)
 	t.dropLocked(actorUID)

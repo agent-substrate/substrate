@@ -1112,10 +1112,11 @@ func TestTrackerReportStaysDueAtShutdown(t *testing.T) {
 	}
 }
 
-// A report waits while a Run, Restore, Checkpoint, or PromoteSnapshot holds
-// the actor, since the control plane holds the actor's lease throughout that
-// call and would refuse the report with Aborted. Once the hold ends without a
-// commit canceling the report, the report is queued.
+// A report waits while a Run, Restore, Checkpoint, PromoteSnapshot, or
+// Terminate holds the actor, since the control plane holds the actor's lease
+// throughout that call and would refuse the report with Aborted. Once the hold
+// ends without a commit canceling the report, or a Terminate forgetting the
+// actor, the report is queued.
 func TestTrackerDefersReportDuringHold(t *testing.T) {
 	holds := []struct {
 		name  string
@@ -1151,6 +1152,13 @@ func TestTrackerDefersReportDuringHold(t *testing.T) {
 					t.Fatalf("BeginPromote: %v", err)
 				}
 				return end
+			},
+		},
+		{
+			// A Terminate that fails before Forget.
+			name: "BeginTerminate",
+			begin: func(t *testing.T, tr *Tracker) func() {
+				return tr.BeginTerminate(trackedActorUID)
 			},
 		},
 	}
