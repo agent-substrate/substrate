@@ -151,13 +151,28 @@ type rpcRule struct {
 	// authorizedInHandler, when set, says how the RPC's handler authorizes
 	// the caller; the interceptor passes such RPCs through unchecked.
 	authorizedInHandler string
-	// ateletActor, when set, lets atelet call the RPC for an Actor hosted on
-	// atelet's own node, in place of extract's checks.
-	ateletActor actorExtractor
+	// actor, set by actorRule, returns the Actor the request names.
+	actor actorExtractor
+	// ateletByNode, set by ateletOnNode, lets atelet call the RPC for the
+	// Actor hosted on atelet's own node, in place of extract's checks.
+	ateletByNode bool
 }
 
 func rule(extract checkExtractor) rpcRule {
 	return rpcRule{extract: extract}
+}
+
+// actorRule checks relation on the Actor that actorFor names in the request at
+// fldPath. extract and actor come from the same actorFor and fldPath.
+func actorRule[T any](relation string, fldPath *field.Path, actorFor func(T) resourceRef) rpcRule {
+	return rpcRule{
+		extract: checksOf(func(r T) ([]check, field.ErrorList) {
+			return onActor(relation, actorFor(r), fldPath)
+		}),
+		actor: actorOf(func(r T) (resourceRef, *field.Path) {
+			return actorFor(r), fldPath
+		}),
+	}
 }
 
 func governance(extract checkExtractor) rpcRule {
@@ -266,11 +281,9 @@ var defaultRPCPermissions = map[string]rpcRule{
 	//
 	// atelet reads the egress policy of an Actor on its node, for the worker
 	// that enforces it.
-	ateapipb.Control_GetActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorEgressPolicyRequest) ([]check, field.ErrorList) {
-		return onActor(RelationCanGetEgressPolicy, r.GetActor(), field.NewPath("actor"))
-	})).ateletOnNode(actorOf(func(r *ateapipb.GetActorEgressPolicyRequest) (resourceRef, *field.Path) {
-		return r.GetActor(), field.NewPath("actor")
-	})),
+	ateapipb.Control_GetActorEgressPolicy_FullMethodName: actorRule(RelationCanGetEgressPolicy, field.NewPath("actor"), func(r *ateapipb.GetActorEgressPolicyRequest) resourceRef {
+		return r.GetActor()
+	}).ateletOnNode(),
 	ateapipb.Control_CreateActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.CreateActorEgressPolicyRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanCreateEgressPolicy, r.GetActor(), field.NewPath("actor"))
 	})),

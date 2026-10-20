@@ -30,7 +30,7 @@ import (
 // For an RPC whose rule declares ateletOnNode, atelet is authorized by node
 // instead of OpenFGA: it may call the RPC only for an Actor hosted on its own
 // node.
-func UnaryServerInterceptor(authorizer *Authorizer, enforce bool, atelet AteletCheck) grpc.UnaryServerInterceptor {
+func UnaryServerInterceptor(authorizer *Authorizer, enforce bool, atelet *AteletAuthorizer) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if IsBypassed(ctx) {
 			return handler(ctx, req)
@@ -52,7 +52,7 @@ func UnaryServerInterceptor(authorizer *Authorizer, enforce bool, atelet AteletC
 			return nil, apierror.Unauthenticated("unauthenticated: missing principal in context")
 		}
 		// atelet is checked by node instead of OpenFGA.
-		if rule.ateletActor != nil {
+		if rule.ateletByNode {
 			node, isAtelet, err := atelet.node(ctx)
 			if err != nil {
 				return nil, err
