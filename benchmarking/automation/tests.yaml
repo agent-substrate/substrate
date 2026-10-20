@@ -52,14 +52,14 @@
 #                  large workerCount fleets whose image pulls or scheduling
 #                  outrun the default.
 #   ateArgs        Optional. List of strings appended verbatim to
-#                  `hack/install-ate.sh --deploy-ate-system` when this
+#                  `hack/install-ate.sh deploy ate-system` when this
 #                  test's substrate is deployed (e.g. ["--atenet-dataplane=agentgateway"]).
 #                  The deploy requires --credential-provider; set it here
 #                  as one YAML string, '--credential-provider={"name":"k8s.io"}'
 #                  (no shell quoting: the args are passed without a shell),
 #                  or as ATE_CREDENTIAL_PROVIDER in .ate-dev-env.sh.
 #   isolate        Optional. Isolate mode: installs substrate with the fake
-#                  data plane (hack/install-ate.sh --fake-data-plane), which
+#                  data plane (hack/install-ate.sh deploy ate-system --fake-data-plane), which
 #                  serves the WorkerPool without worker pods: fake-atelet
 #                  takes atelet's place on every atelet node and answers each
 #                  lifecycle call after a delay, and fake-workersync honors

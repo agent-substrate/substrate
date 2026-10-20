@@ -390,9 +390,9 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
 
 
 def substrate_args(test: dict[str, Any]) -> list[str]:
-    """Return the hack/install-ate.sh --deploy-ate-system arguments for a
+    """Return the hack/install-ate.sh deploy ate-system arguments for a
     tests.yaml entry: its ateArgs, then the fake data plane flag its isolate
-    block asks for. The teardown needs no matching flag: --delete-ate-system
+    block asks for. The teardown needs no matching flag: delete ate-system
     removes the fake data plane whether or not it was installed."""
     return [*test.get("ateArgs", []), *isolate_install_args(test)]
 
@@ -411,11 +411,11 @@ def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
         **os.environ,
         "ATE_API_AUTHZ_BOOTSTRAP_OWNERS": f"{CLIENT_PRINCIPAL},{BENCHMARK_RUNNER_PRINCIPAL}",
     }
-    run(["hack/install-ate.sh", "--deploy-ate-system", *(str(a) for a in ate_args)], env=env)
+    run(["hack/install-ate.sh", "deploy", "ate-system", *(str(a) for a in ate_args)], env=env)
 
 
 def teardown_substrate() -> None:
-    run_no_check(["hack/install-ate.sh", "--delete-ate-system"])
+    run_no_check(["hack/install-ate.sh", "delete", "ate-system"])
 
 
 def install_microvm_deps() -> None:

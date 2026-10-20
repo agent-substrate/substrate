@@ -36,15 +36,15 @@ variable when deploying ATE.
 1. **Cluster with Agent Substrate deployed**:
    - **Existing cluster** (with `.ate-dev-env.sh` configured):
      ```bash
-     hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+     hack/install-ate.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
      ```
    - **Local `kind` cluster**:
      ```bash
-     hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"enabled":false}'
+     hack/install-ate-kind.sh deploy ate-system --credential-provider='{"enabled":false}'
      ```
    - To set the `atenet-egress` Envoy worker thread count (`--concurrency`), set `E2E_ATE_ENVOY_CONCURRENCY` when deploying:
      ```bash
-     E2E_ATE_ENVOY_CONCURRENCY=1 hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"enabled":false}'
+     E2E_ATE_ENVOY_CONCURRENCY=1 hack/install-ate-kind.sh deploy ate-system --credential-provider='{"enabled":false}'
      ```
 2. **`kubectl-ate` installed in `PATH`**:
    ```bash
