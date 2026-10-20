@@ -57,10 +57,12 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 }
 
 // ValidateCustom_CreateActorTemplateRequest_ActorTemplate holds the rules
-// that span more than one field of a template: container volume mounts must
-// reference volumes the template declares.
+// that span more than one field of a template.
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
 	var errs field.ErrorList
+	if value.GetGoldenEgressPolicy() != nil && value.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+		errs = append(errs, field.Forbidden(fldPath.Child("golden_egress_policy"), "requires golden snapshots to be enabled"))
+	}
 	declared := make(map[string]bool, len(value.GetVolumes()))
 	for _, vol := range value.GetVolumes() {
 		declared[vol.GetName()] = true

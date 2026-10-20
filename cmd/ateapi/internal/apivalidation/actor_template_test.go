@@ -36,6 +36,48 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate()},
 		nil,
 	}, {
+		"valid golden egress rules",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}}}}
+		})},
+		nil,
+	}, {
+		"missing golden egress rules",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{}
+		})},
+		field.ErrorList{field.Required(field.NewPath("actor_template", "golden_egress_policy", "rules"), "")},
+	}, {
+		"empty golden egress rules",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{}}
+		})},
+		field.ErrorList{field.Required(field.NewPath("actor_template", "golden_egress_policy", "rules"), "")},
+	}, {
+		"invalid golden egress hostname",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"bad/host"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}}}}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "golden_egress_policy", "rules").Index(0).Child("http", "hostnames").Index(0), nil, "")},
+	}, {
+		"golden egress rules tie across protocols",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
+				{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
+				{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
+			}}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "golden_egress_policy", "rules").Index(1).Child("tls_passthrough", "hostnames").Index(0), nil, "")},
+	}, {
+		"too many golden egress rules",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{}
+			for i := range 257 {
+				tmpl.GoldenEgressPolicy.Rules = append(tmpl.GoldenEgressPolicy.Rules, &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: []string{fmt.Sprintf("host-%d.example.com", i)}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}})
+			}
+		})},
+		field.ErrorList{field.TooMany(field.NewPath("actor_template", "golden_egress_policy", "rules"), 257, 256).WithOrigin("maxItems")},
+	}, {
 		"missing actor_template",
 		&ateapipb.CreateActorTemplateRequest{},
 		field.ErrorList{field.Required(field.NewPath("actor_template"), "")},
@@ -182,7 +224,15 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), tt.req), tt.want)
+			want := tt.want
+			var wantWithPreview map[string]field.ErrorList
+			if tt.req.GetActorTemplate().GetGoldenEgressPolicy() != nil {
+				want = field.ErrorList{field.Forbidden(field.NewPath("actor_template", "golden_egress_policy"), "")}
+				wantWithPreview = map[string]field.ErrorList{"GoldenEgressPolicy": tt.want, "ALL": tt.want}
+			}
+			assertValidate(t, func() field.ErrorList {
+				return ValidateCreateActorTemplateRequest(context.Background(), tt.req)
+			}, want, wantWithPreview)
 		})
 	}
 }

@@ -103,8 +103,56 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `snapshotConfig` | `SnapshotConfig` | Optional; omitted fields take their defaults. The base object-storage location snapshots are written under (a preview field, ignored without the `PerTemplateSnapshotLocation` gate), the snapshot fidelity (`preferredFidelity`) every Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `external` CSI volume source (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpuMillicores` and `memoryBytes` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
+| `goldenEgressPolicy` | `EgressPolicyTemplate` | **Preview.** Optional egress policy for the golden actor during initialization. Requires at least one rule, using the same rule defaults and validation as `EgressPolicy`. See [Golden Egress Policy](#golden-egress-policy-goldenegresspolicy). |
 
 The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-compute-foundation) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the runtime it runs under is stamped onto the actor's assignment and snapshots (`sandboxRuntime`: the sandbox class and the runtime's compatibility version) so subsequent resumes prefer runtime-compatible workers.
+
+### Golden Egress Policy (`goldenEgressPolicy`)
+
+`goldenEgressPolicy` is a **preview** feature. Enable
+`--preview=GoldenEgressPolicy` on the server (or through
+ate-setup's `preview` setting), and opt in on the client with `kubectl ate --preview`
+or the `Ate-Preview-Allowed: true` gRPC metadata header. See [Preview gates](dev/preview-gates.md).
+
+Set `goldenEgressPolicy` on an ActorTemplate to give its golden actor network
+access during initialization. For example, this template field
+allows HTTPS to `api.example.com` on the default port, 443:
+
+```yaml
+goldenEgressPolicy:
+  rules:
+    - https:
+        hostnames: [api.example.com]
+```
+
+The template controller creates the golden actor suspended, then creates its
+`EgressPolicy` through `CreateActorEgressPolicy` before calling `ResumeActor`.
+The policy uses the actor's atespace and the name `default`, and receives its own
+UID, version, and timestamps. The template field contains only rules.
+
+If policy creation fails, the controller retries without resuming the actor.
+On a retry, an existing policy must match the template's rules. A mismatch stops
+golden initialization and records a `GoldenEgressPolicyConflict` error in the
+template's status. Actor and policy creation are separate operations: callers
+must leave golden startup to the controller, since a direct `ResumeActor` call
+can start it before its policy exists.
+
+Other actors created from the template do not inherit this policy, including
+actors restored from its golden snapshot. Configure their network access using
+`CreateActorEgressPolicy` before resuming them.
+
+The controller checks the policy before each resume it attempts during golden
+initialization; it does not continuously reconcile the policy after the actor is
+running. Updating or deleting that policy does not change the immutable template.
+Omitting `goldenEgressPolicy` creates no golden policy. When set, it must contain
+at least one rule.
+It cannot be set when `snapshotConfig.goldenSnapshotConfig.mode` is
+`GOLDEN_SNAPSHOT_MODE_DISABLED`.
+
+Turning the gate off prevents creating new templates with `goldenEgressPolicy`.
+Existing templates retain their configuration, including when their golden is
+created after the gate is turned off. Existing policies and resource cleanup
+continue to work.
 
 ### Sandbox Right-Sizing (`resources`)
 
