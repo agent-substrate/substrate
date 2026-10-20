@@ -23,8 +23,8 @@ export LC_ALL=C
 
 MIGRATIONS_DIR="cmd/ateapi/internal/store/atepg/migrations"
 
-if (( $# != 1 )); then
-  echo "Usage: $0 base-ref" >&2
+if (( $# > 1 )); then
+  echo "Usage: $0 [base-ref]" >&2
   exit 2
 fi
 
@@ -73,6 +73,11 @@ for migration in "${migrations[@]}"; do
   fi
   expected=$((expected + 1))
 done
+
+# Without a base ref, as from verify-all.sh, only the file rules above are checked.
+if (( $# == 0 )); then
+  exit 0
+fi
 
 base="$(git merge-base HEAD "$1")"
 if ! git diff --quiet --no-renames --diff-filter=MD "${base}" HEAD -- "${MIGRATIONS_DIR}"; then
