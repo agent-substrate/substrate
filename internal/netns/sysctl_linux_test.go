@@ -32,9 +32,9 @@ import (
 // and /proc/sys is left as it was found. Remounting it read-only on the way
 // out would break every later write.
 func TestSetSysctlReportsAnUnrelatedError(t *testing.T) {
-	err := setSysctl("net/ipv4/workernet_no_such_sysctl", "0")
+	err := SetSysctls(Sysctl{Key: "net/ipv4/workernet_no_such_sysctl", Value: "0"})
 	if !errors.Is(err, unix.ENOENT) {
-		t.Fatalf("setSysctl() on a missing key: got %v, want ENOENT", err)
+		t.Fatalf("SetSysctls() on a missing key: got %v, want ENOENT", err)
 	}
 	var st unix.Statfs_t
 	if err := unix.Statfs("/proc/sys", &st); err != nil {
@@ -86,7 +86,7 @@ func TestSetSysctlsBatchesRemount(t *testing.T) {
 	}}
 	sysctls := append([]Sysctl{
 		{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"},
-	}, ForwardingSysctls...)
+	}, forwardingSysctls...)
 	if err := fake.procSys().set(sysctls); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestDisableForwardingClearsEveryFamily(t *testing.T) {
 		"/proc/sys/net/ipv6/conf/all/forwarding":     "1",
 		"/proc/sys/net/ipv6/conf/default/forwarding": "1",
 	}}
-	if err := fake.procSys().set(ForwardingSysctls); err != nil {
+	if err := fake.procSys().set(forwardingSysctls); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	for key, v := range fake.values {
@@ -144,7 +144,7 @@ func TestDisableIPv4ForwardingWhenIPv6Disabled(t *testing.T) {
 			return nil
 		},
 	}
-	if err := p.set(ForwardingSysctls); err != nil {
+	if err := p.set(forwardingSysctls); err != nil {
 		t.Fatalf("set without IPv6: %v", err)
 	}
 	for _, key := range []string{"/proc/sys/net/ipv4/conf/all/forwarding", "/proc/sys/net/ipv4/conf/default/forwarding"} {
@@ -160,7 +160,7 @@ func TestDisableForwardingReportsAMissingIPv4Key(t *testing.T) {
 		writeFile: func(path string, data []byte) error { return nil },
 		remount:   func(bool) error { return nil },
 	}
-	if err := p.set(ForwardingSysctls); !errors.Is(err, unix.ENOENT) {
+	if err := p.set(forwardingSysctls); !errors.Is(err, unix.ENOENT) {
 		t.Fatalf("set with no IPv4 keys: got %v, want ENOENT", err)
 	}
 }

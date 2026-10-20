@@ -33,18 +33,11 @@ type Sysctl struct {
 	Value string
 }
 
-// AllowUnprivilegedPorts lets this namespace bind ports below 1024 without
-// CAP_NET_BIND_SERVICE, which is how atunnel answers a sandbox's DNS on 53.
-// The sysctl is per-namespace and grants nothing outside it.
-func AllowUnprivilegedPorts() error {
-	return SetSysctls(Sysctl{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"})
-}
-
-// ForwardingSysctls disables IPv4 and IPv6 forwarding across all interfaces
+// forwardingSysctls disables IPv4 and IPv6 forwarding across all interfaces
 // and default interface templates. Explicitly clearing default/forwarding
 // ensures interfaces created after namespace setup (such as microVM taps)
 // do not inherit forwarding on nodes where all=0 but default=1.
-var ForwardingSysctls = []Sysctl{
+var forwardingSysctls = []Sysctl{
 	{Key: "net/ipv4/conf/all/forwarding", Value: "0"},
 	{Key: "net/ipv4/conf/default/forwarding", Value: "0"},
 	{Key: "net/ipv6/conf/all/forwarding", Value: "0"},
@@ -54,7 +47,7 @@ var ForwardingSysctls = []Sysctl{
 // DisableForwarding turns off IPv4 and IPv6 forwarding in this namespace, which
 // otherwise inherits the node's IPv4 setting. Missing IPv6 keys are skipped.
 func DisableForwarding() error {
-	return SetSysctls(ForwardingSysctls...)
+	return SetSysctls(forwardingSysctls...)
 }
 
 // SetSysctls writes value to each sysctl in the current network namespace under
@@ -91,12 +84,6 @@ var hostProcSys = procSys{
 	},
 }
 
-// setSysctl writes value to the named sysctl in the current network
-// namespace.
-func setSysctl(key, value string) error {
-	return SetSysctls(Sysctl{Key: key, Value: value})
-}
-
 func (p procSys) set(sysctls []Sysctl) error {
 	procSysMu.Lock()
 	defer procSysMu.Unlock()
@@ -130,18 +117,9 @@ func (p procSys) set(sysctls []Sysctl) error {
 		return nil
 	}
 
-	firstPath := "/proc/sys/" + toWrite[0].Key
-	if err := p.writeFile(firstPath, []byte(toWrite[0].Value+"\n")); !errors.Is(err, unix.EROFS) {
-		if err != nil {
-			return fmt.Errorf("while setting %s in the current netns: %w", toWrite[0].Key, err)
-		}
-		for _, s := range toWrite[1:] {
-			path := "/proc/sys/" + s.Key
-			if err := p.writeFile(path, []byte(s.Value+"\n")); err != nil {
-				return fmt.Errorf("while setting %s in the current netns: %w", s.Key, err)
-			}
-		}
-		return nil
+	err := writeAll()
+	if err == nil || !errors.Is(err, unix.EROFS) {
+		return err
 	}
 
 	if err := p.remount(false); err != nil {

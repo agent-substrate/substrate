@@ -501,6 +501,22 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 	}
 	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
+	// Delete disallowed-egress so its prerouting reject does not shadow the
+	// forwarding sysctl and forward chain checks below.
+	table := &nftables.Table{Family: nftables.TableFamilyIPv4, Name: "worker-actor"}
+	c, err := nftables.New(nftables.WithNetNSFd(int(n.GatewayNetNS)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	disallowedEgress := &nftables.Chain{Table: table, Name: "disallowed-egress"}
+	c.FlushChain(disallowedEgress)
+	c.DelChain(disallowedEgress)
+	if err := c.Flush(); err != nil {
+		_ = c.CloseLasting()
+		t.Fatalf("removing disallowed-egress chain: %v", err)
+	}
+	_ = c.CloseLasting()
+
 	probeNSName := fmt.Sprintf("actornet-forward-probe-%d", os.Getpid())
 	probeNS, err := netns.CreateNamed(probeNSName)
 	if err != nil {
@@ -588,16 +604,16 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 		t.Fatal("the gateway namespace routed actor traffic once forwarding was re-enabled; the forward chain is not dropping")
 	}
 
-	c, err := nftables.New(nftables.WithNetNSFd(int(n.GatewayNetNS)))
+	c, err = nftables.New(nftables.WithNetNSFd(int(n.GatewayNetNS)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.CloseLasting() }()
-	c.DelTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "worker-actor"})
+	c.DelChain(&nftables.Chain{Name: "forward", Table: table})
 	if err := c.Flush(); err != nil {
-		t.Fatalf("removing the worker-actor table: %v", err)
+		t.Fatalf("removing the forward chain: %v", err)
 	}
 	if !arrives(5 * time.Second) {
-		t.Fatal("the probe saw nothing even with forwarding on and no firewall; this test cannot detect routing")
+		t.Fatal("the probe saw nothing even with forwarding on and no forward chain; this test cannot detect routing")
 	}
 }
