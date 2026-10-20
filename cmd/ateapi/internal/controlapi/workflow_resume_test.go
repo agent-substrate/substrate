@@ -997,81 +997,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 	}
 }
 
-// TestResolveResumeSource covers the boot source resolved for a pending
-// restore: a durable snapshot captured under a different template sets
-// TemplateReplaced so the restore downgrades to data-only, and a golden tag
-// that became ready after creation does not change the source.
-func TestResolveResumeSource(t *testing.T) {
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	const tmplUID = "tmpl-uid"
-
-	tests := []struct {
-		name         string
-		snapshotUID  string
-		noSnapshot   bool
-		golden       bool
-		wantSource   bool
-		wantReplaced bool
-	}{
-		{
-			name:        "snapshot taken under the current template",
-			snapshotUID: tmplUID,
-			wantSource:  true,
-		},
-		{
-			name:         "snapshot taken under a replaced template",
-			snapshotUID:  "some-other-uid",
-			wantSource:   true,
-			wantReplaced: true,
-		},
-		{
-			name:        "snapshot without a recorded template UID",
-			snapshotUID: "",
-			wantSource:  true,
-		},
-		{
-			name:       "no durable snapshot",
-			noSnapshot: true,
-		},
-		{
-			name:       "golden tag ready after creation is not a source",
-			noSnapshot: true,
-			golden:     true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tmpl := &ateapipb.ActorTemplate{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1", Uid: tmplUID},
-			}
-			if tt.golden {
-				tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
-				}}
-			}
-			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}
-			if !tt.noSnapshot {
-				actor.Status.LastAssignedGeneration = 1
-				actor.Status.Snapshots = []*ateapipb.Snapshot{
-					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tt.snapshotUID, "snap-1", someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-				}
-			}
-
-			src, err := resolveResumeSource(actorRef, actor, tmpl)
-			if err != nil {
-				t.Fatalf("resolveResumeSource: %v", err)
-			}
-			if got := !src.SnapshotURI.IsZero(); got != tt.wantSource {
-				t.Errorf("has snapshot source = %v, want %v (src: %+v)", got, tt.wantSource, src)
-			}
-			if src.TemplateReplaced != tt.wantReplaced {
-				t.Errorf("src.TemplateReplaced = %v, want %v", src.TemplateReplaced, tt.wantReplaced)
-			}
-		})
-	}
-}
-
 func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
@@ -1391,6 +1316,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		snapshotName string
 		snapshotURI  string
 		scope        ateletpb.SnapshotFidelity
+		// kind is the restore's snapshot kind label: local for a local
+		// snapshot, otherwise latest.
+		kind string
 	}
 
 	amd64RT := testSandboxRuntime()
@@ -1434,6 +1362,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			tmpl:  templateSeed{golden: extSnap(goldenURI, fullScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  goldenURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1460,6 +1389,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor: actorSeed{externalSnapshot: extSnap(actorURI, fullScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1472,6 +1402,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1487,6 +1418,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1496,6 +1428,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor: actorSeed{externalSnapshot: extSnap(actorURI, rootfsScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1510,6 +1443,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1519,6 +1453,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor: actorSeed{externalSnapshot: extSnap(actorURI, dataScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1531,6 +1466,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			tmpl:  templateSeed{golden: extSnap(goldenURI, fullScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1543,6 +1479,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor: actorSeed{externalSnapshot: extSnap(actorURI, unspecScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 			},
@@ -1563,6 +1500,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1575,6 +1513,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1610,6 +1549,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1624,6 +1564,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1638,6 +1579,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1658,6 +1600,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1671,6 +1614,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1684,6 +1628,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1698,6 +1643,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			tmpl: templateSeed{golden: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, goldenURI, fullScope, amd64RT)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  goldenURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1712,6 +1658,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1726,6 +1673,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1739,6 +1687,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1752,6 +1701,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1765,6 +1715,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1778,6 +1729,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1882,8 +1834,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			if err == nil {
 				err = checkSnapshotURI(actorRef, actor)
 			}
+			var tele restoreTelemetry
 			if err == nil {
-				_, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
+				tele, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
 			}
 			if got := apierror.Code(err); got != tt.want.code {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
@@ -1905,6 +1858,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				if !proto.Equal(run.GetSandboxRuntime(), wantSandboxRuntime) {
 					t.Errorf("run ActorSandboxRuntime = %v, want %v", run.GetSandboxRuntime(), wantSandboxRuntime)
 				}
+				if tele.SnapshotKind != ateattr.SnapshotKindBoot {
+					t.Errorf("SnapshotKind = %q, want %q", tele.SnapshotKind, ateattr.SnapshotKindBoot)
+				}
 				return
 			}
 			if restore == nil || run != nil {
@@ -1921,6 +1877,12 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			}
 			if got := restore.GetSnapshot().GetFidelity(); got != tt.want.scope {
 				t.Errorf("restore scope = %v, want %v", got, tt.want.scope)
+			}
+			if want := ateattr.SnapshotFidelityValue(tt.want.scope); tele.WireFidelity != want {
+				t.Errorf("WireFidelity = %q, want %q, the fidelity sent to atelet", tele.WireFidelity, want)
+			}
+			if tele.SnapshotKind != tt.want.kind {
+				t.Errorf("SnapshotKind = %q, want %q", tele.SnapshotKind, tt.want.kind)
 			}
 			wantGen := extGen
 			if tt.want.snapshotName == localSnapshotName {

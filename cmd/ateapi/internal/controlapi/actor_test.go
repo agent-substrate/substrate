@@ -975,15 +975,11 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			}
 			workflow := &ActorWorkflow{store: persistence}
 			actorRef := resources.ActorRefFromActor(created)
-			loaded, loadedTmpl, err := workflow.loadActorForResume(ctx, actorRef)
+			loaded, _, err := workflow.loadActorForResume(ctx, actorRef)
 			if err != nil {
 				t.Fatal(err)
 			}
-			src, err := resolveResumeSource(actorRef, loaded, loadedTmpl)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if src.SnapshotURI.IsZero() {
+			if findLatestDurableSnapshot(loaded.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == nil {
 				t.Fatalf("missing snapshot source for %s", scenario)
 			}
 		})
