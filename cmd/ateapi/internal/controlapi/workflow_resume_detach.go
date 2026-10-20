@@ -23,6 +23,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -68,6 +69,15 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 		if canDetachWithoutAtelet(ctx, actor, err) {
 			return w.recordDetach(ctx, actorRef, actor, node, nil)
 		}
+		if errors.Is(err, ErrNoAteletOnNode) {
+			gone, nodeErr := w.dialer.NodeGone(ctx, node)
+			if nodeErr != nil {
+				return nil, apierror.Unavailable("while checking deleted node %q: %w", node, nodeErr)
+			}
+			if gone {
+				return w.recordGoneNode(ctx, actorRef, actor.GetMetadata().GetUid(), node)
+			}
+		}
 		return nil, apierror.Unavailable("while getting atelet conn for node %q: %w", node, err)
 	}
 	resp, err := ateletpb.NewAteletClient(ateletConn).DetachActor(ctx, &ateletpb.DetachActorRequest{
@@ -96,6 +106,56 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 		slog.Any("actor", actorRef),
 		slog.String("node", node))
 	return stored, nil
+}
+
+// recordGoneNode crashes an actor whose latest generation was lost with its node.
+// An upload that completed during the node lookup uses the normal detach path.
+func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.ActorRef, uid, node string) (*ateapipb.Actor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	actor, err := w.loadPinnedActor(ctx, actorRef, uid, node)
+	if err != nil {
+		return nil, err
+	}
+	st := actor.GetStatus()
+	if st.GetWorkerAssignment() != nil || st.GetCrash() != nil {
+		return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef)
+	}
+	for _, snap := range st.GetSnapshots() {
+		if snap.GetGeneration() > st.GetLastAssignedGeneration() ||
+			(snap.GetLocality() != "" && snap.GetLocality() != node) {
+			return nil, apierror.FailedPrecondition("Actor %s has snapshots inconsistent with its assigned node or generation", actorRef)
+		}
+	}
+	latest := snapshotAtLatestGeneration(st)
+	if latest.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		return w.recordDetach(ctx, actorRef, actor, node, nil)
+	}
+	message := fmt.Sprintf("node %q was deleted without a completed durable snapshot for generation %d", node, st.GetLastAssignedGeneration())
+	_, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for _, snap := range toUpdate.Status.Snapshots {
+			if snap.Locality == node {
+				snap.Locality = ""
+			}
+		}
+		toUpdate.Status.AssignedNode = ""
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+		toUpdate.Status.Crash = newActorCrash(ateattr.OperationResume, message)
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrUIDConflict) {
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		}
+		return nil, fmt.Errorf("while recording deleted node %q for Actor %s: %w", node, actorRef, err)
+	}
+	logActorCrashed(ctx, actor, ateattr.OperationResume)
+	recordActorCrash(ctx, ateattr.ActorMetricAttributes(actor, snapshotSandboxClass(actor), ateattr.OperationResume))
+	return nil, apierror.FailedPrecondition("actor %s is CRASHED: %s", actorRef, message)
 }
 
 // loadPinnedActor reads the actor, and fails with Aborted unless it is still
