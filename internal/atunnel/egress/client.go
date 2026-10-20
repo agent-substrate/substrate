@@ -791,11 +791,8 @@ func (c *h2StreamConn) Read(p []byte) (int, error) {
 	}
 }
 
-// WriteTo copies the stream to w until EOF. Unlike Read, it reads the response
-// body on the calling goroutine with relay, so an idle stream holds no reader
-// goroutine and only a small buffer. Close stops it; a read deadline set after
-// it starts does not, so with a deadline already set it falls back to Read.
-func (c *h2StreamConn) WriteTo(w io.Writer) (int64, error) {
+// writeTo copies the stream to w until EOF or an error.
+func (c *h2StreamConn) writeTo(w io.Writer) (int64, error) {
 	c.readMu.Lock()
 	if isClosedChan(c.closedCh) {
 		c.readMu.Unlock()
@@ -818,18 +815,16 @@ func (c *h2StreamConn) WriteTo(w io.Writer) (int64, error) {
 		}
 		return written, err
 	}
+	// A pending Read or a read deadline needs Read's background reader.
 	if c.readInFlight || c.readDeadline.isSet() {
 		c.readMu.Unlock()
-		n, err := relay(w, readOnly{c})
+		n, err := (&streamCopy{dest: w, src: c}).Do()
 		return written + n, err
 	}
 	defer c.readMu.Unlock()
-	n, err := relay(w, h2StreamBody{c})
+	n, err := (&streamCopy{dest: w, src: h2StreamBody{c}}).Do()
 	return written + n, err
 }
-
-// readOnly hides h2StreamConn's other methods so relay reads through Read.
-type readOnly struct{ io.Reader }
 
 // h2StreamBody reads an h2StreamConn's response body directly. The caller holds
 // readMu.

@@ -890,9 +890,9 @@ func TestCopyBothWaysHTTP2Stream(t *testing.T) {
 		close(copied)
 	}()
 
-	// Mix write sizes around relay's buffer sizes, then end the stream.
+	// Mix write sizes around streamCopy's buffer sizes, then end the stream.
 	var sent []byte
-	for i, size := range []int{1, relaySmallBufSize, relaySmallBufSize + 1, relayBufSize, 3 << 20} {
+	for i, size := range []int{1, streamCopySmallBufSize, streamCopySmallBufSize + 1, streamCopyBufSize, 3 << 20} {
 		chunk := make([]byte, size)
 		for j := range chunk {
 			chunk[j] = byte(i + j)
@@ -932,13 +932,13 @@ func TestH2StreamConnWriteToStopsOnClose(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := stream.WriteTo(io.Discard)
+		_, err := stream.writeTo(io.Discard)
 		done <- err
 	}()
 	time.Sleep(20 * time.Millisecond)
 	_ = conn.Close()
-	if err := receiveWithin(t, done, "WriteTo to return"); !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("WriteTo after Close = %v, want net.ErrClosed", err)
+	if err := receiveWithin(t, done, "writeTo to return"); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("writeTo after Close = %v, want net.ErrClosed", err)
 	}
 }
 
@@ -962,19 +962,19 @@ func TestH2StreamConnWriteToHonorsReadDeadline(t *testing.T) {
 	if err := conn.SetReadDeadline(time.Now().Add(20 * time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := stream.WriteTo(io.Discard); !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("WriteTo error = %v, want os.ErrDeadlineExceeded", err)
+	if _, err := stream.writeTo(io.Discard); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("writeTo error = %v, want os.ErrDeadlineExceeded", err)
 	}
 
-	// The timed-out read is still in flight, so WriteTo must collect its
+	// The timed-out read is still in flight, so writeTo must collect its
 	// result instead of reading the body itself.
 	if err := conn.SetReadDeadline(time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	close(releaseServerSend)
 	var got strings.Builder
-	if _, err := stream.WriteTo(&got); err != nil {
-		t.Fatalf("WriteTo after clearing deadline: %v", err)
+	if _, err := stream.writeTo(&got); err != nil {
+		t.Fatalf("writeTo after clearing deadline: %v", err)
 	}
 	if got.String() != "delayed" {
 		t.Errorf("got %q, want delayed", got.String())

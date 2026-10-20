@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net"
@@ -341,87 +340,13 @@ func copyBothWays(a, b net.Conn) {
 	<-done
 }
 
-// copyConn copies src to dst until src reaches EOF. It avoids io.Copy, which
-// holds a 32 KiB buffer for as long as src is idle; tunnels are often idle
-// (connection pools, keep-alive, long polling), so that buffer per direction
-// per tunnel adds up to most of atunnel's memory.
+// copyConn copies src to dst until EOF. Unlike io.Copy, it doesn't hold a 32 KiB
+// buffer per direction while the tunnel is idle.
 func copyConn(dst, src net.Conn) (int64, error) {
 	if stream, ok := src.(*h2StreamConn); ok {
-		return stream.WriteTo(dst)
+		return stream.writeTo(dst)
 	}
-	return relay(dst, src)
-}
-
-const (
-	// relaySmallBufSize is the buffer relay holds while src is idle.
-	relaySmallBufSize = 512
-	// relayBufSize is the buffer relay borrows while data is arriving.
-	relayBufSize = 32 << 10
-)
-
-var relayBufPool = sync.Pool{
-	New: func() any {
-		buf := make([]byte, relayBufSize)
-		return &buf
-	},
-}
-
-// relay copies src to dst until src reaches EOF, like io.Copy, but waits for
-// data with only a small buffer. When a read fills that buffer, more data is
-// likely queued, so relay borrows a large buffer from a pool and reads with it
-// until a read comes back short, then returns it before waiting again.
-//
-// Data is written as soon as it is read, so nothing waits on the next read.
-// The large buffer is held while src is idle only if src pauses right after a
-// read that filled it, until more data arrives or src is closed.
-func relay(dst io.Writer, src io.Reader) (written int64, err error) {
-	write := func(p []byte) error {
-		if len(p) == 0 {
-			return nil
-		}
-		n, err := dst.Write(p)
-		written += int64(n)
-		if err == nil && n < len(p) {
-			err = io.ErrShortWrite
-		}
-		return err
-	}
-	finish := func(readErr error) (int64, error) {
-		if readErr == io.EOF {
-			return written, nil
-		}
-		return written, readErr
-	}
-
-	smallBuf := make([]byte, relaySmallBufSize)
-	for {
-		n, readErr := src.Read(smallBuf)
-		if err := write(smallBuf[:n]); err != nil {
-			return written, err
-		}
-		if readErr != nil {
-			return finish(readErr)
-		}
-		if n < len(smallBuf) {
-			continue
-		}
-
-		buf := relayBufPool.Get().(*[]byte)
-		for {
-			n, readErr = src.Read(*buf)
-			err = write((*buf)[:n])
-			if err != nil || readErr != nil || n < len(*buf) {
-				break
-			}
-		}
-		relayBufPool.Put(buf)
-		if err != nil {
-			return written, err
-		}
-		if readErr != nil {
-			return finish(readErr)
-		}
-	}
+	return (&streamCopy{dest: dst, src: src}).Do()
 }
 
 func closeWrite(conn net.Conn) {
