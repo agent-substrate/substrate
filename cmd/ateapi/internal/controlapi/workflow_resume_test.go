@@ -3272,6 +3272,20 @@ func TestCanRelaxRuntime(t *testing.T) {
 			snapshots: []*ateapipb.Snapshot{durable(1), localNoDurable(2)},
 			required:  rt,
 		},
+		{
+			name:      "pinned actor detaches before relaxing a newer durable snapshot",
+			state:     suspended,
+			node:      "node-1",
+			snapshots: []*ateapipb.Snapshot{local(1), durable(2)},
+			required:  rt,
+		},
+		{
+			name:      "newer durable snapshot may fall back beside an older pending checkpoint",
+			state:     suspended,
+			snapshots: []*ateapipb.Snapshot{localDurable(1, pending), durable(2)},
+			required:  rt,
+			want:      true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

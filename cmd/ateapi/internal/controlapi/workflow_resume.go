@@ -670,14 +670,16 @@ func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) 
 		return false
 	}
 	status := actor.GetStatus()
-	local := findLatestLocalSnapshot(status)
-	if local == nil {
-		return true
-	}
+	// A pinned actor detaches first, so a compatible worker elsewhere can keep
+	// its memory state.
 	if status.GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && status.GetAssignedNode() != "" {
 		return false
 	}
-	return local.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	snap := snapshotToResume(status)
+	if snap.GetLocality() == "" {
+		return true
+	}
+	return snap.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 }
 
 // appliesWithFallback reports whether worker satisfies constraints, or — when
