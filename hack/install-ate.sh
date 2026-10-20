@@ -47,6 +47,7 @@ ATE_DEMOS=(
   demo-egress-microvm
   demo-jupyter
   demo-sandbox
+  demo-sandbox-microvm
   demo-claude-code-multiplex
   demo-multi-template
   demo-parking
@@ -60,7 +61,7 @@ demo_usage() {
       echo "  --deploy-demo-counter-with-external-volume    Deploy demo-counter with external volume validation"
       echo "                                                (STORAGE_CLASS names the class; it otherwise follows --setup-csi)"
       ;;
-    demo-counter-microvm|demo-egress-microvm)
+    demo-counter-microvm|demo-egress-microvm|demo-sandbox-microvm)
       echo "  Needs hack/install-microvm-deps.sh --install to have run (cluster-wide microvm SandboxConfig)."
       ;;
     demo-claude-code-multiplex)
