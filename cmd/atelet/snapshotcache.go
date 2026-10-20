@@ -224,6 +224,28 @@ func mkdirNoFollow(dir string) error {
 	return nil
 }
 
+// fetchManifestCached reads the manifest of the snapshot at snapshotURI,
+// through the snapshot cache when mode allows it: the manifest of a shared
+// snapshot is as immutable as its files, and a restore that finds both on
+// the node makes no request to object storage at all. atelet reads the
+// manifest itself, so a link serves whatever class the files will take;
+// it is read from a scratch dir and the link dropped again.
+func (s *Atelet) fetchManifestCached(ctx context.Context, snapshotURI string, mode cacheMode) ([]byte, error) {
+	if mode == cacheModeOff || s.snapshotCache == nil {
+		return s.fetchManifest(ctx, snapshotURI)
+	}
+	dir, err := s.snapshotScratch()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	local := filepath.Join(dir, sandboxManifestName)
+	if err := s.fetchSnapshotFile(ctx, snapshotURI, sandboxManifestName, local, cacheModeLink); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(local)
+}
+
 // fetchSnapshotFile stages one file of the snapshot at snapshotURI at
 // local, through the snapshot cache per mode. A cacheModeLink hit is a hard
 // link, so local stays valid regardless of later eviction; a cacheModeCopy

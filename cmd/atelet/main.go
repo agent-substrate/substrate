@@ -1540,7 +1540,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			slog.WarnContext(ctx, "Local snapshot is unusable; restoring from object storage",
 				slog.String("local_dir", localDir), slog.Any("err", localErr))
 		}
-		manifest, err := s.fetchManifest(ctx, durable.GetSnapshotUri())
+		manifest, err := s.fetchManifestCached(ctx, durable.GetSnapshotUri(), snapshotCacheMode(durable, cacheModeLink))
 		if status.Code(err) == codes.NotFound {
 			return nil, apierror.NotFound("snapshot %q has no usable local copy and no uploaded copy: %w",
 				req.GetSnapshot().GetSnapshotUuid(), localErr)

@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -229,6 +230,44 @@ func restoreDir(t *testing.T, base, name string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// TestFetchManifestCached pins that a shared snapshot's manifest is read
+// through the cache, one download for any number of restores, with the
+// scratch link dropped again, while a private one is read fresh each time.
+func TestFetchManifestCached(t *testing.T) {
+	const manifest = `{"sandboxClass":"gvisor"}`
+	s, store, _ := newSnapshotCacheHerder(t, nil)
+	ctx := context.Background()
+	// The plugin stores the manifest as is, not zstd-compressed like the
+	// data files the herder's helper uploads.
+	if err := store.ObjectStorage.PutObject(ctx, "bucket", strings.TrimPrefix(testSnapshotPath, "bucket/")+"/"+sandboxManifestName, strings.NewReader(manifest)); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range 2 {
+		got, err := s.fetchManifestCached(ctx, testSnapshotURI, cacheModeLink)
+		if err != nil {
+			t.Fatalf("fetchManifestCached #%d: %v", i+1, err)
+		}
+		if string(got) != manifest {
+			t.Fatalf("manifest #%d = %q, want %q", i+1, got, manifest)
+		}
+	}
+	if n := store.gets.Load(); n != 1 {
+		t.Errorf("two cached manifest reads downloaded %d times, want 1", n)
+	}
+	if left, err := os.ReadDir(s.snapshotScratchDir); err != nil || len(left) != 0 {
+		t.Errorf("scratch dir holds %v (%v) after cached manifest reads, want nothing", left, err)
+	}
+
+	// Not shared: read from object storage, as before the cache existed.
+	if _, err := s.fetchManifestCached(ctx, testSnapshotURI, cacheModeOff); err != nil {
+		t.Fatal(err)
+	}
+	if n := store.gets.Load(); n != 2 {
+		t.Errorf("a private manifest read downloaded %d times in total, want 2", n)
+	}
 }
 
 func TestDownloadExternalCheckpointServesFromCache(t *testing.T) {

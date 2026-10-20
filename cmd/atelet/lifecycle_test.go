@@ -978,8 +978,9 @@ func TestRestoreFailureRemovesStagedSnapshotFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Retired != 1 || stats.SkippedLinked != 0 {
-		t.Errorf("after the failed restore a pass would retire %d entries and skip %d linked, want 1 and 0: the staged link must be gone", stats.Retired, stats.SkippedLinked)
+	// Two entries, the manifest and checkpoint.img, both unlinked.
+	if stats.Retired != 2 || stats.SkippedLinked != 0 {
+		t.Errorf("after the failed restore a pass would retire %d entries and skip %d linked, want 2 and 0: the staged link must be gone", stats.Retired, stats.SkippedLinked)
 	}
 }
 
