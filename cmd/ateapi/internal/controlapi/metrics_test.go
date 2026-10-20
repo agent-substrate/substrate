@@ -86,7 +86,7 @@ func worker(namespace, pool, class string, allocated, capacity int32) *ateapipb.
 		},
 	}
 	if class != "" {
-		w.Status.DefaultRuntime = &ateapipb.ActorSandboxRuntime{SandboxClass: class}
+		w.Status.SandboxClasses = []*ateapipb.WorkerSandboxClass{{SandboxClass: class}}
 	}
 	return w
 }

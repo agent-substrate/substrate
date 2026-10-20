@@ -209,7 +209,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: testSandboxRuntime(),
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		},
 	}
 	if _, err := persistence.CreateWorker(ctx, worker); err != nil {
@@ -271,7 +271,7 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: testSandboxRuntime(),
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		},
 	}
 	free := &ateapipb.Worker{
@@ -285,7 +285,7 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: testSandboxRuntime(),
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		},
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {
@@ -345,7 +345,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: wantRuntime,
+			SandboxClasses: workerSandboxClasses(wantRuntime),
 		},
 	}
 	fallback := &ateapipb.Worker{
@@ -358,7 +358,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: wantRuntime,
+			SandboxClasses: workerSandboxClasses(wantRuntime),
 		},
 	}
 	for _, w := range []*ateapipb.Worker{contested, fallback} {
@@ -453,7 +453,7 @@ func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Inte
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: testSandboxRuntime(),
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		},
 	}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
@@ -762,10 +762,10 @@ func TestValidateAssignedWorker(t *testing.T) {
 	activeStatus := &ateapipb.WorkerStatus{
 		State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 		Capacity:       &ateapipb.WorkerResources{Actors: 1},
-		DefaultRuntime: testSandboxRuntime(),
+		SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 	}
-	drainingStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING, Capacity: &ateapipb.WorkerResources{Actors: 1}, DefaultRuntime: testSandboxRuntime()}
-	unavailableStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE, Capacity: &ateapipb.WorkerResources{Actors: 1}, DefaultRuntime: testSandboxRuntime()}
+	drainingStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING, Capacity: &ateapipb.WorkerResources{Actors: 1}, SandboxClasses: workerSandboxClasses(testSandboxRuntime())}
+	unavailableStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE, Capacity: &ateapipb.WorkerResources{Actors: 1}, SandboxClasses: workerSandboxClasses(testSandboxRuntime())}
 
 	tests := []struct {
 		name string
@@ -2187,7 +2187,7 @@ func contendedWorker(podName string) *ateapipb.Worker {
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: testSandboxRuntime(),
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		},
 	}
 }
@@ -2479,6 +2479,18 @@ func testSandboxRuntime() *ateapipb.ActorSandboxRuntime {
 	return testRuntime("amd64", "")
 }
 
+// workerSandboxClasses is the sandbox_classes a worker reports to run def as
+// its default runtime and restore restorable beyond it, all of def's class.
+// The arguments are the ActorSandboxRuntimes a test also stamps snapshots and
+// assignments with, so both sides of a match derive from one value.
+func workerSandboxClasses(def *ateapipb.ActorSandboxRuntime, restorable ...*ateapipb.ActorSandboxRuntime) []*ateapipb.WorkerSandboxClass {
+	class := &ateapipb.WorkerSandboxClass{SandboxClass: def.GetSandboxClass(), DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: def.GetVersion()}}
+	for _, r := range restorable {
+		class.RestorableRuntimes = append(class.RestorableRuntimes, &ateapipb.WorkerSandboxRuntime{Version: r.GetVersion()})
+	}
+	return []*ateapipb.WorkerSandboxClass{class}
+}
+
 // seedRuntimeWorker stores an ACTIVE gvisor worker on node with room for one
 // actor, reporting def as its default runtime and restorable beyond it.
 func seedRuntimeWorker(t *testing.T, ctx context.Context, st store.Interface, pod, node string, def *ateapipb.ActorSandboxRuntime, restorable ...*ateapipb.ActorSandboxRuntime) *ateapipb.Worker {
@@ -2491,10 +2503,9 @@ func seedRuntimeWorker(t *testing.T, ctx context.Context, st store.Interface, po
 		WorkerPodUid:    testWorkerUID(pod),
 		NodeName:        node,
 		Status: &ateapipb.WorkerStatus{
-			State:              ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:           &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime:     def,
-			RestorableRuntimes: restorable,
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:       &ateapipb.WorkerResources{Actors: 1},
+			SandboxClasses: workerSandboxClasses(def, restorable...),
 		},
 	})
 	if err != nil {
@@ -2526,12 +2537,12 @@ func seedMicroVMWorker(t *testing.T, ctx context.Context, st store.Interface, po
 		Status: &ateapipb.WorkerStatus{
 			State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity: &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: &ateapipb.ActorSandboxRuntime{
+			SandboxClasses: []*ateapipb.WorkerSandboxClass{{
 				SandboxClass: "microvm",
-				Version: &ateapipb.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: []*ateapipb.AttributeEntry{
+				DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: &ateapipb.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: []*ateapipb.AttributeEntry{
 					{Key: "architecture", Value: "amd64"},
-				}},
-			},
+				}}},
+			}},
 		},
 	})
 	if err != nil {
@@ -2734,7 +2745,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		// scheduler hands back still does.
 		fresh := seedRuntimeWorker(t, ctx, st, "amd-pod", "node-amd", newDefaultRT)
 		stale := proto.CloneOf(fresh)
-		stale.Status.RestorableRuntimes = []*ateapipb.ActorSandboxRuntime{oldRestorableRT}
+		stale.Status.SandboxClasses = workerSandboxClasses(newDefaultRT, oldRestorableRT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
 		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: stale}}
@@ -2743,8 +2754,8 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
 		assertAssignedRuntime(t, stored, newDefaultRT)
-		if got := bound.GetStatus().GetRestorableRuntimes(); len(got) != 0 {
-			t.Errorf("returned worker RestorableRuntimes = %v, want the fresh row's none", got)
+		if diff := cmp.Diff(fresh.GetStatus().GetSandboxClasses(), bound.GetStatus().GetSandboxClasses(), protocmp.Transform()); diff != "" {
+			t.Errorf("returned worker SandboxClasses mismatch, want the fresh row's (-fresh +got):\n%s", diff)
 		}
 	})
 }
@@ -2989,7 +3000,7 @@ func seedVolumeAssignFixture(t *testing.T, ctx context.Context, persistence stor
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: testSandboxRuntime(),
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		},
 	}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)

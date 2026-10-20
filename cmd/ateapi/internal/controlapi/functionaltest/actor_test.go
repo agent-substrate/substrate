@@ -3255,7 +3255,7 @@ func TestResumeActor(t *testing.T) {
 			// All a listing reports of the assignments: one actor and the
 			// compute its template declares.
 			Allocated:      &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 512 << 20},
-			DefaultRuntime: defaultWorkerRuntime("gvisor"),
+			SandboxClasses: workerSandboxClasses(defaultWorkerRuntime("gvisor")),
 		},
 	}
 
@@ -6963,7 +6963,7 @@ func TestDeleteActor_Preconditions(t *testing.T) {
 }
 
 // reportWorkerRuntime writes defaultRT and restorableRTs to workerName's status
-// and waits for the worker cache to observe the update.
+// as its one sandbox class and waits for the worker cache to observe the update.
 func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defaultRT *ateapipb.ActorSandboxRuntime, restorableRTs ...*ateapipb.ActorSandboxRuntime) {
 	t.Helper()
 	ctx := context.Background()
@@ -6971,12 +6971,9 @@ func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defau
 	if err != nil {
 		t.Fatalf("GetWorker(%s): %v", workerName, err)
 	}
+	want := workerSandboxClasses(defaultRT, restorableRTs...)
 	if _, err := tc.persistence.UpdateWorker(ctx, workerName, store.PreconditionFrom(cur), func(toUpdate *ateapipb.Worker) error {
-		toUpdate.Status.DefaultRuntime = proto.Clone(defaultRT).(*ateapipb.ActorSandboxRuntime)
-		toUpdate.Status.RestorableRuntimes = nil
-		for _, r := range restorableRTs {
-			toUpdate.Status.RestorableRuntimes = append(toUpdate.Status.RestorableRuntimes, proto.Clone(r).(*ateapipb.ActorSandboxRuntime))
-		}
+		toUpdate.Status.SandboxClasses = workerSandboxClasses(defaultRT, restorableRTs...)
 		return nil
 	}); err != nil {
 		t.Fatalf("UpdateWorker(%s): %v", workerName, err)
@@ -6984,8 +6981,7 @@ func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defau
 	if err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
 		got, err := tc.workerCache.Worker(workerName)
 		return err == nil &&
-			proto.Equal(got.GetStatus().GetDefaultRuntime(), defaultRT) &&
-			slices.EqualFunc(got.GetStatus().GetRestorableRuntimes(), restorableRTs, func(a, b *ateapipb.ActorSandboxRuntime) bool { return proto.Equal(a, b) }), nil
+			slices.EqualFunc(got.GetStatus().GetSandboxClasses(), want, func(a, b *ateapipb.WorkerSandboxClass) bool { return proto.Equal(a, b) }), nil
 	}); err != nil {
 		t.Fatalf("worker %s runtime never reached worker cache: %v", workerName, err)
 	}

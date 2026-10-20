@@ -466,7 +466,7 @@ func TestApplies(t *testing.T) {
 			want:        false,
 		},
 		{
-			name:        "skips worker with no default runtime",
+			name:        "skips worker with no sandbox classes",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(nil)),
 			constraints: Constraints{},
 			want:        false,
@@ -507,20 +507,18 @@ type fleet []*ateapipb.Worker
 func (f fleet) Workers() ([]*ateapipb.Worker, error) { return f, nil }
 
 func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateapipb.Worker)) *ateapipb.Worker {
-	var defRuntime *ateapipb.ActorSandboxRuntime
-	if class != "" {
-		defRuntime = sandboxRuntime(class, "amd64")
-	}
 	w := &ateapipb.Worker{
 		WorkerPod: pod,
 		NodeName:  node,
 		Labels:    lbls,
 		// A stored Worker always carries a ceiling; CreateWorker reifies one.
 		Status: &ateapipb.WorkerStatus{
-			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: defRuntime,
+			State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity: &ateapipb.WorkerResources{Actors: 1},
 		},
+	}
+	if class != "" {
+		withRuntimes(sandboxRuntime(class, "amd64"))(w)
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -542,10 +540,24 @@ func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.ActorSan
 	}
 }
 
+// sandboxClass is the WorkerSandboxClass entry of def's class, with def as
+// its default runtime and restorable as the others.
+func sandboxClass(def *ateapipb.ActorSandboxRuntime, restorable ...*ateapipb.ActorSandboxRuntime) *ateapipb.WorkerSandboxClass {
+	c := &ateapipb.WorkerSandboxClass{SandboxClass: def.GetSandboxClass(), DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: def.GetVersion()}}
+	for _, r := range restorable {
+		c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapipb.WorkerSandboxRuntime{Version: r.GetVersion()})
+	}
+	return c
+}
+
+// withRuntimes gives the worker one sandbox class, def's. A nil def leaves
+// the worker as before it registered: no class at all.
 func withRuntimes(def *ateapipb.ActorSandboxRuntime, restorable ...*ateapipb.ActorSandboxRuntime) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
-		w.Status.DefaultRuntime = def
-		w.Status.RestorableRuntimes = restorable
+		w.Status.SandboxClasses = nil
+		if def != nil {
+			w.Status.SandboxClasses = []*ateapipb.WorkerSandboxClass{sandboxClass(def, restorable...)}
+		}
 	}
 }
 

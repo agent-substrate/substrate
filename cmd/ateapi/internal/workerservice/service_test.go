@@ -86,7 +86,7 @@ func (f *fakeControl) CrashActorReportedByWorker(_ context.Context, actorRef res
 func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capacity *ateapipb.WorkerResources) *ateapipb.Worker {
 	t.Helper()
 	return seedWorker(t, st, testWorkerName, nodeName, &ateapipb.WorkerStatus{
-		State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity, DefaultRuntime: testDefaultRuntime,
+		State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity, SandboxClasses: testSandboxClasses,
 	})
 }
 

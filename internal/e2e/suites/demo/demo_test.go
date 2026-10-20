@@ -149,8 +149,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get assigned Worker %s: %v", assignment.GetWorker().GetName(), err)
 	}
-	if diff := cmp.Diff(worker.GetStatus().GetDefaultRuntime(), assignment.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Fatalf("worker_assignment.sandbox_runtime mismatch (-worker default_runtime +assignment):\n%s", diff)
+	if diff := cmp.Diff(hardware.ColdBootRuntime(worker.GetStatus()), assignment.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("worker_assignment.sandbox_runtime mismatch (-worker default runtime +assignment):\n%s", diff)
 	}
 	if !hardware.Matches(assignment.GetSandboxRuntime(), goldenStamp) {
 		t.Fatalf("assigned runtime %v cannot restore the golden stamp %v", assignment.GetSandboxRuntime(), goldenStamp)

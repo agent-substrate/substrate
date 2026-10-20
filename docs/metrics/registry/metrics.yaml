@@ -267,8 +267,8 @@ groups:
               brief: >
                 The source has no class, or a class that is not in this list.
                 The default is not gvisor. Thus a bad record stays visible.
-                ateapi reports it for a Worker that has not reported a
-                default_runtime class. atelet reports it for a snapshot
+                ateapi reports it for a Worker that has not registered a
+                sandbox class. atelet reports it for a snapshot
                 manifest with no class.
       - id: ate.sandbox.oom_kills
         stability: development

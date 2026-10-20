@@ -21,6 +21,7 @@ import (
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/hardware"
 	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
@@ -98,11 +99,11 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		}
 		for _, w := range ws {
 			state := workerState(w)
-			// A Worker has no default_runtime until its worker registers with
+			// A Worker has no sandbox class until its worker registers with
 			// WorkerService. Report it as unknown, not as the pool's class: the
 			// scheduler puts no actor on a worker that offers no class, thus
 			// the pool's series must not count it as free capacity.
-			class := ateattr.NormalizeSandboxClass(w.GetStatus().GetDefaultRuntime().GetSandboxClass())
+			class := ateattr.NormalizeSandboxClass(hardware.SandboxClass(w.GetStatus()))
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, class}]++
 		}
 		for k, n := range tally {

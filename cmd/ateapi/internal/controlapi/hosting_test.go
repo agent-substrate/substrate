@@ -62,7 +62,7 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 				Status: &ateapipb.WorkerStatus{
 					State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 					Capacity:       &ateapipb.WorkerResources{Actors: 1},
-					DefaultRuntime: &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
+					SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 				},
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
@@ -171,7 +171,7 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: &ateapipb.ActorSandboxRuntime{SandboxClass: "microvm", Version: testSandboxRuntime().GetVersion()},
+			SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "microvm", DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: testSandboxRuntime().GetVersion()}}},
 		},
 	}
 	free := &ateapipb.Worker{
@@ -185,7 +185,7 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: testSandboxRuntime(),
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		},
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {

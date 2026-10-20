@@ -417,10 +417,10 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	if err := c.relay.Report(ctx, addr, &ateapipb.RegisterWorkerRequest{
 		Worker:   &ateapipb.ObjectRef{Name: name},
 		Capacity: fixed,
-		DefaultRuntime: &ateapipb.ActorSandboxRuntime{
-			SandboxClass: string(d.pool.Spec.DefaultSandboxClass()),
-			Version:      hostCompat(),
-		},
+		SandboxClasses: []*ateapipb.WorkerSandboxClass{{
+			SandboxClass:   string(d.pool.Spec.DefaultSandboxClass()),
+			DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: hostCompat()},
+		}},
 	}); err != nil {
 		return fmt.Errorf("while reporting capacity for Worker %s: %w", name, err)
 	}

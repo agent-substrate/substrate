@@ -104,7 +104,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `external` CSI volume source (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpuMillicores` and `memoryBytes` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
-The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-compute-foundation) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the worker's active `ActorSandboxRuntime` is stamped onto the actor's assignment and snapshots so subsequent resumes prefer runtime-compatible workers.
+The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-compute-foundation) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the runtime it runs under is stamped onto the actor's assignment and snapshots (`sandboxRuntime`: the sandbox class and the runtime's compatibility version) so subsequent resumes prefer runtime-compatible workers.
 
 ### Sandbox Right-Sizing (`resources`)
 
@@ -386,8 +386,9 @@ a `Snapshot` with the following fields:
   guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
   when the checkpoint is taken. A resume that restores memory state
   (`SNAPSHOT_FIDELITY_MEMORY`) first schedules onto
-  an eligible worker whose `defaultRuntime` or `restorableRuntimes` is compatible
-  with `sandboxRuntime` (same sandbox class, same schema version, and every
+  an eligible worker whose `status.sandboxClasses` entry for the snapshot's
+  `sandboxClass` has a `defaultRuntime` or `restorableRuntimes` entry whose
+  `version` is compatible with `sandboxRuntime.version` (same schema version, and every
   attribute recorded on the snapshot present on the worker with the same
   value, except `cpu_features`, whose hexadecimal bitmask on the snapshot must be
   a bitwise subset of the worker's; attributes only the worker reports are
@@ -397,7 +398,7 @@ a `Snapshot` with the following fields:
     template's golden snapshot a new actor starts from — falls back to any eligible
     worker and downgrades the restore to `SNAPSHOT_FIDELITY_ROOTFS`, preserving
     the snapshot's rootfs and volume data while booting the guest fresh under the
-    new worker's `defaultRuntime`.
+    `defaultRuntime` of that class on the new worker.
   - A local checkpoint first tries compatible workers on its attached node.
     If that fails, `ResumeActor` checks capacity without the node and runtime
     restrictions. When that capacity exists, it detaches the checkpoint and

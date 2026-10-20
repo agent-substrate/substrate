@@ -167,7 +167,7 @@ func TestListWorkers(t *testing.T) {
 			Status: &ateapipb.WorkerStatus{
 				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 				Capacity:       &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 512 << 20},
-				DefaultRuntime: defaultWorkerRuntime("gvisor"),
+				SandboxClasses: workerSandboxClasses(defaultWorkerRuntime("gvisor")),
 			},
 		},
 	}

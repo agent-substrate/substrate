@@ -86,7 +86,7 @@ func seedAPIWorker(t *testing.T, ctx context.Context, persistence store.Interfac
 		// gvisor default runtime its class is read from.
 		worker.Status = &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			DefaultRuntime: testSandboxRuntime(),
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		}
 	}
 	created, err := persistence.CreateWorker(ctx, worker)

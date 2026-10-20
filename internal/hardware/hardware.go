@@ -107,17 +107,17 @@ func (r Requirement) Runtime() *ateapipb.ActorSandboxRuntime {
 	return r.snap
 }
 
-// Matches reports whether a worker's ActorSandboxRuntime can restore the
-// snapshot. A requirement of nothing is met by any worker. Otherwise the
+// Matches reports whether rt, the runtime an assignment records, can restore
+// the snapshot. A requirement of nothing is met by any runtime. Otherwise the
 // sandbox classes must be equal and the compat must match.
-func (r Requirement) Matches(worker *ateapipb.ActorSandboxRuntime) bool {
+func (r Requirement) Matches(rt *ateapipb.ActorSandboxRuntime) bool {
 	if r.snap == nil {
 		return true
 	}
-	if worker == nil || worker.GetSandboxClass() != r.snap.GetSandboxClass() {
+	if rt == nil || rt.GetSandboxClass() != r.snap.GetSandboxClass() {
 		return false
 	}
-	return r.matchesCompat(worker.GetVersion())
+	return r.matchesCompat(rt.GetVersion())
 }
 
 // matchesCompat reports whether worker can restore the snapshot: the same
@@ -172,18 +172,54 @@ func (r Requirement) attributeSatisfied(key, workerVal, snapVal string) bool {
 	return workerVal == snapVal
 }
 
-// MatchingRuntime returns the ActorSandboxRuntime from status that can restore
-// the snapshot (checking DefaultRuntime first, then RestorableRuntimes in
-// order), or nil if none matches. A requirement of nothing returns
-// DefaultRuntime.
-func (r Requirement) MatchingRuntime(status *ateapipb.WorkerStatus) *ateapipb.ActorSandboxRuntime {
-	if def := status.GetDefaultRuntime(); r.snap == nil || r.Matches(def) {
+// classOf returns the entry of status for class, or nil when the worker does
+// not run that class.
+func classOf(status *ateapipb.WorkerStatus, class string) *ateapipb.WorkerSandboxClass {
+	for _, c := range status.GetSandboxClasses() {
+		if c.GetSandboxClass() == class {
+			return c
+		}
+	}
+	return nil
+}
+
+// runtimeOf is the ActorSandboxRuntime an assignment or snapshot is stamped with
+// for compat under class.
+func runtimeOf(class string, compat *ateapipb.VersionedSandboxCompat) *ateapipb.ActorSandboxRuntime {
+	return &ateapipb.ActorSandboxRuntime{SandboxClass: class, Version: compat}
+}
+
+// matchingCompat returns the version from status that can restore the
+// snapshot: in the worker's entry for the snapshot's class, DefaultRuntime
+// first, then RestorableRuntimes in order. nil if the worker does not run
+// that class or nothing in its entry matches. Only for a requirement of
+// something.
+func (r Requirement) matchingCompat(status *ateapipb.WorkerStatus) *ateapipb.VersionedSandboxCompat {
+	c := classOf(status, r.snap.GetSandboxClass())
+	if c == nil {
+		return nil
+	}
+	if def := c.GetDefaultRuntime().GetVersion(); r.matchesCompat(def) {
 		return def
 	}
-	for _, rt := range status.GetRestorableRuntimes() {
-		if r.Matches(rt) {
-			return rt
+	for _, rt := range c.GetRestorableRuntimes() {
+		if r.matchesCompat(rt.GetVersion()) {
+			return rt.GetVersion()
 		}
+	}
+	return nil
+}
+
+// MatchingRuntime returns the runtime from status that can restore the
+// snapshot, as a stamp: the snapshot's class with the version matchingCompat
+// finds, or nil when it finds none. A requirement of nothing returns
+// ColdBootRuntime.
+func (r Requirement) MatchingRuntime(status *ateapipb.WorkerStatus) *ateapipb.ActorSandboxRuntime {
+	if r.snap == nil {
+		return ColdBootRuntime(status)
+	}
+	if compat := r.matchingCompat(status); compat != nil {
+		return runtimeOf(r.snap.GetSandboxClass(), compat)
 	}
 	return nil
 }
@@ -191,27 +227,48 @@ func (r Requirement) MatchingRuntime(status *ateapipb.WorkerStatus) *ateapipb.Ac
 // WorkerMatches reports whether a worker with status can restore the
 // snapshot. A requirement of nothing is met by any worker.
 func (r Requirement) WorkerMatches(status *ateapipb.WorkerStatus) bool {
-	return r.snap == nil || r.MatchingRuntime(status) != nil
+	return r.snap == nil || r.matchingCompat(status) != nil
 }
 
 // RuntimeFor returns the runtime a worker with status runs an actor under
 // whose snapshot is stamped with the required runtime: the matching runtime
-// when it can restore the snapshot, else the DefaultRuntime the guest boots
+// when it can restore the snapshot, else the ColdBootRuntime the guest boots
 // fresh under. This is what an assignment records and what the actor's next
 // checkpoint is stamped with.
 func (r Requirement) RuntimeFor(status *ateapipb.WorkerStatus) *ateapipb.ActorSandboxRuntime {
 	if rt := r.MatchingRuntime(status); rt != nil {
 		return rt
 	}
-	return status.GetDefaultRuntime()
+	return ColdBootRuntime(status)
 }
 
-// Matches reports whether a worker's ActorSandboxRuntime can restore a snapshot
-// stamped with snap, for one comparison; a caller holding one snap against
-// many workers should prepare a Requirement once. A nil snap imposes no
-// constraint.
-func Matches(worker, snap *ateapipb.ActorSandboxRuntime) bool {
-	return NewRequirement(snap).Matches(worker)
+// ColdBootRuntime returns the runtime a fresh actor starts under on a worker
+// with status: the DefaultRuntime of its class, as a stamp, or nil before the
+// worker has registered.
+func ColdBootRuntime(status *ateapipb.WorkerStatus) *ateapipb.ActorSandboxRuntime {
+	classes := status.GetSandboxClasses()
+	if len(classes) == 0 {
+		return nil
+	}
+	return runtimeOf(classes[0].GetSandboxClass(), classes[0].GetDefaultRuntime().GetVersion())
+}
+
+// SandboxClass returns the sandbox class a worker with status registered, or
+// "" before it has.
+func SandboxClass(status *ateapipb.WorkerStatus) string {
+	classes := status.GetSandboxClasses()
+	if len(classes) == 0 {
+		return ""
+	}
+	return classes[0].GetSandboxClass()
+}
+
+// Matches reports whether rt, the runtime an assignment records, can restore
+// a snapshot stamped with snap, for one comparison; a caller holding one snap
+// against many workers should prepare a Requirement once. A nil snap imposes
+// no constraint.
+func Matches(rt, snap *ateapipb.ActorSandboxRuntime) bool {
+	return NewRequirement(snap).Matches(rt)
 }
 
 // MatchesCompat reports whether worker can restore a snapshot stamped with
