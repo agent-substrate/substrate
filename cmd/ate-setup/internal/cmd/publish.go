@@ -78,7 +78,7 @@ stamped with the build version (VERSION, else git describe), the commit, and
 the commit time, into --out. Beside each kubectl-ate-<os>-<arch> binary it
 writes a .sha256 file that "shasum -a 256 -c" checks.
 
-  VERSION=TAG ate-setup publish release-binaries --out dist
+  VERSION=TAG ate-setup publish release-binaries
 
 The version has to be a release tag. Nothing is uploaded; the release
 workflow attaches the files to the draft release.`,
@@ -96,7 +96,7 @@ func init() {
 
 	config.RegisterCommand(config.Setting{
 		Key: "publish.binariesDir", Env: "ATE_PUBLISH_BINARIES_DIR", Flag: "out",
-		Kind: config.KindString, Default: "dist",
+		Kind: config.KindString, Default: "bin/release",
 		Commands: []string{publishReleaseBinariesPath},
 		Usage:    "Directory the release binaries and their checksums are written to",
 	})

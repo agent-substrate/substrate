@@ -82,13 +82,14 @@ jobs:
       env:
         TOKEN: ${{ github.token }}
       run: .github/scripts/release/ghcr-login.sh
-    # Overwriting replaces the digests that operators of a published release
-    # install by tag, so it is refused once the release is published.
-    - name: Refuse to overwrite a published release
-      if: inputs.overwrite
+    # Publishing replaces the digests that operators of a published release
+    # install by tag, so nothing is published once the release is. This runs
+    # whether or not overwrite is set: without it, an incomplete set (an image
+    # deleted after release) is still rebuilt in full.
+    - name: Refuse to publish images for a published release
       env:
         GH_TOKEN: ${{ github.token }}
-      run: .github/scripts/release/refuse-published-overwrite.sh
+      run: .github/scripts/release/refuse-published-release.sh
     # Builds nothing if every image already exists for the tag, unless overwrite
     # is set, and after pushing checks that every tag names the pushed image on
     # every platform.
@@ -153,7 +154,7 @@ jobs:
     - name: Build kubectl-ate
       env:
         VERSION: ${{ inputs.tag || github.ref_name }}
-      run: go run ./cmd/ate-setup publish release-binaries --out dist
+      run: go run ./cmd/ate-setup publish release-binaries
     - name: Draft release
       env:
         GH_TOKEN: ${{ github.token }}
@@ -167,4 +168,4 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ inputs.tag || github.ref_name }}
-      run: .github/scripts/release/attach-binaries.sh dist
+      run: .github/scripts/release/attach-binaries.sh bin/release

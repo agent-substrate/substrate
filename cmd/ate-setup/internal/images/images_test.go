@@ -154,6 +154,7 @@ func TestReleaseComponents(t *testing.T) {
 		"cmd/atenet",
 		"cmd/ateworker-gvisor",
 		"cmd/ateworker-microvm",
+		"cmd/objectstore-plugin",
 		"cmd/podcertcontroller",
 	}
 	if got := images.ReleaseComponents(); !slices.Equal(got, want) {

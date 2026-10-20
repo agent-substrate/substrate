@@ -83,9 +83,9 @@ is the build, the Go toolchain, and write access to a registry.
 needs an image `REPO` lacks fails naming it.
 
 The images a release publishes to `ghcr.io/agent-substrate/substrate`, with
-`publish release-images`, are not a complete install: releases leave out the
-object storage plugin, `envoy-dataplane`, the Kubernetes Secrets credential
-provider, the demos, and the benchmarking fakes (see
+`publish release-images`, are not a complete install: releases leave out
+`envoy-dataplane`, the Kubernetes Secrets credential provider, the demos, and
+the benchmarking fakes (see
 [`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images)). Under
 `--image-repo`, a reference to one of those fails before any registry lookup,
 saying releases do not publish it.
@@ -140,7 +140,7 @@ all tagged with the build version; see [Installing pre-built
 images](#installing-pre-built-images).
 
 `publish release-binaries` builds `kubectl-ate` for linux and darwin on amd64
-and arm64 into `--out` (default `dist`), stamped with the build version, commit,
+and arm64 into `--out` (default `bin/release`), stamped with the build version, commit,
 and commit time, each with a `.sha256` file that `shasum -a 256 -c` checks. The
 version has to be a release tag. It uploads nothing; the release workflow
 attaches the files to the draft release.

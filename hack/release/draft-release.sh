@@ -148,8 +148,9 @@ fi
 
 # Only the upstream release workflow publishes images (see
 # .github/workflows/release.yaml), so only its notes say where they are. The
-# images are not a complete install: releases leave out the storage plugin and
-# envoy-dataplane, among others, so the notes give no install command. The list
+# images are not a complete install: releases leave out envoy-dataplane and the
+# Kubernetes Secrets credential provider, among others, so the notes give no
+# install command. The list
 # lives in docs/dev/releasing.md, so it is not kept in two places.
 if [[ "${REPO}" == "${UPSTREAM_REPO}" ]]; then
   notes+=$'\n\n## Images\n\n'

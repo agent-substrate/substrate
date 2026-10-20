@@ -128,13 +128,14 @@ func TestReleaseImageRefs(t *testing.T) {
 	if want := len(images.ReleaseComponents()); len(refs) != want {
 		t.Fatalf("releaseImageRefs() returned %d refs, want %d", len(refs), want)
 	}
-	if !slices.Contains(refs, "example.com/substrate/ateapi:v1") {
-		t.Errorf("releaseImageRefs() = %v, want example.com/substrate/ateapi:v1", refs)
+	for _, want := range []string{"example.com/substrate/ateapi:v1", "example.com/substrate/objectstore-plugin:v1"} {
+		if !slices.Contains(refs, want) {
+			t.Errorf("releaseImageRefs() = %v, want %s", refs, want)
+		}
 	}
 	for _, unwanted := range []string{
 		"example.com/substrate/counter:v1",
 		"example.com/substrate/kubernetes-secrets:v1",
-		"example.com/substrate/objectstore-plugin:v1",
 		"example.com/substrate/envoy-dataplane:v1",
 	} {
 		if slices.Contains(refs, unwanted) {

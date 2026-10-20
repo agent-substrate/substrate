@@ -145,9 +145,9 @@ than an install — though only the list is checked that way. The release also h
 to publish the new image under the same repository and tag as the rest, and
 until it does, the component can only be installed by building it.
 
-Releases publish only `images.ReleaseComponents`: the object storage plugin, the
-Kubernetes Secrets credential provider, the demos, and the benchmarking fakes
-are left out, and so is `envoy-dataplane`. A ko reference to one of those under
+Releases publish only `images.ReleaseComponents`: the Kubernetes Secrets
+credential provider, the demos, and the benchmarking fakes are left out, and so
+is `envoy-dataplane`. A ko reference to one of those under
 `--image-repo` fails before any registry lookup, naming what it is and saying to
 build it from source, rather than as a 404 for a tag that was never pushed.
 Release images alone are therefore not a complete install.

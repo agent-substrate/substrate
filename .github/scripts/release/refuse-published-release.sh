@@ -15,11 +15,12 @@
 # limitations under the License.
 
 # Fails if the tag VERSION has a published (non-draft) release in
-# GITHUB_REPOSITORY. Overwriting a release's images replaces the digests that
-# operators install by tag, so it is refused once the release is published.
+# GITHUB_REPOSITORY. Publishing a release's images again replaces the digests
+# that operators install by tag, so it is refused once the release is
+# published, whether or not the run asked to overwrite.
 #
 #   GITHUB_REPOSITORY=<owner/repo> VERSION=<tag> GH_TOKEN=<token> \
-#     .github/scripts/release/refuse-published-overwrite.sh
+#     .github/scripts/release/refuse-published-release.sh
 #
 # A draft is not returned by tag, so a 404 means there is no published
 # release. Any other failure stops the script rather than being read as "none".
@@ -30,7 +31,7 @@ set -o errexit -o nounset -o pipefail
 
 if out="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" --jq .draft 2>&1)"; then
   if [[ "${out}" == false ]]; then
-    echo "::error::${VERSION} has a published release; its images cannot be overwritten"
+    echo "::error::${VERSION} has a published release; its images are not published again"
     exit 1
   fi
 elif [[ "${out}" != *"HTTP 404"* ]]; then

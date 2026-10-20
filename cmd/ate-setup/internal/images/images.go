@@ -65,11 +65,10 @@ var unreleased = map[string]string{
 	"cmd/benchmarking/isolate/fake-atelet":       "a benchmarking fake",
 	"cmd/benchmarking/isolate/fake-workersync":   "a benchmarking fake",
 	"cmd/credential-provider/kubernetes-secrets": "the Kubernetes Secrets credential provider",
-	"cmd/objectstore-plugin":                     "the object storage plugin",
-	"demos/counter":                              "a demo",
-	"demos/egress":                               "a demo",
-	"demos/multi-template/fspersist":             "a demo",
-	"demos/sandbox":                              "a demo",
+	"demos/counter":                  "a demo",
+	"demos/egress":                   "a demo",
+	"demos/multi-template/fspersist": "a demo",
+	"demos/sandbox":                  "a demo",
 }
 
 // ReleaseComponents returns the Components a release publishes, in order.
