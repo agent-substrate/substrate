@@ -32,9 +32,10 @@ import (
 )
 
 // revertableStates are the states a revert is accepted from. A SUSPENDED
-// actor is also accepted when its latest snapshot records a local copy. Revert
-// clears that reference and keeps the latest durable snapshot. Unbound cache
-// files are left for the node's background cleanup. See isRevertable.
+// actor is also accepted when it is paused, that is, when its latest snapshot
+// is node-local: the revert discards the node-local copy and returns the actor
+// to its latest durable snapshot, which is that same snapshot once atelet's
+// upload of it is recorded. See isRevertable.
 var revertableStates = []ateapipb.ActorState{
 	ateapipb.ActorState_ACTOR_STATE_RUNNING,
 	ateapipb.ActorState_ACTOR_STATE_CRASHED,
@@ -277,10 +278,10 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.AssignedNode = ""
-		// Keep the latest durable snapshot and clear local and pending records.
-		// ensureWorkerDiscarded cleaned up any bound node; unbound cache files
-		// remain for the node's background cleanup. In-progress durable objects
-		// were discarded in ensureInProgressSnapshotDiscarded.
+		// We revert back to the latest durable snapshot, so all local snapshots
+		// and pending durable snapshots are removed.
+		// We already cleaned up the node before this in ensureWorkerDiscarded,
+		// and any in-progress durable snapshot in ensureInProgressSnapshotDiscarded.
 		// Even during revert, we do not decrease LastAssignedGeneration so that we
 		// can keep track of stale snapshots that need to be cleaned up.
 		pruneSnapshots(toUpdate.Status, nil)

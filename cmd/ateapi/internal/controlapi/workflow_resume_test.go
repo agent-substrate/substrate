@@ -1323,14 +1323,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		localSnapshot *ateapipb.Snapshot
 		// externalSnapshot seeds a completed durable snapshot.
 		externalSnapshot *ateapipb.Snapshot
-		// tmplUID seeds the template UID the durable snapshot's guest state was
-		// built on, stamped onto externalSnapshot: "current" stands for the
-		// created template's store-assigned UID (unknown until runtime), ""
-		// leaves the field unset, anything else mismatches (a repointed actor).
+		// tmplUID stamps externalSnapshot. "current" means the created template's UID.
 		tmplUID string
-		// localTmplUID stamps the local snapshot's provenance the same way;
-		// the two sources are set independently, since a newer pause checkpoint
-		// can be captured under the template an older durable snapshot predates.
+		// localTmplUID stamps localSnapshot independently.
 		localTmplUID string
 		// sourceTag seeds Actor.SourceTag when testing explicit tag clones.
 		sourceTag *ateapipb.ObjectRef
@@ -1708,9 +1703,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// A local restore runs under the assigned worker's runtime too: a
-			// worker that cannot run the checkpoint's runtime restores rootfs
-			// and volumes, keeping the checkpoint's own identity and upload.
 			name: "24a stamped local snapshot on incompatible worker drops to Rootfs",
 			actor: actorSeed{
 				localSnapshot:   stampedLocalSnap(localSnapshotName, fullScope, amd64RT),
@@ -2802,10 +2794,7 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 			ActorUid: "own-actor-uid",
 		})
 
-		// A previous attempt bound the actor relaxed, under the worker's
-		// default: its pause checkpoint is uploaded (the durable copy of the
-		// checkpoint itself is COMPLETED), so the fallback was allowed even
-		// though the checkpoint was captured under another runtime.
+		// Re-entry must accept a previously allowed ROOTFS assignment.
 		local := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-arm")
 		local.SandboxRuntime = testSandboxRuntime()
 		local.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
@@ -2939,8 +2928,7 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			},
 		},
 		{
-			// The older durable's replaced template must not drop the newer
-			// local checkpoint's runtime: the restore reads the local one.
+			// Restore uses the newer local snapshot's template.
 			name: "local checkpoint ignores an older durable snapshot's replaced template",
 			snapshots: []*ateapipb.Snapshot{
 				durable(1, memory, "old-tmpl-uid", completed, durableRT),
@@ -2959,14 +2947,16 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 	}
 }
 
-// TestCanRelaxRuntime pins when a resume may drop its runtime constraint: only
-// when it has one, and a local pause checkpoint permits it only once its own
-// durable copy completes.
 func TestCanRelaxRuntime(t *testing.T) {
 	rt := testSandboxRuntime()
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	suspended := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	resuming := ateapipb.ActorState_ACTOR_STATE_RESUMING
+
 	durable := func(gen int32) *ateapipb.Snapshot {
-		return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "snap", "gs://bucket/snap", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "snap", "gs://bucket/snap", completed)
 	}
 	local := func(gen int32) *ateapipb.Snapshot {
 		return newPausedSnapshot(t, gen, memory, "", "local", "node-1")
@@ -2984,57 +2974,89 @@ func TestCanRelaxRuntime(t *testing.T) {
 
 	tests := []struct {
 		name      string
+		state     ateapipb.ActorState
+		node      string
 		snapshots []*ateapipb.Snapshot
 		required  *ateapipb.SandboxRuntime
 		want      bool
 	}{
 		{
 			name:      "nothing to relax without a runtime constraint",
+			state:     suspended,
 			snapshots: []*ateapipb.Snapshot{durable(1)},
 		},
 		{
 			name:      "durable snapshot may fall back",
+			state:     suspended,
 			snapshots: []*ateapipb.Snapshot{durable(1)},
 			required:  rt,
 			want:      true,
 		},
 		{
 			name:      "local checkpoint stays pinned",
+			state:     suspended,
+			node:      "node-1",
 			snapshots: []*ateapipb.Snapshot{local(1)},
 			required:  rt,
 		},
 		{
 			name:      "local checkpoint stays pinned beside a durable snapshot",
+			state:     suspended,
+			node:      "node-1",
 			snapshots: []*ateapipb.Snapshot{durable(1), local(2)},
 			required:  rt,
 		},
 		{
-			name:      "local durable completed",
-			snapshots: []*ateapipb.Snapshot{localDurable(2, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)},
+			name:      "uploaded checkpoint detaches before relaxing a pinned actor",
+			state:     suspended,
+			node:      "node-1",
+			snapshots: []*ateapipb.Snapshot{localDurable(2, completed)},
+			required:  rt,
+		},
+		{
+			name:      "unbound uploaded checkpoint may fall back",
+			state:     suspended,
+			snapshots: []*ateapipb.Snapshot{localDurable(2, completed)},
 			required:  rt,
 			want:      true,
 		},
 		{
-			name:      "local durable pending",
-			snapshots: []*ateapipb.Snapshot{localDurable(2, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)},
+			name:      "resuming uploaded checkpoint keeps its relaxed assignment",
+			state:     resuming,
+			node:      "node-1",
+			snapshots: []*ateapipb.Snapshot{localDurable(2, completed)},
+			required:  rt,
+			want:      true,
+		},
+		{
+			name:      "resuming pending checkpoint cannot relax",
+			state:     resuming,
+			node:      "node-1",
+			snapshots: []*ateapipb.Snapshot{localDurable(2, pending)},
 			required:  rt,
 		},
 		{
-			name:      "local no durable",
+			name:      "resuming checkpoint without a durable copy cannot relax",
+			state:     resuming,
+			node:      "node-1",
 			snapshots: []*ateapipb.Snapshot{localNoDurable(2)},
 			required:  rt,
 		},
 		{
-			// An older generation's durable copy cannot authorize the fallback
-			// for a newer local checkpoint.
-			name:      "older durable only",
+			name:      "older durable copy cannot authorize a resuming checkpoint",
+			state:     resuming,
+			node:      "node-1",
 			snapshots: []*ateapipb.Snapshot{durable(1), localNoDurable(2)},
 			required:  rt,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{Snapshots: tc.snapshots}}
+			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{
+				State:        tc.state,
+				AssignedNode: tc.node,
+				Snapshots:    tc.snapshots,
+			}}
 			if got := canRelaxRuntime(actor, scheduling.Constraints{RequiredRuntime: hardware.NewRequirement(tc.required)}); got != tc.want {
 				t.Errorf("canRelaxRuntime = %v, want %v", got, tc.want)
 			}

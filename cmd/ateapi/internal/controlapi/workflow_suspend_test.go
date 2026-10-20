@@ -1549,31 +1549,21 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 	}
 }
 
-// TestSuspendActor_Finalized_RecordsLocalCopyWhenKept verifies a sync suspend
-// records a node-local copy only when the state Checkpoint returns reports
-// keeping one whose UUID, generation, and upload URI match the recorded
-// snapshot. Every case ends with the assignment cleared and the durable copy
-// COMPLETED; a report that does not match records no locality, leaving the
-// durable copy on its own.
 func TestSuspendActor_Finalized_RecordsLocalCopyWhenKept(t *testing.T) {
 	const node = "node-1"
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	// localReport wraps a snapshot as the LatestLocal atelet reports.
 	localReport := func(snap *ateletpb.Snapshot) *ateletpb.ActorSnapshotState {
 		return &ateletpb.ActorSnapshotState{LatestLocal: &ateletpb.SnapshotReport{Snapshot: snap}}
 	}
-	// variant clones the request's snapshot with mutate applied.
 	variant := func(req *ateletpb.CheckpointRequest, mutate func(*ateletpb.Snapshot)) *ateletpb.Snapshot {
 		snap := proto.CloneOf(req.GetSnapshot())
 		mutate(snap)
 		return snap
 	}
 	tests := []struct {
-		name string
-		// state builds what Checkpoint returns, from the request it got.
-		state func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState
-		// wantLocality is the Locality the recorded snapshot keeps.
+		name         string
+		state        func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState
 		wantLocality string
 	}{{
 		name: "kept",
@@ -1582,7 +1572,6 @@ func TestSuspendActor_Finalized_RecordsLocalCopyWhenKept(t *testing.T) {
 		},
 		wantLocality: node,
 	}, {
-		// The immediate upload finished; atelet kept no local copy.
 		name: "not kept",
 		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
 			return &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: req.GetSnapshot()}}
@@ -1637,8 +1626,8 @@ func TestSuspendActor_Finalized_RecordsLocalCopyWhenKept(t *testing.T) {
 			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				t.Errorf("state = %v, want SUSPENDED", got)
 			}
-			if got := stored.GetStatus().GetAssignedNode(); got != "" {
-				t.Errorf("AssignedNode = %q, want cleared", got)
+			if got := stored.GetStatus().GetAssignedNode(); got != tt.wantLocality {
+				t.Errorf("AssignedNode = %q, want %q", got, tt.wantLocality)
 			}
 			if got := stored.GetStatus().GetWorkerAssignment(); got != nil {
 				t.Errorf("WorkerAssignment = %v, want cleared", got)

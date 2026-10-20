@@ -402,13 +402,12 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		switch mode {
 		case suspendSync:
 			snap.GetDurableSnapshot().Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-			// Record only the cache atelet reports. It does not pin placement.
-			snap.Locality = ""
 			if ateletKeptLocal(ateletState, snap) {
 				snap.Locality = toUpdate.GetStatus().GetAssignedNode()
+			} else {
+				toUpdate.Status.AssignedNode = ""
 			}
 			pruneSnapshots(toUpdate.Status, snap)
-			toUpdate.Status.AssignedNode = ""
 		case suspendAsync:
 			// Record the node locality of the local checkpoint and clear older local checkpoints.
 			// AssignedNode is kept: a paused actor resumes on that node.
@@ -436,12 +435,8 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	return storedActor, nil
 }
 
-// ateletKeptLocal reports whether atelet kept the recorded snapshot locally.
-// A successful upload does not guarantee a local copy was kept.
+// ateletKeptLocal reports whether atelet retained this checkpoint.
 func ateletKeptLocal(state *ateletpb.ActorSnapshotState, snap *ateapipb.Snapshot) bool {
-	if state == nil || snap == nil {
-		return false
-	}
 	local := state.GetLatestLocal().GetSnapshot()
 	uri := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	return local != nil && uri != "" &&

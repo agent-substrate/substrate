@@ -262,20 +262,9 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	return storedActor, nil
 }
 
-// ensureWorkerAssigned leaves the actor RESUMING with a validated, live,
-// owned, and eligible worker.
-//
-// A RESUMING actor was assigned by a previous attempt: its persisted
-// assignment is revalidated (worker still exists, not draining, still owned
-// by this actor UID, still eligible for the actor's constraints) and reused;
-// a stale assignment crashes the actor. A SUSPENDED actor goes through
-// scheduling, pinned to its assigned node while a pause keeps its local
-// snapshot there (a local copy a sync suspend leaves behind does not pin:
-// that actor's AssignedNode is clear), claiming the worker and persisting
-// RESUMING with the assignment. A version conflict there is retried under a
-// bounded backoff only after re-reading the actor and revalidating it can
-// still be resumed — the conflicting writer may have crashed, drained, or
-// deleted it.
+// ensureWorkerAssigned assigns a worker and leaves the actor RESUMING.
+// Re-entry validates the recorded assignment before reuse.
+// Version conflicts re-read the actor before retrying.
 func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, _ *ateapipb.Worker, err error) {
 	ctx, done := stepSpan(ctx, "AssignWorker")
 	defer func() { err = done(err) }()
@@ -684,9 +673,6 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		return scheduling.Constraints{}, fmt.Errorf("invalid template resource limits: %w", err)
 	}
 	var requiredNodes []string
-	// AssignedNode binds a paused Actor to its node until atelet detaches it.
-	// When the node is full, ResumeActor detaches it. A local copy a sync
-	// suspend keeps is recorded only in locality and does not pin placement.
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}
@@ -745,18 +731,18 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 	return nil
 }
 
-// canRelaxRuntime reports whether a resume may drop its RequiredRuntime
-// constraint when no compatible worker has capacity. A local snapshot permits
-// this fallback only after its own durable copy completes. An older durable
-// snapshot cannot authorize fallback for a newer local one. Node placement
-// constraints are evaluated separately.
+// canRelaxRuntime reports whether scheduling may drop its runtime requirement.
 func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
 	if constraints.RequiredRuntime.Runtime() == nil {
 		return false
 	}
-	local := findLatestLocalSnapshot(actor.GetStatus())
+	status := actor.GetStatus()
+	local := findLatestLocalSnapshot(status)
 	if local == nil {
 		return true
+	}
+	if status.GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && status.GetAssignedNode() != "" {
+		return false
 	}
 	return local.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 }
@@ -848,10 +834,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
-		// The local snapshot's own provenance decides the effective fidelity:
-		// src describes the latest durable snapshot, which may be an older
-		// generation captured under another template. Identity always stays
-		// the local snapshot's.
 		fidelity := fidelityToAtelet(localSnap.GetFidelity())
 		switch {
 		case templateReplaced(localSnap, actorTemplate):
