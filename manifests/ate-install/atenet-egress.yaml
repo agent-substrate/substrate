@@ -1398,6 +1398,11 @@ spec:
         # {"enabled":false}. Without a provider, a request matching a rule that
         # requires an injection is denied (see egress.applyEffects).
         #ATE_EGRESS_INJECT_FLAGS -- Don't modify this line.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
         env:
         - name: POD_NAME
           valueFrom:
