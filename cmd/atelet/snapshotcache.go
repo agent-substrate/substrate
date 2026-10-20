@@ -134,14 +134,14 @@ const (
 
 // cacheModeFor returns how this sandbox class's restores may use the
 // snapshot cache. ateworker-gvisor reads restore state and gets hard
-// links. It unlinks the memory and filesystem images from its restore dir
-// as soon as the restore returns, keeping only the small descriptors
-// linked, so a link protects an image's entry through the restore and the
-// min age, not for the actor's life: an entry evicted later is still read
-// to the end by the descriptors runsc holds open. The images' pages stay
-// in the page cache for the next restore of the snapshot, since the
-// worker's unlink no longer takes the inode to zero links.
-// ateworker-microvm gets private copies. Not because a link would
+// links. Once the restore's page loading is done it drops the memory and
+// filesystem images from the page cache and unlinks them from its restore
+// dir, keeping only the small descriptors linked, so the actor's cgroup is
+// charged for its guest memory alone, as for any restore, and a link
+// protects an image's entry through the restore and the min age, not for
+// the actor's life: an entry evicted later is still read to the end by the
+// descriptors runsc holds open, and the next restore of the snapshot reads
+// the images from local disk. ateworker-microvm gets private copies. Not because a link would
 // corrupt the cache: it replaces config.json by rename, and its delta
 // merge copies instead of writing in place when the memory file's inode
 // is shared. Because a link would cost more than it saves: an on-demand
