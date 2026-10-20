@@ -323,15 +323,24 @@ func TestSetupBundleRootfs_ImageVolumes(t *testing.T) {
 				}, nil)
 				layers = append(layers, dir)
 			}
-			// a submount in the layer, which only the bind arm carries along
-			nested := filepath.Join(layers[tc.layers-1], layerFSDirName, "sub")
-			if err := os.Mkdir(nested, 0o755); err != nil {
-				t.Fatal(err)
+			// A shared layer with a submount now and one mounted after setup. Only
+			// the bind arm could carry either along.
+			fsDir := filepath.Join(layers[tc.layers-1], layerFSDirName)
+			for _, d := range []string{"sub", "later"} {
+				if err := os.Mkdir(filepath.Join(fsDir, d), 0o755); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if err := unix.Mount("tmpfs", nested, "tmpfs", 0, ""); err != nil {
+			if err := unix.Mount(fsDir, fsDir, "", unix.MS_BIND, ""); err != nil {
+				t.Fatalf("self-binding %q: %v", fsDir, err)
+			}
+			t.Cleanup(func() { _ = unix.Unmount(fsDir, unix.MNT_DETACH) })
+			if err := unix.Mount("", fsDir, "", unix.MS_SHARED, ""); err != nil {
+				t.Fatalf("making %q shared: %v", fsDir, err)
+			}
+			if err := unix.Mount("tmpfs", filepath.Join(fsDir, "sub"), "tmpfs", 0, ""); err != nil {
 				t.Fatalf("mounting nested tmpfs: %v", err)
 			}
-			t.Cleanup(func() { _ = unix.Unmount(nested, unix.MNT_DETACH) })
 
 			bundle := t.TempDir()
 			if err := WriteSpec(bundle, &OverlaySpec{
@@ -344,6 +353,9 @@ func TestSetupBundleRootfs_ImageVolumes(t *testing.T) {
 				t.Fatalf("SetupBundleRootfs: %v", err)
 			}
 			t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+			if err := unix.Mount("tmpfs", filepath.Join(fsDir, "later"), "tmpfs", 0, ""); err != nil {
+				t.Fatalf("mounting tmpfs after setup: %v", err)
+			}
 
 			mnt := filepath.Join(bundle, "volumes", "agent")
 			for i := range tc.layers {
@@ -357,7 +369,7 @@ func TestSetupBundleRootfs_ImageVolumes(t *testing.T) {
 				t.Errorf("shadowed.txt = %q (%v), want %q", got, err, want)
 			}
 			// No upper on either arm, so there is nowhere for a write to go.
-			for _, name := range []string{"nope.txt", "sub/nope.txt"} {
+			for _, name := range []string{"nope.txt", "sub/nope.txt", "later/nope.txt"} {
 				if err := os.WriteFile(filepath.Join(mnt, name), []byte("x"), 0o644); err == nil {
 					t.Errorf("write of %s succeeded through a read-only image volume", name)
 				} else if !errors.Is(err, unix.EROFS) {
