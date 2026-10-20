@@ -72,8 +72,8 @@ func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 }
 
 // buildRuntime converts the compatibility attributes atelet wrote for one
-// SandboxConfig version into a SandboxRuntime of sandboxClass.
-func buildRuntime(sandboxClass string, attrs sandboxruntimes.Attributes) *ateletpb.SandboxRuntime {
+// SandboxConfig version into an ActorSandboxRuntime of sandboxClass.
+func buildRuntime(sandboxClass string, attrs sandboxruntimes.Attributes) *ateletpb.ActorSandboxRuntime {
 	entries := make([]*ateletpb.AttributeEntry, 0, len(attrs))
 	for _, k := range slices.Sorted(maps.Keys(attrs)) {
 		entries = append(entries, &ateletpb.AttributeEntry{
@@ -81,7 +81,7 @@ func buildRuntime(sandboxClass string, attrs sandboxruntimes.Attributes) *atelet
 			Value: attrs[k],
 		})
 	}
-	return &ateletpb.SandboxRuntime{
+	return &ateletpb.ActorSandboxRuntime{
 		SandboxClass: sandboxClass,
 		Version: &ateletpb.VersionedSandboxCompat{
 			SchemaVersion: hardware.SchemaVersionV1,

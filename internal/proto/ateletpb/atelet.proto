@@ -67,10 +67,10 @@ message RegisterWorkerRequest {
 
   // Runtime that new and cold-booted actors start under.
   // Snapshots matching default_runtime can also warm-boot on this worker.
-  // atelet converts it to the control plane's SandboxRuntime when forwarding.
+  // atelet converts it to the control plane's ActorSandboxRuntime when forwarding.
   //
   // +k8s:required
-  SandboxRuntime default_runtime = 2;
+  ActorSandboxRuntime default_runtime = 2;
 
   // Additional runtimes (excluding default_runtime) that this worker can
   // restore snapshots from right now.
@@ -78,13 +78,13 @@ message RegisterWorkerRequest {
   // +k8s:optional
   // +k8s:maxItems=32
   // +k8s:listType=atomic
-  repeated SandboxRuntime restorable_runtimes = 3;
+  repeated ActorSandboxRuntime restorable_runtimes = 3;
 }
 
-// SandboxRuntime describes a sandbox runtime and its compatibility identity as
-// reported by a worker. It mirrors the control plane's SandboxRuntime and is
+// ActorSandboxRuntime describes a sandbox runtime and its compatibility identity as
+// reported by a worker. It mirrors the control plane's ActorSandboxRuntime and is
 // validated by the same rules.
-message SandboxRuntime {
+message ActorSandboxRuntime {
   // e.g. "gvisor", "microvm"
   //
   // +k8s:required
@@ -105,7 +105,7 @@ message SandboxRuntime {
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
-// key-value compatibility attributes for a SandboxRuntime.
+// key-value compatibility attributes for an ActorSandboxRuntime.
 message VersionedSandboxCompat {
   // Compatibility schema version (e.g. "v1") defining which runtime and
   // hardware attributes are recorded and how they are computed.
@@ -490,7 +490,7 @@ message RunRequest {
   // actor so a later Checkpoint pins the snapshot to it.
   //
   // +k8s:required
-  SandboxRuntime sandbox_runtime = 12;
+  ActorSandboxRuntime sandbox_runtime = 12;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -1107,7 +1107,7 @@ message RestoreRequest {
   // activation, not what the restored snapshot was taken under.
   //
   // +k8s:required
-  SandboxRuntime sandbox_runtime = 12;
+  ActorSandboxRuntime sandbox_runtime = 12;
 }
 
 message RestoreResponse {

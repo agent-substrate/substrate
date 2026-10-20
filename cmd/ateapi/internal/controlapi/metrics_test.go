@@ -86,7 +86,7 @@ func worker(namespace, pool, class string, allocated, capacity int32) *ateapipb.
 		},
 	}
 	if class != "" {
-		w.Status.DefaultRuntime = &ateapipb.SandboxRuntime{SandboxClass: class}
+		w.Status.DefaultRuntime = &ateapipb.ActorSandboxRuntime{SandboxClass: class}
 	}
 	return w
 }
@@ -248,7 +248,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				WorkerNamespace: "ate-workers",
 				WorkerPool:      "pool-a",
-				SandboxRuntime:  &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+				SandboxRuntime:  &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 	}

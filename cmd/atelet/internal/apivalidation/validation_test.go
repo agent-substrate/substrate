@@ -37,20 +37,20 @@ func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) 
 
 // runtimeWithAttributes returns a valid gVisor runtime carrying n attributes
 // with distinct keys.
-func runtimeWithAttributes(n int) *ateletpb.SandboxRuntime {
+func runtimeWithAttributes(n int) *ateletpb.ActorSandboxRuntime {
 	attrs := make([]*ateletpb.AttributeEntry, n)
 	for i := range attrs {
 		attrs[i] = &ateletpb.AttributeEntry{Key: fmt.Sprintf("k%d", i), Value: "v"}
 	}
-	return &ateletpb.SandboxRuntime{
+	return &ateletpb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version:      &ateletpb.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: attrs},
 	}
 }
 
 // sandboxRuntimes returns n runtimes built by mk.
-func sandboxRuntimes(n int, mk func() *ateletpb.SandboxRuntime) []*ateletpb.SandboxRuntime {
-	rts := make([]*ateletpb.SandboxRuntime, n)
+func sandboxRuntimes(n int, mk func() *ateletpb.ActorSandboxRuntime) []*ateletpb.ActorSandboxRuntime {
+	rts := make([]*ateletpb.ActorSandboxRuntime, n)
 	for i := range rts {
 		rts[i] = mk()
 	}
@@ -1012,8 +1012,8 @@ func TestValidateDetachActorRequest(t *testing.T) {
 }
 
 func TestValidateRegisterWorkerRequest(t *testing.T) {
-	testRuntime := func() *ateletpb.SandboxRuntime {
-		return &ateletpb.SandboxRuntime{
+	testRuntime := func() *ateletpb.ActorSandboxRuntime {
+		return &ateletpb.ActorSandboxRuntime{
 			SandboxClass: "gvisor",
 			Version: &ateletpb.VersionedSandboxCompat{
 				SchemaVersion: "v1",
@@ -1045,7 +1045,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity:           &ateletpb.WorkerResources{},
 			DefaultRuntime:     testRuntime(),
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{testRuntime()},
+			RestorableRuntimes: []*ateletpb.ActorSandboxRuntime{testRuntime()},
 		},
 	}, {
 		name: "missing capacity",
@@ -1059,7 +1059,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "missing default_runtime.sandbox_class",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				Version: testRuntime().Version,
 			},
 		},
@@ -1068,7 +1068,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "default_runtime.sandbox_class too long",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				SandboxClass: strings.Repeat("c", 64),
 				Version:      testRuntime().Version,
 			},
@@ -1081,7 +1081,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "unsupported default_runtime.sandbox_class",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				SandboxClass: "kata",
 				Version:      testRuntime().Version,
 			},
@@ -1091,14 +1091,14 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "missing default_runtime.version",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity:       &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{SandboxClass: "gvisor"},
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{SandboxClass: "gvisor"},
 		},
 		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version"), "")},
 	}, {
 		name: "missing default_runtime.version.schema_version",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				SandboxClass: "gvisor",
 				Version: &ateletpb.VersionedSandboxCompat{
 					Attributes: []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
@@ -1110,7 +1110,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "default_runtime.version.schema_version too long",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				SandboxClass: "gvisor",
 				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: strings.Repeat("v", 65),
@@ -1123,7 +1123,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "missing default_runtime.version.attributes",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				SandboxClass: "gvisor",
 				Version:      &ateletpb.VersionedSandboxCompat{SchemaVersion: "v1"},
 			},
@@ -1133,7 +1133,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "duplicate attribute key",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				SandboxClass: "gvisor",
 				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
@@ -1149,7 +1149,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "missing attribute key",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				SandboxClass: "gvisor",
 				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
@@ -1162,7 +1162,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "attribute key too long",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				SandboxClass: "gvisor",
 				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
@@ -1175,7 +1175,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "missing attribute value",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				SandboxClass: "gvisor",
 				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
@@ -1188,7 +1188,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "attribute value too long",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
+			DefaultRuntime: &ateletpb.ActorSandboxRuntime{
 				SandboxClass: "gvisor",
 				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
@@ -1215,7 +1215,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity:           &ateletpb.WorkerResources{},
 			DefaultRuntime:     testRuntime(),
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{nil},
+			RestorableRuntimes: []*ateletpb.ActorSandboxRuntime{nil},
 		},
 		want: field.ErrorList{field.Required(restorablePath.Index(0), "")},
 	}, {
@@ -1223,7 +1223,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity:           &ateletpb.WorkerResources{},
 			DefaultRuntime:     testRuntime(),
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{{SandboxClass: "gvisor"}},
+			RestorableRuntimes: []*ateletpb.ActorSandboxRuntime{{SandboxClass: "gvisor"}},
 		},
 		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("version"), "")},
 	}, {
@@ -1231,7 +1231,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity:       &ateletpb.WorkerResources{},
 			DefaultRuntime: testRuntime(),
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{{
+			RestorableRuntimes: []*ateletpb.ActorSandboxRuntime{{
 				SandboxClass: "GVISOR",
 				Version:      testRuntime().Version,
 			}},

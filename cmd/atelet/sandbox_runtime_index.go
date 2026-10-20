@@ -284,7 +284,7 @@ func (x *runtimeIndex) worker(podUID string) (*workerRuntime, bool) {
 // A miss means the request reached a node whose workers never advertised the
 // runtime, which must surface. A runtime registered before an atelet restart
 // is no miss: the index is loaded from disk before atelet serves.
-func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.SandboxRuntime) (*sandboxAssetsRecord, error) {
+func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.ActorSandboxRuntime) (*sandboxAssetsRecord, error) {
 	hash, err := bundleHashOf(rt)
 	if err != nil {
 		return nil, apierror.InvalidArgument("sandbox_runtime: %v", err)
@@ -304,7 +304,7 @@ func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.SandboxRunt
 
 // bundleHashOf returns the sandbox_bundle_hash attribute of rt, which names
 // the SandboxConfig version a worker runs an actor under.
-func bundleHashOf(rt *ateletpb.SandboxRuntime) (string, error) {
+func bundleHashOf(rt *ateletpb.ActorSandboxRuntime) (string, error) {
 	if rt == nil {
 		return "", errors.New("missing")
 	}

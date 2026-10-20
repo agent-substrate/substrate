@@ -749,7 +749,7 @@ type Snapshot struct {
 	// taken.
 	//
 	// +k8s:optional
-	SandboxRuntime *SandboxRuntime `protobuf:"bytes,8,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
+	SandboxRuntime *ActorSandboxRuntime `protobuf:"bytes,8,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -833,7 +833,7 @@ func (x *Snapshot) GetDurableSnapshot() *SnapshotStorage {
 	return nil
 }
 
-func (x *Snapshot) GetSandboxRuntime() *SandboxRuntime {
+func (x *Snapshot) GetSandboxRuntime() *ActorSandboxRuntime {
 	if x != nil {
 		return x.SandboxRuntime
 	}
@@ -2285,7 +2285,7 @@ type WorkerAssignment struct {
 	// was started or restored under on this Worker.
 	//
 	// +k8s:optional
-	SandboxRuntime *SandboxRuntime `protobuf:"bytes,9,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
+	SandboxRuntime *ActorSandboxRuntime `protobuf:"bytes,9,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
 	// worker_spiffe_id is the SPIFFE ID worker_pod's certificate carries, copied
 	// from Worker.worker_spiffe_id.
 	//
@@ -2383,7 +2383,7 @@ func (x *WorkerAssignment) GetWorkerEpoch() int64 {
 	return 0
 }
 
-func (x *WorkerAssignment) GetSandboxRuntime() *SandboxRuntime {
+func (x *WorkerAssignment) GetSandboxRuntime() *ActorSandboxRuntime {
 	if x != nil {
 		return x.SandboxRuntime
 	}
@@ -7442,14 +7442,14 @@ type WorkerStatus struct {
 	// by the first RegisterWorker call.
 	//
 	// +k8s:optional
-	DefaultRuntime *SandboxRuntime `protobuf:"bytes,5,opt,name=default_runtime,json=defaultRuntime,proto3" json:"default_runtime,omitempty"`
+	DefaultRuntime *ActorSandboxRuntime `protobuf:"bytes,5,opt,name=default_runtime,json=defaultRuntime,proto3" json:"default_runtime,omitempty"`
 	// Additional runtimes (excluding default_runtime) that this worker can
 	// restore snapshots from right now.
 	//
 	// +k8s:optional
 	// +k8s:maxItems=32
 	// +k8s:listType=atomic
-	RestorableRuntimes []*SandboxRuntime `protobuf:"bytes,6,rep,name=restorable_runtimes,json=restorableRuntimes,proto3" json:"restorable_runtimes,omitempty"`
+	RestorableRuntimes []*ActorSandboxRuntime `protobuf:"bytes,6,rep,name=restorable_runtimes,json=restorableRuntimes,proto3" json:"restorable_runtimes,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -7512,23 +7512,23 @@ func (x *WorkerStatus) GetObservedEpoch() int64 {
 	return 0
 }
 
-func (x *WorkerStatus) GetDefaultRuntime() *SandboxRuntime {
+func (x *WorkerStatus) GetDefaultRuntime() *ActorSandboxRuntime {
 	if x != nil {
 		return x.DefaultRuntime
 	}
 	return nil
 }
 
-func (x *WorkerStatus) GetRestorableRuntimes() []*SandboxRuntime {
+func (x *WorkerStatus) GetRestorableRuntimes() []*ActorSandboxRuntime {
 	if x != nil {
 		return x.RestorableRuntimes
 	}
 	return nil
 }
 
-// SandboxRuntime describes a sandbox runtime and its compatibility identity as
+// ActorSandboxRuntime describes a sandbox runtime and its compatibility identity as
 // reported by a Worker or recorded on a snapshot.
-type SandboxRuntime struct {
+type ActorSandboxRuntime struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// e.g. "gvisor", "microvm"
 	//
@@ -7547,20 +7547,20 @@ type SandboxRuntime struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SandboxRuntime) Reset() {
-	*x = SandboxRuntime{}
+func (x *ActorSandboxRuntime) Reset() {
+	*x = ActorSandboxRuntime{}
 	mi := &file_ateapi_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SandboxRuntime) String() string {
+func (x *ActorSandboxRuntime) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SandboxRuntime) ProtoMessage() {}
+func (*ActorSandboxRuntime) ProtoMessage() {}
 
-func (x *SandboxRuntime) ProtoReflect() protoreflect.Message {
+func (x *ActorSandboxRuntime) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -7572,19 +7572,19 @@ func (x *SandboxRuntime) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SandboxRuntime.ProtoReflect.Descriptor instead.
-func (*SandboxRuntime) Descriptor() ([]byte, []int) {
+// Deprecated: Use ActorSandboxRuntime.ProtoReflect.Descriptor instead.
+func (*ActorSandboxRuntime) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{104}
 }
 
-func (x *SandboxRuntime) GetSandboxClass() string {
+func (x *ActorSandboxRuntime) GetSandboxClass() string {
 	if x != nil {
 		return x.SandboxClass
 	}
 	return ""
 }
 
-func (x *SandboxRuntime) GetVersion() *VersionedSandboxCompat {
+func (x *ActorSandboxRuntime) GetVersion() *VersionedSandboxCompat {
 	if x != nil {
 		return x.Version
 	}
@@ -7592,7 +7592,7 @@ func (x *SandboxRuntime) GetVersion() *VersionedSandboxCompat {
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
-// key-value compatibility attributes for a SandboxRuntime.
+// key-value compatibility attributes for an ActorSandboxRuntime.
 type VersionedSandboxCompat struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Compatibility schema version (e.g. "v1") defining which runtime and
@@ -7927,14 +7927,14 @@ type RegisterWorkerRequest struct {
 	// sandbox_class is refused.
 	//
 	// +k8s:required
-	DefaultRuntime *SandboxRuntime `protobuf:"bytes,3,opt,name=default_runtime,json=defaultRuntime,proto3" json:"default_runtime,omitempty"`
+	DefaultRuntime *ActorSandboxRuntime `protobuf:"bytes,3,opt,name=default_runtime,json=defaultRuntime,proto3" json:"default_runtime,omitempty"`
 	// Additional runtimes (excluding default_runtime) that this worker can
 	// restore snapshots from right now.
 	//
 	// +k8s:optional
 	// +k8s:maxItems=32
 	// +k8s:listType=atomic
-	RestorableRuntimes []*SandboxRuntime `protobuf:"bytes,4,rep,name=restorable_runtimes,json=restorableRuntimes,proto3" json:"restorable_runtimes,omitempty"`
+	RestorableRuntimes []*ActorSandboxRuntime `protobuf:"bytes,4,rep,name=restorable_runtimes,json=restorableRuntimes,proto3" json:"restorable_runtimes,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -7983,14 +7983,14 @@ func (x *RegisterWorkerRequest) GetCapacity() *WorkerResources {
 	return nil
 }
 
-func (x *RegisterWorkerRequest) GetDefaultRuntime() *SandboxRuntime {
+func (x *RegisterWorkerRequest) GetDefaultRuntime() *ActorSandboxRuntime {
 	if x != nil {
 		return x.DefaultRuntime
 	}
 	return nil
 }
 
-func (x *RegisterWorkerRequest) GetRestorableRuntimes() []*SandboxRuntime {
+func (x *RegisterWorkerRequest) GetRestorableRuntimes() []*ActorSandboxRuntime {
 	if x != nil {
 		return x.RestorableRuntimes
 	}
@@ -9593,7 +9593,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"x\n" +
 	"\x0fSnapshotStorage\x125\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x1d.ateapi.SnapshotStorageStatusR\x06status\x12.\n" +
-	"\x06object\x18\x02 \x01(\v2\x16.ateapi.ObjectSnapshotR\x06object\"\xf0\x02\n" +
+	"\x06object\x18\x02 \x01(\v2\x16.ateapi.ObjectSnapshotR\x06object\"\xf5\x02\n" +
 	"\bSnapshot\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x1e\n" +
 	"\n" +
@@ -9603,8 +9603,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\bfidelity\x18\x04 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\bfidelity\x12,\n" +
 	"\x12actor_template_uid\x18\x05 \x01(\tR\x10actorTemplateUid\x12\x1a\n" +
 	"\blocality\x18\x06 \x01(\tR\blocality\x12B\n" +
-	"\x10durable_snapshot\x18\a \x01(\v2\x17.ateapi.SnapshotStorageR\x0fdurableSnapshot\x12?\n" +
-	"\x0fsandbox_runtime\x18\b \x01(\v2\x16.ateapi.SandboxRuntimeR\x0esandboxRuntime\"\x90\x01\n" +
+	"\x10durable_snapshot\x18\a \x01(\v2\x17.ateapi.SnapshotStorageR\x0fdurableSnapshot\x12D\n" +
+	"\x0fsandbox_runtime\x18\b \x01(\v2\x1b.ateapi.ActorSandboxRuntimeR\x0esandboxRuntime\"\x90\x01\n" +
 	"\bSelector\x12D\n" +
 	"\fmatch_labels\x18\x01 \x03(\v2!.ateapi.Selector.MatchLabelsEntryR\vmatchLabels\x1a>\n" +
 	"\x10MatchLabelsEntry\x12\x10\n" +
@@ -9685,7 +9685,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +
 	"\n" +
-	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\x9f\x03\n" +
+	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xa4\x03\n" +
 	"\x10WorkerAssignment\x12)\n" +
 	"\x06worker\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -9696,8 +9696,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0eworker_pod_uid\x18\x04 \x01(\tR\fworkerPodUid\x12$\n" +
 	"\x0eworker_pod_ips\x18\x05 \x03(\tR\fworkerPodIps\x12\x1b\n" +
 	"\tnode_name\x18\a \x01(\tR\bnodeName\x12!\n" +
-	"\fworker_epoch\x18\b \x01(\x03R\vworkerEpoch\x12?\n" +
-	"\x0fsandbox_runtime\x18\t \x01(\v2\x16.ateapi.SandboxRuntimeR\x0esandboxRuntime\x12(\n" +
+	"\fworker_epoch\x18\b \x01(\x03R\vworkerEpoch\x12D\n" +
+	"\x0fsandbox_runtime\x18\t \x01(\v2\x1b.ateapi.ActorSandboxRuntimeR\x0esandboxRuntime\x12(\n" +
 	"\x10worker_spiffe_id\x18\n" +
 	" \x01(\tR\x0eworkerSpiffeId\"g\n" +
 	"\tTagStatus\x12,\n" +
@@ -9952,15 +9952,15 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x06status\x18\v \x01(\v2\x14.ateapi.WorkerStatusR\x06status\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x0f\x82\xb5\x18\v\x18\x02\"\aWorkers\"\xd6\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x0f\x82\xb5\x18\v\x18\x02\"\aWorkers\"\xe0\x02\n" +
 	"\fWorkerStatus\x12)\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x13.ateapi.WorkerStateR\x05state\x123\n" +
 	"\bcapacity\x18\x02 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\x125\n" +
 	"\tallocated\x18\x03 \x01(\v2\x17.ateapi.WorkerResourcesR\tallocated\x12%\n" +
-	"\x0eobserved_epoch\x18\x04 \x01(\x03R\robservedEpoch\x12?\n" +
-	"\x0fdefault_runtime\x18\x05 \x01(\v2\x16.ateapi.SandboxRuntimeR\x0edefaultRuntime\x12G\n" +
-	"\x13restorable_runtimes\x18\x06 \x03(\v2\x16.ateapi.SandboxRuntimeR\x12restorableRuntimes\"o\n" +
-	"\x0eSandboxRuntime\x12#\n" +
+	"\x0eobserved_epoch\x18\x04 \x01(\x03R\robservedEpoch\x12D\n" +
+	"\x0fdefault_runtime\x18\x05 \x01(\v2\x1b.ateapi.ActorSandboxRuntimeR\x0edefaultRuntime\x12L\n" +
+	"\x13restorable_runtimes\x18\x06 \x03(\v2\x1b.ateapi.ActorSandboxRuntimeR\x12restorableRuntimes\"t\n" +
+	"\x13ActorSandboxRuntime\x12#\n" +
 	"\rsandbox_class\x18\x01 \x01(\tR\fsandboxClass\x128\n" +
 	"\aversion\x18\x02 \x01(\v2\x1e.ateapi.VersionedSandboxCompatR\aversion\"w\n" +
 	"\x16VersionedSandboxCompat\x12%\n" +
@@ -9981,12 +9981,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12/\n" +
 	"\tresources\x18\x04 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12!\n" +
 	"\fworker_epoch\x18\x05 \x01(\x03R\vworkerEpoch:\x1e\x82\xb5\x18\x1a\n" +
-	"\x06Worker\"\x10ActorAssignments\"\x81\x02\n" +
+	"\x06Worker\"\x10ActorAssignments\"\x8b\x02\n" +
 	"\x15RegisterWorkerRequest\x12)\n" +
 	"\x06worker\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x123\n" +
-	"\bcapacity\x18\x02 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\x12?\n" +
-	"\x0fdefault_runtime\x18\x03 \x01(\v2\x16.ateapi.SandboxRuntimeR\x0edefaultRuntime\x12G\n" +
-	"\x13restorable_runtimes\x18\x04 \x03(\v2\x16.ateapi.SandboxRuntimeR\x12restorableRuntimes\"@\n" +
+	"\bcapacity\x18\x02 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\x12D\n" +
+	"\x0fdefault_runtime\x18\x03 \x01(\v2\x1b.ateapi.ActorSandboxRuntimeR\x0edefaultRuntime\x12L\n" +
+	"\x13restorable_runtimes\x18\x04 \x03(\v2\x1b.ateapi.ActorSandboxRuntimeR\x12restorableRuntimes\"@\n" +
 	"\x16RegisterWorkerResponse\x12&\n" +
 	"\x06worker\x18\x01 \x01(\v2\x0e.ateapi.WorkerR\x06worker\"\xd4\x01\n" +
 	"!MintWorkerActorCertificateRequest\x12'\n" +
@@ -10350,7 +10350,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*ListActorsResponse)(nil),                 // 111: ateapi.ListActorsResponse
 	(*Worker)(nil),                             // 112: ateapi.Worker
 	(*WorkerStatus)(nil),                       // 113: ateapi.WorkerStatus
-	(*SandboxRuntime)(nil),                     // 114: ateapi.SandboxRuntime
+	(*ActorSandboxRuntime)(nil),                // 114: ateapi.ActorSandboxRuntime
 	(*VersionedSandboxCompat)(nil),             // 115: ateapi.VersionedSandboxCompat
 	(*AttributeEntry)(nil),                     // 116: ateapi.AttributeEntry
 	(*WorkerResources)(nil),                    // 117: ateapi.WorkerResources
@@ -10393,7 +10393,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	0,   // 2: ateapi.Snapshot.owner:type_name -> ateapi.SnapshotOwner
 	2,   // 3: ateapi.Snapshot.fidelity:type_name -> ateapi.SnapshotFidelity
 	11,  // 4: ateapi.Snapshot.durable_snapshot:type_name -> ateapi.SnapshotStorage
-	114, // 5: ateapi.Snapshot.sandbox_runtime:type_name -> ateapi.SandboxRuntime
+	114, // 5: ateapi.Snapshot.sandbox_runtime:type_name -> ateapi.ActorSandboxRuntime
 	144, // 6: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
 	147, // 7: ateapi.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
 	147, // 8: ateapi.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
@@ -10424,7 +10424,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	12,  // 33: ateapi.ActorStatus.snapshots:type_name -> ateapi.Snapshot
 	147, // 34: ateapi.ActorCrash.crash_time:type_name -> google.protobuf.Timestamp
 	34,  // 35: ateapi.WorkerAssignment.worker:type_name -> ateapi.ObjectRef
-	114, // 36: ateapi.WorkerAssignment.sandbox_runtime:type_name -> ateapi.SandboxRuntime
+	114, // 36: ateapi.WorkerAssignment.sandbox_runtime:type_name -> ateapi.ActorSandboxRuntime
 	12,  // 37: ateapi.TagStatus.snapshot:type_name -> ateapi.Snapshot
 	14,  // 38: ateapi.Tag.metadata:type_name -> ateapi.ResourceMetadata
 	31,  // 39: ateapi.Tag.status:type_name -> ateapi.TagStatus
@@ -10528,17 +10528,17 @@ var file_ateapi_proto_depIdxs = []int32{
 	8,   // 137: ateapi.WorkerStatus.state:type_name -> ateapi.WorkerState
 	117, // 138: ateapi.WorkerStatus.capacity:type_name -> ateapi.WorkerResources
 	117, // 139: ateapi.WorkerStatus.allocated:type_name -> ateapi.WorkerResources
-	114, // 140: ateapi.WorkerStatus.default_runtime:type_name -> ateapi.SandboxRuntime
-	114, // 141: ateapi.WorkerStatus.restorable_runtimes:type_name -> ateapi.SandboxRuntime
-	115, // 142: ateapi.SandboxRuntime.version:type_name -> ateapi.VersionedSandboxCompat
+	114, // 140: ateapi.WorkerStatus.default_runtime:type_name -> ateapi.ActorSandboxRuntime
+	114, // 141: ateapi.WorkerStatus.restorable_runtimes:type_name -> ateapi.ActorSandboxRuntime
+	115, // 142: ateapi.ActorSandboxRuntime.version:type_name -> ateapi.VersionedSandboxCompat
 	116, // 143: ateapi.VersionedSandboxCompat.attributes:type_name -> ateapi.AttributeEntry
 	14,  // 144: ateapi.ActorAssignment.metadata:type_name -> ateapi.ResourceMetadata
 	34,  // 145: ateapi.ActorAssignment.actor:type_name -> ateapi.ObjectRef
 	37,  // 146: ateapi.ActorAssignment.resources:type_name -> ateapi.Resources
 	34,  // 147: ateapi.RegisterWorkerRequest.worker:type_name -> ateapi.ObjectRef
 	117, // 148: ateapi.RegisterWorkerRequest.capacity:type_name -> ateapi.WorkerResources
-	114, // 149: ateapi.RegisterWorkerRequest.default_runtime:type_name -> ateapi.SandboxRuntime
-	114, // 150: ateapi.RegisterWorkerRequest.restorable_runtimes:type_name -> ateapi.SandboxRuntime
+	114, // 149: ateapi.RegisterWorkerRequest.default_runtime:type_name -> ateapi.ActorSandboxRuntime
+	114, // 150: ateapi.RegisterWorkerRequest.restorable_runtimes:type_name -> ateapi.ActorSandboxRuntime
 	112, // 151: ateapi.RegisterWorkerResponse.worker:type_name -> ateapi.Worker
 	34,  // 152: ateapi.MintWorkerActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
 	34,  // 153: ateapi.MintWorkerActorCertificateRequest.worker:type_name -> ateapi.ObjectRef

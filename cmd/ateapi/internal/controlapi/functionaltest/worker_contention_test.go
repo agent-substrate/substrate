@@ -153,13 +153,13 @@ func setWorkerActorCapacity(t *testing.T, tc *testContext, pool string, actors i
 	}
 }
 
-// defaultWorkerRuntime returns the default SandboxRuntime that
+// defaultWorkerRuntime returns the default ActorSandboxRuntime that
 // reportWorkerCapacity records on a test worker of the given sandbox class.
-func defaultWorkerRuntime(class string) *ateapipb.SandboxRuntime {
+func defaultWorkerRuntime(class string) *ateapipb.ActorSandboxRuntime {
 	if class == "" {
 		class = "gvisor"
 	}
-	return &ateapipb.SandboxRuntime{
+	return &ateapipb.ActorSandboxRuntime{
 		SandboxClass: class,
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: hardware.SchemaVersionV1,

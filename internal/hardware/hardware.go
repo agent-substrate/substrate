@@ -67,12 +67,12 @@ func ProbeHost() *ateletpb.VersionedSandboxCompat {
 }
 
 // Requirement is what a worker must run to restore a snapshot: the
-// SandboxRuntime the snapshot was stamped with, prepared for matching against
+// ActorSandboxRuntime the snapshot was stamped with, prepared for matching against
 // many workers. The scheduler asks it once per candidate, so the snapshot's
 // AttrCPUFeatures is parsed here, once, rather than on every comparison. The
 // zero Requirement, like NewRequirement(nil), requires nothing.
 type Requirement struct {
-	snap   *ateapipb.SandboxRuntime
+	snap   *ateapipb.ActorSandboxRuntime
 	compat *ateapipb.VersionedSandboxCompat // snap's version
 	// cpuFeatures is compat's AttrCPUFeatures parsed, when it has one.
 	// badCPUFeatures records one that is not a canonical mask, which no
@@ -82,7 +82,7 @@ type Requirement struct {
 }
 
 // NewRequirement prepares snap for matching. A nil snap requires nothing.
-func NewRequirement(snap *ateapipb.SandboxRuntime) Requirement {
+func NewRequirement(snap *ateapipb.ActorSandboxRuntime) Requirement {
 	r := compatRequirement(snap.GetVersion())
 	r.snap = snap
 	return r
@@ -101,16 +101,16 @@ func compatRequirement(compat *ateapipb.VersionedSandboxCompat) Requirement {
 	return r
 }
 
-// Runtime returns the SandboxRuntime the requirement was prepared from, or
+// Runtime returns the ActorSandboxRuntime the requirement was prepared from, or
 // nil when it requires nothing.
-func (r Requirement) Runtime() *ateapipb.SandboxRuntime {
+func (r Requirement) Runtime() *ateapipb.ActorSandboxRuntime {
 	return r.snap
 }
 
-// Matches reports whether a worker's SandboxRuntime can restore the
+// Matches reports whether a worker's ActorSandboxRuntime can restore the
 // snapshot. A requirement of nothing is met by any worker. Otherwise the
 // sandbox classes must be equal and the compat must match.
-func (r Requirement) Matches(worker *ateapipb.SandboxRuntime) bool {
+func (r Requirement) Matches(worker *ateapipb.ActorSandboxRuntime) bool {
 	if r.snap == nil {
 		return true
 	}
@@ -172,11 +172,11 @@ func (r Requirement) attributeSatisfied(key, workerVal, snapVal string) bool {
 	return workerVal == snapVal
 }
 
-// MatchingRuntime returns the SandboxRuntime from status that can restore
+// MatchingRuntime returns the ActorSandboxRuntime from status that can restore
 // the snapshot (checking DefaultRuntime first, then RestorableRuntimes in
 // order), or nil if none matches. A requirement of nothing returns
 // DefaultRuntime.
-func (r Requirement) MatchingRuntime(status *ateapipb.WorkerStatus) *ateapipb.SandboxRuntime {
+func (r Requirement) MatchingRuntime(status *ateapipb.WorkerStatus) *ateapipb.ActorSandboxRuntime {
 	if def := status.GetDefaultRuntime(); r.snap == nil || r.Matches(def) {
 		return def
 	}
@@ -199,18 +199,18 @@ func (r Requirement) WorkerMatches(status *ateapipb.WorkerStatus) bool {
 // when it can restore the snapshot, else the DefaultRuntime the guest boots
 // fresh under. This is what an assignment records and what the actor's next
 // checkpoint is stamped with.
-func (r Requirement) RuntimeFor(status *ateapipb.WorkerStatus) *ateapipb.SandboxRuntime {
+func (r Requirement) RuntimeFor(status *ateapipb.WorkerStatus) *ateapipb.ActorSandboxRuntime {
 	if rt := r.MatchingRuntime(status); rt != nil {
 		return rt
 	}
 	return status.GetDefaultRuntime()
 }
 
-// Matches reports whether a worker's SandboxRuntime can restore a snapshot
+// Matches reports whether a worker's ActorSandboxRuntime can restore a snapshot
 // stamped with snap, for one comparison; a caller holding one snap against
 // many workers should prepare a Requirement once. A nil snap imposes no
 // constraint.
-func Matches(worker, snap *ateapipb.SandboxRuntime) bool {
+func Matches(worker, snap *ateapipb.ActorSandboxRuntime) bool {
 	return NewRequirement(snap).Matches(worker)
 }
 
@@ -222,16 +222,16 @@ func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 }
 
 // MatchingRuntime is NewRequirement(snap).MatchingRuntime(status).
-func MatchingRuntime(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime) *ateapipb.SandboxRuntime {
+func MatchingRuntime(status *ateapipb.WorkerStatus, snap *ateapipb.ActorSandboxRuntime) *ateapipb.ActorSandboxRuntime {
 	return NewRequirement(snap).MatchingRuntime(status)
 }
 
 // WorkerMatches is NewRequirement(snap).WorkerMatches(status).
-func WorkerMatches(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime) bool {
+func WorkerMatches(status *ateapipb.WorkerStatus, snap *ateapipb.ActorSandboxRuntime) bool {
 	return NewRequirement(snap).WorkerMatches(status)
 }
 
 // RuntimeFor is NewRequirement(snap).RuntimeFor(status).
-func RuntimeFor(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime) *ateapipb.SandboxRuntime {
+func RuntimeFor(status *ateapipb.WorkerStatus, snap *ateapipb.ActorSandboxRuntime) *ateapipb.ActorSandboxRuntime {
 	return NewRequirement(snap).RuntimeFor(status)
 }

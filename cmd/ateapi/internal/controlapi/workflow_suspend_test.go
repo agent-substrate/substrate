@@ -144,7 +144,7 @@ func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root/"})
-	wantRuntime := &ateapipb.SandboxRuntime{
+	wantRuntime := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",

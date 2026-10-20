@@ -778,7 +778,7 @@ func hasLocalSnapshot(status *ateapipb.ActorStatus) bool {
 	return localSnapshot(status) != nil
 }
 
-func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clients, at *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
+func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clients, at *ateapipb.ActorTemplate) *ateapipb.ActorSandboxRuntime {
 	t.Helper()
 	current, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: e2e.TemplateRef(at)})
 	if err != nil {
@@ -799,7 +799,7 @@ func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clien
 	return stamp
 }
 
-func runtimeAttribute(rt *ateapipb.SandboxRuntime, key string) string {
+func runtimeAttribute(rt *ateapipb.ActorSandboxRuntime, key string) string {
 	for _, attr := range rt.GetVersion().GetAttributes() {
 		if attr.GetKey() == key {
 			return attr.GetValue()

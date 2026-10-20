@@ -58,7 +58,7 @@ type resumeSnapshotSource struct {
 	TemplateReplaced bool
 	// RequiredRuntime is the runtime resolved from the snapshot's memory state
 	// (via requiredSnapshotRuntime), or nil when memory state is not restored.
-	RequiredRuntime *ateapipb.SandboxRuntime
+	RequiredRuntime *ateapipb.ActorSandboxRuntime
 }
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
@@ -644,13 +644,13 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime hardware.Requirement) 
 	}
 }
 
-// toAteletSandboxRuntime converts the control plane's SandboxRuntime to
+// toAteletSandboxRuntime converts the control plane's ActorSandboxRuntime to
 // atelet's, which it mirrors field for field.
-func toAteletSandboxRuntime(in *ateapipb.SandboxRuntime) *ateletpb.SandboxRuntime {
+func toAteletSandboxRuntime(in *ateapipb.ActorSandboxRuntime) *ateletpb.ActorSandboxRuntime {
 	if in == nil {
 		return nil
 	}
-	out := &ateletpb.SandboxRuntime{SandboxClass: in.GetSandboxClass()}
+	out := &ateletpb.ActorSandboxRuntime{SandboxClass: in.GetSandboxClass()}
 	if v := in.GetVersion(); v != nil {
 		out.Version = &ateletpb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
 		for _, a := range v.GetAttributes() {
@@ -694,11 +694,11 @@ func snapshotSandboxClass(actor *ateapipb.Actor) string {
 	return ""
 }
 
-// requiredSnapshotRuntime returns the SandboxRuntime stamped on the snapshot
+// requiredSnapshotRuntime returns the ActorSandboxRuntime stamped on the snapshot
 // that ResumeActor will restore memory state from, or nil when the resume does
 // not restore memory state (cold boot, ROOTFS or VOLUMES fidelity, or replaced
 // template).
-func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
+func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) *ateapipb.ActorSandboxRuntime {
 	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
 		if localSnap.GetFidelity() != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 			return nil
@@ -944,7 +944,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 // logRuntimeFallback records a resume that restores without memory state
 // because the assigned worker does not run the runtime the snapshot's memory
 // state was captured under.
-func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapipb.WorkerAssignment, required *ateapipb.SandboxRuntime) {
+func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapipb.WorkerAssignment, required *ateapipb.ActorSandboxRuntime) {
 	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring without memory state",
 		slog.String("actor", actorRef.String()),
 		slog.String("worker", assignment.GetWorkerPod()),

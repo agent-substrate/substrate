@@ -417,7 +417,7 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	if err := c.relay.Report(ctx, addr, &ateapipb.RegisterWorkerRequest{
 		Worker:   &ateapipb.ObjectRef{Name: name},
 		Capacity: fixed,
-		DefaultRuntime: &ateapipb.SandboxRuntime{
+		DefaultRuntime: &ateapipb.ActorSandboxRuntime{
 			SandboxClass: string(d.pool.Spec.DefaultSandboxClass()),
 			Version:      hostCompat(),
 		},

@@ -82,7 +82,7 @@ func TestBuildRuntime(t *testing.T) {
 		hardware.AttrCPUFeatures:       "3f",
 		hardware.AttrArchitecture:      runtime.GOARCH,
 	})
-	want := &ateletpb.SandboxRuntime{
+	want := &ateletpb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateletpb.VersionedSandboxCompat{
 			SchemaVersion: hardware.SchemaVersionV1,

@@ -30,11 +30,11 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// testRuntime is a SandboxRuntime of the given class whose compatibility
+// testRuntime is an ActorSandboxRuntime of the given class whose compatibility
 // identity is a single architecture attribute, which is enough to tell two
 // runtimes apart.
-func testRuntime(class, arch string) *ateapipb.SandboxRuntime {
-	return &ateapipb.SandboxRuntime{
+func testRuntime(class, arch string) *ateapipb.ActorSandboxRuntime {
+	return &ateapipb.ActorSandboxRuntime{
 		SandboxClass: class,
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -97,7 +97,7 @@ func TestRegisterWorker_Runtimes(t *testing.T) {
 			State:              ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:           &ateapipb.WorkerResources{Actors: 1},
 			DefaultRuntime:     gvisorAMD64,
-			RestorableRuntimes: []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
+			RestorableRuntimes: []*ateapipb.ActorSandboxRuntime{gvisorV8, gvisorV9},
 		}
 	}
 
@@ -106,31 +106,31 @@ func TestRegisterWorker_Runtimes(t *testing.T) {
 		// unreported seeds a Worker with no prior DefaultRuntime instead of
 		// seeded().
 		unreported bool
-		def        *ateapipb.SandboxRuntime
-		restorable []*ateapipb.SandboxRuntime
+		def        *ateapipb.ActorSandboxRuntime
+		restorable []*ateapipb.ActorSandboxRuntime
 		wantCode   codes.Code
 		// wantWrite is whether the report changes the record.
 		wantWrite bool
 	}{{
 		name:       "identical report writes nothing",
 		def:        gvisorAMD64,
-		restorable: []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
+		restorable: []*ateapipb.ActorSandboxRuntime{gvisorV8, gvisorV9},
 	}, {
 		name:       "changed default runtime writes",
 		def:        gvisorARM64,
-		restorable: []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
+		restorable: []*ateapipb.ActorSandboxRuntime{gvisorV8, gvisorV9},
 		wantWrite:  true,
 	}, {
 		name:       "changed restorable runtime writes",
 		def:        gvisorAMD64,
-		restorable: []*ateapipb.SandboxRuntime{gvisorV8, gvisorARM64},
+		restorable: []*ateapipb.ActorSandboxRuntime{gvisorV8, gvisorARM64},
 		wantWrite:  true,
 	}, {
 		// A report is compared as sent: the list is atomic, so a new order
 		// is a new report.
 		name:       "reordered restorable runtimes write",
 		def:        gvisorAMD64,
-		restorable: []*ateapipb.SandboxRuntime{gvisorV9, gvisorV8},
+		restorable: []*ateapipb.ActorSandboxRuntime{gvisorV9, gvisorV8},
 		wantWrite:  true,
 	}, {
 		// Runtimes are replaced like capacity: a report that lists no
@@ -145,12 +145,12 @@ func TestRegisterWorker_Runtimes(t *testing.T) {
 		// class contradicts its recorded state and is refused.
 		name:       "default runtime of another class is refused",
 		def:        microvm,
-		restorable: []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
+		restorable: []*ateapipb.ActorSandboxRuntime{gvisorV8, gvisorV9},
 		wantCode:   codes.FailedPrecondition,
 	}, {
 		name:       "restorable runtime of another class is refused",
 		def:        gvisorAMD64,
-		restorable: []*ateapipb.SandboxRuntime{gvisorV8, microvm},
+		restorable: []*ateapipb.ActorSandboxRuntime{gvisorV8, microvm},
 		wantCode:   codes.FailedPrecondition,
 	}, {
 		// A Worker that has not yet registered a default runtime accepts any
@@ -163,7 +163,7 @@ func TestRegisterWorker_Runtimes(t *testing.T) {
 		name:       "unreported Worker refuses restorable runtimes of mixed classes",
 		unreported: true,
 		def:        gvisorAMD64,
-		restorable: []*ateapipb.SandboxRuntime{gvisorV8, microvm},
+		restorable: []*ateapipb.ActorSandboxRuntime{gvisorV8, microvm},
 		wantCode:   codes.FailedPrecondition,
 	}}
 	for i, tt := range tests {
@@ -267,7 +267,7 @@ func TestRegisterWorker_SortsAttributes(t *testing.T) {
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
-	runtimeWith := func(keys ...string) *ateapipb.SandboxRuntime {
+	runtimeWith := func(keys ...string) *ateapipb.ActorSandboxRuntime {
 		rt := testRuntime("gvisor", "amd64")
 		rt.Version.Attributes = nil
 		for _, k := range keys {
@@ -275,13 +275,13 @@ func TestRegisterWorker_SortsAttributes(t *testing.T) {
 		}
 		return rt
 	}
-	register := func(def, restorable *ateapipb.SandboxRuntime) *ateapipb.Worker {
+	register := func(def, restorable *ateapipb.ActorSandboxRuntime) *ateapipb.Worker {
 		t.Helper()
 		got, err := s.RegisterWorker(authed, &ateapipb.RegisterWorkerRequest{
 			Worker:             &ateapipb.ObjectRef{Name: testWorkerName},
 			Capacity:           &ateapipb.WorkerResources{Actors: 1},
 			DefaultRuntime:     def,
-			RestorableRuntimes: []*ateapipb.SandboxRuntime{restorable},
+			RestorableRuntimes: []*ateapipb.ActorSandboxRuntime{restorable},
 		})
 		if err != nil {
 			t.Fatalf("RegisterWorker() failed: %v", err)
@@ -293,7 +293,7 @@ func TestRegisterWorker_SortsAttributes(t *testing.T) {
 	if diff := cmp.Diff(runtimeWith("architecture", "cpu_features"), first.GetStatus().GetDefaultRuntime(), protocmp.Transform()); diff != "" {
 		t.Errorf("default_runtime not stored sorted by key (-want +got):\n%s", diff)
 	}
-	if diff := cmp.Diff([]*ateapipb.SandboxRuntime{runtimeWith("architecture", "sandbox_bundle_hash")}, first.GetStatus().GetRestorableRuntimes(), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff([]*ateapipb.ActorSandboxRuntime{runtimeWith("architecture", "sandbox_bundle_hash")}, first.GetStatus().GetRestorableRuntimes(), protocmp.Transform()); diff != "" {
 		t.Errorf("restorable_runtimes not stored sorted by key (-want +got):\n%s", diff)
 	}
 

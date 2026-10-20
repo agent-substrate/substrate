@@ -258,16 +258,16 @@ func (f *fakeControl) uid(pod string) string {
 type fakeRelay struct {
 	control  *fakeControl
 	mu       sync.Mutex
-	reported map[string]*ateapipb.WorkerResources // by Worker name
-	runtimes map[string]*ateapipb.SandboxRuntime  // default runtime, by Worker name
-	via      map[string]string                    // relay address, by Worker name
+	reported map[string]*ateapipb.WorkerResources     // by Worker name
+	runtimes map[string]*ateapipb.ActorSandboxRuntime // default runtime, by Worker name
+	via      map[string]string                        // relay address, by Worker name
 	reject   map[string]codes.Code
 	calls    int
 	live     map[string]string // as last pruned to
 }
 
 func newFakeRelay() *fakeRelay {
-	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, runtimes: map[string]*ateapipb.SandboxRuntime{}, via: map[string]string{}, reject: map[string]codes.Code{}}
+	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, runtimes: map[string]*ateapipb.ActorSandboxRuntime{}, via: map[string]string{}, reject: map[string]codes.Code{}}
 }
 
 func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.RegisterWorkerRequest) error {
@@ -449,7 +449,7 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 	if got, want := rel.reported[ctl.uid(name)], wantCapacity(1000, "1500m", "4Gi"); !proto.Equal(got, want) {
 		t.Errorf("reported %v, want %v from the pool's limits", got, want)
 	}
-	wantRuntime := &ateapipb.SandboxRuntime{SandboxClass: "gvisor", Version: hostCompat()}
+	wantRuntime := &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor", Version: hostCompat()}
 	if got := rel.runtimes[ctl.uid(name)]; !proto.Equal(got, wantRuntime) {
 		t.Errorf("default runtime %v, want %v: the pool's class on this host, which ate-api-server requires", got, wantRuntime)
 	}

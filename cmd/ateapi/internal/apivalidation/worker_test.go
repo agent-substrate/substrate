@@ -365,7 +365,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 	}, {
 		name: "valid with restorable runtimes",
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
-			r.RestorableRuntimes = []*ateapipb.SandboxRuntime{{
+			r.RestorableRuntimes = []*ateapipb.ActorSandboxRuntime{{
 				SandboxClass: "gvisor",
 				Version: &ateapipb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
@@ -489,18 +489,18 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		want: field.ErrorList{field.TooMany(defaultRuntimePath.Child("version", "attributes"), 33, 32).WithOrigin("maxItems")},
 	}, {
 		name: "nil restorable_runtimes entry",
-		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.RestorableRuntimes = []*ateapipb.SandboxRuntime{nil} }),
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.RestorableRuntimes = []*ateapipb.ActorSandboxRuntime{nil} }),
 		want: field.ErrorList{field.Required(restorablePath.Index(0), "")},
 	}, {
 		name: "invalid restorable_runtimes entry",
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
-			r.RestorableRuntimes = []*ateapipb.SandboxRuntime{{SandboxClass: "gvisor"}}
+			r.RestorableRuntimes = []*ateapipb.ActorSandboxRuntime{{SandboxClass: "gvisor"}}
 		}),
 		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("version"), "")},
 	}, {
 		name: "unsupported restorable_runtimes sandbox_class",
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
-			r.RestorableRuntimes = []*ateapipb.SandboxRuntime{validSandboxRuntime()}
+			r.RestorableRuntimes = []*ateapipb.ActorSandboxRuntime{validSandboxRuntime()}
 			r.RestorableRuntimes[0].SandboxClass = "GVISOR"
 		}),
 		want: field.ErrorList{field.NotSupported[string](restorablePath.Index(0).Child("sandbox_class"), nil, nil)},
@@ -552,7 +552,7 @@ func TestValidateWorkerUpdate_SandboxRuntimes(t *testing.T) {
 	}, {
 		name: "missing default_runtime.version",
 		mutate: func(s *ateapipb.WorkerStatus) {
-			s.DefaultRuntime = &ateapipb.SandboxRuntime{SandboxClass: "gvisor"}
+			s.DefaultRuntime = &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"}
 		},
 		want: field.ErrorList{field.Required(statusPath.Child("default_runtime", "version"), "")},
 	}, {
@@ -565,7 +565,7 @@ func TestValidateWorkerUpdate_SandboxRuntimes(t *testing.T) {
 	}, {
 		name: "invalid restorable_runtimes entry",
 		mutate: func(s *ateapipb.WorkerStatus) {
-			s.RestorableRuntimes = []*ateapipb.SandboxRuntime{{SandboxClass: "gvisor"}}
+			s.RestorableRuntimes = []*ateapipb.ActorSandboxRuntime{{SandboxClass: "gvisor"}}
 		},
 		want: field.ErrorList{field.Required(statusPath.Child("restorable_runtimes").Index(0).Child("version"), "")},
 	}, {
@@ -821,10 +821,10 @@ func workerRef(name string) *ateapipb.ObjectRef {
 	return &ateapipb.ObjectRef{Name: name}
 }
 
-// validSandboxRuntime returns a SandboxRuntime in the shape RegisterWorker
+// validSandboxRuntime returns an ActorSandboxRuntime in the shape RegisterWorker
 // accepts: a class and a v1 identity with one attribute.
-func validSandboxRuntime() *ateapipb.SandboxRuntime {
-	return &ateapipb.SandboxRuntime{
+func validSandboxRuntime() *ateapipb.ActorSandboxRuntime {
+	return &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -843,8 +843,8 @@ func attributeEntries(n int) []*ateapipb.AttributeEntry {
 }
 
 // sandboxRuntimes returns n valid runtimes.
-func sandboxRuntimes(n int) []*ateapipb.SandboxRuntime {
-	rts := make([]*ateapipb.SandboxRuntime, n)
+func sandboxRuntimes(n int) []*ateapipb.ActorSandboxRuntime {
+	rts := make([]*ateapipb.ActorSandboxRuntime, n)
 	for i := range rts {
 		rts[i] = validSandboxRuntime()
 	}

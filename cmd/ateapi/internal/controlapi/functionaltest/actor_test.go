@@ -4502,7 +4502,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 }
 
 func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
-	rtA := &ateapipb.SandboxRuntime{
+	rtA := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -4521,7 +4521,7 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 		failDetach     bool
 		wantWorker     string
 		wantNode       string
-		wantRuntime    *ateapipb.SandboxRuntime
+		wantRuntime    *ateapipb.ActorSandboxRuntime
 		wantFidelity   ateletpb.SnapshotFidelity
 	}{
 		{
@@ -4648,7 +4648,7 @@ func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
 	ctx := context.Background()
 	createTemplate(t, tc, ns)
 
-	rtA := &ateapipb.SandboxRuntime{
+	rtA := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -4658,7 +4658,7 @@ func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
 			},
 		},
 	}
-	rtB := &ateapipb.SandboxRuntime{
+	rtB := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -4759,7 +4759,7 @@ func TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot(t *testing.
 	ctx := context.Background()
 	createTemplate(t, tc, ns)
 
-	rtA := &ateapipb.SandboxRuntime{
+	rtA := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -4769,7 +4769,7 @@ func TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot(t *testing.
 			},
 		},
 	}
-	rtB := &ateapipb.SandboxRuntime{
+	rtB := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -6964,7 +6964,7 @@ func TestDeleteActor_Preconditions(t *testing.T) {
 
 // reportWorkerRuntime writes defaultRT and restorableRTs to workerName's status
 // and waits for the worker cache to observe the update.
-func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defaultRT *ateapipb.SandboxRuntime, restorableRTs ...*ateapipb.SandboxRuntime) {
+func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defaultRT *ateapipb.ActorSandboxRuntime, restorableRTs ...*ateapipb.ActorSandboxRuntime) {
 	t.Helper()
 	ctx := context.Background()
 	cur, err := tc.persistence.GetWorker(ctx, workerName)
@@ -6972,10 +6972,10 @@ func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defau
 		t.Fatalf("GetWorker(%s): %v", workerName, err)
 	}
 	if _, err := tc.persistence.UpdateWorker(ctx, workerName, store.PreconditionFrom(cur), func(toUpdate *ateapipb.Worker) error {
-		toUpdate.Status.DefaultRuntime = proto.Clone(defaultRT).(*ateapipb.SandboxRuntime)
+		toUpdate.Status.DefaultRuntime = proto.Clone(defaultRT).(*ateapipb.ActorSandboxRuntime)
 		toUpdate.Status.RestorableRuntimes = nil
 		for _, r := range restorableRTs {
-			toUpdate.Status.RestorableRuntimes = append(toUpdate.Status.RestorableRuntimes, proto.Clone(r).(*ateapipb.SandboxRuntime))
+			toUpdate.Status.RestorableRuntimes = append(toUpdate.Status.RestorableRuntimes, proto.Clone(r).(*ateapipb.ActorSandboxRuntime))
 		}
 		return nil
 	}); err != nil {
@@ -6985,7 +6985,7 @@ func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defau
 		got, err := tc.workerCache.Worker(workerName)
 		return err == nil &&
 			proto.Equal(got.GetStatus().GetDefaultRuntime(), defaultRT) &&
-			slices.EqualFunc(got.GetStatus().GetRestorableRuntimes(), restorableRTs, func(a, b *ateapipb.SandboxRuntime) bool { return proto.Equal(a, b) }), nil
+			slices.EqualFunc(got.GetStatus().GetRestorableRuntimes(), restorableRTs, func(a, b *ateapipb.ActorSandboxRuntime) bool { return proto.Equal(a, b) }), nil
 	}); err != nil {
 		t.Fatalf("worker %s runtime never reached worker cache: %v", workerName, err)
 	}
@@ -7014,7 +7014,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	ctx := context.Background()
 	tmpl := createTemplate(t, tc, ns)
 
-	rtA := &ateapipb.SandboxRuntime{
+	rtA := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -7024,7 +7024,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 			},
 		},
 	}
-	rtB := &ateapipb.SandboxRuntime{
+	rtB := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -7151,7 +7151,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	// worker-a is full and it falls back onto worker-b, restores the golden at
 	// ROOTFS fidelity like any other durable snapshot rather than cold-booting.
 	goldenSnap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t))
-	goldenSnap.SandboxRuntime = proto.Clone(rtA).(*ateapipb.SandboxRuntime)
+	goldenSnap.SandboxRuntime = proto.Clone(rtA).(*ateapipb.ActorSandboxRuntime)
 	stampedGoldenTag, err := tc.persistence.CreateTag(ctx, &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "golden-rt-a"},
 		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()},

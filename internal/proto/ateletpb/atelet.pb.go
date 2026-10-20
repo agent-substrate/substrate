@@ -280,17 +280,17 @@ type RegisterWorkerRequest struct {
 	Capacity *WorkerResources `protobuf:"bytes,1,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	// Runtime that new and cold-booted actors start under.
 	// Snapshots matching default_runtime can also warm-boot on this worker.
-	// atelet converts it to the control plane's SandboxRuntime when forwarding.
+	// atelet converts it to the control plane's ActorSandboxRuntime when forwarding.
 	//
 	// +k8s:required
-	DefaultRuntime *SandboxRuntime `protobuf:"bytes,2,opt,name=default_runtime,json=defaultRuntime,proto3" json:"default_runtime,omitempty"`
+	DefaultRuntime *ActorSandboxRuntime `protobuf:"bytes,2,opt,name=default_runtime,json=defaultRuntime,proto3" json:"default_runtime,omitempty"`
 	// Additional runtimes (excluding default_runtime) that this worker can
 	// restore snapshots from right now.
 	//
 	// +k8s:optional
 	// +k8s:maxItems=32
 	// +k8s:listType=atomic
-	RestorableRuntimes []*SandboxRuntime `protobuf:"bytes,3,rep,name=restorable_runtimes,json=restorableRuntimes,proto3" json:"restorable_runtimes,omitempty"`
+	RestorableRuntimes []*ActorSandboxRuntime `protobuf:"bytes,3,rep,name=restorable_runtimes,json=restorableRuntimes,proto3" json:"restorable_runtimes,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -332,24 +332,24 @@ func (x *RegisterWorkerRequest) GetCapacity() *WorkerResources {
 	return nil
 }
 
-func (x *RegisterWorkerRequest) GetDefaultRuntime() *SandboxRuntime {
+func (x *RegisterWorkerRequest) GetDefaultRuntime() *ActorSandboxRuntime {
 	if x != nil {
 		return x.DefaultRuntime
 	}
 	return nil
 }
 
-func (x *RegisterWorkerRequest) GetRestorableRuntimes() []*SandboxRuntime {
+func (x *RegisterWorkerRequest) GetRestorableRuntimes() []*ActorSandboxRuntime {
 	if x != nil {
 		return x.RestorableRuntimes
 	}
 	return nil
 }
 
-// SandboxRuntime describes a sandbox runtime and its compatibility identity as
-// reported by a worker. It mirrors the control plane's SandboxRuntime and is
+// ActorSandboxRuntime describes a sandbox runtime and its compatibility identity as
+// reported by a worker. It mirrors the control plane's ActorSandboxRuntime and is
 // validated by the same rules.
-type SandboxRuntime struct {
+type ActorSandboxRuntime struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// e.g. "gvisor", "microvm"
 	//
@@ -368,20 +368,20 @@ type SandboxRuntime struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SandboxRuntime) Reset() {
-	*x = SandboxRuntime{}
+func (x *ActorSandboxRuntime) Reset() {
+	*x = ActorSandboxRuntime{}
 	mi := &file_atelet_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SandboxRuntime) String() string {
+func (x *ActorSandboxRuntime) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SandboxRuntime) ProtoMessage() {}
+func (*ActorSandboxRuntime) ProtoMessage() {}
 
-func (x *SandboxRuntime) ProtoReflect() protoreflect.Message {
+func (x *ActorSandboxRuntime) ProtoReflect() protoreflect.Message {
 	mi := &file_atelet_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -393,19 +393,19 @@ func (x *SandboxRuntime) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SandboxRuntime.ProtoReflect.Descriptor instead.
-func (*SandboxRuntime) Descriptor() ([]byte, []int) {
+// Deprecated: Use ActorSandboxRuntime.ProtoReflect.Descriptor instead.
+func (*ActorSandboxRuntime) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *SandboxRuntime) GetSandboxClass() string {
+func (x *ActorSandboxRuntime) GetSandboxClass() string {
 	if x != nil {
 		return x.SandboxClass
 	}
 	return ""
 }
 
-func (x *SandboxRuntime) GetVersion() *VersionedSandboxCompat {
+func (x *ActorSandboxRuntime) GetVersion() *VersionedSandboxCompat {
 	if x != nil {
 		return x.Version
 	}
@@ -413,7 +413,7 @@ func (x *SandboxRuntime) GetVersion() *VersionedSandboxCompat {
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
-// key-value compatibility attributes for a SandboxRuntime.
+// key-value compatibility attributes for an ActorSandboxRuntime.
 type VersionedSandboxCompat struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Compatibility schema version (e.g. "v1") defining which runtime and
@@ -1687,7 +1687,7 @@ type RunRequest struct {
 	// actor so a later Checkpoint pins the snapshot to it.
 	//
 	// +k8s:required
-	SandboxRuntime *SandboxRuntime `protobuf:"bytes,12,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
+	SandboxRuntime *ActorSandboxRuntime `protobuf:"bytes,12,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1785,7 +1785,7 @@ func (x *RunRequest) GetResources() *ResourceRequirements {
 	return nil
 }
 
-func (x *RunRequest) GetSandboxRuntime() *SandboxRuntime {
+func (x *RunRequest) GetSandboxRuntime() *ActorSandboxRuntime {
 	if x != nil {
 		return x.SandboxRuntime
 	}
@@ -3606,7 +3606,7 @@ type RestoreRequest struct {
 	// activation, not what the restored snapshot was taken under.
 	//
 	// +k8s:required
-	SandboxRuntime *SandboxRuntime `protobuf:"bytes,12,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
+	SandboxRuntime *ActorSandboxRuntime `protobuf:"bytes,12,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -3711,7 +3711,7 @@ func (x *RestoreRequest) GetResources() *ResourceRequirements {
 	return nil
 }
 
-func (x *RestoreRequest) GetSandboxRuntime() *SandboxRuntime {
+func (x *RestoreRequest) GetSandboxRuntime() *ActorSandboxRuntime {
 	if x != nil {
 		return x.SandboxRuntime
 	}
@@ -4018,12 +4018,12 @@ var File_atelet_proto protoreflect.FileDescriptor
 
 const file_atelet_proto_rawDesc = "" +
 	"\n" +
-	"\fatelet.proto\x12\x06atelet\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd6\x01\n" +
+	"\fatelet.proto\x12\x06atelet\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe0\x01\n" +
 	"\x15RegisterWorkerRequest\x123\n" +
-	"\bcapacity\x18\x01 \x01(\v2\x17.atelet.WorkerResourcesR\bcapacity\x12?\n" +
-	"\x0fdefault_runtime\x18\x02 \x01(\v2\x16.atelet.SandboxRuntimeR\x0edefaultRuntime\x12G\n" +
-	"\x13restorable_runtimes\x18\x03 \x03(\v2\x16.atelet.SandboxRuntimeR\x12restorableRuntimes\"o\n" +
-	"\x0eSandboxRuntime\x12#\n" +
+	"\bcapacity\x18\x01 \x01(\v2\x17.atelet.WorkerResourcesR\bcapacity\x12D\n" +
+	"\x0fdefault_runtime\x18\x02 \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0edefaultRuntime\x12L\n" +
+	"\x13restorable_runtimes\x18\x03 \x03(\v2\x1b.atelet.ActorSandboxRuntimeR\x12restorableRuntimes\"t\n" +
+	"\x13ActorSandboxRuntime\x12#\n" +
 	"\rsandbox_class\x18\x01 \x01(\tR\fsandboxClass\x128\n" +
 	"\aversion\x18\x02 \x01(\v2\x1e.atelet.VersionedSandboxCompatR\aversion\"w\n" +
 	"\x16VersionedSandboxCompat\x12%\n" +
@@ -4094,7 +4094,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x17actor_template_atespace\x18\x05 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\"\x13\n" +
-	"\x11TerminateResponse\"\xef\x03\n" +
+	"\x11TerminateResponse\"\xf4\x03\n" +
 	"\n" +
 	"RunRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
@@ -4107,8 +4107,8 @@ const file_atelet_proto_rawDesc = "" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12A\n" +
 	"\x0eegress_gateway\x18\t \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12:\n" +
 	"\tresources\x18\n" +
-	" \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\x12?\n" +
-	"\x0fsandbox_runtime\x18\f \x01(\v2\x16.atelet.SandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
+	" \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\x12D\n" +
+	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
 	"\x0f_egress_gateway\")\n" +
 	"\rEgressGateway\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\"k\n" +
@@ -4215,7 +4215,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\bsnapshot\x18\b \x01(\v2\x10.atelet.SnapshotR\bsnapshot\x129\n" +
 	"\rupload_config\x18\t \x01(\v2\x14.atelet.UploadConfigR\fuploadConfig\"F\n" +
 	"\x12CheckpointResponse\x120\n" +
-	"\x05state\x18\x01 \x01(\v2\x1a.atelet.ActorSnapshotStateR\x05state\"\xa1\x04\n" +
+	"\x05state\x18\x01 \x01(\v2\x1a.atelet.ActorSnapshotStateR\x05state\"\xa6\x04\n" +
 	"\x0eRestoreRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -4228,8 +4228,8 @@ const file_atelet_proto_rawDesc = "" +
 	"\bsnapshot\x18\b \x01(\v2\x10.atelet.SnapshotR\bsnapshot\x12A\n" +
 	"\x0eegress_gateway\x18\t \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12:\n" +
 	"\tresources\x18\n" +
-	" \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\x12?\n" +
-	"\x0fsandbox_runtime\x18\f \x01(\v2\x16.atelet.SandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
+	" \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\x12D\n" +
+	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse\"\x86\x02\n" +
 	"\x16PromoteSnapshotRequest\x12\x1a\n" +
@@ -4303,7 +4303,7 @@ var file_atelet_proto_goTypes = []any{
 	(SnapshotSharing)(0),                 // 2: atelet.SnapshotSharing
 	(UploadMode)(0),                      // 3: atelet.UploadMode
 	(*RegisterWorkerRequest)(nil),        // 4: atelet.RegisterWorkerRequest
-	(*SandboxRuntime)(nil),               // 5: atelet.SandboxRuntime
+	(*ActorSandboxRuntime)(nil),          // 5: atelet.ActorSandboxRuntime
 	(*VersionedSandboxCompat)(nil),       // 6: atelet.VersionedSandboxCompat
 	(*AttributeEntry)(nil),               // 7: atelet.AttributeEntry
 	(*WorkerResources)(nil),              // 8: atelet.WorkerResources
@@ -4364,9 +4364,9 @@ var file_atelet_proto_goTypes = []any{
 }
 var file_atelet_proto_depIdxs = []int32{
 	8,  // 0: atelet.RegisterWorkerRequest.capacity:type_name -> atelet.WorkerResources
-	5,  // 1: atelet.RegisterWorkerRequest.default_runtime:type_name -> atelet.SandboxRuntime
-	5,  // 2: atelet.RegisterWorkerRequest.restorable_runtimes:type_name -> atelet.SandboxRuntime
-	6,  // 3: atelet.SandboxRuntime.version:type_name -> atelet.VersionedSandboxCompat
+	5,  // 1: atelet.RegisterWorkerRequest.default_runtime:type_name -> atelet.ActorSandboxRuntime
+	5,  // 2: atelet.RegisterWorkerRequest.restorable_runtimes:type_name -> atelet.ActorSandboxRuntime
+	6,  // 3: atelet.ActorSandboxRuntime.version:type_name -> atelet.VersionedSandboxCompat
 	7,  // 4: atelet.VersionedSandboxCompat.attributes:type_name -> atelet.AttributeEntry
 	10, // 5: atelet.ResourceRequirements.limits:type_name -> atelet.Resources
 	18, // 6: atelet.GetActorEgressPolicyResponse.egress_policy:type_name -> atelet.EgressPolicy
@@ -4380,7 +4380,7 @@ var file_atelet_proto_depIdxs = []int32{
 	29, // 14: atelet.RunRequest.spec:type_name -> atelet.WorkloadSpec
 	28, // 15: atelet.RunRequest.egress_gateway:type_name -> atelet.EgressGateway
 	9,  // 16: atelet.RunRequest.resources:type_name -> atelet.ResourceRequirements
-	5,  // 17: atelet.RunRequest.sandbox_runtime:type_name -> atelet.SandboxRuntime
+	5,  // 17: atelet.RunRequest.sandbox_runtime:type_name -> atelet.ActorSandboxRuntime
 	40, // 18: atelet.WorkloadSpec.containers:type_name -> atelet.Container
 	38, // 19: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
 	60, // 20: atelet.ExternalVolumeSource.volume_context:type_name -> atelet.ExternalVolumeSource.VolumeContextEntry
@@ -4420,7 +4420,7 @@ var file_atelet_proto_depIdxs = []int32{
 	48, // 54: atelet.RestoreRequest.snapshot:type_name -> atelet.Snapshot
 	28, // 55: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
 	9,  // 56: atelet.RestoreRequest.resources:type_name -> atelet.ResourceRequirements
-	5,  // 57: atelet.RestoreRequest.sandbox_runtime:type_name -> atelet.SandboxRuntime
+	5,  // 57: atelet.RestoreRequest.sandbox_runtime:type_name -> atelet.ActorSandboxRuntime
 	48, // 58: atelet.PromoteSnapshotRequest.snapshot:type_name -> atelet.Snapshot
 	50, // 59: atelet.PromoteSnapshotResponse.state:type_name -> atelet.ActorSnapshotState
 	50, // 60: atelet.DetachActorResponse.state:type_name -> atelet.ActorSnapshotState

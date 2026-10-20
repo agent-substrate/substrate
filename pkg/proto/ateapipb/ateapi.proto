@@ -373,7 +373,7 @@ message Snapshot {
   // taken.
   //
   // +k8s:optional
-  SandboxRuntime sandbox_runtime = 8;
+  ActorSandboxRuntime sandbox_runtime = 8;
 }
 
 // SnapshotFidelity orders the state layers a snapshot can hold, lowest to
@@ -1012,7 +1012,7 @@ message WorkerAssignment {
   // was started or restored under on this Worker.
   //
   // +k8s:optional
-  SandboxRuntime sandbox_runtime = 9;
+  ActorSandboxRuntime sandbox_runtime = 9;
 
   // worker_spiffe_id is the SPIFFE ID worker_pod's certificate carries, copied
   // from Worker.worker_spiffe_id.
@@ -2400,7 +2400,7 @@ message WorkerStatus {
   // by the first RegisterWorker call.
   //
   // +k8s:optional
-  SandboxRuntime default_runtime = 5;
+  ActorSandboxRuntime default_runtime = 5;
 
   // Additional runtimes (excluding default_runtime) that this worker can
   // restore snapshots from right now.
@@ -2408,12 +2408,12 @@ message WorkerStatus {
   // +k8s:optional
   // +k8s:maxItems=32
   // +k8s:listType=atomic
-  repeated SandboxRuntime restorable_runtimes = 6;
+  repeated ActorSandboxRuntime restorable_runtimes = 6;
 }
 
-// SandboxRuntime describes a sandbox runtime and its compatibility identity as
+// ActorSandboxRuntime describes a sandbox runtime and its compatibility identity as
 // reported by a Worker or recorded on a snapshot.
-message SandboxRuntime {
+message ActorSandboxRuntime {
   // e.g. "gvisor", "microvm"
   //
   // +k8s:required
@@ -2434,7 +2434,7 @@ message SandboxRuntime {
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
-// key-value compatibility attributes for a SandboxRuntime.
+// key-value compatibility attributes for an ActorSandboxRuntime.
 message VersionedSandboxCompat {
   // Compatibility schema version (e.g. "v1") defining which runtime and
   // hardware attributes are recorded and how they are computed.
@@ -2656,7 +2656,7 @@ message RegisterWorkerRequest {
   // sandbox_class is refused.
   //
   // +k8s:required
-  SandboxRuntime default_runtime = 3;
+  ActorSandboxRuntime default_runtime = 3;
 
   // Additional runtimes (excluding default_runtime) that this worker can
   // restore snapshots from right now.
@@ -2664,7 +2664,7 @@ message RegisterWorkerRequest {
   // +k8s:optional
   // +k8s:maxItems=32
   // +k8s:listType=atomic
-  repeated SandboxRuntime restorable_runtimes = 4;
+  repeated ActorSandboxRuntime restorable_runtimes = 4;
 }
 
 message RegisterWorkerResponse {

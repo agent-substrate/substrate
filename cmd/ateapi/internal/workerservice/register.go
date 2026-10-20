@@ -127,15 +127,15 @@ func validateRuntimeClasses(existingClass string, req *ateapipb.RegisterWorkerRe
 // sameRuntimes reports whether two runtime lists are identical entry for
 // entry, in order. A report is compared as sent, so a Worker that reorders its
 // runtimes between reports is recorded again.
-func sameRuntimes(a, b []*ateapipb.SandboxRuntime) bool {
-	return slices.EqualFunc(a, b, func(x, y *ateapipb.SandboxRuntime) bool { return proto.Equal(x, y) })
+func sameRuntimes(a, b []*ateapipb.ActorSandboxRuntime) bool {
+	return slices.EqualFunc(a, b, func(x, y *ateapipb.ActorSandboxRuntime) bool { return proto.Equal(x, y) })
 }
 
 // sortAttributes orders a runtime's compatibility attributes by key, in place.
 // Attribute order carries no meaning, but proto equality is order-sensitive, so
 // a report is canonicalized before it is compared with what is stored: the same
 // attributes in another order are the same runtime and write nothing.
-func sortAttributes(rt *ateapipb.SandboxRuntime) {
+func sortAttributes(rt *ateapipb.ActorSandboxRuntime) {
 	slices.SortFunc(rt.GetVersion().GetAttributes(), func(a, b *ateapipb.AttributeEntry) int {
 		return cmp.Compare(a.GetKey(), b.GetKey())
 	})

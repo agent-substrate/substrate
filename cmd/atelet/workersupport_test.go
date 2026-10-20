@@ -114,8 +114,8 @@ func (s *fakeWorkerService) MintWorkerActorCertificate(_ context.Context, in *at
 }
 
 func TestRegisterWorker(t *testing.T) {
-	reqRuntime := func(hash string) *ateletpb.SandboxRuntime {
-		return &ateletpb.SandboxRuntime{
+	reqRuntime := func(hash string) *ateletpb.ActorSandboxRuntime {
+		return &ateletpb.ActorSandboxRuntime{
 			SandboxClass: "gvisor",
 			Version: &ateletpb.VersionedSandboxCompat{
 				SchemaVersion: "v1",
@@ -126,8 +126,8 @@ func TestRegisterWorker(t *testing.T) {
 			},
 		}
 	}
-	wantRuntime := func(hash string) *ateapipb.SandboxRuntime {
-		return &ateapipb.SandboxRuntime{
+	wantRuntime := func(hash string) *ateapipb.ActorSandboxRuntime {
+		return &ateapipb.ActorSandboxRuntime{
 			SandboxClass: "gvisor",
 			Version: &ateapipb.VersionedSandboxCompat{
 				SchemaVersion: "v1",
@@ -139,7 +139,7 @@ func TestRegisterWorker(t *testing.T) {
 		}
 	}
 	reqDefault, wantDefault := reqRuntime("9988"), wantRuntime("9988")
-	forwarded := func(capacity *ateapipb.WorkerResources, restorable ...*ateapipb.SandboxRuntime) []*ateapipb.RegisterWorkerRequest {
+	forwarded := func(capacity *ateapipb.WorkerResources, restorable ...*ateapipb.ActorSandboxRuntime) []*ateapipb.RegisterWorkerRequest {
 		// The Worker is named after the worker pod UID, taken from the
 		// certificate rather than the request; capacity and runtimes come
 		// from what the worker reported.
@@ -172,7 +172,7 @@ func TestRegisterWorker(t *testing.T) {
 		req: &ateletpb.RegisterWorkerRequest{
 			Capacity:           &ateletpb.WorkerResources{Actors: 1},
 			DefaultRuntime:     reqDefault,
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{reqRuntime("d547")},
+			RestorableRuntimes: []*ateletpb.ActorSandboxRuntime{reqRuntime("d547")},
 		},
 		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}, wantRuntime("d547")),
 	}, {

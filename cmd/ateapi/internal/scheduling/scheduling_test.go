@@ -507,7 +507,7 @@ type fleet []*ateapipb.Worker
 func (f fleet) Workers() ([]*ateapipb.Worker, error) { return f, nil }
 
 func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateapipb.Worker)) *ateapipb.Worker {
-	var defRuntime *ateapipb.SandboxRuntime
+	var defRuntime *ateapipb.ActorSandboxRuntime
 	if class != "" {
 		defRuntime = sandboxRuntime(class, "amd64")
 	}
@@ -528,12 +528,12 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 	return w
 }
 
-func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.SandboxRuntime {
+func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.ActorSandboxRuntime {
 	attrs := []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}}
 	if len(bundleHash) > 0 && bundleHash[0] != "" {
 		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "sandbox_bundle_hash", Value: bundleHash[0]})
 	}
-	return &ateapipb.SandboxRuntime{
+	return &ateapipb.ActorSandboxRuntime{
 		SandboxClass: class,
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -542,7 +542,7 @@ func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.SandboxR
 	}
 }
 
-func withRuntimes(def *ateapipb.SandboxRuntime, restorable ...*ateapipb.SandboxRuntime) func(*ateapipb.Worker) {
+func withRuntimes(def *ateapipb.ActorSandboxRuntime, restorable ...*ateapipb.ActorSandboxRuntime) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
 		w.Status.DefaultRuntime = def
 		w.Status.RestorableRuntimes = restorable

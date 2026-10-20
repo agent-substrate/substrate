@@ -153,13 +153,13 @@ func toWorkerResources(in *ateletpb.WorkerResources) *ateapipb.WorkerResources {
 	}
 }
 
-// toAteAPISandboxRuntime converts atelet's SandboxRuntime to the control
+// toAteAPISandboxRuntime converts atelet's ActorSandboxRuntime to the control
 // plane's, which it mirrors field for field.
-func toAteAPISandboxRuntime(in *ateletpb.SandboxRuntime) *ateapipb.SandboxRuntime {
+func toAteAPISandboxRuntime(in *ateletpb.ActorSandboxRuntime) *ateapipb.ActorSandboxRuntime {
 	if in == nil {
 		return nil
 	}
-	out := &ateapipb.SandboxRuntime{SandboxClass: in.GetSandboxClass()}
+	out := &ateapipb.ActorSandboxRuntime{SandboxClass: in.GetSandboxClass()}
 	if v := in.GetVersion(); v != nil {
 		out.Version = &ateapipb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
 		for _, a := range v.GetAttributes() {
@@ -169,11 +169,11 @@ func toAteAPISandboxRuntime(in *ateletpb.SandboxRuntime) *ateapipb.SandboxRuntim
 	return out
 }
 
-func toAteAPISandboxRuntimes(in []*ateletpb.SandboxRuntime) []*ateapipb.SandboxRuntime {
+func toAteAPISandboxRuntimes(in []*ateletpb.ActorSandboxRuntime) []*ateapipb.ActorSandboxRuntime {
 	if in == nil {
 		return nil
 	}
-	out := make([]*ateapipb.SandboxRuntime, 0, len(in))
+	out := make([]*ateapipb.ActorSandboxRuntime, 0, len(in))
 	for _, r := range in {
 		out = append(out, toAteAPISandboxRuntime(r))
 	}

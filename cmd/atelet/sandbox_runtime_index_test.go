@@ -143,8 +143,8 @@ func TestResolveRuntime(t *testing.T) {
 	const sha = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	s := &Atelet{runtimes: newRuntimeIndex()}
 	advertised := hashedTestVersion(t, "v1", true, sha)
-	runtimeWith := func(class string, attrs ...*ateletpb.AttributeEntry) *ateletpb.SandboxRuntime {
-		return &ateletpb.SandboxRuntime{SandboxClass: class, Version: &ateletpb.VersionedSandboxCompat{SchemaVersion: hardware.SchemaVersionV1, Attributes: attrs}}
+	runtimeWith := func(class string, attrs ...*ateletpb.AttributeEntry) *ateletpb.ActorSandboxRuntime {
+		return &ateletpb.ActorSandboxRuntime{SandboxClass: class, Version: &ateletpb.VersionedSandboxCompat{SchemaVersion: hardware.SchemaVersionV1, Attributes: attrs}}
 	}
 	placed := runtimeWith("gvisor",
 		&ateletpb.AttributeEntry{Key: hardware.AttrArchitecture, Value: "amd64"},
@@ -162,7 +162,7 @@ func TestResolveRuntime(t *testing.T) {
 		t.Errorf("advertisedRuntime returned %+v, want the advertised record", rec)
 	}
 
-	for name, rt := range map[string]*ateletpb.SandboxRuntime{
+	for name, rt := range map[string]*ateletpb.ActorSandboxRuntime{
 		"no runtime":    nil,
 		"no attributes": runtimeWith("gvisor"),
 		"no bundle hash": runtimeWith("gvisor",

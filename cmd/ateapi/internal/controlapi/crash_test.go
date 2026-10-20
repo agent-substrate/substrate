@@ -588,7 +588,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 				WorkerPool:      "pool-1",
 				WorkerPod:       "pod-1",
 				WorkerPodUid:    "pod-uid-1",
-				SandboxRuntime:  &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+				SandboxRuntime:  &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 	}

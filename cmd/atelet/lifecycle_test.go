@@ -2054,10 +2054,10 @@ func TestRunAndRestoreRejectUnadvertisedRuntime(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		call func(t *testing.T, rt *ateletpb.SandboxRuntime) error
+		call func(t *testing.T, rt *ateletpb.ActorSandboxRuntime) error
 	}{{
 		name: "Run",
-		call: func(t *testing.T, rt *ateletpb.SandboxRuntime) error {
+		call: func(t *testing.T, rt *ateletpb.ActorSandboxRuntime) error {
 			_, err := s.Run(t.Context(), &ateletpb.RunRequest{
 				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: workerPodUID,
 				SandboxRuntime: rt, Spec: &ateletpb.WorkloadSpec{},
@@ -2066,7 +2066,7 @@ func TestRunAndRestoreRejectUnadvertisedRuntime(t *testing.T) {
 		},
 	}, {
 		name: "Restore",
-		call: func(t *testing.T, rt *ateletpb.SandboxRuntime) error {
+		call: func(t *testing.T, rt *ateletpb.ActorSandboxRuntime) error {
 			_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
 				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: workerPodUID,
 				SandboxRuntime: rt, Spec: &ateletpb.WorkloadSpec{},
@@ -2101,13 +2101,13 @@ func TestRunAndRestoreRejectUnadvertisedRuntime(t *testing.T) {
 	}
 }
 
-// runtimeFor returns the SandboxRuntime ate-api-server sends for an actor
+// runtimeFor returns the ActorSandboxRuntime ate-api-server sends for an actor
 // placed on a worker that advertises the runtime rec describes: the worker's
 // registration, whose sandbox_bundle_hash is the hash of rec.
-func runtimeFor(t *testing.T, rec *sandboxAssetsRecord) *ateletpb.SandboxRuntime {
+func runtimeFor(t *testing.T, rec *sandboxAssetsRecord) *ateletpb.ActorSandboxRuntime {
 	t.Helper()
 	hash := bundleHash(rec)
-	return &ateletpb.SandboxRuntime{
+	return &ateletpb.ActorSandboxRuntime{
 		SandboxClass: rec.SandboxClass,
 		Version: &ateletpb.VersionedSandboxCompat{
 			SchemaVersion: hardware.SchemaVersionV1,

@@ -33,8 +33,8 @@ func TestProbeHost(t *testing.T) {
 }
 
 func TestMatches(t *testing.T) {
-	runtimeWith := func(class, ver string, attrs ...*ateapipb.AttributeEntry) *ateapipb.SandboxRuntime {
-		return &ateapipb.SandboxRuntime{
+	runtimeWith := func(class, ver string, attrs ...*ateapipb.AttributeEntry) *ateapipb.ActorSandboxRuntime {
+		return &ateapipb.ActorSandboxRuntime{
 			SandboxClass: class,
 			Version: &ateapipb.VersionedSandboxCompat{
 				SchemaVersion: ver,
@@ -70,8 +70,8 @@ func TestMatches(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		worker *ateapipb.SandboxRuntime
-		snap   *ateapipb.SandboxRuntime
+		worker *ateapipb.ActorSandboxRuntime
+		snap   *ateapipb.ActorSandboxRuntime
 		want   bool
 	}{
 		{"nil snapshot imposes no constraint", amd64GVisor, nil, true},
@@ -83,7 +83,7 @@ func TestMatches(t *testing.T) {
 		{"attribute only the worker has is ignored", amd64GVisorExtraAttr, amd64GVisor, true},
 		{"attribute missing on worker fails", amd64GVisor, amd64GVisorExtraAttr, false},
 		{"nil worker fails when snapshot is stamped", nil, amd64GVisor, false},
-		{"nil version fails", &ateapipb.SandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
+		{"nil version fails", &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,8 +160,8 @@ func TestMatchesCompat(t *testing.T) {
 // of the snapshot must hold across comparisons, and the zero value must
 // require nothing.
 func TestRequirement(t *testing.T) {
-	rt := func(cpu string) *ateapipb.SandboxRuntime {
-		return &ateapipb.SandboxRuntime{
+	rt := func(cpu string) *ateapipb.ActorSandboxRuntime {
+		return &ateapipb.ActorSandboxRuntime{
 			SandboxClass: "gvisor",
 			Version: &ateapipb.VersionedSandboxCompat{
 				SchemaVersion: SchemaVersionV1,
@@ -179,7 +179,7 @@ func TestRequirement(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name   string
-		worker *ateapipb.SandboxRuntime
+		worker *ateapipb.ActorSandboxRuntime
 		want   bool
 	}{
 		{"worker superset", rt("f"), true},
@@ -191,7 +191,7 @@ func TestRequirement(t *testing.T) {
 			t.Errorf("%s: Matches() = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	status := &ateapipb.WorkerStatus{DefaultRuntime: rt("3"), RestorableRuntimes: []*ateapipb.SandboxRuntime{rt("f")}}
+	status := &ateapipb.WorkerStatus{DefaultRuntime: rt("3"), RestorableRuntimes: []*ateapipb.ActorSandboxRuntime{rt("f")}}
 	if got := req.MatchingRuntime(status); got != status.RestorableRuntimes[0] {
 		t.Errorf("MatchingRuntime() = %v, want the restorable superset", got)
 	}
@@ -211,12 +211,12 @@ func TestRequirement(t *testing.T) {
 }
 
 func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
-	rt := func(class, arch, hash string) *ateapipb.SandboxRuntime {
+	rt := func(class, arch, hash string) *ateapipb.ActorSandboxRuntime {
 		attrs := []*ateapipb.AttributeEntry{{Key: AttrArchitecture, Value: arch}}
 		if hash != "" {
 			attrs = append(attrs, &ateapipb.AttributeEntry{Key: AttrSandboxBundleHash, Value: hash})
 		}
-		return &ateapipb.SandboxRuntime{
+		return &ateapipb.ActorSandboxRuntime{
 			SandboxClass: class,
 			Version: &ateapipb.VersionedSandboxCompat{
 				SchemaVersion: SchemaVersionV1,
@@ -232,7 +232,7 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 
 	status := &ateapipb.WorkerStatus{
 		DefaultRuntime:     defRT,
-		RestorableRuntimes: []*ateapipb.SandboxRuntime{restorable1, restorable2},
+		RestorableRuntimes: []*ateapipb.ActorSandboxRuntime{restorable1, restorable2},
 	}
 
 	t.Run("nil snap matches any worker status and returns DefaultRuntime", func(t *testing.T) {

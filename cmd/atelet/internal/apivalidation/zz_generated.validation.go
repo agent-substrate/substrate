@@ -171,6 +171,82 @@ func Validate_ActorMetadataItem(
 	return errs
 }
 
+// Validate_ActorSandboxRuntime validates an instance of ActorSandboxRuntime according
+// to declarative validation rules in the API schema.
+func Validate_ActorSandboxRuntime(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.ActorSandboxRuntime) (errs field.ErrorList) {
+
+	{ // field ateletpb.ActorSandboxRuntime.SandboxClass
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_ActorSandboxRuntime_SandboxClass(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 63); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.ActorSandboxRuntime) *string {
+				return &oldObj.SandboxClass
+			})
+		errs = append(errs, fn(fldPath.Child("sandbox_class"), &obj.SandboxClass, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.ActorSandboxRuntime.Version
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.VersionedSandboxCompat,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_VersionedSandboxCompat(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.ActorSandboxRuntime) *ateletpb.VersionedSandboxCompat {
+				return oldObj.Version
+			})
+		errs = append(errs, fn(fldPath.Child("version"), obj.Version, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_AttributeEntry validates an instance of AttributeEntry according
 // to declarative validation rules in the API schema.
 func Validate_AttributeEntry(
@@ -1983,7 +2059,7 @@ func Validate_RegisterWorkerRequest(
 	{ // field ateletpb.RegisterWorkerRequest.DefaultRuntime
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.SandboxRuntime,
+			obj, oldObj *ateletpb.ActorSandboxRuntime,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2001,11 +2077,11 @@ func Validate_RegisterWorkerRequest(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_SandboxRuntime(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ActorSandboxRuntime(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RegisterWorkerRequest) *ateletpb.SandboxRuntime {
+			func(oldObj *ateletpb.RegisterWorkerRequest) *ateletpb.ActorSandboxRuntime {
 				return oldObj.DefaultRuntime
 			})
 		errs = append(errs, fn(fldPath.Child("default_runtime"), obj.DefaultRuntime, oldVal, oldObj != nil)...)
@@ -2014,7 +2090,7 @@ func Validate_RegisterWorkerRequest(
 	{ // field ateletpb.RegisterWorkerRequest.RestorableRuntimes
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj []*ateletpb.SandboxRuntime,
+			obj, oldObj []*ateletpb.ActorSandboxRuntime,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2024,7 +2100,7 @@ func Validate_RegisterWorkerRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.PtrSliceNoNils[ateletpb.SandboxRuntime](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.PtrSliceNoNils[ateletpb.ActorSandboxRuntime](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -2039,13 +2115,13 @@ func Validate_RegisterWorkerRequest(
 				return // do not proceed
 			}
 			// iterate the list and call the type's validation function
-			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_SandboxRuntime); len(e) != 0 {
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_ActorSandboxRuntime); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RegisterWorkerRequest) []*ateletpb.SandboxRuntime {
+			func(oldObj *ateletpb.RegisterWorkerRequest) []*ateletpb.ActorSandboxRuntime {
 				return oldObj.RestorableRuntimes
 			})
 		errs = append(errs, fn(fldPath.Child("restorable_runtimes"), obj.RestorableRuntimes, oldVal, oldObj != nil)...)
@@ -2730,7 +2806,7 @@ func Validate_RestoreRequest(
 	{ // field ateletpb.RestoreRequest.SandboxRuntime
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.SandboxRuntime,
+			obj, oldObj *ateletpb.ActorSandboxRuntime,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2748,11 +2824,11 @@ func Validate_RestoreRequest(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_SandboxRuntime(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ActorSandboxRuntime(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RestoreRequest) *ateletpb.SandboxRuntime {
+			func(oldObj *ateletpb.RestoreRequest) *ateletpb.ActorSandboxRuntime {
 				return oldObj.SandboxRuntime
 			})
 		errs = append(errs, fn(fldPath.Child("sandbox_runtime"), obj.SandboxRuntime, oldVal, oldObj != nil)...)
@@ -3051,7 +3127,7 @@ func Validate_RunRequest(
 	{ // field ateletpb.RunRequest.SandboxRuntime
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.SandboxRuntime,
+			obj, oldObj *ateletpb.ActorSandboxRuntime,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -3069,90 +3145,14 @@ func Validate_RunRequest(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_SandboxRuntime(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ActorSandboxRuntime(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RunRequest) *ateletpb.SandboxRuntime {
+			func(oldObj *ateletpb.RunRequest) *ateletpb.ActorSandboxRuntime {
 				return oldObj.SandboxRuntime
 			})
 		errs = append(errs, fn(fldPath.Child("sandbox_runtime"), obj.SandboxRuntime, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
-// Validate_SandboxRuntime validates an instance of SandboxRuntime according
-// to declarative validation rules in the API schema.
-func Validate_SandboxRuntime(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateletpb.SandboxRuntime) (errs field.ErrorList) {
-
-	{ // field ateletpb.SandboxRuntime.SandboxClass
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_SandboxRuntime_SandboxClass(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 63); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.SandboxRuntime) *string {
-				return &oldObj.SandboxClass
-			})
-		errs = append(errs, fn(fldPath.Child("sandbox_class"), &obj.SandboxClass, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateletpb.SandboxRuntime.Version
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateletpb.VersionedSandboxCompat,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// call the type's validation function
-			errs = append(errs, Validate_VersionedSandboxCompat(ctx, op, fldPath, obj, oldObj)...)
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.SandboxRuntime) *ateletpb.VersionedSandboxCompat {
-				return oldObj.Version
-			})
-		errs = append(errs, fn(fldPath.Child("version"), obj.Version, oldVal, oldObj != nil)...)
 	}
 
 	return errs

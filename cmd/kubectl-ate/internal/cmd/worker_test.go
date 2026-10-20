@@ -130,7 +130,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 				Capacity:       &ateapipb.WorkerResources{Actors: 1},
 				Allocated:      &ateapipb.WorkerResources{Actors: 1},
-				DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "microvm"},
+				DefaultRuntime: &ateapipb.ActorSandboxRuntime{SandboxClass: "microvm"},
 			},
 		},
 		{
@@ -141,7 +141,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			Labels:          map[string]string{"ate.dev/worker-pool": "other"},
 			Status: &ateapipb.WorkerStatus{
 				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+				DefaultRuntime: &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 		{
@@ -154,7 +154,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 				Capacity:       &ateapipb.WorkerResources{Actors: 1},
 				Allocated:      &ateapipb.WorkerResources{Actors: 1},
-				DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+				DefaultRuntime: &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 	}
@@ -333,7 +333,7 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			Status: &ateapipb.WorkerStatus{
 				Capacity:       &ateapipb.WorkerResources{Actors: 1},
 				Allocated:      &ateapipb.WorkerResources{Actors: 1},
-				DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+				DefaultRuntime: &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 		{
@@ -342,7 +342,7 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			WorkerPod:       "counter-worker-pool-7b9f8-y456",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
 			Status: &ateapipb.WorkerStatus{
-				DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "microvm"},
+				DefaultRuntime: &ateapipb.ActorSandboxRuntime{SandboxClass: "microvm"},
 			},
 		},
 	}
@@ -408,7 +408,7 @@ func TestTopWorkersRunner_FilterNamespace(t *testing.T) {
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Status: &ateapipb.WorkerStatus{
-				DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+				DefaultRuntime: &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 		{
@@ -449,7 +449,7 @@ func TestTopWorkersRunner_FilterAtespace(t *testing.T) {
 			Status: &ateapipb.WorkerStatus{
 				Capacity:       &ateapipb.WorkerResources{Actors: 1},
 				Allocated:      &ateapipb.WorkerResources{Actors: 1},
-				DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "microvm"},
+				DefaultRuntime: &ateapipb.ActorSandboxRuntime{SandboxClass: "microvm"},
 			},
 		},
 		{
@@ -494,7 +494,7 @@ func TestTopWorkersRunner_FilterSelector(t *testing.T) {
 			WorkerPod:       "pod-1",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
 			Status: &ateapipb.WorkerStatus{
-				DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+				DefaultRuntime: &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 		{
