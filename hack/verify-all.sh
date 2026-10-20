@@ -21,8 +21,19 @@ cd "${ROOT}"
 
 export LC_ALL=C # for sorting to be consistent across locales
 
+# Run every verifier even if one fails, so a single run reports all failures.
+FAILED=()
 # shellcheck disable=2044 # for-loop over find output is intentional
 for F in $(find ./hack/verify -name '*.sh' | sort); do
   echo "Running ${F}"
-  "${F}" "$@"
+  if ! "${F}" "$@"; then
+    FAILED+=("${F}")
+  fi
 done
+
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+  echo >&2
+  echo "FAILED verifiers:" >&2
+  printf '  %s\n' "${FAILED[@]}" >&2
+  exit 1
+fi
