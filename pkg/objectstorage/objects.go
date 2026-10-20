@@ -184,6 +184,13 @@ type writeContentResult struct {
 // plain zstd stream otherwise. It touches only io, so it is unit-testable without
 // an object store, and is shared by the buffered and streaming upload paths.
 func writeContent(ctx context.Context, out io.Writer, content io.Reader, workers int) (writeContentResult, error) {
+	if sf, ok := content.(*sparseFile); ok {
+		logical, populated, err := writeSparseExtents(ctx, out, sf.File, sf.size, sf.exts, sf.populated, workers)
+		if err != nil {
+			return writeContentResult{}, err
+		}
+		return writeContentResult{logicalBytes: logical, populatedBytes: populated, sparse: true}, nil
+	}
 	if f, ok := content.(*os.File); ok {
 		logical, populated, err := writeSparseZstd(ctx, out, f, workers)
 		if err != nil {
@@ -223,7 +230,7 @@ func (u *Uploader) sendZstd(ctx context.Context, gsURL string, content io.Reader
 	if err != nil {
 		return fmt.Errorf("while parsing URL: %w", err)
 	}
-	plan, err := u.plan(content)
+	plan, streamMax, plannedContent, err := u.planStream(content)
 	if err != nil {
 		return err
 	}
@@ -232,7 +239,7 @@ func (u *Uploader) sendZstd(ctx context.Context, gsURL string, content io.Reader
 	}
 	defer u.budget.reserved.Release(plan.memory)
 	tStart := time.Now()
-	if sp, ok := client.(sparseFilePutter); ok {
+	if sp, ok := client.(sparseFilePutter); ok && plan.parts >= 2 {
 		if f, isFile := content.(*os.File); isFile {
 			res, err := sp.PutSparseFile(ctx, bucket, object, f, plan.parts)
 			switch {
@@ -254,9 +261,9 @@ func (u *Uploader) sendZstd(ctx context.Context, gsURL string, content io.Reader
 		}
 	}
 	if _, ok := client.(streamingPutter); ok {
-		return sendStreamingZstd(ctx, client, bucket, object, content, tStart, plan.workers)
+		return sendStreamingZstd(ctx, client, bucket, object, plannedContent, tStart, plan.workers, streamMax)
 	}
-	return sendBufferedZstd(ctx, client, bucket, object, content, tStart, plan.workers)
+	return sendBufferedZstd(ctx, client, bucket, object, plannedContent, tStart, plan.workers)
 }
 
 // sendBufferedZstd compresses content to a seekable temp file, then uploads it.
@@ -295,7 +302,7 @@ func sendBufferedZstd(ctx context.Context, client ObjectStorage, bucket, object 
 // PutObject streams the read end to the object store. No seekable temp file, and
 // the compress runs concurrently with the network PUT. Used only for streaming
 // backends (GCS and S3); see sendZstd.
-func sendStreamingZstd(ctx context.Context, client ObjectStorage, bucket, object string, content io.Reader, tStart time.Time, workers int) error {
+func sendStreamingZstd(ctx context.Context, client ObjectStorage, bucket, object string, content io.Reader, tStart time.Time, workers int, streamMax int64) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type result struct {
@@ -311,7 +318,11 @@ func sendStreamingZstd(ctx context.Context, client ObjectStorage, bucket, object
 		ch <- result{res: res, err: err}
 	}()
 
-	putErr := client.PutObject(ctx, bucket, object, pr)
+	var body io.Reader = pr
+	if streamMax >= 0 {
+		body = boundedReader{Reader: pr, max: streamMax}
+	}
+	putErr := client.PutObject(ctx, bucket, object, body)
 	if putErr != nil {
 		cancel()
 		// PutObject bailed (e.g. mid-stream); unblock the compressor goroutine so it
