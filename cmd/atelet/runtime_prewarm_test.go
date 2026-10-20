@@ -35,6 +35,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	kubeinformers "k8s.io/client-go/informers"
@@ -183,6 +185,69 @@ func TestRuntimePrewarmProcess(t *testing.T) {
 	p.process(ctx, unknown)
 	if got := p.queue.NumRequeues(unknown); got != 0 {
 		t.Errorf("NumRequeues for an unknown hash = %d, want 0 (forgotten)", got)
+	}
+}
+
+// TestRuntimePrewarmPluginCodes covers which final plugin refusals prewarm
+// retries: not the ones that hold until the SandboxConfig or the plugin
+// deployment changes, such as a URL under a snapshot location, but every
+// failure a later attempt may not repeat.
+func TestRuntimePrewarmPluginCodes(t *testing.T) {
+	content := gvisorReleaseTarball(t)
+	for _, tc := range []struct {
+		code      codes.Code
+		wantRetry bool
+	}{
+		{codes.PermissionDenied, false},
+		{codes.InvalidArgument, false},
+		{codes.Unimplemented, false},
+		{codes.NotFound, true},
+		{codes.FailedPrecondition, true},
+		{codes.Unavailable, true},
+		{codes.Internal, true},
+	} {
+		t.Run(tc.code.String(), func(t *testing.T) {
+			index := newRuntimeIndex()
+			// Not gs://, so atelet has no anonymous fallback and the
+			// plugin's code is final.
+			hash := indexedTestRuntimeAt(t, index, "https://account.blob.core.windows.net/assets/gvisor.tar", content, "")
+			root := t.TempDir()
+			plugin := &countingAssetClient{AssetProviderClient: fakeAssetClient{err: status.Error(tc.code, "plugin failure")}}
+			herder := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), assetPlugin: plugin, pluginSocket: testPluginSock}
+			p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
+
+			item := defaultItem(t, root, hash)
+			p.process(t.Context(), item)
+			if got := plugin.calls.Load(); got != 1 {
+				t.Errorf("FetchAsset calls = %d, want 1", got)
+			}
+			wantRequeues := 0
+			if tc.wantRetry {
+				wantRequeues = 1
+			}
+			if got := p.queue.NumRequeues(item); got != wantRequeues {
+				t.Errorf("NumRequeues after %s = %d, want %d", tc.code, got, wantRequeues)
+			}
+		})
+	}
+}
+
+func TestRetryable(t *testing.T) {
+	permanent := &permanentAssetError{err: errors.New("refused")}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"transient", errors.New("network"), true},
+		{"permanent", permanent, false},
+		{"wrapped permanent", fmt.Errorf("while fetching sandbox asset: %w", permanent), false},
+		{"joined permanent", errors.Join(permanent), false},
+		{"joined with a pause image failure", errors.Join(permanent, errors.New("pull failed")), true},
+	} {
+		if got := retryable(tc.err); got != tc.want {
+			t.Errorf("retryable(%s) = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

@@ -145,7 +145,8 @@ func (p *runtimePrewarmer) wait() {
 	<-p.done
 }
 
-// process prewarms the item, requeueing with backoff on failure.
+// process prewarms the item, requeueing with backoff on failures a retry can
+// fix.
 func (p *runtimePrewarmer) process(ctx context.Context, item prewarmItem) {
 	defer p.queue.Done(item)
 	rt, ok := p.index.lookup(item.hash)
@@ -166,6 +167,15 @@ func (p *runtimePrewarmer) process(ctx context.Context, item prewarmItem) {
 	}
 	if ctx.Err() != nil {
 		// Shutting down, not a prewarm failure; drop without retry noise.
+		return
+	}
+	if !retryable(err) {
+		// The next sync of the worker enqueues it again; first use reports
+		// the error.
+		slog.WarnContext(ctx, "Sandbox runtime prewarm failed; not retrying, since only a config or plugin change can fix it",
+			slog.String("runtime_hash", item.hash), slog.String("config", rt.config), slog.String("version", rt.version),
+			slog.Any("err", err))
+		p.queue.Forget(item)
 		return
 	}
 	if retries := p.queue.NumRequeues(item); retries < prewarmMaxRetries {
@@ -245,4 +255,19 @@ func dirGone(dir string) (bool, error) {
 		return false, fmt.Errorf("while checking the prewarm directory: %w", err)
 	}
 	return false, nil
+}
+
+// retryable reports whether retrying a failed prewarm can succeed: it cannot
+// when every error err joins is a permanentAssetError.
+func retryable(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if retryable(e) {
+				return true
+			}
+		}
+		return false
+	}
+	var permanent *permanentAssetError
+	return !errors.As(err, &permanent)
 }
