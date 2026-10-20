@@ -20,15 +20,15 @@ import (
 	"errors"
 	"io"
 	"math/rand"
+	"slices"
 	"testing"
-	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
 
 // compressibleData returns n bytes that compress like guest memory: runs of
 // zeros between random-ish pages.
-func compressibleData(t *testing.T, n int) []byte {
+func compressibleData(t testing.TB, n int) []byte {
 	t.Helper()
 	rng := rand.New(rand.NewSource(1))
 	b := make([]byte, n)
@@ -44,7 +44,7 @@ func compressibleData(t *testing.T, n int) []byte {
 	return b
 }
 
-func parFrames(t *testing.T, data []byte) []byte {
+func parFrames(t testing.TB, data []byte) []byte {
 	t.Helper()
 	var out bytes.Buffer
 	zw := newParZstd(&out, 4)
@@ -75,7 +75,7 @@ func streamFrame(t *testing.T, data []byte) []byte {
 
 func readAllPar(t *testing.T, compressed []byte) ([]byte, error) {
 	t.Helper()
-	r := newParZstdReader(bytes.NewReader(compressed), 4)
+	r := newParZstdReader(bytes.NewReader(compressed))
 	defer r.Close()
 	return io.ReadAll(r)
 }
@@ -194,21 +194,127 @@ func TestParZstdReaderReportsCorruption(t *testing.T) {
 	}
 }
 
-// Closing with output unread must not leave the splitter or workers blocked.
+// Close must return the decode tokens of a reader left part read, and a reader
+// must make progress on its own token while others hold every shared one.
 func TestParZstdReaderCloseEarly(t *testing.T) {
-	stream := parFrames(t, compressibleData(t, 6*parZstdChunk))
-	r := newParZstdReader(bytes.NewReader(stream), 2)
+	stream := parFrames(t, compressibleData(t, 3*parZstdChunk))
+	r := newParZstdReader(bytes.NewReader(stream))
 	if _, err := r.Read(make([]byte, 10)); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan struct{})
-	go func() {
-		r.Close()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("Close did not return")
+	r.Close()
+	if n := len(parZstdDecodeTokens); n != 0 {
+		t.Errorf("%d shared decode tokens still held after Close", n)
 	}
+	if _, err := r.Read(make([]byte, 10)); err == nil {
+		t.Error("Read after Close returned no error")
+	}
+
+	for range parZstdDecoders {
+		parZstdDecodeTokens <- struct{}{}
+	}
+	defer func() {
+		for range parZstdDecoders {
+			<-parZstdDecodeTokens
+		}
+	}()
+	got, err := readAllPar(t, stream)
+	if err != nil || len(got) != 3*parZstdChunk {
+		t.Errorf("decoded %d bytes, err %v, with no shared tokens free", len(got), err)
+	}
+}
+
+// rawFrame builds a frame with no declared size, window descriptor wd and one raw
+// block per element of blocks.
+func rawFrame(wd byte, blocks ...[]byte) []byte {
+	f := binary.LittleEndian.AppendUint32(nil, zstdFrameMagic)
+	f = append(f, 0, wd)
+	for i, b := range blocks {
+		h := uint32(len(b)) << 3
+		if i == len(blocks)-1 {
+			h |= 1
+		}
+		f = append(f, byte(h), byte(h>>8), byte(h>>16))
+		f = append(f, b...)
+	}
+	return f
+}
+
+// Frames that may not fit a decode worker must fall back to the serial decoder,
+// and must not be buffered whole first.
+func TestParZstdReaderFallsBackForLargeFrames(t *testing.T) {
+	const wd128KiB, wd32MiB = 7 << 3, 15 << 3
+	block := compressibleData(t, zstdMaxBlockOut)
+	var blocks [][]byte
+	for range parZstdMaxFrame/zstdMaxBlockOut + 1 {
+		blocks = append(blocks, block)
+	}
+	// Declares 300 bytes but carries more blocks than parZstdMaxFrame allows.
+	oversized := rawFrame(wd128KiB, append(blocks, blocks...)...)
+	oversized[4] = 1 << 6 // two-byte content size
+	oversized = slices.Insert(oversized, 6, 300-256, 0)
+	// A block larger than any block may be.
+	bigBlock := rawFrame(wd32MiB, compressibleData(t, 2*zstdMaxBlockOut))
+
+	for _, tc := range []struct {
+		name   string
+		stream []byte
+	}{
+		{"unsized, last block over the limit", rawFrame(wd128KiB, blocks...)},
+		{"window over the limit", rawFrame(wd32MiB, compressibleData(t, 100))},
+		{"sized, too many blocks", oversized},
+		{"block over the maximum", bigBlock},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frame, _, _, ok, _ := readZstdFrame(bytes.NewReader(tc.stream))
+			if ok {
+				t.Error("readZstdFrame: ok=true, want the frame left to the serial decoder")
+			}
+			if len(frame) > parZstdMaxFrame+(parZstdMaxFrame/zstdMaxBlockOut+1)*3+18 {
+				t.Errorf("readZstdFrame buffered %d bytes", len(frame))
+			}
+			zr, err := zstd.NewReader(bytes.NewReader(tc.stream), zstd.WithDecoderConcurrency(1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer zr.Close()
+			want, wantErr := io.ReadAll(zr)
+			got, err := readAllPar(t, tc.stream)
+			if (err != nil) != (wantErr != nil) || !bytes.Equal(got, want) {
+				t.Errorf("decoded %d bytes, err %v; serial decoder: %d bytes, err %v", len(got), err, len(want), wantErr)
+			}
+		})
+	}
+}
+
+// BenchmarkParZstdReader compares parZstdReader with a serial zstd decoder on the
+// same parZstd stream.
+func BenchmarkParZstdReader(b *testing.B) {
+	data := compressibleData(b, 128<<20)
+	stream := parFrames(b, data)
+	b.Run("serial", func(b *testing.B) {
+		b.SetBytes(int64(len(data)))
+		b.ReportAllocs()
+		for b.Loop() {
+			zr, err := zstd.NewReader(bytes.NewReader(stream), zstd.WithDecoderConcurrency(1))
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := io.Copy(io.Discard, zr); err != nil {
+				b.Fatal(err)
+			}
+			zr.Close()
+		}
+	})
+	b.Run("parallel", func(b *testing.B) {
+		b.SetBytes(int64(len(data)))
+		b.ReportAllocs()
+		for b.Loop() {
+			r := newParZstdReader(bytes.NewReader(stream))
+			if _, err := io.Copy(io.Discard, r); err != nil {
+				b.Fatal(err)
+			}
+			r.Close()
+		}
+	})
 }
