@@ -358,6 +358,35 @@ func TestIterateAfterShutdownStartsNoSession(t *testing.T) {
 	}
 }
 
+// A VU that is inside startUser when shutdown runs is not in users yet, so
+// the sweep cannot see its session. The VU finds stopping set once the
+// session is stored and cleans it up itself, exactly once, so the actor
+// does not outlive the run.
+func TestIterateCleansUpSessionStartedDuringShutdown(t *testing.T) {
+	ctl := &fakeControlClient{createStarted: make(chan struct{}, 1), createGate: make(chan struct{})}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
+	rt := &runtime{cfg: u.cfg}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.iterate()
+	}()
+	<-ctl.createStarted
+	rt.shutdown(context.Background()) // sees no session yet
+	close(ctl.createGate)
+	<-done
+
+	if got := countCalls(ctl.recordedCalls(), "DeleteActor"); got != 1 {
+		t.Errorf("DeleteActor calls = %d, want the session started during shutdown cleaned up once", got)
+	}
+	left := 0
+	rt.users.Range(func(any, any) bool { left++; return true })
+	if left != 0 {
+		t.Errorf("%d sessions left in users after shutdown, want 0", left)
+	}
+}
+
 // TestShutdownFansOut: at thousands of sessions a serial suspend+delete
 // sweep leaks most actors before boomer's shutdown budget runs out, so the
 // hook must run sessions concurrently and still clean up every one.
@@ -460,7 +489,7 @@ func TestStartUserChecksTemplateMemory(t *testing.T) {
 			u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 			rt := &runtime{cfg: u.cfg}
 
-			started, err := rt.startUser(context.Background(), &loadedScript{Script: script, ingestBuf: makeIngestBuf(script.Steps)})
+			started, err := rt.startUser(context.Background(), 0, &loadedScript{Script: script, ingestBuf: makeIngestBuf(script.Steps)})
 			created := countCalls(ctl.recordedCalls(), "CreateActor") > 0
 			if tc.wantStart {
 				if err != nil || !created {
@@ -522,7 +551,7 @@ func TestRunningSessionKeepsItsScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := rt.startUser(context.Background(), first)
+	session, err := rt.startUser(context.Background(), 0, first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,6 +615,11 @@ type fakeControlClient struct {
 	deleteDelay time.Duration
 	inFlight    atomic.Int32
 	maxInFlight atomic.Int32
+	// createStarted, when set, receives once a CreateActor has begun, and
+	// createGate, when set, holds every CreateActor until it is closed, so
+	// a test can run shutdown while a session start is in flight.
+	createStarted chan struct{}
+	createGate    chan struct{}
 }
 
 func nextErr(errs *[]error) error {
@@ -622,6 +656,15 @@ func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.Cre
 
 func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 	f.record(ctx, "CreateActor")
+	if f.createStarted != nil {
+		select {
+		case f.createStarted <- struct{}{}:
+		default:
+		}
+	}
+	if f.createGate != nil {
+		<-f.createGate
+	}
 	return &ateapipb.Actor{}, nil
 }
 
@@ -848,9 +891,12 @@ func TestRunStep_RetriesWakeWhileFleetIsFull(t *testing.T) {
 	srv := &fake.Server{}
 	u := newTestUser(t, srv, ctl, knobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit}, ResumeRetryBudget: dynconfig.Seconds(10 * time.Second)})
 
-	if !u.runStep(context.Background(), pingStep) {
-		t.Fatal("runStep = false; the resume succeeded within the budget and the step must count")
-	}
+	// One TimeToWake row for the whole wake, not one per attempt.
+	expectRows(t, "TimeToWake", 1, 0, func() {
+		if !u.runStep(context.Background(), pingStep) {
+			t.Fatal("runStep = false; the resume succeeded within the budget and the step must count")
+		}
+	})
 	if got := countCalls(ctl.recordedCalls(), "ResumeActor"); got != full+1 {
 		t.Errorf("ResumeActor calls = %d, want %d failed attempts and one success", got, full+1)
 	}
@@ -878,9 +924,12 @@ func TestRunStep_GivesUpWakeAfterRetryBudget(t *testing.T) {
 	u := newTestUser(t, srv, ctl, knobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit}, ResumeRetryBudget: dynconfig.Seconds(budget)})
 
 	start := time.Now()
-	if u.runStep(context.Background(), pingStep) {
-		t.Fatal("runStep = true while every resume fails")
-	}
+	// The given-up wake is one failed TimeToWake row.
+	expectRows(t, "TimeToWake", 1, 1, func() {
+		if u.runStep(context.Background(), pingStep) {
+			t.Fatal("runStep = true while every resume fails")
+		}
+	})
 	if waited := time.Since(start); waited > budget+wakeRetryMaxBackoff {
 		t.Errorf("runStep took %v, want at most the budget plus one backoff", waited)
 	}
@@ -938,9 +987,11 @@ func TestRunStep_RetriesWakePingOnRouterCapacityError(t *testing.T) {
 	rt := &capacityThenServe{next: u.cfg.HTTPClient.Transport, status: http.StatusServiceUnavailable, n: 2}
 	u.cfg.HTTPClient = &http.Client{Transport: rt}
 
-	if !u.runStep(context.Background(), pingStep) {
-		t.Fatal("runStep = false; the wake ping succeeded within the budget and the step must count")
-	}
+	expectRows(t, "TimeToWake", 1, 0, func() {
+		if !u.runStep(context.Background(), pingStep) {
+			t.Fatal("runStep = false; the wake ping succeeded within the budget and the step must count")
+		}
+	})
 	if rt.failed != 2 {
 		t.Errorf("router failures served = %d, want 2", rt.failed)
 	}
@@ -1136,32 +1187,59 @@ func TestDwell(t *testing.T) {
 	}
 }
 
-// wakeFirstTouchCount returns the cumulative WakeFirstTouch count (success +
-// failure) recorded in Prometheus so far.
-func wakeFirstTouchCount(t *testing.T) float64 {
+// rowCount returns the cumulative count of the locust stats row `name`
+// recorded in Prometheus so far, and how many of those were failures.
+func rowCount(t *testing.T, name string) (total, failures float64) {
 	t.Helper()
 	mfs, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var total float64
 	for _, mf := range mfs {
 		if mf.GetName() != "locust_requests_total" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {
-			var isWake bool
+			var isRow, failed bool
 			for _, lp := range m.GetLabel() {
-				if lp.GetName() == "name" && lp.GetValue() == "WakeFirstTouch" {
-					isWake = true
+				switch lp.GetName() {
+				case "name":
+					isRow = lp.GetValue() == name
+				case "status":
+					failed = lp.GetValue() == "failure"
 				}
 			}
-			if isWake {
-				total += m.GetCounter().GetValue()
+			if !isRow {
+				continue
+			}
+			total += m.GetCounter().GetValue()
+			if failed {
+				failures += m.GetCounter().GetValue()
 			}
 		}
 	}
+	return total, failures
+}
+
+// wakeFirstTouchCount returns the cumulative WakeFirstTouch count (success +
+// failure) recorded in Prometheus so far.
+func wakeFirstTouchCount(t *testing.T) float64 {
+	t.Helper()
+	total, _ := rowCount(t, "WakeFirstTouch")
 	return total
+}
+
+// expectRows runs fn and checks it recorded wantTotal rows named `name`,
+// wantFailed of them failures.
+func expectRows(t *testing.T, name string, wantTotal, wantFailed float64, fn func()) {
+	t.Helper()
+	totalBefore, failedBefore := rowCount(t, name)
+	fn()
+	total, failed := rowCount(t, name)
+	if total-totalBefore != wantTotal || failed-failedBefore != wantFailed {
+		t.Errorf("%s rows recorded = %v (%v failed), want %v (%v failed)",
+			name, total-totalBefore, failed-failedBefore, wantTotal, wantFailed)
+	}
 }
 
 // TestLifecycleModeNone: in resident mode, startUser and runStep never park
@@ -1180,7 +1258,7 @@ func TestLifecycleModeNone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := rt.startUser(context.Background(), loaded)
+	session, err := rt.startUser(context.Background(), 0, loaded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1188,11 +1266,14 @@ func TestLifecycleModeNone(t *testing.T) {
 		t.Error("session.awake = false after startUser in LifecycleModeNone")
 	}
 	wakesBefore := wakeFirstTouchCount(t)
-	for range 3 {
-		if !session.runStep(context.Background(), pingStep) {
-			t.Fatal("runStep = false in LifecycleModeNone")
+	// A resident step is no wake, so it records no TimeToWake either.
+	expectRows(t, "TimeToWake", 0, 0, func() {
+		for range 3 {
+			if !session.runStep(context.Background(), pingStep) {
+				t.Fatal("runStep = false in LifecycleModeNone")
+			}
 		}
-	}
+	})
 	if got := wakeFirstTouchCount(t) - wakesBefore; got != 0 {
 		t.Errorf("WakeFirstTouch recorded %v times in LifecycleModeNone, want 0", got)
 	}
@@ -1230,7 +1311,7 @@ func TestSnapshotSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := rt.startUser(context.Background(), loaded)
+	session, err := rt.startUser(context.Background(), 0, loaded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1275,7 +1356,7 @@ func TestSnapshotSteps(t *testing.T) {
 		SnapshotSteps: "2,99",
 	})
 	badRT := &runtime{cfg: badUser.cfg}
-	if _, err := badRT.startUser(context.Background(), loaded); err == nil || !strings.Contains(err.Error(), "exceeds script") {
+	if _, err := badRT.startUser(context.Background(), 0, loaded); err == nil || !strings.Contains(err.Error(), "exceeds script") {
 		t.Errorf("startUser with out-of-range snapshot step = %v, want error mentioning 'exceeds script'", err)
 	}
 	if got := countCalls(badCtl.recordedCalls(), "CreateActor"); got != 0 {

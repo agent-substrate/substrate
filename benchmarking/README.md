@@ -462,9 +462,12 @@ To go back to a built-in variant, redeploy without the flag.
 * `TimeToWake`: the whole wake of a parked actor, from the first
   `ResumeActor` attempt (in implicit mode, the first wake ping) to the ping
   that found the actor serving, including every retry while the fleet had no
-  room. Equal to `WakeFirstTouch` plus `ResumeActor` when the first attempt
-  went through; a failed row is a step given up after
-  `--agentsession-resume-retry-budget`.
+  room. In implicit mode a first-attempt wake is the `WakeFirstTouch` sample;
+  in explicit mode it is `WakeFirstTouch` plus `ResumeActor`. A failed row is
+  a wake that failed: a step given up after
+  `--agentsession-resume-retry-budget`, or one that failed at once with an
+  error that is not a capacity error, such as a crashed actor or a router
+  404 or 500.
 * `Step_<name>` (e.g. `Step_06_first_build`): wall time of that step's ops,
   think gap excluded.
 * `SuspendActor` / `ResumeActor` / `CreateActor` / `DeleteActor`: control-plane

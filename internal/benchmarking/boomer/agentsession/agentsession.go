@@ -99,6 +99,10 @@ const (
 	wakeRetryJitter         = 5 * time.Millisecond
 )
 
+// errStopping is startUser's answer once shutdown has begun: the sweep has
+// passed, so no session may start.
+var errStopping = errors.New("agentsession: shutting down, no session started")
+
 // burnRate is the per-goroutine sha256 iteration rate BurnCPU reports.
 // BurnCPU runs for a fixed wall-clock duration, so Step_* latency stays flat
 // when the sandbox is CPU-starved; this rate is what drops.
@@ -225,9 +229,9 @@ type runtime struct {
 	// phasedIn holds the goroutines that have served their phase-in wait,
 	// so a start that failed and is retried does not wait a second time.
 	phasedIn sync.Map // goroutineID -> struct{}
-	// stopping is set by shutdown, so a VU that comes out of its phase-in
-	// wait during the shutdown sweep does not start a session the sweep has
-	// already passed over.
+	// stopping is set by shutdown. A VU that comes out of its phase-in
+	// wait after that starts no session, and one whose start finishes
+	// after that cleans up its own, since the sweep has passed.
 	stopping atomic.Bool
 
 	// loaded is what the knobs currently select, resolved by loadScript when
@@ -426,12 +430,6 @@ func (r *runtime) iterate() {
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
-		r.phaseIn(gid)
-		if r.stopping.Load() {
-			// The run ended during the wait. shutdown has swept users
-			// already, so an actor started now would outlive the run.
-			return
-		}
 		loaded, err := r.loadScript()
 		if err != nil {
 			slog.Error("agentsession: cannot load script; goroutine will retry next iter",
@@ -439,7 +437,10 @@ func (r *runtime) iterate() {
 			time.Sleep(2 * time.Second)
 			return
 		}
-		u, err := r.startUser(context.Background(), loaded)
+		u, err := r.startUser(context.Background(), gid, loaded)
+		if errors.Is(err, errStopping) {
+			return
+		}
 		if err != nil {
 			slog.Warn("agentsession start failed; goroutine will retry next iter",
 				slog.String("err", err.Error()))
@@ -447,6 +448,16 @@ func (r *runtime) iterate() {
 			return
 		}
 		val, _ = r.users.LoadOrStore(gid, u)
+		if r.stopping.Load() {
+			// shutdown ran while the session started, and its sweep may
+			// or may not have seen the entry. Deleting the entry claims
+			// the cleanup, on either side, so the actor is suspended and
+			// deleted exactly once and does not outlive the run.
+			if _, ok := r.users.LoadAndDelete(gid); ok {
+				u.suspendAndDelete(context.Background())
+			}
+			return
+		}
 	}
 	u := val.(*sessionUser)
 
@@ -474,14 +485,22 @@ func (r *runtime) iterate() {
 
 // startUser creates the session's actor, waits for its sandbox to serve,
 // then suspends it so the first scripted step begins — like every later
-// step — with a wake from suspension.
-func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*sessionUser, error) {
+// step — with a wake from suspension. The VU's phase-in wait comes after
+// the preflight checks, so a refusal that a redeploy fixes a minute into
+// the run does not leave every VU whose wait elapsed meanwhile starting
+// together once the check clears. It returns errStopping when shutdown
+// began during the wait.
+func (r *runtime) startUser(ctx context.Context, gid int64, loaded *loadedScript) (*sessionUser, error) {
 	if err := r.checkTemplateMemory(ctx, loaded.Script); err != nil {
 		return nil, err
 	}
 	dyn := dynconfig.Get[knobs](r.cfg.Dyn)
 	if err := checkSnapshotSteps(dyn, loaded.Script); err != nil {
 		return nil, err
+	}
+	r.phaseIn(gid)
+	if r.stopping.Load() {
+		return nil, errStopping
 	}
 	u := &sessionUser{
 		cfg:       r.cfg,
@@ -541,16 +560,23 @@ const shutdownConcurrency = 64
 // shutdown suspends and deletes every session's actor, shutdownConcurrency
 // at a time, until done or ctx expires. It first marks the runtime as
 // stopping, so a VU that is still waiting out its phase-in starts no
-// session once it wakes.
+// session once it wakes, and one whose start finishes during the sweep
+// cleans up its own session (see iterate).
 func (r *runtime) shutdown(ctx context.Context) {
 	r.stopping.Store(true)
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, shutdownConcurrency)
-	r.users.Range(func(_, val any) bool {
+	r.users.Range(func(key, val any) bool {
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			return false
+		}
+		// Deleting the entry claims its cleanup; a VU that stored its
+		// session during the sweep claims its own the same way.
+		if _, ok := r.users.LoadAndDelete(key); !ok {
+			<-sem
+			return true
 		}
 		wg.Add(1)
 		go func(u *sessionUser) {
