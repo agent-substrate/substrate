@@ -131,8 +131,8 @@ layer diffIDs in order — layers shared by N images exist once.
 
    A layer already in the pool is reused without re-hashing, because it
    was checked when it was written. The reusing image's own blob is never
-   downloaded, so it is never checked. Layers unpacked by an atelet that
-   lacked this check stay in the pool until eviction retires them.
+   downloaded, so it is never checked. Every atelet that writes layout
+   version `2` has this check, so the pool holds no unchecked layer.
 6. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
 
