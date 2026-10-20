@@ -17,6 +17,7 @@ package egress
 import (
 	"context"
 	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -166,6 +168,27 @@ func wantDial(t *testing.T, res extproc.Result, err error, want string) {
 	}
 	if want == extproc.EgressDialName && hostOf(res) == "" {
 		t.Error("dial=name without a host; Envoy would dial the Host, port included")
+	}
+	_ = sniRulesOf(t, res)
+}
+
+func TestRequestLegReturnsPolicyMetadata(t *testing.T) {
+	policy := combined(
+		httpsPolicy("*.example.org", "api.example.com"),
+		credentialInjectionPolicySample("auth.example.com"),
+		passthroughPolicy(ports(443), "foo.bar.com"),
+	)
+	h := policyHandler(policy)
+	res, err := h.HandleRequestHeaders(context.Background(), innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
+	wantDial(t, res, err, extproc.EgressDialName)
+	want := []egresspolicy.SNIRule{
+		{Pattern: "api.example.com", Mode: egresspolicy.SNIModeMITM},
+		{Pattern: "auth.example.com", Mode: egresspolicy.SNIModeMITM, HasEffects: true},
+		{Pattern: "foo.bar.com", Mode: egresspolicy.SNIModePassthrough},
+		{Pattern: "*.example.org", Mode: egresspolicy.SNIModeMITM},
+	}
+	if got := sniRulesOf(t, res); !slices.Equal(got, want) {
+		t.Errorf("SNI rules = %v, want %v", got, want)
 	}
 }
 
