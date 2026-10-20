@@ -277,38 +277,6 @@ func TestValidateSandboxClass(t *testing.T) {
 	}
 }
 
-func TestValidateLimit(t *testing.T) {
-	path := field.NewPath("limits").Index(0)
-	quantityPath := path.Child("quantity")
-	tests := []struct {
-		name     string
-		limit    string
-		quantity string
-		want     field.ErrorList
-	}{
-		{name: "cpu below the bound", limit: "cpu", quantity: "999"},
-		{name: "cpu at the millicore bound", limit: "cpu", quantity: "999.999"},
-		{name: "memory", limit: "memory", quantity: "1Gi"},
-		{name: "memory at the int64 bound", limit: "memory", quantity: "9223372036854775807"},
-		{name: "missing quantity left to tags", limit: "cpu"},
-		{name: "unsupported name", limit: "gpu", quantity: "1", want: field.ErrorList{field.NotSupported[string](path.Child("name"), nil, nil)}},
-		{name: "malformed quantity", limit: "cpu", quantity: "x", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "zero quantity", limit: "memory", quantity: "0", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "negative quantity", limit: "memory", quantity: "-1", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "cpu at 1000 cores", limit: "cpu", quantity: "1000", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "cpu rounds up to 1000 cores in millicores", limit: "cpu", quantity: "999.9995", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "cpu far beyond int64 millicores", limit: "cpu", quantity: "1e30", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "memory past the int64 bound", limit: "memory", quantity: "9223372036854775808", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "memory rounds up past the int64 bound", limit: "memory", quantity: "9223372036854775807.5", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "memory far beyond int64 bytes", limit: "memory", quantity: "1e30", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateLimit(path, tt.limit, tt.quantity))
-		})
-	}
-}
-
 func testActorDirs() *ateworkerpb.ActorDirs {
 	return &ateworkerpb.ActorDirs{
 		RootDir:                   "/node/actors/a",

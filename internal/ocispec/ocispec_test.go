@@ -184,11 +184,11 @@ func TestOCIResources(t *testing.T) {
 	if got := ociResources(nil); got != nil {
 		t.Errorf("ociResources(nil) = %v, want nil", got)
 	}
-	if got := ociResources(&ateworkerpb.ResourceLimits{}); got != nil {
+	if got := ociResources(&ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{}}); got != nil {
 		t.Errorf("ociResources(zero) = %v, want nil so the spec is unchanged", got)
 	}
 
-	got := ociResources(&ateworkerpb.ResourceLimits{MemoryBytes: 268435456, CpuMillis: 200})
+	got := ociResources(&ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: 268435456, CpuMillicores: 200}})
 	if got == nil {
 		t.Fatal("ociResources() = nil, want limits")
 	}
@@ -215,7 +215,7 @@ func TestOCIResources(t *testing.T) {
 // EINVAL at container create.
 func TestOCIResources_ClampsQuotaToKernelMinimum(t *testing.T) {
 	for _, millis := range []int64{1, 5, 9} {
-		got := ociResources(&ateworkerpb.ResourceLimits{CpuMillis: millis})
+		got := ociResources(&ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: millis}})
 		if got == nil || got.CPU == nil || got.CPU.Quota == nil {
 			t.Fatalf("cpu=%dm: ociResources() = %v, want a quota", millis, got)
 		}
@@ -225,7 +225,7 @@ func TestOCIResources_ClampsQuotaToKernelMinimum(t *testing.T) {
 		}
 	}
 	// At the floor the quota is exact, not clamped.
-	got := ociResources(&ateworkerpb.ResourceLimits{CpuMillis: 10})
+	got := ociResources(&ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: 10}})
 	if *got.CPU.Quota != cpuQuotaMinUS {
 		t.Errorf("cpu=10m: quota = %d, want exactly %d", *got.CPU.Quota, cpuQuotaMinUS)
 	}
@@ -234,7 +234,7 @@ func TestOCIResources_ClampsQuotaToKernelMinimum(t *testing.T) {
 // A negative limit must not produce a non-nil but empty LinuxResources, which
 // would put a bare "resources": {} into the spec.
 func TestOCIResources_NegativeIsUnset(t *testing.T) {
-	if got := ociResources(&ateworkerpb.ResourceLimits{MemoryBytes: -1, CpuMillis: -1}); got != nil {
+	if got := ociResources(&ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: -1, CpuMillicores: -1}}); got != nil {
 		t.Errorf("ociResources(negative) = %+v, want nil", got)
 	}
 }
@@ -250,7 +250,7 @@ func TestBuild_NoResourcesLeavesLinuxUntouched(t *testing.T) {
 func TestBuild_ResourcesApplied(t *testing.T) {
 	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{
 		Args:      []string{"/app"},
-		Resources: &ateworkerpb.ResourceLimits{MemoryBytes: 67108864},
+		Resources: &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: 67108864}},
 	}}})
 	if spec.Linux.Resources == nil || spec.Linux.Resources.Memory == nil {
 		t.Fatalf("Linux.Resources = %v, want a memory limit", spec.Linux.Resources)

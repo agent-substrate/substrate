@@ -142,7 +142,7 @@ func TestShapeMicroVM_KeepsDeclaredContainerLimits(t *testing.T) {
 	const declared = 64 * 1024 * 1024
 	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{
 		Args:      []string{"/app"},
-		Resources: &ateworkerpb.ResourceLimits{MemoryBytes: declared},
+		Resources: &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: declared}},
 	}}})
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)

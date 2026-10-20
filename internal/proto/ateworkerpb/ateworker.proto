@@ -240,12 +240,7 @@ message RunWorkloadRequest {
   // runtime default (unlimited for gVisor, the worker's own default for the micro-VM).
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=999999 # matches atelet.RunRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
-  // +k8s:optional
-  // +k8s:minimum=1
-  int64 memory_bytes = 11; // Memory limit in bytes.
+  ResourceRequirements resources = 10;
   // +k8s:required
   ActorDirs actor_dirs = 12;
 }
@@ -349,15 +344,33 @@ message ContainerSpec {
   repeated string capabilities = 3;
 
   // resources are the container's own declared limits, if any.
-  ResourceLimits resources = 4;
+  //
+  // +k8s:optional
+  ResourceRequirements resources = 4;
 }
 
-// ResourceLimits are a container's declared limits.
-message ResourceLimits {
-  // memory_bytes is the memory limit in bytes. 0 means unset.
-  int64 memory_bytes = 1;
-  // cpu_millis is the CPU limit in milli-cores (1000 = one core). 0 means unset.
-  int64 cpu_millis = 2;
+// ResourceRequirements mirrors atelet's ResourceRequirements.
+message ResourceRequirements {
+  // limits is the maximum amount of compute resources allowed.
+  //
+  // +k8s:optional
+  Resources limits = 1;
+}
+
+// Resources is an amount of each compute resource.
+message Resources {
+  // cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. 0 means none.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 }
 
 // VolumeMount is one volume mounted into a container.
@@ -529,12 +542,7 @@ message RestoreWorkloadRequest {
   // these are ignored. Zero means "unset": keep the runtime default.
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=999999 # matches atelet.RestoreRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 11; // CPU limit in millicores (1000 = one core).
-  // +k8s:optional
-  // +k8s:minimum=1
-  int64 memory_bytes = 12; // Memory limit in bytes.
+  ResourceRequirements resources = 11;
   // +k8s:required
   ActorDirs actor_dirs = 13;
 

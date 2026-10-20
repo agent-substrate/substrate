@@ -53,8 +53,8 @@ type Constraints struct {
 	// to specific node VMs.
 	RequiredNodes []string
 
-	// Limits are the actor's declared resource limits, named as a Worker names
-	// the capacity it reports, so the two subtract.
+	// Limits are the actor's declared resource limits, in the units a Worker
+	// reports its capacity in, so the two subtract.
 	Limits *ateapipb.Resources
 }
 
@@ -118,17 +118,12 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		return nil, fmt.Errorf("while listing workers: %w", err)
 	}
 
-	want, err := resources.ParseQuantities(constraints.Limits)
-	if err != nil {
-		return nil, fmt.Errorf("while parsing actor resource limits: %w", err)
-	}
-
 	var candidates []candidate
 	for _, worker := range workers {
 		if !s.Applies(worker, constraints) {
 			continue
 		}
-		if cand, ok := checkRoom(worker, want); ok {
+		if cand, ok := checkRoom(worker, constraints.Limits); ok {
 			candidates = append(candidates, cand)
 		}
 	}
@@ -192,30 +187,23 @@ func lessLoaded(a, b *candidate) bool {
 }
 
 // workerResourceUtilization returns the highest allocated/capacity ratio across
-// compute dimensions, or 1 when capacity is unreported or quantities fail to parse.
+// compute dimensions, or 1 when capacity is unreported.
 func workerResourceUtilization(w *ateapipb.Worker) float64 {
-	capQ, err := resources.ParseQuantities(w.GetStatus().GetCapacity().GetResources())
-	if err != nil || len(capQ) == 0 {
-		return 1
-	}
-	usedQ, err := resources.ParseQuantities(w.GetStatus().GetAllocated().GetResources())
-	if err != nil {
-		return 1
-	}
-	return quantitiesUtilization(capQ, usedQ)
+	return utilization(w.GetStatus().GetCapacity(), w.GetStatus().GetAllocated())
 }
 
-func quantitiesUtilization(capQ, usedQ resources.Quantities) float64 {
+func utilization(capacity, used *ateapipb.WorkerResources) float64 {
 	var (
 		maxRatio    float64
 		hasPositive bool
 	)
-	for name, capVal := range capQ {
-		if capFloat := capVal.AsApproximateFloat64(); capFloat > 0 {
+	for _, d := range [][2]int64{
+		{capacity.GetCpuMillicores(), used.GetCpuMillicores()},
+		{capacity.GetMemoryBytes(), used.GetMemoryBytes()},
+	} {
+		if d[0] > 0 {
 			hasPositive = true
-			if usedVal, ok := usedQ[name]; ok {
-				maxRatio = max(maxRatio, usedVal.AsApproximateFloat64()/capFloat)
-			}
+			maxRatio = max(maxRatio, float64(d[1])/float64(d[0]))
 		}
 	}
 	if !hasPositive {
@@ -262,20 +250,12 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 // HasRoom reports whether what the worker has left admits one more actor of
 // this size. A dimension the worker does not report is unconstrained, so
 // placement is never blocked by missing data.
-//
-// A worker whose recorded capacity or allocation will not parse is treated as
-// having no room: it is the only answer that cannot overcommit a worker whose
-// true occupancy is unreadable.
 func (s *scheduler) HasRoom(worker *ateapipb.Worker, constraints Constraints) bool {
-	want, err := resources.ParseQuantities(constraints.Limits)
-	if err != nil {
-		return false
-	}
-	_, ok := checkRoom(worker, want)
+	_, ok := checkRoom(worker, constraints.Limits)
 	return ok
 }
 
-func checkRoom(worker *ateapipb.Worker, want resources.Quantities) (candidate, bool) {
+func checkRoom(worker *ateapipb.Worker, want *ateapipb.Resources) (candidate, bool) {
 	capacity := worker.GetStatus().GetCapacity()
 	used := worker.GetStatus().GetAllocated()
 
@@ -285,24 +265,12 @@ func checkRoom(worker *ateapipb.Worker, want resources.Quantities) (candidate, b
 		return candidate{}, false
 	}
 
-	if len(want) == 0 {
+	if want.GetCpuMillicores() == 0 && want.GetMemoryBytes() == 0 {
 		return candidate{worker: worker, resUtil: -1}, true
 	}
-	free, err := resources.ParseQuantities(capacity.GetResources())
-	if err != nil {
+	if !resources.Covers(resources.Free(capacity, used), want) {
 		return candidate{}, false
 	}
-	if free == nil {
-		free = resources.Quantities{}
-	}
-	allocated, err := resources.ParseQuantities(used.GetResources())
-	if err != nil {
-		return candidate{}, false
-	}
-	resUtil := quantitiesUtilization(free, allocated)
-	free.Sub(allocated)
-	if !free.Covers(want) {
-		return candidate{}, false
-	}
+	resUtil := utilization(capacity, used)
 	return candidate{worker: worker, resUtil: resUtil}, true
 }

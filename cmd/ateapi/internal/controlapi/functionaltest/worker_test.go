@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -169,7 +168,7 @@ func TestListWorkers(t *testing.T) {
 			Labels:          map[string]string{"foo": "bar"},
 			Status: &ateapipb.WorkerStatus{
 				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity:       &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(1000, 512<<20)},
+				Capacity:       &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 512 << 20},
 				DefaultRuntime: defaultWorkerRuntime("gvisor"),
 			},
 		},

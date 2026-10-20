@@ -91,12 +91,6 @@ func ValidateCustom_ResourceMetadata(_ context.Context, _ operation.Operation, f
 	return errs
 }
 
-// ValidateCustom_Limits validates one limit with resources.ValidateLimit.
-// Presence and uniqueness of names are enforced by tags.
-func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Limits) field.ErrorList {
-	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
-}
-
 // validateDualStackIPs checks that each entry is a valid, canonical IP and
 // that the list holds at most one IPv4 and one IPv6 address, matching the
 // Kubernetes rule for pod IPs. Presence and length are enforced by tags.

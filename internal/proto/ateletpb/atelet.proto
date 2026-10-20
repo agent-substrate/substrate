@@ -151,10 +151,20 @@ message AttributeEntry {
 // WorkerResources is what a worker can supply. It mirrors the control plane's
 // WorkerResources and is validated by the same rules.
 message WorkerResources {
-  // Resources are matched by name against actors' resources for placement.
+  // cpu_millicores is CPU in millicores (1000 = one core). Compared against
+  // actors' resource limits for placement.
   //
   // +k8s:optional
-  Resources resources = 1;
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. Compared against actors' resource
+  // limits for placement.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 
   // A count of Actors. Workers can use this to limit the number of Actors
   // that can be placed on them, constraining costs not captured in the
@@ -162,33 +172,31 @@ message WorkerResources {
   //
   // +k8s:optional
   // +k8s:minimum=1
-  int32 actors = 2;
+  int32 actors = 3;
 }
 
-message Resources {
-  // limits is the maximum amount of compute resources allowed. Only "cpu"
-  // and "memory" are supported, each at most once, and each quantity must be
-  // greater than zero; the cpu limit must be less than 1000 cores.
+// ResourceRequirements are the compute resources a workload may use.
+message ResourceRequirements {
+  // limits is the maximum amount of compute resources allowed.
   //
   // +k8s:optional
-  // +k8s:maxItems=2
-  // +k8s:listType=map
-  // +k8s:listMapKey=name
-  repeated Limits limits = 1;
+  Resources limits = 1;
 }
 
-// +k8s:customValidation # names, quantity parse/positivity, cpu bound
-message Limits {
-  // +k8s:required
-  // +k8s:maxLength=16 # the Limits hook restricts values to cpu/memory
-  string name = 1;
-
-  // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
-  // "2Gi").
+// Resources is an amount of each compute resource.
+message Resources {
+  // cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
   //
-  // +k8s:required
-  // +k8s:maxLength=32 # the Limits hook requires a parseable quantity
-  string quantity = 2;
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. 0 means none.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 }
 
 message RegisterWorkerResponse {
@@ -471,16 +479,10 @@ message RunRequest {
 
   // The actor's declared size, from the ActorTemplate's resource limits. atelet
   // passes these through to the sandbox so it is sized to the actor (not the
-  // whole host or worker pod). Zero means "unset": keep the runtime default.
+  // whole host or worker pod). A zero limit keeps the runtime default.
   //
   // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
-
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 11; // Memory limit in bytes.
+  ResourceRequirements resources = 10;
 
   // The runtime the assigned worker runs this actor under, from
   // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
@@ -729,11 +731,11 @@ message Container {
   // +k8s:optional
   SecurityContext security_context = 8;
 
-  // resources are the cgroup limits for this container, resolved by
-  // ate-api-server from the ActorTemplate. Unset means no limits.
+  // resources are the cgroup limits for this container, from the
+  // ActorTemplate. Unset means no limits.
   //
   // +k8s:optional
-  ResourceLimits resources = 9;
+  ResourceRequirements resources = 9;
 }
 
 // SecurityContext holds security settings for a container's process.
@@ -756,23 +758,6 @@ message Capabilities {
   // +k8s:listType=set
   // +k8s:customValidation # capability grammar
   repeated string drop = 2;
-}
-
-// ResourceLimits are the cgroup limits for one container. Scalars rather than a
-// map so each resource.Quantity is parsed exactly once, in ate-api-server.
-message ResourceLimits {
-  // memory_bytes is the memory limit in bytes. 0 means unset.
-  //
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 1;
-
-  // cpu_millis is the CPU limit in milli-cores (1000 = one core). 0 means unset.
-  //
-  // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_millis = 2;
 }
 
 message EnvVar {
@@ -1091,13 +1076,7 @@ message RestoreRequest {
   // means "unset": keep the runtime default.
   //
   // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
-
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 11; // Memory limit in bytes.
+  ResourceRequirements resources = 10;
 
   // The runtime the assigned worker restores this actor under, from
   // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and

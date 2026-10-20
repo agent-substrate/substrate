@@ -296,22 +296,6 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-known",
 		},
 		{
-			name: "prefers worker with known resource utilization over malformed allocated quantities",
-			fleet: fleet{
-				worker("w-malformed", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
-					func(w *ateapipb.Worker) {
-						w.Status.Allocated = &ateapipb.WorkerResources{
-							Actors:    1,
-							Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: resources.ResourceCPU, Quantity: "not-a-quantity"}}},
-						}
-					}),
-				worker("w-known", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
-					assignedFor("demo", "b", resources.CPUMemory(1000, 2<<30))),
-			},
-			constraints: Constraints{},
-			wantPod:     "w-known",
-		},
-		{
 			name: "breaks utilization ties using remaining actor slots",
 			fleet: fleet{
 				// Both workers are at 50% actor-slot utilization (1/2 vs 4/8) and
@@ -585,12 +569,8 @@ func assignedFor(atespace, name string, took *ateapipb.Resources) func(*ateapipb
 		if w.Status == nil {
 			w.Status = &ateapipb.WorkerStatus{}
 		}
-		allocated, err := resources.AddToAllocated(w.Status.Allocated,
+		w.Status.Allocated = resources.AddToAllocated(w.Status.Allocated,
 			&ateapipb.ActorAssignment{ActorUid: atespace + "/" + name, Resources: took}, +1)
-		if err != nil {
-			panic(err)
-		}
-		w.Status.Allocated = allocated
 	}
 }
 
@@ -611,7 +591,8 @@ func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
 		if w.Status.Capacity == nil {
 			w.Status.Capacity = &ateapipb.WorkerResources{}
 		}
-		w.Status.Capacity.Resources = resources.CPUMemory(cpuMilli, memBytes)
+		w.Status.Capacity.CpuMillicores = cpuMilli
+		w.Status.Capacity.MemoryBytes = memBytes
 	}
 }
 
@@ -689,19 +670,5 @@ func TestSchedulePowerOfTwoChoicesShiftedSecondSample(t *testing.T) {
 	}
 	if got.GetWorkerPod() != "w-2" {
 		t.Fatalf("Schedule() = %q, want %q", got.GetWorkerPod(), "w-2")
-	}
-}
-
-func TestScheduleMalformedLimitsIsNotNoCapacity(t *testing.T) {
-	f := fleet{worker("w-1", "gvisor", "node-a", nil)}
-	constraints := Constraints{
-		Limits: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: resources.ResourceCPU, Quantity: "not-a-quantity"}}},
-	}
-	_, err := New(f, WithIntn(firstIntn)).Schedule(context.Background(), constraints)
-	if err == nil {
-		t.Fatal("Schedule() error = nil, want a parse error")
-	}
-	if errors.Is(err, ErrNoCapacity) {
-		t.Fatalf("Schedule() error = %v, want an error other than ErrNoCapacity", err)
 	}
 }

@@ -537,65 +537,42 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 
 func TestToAteletResources(t *testing.T) {
 	tests := []struct {
-		name    string
-		in      *ateapipb.Resources
-		want    *ateletpb.ResourceLimits
-		wantErr bool
+		name string
+		in   *ateapipb.ResourceRequirements
+		want *ateletpb.ResourceRequirements
 	}{{
 		name: "nil resources",
 		in:   nil,
 		want: nil,
 	}, {
-		name: "empty limits",
-		in:   &ateapipb.Resources{},
+		name: "empty resources",
+		in:   &ateapipb.ResourceRequirements{},
 		want: nil,
 	}, {
 		name: "memory only",
-		in:   &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "256Mi"}}},
-		want: &ateletpb.ResourceLimits{MemoryBytes: 268435456},
+		in:   &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{MemoryBytes: 256 << 20}},
+		want: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 268435456}},
 	}, {
 		name: "cpu only",
-		in:   &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "200m"}}},
-		want: &ateletpb.ResourceLimits{CpuMillis: 200},
+		in:   &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 200}},
+		want: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: 200}},
 	}, {
 		name: "both",
-		in: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-			{Name: "cpu", Quantity: "1"},
-			{Name: "memory", Quantity: "1Gi"},
-		}},
-		want: &ateletpb.ResourceLimits{MemoryBytes: 1073741824, CpuMillis: 1000},
-	}, {
-		name:    "invalid quantity",
-		in:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "banana"}}},
-		wantErr: true,
+		in:   &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 1000, MemoryBytes: 1 << 30}},
+		want: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 1073741824, CpuMillicores: 1000}},
 	}}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := toAteletResources(tc.in)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("toAteletResources() error = nil, want parse error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("toAteletResources() failed: %v", err)
-			}
+			got := toAteletResources(tc.in)
 			if tc.want == nil {
 				if got != nil {
 					t.Fatalf("toAteletResources() = %v, want nil", got)
 				}
 				return
 			}
-			if got == nil {
-				t.Fatalf("toAteletResources() = nil, want %v", tc.want)
-			}
-			if got.GetMemoryBytes() != tc.want.GetMemoryBytes() {
-				t.Errorf("memory_bytes = %d, want %d", got.GetMemoryBytes(), tc.want.GetMemoryBytes())
-			}
-			if got.GetCpuMillis() != tc.want.GetCpuMillis() {
-				t.Errorf("cpu_millis = %d, want %d", got.GetCpuMillis(), tc.want.GetCpuMillis())
+			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("toAteletResources() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -610,12 +587,9 @@ func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-limits"},
 		Containers: []*ateapipb.Container{
 			{
-				Name:  "limited",
-				Image: "main",
-				Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-					{Name: "cpu", Quantity: "200m"},
-					{Name: "memory", Quantity: "256Mi"},
-				}},
+				Name:      "limited",
+				Image:     "main",
+				Resources: &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 200, MemoryBytes: 256 << 20}},
 			},
 			{Name: "unlimited", Image: "main"},
 		},
@@ -631,11 +605,11 @@ func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 	if limited == nil {
 		t.Fatal("limited container Resources = nil, want the declared limits")
 	}
-	if limited.GetMemoryBytes() != 268435456 {
-		t.Errorf("memory_bytes = %d, want 268435456", limited.GetMemoryBytes())
+	if got := limited.GetLimits().GetMemoryBytes(); got != 268435456 {
+		t.Errorf("memory_bytes = %d, want 268435456", got)
 	}
-	if limited.GetCpuMillis() != 200 {
-		t.Errorf("cpu_millis = %d, want 200", limited.GetCpuMillis())
+	if got := limited.GetLimits().GetCpuMillicores(); got != 200 {
+		t.Errorf("cpu_millicores = %d, want 200", got)
 	}
 	if r := got.GetContainers()[1].GetResources(); r != nil {
 		t.Errorf("unlimited container Resources = %v, want nil", r)

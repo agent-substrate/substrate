@@ -52,13 +52,11 @@ containers:
     mountPath: /home/counter
 # Sandbox size: vCPUs + guest RAM at (or below) the pool's per-worker
 # capacity, leaving VMM-reserve headroom under the worker memory limit
-# (see internal/sizing). Quantities are strings in the proto.
+# (see internal/sizing).
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 512Mi
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
 snapshotConfig:
   # MEMORY, matching the gVisor variant: a suspend captures guest memory, so
   # the in-RAM count continues from where it left off — the round-trip this

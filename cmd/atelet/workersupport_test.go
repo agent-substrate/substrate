@@ -163,12 +163,10 @@ func TestRegisterWorker(t *testing.T) {
 	}{{
 		name: "records what the worker says",
 		req: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{
-				Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
-			}},
+			Capacity:       &ateletpb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
 			DefaultRuntime: reqDefault,
 		},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, Resources: resources.CPUMemory(2000, 4294967296)}),
+		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4294967296}),
 	}, {
 		name: "forwards restorable runtimes",
 		req: &ateletpb.RegisterWorkerRequest{
@@ -182,15 +180,13 @@ func TestRegisterWorker(t *testing.T) {
 		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, DefaultRuntime: reqDefault},
 		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}),
 	}, {
-		name:          "forwards empty resources",
-		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{}}, DefaultRuntime: reqDefault},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Resources: &ateapipb.Resources{}}),
+		name:          "forwards empty capacity",
+		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{}, DefaultRuntime: reqDefault},
+		wantForwarded: forwarded(&ateapipb.WorkerResources{}),
 	}, {
 		name: "rejects invalid capacity without forwarding",
 		req: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{
-				Limits: []*ateletpb.Limits{{Name: "gpu", Quantity: "1"}},
-			}},
+			Capacity:       &ateletpb.WorkerResources{CpuMillicores: -1},
 			DefaultRuntime: reqDefault,
 		},
 		wantCode: codes.InvalidArgument,

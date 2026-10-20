@@ -26,7 +26,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
@@ -62,7 +61,7 @@ func TestRegisterWorker(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, "", nil)
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(2000, 0)})
+	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 2000, MemoryBytes: 0})
 
 	got, err := s.RegisterWorker(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), setRequest(4094))
 	if err != nil {
@@ -74,8 +73,8 @@ func TestRegisterWorker(t *testing.T) {
 	// A report replaces what is recorded. The Worker reports everything it has,
 	// so a dimension this one leaves out is one it no longer supplies -- keeping
 	// the old value would advertise compute nothing claims to have.
-	if got := got.GetWorker().GetStatus().GetCapacity().GetResources(); got != nil {
-		t.Errorf("capacity resources = %v, want the report's own (none)", got)
+	if c := got.GetWorker().GetStatus().GetCapacity(); c.GetCpuMillicores() != 0 || c.GetMemoryBytes() != 0 {
+		t.Errorf("capacity = %v, want the report's own (no cpu or memory)", c)
 	}
 }
 
@@ -365,10 +364,7 @@ func TestRegisterWorker_RejectsNonsense(t *testing.T) {
 	}{
 		{"negative ceiling", &ateapipb.WorkerResources{Actors: -1}},
 		{"int32 underflow", &ateapipb.WorkerResources{Actors: -2147483648}},
-		{"negative quantity", &ateapipb.WorkerResources{Resources: resources.CPUMemory(-1, 0)}},
-		{"unparseable quantity", &ateapipb.WorkerResources{
-			Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "lots"}}},
-		}},
+		{"negative quantity", &ateapipb.WorkerResources{CpuMillicores: -1, MemoryBytes: 0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.RegisterWorker(authed, &ateapipb.RegisterWorkerRequest{

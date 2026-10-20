@@ -153,6 +153,40 @@ run_kubectl_ate() {
   "${KUBECTL_ATE_BIN}" "$@"
 }
 
+# cpu_millicores converts a Kubernetes cpu quantity like 250m or 1.5 to
+# millicores, which is what ActorTemplates take
+cpu_millicores() {
+  local q="$1"
+  if [[ "${q}" =~ ^([0-9]+)m$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "${q}" =~ ^([0-9]+)(\.([0-9]{1,3}))?$ ]]; then
+    local frac="${BASH_REMATCH[3]}000"
+    echo $((10#${BASH_REMATCH[1]} * 1000 + 10#${frac:0:3}))
+  else
+    echo "Error: --actor-cpu ${q} is not a cpu quantity like 250m or 1.5" >&2
+    return 1
+  fi
+}
+
+# memory_bytes converts a memory quantity like 256Mi or 1Gi to bytes, which is
+# what ActorTemplates take
+memory_bytes() {
+  local q="$1"
+  if [[ "${q}" =~ ^([0-9]+)(Ki|Mi|Gi|Ti)?$ ]]; then
+    local shift=0
+    case "${BASH_REMATCH[2]}" in
+      Ki) shift=10 ;;
+      Mi) shift=20 ;;
+      Gi) shift=30 ;;
+      Ti) shift=40 ;;
+    esac
+    echo $((10#${BASH_REMATCH[1]} << shift))
+  else
+    echo "Error: --actor-memory ${q} is not a memory quantity like 256Mi or 1Gi" >&2
+    return 1
+  fi
+}
+
 substitute() {
   local manifest="$1"
   local worker_resources=""
@@ -165,7 +199,8 @@ substitute() {
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
-      -e "s|\${ACTOR_CPU}|${ACTOR_CPU}|g" \
+      -e "s|\${ACTOR_MEMORY_BYTES}|${ACTOR_MEMORY_BYTES}|g" \
+      -e "s|\${ACTOR_CPU_MILLICORES}|${ACTOR_CPU_MILLICORES}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
       -e "s|\${ATE_ENV_IMAGE}|${ATE_ENV_IMAGE:-}|g" \
       -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
@@ -275,6 +310,8 @@ deploy() {
     echo "Error: --fake-atelet-env needs substrate installed with --fake-data-plane" >&2
     exit 1
   fi
+  ACTOR_CPU_MILLICORES="$(cpu_millicores "${ACTOR_CPU}")"
+  ACTOR_MEMORY_BYTES="$(memory_bytes "${ACTOR_MEMORY}")"
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."

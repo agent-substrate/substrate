@@ -161,10 +161,10 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 		"space-b": {actorOn("space-b", "actor-b", "worker-3")},
 	}}
 
-	header := "NAME       POOL      STATE                 ACTORS   CPU   MEMORY   POD          AGE\n"
-	row1 := "worker-1   counter   WORKER_STATE_ACTIVE   1/1      -     -        ns-1/pod-1   5m\n"
-	row2 := "worker-2   other     WORKER_STATE_ACTIVE   0/0      -     -        ns-1/pod-2   3h\n"
-	row3 := "worker-3   counter   WORKER_STATE_ACTIVE   1/1      -     -        ns-2/pod-3   3d\n"
+	header := "NAME       POOL      STATE                 ACTORS   CPU(MILLICORES)   MEMORY   POD          AGE\n"
+	row1 := "worker-1   counter   WORKER_STATE_ACTIVE   1/1      -                 -        ns-1/pod-1   5m\n"
+	row2 := "worker-2   other     WORKER_STATE_ACTIVE   0/0      -                 -        ns-1/pod-2   3h\n"
+	row3 := "worker-3   counter   WORKER_STATE_ACTIVE   1/1      -                 -        ns-2/pod-3   3d\n"
 
 	tests := []struct {
 		name         string
@@ -178,7 +178,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 		{name: "namespace", namespace: "ns-1", expected: header + row1 + row2},
 		{name: "atespace", atespace: "space-a", expected: header + row1},
 		// With no matching rows the tabwriter sizes columns to the header alone.
-		{name: "atespace excludes free workers", atespace: "no-such-space", expected: "NAME   POOL   STATE   ACTORS   CPU   MEMORY   POD   AGE\n"},
+		{name: "atespace excludes free workers", atespace: "no-such-space", expected: "NAME   POOL   STATE   ACTORS   CPU(MILLICORES)   MEMORY   POD   AGE\n"},
 		{name: "selector", selector: "ate.dev/worker-pool=counter", expected: header + row1 + row3},
 		{name: "sandbox class", sandboxClass: "microvm", expected: header + row1},
 		{name: "sandbox class gvisor", sandboxClass: "gvisor", expected: header + row2 + row3},
@@ -230,13 +230,9 @@ func TestGetWorkersRunner_GetByName(t *testing.T) {
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
 			Status: &ateapipb.WorkerStatus{
-				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity: &ateapipb.WorkerResources{Actors: 4, Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-					{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"},
-				}}},
-				Allocated: &ateapipb.WorkerResources{Actors: 1, Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-					{Name: "cpu", Quantity: "500m"}, {Name: "memory", Quantity: "1Gi"},
-				}}},
+				State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity:  &ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
+				Allocated: &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 1 << 30},
 			},
 		},
 		"worker-2": {
@@ -259,9 +255,9 @@ func TestGetWorkersRunner_GetByName(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := "NAME       POOL      STATE                   ACTORS   CPU      MEMORY    POD          AGE\n" +
-		"worker-1   counter   WORKER_STATE_ACTIVE     1/4      500m/2   1Gi/4Gi   ns-1/pod-1   5m\n" +
-		"worker-2   counter   WORKER_STATE_DRAINING   0/0      -        -         ns-1/pod-2   3d\n"
+	expected := "NAME       POOL      STATE                   ACTORS   CPU(MILLICORES)   MEMORY    POD          AGE\n" +
+		"worker-1   counter   WORKER_STATE_ACTIVE     1/4      500/2000          1Gi/4Gi   ns-1/pod-1   5m\n" +
+		"worker-2   counter   WORKER_STATE_DRAINING   0/0      -                 -         ns-1/pod-2   3d\n"
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}

@@ -354,10 +354,8 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		r := &ateapipb.RegisterWorkerRequest{
 			Worker: workerRef(apiWorkerName),
 			Capacity: &ateapipb.WorkerResources{
-				Actors: 10,
-				Resources: &ateapipb.Resources{
-					Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
-				},
+				Actors:        10,
+				CpuMillicores: 2000, MemoryBytes: 4 << 30,
 			},
 			DefaultRuntime: validRuntime(),
 		}
@@ -416,11 +414,9 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Capacity.Actors = -1 }),
 		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "invalid limit quantity",
-		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
-			r.Capacity.Resources.Limits = []*ateapipb.Limits{{Name: "cpu", Quantity: "lots"}}
-		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+		name: "negative capacity.memory_bytes",
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Capacity.MemoryBytes = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "memory_bytes"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "missing default_runtime",
 		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime = nil }),

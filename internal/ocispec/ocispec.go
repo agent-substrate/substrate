@@ -60,15 +60,16 @@ const (
 // ociResources maps the resolved limits onto the OCI spec's linux.resources.
 // Returns nil when nothing is set, so the spec carries no linux.resources at
 // all for a container that declares no limits.
-func ociResources(r *ateworkerpb.ResourceLimits) *specs.LinuxResources {
-	if r == nil || (r.GetMemoryBytes() <= 0 && r.GetCpuMillis() <= 0) {
+func ociResources(r *ateworkerpb.ResourceRequirements) *specs.LinuxResources {
+	l := r.GetLimits()
+	if l.GetMemoryBytes() <= 0 && l.GetCpuMillicores() <= 0 {
 		return nil
 	}
 	out := &specs.LinuxResources{}
-	if b := r.GetMemoryBytes(); b > 0 {
+	if b := l.GetMemoryBytes(); b > 0 {
 		out.Memory = &specs.LinuxMemory{Limit: &b}
 	}
-	if m := r.GetCpuMillis(); m > 0 {
+	if m := l.GetCpuMillicores(); m > 0 {
 		quota := max(m*cpuQuotaPeriodUS/1000, cpuQuotaMinUS)
 		period := uint64(cpuQuotaPeriodUS)
 		out.CPU = &specs.LinuxCPU{Quota: &quota, Period: &period}

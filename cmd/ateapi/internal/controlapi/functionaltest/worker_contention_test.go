@@ -25,7 +25,6 @@ import (
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/hardware"
-	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -185,8 +184,8 @@ func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int
 	}
 	if _, err := tc.persistence.UpdateWorker(ctx, name, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
 		toUpdate.Status.Capacity = &ateapipb.WorkerResources{
-			Actors:    actors,
-			Resources: resources.CPUMemory(int64(actors)*1000, int64(actors)*512<<20),
+			Actors:        actors,
+			CpuMillicores: int64(actors) * 1000, MemoryBytes: int64(actors) * 512 << 20,
 		}
 		if toUpdate.Status.DefaultRuntime == nil {
 			toUpdate.Status.DefaultRuntime = defaultWorkerRuntime(toUpdate.GetSandboxClass())

@@ -49,11 +49,8 @@ func report() *ateapipb.RegisterWorkerRequest {
 	return &ateapipb.RegisterWorkerRequest{
 		Worker: &ateapipb.ObjectRef{Name: "fake-r1-c52b9bd3-0"},
 		Capacity: &ateapipb.WorkerResources{
-			Actors: 1000,
-			Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-				{Name: "cpu", Quantity: "64"},
-				{Name: "memory", Quantity: "256Gi"},
-			}},
+			Actors:        1000,
+			CpuMillicores: 64000, MemoryBytes: 256 << 30,
 		},
 	}
 }

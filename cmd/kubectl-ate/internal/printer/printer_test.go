@@ -283,13 +283,9 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 			WorkerPod:       "pod-1",
 			SandboxClass:    "gvisor",
 			Status: &ateapipb.WorkerStatus{
-				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity: &ateapipb.WorkerResources{Actors: 4, Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-					{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"},
-				}}},
-				Allocated: &ateapipb.WorkerResources{Actors: 1, Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-					{Name: "cpu", Quantity: "500m"}, {Name: "memory", Quantity: "1Gi"},
-				}}},
+				State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity:  &ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
+				Allocated: &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 1 << 30},
 			},
 		},
 	}
@@ -299,8 +295,8 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `NAME       POOL     STATE                 ACTORS   CPU      MEMORY    POD             AGE
-worker-1   pool-1   WORKER_STATE_ACTIVE   1/4      500m/2   1Gi/4Gi   default/pod-1   3d
+	expected := `NAME       POOL     STATE                 ACTORS   CPU(MILLICORES)   MEMORY    POD             AGE
+worker-1   pool-1   WORKER_STATE_ACTIVE   1/4      500/2000          1Gi/4Gi   default/pod-1   3d
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -330,8 +326,8 @@ func TestPrintWorkersTo_Table_Free(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `NAME   POOL     STATE                      ACTORS   CPU   MEMORY   POD             AGE
-       pool-1   WORKER_STATE_UNSPECIFIED   0/0      -     -        default/pod-1   56y
+	expected := `NAME   POOL     STATE                      ACTORS   CPU(MILLICORES)   MEMORY   POD             AGE
+       pool-1   WORKER_STATE_UNSPECIFIED   0/0      -                 -        default/pod-1   56y
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -368,10 +364,10 @@ func TestPrintWorkersTo_Table_Sorted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `NAME       POOL     STATE                      ACTORS   CPU   MEMORY   POD             AGE
-worker-a   pool-1   WORKER_STATE_UNSPECIFIED   0/0      -     -        default/pod-a   5m
-worker-z   pool-1   WORKER_STATE_UNSPECIFIED   0/0      -     -        default/pod-z   5m
-worker-o   pool-2   WORKER_STATE_UNSPECIFIED   0/0      -     -        other/pod-1     5m
+	expected := `NAME       POOL     STATE                      ACTORS   CPU(MILLICORES)   MEMORY   POD             AGE
+worker-a   pool-1   WORKER_STATE_UNSPECIFIED   0/0      -                 -        default/pod-a   5m
+worker-z   pool-1   WORKER_STATE_UNSPECIFIED   0/0      -                 -        default/pod-z   5m
+worker-o   pool-2   WORKER_STATE_UNSPECIFIED   0/0      -                 -        other/pod-1     5m
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

@@ -135,7 +135,7 @@ func newTestWorker(name, pod string) *ateapipb.Worker {
 		WorkerPod:       pod,
 		WorkerPodUid:    testWorkerPodUID,
 		Status: &ateapipb.WorkerStatus{
-			Capacity: &ateapipb.WorkerResources{Resources: resources.CPUMemory(2000, 4<<30)},
+			Capacity: &ateapipb.WorkerResources{CpuMillicores: 2000, MemoryBytes: 4 << 30},
 		},
 	}
 }
@@ -1882,13 +1882,13 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 				defer wg.Done()
 				// Claimants contend over the allocation total, which is what a
 				// claim actually moves on the Worker record now that the
-				// assignments themselves are separate records. CpuMilli carries
+				// assignments themselves are separate records. The cpu limit carries
 				// the claimant's number so the winner is identifiable.
 				_, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
 					if toUpdate.GetStatus().GetAllocated().GetActors() > 0 {
 						return errTaken
 					}
-					toUpdate.Status.Allocated = &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(int64(i)+1, 0)}
+					toUpdate.Status.Allocated = &ateapipb.WorkerResources{Actors: 1, CpuMillicores: int64(i) + 1, MemoryBytes: 0}
 					return nil
 				})
 				switch {
@@ -2183,7 +2183,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		want := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(500, 1<<20)}
+		want := &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 1 << 20}
 		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("allocated mismatch (-want +got):\n%s", diff)
 		}
@@ -2216,7 +2216,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		want := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(250, 1<<21)}
+		want := &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 250, MemoryBytes: 1 << 21}
 		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("allocated mismatch after rebinding the same actor (-want +got):\n%s", diff)
 		}
@@ -2331,7 +2331,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		want := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(500, 0)}
+		want := &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 0}
 		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("a refused replacement changed the allocation (-want +got):\n%s", diff)
 		}
@@ -2418,7 +2418,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		want := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(500, 1<<20)}
+		want := &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 1 << 20}
 		if diff := cmp.Diff(want, first.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("first worker's allocation changed (-want +got):\n%s", diff)
 		}
@@ -2482,15 +2482,12 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 				t.Fatalf("ListWorkerAssignments(%s) failed: %v", name, err)
 			}
 			assignments := assignmentsPage.Items
-			want, err := resources.SumAllocated(assignments)
-			if err != nil {
-				t.Fatalf("%s: summing assignments: %v", name, err)
-			}
+			want := resources.SumAllocated(assignments)
 			// A Worker that never took anything has no allocation at all, while
 			// a sum over no assignments is a zeroed message; the two say the
 			// same thing, so compare what they mean rather than the messages.
 			got := worker.GetStatus().GetAllocated()
-			if got.GetActors() != want.GetActors() || !proto.Equal(got.GetResources(), want.GetResources()) {
+			if !sameAllocation(got, want) {
 				t.Errorf("%s: allocation %v disagrees with the %d assignments it holds (%v)",
 					name, got, len(assignments), want)
 			}
@@ -2524,7 +2521,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 		// The returned Worker is what the caller feeds the cache, so it has to
 		// be the post-release state, not the copy that went in.
-		wantReleased := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(250, 1<<21)}
+		wantReleased := &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 250, MemoryBytes: 1 << 21}
 		if diff := cmp.Diff(wantReleased, released.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("returned worker's allocated mismatch (-want +got):\n%s", diff)
 		}
@@ -2540,7 +2537,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		want := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(250, 1<<21)}
+		want := &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 250, MemoryBytes: 1 << 21}
 		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("allocated mismatch after release (-want +got):\n%s", diff)
 		}
@@ -2765,10 +2762,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 				t.Fatalf("ListWorkerAssignments failed: %v", err)
 			}
 			assignments := assignmentsPage.Items
-			want, err := resources.SumAllocated(assignments)
-			if err != nil {
-				t.Fatalf("summing assignments: %v", err)
-			}
+			want := resources.SumAllocated(assignments)
 			if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 				t.Fatalf("after step %d (actor %s) the total no longer matches the assignments (-want +got):\n%s", step, actorUID, diff)
 			}
@@ -2790,7 +2784,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if got := worker.GetStatus().GetAllocated(); got.GetActors() != 0 || got.GetResources() != nil {
+		if got := worker.GetStatus().GetAllocated(); got.GetActors() != 0 || got.GetCpuMillicores() != 0 || got.GetMemoryBytes() != 0 {
 			t.Errorf("after releasing everything the total is %v, want all zero", got)
 		}
 	})
@@ -3425,4 +3419,10 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		assertPruned(t, "DeleteWorker", created, deleted)
 	})
+}
+
+// sameAllocation compares two allocation totals by what they hold, so an
+// absent total and a zeroed one are the same.
+func sameAllocation(a, b *ateapipb.WorkerResources) bool {
+	return a.GetActors() == b.GetActors() && a.GetCpuMillicores() == b.GetCpuMillicores() && a.GetMemoryBytes() == b.GetMemoryBytes()
 }

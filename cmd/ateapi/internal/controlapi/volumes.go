@@ -121,9 +121,9 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 		}
 
 		resp, volErr := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
-			Name:       actVolID,
-			Capacity:   specVol.GetExternal().GetTemplate().GetCapacity(),
-			Parameters: sc.Parameters,
+			Name:          actVolID,
+			CapacityBytes: specVol.GetExternal().GetTemplate().GetCapacityBytes(),
+			Parameters:    sc.Parameters,
 		})
 		if volErr != nil {
 			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)

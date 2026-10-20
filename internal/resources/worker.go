@@ -15,53 +15,44 @@
 package resources
 
 import (
-	"fmt"
-
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // AddToAllocated adjusts allocation by an assignment; sign is 1 or -1.
 // It returns nil when allocation reaches zero.
-func AddToAllocated(total *ateapipb.WorkerResources, assignment *ateapipb.ActorAssignment, sign int64) (*ateapipb.WorkerResources, error) {
-	held, err := ParseQuantities(total.GetResources())
-	if err != nil {
-		return nil, fmt.Errorf("allocated: %w", err)
+func AddToAllocated(total *ateapipb.WorkerResources, assignment *ateapipb.ActorAssignment, sign int64) *ateapipb.WorkerResources {
+	booked := assignment.GetResources()
+	out := &ateapipb.WorkerResources{
+		CpuMillicores: total.GetCpuMillicores() + sign*booked.GetCpuMillicores(),
+		MemoryBytes:   total.GetMemoryBytes() + sign*booked.GetMemoryBytes(),
+		Actors:        total.GetActors() + int32(sign),
 	}
-	booked, err := ParseQuantities(assignment.GetResources())
-	if err != nil {
-		return nil, fmt.Errorf("assignment for actor %s: %w", assignment.GetActorUid(), err)
+	if out.CpuMillicores == 0 && out.MemoryBytes == 0 && out.Actors == 0 {
+		return nil
 	}
-	if held == nil {
-		held = Quantities{}
-	}
-	if sign > 0 {
-		held.Add(booked)
-	} else {
-		held.Sub(booked)
-	}
-
-	actors := total.GetActors() + int32(sign)
-	resources := held.Proto()
-	if actors == 0 && resources == nil {
-		return nil, nil
-	}
-	return &ateapipb.WorkerResources{Actors: actors, Resources: resources}, nil
+	return out
 }
 
 // SumAllocated is what a set of assignments takes from a Worker, or nil for
 // none. Rebuilds the total rather than adjusting it, which is what the checks
 // holding AddToAllocated to the assignments it counts compare against.
-func SumAllocated(assignments []*ateapipb.ActorAssignment) (*ateapipb.WorkerResources, error) {
+func SumAllocated(assignments []*ateapipb.ActorAssignment) *ateapipb.WorkerResources {
 	if len(assignments) == 0 {
-		return nil, nil
+		return nil
 	}
-	total := Quantities{}
+	total := &ateapipb.WorkerResources{Actors: int32(len(assignments))}
 	for _, assignment := range assignments {
-		booked, err := ParseQuantities(assignment.GetResources())
-		if err != nil {
-			return nil, fmt.Errorf("assignment for actor %s: %w", assignment.GetActorUid(), err)
-		}
-		total.Add(booked)
+		total.CpuMillicores += assignment.GetResources().GetCpuMillicores()
+		total.MemoryBytes += assignment.GetResources().GetMemoryBytes()
 	}
-	return &ateapipb.WorkerResources{Actors: int32(len(assignments)), Resources: total.Proto()}, nil
+	return total
+}
+
+// Free is what a Worker has left after what its Actors hold. It goes negative
+// once a Worker is overcommitted.
+func Free(capacity, allocated *ateapipb.WorkerResources) *ateapipb.Resources {
+	return &ateapipb.Resources{
+		CpuMillicores: capacity.GetCpuMillicores() - allocated.GetCpuMillicores(),
+		MemoryBytes:   capacity.GetMemoryBytes() - allocated.GetMemoryBytes(),
+	}
 }

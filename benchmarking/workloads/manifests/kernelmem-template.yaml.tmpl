@@ -33,10 +33,8 @@ containers:
 # each, mostly page tables and kernel state).
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 8Gi
+    cpuMillicores: 1000
+    memoryBytes: 8589934592 # 8Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/kernelmem/

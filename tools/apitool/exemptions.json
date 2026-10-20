@@ -191,16 +191,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Limits",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Limits.name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ListActorTemplatesRequest",
     "message": "message has no doc comment"
   },
@@ -252,11 +242,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.ListWorkersResponse",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Resources",
     "message": "message has no doc comment"
   },
   {

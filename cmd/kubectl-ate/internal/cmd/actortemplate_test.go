@@ -52,10 +52,8 @@ containers:
     mountPath: /home/counter
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 512Mi
+    cpuMillicores: 1000
+    memoryBytes: 536870912
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://ate-snapshots/ate-demo-counter/
@@ -82,10 +80,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			},
 			VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/home/counter"}},
 		}},
-		Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-			{Name: "cpu", Quantity: "1"},
-			{Name: "memory", Quantity: "512Mi"},
-		}},
+		Resources: &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 1000, MemoryBytes: 512 << 20}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			StorageLocation:   "gs://ate-snapshots/ate-demo-counter/",
@@ -125,6 +120,7 @@ func TestActorTemplateFromManifest_Errors(t *testing.T) {
 		{name: "empty", manifest: ""},
 		{name: "unknown field", manifest: "metadata: {atespace: a, name: n}\nsandboxClass: gvisor\n"},
 		{name: "bad enum", manifest: "snapshotConfig: {preferredFidelity: memory}\n"},
+		{name: "resources limits list", manifest: "resources: {limits: [{name: cpu, quantity: \"1\"}]}\n"},
 		{name: "crd shape", manifest: "apiVersion: ate.dev/v1alpha1\nkind: ActorTemplate\nmetadata: {name: counter}\n"},
 		{name: "not yaml", manifest: "\t{"},
 	}

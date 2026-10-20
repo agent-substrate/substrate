@@ -35,7 +35,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -297,45 +296,6 @@ func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
 		}
 	}
 	return nil
-}
-
-// cpuLimitMax bounds cpu limits. The wire carries ceil(cores × 1000)
-// millicores and caps it at 999999 (strictly below 1000 cores), so a limit
-// above 999.999 cores rounds up out of range.
-var cpuLimitMax = resource.MustParse("999.999")
-
-// memoryLimitMax bounds memory limits at what the wire's int64 byte count
-// holds; resource.Quantity.Value wraps silently past it.
-var memoryLimitMax = resource.MustParse("9223372036854775807")
-
-// ValidateLimit validates one resource limit entry at fldPath: only cpu and
-// memory are supported, the quantity must be greater than zero, and it must
-// fit the scalars the control plane converts it to (cpuLimitMax and
-// memoryLimitMax). The bounds compare Quantities rather than the converted
-// integers, which wrap for very large values. An empty quantity is left to
-// the required tag.
-func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
-	if name != ResourceCPU && name != ResourceMemory {
-		return field.ErrorList{field.NotSupported(fldPath.Child("name"), name, []string{ResourceCPU, ResourceMemory})}
-	}
-	if quantity == "" {
-		return nil
-	}
-	q, err := resource.ParseQuantity(quantity)
-	if err != nil {
-		return field.ErrorList{field.Invalid(fldPath.Child("quantity"), quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
-	}
-	var errs field.ErrorList
-	if q.Sign() <= 0 {
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "must be greater than zero"))
-	}
-	switch {
-	case name == ResourceCPU && q.Cmp(cpuLimitMax) > 0:
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be at most 999.999 cores"))
-	case name == ResourceMemory && q.Cmp(memoryLimitMax) > 0:
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "memory limit must be at most 9223372036854775807 bytes"))
-	}
-	return errs
 }
 
 // ValidatePinnedImage requires a well-formed OCI image reference pinned by

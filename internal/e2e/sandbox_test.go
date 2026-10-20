@@ -110,17 +110,6 @@ func renderTemplates(t *testing.T, relPath string) []*ateapipb.ActorTemplate {
 	return decodeSubstrateTemplates(t, rendered)
 }
 
-// memoryLimit returns the template's spec-level memory limit quantity, "" if
-// none is declared.
-func memoryLimit(tmpl *ateapipb.ActorTemplate) string {
-	for _, l := range tmpl.GetResources().GetLimits() {
-		if l.GetName() == "memory" {
-			return l.GetQuantity()
-		}
-	}
-	return ""
-}
-
 // TestRenderSubstrateFixtures_GVisor pins the default rendering: every
 // micro-VM block is gone, no placeholder survives, and the templates select
 // their fixture's pool.
@@ -183,7 +172,7 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 			for _, tmpl := range templates {
 				name := tmpl.GetMetadata().GetName()
 				// The API rejects a template without limits.
-				if memoryLimit(tmpl) == "" {
+				if tmpl.GetResources().GetLimits().GetMemoryBytes() == 0 {
 					t.Errorf("template %s declares no memory limit", name)
 				}
 				location := tmpl.GetSnapshotConfig().GetStorageLocation()

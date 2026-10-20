@@ -35,13 +35,11 @@ import (
 	"go.ate.dev/substrate/internal/ateletdial"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/sandboxruntimes"
 	"go.ate.dev/substrate/internal/workercapacity"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -67,11 +65,9 @@ func FromFiles(actors int) *ateletpb.WorkerResources {
 
 func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 	return &ateletpb.WorkerResources{
-		Actors: int32(actors),
-		Resources: cpuMemory(
-			readLimit(filepath.Join(dir, workercapacity.CPULimitFile)),
-			readLimit(filepath.Join(dir, workercapacity.MemoryLimitFile)),
-		),
+		CpuMillicores: readLimit(filepath.Join(dir, workercapacity.CPULimitFile)),
+		MemoryBytes:   readLimit(filepath.Join(dir, workercapacity.MemoryLimitFile)),
+		Actors:        int32(actors),
 	}
 }
 
@@ -105,22 +101,6 @@ func buildRequest(capacity *ateletpb.WorkerResources, sandboxClass string, f *sa
 		req.RestorableRuntimes = append(req.RestorableRuntimes, buildRuntime(sandboxClass, attrs))
 	}
 	return req
-}
-
-// cpuMemory is the Resources for those two dimensions. A zero dimension is
-// left out, which the control plane reads as none of it; nil when both are.
-func cpuMemory(cpuMilli, memoryBytes int64) *ateletpb.Resources {
-	var limits []*ateletpb.Limits
-	if cpuMilli != 0 {
-		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceCPU, Quantity: resource.NewMilliQuantity(cpuMilli, resource.DecimalSI).String()})
-	}
-	if memoryBytes != 0 {
-		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceMemory, Quantity: resource.NewQuantity(memoryBytes, resource.BinarySI).String()})
-	}
-	if len(limits) == 0 {
-		return nil
-	}
-	return &ateletpb.Resources{Limits: limits}
 }
 
 func readLimit(path string) int64 {

@@ -42,10 +42,8 @@ containers:
       port: 80
 resources:
   limits:
-  - name: cpu
-    quantity: "${ACTOR_CPU}"
-  - name: memory
-    quantity: "${ACTOR_MEMORY}"
+    cpuMillicores: "${ACTOR_CPU_MILLICORES}"
+    memoryBytes: "${ACTOR_MEMORY_BYTES}"
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/ate-env/

@@ -63,13 +63,10 @@ volumes:
         - egress-mitm.ate.dev
         path: trust-bundle.pem
 # Sandbox size: ateworker applies these to the VM (see internal/sizing).
-# Quantities are strings in the proto.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 512Mi
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-egress-microvm/

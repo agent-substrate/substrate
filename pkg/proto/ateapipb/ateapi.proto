@@ -1168,36 +1168,34 @@ message ActorTemplate {
   //
   // +k8s:required
   // +k8s:customValidation # cpu and memory limits are both set
-  Resources resources = 6;
+  ResourceRequirements resources = 6;
 
   // +k8s:optional
   ActorTemplateStatus status = 7;
 }
 
-message Resources {
-  // limits is the maximum amount of compute resources allowed. Only "cpu"
-  // and "memory" are supported, each at most once, and each quantity must be
-  // greater than zero; the cpu limit must be less than 1000 cores.
+// ResourceRequirements are the compute resources a workload may use.
+message ResourceRequirements {
+  // limits is the maximum amount of compute resources allowed.
   //
   // +k8s:optional
-  // +k8s:maxItems=2
-  // +k8s:listType=map
-  // +k8s:listMapKey=name
-  repeated Limits limits = 1;
+  Resources limits = 1;
 }
 
-// +k8s:customValidation # names, quantity parse/positivity, cpu bound
-message Limits {
-  // +k8s:required
-  // +k8s:maxLength=16 # the Limits hook restricts values to cpu/memory
-  string name = 1;
-
-  // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
-  // "2Gi").
+// Resources is an amount of each compute resource.
+message Resources {
+  // cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
   //
-  // +k8s:required
-  // +k8s:maxLength=32 # the Limits hook requires a parseable quantity
-  string quantity = 2;
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. 0 means none.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 }
 
 message GoldenSnapshotStatus {
@@ -1345,10 +1343,10 @@ message Container {
   SecurityContext security_context = 8;
 
   // resources carries this container's compute limits, enforced inside the
-  // actor's sandbox. Only cpu and memory limits are supported.
+  // actor's sandbox. A limit of 0 leaves that resource unlimited.
   //
   // +k8s:optional
-  Resources resources = 9;
+  ResourceRequirements resources = 9;
 }
 
 // SecurityContext holds security settings for a container's process,
@@ -1502,13 +1500,11 @@ message DurableDirVolumeSource {}
 // ExternalVolumeTemplate provisions an external volume per actor; the volume
 // lives only as long as the actor.
 message ExternalVolumeTemplate {
-  // capacity of the volume to create, in Kubernetes resource.Quantity string
-  // form (e.g. "10Gi"). Required.
+  // capacity_bytes is the size of the volume to create, in bytes. Required.
   //
   // +k8s:required
-  // +k8s:maxLength=32 # matches Limits.quantity's bound
-  // +k8s:customValidation # must parse as a resource.Quantity
-  string capacity = 1;
+  // +k8s:minimum=1
+  int64 capacity_bytes = 1;
 
   // storage_class_name names the cluster-scoped Kubernetes StorageClass to
   // create the volume from. Required.
@@ -2493,11 +2489,20 @@ message AttributeEntry {
 
 // WorkerResources represents a set of resources.
 message WorkerResources {
-  // Resources match the Actor's definition of resources.
-  // They are matched by name and used for placement.
+  // cpu_millicores is CPU in millicores (1000 = one core). Compared against
+  // the Actor's resource limits for placement.
   //
   // +k8s:optional
-  Resources resources = 1;
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. Compared against the Actor's resource
+  // limits for placement.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 
   // A count of Actors.  Workers can use this to limit the number of Actors
   // that can be placed on them, constraining the costs of other things that
@@ -2506,7 +2511,7 @@ message WorkerResources {
   //
   // +k8s:optional
   // +k8s:minimum=1
-  int32 actors = 2;
+  int32 actors = 3;
 }
 
 // ActorAssignment binds an Actor to a Worker.  This is a subresource of the
