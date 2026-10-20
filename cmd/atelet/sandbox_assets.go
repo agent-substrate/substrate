@@ -405,7 +405,9 @@ var anonymousFallbackCodes = []codes.Code{codes.NotFound, codes.InvalidArgument,
 var permanentPluginCodes = []codes.Code{codes.PermissionDenied, codes.InvalidArgument, codes.Unimplemented}
 
 // permanentAssetError marks a sandbox asset fetch that retrying cannot fix
-// (see permanentPluginCodes). It keeps err's message and code.
+// (see permanentPluginCodes). It wraps err instead of using errPermanent so
+// Run, Restore and the other RPCs that fetch assets keep err's message and
+// code.
 type permanentAssetError struct {
 	err error
 }
