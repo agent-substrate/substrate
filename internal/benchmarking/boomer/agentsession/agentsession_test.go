@@ -359,32 +359,71 @@ func TestIterateAfterShutdownStartsNoSession(t *testing.T) {
 }
 
 // A VU that is inside startUser when shutdown runs is not in users yet, so
-// the sweep cannot see its session. The VU finds stopping set once the
-// session is stored and cleans it up itself, exactly once, so the actor
-// does not outlive the run.
-func TestIterateCleansUpSessionStartedDuringShutdown(t *testing.T) {
+// the sweep cannot see its session. shutdown waits for the start, and the
+// VU finds stopping set once the session is stored and cleans it up itself,
+// exactly once, before shutdown returns and the process exits.
+func TestShutdownWaitsForSessionStartedDuringIt(t *testing.T) {
 	ctl := &fakeControlClient{createStarted: make(chan struct{}, 1), createGate: make(chan struct{})}
 	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 	rt := &runtime{cfg: u.cfg}
 
-	done := make(chan struct{})
+	iterated := make(chan struct{})
 	go func() {
-		defer close(done)
+		defer close(iterated)
 		rt.iterate()
 	}()
 	<-ctl.createStarted
-	rt.shutdown(context.Background()) // sees no session yet
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		rt.shutdown(context.Background()) // the sweep sees no session yet
+	}()
+	select {
+	case <-shutdownDone:
+		t.Fatal("shutdown returned with a session start in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
 	close(ctl.createGate)
-	<-done
+	<-shutdownDone
 
+	// Checked as soon as shutdown returns: that is when main exits.
 	if got := countCalls(ctl.recordedCalls(), "DeleteActor"); got != 1 {
-		t.Errorf("DeleteActor calls = %d, want the session started during shutdown cleaned up once", got)
+		t.Errorf("DeleteActor calls when shutdown returned = %d, want the session started during it cleaned up once", got)
 	}
 	left := 0
 	rt.users.Range(func(any, any) bool { left++; return true })
 	if left != 0 {
 		t.Errorf("%d sessions left in users after shutdown, want 0", left)
 	}
+	<-iterated
+}
+
+// The wait for in-flight starts is bounded by shutdown's context, as the
+// sweep is, so a start that never finishes cannot hold the process past
+// boomer's shutdown budget.
+func TestShutdownStopsWaitingForStartsWhenCtxExpires(t *testing.T) {
+	ctl := &fakeControlClient{createStarted: make(chan struct{}, 1), createGate: make(chan struct{})}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
+	rt := &runtime{cfg: u.cfg}
+
+	iterated := make(chan struct{})
+	go func() {
+		defer close(iterated)
+		rt.iterate()
+	}()
+	<-ctl.createStarted
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	rt.shutdown(ctx)
+	if waited := time.Since(start); waited > 2*time.Second {
+		t.Errorf("shutdown waited %v on a start that never finished, want to stop at the context", waited)
+	}
+	if got := countCalls(ctl.recordedCalls(), "DeleteActor"); got != 0 {
+		t.Errorf("DeleteActor calls = %d while the start was still gated, want 0", got)
+	}
+	close(ctl.createGate)
+	<-iterated
 }
 
 // TestShutdownFansOut: at thousands of sessions a serial suspend+delete

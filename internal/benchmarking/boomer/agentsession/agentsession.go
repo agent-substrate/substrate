@@ -91,12 +91,14 @@ const (
 	// fleet had no room for when --agentsession-resume-retry-budget is unset;
 	// a budget of 0 gives the wake one attempt.
 	defaultResumeRetryBudget = 60 * time.Second
-	// The backoff between wake retries, as in glutton's spawn path: short
-	// enough that a slot freed by another session's suspend is taken within
-	// a second, with jitter so a wave of waiters does not retry in step.
+	// The backoff between wake retries, the same window as glutton's spawn
+	// path: short enough that a slot freed by another session's suspend is
+	// taken within a second. Each wait is lengthened by up to this fraction
+	// of itself, so sessions that hit a full fleet in the same instant
+	// drift apart over their attempts instead of retrying in step.
 	wakeRetryInitialBackoff = 50 * time.Millisecond
 	wakeRetryMaxBackoff     = time.Second
-	wakeRetryJitter         = 5 * time.Millisecond
+	wakeRetryJitterFraction = 0.1
 )
 
 // errStopping is startUser's answer once shutdown has begun: the sweep has
@@ -233,6 +235,12 @@ type runtime struct {
 	// wait after that starts no session, and one whose start finishes
 	// after that cleans up its own, since the sweep has passed.
 	stopping atomic.Bool
+	// starting counts the starts past their phase-in wait that iterate has
+	// not yet stored or cleaned up, so shutdown can wait for them: main
+	// exits when it returns. startMu orders setting stopping against
+	// joining the count, so no start slips in between the two.
+	startMu  sync.Mutex
+	starting sync.WaitGroup
 
 	// loaded is what the knobs currently select, resolved by loadScript when
 	// a session starts and re-resolved when the knobs name something else or
@@ -448,7 +456,8 @@ func (r *runtime) iterate() {
 			return
 		}
 		val, _ = r.users.LoadOrStore(gid, u)
-		if r.stopping.Load() {
+		stopping := r.stopping.Load()
+		if stopping {
 			// shutdown ran while the session started, and its sweep may
 			// or may not have seen the entry. Deleting the entry claims
 			// the cleanup, on either side, so the actor is suspended and
@@ -456,6 +465,10 @@ func (r *runtime) iterate() {
 			if _, ok := r.users.LoadAndDelete(gid); ok {
 				u.suspendAndDelete(context.Background())
 			}
+		}
+		// The start is complete, cleanup included; shutdown may return.
+		r.starting.Done()
+		if stopping {
 			return
 		}
 	}
@@ -489,7 +502,9 @@ func (r *runtime) iterate() {
 // the preflight checks, so a refusal that a redeploy fixes a minute into
 // the run does not leave every VU whose wait elapsed meanwhile starting
 // together once the check clears. It returns errStopping when shutdown
-// began during the wait.
+// began during the wait. A start that gets past the wait is counted in
+// starting until iterate has stored or cleaned up the session; a start
+// that fails leaves the count itself.
 func (r *runtime) startUser(ctx context.Context, gid int64, loaded *loadedScript) (*sessionUser, error) {
 	if err := r.checkTemplateMemory(ctx, loaded.Script); err != nil {
 		return nil, err
@@ -499,9 +514,25 @@ func (r *runtime) startUser(ctx context.Context, gid int64, loaded *loadedScript
 		return nil, err
 	}
 	r.phaseIn(gid)
+	r.startMu.Lock()
 	if r.stopping.Load() {
+		r.startMu.Unlock()
 		return nil, errStopping
 	}
+	r.starting.Add(1)
+	r.startMu.Unlock()
+	u, err := r.createSession(ctx, dyn, loaded)
+	if err != nil {
+		r.starting.Done()
+		return nil, err
+	}
+	return u, nil
+}
+
+// createSession is the part of a start that touches the cluster: it creates
+// the actor, waits for it to serve, and parks it unless the session stays
+// resident.
+func (r *runtime) createSession(ctx context.Context, dyn knobs, loaded *loadedScript) (*sessionUser, error) {
 	u := &sessionUser{
 		cfg:       r.cfg,
 		actorName: "agent-" + uuid.NewString(),
@@ -561,9 +592,13 @@ const shutdownConcurrency = 64
 // at a time, until done or ctx expires. It first marks the runtime as
 // stopping, so a VU that is still waiting out its phase-in starts no
 // session once it wakes, and one whose start finishes during the sweep
-// cleans up its own session (see iterate).
+// cleans up its own session (see iterate). After the sweep it waits for
+// those in-flight starts, within the same ctx, since main exits once it
+// returns.
 func (r *runtime) shutdown(ctx context.Context) {
+	r.startMu.Lock()
 	r.stopping.Store(true)
+	r.startMu.Unlock()
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, shutdownConcurrency)
 	r.users.Range(func(key, val any) bool {
@@ -587,6 +622,16 @@ func (r *runtime) shutdown(ctx context.Context) {
 		return true
 	})
 	wg.Wait()
+
+	started := make(chan struct{})
+	go func() {
+		r.starting.Wait()
+		close(started)
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+	}
 }
 
 // sessionUser is one coding-agent session: a single actor plus its progress
@@ -832,7 +877,7 @@ func retryWhileFull(ctx context.Context, deadline time.Time, call func() error) 
 		if err == nil || !isCapacityError(err) {
 			return err
 		}
-		wait := delay + time.Duration(mathrand.Float64()*float64(wakeRetryJitter))
+		wait := delay + time.Duration(mathrand.Float64()*wakeRetryJitterFraction*float64(delay))
 		if time.Now().Add(wait).After(deadline) {
 			return err
 		}
