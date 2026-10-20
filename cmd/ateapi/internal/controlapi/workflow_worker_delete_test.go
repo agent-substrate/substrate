@@ -61,6 +61,7 @@ func seedAPIActor(t *testing.T, ctx context.Context, persistence store.Interface
 				WorkerPod:       "worker-pod-1",
 				WorkerPodUid:    apiWorkerName,
 				WorkerPodIps:    []string{"10.1.2.3"},
+				SandboxRuntime:  &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 	}

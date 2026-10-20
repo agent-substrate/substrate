@@ -302,7 +302,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 	}
 
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
-		_, _, err := releaseWorker(ctx, w.store, latestActor)
+		_, err := releaseWorker(ctx, w.store, latestActor)
 		if err != nil {
 			return nil, err
 		}

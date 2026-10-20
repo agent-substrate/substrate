@@ -96,10 +96,8 @@ type fakeWorker struct {
 	// from before its create, so a create the server commits but the caller
 	// sees fail is still retired, or deleted by --cleanup.
 	created bool
-	// labels is synced onto the Worker record; sandboxClass is reported in
-	// DefaultRuntime via RegisterWorker.
-	labels       map[string]string
-	sandboxClass string
+	// labels is synced onto the Worker record.
+	labels map[string]string
 	// tmpl is the pool template the Worker was made from; nil for a Worker
 	// adopted after a restart until reconcile matches it to its pool.
 	tmpl *template
@@ -202,16 +200,15 @@ func (c *controller) adopt(ctx context.Context) error {
 			}
 			name := w.GetMetadata().GetName()
 			c.workers[name] = &fakeWorker{
-				name:         name,
-				pod:          pod,
-				namespace:    w.GetWorkerNamespace(),
-				pool:         w.GetWorkerPool(),
-				index:        index,
-				node:         w.GetNodeName(),
-				labels:       w.GetLabels(),
-				sandboxClass: w.GetStatus().GetDefaultRuntime().GetSandboxClass(),
-				capacity:     w.GetStatus().GetCapacity(),
-				reported:     w.GetStatus().GetCapacity() != nil,
+				name:      name,
+				pod:       pod,
+				namespace: w.GetWorkerNamespace(),
+				pool:      w.GetWorkerPool(),
+				index:     index,
+				node:      w.GetNodeName(),
+				labels:    w.GetLabels(),
+				capacity:  w.GetStatus().GetCapacity(),
+				reported:  w.GetStatus().GetCapacity() != nil,
 				// One never marked available goes back through create, which
 				// marks it.
 				created:  w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
@@ -362,14 +359,13 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 			return errors.New("no fake-atelet node to place fake Workers on")
 		}
 		w = &fakeWorker{
-			name:         c.newUID(),
-			pod:          pod,
-			namespace:    d.pool.Namespace,
-			pool:         d.pool.Name,
-			index:        d.index,
-			node:         fakeworker.Node(d.index, nodes),
-			labels:       maps.Clone(d.pool.GetLabels()),
-			sandboxClass: string(d.pool.Spec.DefaultSandboxClass()),
+			name:      c.newUID(),
+			pod:       pod,
+			namespace: d.pool.Namespace,
+			pool:      d.pool.Name,
+			index:     d.index,
+			node:      fakeworker.Node(d.index, nodes),
+			labels:    maps.Clone(d.pool.GetLabels()),
 		}
 		c.mu.Lock()
 		c.workers[w.name] = w
@@ -430,7 +426,6 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	}
 	c.mu.Lock()
 	w.reported = true
-	w.sandboxClass = string(d.pool.Spec.DefaultSandboxClass())
 	c.mu.Unlock()
 	return nil
 }
@@ -642,15 +637,11 @@ func (t template) capacity(allocatable corev1.ResourceList) *ateapipb.WorkerReso
 
 // fits reports whether w was made from wp's current template, so a real pool
 // would keep its pod. A Worker adopted after a restart has only its reported
-// runtime and capacity to go by, so it fits when those match what wp would
-// give it on its node now (or when it was adopted before its first report,
-// with sandboxClass and capacity still unset, until ensure sends that report);
-// one whose node's allocatable changed while fake-workersync was down is
-// replaced too. A held pool's Workers fit, since they are left as they are.
+// capacity to go by, so it fits when that capacity is what wp would give it on
+// its node now; one whose node's allocatable changed while fake-workersync was
+// down is replaced too. A held pool's Workers fit, since they are left as they
+// are.
 func fits(w *fakeWorker, wp *atev1alpha1.WorkerPool, allocatable map[string]corev1.ResourceList) bool {
-	if w.sandboxClass != "" && w.sandboxClass != string(wp.Spec.DefaultSandboxClass()) {
-		return false
-	}
 	t, err := templateOf(wp)
 	if err != nil {
 		return true

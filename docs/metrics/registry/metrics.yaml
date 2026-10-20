@@ -802,9 +802,8 @@ groups:
       Substrate can also lose the data that it did not write. Some moves into
       this state are not a loss of data. They are careful responses to a control
       plane problem.
-      ate.sandbox.class is unknown when ateapi could not read the class of the
-      worker: the worker record is already gone, or its assignment is already
-      clear.
+      ate.sandbox.class is unknown when the actor's worker assignment is already
+      clear or carries no sandbox runtime.
     annotations:
       substrate:
         emitted_by: [ateapi]

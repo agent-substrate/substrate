@@ -202,7 +202,7 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 			}
 		}
 		if actor.GetStatus().GetWorkerAssignment() != nil {
-			if _, _, err := releaseWorker(ctx, w.store, actor); err != nil {
+			if _, err := releaseWorker(ctx, w.store, actor); err != nil {
 				return fmt.Errorf("while releasing worker: %w", err)
 			}
 		}
