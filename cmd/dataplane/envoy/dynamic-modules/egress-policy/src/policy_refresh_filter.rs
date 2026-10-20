@@ -40,14 +40,6 @@ pub struct EgressPolicyRefreshFilterConfig {
   pub policy_change_for_active_connection: EnvoyCounterId,
 }
 
-impl Default for EgressPolicyRefreshFilterConfig {
-  fn default() -> Self {
-    Self {
-      policy_change_for_active_connection: EnvoyCounterId(0),
-    }
-  }
-}
-
 impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyRefreshFilterConfig {
   fn new_http_filter(&self, _envoy: &mut EHF) -> Box<dyn HttpFilter<EHF>> {
     Box::new(EgressPolicyRefreshFilter {
@@ -61,19 +53,11 @@ pub struct EgressPolicyRefreshFilter {
   pub policy_change_for_active_connection: EnvoyCounterId,
 }
 
-impl Default for EgressPolicyRefreshFilter {
-  fn default() -> Self {
-    Self {
-      policy_change_for_active_connection: EnvoyCounterId(0),
-    }
-  }
-}
-
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyRefreshFilter {
   fn on_request_headers(
     &self,
     envoy_filter: &mut EHF,
-    end_of_stream: bool,
+    _end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
     // Compare hash produced by the previos polisy-store filter in the ATE_POLICY_EGRESS_HASH_NOT_SHARED
     // filter state, with the hash original of the original policy retrieved during establishment of
@@ -86,7 +70,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyRefreshFilter {
       // If either hash is not available, continue to the next filter.
       _ => return envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue,
     };
-    
+
     if same_hash {
       // If policy did not change, update the timestamp so it can be used for the next TTL duration.
       let now = DateTime::<Utc>::from(SystemTime::now()).to_rfc3339();
