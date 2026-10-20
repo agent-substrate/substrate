@@ -226,3 +226,30 @@ func TestEgressConnectAccessLogMatches(t *testing.T) {
 		})
 	}
 }
+
+func TestCountMuxConnects(t *testing.T) {
+	t.Parallel()
+	const atespace, actorName, port = "networking-e2e", "egress-mux-1", "80"
+	envoy := func(typ, peer, authority, code, up, down string) gatewayAccessLogLine {
+		return gatewayAccessLogLine{container: "envoy", text: `[egress] type=` + typ + ` authority=` + authority + ` peer_san=spiffe://substrate-actor.local/worker-for-actor/networking-e2e/` + peer + ` code=` + code + ` flags=- up_bytes=` + up + ` down_bytes=` + down}
+	}
+	lines := []gatewayAccessLogLine{
+		envoy("DownstreamTunnelSuccessfullyEstablished", "egress-mux-1", "10.96.0.7:80", "200", "0", "0"),  // accepted: establishment, counted
+		envoy("DownstreamEnd", "egress-mux-1", "10.96.0.7:80", "200", "0", "0"),                            // accepted: close with 0 payload bytes, not counted
+		envoy("DownstreamEnd", "egress-mux-1", "10.96.0.7:80", "200", "190", "143"),                        // accepted: close with payload bytes, not counted
+		envoy("DownstreamEnd", "egress-mux-1", "10.96.0.7:80", "403", "0", "448"),                          // refused, not counted
+		envoy("DownstreamTunnelSuccessfullyEstablished", "egress-mux-2", "10.96.0.7:80", "200", "0", "0"),  // another actor
+		envoy("DownstreamTunnelSuccessfullyEstablished", "egress-mux-1", "10.96.0.7:443", "200", "0", "0"), // another port
+	}
+	if got := countMuxConnects(lines, atespace, actorName, port); got != 1 {
+		t.Errorf("countMuxConnects(envoy) = %d, want 1", got)
+	}
+
+	agentgateway := []gatewayAccessLogLine{
+		{container: "agentgateway", text: `CONNECT tunnel terminated target=10.96.0.7:80 actor_name=egress-mux-1 atespace=networking-e2e`},
+		{container: "agentgateway", text: `CONNECT tunnel terminated target=10.96.0.7:80 actor_name=egress-mux-2 atespace=networking-e2e`},
+	}
+	if got := countMuxConnects(agentgateway, atespace, actorName, port); got != 1 {
+		t.Errorf("countMuxConnects(agentgateway) = %d, want 1", got)
+	}
+}
