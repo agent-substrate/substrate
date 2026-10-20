@@ -23,7 +23,7 @@ pub mod pep_config;
 pub mod pep_http_filter;
 pub mod policy_store_filter;
 
-use envoy_proxy_dynamic_modules_rust_sdk::declare_all_init_functions;
+use envoy_proxy_dynamic_modules_rust_sdk::{declare_all_init_functions, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilterConfig};
 pub use egress_policy::*;
 pub use egress_policy_store::*;
 pub use listener_filter::*;
@@ -33,13 +33,25 @@ pub use policy_store_filter::*;
 
 declare_all_init_functions!(
   init,
-  http: policy_store_filter::new_http_filter_config_fn,
+  http: new_http_filter_config_fn,
   listener: listener_filter::new_listener_filter_config_fn,
 );
 
 /// Called when the dynamic module is loaded into Envoy.
 fn init() -> bool {
   true
+}
+
+pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
+  envoy_filter_config: &mut EC,
+  name: &str,
+  config: &[u8],
+) -> Option<Box<dyn HttpFilterConfig<EHF>>> {
+  match name {
+    "envoy_substrate_egress_policy_store" => policy_store_filter::new_http_filter_config_fn(envoy_filter_config, name, config),
+    "envoy_substrate_egress_pep" => pep_config::new_http_filter_config_fn(envoy_filter_config, name, config),
+    _ => None,
+  }
 }
 
 #[cfg(test)]

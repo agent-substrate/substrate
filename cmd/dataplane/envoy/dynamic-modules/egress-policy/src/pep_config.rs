@@ -140,7 +140,7 @@ fn parse_seconds_duration(s: &str) -> Result<Duration, String> {
 }
 
 /// Called when a new HTTP filter configuration is created.
-fn new_http_filter_config_fn<
+pub fn new_http_filter_config_fn<
   EC: EnvoyHttpFilterConfig,
   EHF: EnvoyHttpFilter,
 >(
