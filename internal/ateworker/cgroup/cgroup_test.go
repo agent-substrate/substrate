@@ -23,6 +23,34 @@ import (
 	"testing"
 )
 
+func TestSetWorkerCPUWeight(t *testing.T) {
+	root := t.TempDir()
+	leaf := filepath.Join(root, workerLeaf)
+	if err := os.Mkdir(leaf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// No cpu controller, no cpu.weight: nothing to write.
+	if err := setWorkerCPUWeight(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(leaf, "cpu.weight")); !os.IsNotExist(err) {
+		t.Errorf("cpu.weight was created: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(leaf, "cpu.weight"), []byte("100\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setWorkerCPUWeight(root); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(leaf, "cpu.weight"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != workerCPUWeight {
+		t.Errorf("cpu.weight = %q, want %q", got, workerCPUWeight)
+	}
+}
+
 func TestParseCgroupPath(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
