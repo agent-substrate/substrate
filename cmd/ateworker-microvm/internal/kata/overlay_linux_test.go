@@ -102,12 +102,8 @@ func TestVirtiofsdArgs(t *testing.T) {
 
 func TestRemountReadOnly_NonExistent(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "nonexistent")
-	err := RemountReadOnly(dst)
-	if err == nil {
-		t.Fatalf("RemountReadOnly(%q) = nil, want error", dst)
-	}
-	if !strings.Contains(err.Error(), "statfs") {
-		t.Errorf("RemountReadOnly(%q) error = %v, want error from statfs", dst, err)
+	if err := RemountReadOnly(dst); !errors.Is(err, unix.ENOENT) {
+		t.Errorf("RemountReadOnly(%q) = %v, want ENOENT", dst, err)
 	}
 }
 
@@ -117,33 +113,56 @@ func TestUnmount_NonExistent(t *testing.T) {
 	Unmount(dst)
 }
 
+// image volumes are rbound into the share, so submounts must go read-only too
+// without losing their other flags
 func TestRemountReadOnlyAndUnmount(t *testing.T) {
 	roottest.Require(t, "bind mounts")
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src")
 	dst := filepath.Join(dir, "dst")
-	if err := os.Mkdir(src, 0o755); err != nil {
-		t.Fatal(err)
+	sub := filepath.Join(src, "sub")
+	for _, d := range []string{src, dst, sub} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.Mkdir(dst, 0o755); err != nil {
-		t.Fatal(err)
+	if err := unix.Mount("tmpfs", sub, "tmpfs", 0, ""); err != nil {
+		t.Fatalf("mounting nested tmpfs: %v", err)
 	}
-	if err := unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
-		t.Fatalf("Mount(%q, %q, BIND) = %v", src, dst, err)
+	t.Cleanup(func() { _ = unix.Unmount(sub, unix.MNT_DETACH) })
+	if err := unix.Mount(src, dst, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		t.Fatalf("Mount(%q, %q, BIND|REC) = %v", src, dst, err)
 	}
 	defer Unmount(dst)
+	// as StageImageVolume gets from BindIntoShare
+	if err := setNosuidNodev(dst); err != nil {
+		t.Fatalf("setNosuidNodev: %v", err)
+	}
 
-	testFile := filepath.Join(dst, "test.txt")
-	if err := os.WriteFile(testFile, []byte("write test"), 0o644); err != nil {
-		t.Fatalf("WriteFile before remount = %v", err)
+	testFiles := []string{filepath.Join(dst, "test.txt"), filepath.Join(dst, "sub", "test.txt")}
+	for _, f := range testFiles {
+		if err := os.WriteFile(f, []byte("write test"), 0o644); err != nil {
+			t.Fatalf("WriteFile before remount = %v", err)
+		}
 	}
 
 	if err := RemountReadOnly(dst); err != nil {
 		t.Fatalf("RemountReadOnly(%q) = %v", dst, err)
 	}
 
-	if err := os.WriteFile(testFile, []byte("should fail"), 0o644); !errors.Is(err, syscall.EROFS) {
-		t.Fatalf("WriteFile after remount = %v, want EROFS", err)
+	for _, f := range testFiles {
+		if err := os.WriteFile(f, []byte("should fail"), 0o644); !errors.Is(err, syscall.EROFS) {
+			t.Errorf("WriteFile(%q) after remount = %v, want EROFS", f, err)
+		}
+	}
+	for _, path := range []string{dst, filepath.Join(dst, "sub")} {
+		var st unix.Statfs_t
+		if err := unix.Statfs(path, &st); err != nil {
+			t.Fatalf("statfs %q: %v", path, err)
+		}
+		if st.Flags&unix.ST_NOSUID == 0 || st.Flags&unix.ST_NODEV == 0 {
+			t.Errorf("%q: flags %#x, want nosuid and nodev kept", path, st.Flags)
+		}
 	}
 
 	Unmount(dst)
