@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -94,38 +95,17 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 	})
 
 	t.Run("tunnels to different ports do not cross", func(t *testing.T) {
-		// Keep a tunnel to the default port open and idle. A tunnel to another
-		// port must not inherit its authority from it.
-		held, err := router.Connect(ctx, actorRef, 80)
-		if err != nil {
-			t.Fatalf("CONNECT to the default port: %v", err)
-		}
-		defer held.Close()
-		held.SetDeadline(time.Now().Add(time.Minute))
-		if _, err := fmt.Fprintf(held, "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", actorRef.Name); err != nil {
-			t.Fatalf("writing request on the held tunnel: %v", err)
-		}
-		heldResp, err := http.ReadResponse(bufio.NewReader(held), nil)
-		if err != nil {
-			t.Fatalf("reading response on the held tunnel: %v", err)
-		}
-		io.Copy(io.Discard, heldResp.Body)
-		heldResp.Body.Close()
-
-		for i := range 20 {
-			conn, err := router.Connect(ctx, actorRef, counterExtraPort)
-			if err != nil {
-				t.Fatalf("CONNECT %d to port %d: %v", i, counterExtraPort, err)
+		// A reset kills a port-forward and the held tunnel with it, so each
+		// attempt gets its own. Retry transport errors, never a wrong port.
+		const attempts = 3
+		var err error
+		for i := 1; i <= attempts; i++ {
+			if err = checkTunnelsDoNotCross(t, ctx, actorRef); err == nil {
+				return
 			}
-			resp, body, err := requestTunneled(conn, actorRef.Name)
-			conn.Close()
-			if err != nil {
-				t.Fatalf("request %d through the tunnel to port %d: %v", i, counterExtraPort, err)
-			}
-			if resp.StatusCode != http.StatusOK || !strings.Contains(body, "extra port 9090") {
-				t.Fatalf("request %d through the tunnel to port %d got HTTP %d, body %q, want the extra port's response", i, counterExtraPort, resp.StatusCode, body)
-			}
+			t.Logf("attempt %d of %d: %v", i, attempts, err)
 		}
+		t.Fatalf("tunnels to port %d failed %d times: %v", counterExtraPort, attempts, err)
 	})
 
 	t.Run("unlisted port rejected", func(t *testing.T) {
@@ -226,6 +206,59 @@ func waitForTunneledRouteReady(t *testing.T, ctx context.Context, router *e2e.Ro
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+// crossTunnels is how many short tunnels follow the held one. The bug crossed
+// about 1 in 10.
+const crossTunnels = 6
+
+// checkTunnelsDoNotCross holds an idle tunnel to the default port, then checks
+// that each new tunnel to the extra port gets that port's response. It returns
+// transport errors and fails the test on a wrong response.
+func checkTunnelsDoNotCross(t *testing.T, ctx context.Context, actorRef resources.ActorRef) error {
+	t.Helper()
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+
+	held, err := router.Connect(ctx, actorRef, 80)
+	if err != nil {
+		return fmt.Errorf("CONNECT to the default port: %w", err)
+	}
+	defer held.Close()
+	held.SetDeadline(time.Now().Add(time.Minute))
+	if _, err := fmt.Fprintf(held, "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", actorRef.Name); err != nil {
+		return fmt.Errorf("writing request on the held tunnel: %w", err)
+	}
+	heldResp, err := http.ReadResponse(bufio.NewReader(held), nil)
+	if err != nil {
+		return fmt.Errorf("reading response on the held tunnel: %w", err)
+	}
+	io.Copy(io.Discard, heldResp.Body)
+	heldResp.Body.Close()
+
+	for i := range crossTunnels {
+		conn, err := router.Connect(ctx, actorRef, counterExtraPort)
+		if err != nil {
+			return fmt.Errorf("CONNECT %d to port %d: %w", i, counterExtraPort, err)
+		}
+		resp, body, err := requestTunneled(conn, actorRef.Name)
+		closeTunnel(conn)
+		if err != nil {
+			return fmt.Errorf("request %d through the tunnel to port %d: %w", i, counterExtraPort, err)
+		}
+		if resp.StatusCode != http.StatusOK || !strings.Contains(body, "extra port 9090") {
+			t.Fatalf("request %d through the tunnel to port %d got HTTP %d, body %q, want the extra port's response", i, counterExtraPort, resp.StatusCode, body)
+		}
+	}
+	return nil
+}
+
+// closeTunnel drains the tunnel before closing it. Closing one the router has
+// already closed can reset, and so kill, the port-forward.
+func closeTunnel(conn net.Conn) {
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	io.Copy(io.Discard, conn)
+	conn.Close()
 }
 
 func requestTunneled(conn interface {
