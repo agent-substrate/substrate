@@ -73,7 +73,7 @@ func newWorkerAPIService(t *testing.T) (*RPCService, store.Interface) {
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
 	impl := newServiceImpl(persistence, nil)
-	return &RPCService{impl: impl, workerWorkflow: NewWorkerWorkflow(persistence)}, persistence
+	return &RPCService{impl: impl, workerWorkflow: NewWorkerWorkflow(persistence, newNodeAteletDialer(t, &capturingTerminator{}))}, persistence
 }
 
 // seedAPIWorker registers a worker directly through the store and returns it as

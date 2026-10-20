@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -198,12 +200,25 @@ type actorWorkflowStore interface {
 // does from the other side: releasing the Actor bound to a Worker stays
 // in-process because there is no bind/release RPC.
 type WorkerWorkflow struct {
-	store workerWorkflowStore
+	store          workerWorkflowStore
+	dialer         *AteletDialer
+	reclaimTimeout time.Duration
+	now            func() time.Time
+
+	mu     sync.Mutex
+	gaveUp map[string]time.Time
 }
 
-// NewWorkerWorkflow creates a new WorkerWorkflow.
-func NewWorkerWorkflow(store workerWorkflowStore) *WorkerWorkflow {
-	return &WorkerWorkflow{store: store}
+// NewWorkerWorkflow creates a new WorkerWorkflow. dialer may be nil when the
+// caller only runs ReconcileAssignments.
+func NewWorkerWorkflow(store workerWorkflowStore, dialer *AteletDialer) *WorkerWorkflow {
+	return &WorkerWorkflow{
+		store:          store,
+		dialer:         dialer,
+		reclaimTimeout: defaultWorkerReclaimTimeout,
+		now:            time.Now,
+		gaveUp:         make(map[string]time.Time),
+	}
 }
 
 // workerWorkflowStore enumerates the exact storage methods needed by

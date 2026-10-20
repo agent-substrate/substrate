@@ -1604,9 +1604,9 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	if err := resetSandboxAssetsDir(actorUID); err != nil {
 		return nil, err
 	}
-	// The record below is written last, so until then it describes the
-	// previous activation; a failed restore must not leave this one's
-	// asset links behind for a later Terminate to take for that record's.
+	// The record below is written before RestoreWorkload, so until then it
+	// describes the previous activation; a failed restore must not leave this
+	// one's asset links behind for a later Terminate to take for that record's.
 	// Nor its snapshot files: staged ones are links into the snapshot cache
 	// or copies, and either would hold the cache's entries, or disk, until
 	// the next lifecycle call resets the directory.
@@ -1756,6 +1756,13 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
+	// Record the sandbox binaries running the guest on-node before
+	// RestoreWorkload, as Run does before RunWorkload, so a Checkpoint or
+	// Terminate can resolve the runtime as soon as the sandbox is started.
+	if err := writeSandboxRecord(actorUID, runtimeRec); err != nil {
+		return nil, err
+	}
+
 	actorDirs := ateletpath.ActorDirs(actorUID)
 	actorDirs.RestoreDir = checkpointDir
 
@@ -1780,14 +1787,6 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	dWorker = time.Since(tWorker)
 	if err != nil {
 		return nil, s.boundRetryableRestoreError(actorUID, req.GetSnapshot().GetSnapshotUuid(), workerRestoreError(ctx, err))
-	}
-
-	// Record the sandbox binaries actually running the guest on-node so a
-	// subsequent Checkpoint of this restored actor can re-pin the same version
-	// (Checkpoint overwrites the identity fields from its own request).
-	if err := writeSandboxRecord(actorUID, runtimeRec); err != nil {
-		// Note: crash the actor right away, if we cannot write the sandbox record now, we will not be able to checkpoint it later.
-		return nil, err
 	}
 
 	return &ateletpb.RestoreResponse{}, nil
@@ -1936,43 +1935,8 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	endTerminate := s.snapshots.BeginTerminate(actorUID)
 	defer endTerminate()
 
-	if req.GetWorkerPodUid() != "" {
-		var assetPaths map[string]string
-		sandboxRec, err := readSandboxRecord(actorUID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-		}
-		paths, err := s.ensureSandboxAssets(ctx, sandboxRec, ateletpath.SandboxAssetsDir(actorUID))
-		if err != nil {
-			return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-		}
-		assetPaths = paths
-
-		client, err := s.dialWorker(ctx, req.GetWorkerPodUid())
-		if err != nil {
-			return nil, fmt.Errorf("failed to dial worker for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-		}
-
-		spec, err := buildWorkerWorkloadSpec(req.GetSpec(), nil)
-		if err != nil {
-			return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
-		}
-		if _, err := client.TerminateWorkload(ctx, &ateworkerpb.TerminateWorkloadRequest{
-			Atespace:              req.GetAtespace(),
-			ActorName:             req.GetActorName(),
-			ActorUid:              req.GetActorUid(),
-			ActorTemplateAtespace: req.GetActorTemplateAtespace(),
-			ActorTemplateName:     req.GetActorTemplateName(),
-			RunscPath:             runscPathFor(assetPaths),
-			Spec:                  spec,
-			ActorDirs:             ateletpath.ActorDirs(actorUID),
-		}); err != nil {
-			if status.Code(err) == codes.NotFound {
-				slog.InfoContext(ctx, "workload not found on worker during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
-			} else {
-				return nil, fmt.Errorf("failed calling worker TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-			}
-		}
+	if err := s.terminateWorkloadOnWorker(ctx, req, actorRef, actorUID); err != nil {
+		return nil, err
 	}
 
 	// Deregister after teardown succeeds
@@ -2004,6 +1968,98 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	s.restoreFailures.reset(actorUID)
 
 	return &ateletpb.TerminateResponse{}, nil
+}
+
+// terminateWorkloadOnWorker tears the workload down on the worker hosting it.
+//
+// A Terminate can legitimately arrive with no worker to tear down: none named,
+// because the actor no longer holds a worker (the delete or revert of a
+// suspended or crashed actor), or one named that is gone, its worker pod
+// deleted, evicted, or its node drained. Either way the actor's state is still
+// on the node, so the teardown is skipped rather than failing the RPC and
+// leaving the actor state behind.
+//
+// A worker that is present but rejects the call still fails: that is a live
+// sandbox this could not tear down, and reclaiming its directories underneath
+// it would be worse than leaving them.
+func (s *Atelet) terminateWorkloadOnWorker(ctx context.Context, req *ateletpb.TerminateRequest, actorRef resources.ActorRef, actorUID string) error {
+	workerPodUID := req.GetWorkerPodUid()
+	if workerPodUID == "" {
+		// No worker named: the actor has no worker pod left, only state on
+		// this node, such as a suspended or crashed actor's on delete or revert.
+		slog.InfoContext(ctx, "no worker named during terminate; reclaiming the actor's node state without a sandbox teardown",
+			slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+		return nil
+	}
+	// The socket is the worker's liveness. The worker removes its socket on a
+	// graceful exit, and workerSandboxSyncer removes the pod's directory once
+	// the pod is deleted, so the common pod-is-gone path finds no socket and
+	// does no other work; in particular, it never reaches ensureSandboxAssets,
+	// which would fetch binaries for a sandbox that no longer exists. After an
+	// ungraceful exit the socket can outlive the pod until the syncer removes
+	// the directory: that path does reach ensureSandboxAssets, and since the
+	// dial is lazy, TerminateWorkload then fails with Unavailable, which is
+	// tolerated below.
+	if _, err := os.Stat(workerSocketPath(workerPodUID)); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("failed to stat the worker socket during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		slog.InfoContext(ctx, "worker is gone during terminate; reclaiming the actor's node state without a sandbox teardown",
+			slog.Any("actor", actorRef), slog.String("actorUID", actorUID), slog.String("workerPodUID", workerPodUID))
+		return nil
+	}
+
+	sandboxRec, err := readSandboxRecord(actorUID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Run and Restore write the record before starting the workload,
+			// and an earlier Terminate removes it with the actor directory.
+			// Without it, no sandbox was started.
+			slog.InfoContext(ctx, "no sandbox record during terminate; reclaiming the actor's node state without a sandbox teardown",
+				slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+			return nil
+		}
+		return fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec, ateletpath.SandboxAssetsDir(actorUID))
+	if err != nil {
+		return fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+
+	client, err := s.dialWorker(ctx, workerPodUID)
+	if err != nil {
+		return fmt.Errorf("failed to dial worker for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+
+	spec, err := buildWorkerWorkloadSpec(req.GetSpec(), nil)
+	if err != nil {
+		return apierror.InvalidArgument("invalid workload spec: %v", err)
+	}
+	if _, err := client.TerminateWorkload(ctx, &ateworkerpb.TerminateWorkloadRequest{
+		Atespace:              req.GetAtespace(),
+		ActorName:             req.GetActorName(),
+		ActorUid:              req.GetActorUid(),
+		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+		ActorTemplateName:     req.GetActorTemplateName(),
+		RunscPath:             runscPathFor(assetPaths),
+		Spec:                  spec,
+		ActorDirs:             ateletpath.ActorDirs(actorUID),
+	}); err != nil {
+		switch status.Code(err) {
+		case codes.NotFound:
+			slog.InfoContext(ctx, "workload not found on worker during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+		case codes.Unavailable:
+			// The socket outlived the process serving it (a worker shutting
+			// down while this RPC was in flight, or a stale socket file). Same
+			// situation as a missing socket: there is nothing left to tear
+			// down, and the state on disk still has to go.
+			slog.InfoContext(ctx, "worker unreachable during terminate; reclaiming the actor's node state without a sandbox teardown",
+				slog.Any("actor", actorRef), slog.String("actorUID", actorUID), slog.Any("err", err))
+		default:
+			return fmt.Errorf("failed calling worker TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+	}
+	return nil
 }
 
 // checkLocalSnapshotFiles verifies each snapshot file exists in dir as a

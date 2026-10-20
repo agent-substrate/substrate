@@ -161,28 +161,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.String("actor", actorRef.Name),
 			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
 			slog.String("templateName", actor.GetActorTemplate().GetName()))
-		// Given that external volumes has been in the codebase for a while and
-		// its preview-ness is solely around the API, and that the impact of
-		// disabling the gate while in use would be an orphaned volume
-		// attachment, we are NOT checking the ExternalVolumes gate in the
-		// delete/suspend path.
-		workloadSpec = &ateletpb.WorkloadSpec{}
-		if preview.IsEnabled(preview.GateExternalVolumes) {
-			for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
-				// StorageVolumeId is only populated once the volume is provisioned.
-				// Skip volumes that were never created (e.g. failed during PENDING state).
-				if vol.GetStorageVolumeId() != "" {
-					workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-						Name: vol.GetName(),
-						External: &ateletpb.ExternalVolumeSource{
-							StorageVolumeId: vol.GetStorageVolumeId(),
-							VolumeType:      vol.GetVolumeType(),
-							VolumeContext:   vol.GetVolumeContext(),
-						},
-					})
-				}
-			}
-		}
+		workloadSpec = fallbackWorkloadSpec(actor)
 	}
 
 	req := &ateletpb.TerminateRequest{
@@ -204,6 +183,37 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	return nil
+}
+
+// fallbackWorkloadSpec is the spec to terminate an actor with when its template
+// cannot be resolved, whether deleted or never readable from the caller. Only
+// the external volumes recorded on the actor are carried, because atelet still
+// unmounts them from the node. A volume with no StorageVolumeId was never
+// provisioned (e.g. the actor failed while PENDING), so there is nothing
+// mounted to name.
+func fallbackWorkloadSpec(actor *ateapipb.Actor) *ateletpb.WorkloadSpec {
+	// Given that external volumes has been in the codebase for a while and
+	// its preview-ness is solely around the API, and that the impact of
+	// disabling the gate while in use would be an orphaned volume
+	// attachment, we are NOT checking the ExternalVolumes gate in the
+	// delete/suspend path.
+	spec := &ateletpb.WorkloadSpec{}
+	if preview.IsEnabled(preview.GateExternalVolumes) {
+		for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
+			if vol.GetStorageVolumeId() == "" {
+				continue
+			}
+			spec.Volumes = append(spec.Volumes, &ateletpb.Volume{
+				Name: vol.GetName(),
+				External: &ateletpb.ExternalVolumeSource{
+					StorageVolumeId: vol.GetStorageVolumeId(),
+					VolumeType:      vol.GetVolumeType(),
+					VolumeContext:   vol.GetVolumeContext(),
+				},
+			})
+		}
+	}
+	return spec
 }
 
 // ensureVolumesDetachedForDelete detaches external volumes.

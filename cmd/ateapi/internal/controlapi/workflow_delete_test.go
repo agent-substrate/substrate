@@ -603,16 +603,15 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				}
 				fresh = uri
 				objects.PutSnapshot(t, fresh, "manifest.json")
-				// The worker's pod goes away with the commit still outstanding, so
-				// the suspend never gets to finish.
-				if _, err := NewWorkerWorkflow(persistence).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
-					t.Errorf("DeleteWorker: %v", err)
-					return err
-				}
 				return apierror.Unavailable("worker pod is gone")
 			}
 			if _, err := actorWorkflow.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.Unavailable {
 				t.Fatalf("SuspendActor err = %v, want Unavailable from the failed checkpoint", err)
+			}
+			// SuspendActor failed mid-checkpoint and released the actor's lease,
+			// leaving the actor in SUSPENDING; DeleteWorker then crashes it.
+			if _, err := NewWorkerWorkflow(persistence, actorWorkflow.dialer).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker: %v", err)
 			}
 
 			// The actor is CRASHED; DeleteActor deletes the in-progress snapshot

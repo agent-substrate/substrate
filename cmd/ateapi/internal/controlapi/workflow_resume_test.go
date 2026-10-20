@@ -1190,17 +1190,24 @@ func wireTestAssignment() *ateapipb.WorkerAssignment {
 }
 
 // newWireCaptureWorkflow builds an ActorWorkflow whose atelet dialer resolves
-// to an in-process capturing fake. The dialer's conn cache is pre-warmed with
-// a bufconn-backed connection for the atelet pod's UID and IP, so
-// DialForAteletOnNode returns it without dialing the pod IP. The fake's server
-// runs atelet's interceptor, so its errors reach the workflow with the code
-// atelet would send.
+// to an in-process capturing fake.
 func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWorkflow, *capturingAtelet) {
 	t.Helper()
 
 	fake := &capturingAtelet{}
+	return &ActorWorkflow{store: persistence, dialer: newNodeAteletDialer(t, fake)}, fake
+}
+
+// newNodeAteletDialer resolves node-1's atelet to an in-process fake. The
+// dialer's conn cache is pre-warmed with a bufconn-backed connection for the
+// atelet pod's UID and IP, so DialForAteletOnNode returns it without dialing
+// the pod IP. The server runs atelet's interceptor, so its errors reach the
+// workflow with the code atelet would send.
+func newNodeAteletDialer(t *testing.T, srvImpl ateletpb.AteletServer) *AteletDialer {
+	t.Helper()
+
 	srv := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor))
-	ateletpb.RegisterAteletServer(srv, fake)
+	ateletpb.RegisterAteletServer(srv, srvImpl)
 	lis := bufconn.Listen(1 << 20)
 	go func() {
 		if err := srv.Serve(lis); err != nil {
@@ -1227,8 +1234,7 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 	}
 	dialer := NewAteletDialer(newTestAteletIndexer(t, ateletPod), installdefaults.SystemNamespace, "", "")
 	dialer.ateletConns.Add("atelet-uid", &ateletConn{ip: "10.0.0.1", conn: conn})
-
-	return &ActorWorkflow{store: persistence, dialer: dialer}, fake
+	return dialer
 }
 
 // TestResumeActor_AteletWireRequest is the characteristic test for the

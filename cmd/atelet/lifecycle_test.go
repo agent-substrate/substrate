@@ -101,6 +101,8 @@ type fakeWorker struct {
 	// onRestore, if non-nil, runs inside RestoreWorkload after it recorded
 	// the request, before it fails with restoreErr or succeeds.
 	onRestore func()
+	// terminations counts TerminateWorkload calls.
+	terminations atomic.Int32
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
@@ -166,6 +168,7 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 }
 
 func (f *fakeWorker) TerminateWorkload(_ context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
+	f.terminations.Add(1)
 	f.recordActorDirs("TerminateWorkload", req.GetActorDirs())
 	if f.onTerminate != nil {
 		if err := f.onTerminate(); err != nil {
@@ -489,7 +492,7 @@ func TestRestoreUsesRequestSandboxRuntime(t *testing.T) {
 
 	s.anonGCSClient = fakeObjectStorage{data: restoreRelease.tarball}
 	advertiseRuntime(t, s, restoreRec)
-	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
+	restoreReq := &ateletpb.RestoreRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -499,11 +502,32 @@ func TestRestoreUsesRequestSandboxRuntime(t *testing.T) {
 		SandboxRuntime:        runtimeFor(t, restoreRec),
 		Spec:                  spec,
 		Snapshot:              lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
-	}); err != nil {
+	}
+
+	// Restore writes the sandbox record before calling RestoreWorkload, so a
+	// Restore that fails or times out after reaching the worker still leaves
+	// the record for a subsequent Terminate to tear the sandbox down.
+	if err := os.Remove(ateletpath.ActorSandboxAssetsFile(actorUID)); err != nil {
+		t.Fatalf("removing sandbox record: %v", err)
+	}
+	worker.restoreErr = status.Error(codes.DeadlineExceeded, "restore timed out")
+	if _, err := s.Restore(ctx, restoreReq); err == nil {
+		t.Fatal("Restore succeeded when RestoreWorkload failed")
+	}
+	got, err := readSandboxRecord(actorUID)
+	if err != nil {
+		t.Fatalf("reading on-node sandbox record after failed RestoreWorkload: %v", err)
+	}
+	if sha, want := got.Assets[gvisorAssetName].SHA256, restoreRelease.entry.SHA256; sha != want {
+		t.Errorf("sandbox record gvisor sha256 after failed RestoreWorkload = %q, want %q", sha, want)
+	}
+
+	worker.restoreErr = nil
+	if _, err := s.Restore(ctx, restoreReq); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 
-	got, err := readSandboxRecord(actorUID)
+	got, err = readSandboxRecord(actorUID)
 	if err != nil {
 		t.Fatalf("reading on-node sandbox record: %v", err)
 	}
@@ -1128,6 +1152,247 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 	}
 	if _, err := os.Stat(ateletpath.ActorPath(actorUID)); !os.IsNotExist(err) {
 		t.Errorf("actor dir survived terminate: %v", err)
+	}
+}
+
+// A deleted worker pod takes its worker with it and leaves the actor's state on
+// the node. The worker delete reclaims it with a Terminate that still names
+// that worker, so one that refuses to run without a live worker leaves the
+// state until the actor is deleted or reverted. All three ways the sandbox can
+// be absent are covered: the pod's socket gone with it, a socket that outlived
+// its process (Unavailable from TerminateWorkload), and an actor with no
+// sandbox record on disk.
+func TestTerminateReclaimsStateWithoutALiveSandbox(t *testing.T) {
+	const (
+		atespace     = "ate-demo"
+		actorName    = "counter"
+		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
+		workerPodUID = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+	)
+
+	tests := []struct {
+		name string
+		// setup arranges the absence under test.
+		setup func(t *testing.T, s *Atelet)
+	}{
+		{
+			name: "worker socket gone with its pod",
+			setup: func(t *testing.T, _ *Atelet) {
+				orig := workerSocketPath
+				missing := filepath.Join(t.TempDir(), "worker.sock")
+				workerSocketPath = func(string) string { return missing }
+				t.Cleanup(func() { workerSocketPath = orig })
+				// A sandbox record whose asset is not in the cache would fail
+				// ensureSandboxAssets (anonGCSClient is nil) if Terminate read
+				// the record before checking whether the worker socket exists.
+				if err := writeSandboxRecord(actorUID, &sandboxAssetsRecord{
+					SandboxClass: "gvisor",
+					Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://test-bucket/gvisor-release.tar.gz", SHA256: strings.Repeat("a", 64)}},
+				}); err != nil {
+					t.Fatalf("writing sandbox record: %v", err)
+				}
+			},
+		},
+		{
+			// After an ungraceful exit the socket can outlive the pod, or the
+			// worker can shut down while TerminateWorkload is in flight;
+			// TerminateWorkload then fails with Unavailable.
+			name: "worker socket outlived its process",
+			setup: func(t *testing.T, s *Atelet) {
+				release := newGVisorTestRelease(t)
+				s.anonGCSClient = fakeObjectStorage{data: release.tarball}
+				rec := testSandboxRecord(release)
+				if err := writeSandboxRecord(actorUID, rec); err != nil {
+					t.Fatalf("writing sandbox record: %v", err)
+				}
+				serveFakeWorker(t, &fakeWorker{
+					onTerminate: func() error {
+						return status.Error(codes.Unavailable, "worker shutting down")
+					},
+				})
+			},
+		},
+		{
+			// Run and Restore write the record before starting the workload,
+			// and an earlier Terminate removes it with the actor directory.
+			// Without one, no sandbox was started.
+			name: "worker reachable but the actor has no sandbox record",
+			setup: func(t *testing.T, _ *Atelet) {
+				serveFakeWorker(t, &fakeWorker{})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := t.Context()
+
+			stateDirs := []string{
+				ateletpath.DurableDirVolumeMountsDir(actorUID),
+				ateletpath.CheckpointStateDir(actorUID),
+				ateletpath.RestoreStateDir(actorUID),
+			}
+			for _, dir := range stateDirs {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatalf("seeding %s: %v", dir, err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "payload"), []byte("actor state"), 0o600); err != nil {
+					t.Fatalf("seeding %s: %v", dir, err)
+				}
+			}
+			snapshotDir := ateletpath.LocalSnapshotDir(actorUID, "pause-snap-1")
+			if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
+				t.Fatalf("seeding %s: %v", snapshotDir, err)
+			}
+
+			s := &Atelet{
+				workerDialer:      newWorkerDialer(1),
+				sandboxAssetCache: newTestAssetCache(t),
+				systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+				snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+			}
+			tt.setup(t, s)
+			if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          workerPodUID,
+				Spec:                  &ateletpb.WorkloadSpec{},
+			}); err != nil {
+				t.Fatalf("Terminate: %v", err)
+			}
+
+			// Terminate removes both the actor and snapshot directories
+			// outright rather than emptying the state dirs in place, so the
+			// seeded payloads go with them and both trees are the assertion.
+			assertDirGone(t, "actor dir", ateletpath.ActorPath(actorUID))
+			assertDirGone(t, "actor snapshot dir", ateletpath.ActorSnapshotPath(actorUID))
+		})
+	}
+}
+
+// TestTerminateCanBeRetried pins that a repeated Terminate succeeds, both when
+// a single caller retries and when DeleteActor or RevertActor sends a second
+// Terminate after DeleteWorker's best-effort Terminate.
+func TestTerminateCanBeRetried(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		// failFirst fails the first Terminate after its worker teardown, the way
+		// a volume that has not finished unmounting does.
+		failFirst bool
+		// secondWithoutWorker sends the second Terminate with an empty
+		// WorkerPodUid, as DeleteActor and RevertActor do after DeleteWorker
+		// has already cleared the actor's worker assignment.
+		secondWithoutWorker bool
+		// wantTeardowns is how many TerminateWorkload calls worker sees. A retry
+		// tears down again only when it names a worker and the sandbox record
+		// survived the first call.
+		wantTeardowns int32
+	}{
+		{name: "after a terminate that succeeded", wantTeardowns: 1},
+		{name: "after a terminate that failed past the teardown", failFirst: true, wantTeardowns: 2},
+		{name: "delete or revert after a worker-delete terminate that succeeded", secondWithoutWorker: true, wantTeardowns: 1},
+		{name: "delete or revert after a worker-delete terminate that failed partway", failFirst: true, secondWithoutWorker: true, wantTeardowns: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			ctx := t.Context()
+
+			snap := a.snapshot("pause-snap-1", 1)
+			if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+
+			// A populated volume directory, which resetActorDirs refuses to
+			// delete through.
+			straggler := filepath.Join(ateletpath.ExternalVolumeHostPath(pluginActorUID, "data"), "file")
+			if tt.failFirst {
+				if err := os.MkdirAll(filepath.Dir(straggler), 0o755); err != nil {
+					t.Fatalf("seeding %s: %v", straggler, err)
+				}
+				if err := os.WriteFile(straggler, []byte("still mounted"), 0o600); err != nil {
+					t.Fatalf("seeding %s: %v", straggler, err)
+				}
+			}
+
+			firstReq := &ateletpb.TerminateRequest{
+				Atespace:              "ate-demo",
+				ActorName:             "counter",
+				ActorUid:              pluginActorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          pluginWorkerPodUID,
+				Spec:                  a.spec,
+			}
+			_, err := a.s.Terminate(ctx, firstReq)
+			if tt.failFirst {
+				if err == nil {
+					t.Fatal("first Terminate succeeded through a populated volume directory")
+				}
+				// The unmount finishes before the second Terminate.
+				if err := os.Remove(straggler); err != nil {
+					t.Fatalf("removing %s: %v", straggler, err)
+				}
+			} else if err != nil {
+				t.Fatalf("first Terminate: %v", err)
+			}
+
+			secondReq := proto.Clone(firstReq).(*ateletpb.TerminateRequest)
+			if tt.secondWithoutWorker {
+				secondReq.WorkerPodUid = ""
+			}
+			if _, err := a.s.Terminate(ctx, secondReq); err != nil {
+				t.Fatalf("second Terminate: %v", err)
+			}
+			if got := a.worker.terminations.Load(); got != tt.wantTeardowns {
+				t.Errorf("worker saw %d TerminateWorkload calls, want %d", got, tt.wantTeardowns)
+			}
+			assertDirGone(t, "actor dir", ateletpath.ActorPath(pluginActorUID))
+			assertDirGone(t, "actor snapshot dir", ateletpath.ActorSnapshotPath(pluginActorUID))
+		})
+	}
+}
+
+// TestTerminateWorkerFailurePreservesState checks that when a live worker
+// returns Internal from TerminateWorkload, Terminate fails without resetting
+// actor directories or pruning local snapshots.
+func TestTerminateWorkerFailurePreservesState(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.snapshot("pause-snap-1", 1)
+	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	durableFile := filepath.Join(ateletpath.DurableDirVolumeMountPoint(pluginActorUID, "work"), "payload")
+	if err := os.MkdirAll(filepath.Dir(durableFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(durableFile, []byte("runtime-payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	a.worker.onTerminate = func() error { return apierror.Internal("sandbox busy") }
+	_, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              pluginActorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          pluginWorkerPodUID,
+		Spec:                  a.spec,
+	})
+	if got := apierror.Code(err); got != codes.Internal {
+		t.Fatalf("Terminate error = %v (code %v), want Internal", err, got)
+	}
+	if _, err := os.Stat(durableFile); err != nil {
+		t.Errorf("durable-dir payload removed after failed TerminateWorkload: %v", err)
+	}
+	snapshotFile := filepath.Join(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1"), "checkpoint.img")
+	if _, err := os.Stat(snapshotFile); err != nil {
+		t.Errorf("local snapshot removed after failed TerminateWorkload: %v", err)
 	}
 }
 

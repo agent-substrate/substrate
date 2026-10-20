@@ -17,17 +17,22 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 )
 
 // newWorkerDeleteWorkflow returns a workflow backed by a real store, which is
@@ -37,7 +42,7 @@ func newWorkerDeleteWorkflow(t *testing.T) (*WorkerWorkflow, store.Interface) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	return NewWorkerWorkflow(persistence), persistence
+	return NewWorkerWorkflow(persistence, newNodeAteletDialer(t, &capturingTerminator{})), persistence
 }
 
 // apiActorRef names the Actor seedAPIActor stores.
@@ -88,7 +93,7 @@ func TestDeleteWorkerWorkflow_DrainsBeforeSweeping(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")})
+	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")}, newNodeAteletDialer(t, &capturingTerminator{}))
 	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err == nil {
 		t.Fatal("DeleteWorker() = nil error, want the release failure reported")
 	}
@@ -310,7 +315,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 			actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-			wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: tc.updateErr})
+			wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: tc.updateErr}, newNodeAteletDialer(t, &capturingTerminator{}))
 			_, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
 			if err == nil {
 				t.Fatal("DeleteWorker() = nil error, want the release failure reported")
@@ -357,7 +362,7 @@ func TestDeleteWorkerWorkflow_ActorDeletedDuringRelease(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: store.ErrNotFound})
+	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: store.ErrNotFound}, newNodeAteletDialer(t, &capturingTerminator{}))
 	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}
@@ -419,4 +424,335 @@ func TestDeleteWorkerWorkflow_DrainedWorkerIsStillAdmitted(t *testing.T) {
 	if got, want := deleted.GetMetadata().GetVersion(), drained.GetMetadata().GetVersion()+1; got != want {
 		t.Errorf("version = %d, want %d: admission is one write", got, want)
 	}
+}
+
+// A Worker is deleted because its pod is gone. The pod took the worker process
+// with it, leaving the actor's state directory on the node. This delete
+// reclaims it ahead of the actor's revert or delete.
+func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
+	tests := []struct {
+		name string
+		// state the actor is in when its pod disappears.
+		state ateapipb.ActorState
+		// seed further shapes the stored actor.
+		seed func(*ateapipb.Actor)
+		// terminateErr is what the atelet answers, if anything.
+		terminateErr  error
+		wantTerminate bool
+	}{
+		{
+			name:          "running actor is reclaimed",
+			state:         ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantTerminate: true,
+		},
+		{
+			// An actor resumed from a local snapshot keeps Locality on that
+			// snapshot while running. When its worker pod vanishes, it crashes
+			// and its node state is reclaimed along with any local snapshot.
+			name:          "running actor with a local snapshot is reclaimed",
+			state:         ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			seed:          withPausedShape(t, "node-1"),
+			wantTerminate: true,
+		},
+		{
+			// A cleanly suspended actor already ran Checkpoint's teardown,
+			// volume unmount, and resetActorDirs, and stays resumable.
+			name:          "cleanly suspended actor is left alone",
+			state:         ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			wantTerminate: false,
+		},
+		{
+			// An unreachable or unhappy node must not wedge deregistration:
+			// the worker still goes, and the actor's revert or delete collects
+			// what this could not.
+			name:          "a failing terminate does not fail the delete",
+			state:         ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			terminateErr:  apierror.Internal("atelet is having a bad day"),
+			wantTerminate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence, cleanup := storetest.SetupTestStore(t)
+			t.Cleanup(cleanup)
+
+			atelet := &capturingTerminator{err: tt.terminateErr}
+			wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+			seeds := []func(*ateapipb.Actor){}
+			if tt.seed != nil {
+				seeds = append(seeds, tt.seed)
+			}
+			actor := seedAPIActor(t, ctx, persistence, tt.state, seeds...)
+			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker() failed: %v", err)
+			}
+
+			got := atelet.requests()
+			if !tt.wantTerminate {
+				if len(got) != 0 {
+					t.Fatalf("atelet received %d Terminate calls, want none: %v", len(got), got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("atelet received %d Terminate calls, want exactly 1", len(got))
+			}
+			req := got[0]
+			// The request names the actor and the worker pod UID it ran on, so
+			// atelet can check whether that worker is still present.
+			if req.GetActorUid() != actor.GetMetadata().GetUid() {
+				t.Errorf("Terminate actor_uid = %q, want %q", req.GetActorUid(), actor.GetMetadata().GetUid())
+			}
+			if req.GetAtespace() != apiActorRef.Atespace || req.GetActorName() != apiActorRef.Name {
+				t.Errorf("Terminate named %s/%s, want %s", req.GetAtespace(), req.GetActorName(), apiActorRef)
+			}
+			if want := validWorker(apiWorkerName).GetWorkerPodUid(); req.GetWorkerPodUid() != want {
+				t.Errorf("Terminate worker_pod_uid = %q, want the worker's pod uid %q", req.GetWorkerPodUid(), want)
+			}
+		})
+	}
+}
+
+// A suspend holds the actor's lease from writing its snapshot to finalizing
+// it. A release that reclaimed in between would race the checkpoint, so the
+// release waits for the lease: while it is held, the actor and its worker are
+// left alone and the delete fails ABORTED for a retry. Once it is free no
+// suspend is running and the release reclaims and crashes the actor.
+func TestDeleteWorkerWorkflow_ReleasesUnderTheActorLease(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	atelet := &capturingTerminator{}
+	wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_SUSPENDING, func(a *ateapipb.Actor) {
+		withPauseInProgress(t)(a)
+		a.Status.AssignedNode = "node-1"
+	})
+	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+
+	lease, err := persistence.AcquireLease(ctx, actorLeaseKey(apiActorRef))
+	if err != nil {
+		t.Fatalf("AcquireLease() failed: %v", err)
+	}
+	_, err = wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
+	if got := atelet.requests(); len(got) != 0 {
+		t.Errorf("atelet received %d Terminate calls while the actor's lease was held, want none", len(got))
+	}
+	if got := apierror.Code(err); got != codes.Aborted {
+		t.Errorf("DeleteWorker() with the actor's lease held = %v, want ABORTED", err)
+	}
+	held := mustGetActor(t, ctx, persistence)
+	if got := held.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		t.Errorf("actor state = %v, want SUSPENDING while its lease is held", got)
+	}
+	if got := held.GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != apiWorkerName {
+		t.Errorf("actor points at worker %q, want %q while its lease is held", got, apiWorkerName)
+	}
+	if _, err := persistence.GetWorker(ctx, apiWorkerName); err != nil {
+		t.Errorf("GetWorker() = %v, want the worker kept for the retry", err)
+	}
+
+	lease.Close()
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker() once the lease is free failed: %v", err)
+	}
+	if got := atelet.requests(); len(got) != 1 {
+		t.Errorf("atelet received %d Terminate calls once the lease was free, want 1", len(got))
+	}
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("actor state = %v, want CRASHED once the lease is free", got)
+	}
+}
+
+// One actor with an operation in progress does not hold up the rest of the
+// worker's actors: they are reclaimed and crashed in the same call, which then
+// fails ABORTED so the delete is retried for the busy one.
+func TestDeleteWorkerWorkflow_BusyActorDoesNotHoldUpOthers(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	atelet := &capturingTerminator{}
+	wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	var refs []resources.ActorRef
+	var uids []string
+	for _, name := range []string{"busy", "free"} {
+		actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
+			a.Metadata.Name = name
+		})
+		ref := resources.ActorRefFromActor(actor)
+		if err := persistence.BindActorToWorker(ctx, apiWorkerName, &ateapipb.ActorAssignment{
+			Actor:    &ateapipb.ObjectRef{Atespace: ref.Atespace, Name: ref.Name},
+			ActorUid: actor.GetMetadata().GetUid(),
+		}, nil); err != nil {
+			t.Fatalf("assigning %s to worker %s: %v", ref, apiWorkerName, err)
+		}
+		refs = append(refs, ref)
+		uids = append(uids, actor.GetMetadata().GetUid())
+	}
+
+	lease, err := persistence.AcquireLease(ctx, actorLeaseKey(refs[0]))
+	if err != nil {
+		t.Fatalf("AcquireLease() failed: %v", err)
+	}
+	defer lease.Close()
+	_, err = wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
+	if got := apierror.Code(err); got != codes.Aborted {
+		t.Errorf("DeleteWorker() with one actor's lease held = %v, want ABORTED", err)
+	}
+	got := atelet.requests()
+	if len(got) != 1 || got[0].GetActorUid() != uids[1] {
+		t.Errorf("atelet received %v, want exactly one Terminate, for the free actor %s", got, uids[1])
+	}
+	for i, want := range []ateapipb.ActorState{ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_CRASHED} {
+		actor, err := persistence.GetActor(ctx, refs[i])
+		if err != nil {
+			t.Fatalf("GetActor(%s) failed: %v", refs[i], err)
+		}
+		if actor.GetStatus().GetState() != want {
+			t.Errorf("actor %s state = %v, want %v", refs[i], actor.GetStatus().GetState(), want)
+		}
+	}
+}
+
+// An unmount that hangs, such as one against a dead NFS server, or an
+// unreachable atelet returning Unavailable, must not wedge deregistration.
+// Each reclaim gets w.reclaimTimeout, and once one times out or returns
+// Unavailable the worker's other actors, and subsequent worker deletes on that
+// node within w.reclaimTimeout, leave theirs to their revert or delete. Once
+// w.reclaimTimeout elapses, a later delete tries the node again.
+func TestDeleteWorkerWorkflow_HungReclaimDoesNotWedgeDelete(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		hang bool
+		err  error
+	}{
+		{name: "timeout", hang: true},
+		{name: "unavailable", err: apierror.Unavailable("atelet shutting down")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence, cleanup := storetest.SetupTestStore(t)
+			t.Cleanup(cleanup)
+
+			now := time.Now()
+			atelet := &capturingTerminator{hang: tt.hang, err: tt.err}
+			wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+			wf.reclaimTimeout = 50 * time.Millisecond
+			wf.now = func() time.Time { return now }
+
+			bindRunningActor := func(workerName, actorName string) resources.ActorRef {
+				actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
+					a.Metadata.Name = actorName
+					a.Status.WorkerAssignment.Worker = workerRef(workerName)
+					a.Status.WorkerAssignment.WorkerPodUid = workerName
+				})
+				ref := resources.ActorRefFromActor(actor)
+				if err := persistence.BindActorToWorker(ctx, workerName, &ateapipb.ActorAssignment{
+					Actor:    &ateapipb.ObjectRef{Atespace: ref.Atespace, Name: ref.Name},
+					ActorUid: actor.GetMetadata().GetUid(),
+				}, nil); err != nil {
+					t.Fatalf("assigning %s to worker %s: %v", ref, workerName, err)
+				}
+				return ref
+			}
+
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+			refs := []resources.ActorRef{
+				bindRunningActor(apiWorkerName, "actor-1"),
+				bindRunningActor(apiWorkerName, "actor-2"),
+			}
+
+			// A deadline, as the RPC has. A Terminate without a timeout of its own runs
+			// into it, and the release after it fails.
+			rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if _, err := wf.DeleteWorker(rpcCtx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker(first) failed: %v", err)
+			}
+			if got := len(atelet.requests()); got != 1 {
+				t.Errorf("atelet received %d Terminate calls on first worker delete, want 1: the first failure gives up on the node", got)
+			}
+
+			// A second worker deleted from the same node within w.reclaimTimeout
+			// skips Terminate without waiting out another timeout.
+			seedAPIWorker(t, ctx, persistence, validWorker(apiOtherWorkerName))
+			refs = append(refs, bindRunningActor(apiOtherWorkerName, "actor-3"))
+			if _, err := wf.DeleteWorker(rpcCtx, apiOtherWorkerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker(second) failed: %v", err)
+			}
+			if got := len(atelet.requests()); got != 1 {
+				t.Errorf("atelet received %d Terminate calls across two worker deletes on the same node, want 1", got)
+			}
+
+			for _, ref := range refs {
+				got, err := persistence.GetActor(ctx, ref)
+				if err != nil {
+					t.Fatalf("GetActor(%s) failed: %v", ref, err)
+				}
+				if got.GetStatus().GetWorkerAssignment() != nil {
+					t.Errorf("actor %s still points at a worker: %v", ref, got.GetStatus().GetWorkerAssignment())
+				}
+			}
+
+			// Once w.reclaimTimeout elapses, a subsequent worker delete tries the node again.
+			now = now.Add(wf.reclaimTimeout)
+			atelet.mu.Lock()
+			atelet.hang = false
+			atelet.err = nil
+			atelet.mu.Unlock()
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+			bindRunningActor(apiWorkerName, "actor-4")
+			if _, err := wf.DeleteWorker(rpcCtx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker(after timeout) failed: %v", err)
+			}
+			if got := len(atelet.requests()); got != 2 {
+				t.Errorf("atelet received %d Terminate calls after w.reclaimTimeout elapsed, want 2", got)
+			}
+		})
+	}
+}
+
+// capturingTerminator is an atelet that records the Terminate calls it is sent
+// and answers them with err, or, with hang set, blocks until the caller gives
+// up, like an atelet stuck in an unmount.
+type capturingTerminator struct {
+	ateletpb.UnimplementedAteletServer
+
+	mu   sync.Mutex
+	err  error
+	hang bool
+	reqs []*ateletpb.TerminateRequest
+}
+
+func (f *capturingTerminator) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
+	f.mu.Lock()
+	f.reqs = append(f.reqs, proto.Clone(req).(*ateletpb.TerminateRequest))
+	hang, err := f.hang, f.err
+	f.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ateletpb.TerminateResponse{}, nil
+}
+
+func (f *capturingTerminator) requests() []*ateletpb.TerminateRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.reqs)
 }
