@@ -50,11 +50,6 @@ const (
 	// the podcertificate controller's API rate limits to match.
 	ClusterSizeSize0  = "size0"
 	ClusterSizeSize10 = "size10"
-
-	// Ingress router authentication modes; see atenet router's
-	// --ingress-auth-mode.
-	IngressAuthDeprecatedInsecure = "deprecated-insecure"
-	IngressAuthStaticMTLS         = "static-mtls"
 )
 
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
@@ -214,11 +209,6 @@ type Config struct {
 	// fake-workersync in place of ate-controller
 	// (ATE_INSTALL_FAKE_DATA_PLANE), for control-plane benchmarks.
 	FakeDataPlane bool
-
-	// IngressAuthMode is how the ingress router authenticates its clients
-	// (ATE_INGRESS_AUTH_MODE): IngressAuthDeprecatedInsecure or
-	// IngressAuthStaticMTLS.
-	IngressAuthMode string
 
 	// IngressAllowedSPIFFEIDs are the SPIFFE IDs the ingress router lets
 	// reach actors over its TLS listeners (ATE_INGRESS_ALLOWED_SPIFFE_IDS).
@@ -493,10 +483,6 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INSTALL_FAKE_DATA_PLANE")
 	if c.FakeDataPlane {
 		merged["ATE_INSTALL_FAKE_DATA_PLANE"] = "true"
-	}
-	delete(merged, "ATE_INGRESS_AUTH_MODE")
-	if c.IngressAuthMode != "" && c.IngressAuthMode != IngressAuthDeprecatedInsecure {
-		merged["ATE_INGRESS_AUTH_MODE"] = c.IngressAuthMode
 	}
 	delete(merged, "ATE_INGRESS_ALLOWED_SPIFFE_IDS")
 	if len(c.IngressAllowedSPIFFEIDs) > 0 {

@@ -48,11 +48,6 @@ const cordonControlPlaneComponent = installDir + "/components/cordon-control-pla
 // over the atelet and ate-controller applies under --fake-data-plane.
 const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
 
-// routerStaticMTLSComponent is the kustomize component that switches the
-// ingress router to --ingress-auth-mode=static-mtls, layered over every
-// control plane apply under --ingress-auth-mode=static-mtls.
-const routerStaticMTLSComponent = installDir + "/components/router-static-mtls"
-
 // components lists the kustomize components every control plane apply is
 // composed with. Each patch targets its workloads by name, and kustomize leaves
 // a stream alone when nothing in it matches, so composing a manifest that
@@ -61,9 +56,6 @@ func (e *Env) components() []string {
 	var components []string
 	if e.Cfg.FakeDataPlane {
 		components = append(components, e.Cfg.Path(fakeDataPlaneComponent))
-	}
-	if e.Cfg.IngressAuthMode == config.IngressAuthStaticMTLS {
-		components = append(components, e.Cfg.Path(routerStaticMTLSComponent))
 	}
 	if e.Cfg.CordonControlPlane {
 		components = append(components, e.Cfg.Path(cordonControlPlaneComponent))

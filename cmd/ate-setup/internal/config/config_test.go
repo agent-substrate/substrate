@@ -64,7 +64,6 @@ func loadEnv(t *testing.T) {
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
 		"ATE_INGRESS_ALLOWED_SPIFFE_IDS",
-		"ATE_INGRESS_AUTH_MODE",
 		"ATE_INSTALL_CLUSTER_SIZE",
 		"ATE_INSTALL_CORDON_CONTROL_PLANE",
 		"ATE_INSTALL_FAKE_DATA_PLANE",
@@ -131,9 +130,6 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.CordonControlPlane {
 		t.Error("CordonControlPlane = true, want false")
-	}
-	if cfg.IngressAuthMode != IngressAuthDeprecatedInsecure {
-		t.Errorf("IngressAuthMode = %q, want %q", cfg.IngressAuthMode, IngressAuthDeprecatedInsecure)
 	}
 }
 
@@ -250,39 +246,6 @@ func TestLoadFakeDataPlane(t *testing.T) {
 		})
 	}
 }
-func TestLoadIngressAuthMode(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		opts       Options
-		env        string
-		want       string
-		wantExport bool
-	}{
-		{name: "flag static-mtls", opts: Options{IngressAuthMode: IngressAuthStaticMTLS}, want: IngressAuthStaticMTLS, wantExport: true},
-		{name: "environment static-mtls", env: IngressAuthStaticMTLS, want: IngressAuthStaticMTLS, wantExport: true},
-		{name: "environment deprecated-insecure", env: IngressAuthDeprecatedInsecure, want: IngressAuthDeprecatedInsecure},
-		{name: "flag outranks environment", opts: Options{IngressAuthMode: IngressAuthDeprecatedInsecure}, env: IngressAuthStaticMTLS, want: IngressAuthDeprecatedInsecure},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			loadEnv(t)
-			if tc.env != "" {
-				t.Setenv("ATE_INGRESS_AUTH_MODE", tc.env)
-			}
-			cfg, err := Load(tc.opts)
-			if err != nil {
-				t.Fatalf("Load() error = %v", err)
-			}
-			if cfg.IngressAuthMode != tc.want {
-				t.Errorf("IngressAuthMode = %q, want %q", cfg.IngressAuthMode, tc.want)
-			}
-			got, exported := scriptEnvMap(t, cfg)["ATE_INGRESS_AUTH_MODE"]
-			if exported != tc.wantExport || (exported && got != tc.want) {
-				t.Errorf("ScriptEnv() ATE_INGRESS_AUTH_MODE = %q (exported %v), want %q (exported %v)", got, exported, tc.want, tc.wantExport)
-
-			}
-		})
-	}
-}
 
 func TestLoadIngressAllowedSPIFFEIDs(t *testing.T) {
 	const a, b = "spiffe://cluster.local/ns/a/sa/a", "spiffe://cluster.local/ns/b/sa/b"
@@ -332,7 +295,6 @@ func TestRequireIngressAllowedSPIFFEIDs(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "envoy without IDs", cfg: Config{Router: RouterEnvoy}, wantErr: true},
-		{name: "envoy static-mtls without IDs", cfg: Config{Router: RouterEnvoy, IngressAuthMode: IngressAuthStaticMTLS}, wantErr: true},
 		{name: "envoy with IDs", cfg: Config{Router: RouterEnvoy, IngressAllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/a/sa/a"}}},
 		{name: "agentgateway without IDs", cfg: Config{Router: RouterAgentgateway}},
 	} {
@@ -996,9 +958,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"kubernetes address without a port", Options{CredentialProvider: `{"name":"k8s.io","address":"secrets.ate-system.svc"}`}},
 		{"other provider without an address", Options{CredentialProvider: `{"name":"vault.example.com"}`}},
 		{"other provider address without a port", Options{CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc"}`}},
-		{"ingress auth mode", Options{IngressAuthMode: "mtls"}},
-		{"old insecure ingress auth mode", Options{IngressAuthMode: "insecure"}},
-		{"static-mtls agentgateway", Options{Router: RouterAgentgateway, IngressAuthMode: IngressAuthStaticMTLS}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {

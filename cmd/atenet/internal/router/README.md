@@ -34,13 +34,13 @@ Router has several responsibilities:
   [egress legs](#egress-legs).
 * Serves arbitrary-port ingress: a client reaches a port on the actor other
   than its default (80) by sending an HTTP CONNECT to
-  `<actor-dns>:<port>` on `--port-connect`/`--port-connect-tls`, rather than
+  `<actor-dns>:<port>` on `--port-connect-tls`, rather than
   naming the port some other way. Envoy terminates the CONNECT and reinjects
   the tunneled bytes into an internal listener that runs the same ext_proc
   path as ordinary traffic, so each request inside a long-lived tunnel still
   resumes the actor and re-routes independently if it moves workers. Only
   HTTP(S) traffic over the tunnel is supported today -- see `xds.go`'s
-  `connect_terminate`/`main_internal` listeners and
+  `connect_terminate_tls`/`main_internal` listeners and
   `ingress.Handler.HandleRequestHeaders`.
 
 ## packages
@@ -198,12 +198,9 @@ its own static configuration because ingress and egress scale independently.
 
 ## Ingress client authentication and authorization
 
-The ingress router is migrating to require clients to present a SPIFFE certificate.
-* With `--ingress-auth-mode=static-mtls`, the ingress router no longer offers any
-  plaintext listeners, and all clients *must* present a SPIFFE certificate.
-* With `--ingress-auth-mode=deprecated-insecure`, the ingress router offers both
-  plaintext and secure listeners.  If a client presents a SPIFFE certificate, it
-  must be valid.
+The Envoy ingress router serves only TLS listeners, and every client must
+present a SPIFFE certificate. The agentgateway dataplane does not authenticate
+clients yet.
 
 Configure the CA that is used to validate client certificates with the
 `--ingress-client-ca-file` flag, which points at a PEM file containing root
@@ -214,6 +211,55 @@ against a static allowlist.  Any ID on the allowlist may use the ingress router
 to contact any actor.  Richer authorization policies may be added post-GA.  Use
 the `--ingress-allowed-spiffe-ids` flag to set the allowlist (comma-separated
 list).
+
+### Common setups
+
+The default install sets `--ingress-client-ca-file` to the trust bundle of
+substrate's pod identity signer, `podidentity.podcert.ate.dev/identity`. That
+signer issues certificates with the SPIFFE ID
+`spiffe://cluster.local/ns/<namespace>/sa/<serviceaccount>`.
+
+The router's serving certificate comes from the
+`servicedns.podcert.ate.dev/identity` signer. Clients verify it against that
+signer's ClusterTrustBundle, with server name
+`atenet-router.ate-system.svc`.
+
+**Custom CA.** An installer can point `--ingress-client-ca-file` at a CA of
+their own choosing. Clients then get certificates from that CA however the
+installer provides them, and the allowlist holds the SPIFFE IDs it issues.
+
+**Client in the cluster, pod identity CA.** Mount a client certificate with a
+`podCertificate` projected volume, and the router's serving CA with a
+`clusterTrustBundle` projected volume:
+
+```yaml
+volumes:
+- name: router-client
+  projected:
+    sources:
+    - podCertificate:
+        signerName: podidentity.podcert.ate.dev/identity
+        keyType: ECDSAP256
+        credentialBundlePath: credential-bundle.pem
+    - clusterTrustBundle:
+        signerName: servicedns.podcert.ate.dev/identity
+        labelSelector:
+          matchLabels:
+            podcert.ate.dev/canarying: live
+        path: router-ca.pem
+```
+
+Add the pod's SPIFFE ID to `--ingress-allowed-spiffe-ids`.
+
+**Client outside the cluster, pod identity CA.** A demo on your machine can
+follow the e2e tests in `internal/e2e/ingressauth.go`. It creates a
+PodCertificateRequest for the podidentity signer that names a pod, node and
+ServiceAccount that don't exist. kube-apiserver checks those only for requests
+from a kubelet, and the signer issues the SPIFFE ID of the named namespace and
+ServiceAccount. The client keeps the private key, reads the chain from the
+request's status, and reads the servicedns ClusterTrustBundle to verify the
+router. Creating PodCertificateRequests needs RBAC for that resource in the
+namespace.
 
 ## status page
 

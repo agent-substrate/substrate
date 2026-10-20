@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ingressauth checks atenet-router's static-mtls client
-// authentication: who the ingress listeners let through, and who they turn
-// away. The other suites cover what happens once a client is let through,
-// since in static-mtls mode every one of them reaches its actors as the
-// allowlisted e2e router client.
+// Package ingressauth checks atenet-router's mTLS client authentication: who
+// the ingress listeners let through, and who they turn away. The other suites
+// cover what happens once a client is let through, since every one of them
+// reaches its actors as the allowlisted e2e router client.
 package ingressauth
 
 import (
@@ -56,27 +55,9 @@ var targetActor = resources.ActorRef{Atespace: "ate-e2e-ingressauth", Name: "nob
 
 // atenet-router's Service ports; see manifests/ate-install/atenet-router.yaml.
 const (
-	httpServicePort       = 80
 	httpsServicePort      = 443
-	connectServicePort    = 8081
 	connectTLSServicePort = 8444
 )
-
-// requireStaticMTLS skips the test unless the router was installed with
-// --ingress-auth-mode=static-mtls.
-//
-// Only needed until agent-gateway supports static-mtls mode as well.
-func requireStaticMTLS(t *testing.T) {
-	t.Helper()
-	if !e2e.IngressAuthModeSet() && e2e.IngressAuthModeRequired() {
-		t.Fatalf("%s is unset and required (CI or REQUIRE_INGRESS_AUTH_MODE is set): set it to %q or %q to match how atenet-router was installed (ATE_INGRESS_AUTH_MODE)",
-			e2e.IngressAuthModeEnv, e2e.IngressAuthStaticMTLS, e2e.IngressAuthDeprecatedInsecure)
-	}
-	if !e2e.IngressMTLS() {
-		t.Skipf("atenet-router does not require client certificates (%s=%q); install with --ingress-auth-mode=%s and set %s=%s to run this suite",
-			e2e.IngressAuthModeEnv, e2e.IngressAuthMode(), e2e.IngressAuthStaticMTLS, e2e.IngressAuthModeEnv, e2e.IngressAuthStaticMTLS)
-	}
-}
 
 // tlsListener is one of the router's TLS ingress listeners and how to send it
 // one request.
@@ -202,7 +183,9 @@ const refusalAttempts = 3
 // failure without one is retried on a fresh port-forward, refusalAttempts
 // times at most.
 func TestIngressAuthentication(t *testing.T) {
-	requireStaticMTLS(t)
+	if !e2e.CurrentAtenetDataplane().AuthenticatesIngressClients() {
+		t.Skip("the atenet dataplane does not authenticate ingress clients")
+	}
 	ctx := context.Background()
 
 	allowed := e2e.RouterClientCertificate(t, ctx, e2e.RouterClientServiceAccount)
@@ -244,39 +227,6 @@ func TestIngressAuthentication(t *testing.T) {
 					}
 				})
 			}
-		})
-	}
-}
-
-// TestPlaintextListenersDisabled checks that static-mtls leaves nothing
-// listening on the plaintext ports, which could not authenticate a client.
-// The Service still publishes them; the router container no longer serves
-// them, so a request through either gets no response.
-func TestPlaintextListenersDisabled(t *testing.T) {
-	requireStaticMTLS(t)
-	ctx := context.Background()
-
-	for _, tc := range []struct {
-		name string
-		port int32
-	}{
-		{name: "http", port: httpServicePort},
-		{name: "connect", port: connectServicePort},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			address := forwardRouterPort(t, ctx, tc.port)
-			client := &http.Client{Timeout: 30 * time.Second}
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			req.Header.Set(atenet.TargetActorHeader, targetActor.String())
-			resp, err := client.Do(req)
-			if err == nil {
-				resp.Body.Close()
-				t.Fatalf("plaintext port %d answered with status %d; want nothing listening", tc.port, resp.StatusCode)
-			}
-			t.Logf("no response: %v", err)
 		})
 	}
 }

@@ -557,11 +557,10 @@ Agent Substrate is built on a **Defense-in-Depth** model:
 
   * **Ingress Authentication and Routing**: The gateway routes each request to
     the actor its `ate-target-actor` header names, and only to recognized,
-    registered actors. With `--ingress-auth-mode=static-mtls`, it accepts only
-    clients whose SPIFFE ID is on a static allowlist; any listed client may
-    reach any actor, as per-actor ingress authorization is not yet supported.
-    The default mode, `deprecated-insecure`, also serves plaintext listeners
-    that accept any client.
+    registered actors. It accepts only mTLS clients whose SPIFFE ID is on a
+    static allowlist; any listed client may reach any actor, as per-actor
+    ingress authorization is not yet supported. The agentgateway dataplane
+    does not authenticate clients yet.
 
   * **Network Policy**: Agent Substrate leverages standard Kubernetes
     NetworkPolicy for connectivity control. Policies can be applied at the
