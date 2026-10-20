@@ -1,0 +1,151 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package controlclienttest provides a shared fake ateapi.ControlClient for
+// tests that only need a handful of RPCs, so callers stop hand-rolling their
+// own copy of the same embed-and-override struct.
+package controlclienttest
+
+import (
+	"context"
+	"sync"
+
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"google.golang.org/grpc"
+)
+
+// Fake is an ateapi.ControlClient for tests. Each RPC it implements records
+// its name, then defers to the matching *Func field if set, or a zero-value
+// response otherwise. RPCs it does not implement panic if called, through the
+// embedded nil interface.
+type Fake struct {
+	ateapi.ControlClient
+
+	mu              sync.Mutex
+	calls           []string
+	deleteRequests  []*ateapi.DeleteActorRequest
+	suspendRequests []*ateapi.SuspendActorRequest
+
+	CreateAtespaceFunc func(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error)
+	CreateActorFunc    func(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error)
+	ResumeActorFunc    func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error)
+	SuspendActorFunc   func(ctx context.Context, in *ateapi.SuspendActorRequest, opts ...grpc.CallOption) (*ateapi.SuspendActorResponse, error)
+	DeleteActorFunc    func(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error)
+	ListActorsFunc     func(ctx context.Context, in *ateapi.ListActorsRequest, opts ...grpc.CallOption) (*ateapi.ListActorsResponse, error)
+}
+
+func (f *Fake) record(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, name)
+}
+
+// RecordedCalls returns the RPC names invoked so far, in call order.
+func (f *Fake) RecordedCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+// RecordedDeleteActorRequests returns every DeleteActor request received so far.
+func (f *Fake) RecordedDeleteActorRequests() []*ateapi.DeleteActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapi.DeleteActorRequest(nil), f.deleteRequests...)
+}
+
+// RecordedSuspendActorRequests returns every SuspendActor request received so far.
+func (f *Fake) RecordedSuspendActorRequests() []*ateapi.SuspendActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapi.SuspendActorRequest(nil), f.suspendRequests...)
+}
+
+func (f *Fake) CreateAtespace(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
+	f.record("CreateAtespace")
+	if f.CreateAtespaceFunc != nil {
+		return f.CreateAtespaceFunc(ctx, in, opts...)
+	}
+	return &ateapi.Atespace{}, nil
+}
+
+func (f *Fake) CreateActor(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
+	f.record("CreateActor")
+	if f.CreateActorFunc != nil {
+		return f.CreateActorFunc(ctx, in, opts...)
+	}
+	return &ateapi.Actor{}, nil
+}
+
+func (f *Fake) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+	f.record("ResumeActor")
+	if f.ResumeActorFunc != nil {
+		return f.ResumeActorFunc(ctx, in, opts...)
+	}
+	return &ateapi.ResumeActorResponse{}, nil
+}
+
+// SuspendActor records "SuspendActor(async)" for an asynchronous-durability
+// suspend and "SuspendActor" for any other, so tests can tell them apart.
+func (f *Fake) SuspendActor(ctx context.Context, in *ateapi.SuspendActorRequest, opts ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
+	name := "SuspendActor"
+	if in.GetOptions().GetMode() == ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		name = "SuspendActor(async)"
+	}
+	f.mu.Lock()
+	f.calls = append(f.calls, name)
+	f.suspendRequests = append(f.suspendRequests, in)
+	f.mu.Unlock()
+	if f.SuspendActorFunc != nil {
+		return f.SuspendActorFunc(ctx, in, opts...)
+	}
+	return &ateapi.SuspendActorResponse{}, nil
+}
+
+func (f *Fake) DeleteActor(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, "DeleteActor")
+	f.deleteRequests = append(f.deleteRequests, in)
+	f.mu.Unlock()
+	if f.DeleteActorFunc != nil {
+		return f.DeleteActorFunc(ctx, in, opts...)
+	}
+	return &ateapi.Actor{}, nil
+}
+
+func (f *Fake) ListActors(ctx context.Context, in *ateapi.ListActorsRequest, opts ...grpc.CallOption) (*ateapi.ListActorsResponse, error) {
+	f.record("ListActors")
+	if f.ListActorsFunc != nil {
+		return f.ListActorsFunc(ctx, in, opts...)
+	}
+	return &ateapi.ListActorsResponse{}, nil
+}
+
+// Sequence returns a function that hands back the next error in errs on each
+// call, or nil once the list is drained. Safe for concurrent use, so a *Func
+// field can inject a run of errors before falling back to success.
+func Sequence(errs ...error) func() error {
+	var mu sync.Mutex
+	i := 0
+	return func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		if i >= len(errs) {
+			return nil
+		}
+		err := errs[i]
+		i++
+		return err
+	}
+}

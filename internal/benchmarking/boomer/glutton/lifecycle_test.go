@@ -24,13 +24,14 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
+	"go.ate.dev/substrate/internal/controlclienttest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 func TestGluttonIterate_SuspendMode(t *testing.T) {
 	srv := &fake.Server{}
-	fakeCtrl := &fakeControlClient{}
+	fakeCtrl := &controlclienttest.Fake{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
@@ -42,14 +43,14 @@ func TestGluttonIterate_SuspendMode(t *testing.T) {
 	rt := &taskRuntime{cfg: cfg}
 	rt.iterate()
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if !slices.Contains(calls, "SuspendActor") {
 		t.Errorf("expected SuspendActor in calls, got: %v", calls)
 	}
 	if slices.Contains(calls, "SuspendActor(async)") {
 		t.Errorf("did not expect SuspendActor(async) in suspend mode calls, got: %v", calls)
 	}
-	for _, req := range fakeCtrl.recordedSuspendRequests() {
+	for _, req := range fakeCtrl.RecordedSuspendActorRequests() {
 		if got := req.GetOptions().GetMode(); got != ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
 			t.Errorf("suspend mode = %v, want %v", got, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
 		}
@@ -58,7 +59,7 @@ func TestGluttonIterate_SuspendMode(t *testing.T) {
 
 func TestGluttonIterate_PauseMode(t *testing.T) {
 	srv := &fake.Server{}
-	fakeCtrl := &fakeControlClient{}
+	fakeCtrl := &controlclienttest.Fake{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
@@ -70,7 +71,7 @@ func TestGluttonIterate_PauseMode(t *testing.T) {
 	rt := &taskRuntime{cfg: cfg}
 	rt.iterate()
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if !slices.Contains(calls, "SuspendActor(async)") {
 		t.Errorf("expected SuspendActor(async) in calls, got: %v", calls)
 	}
@@ -81,7 +82,7 @@ func TestGluttonIterate_PauseMode(t *testing.T) {
 
 func TestGluttonIterate_NoneMode(t *testing.T) {
 	srv := &fake.Server{}
-	fakeCtrl := &fakeControlClient{}
+	fakeCtrl := &controlclienttest.Fake{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
@@ -94,7 +95,7 @@ func TestGluttonIterate_NoneMode(t *testing.T) {
 	rt.iterate()
 	rt.iterate()
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if slices.Contains(calls, "SuspendActor") || slices.Contains(calls, "SuspendActor(async)") {
 		t.Errorf("did not expect a sync or async SuspendActor during iterate in none mode, got: %v", calls)
 	}
@@ -103,7 +104,7 @@ func TestGluttonIterate_NoneMode(t *testing.T) {
 	}
 
 	rt.shutdown(context.Background())
-	afterShutdown := fakeCtrl.recordedCalls()
+	afterShutdown := fakeCtrl.RecordedCalls()
 	if len(afterShutdown) < 2 || afterShutdown[len(afterShutdown)-2] != "SuspendActor(async)" || afterShutdown[len(afterShutdown)-1] != "DeleteActor" {
 		t.Errorf("shutdown in none mode must end with [SuspendActor(async), DeleteActor], got %v", afterShutdown)
 	}
@@ -111,7 +112,7 @@ func TestGluttonIterate_NoneMode(t *testing.T) {
 
 func TestGluttonShutdown_PauseModeRunningActor(t *testing.T) {
 	srv := &fake.Server{}
-	fakeCtrl := &fakeControlClient{}
+	fakeCtrl := &controlclienttest.Fake{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
@@ -130,15 +131,15 @@ func TestGluttonShutdown_PauseModeRunningActor(t *testing.T) {
 	rt.users.Store(boomerutil.GoroutineID(), u)
 	rt.shutdown(context.Background())
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor(async)" || calls[len(calls)-1] != "DeleteActor" {
-		t.Errorf("recordedCalls must end with [SuspendActor(async), DeleteActor], got %v", calls)
+		t.Errorf("RecordedCalls must end with [SuspendActor(async), DeleteActor], got %v", calls)
 	}
 }
 
 func TestGluttonShutdown_StoppedActorOnlyDeleted(t *testing.T) {
 	srv := &fake.Server{}
-	fakeCtrl := &fakeControlClient{}
+	fakeCtrl := &controlclienttest.Fake{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
@@ -157,7 +158,7 @@ func TestGluttonShutdown_StoppedActorOnlyDeleted(t *testing.T) {
 	rt.users.Store(boomerutil.GoroutineID(), u)
 	rt.shutdown(context.Background())
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if len(calls) != 1 || calls[0] != "DeleteActor" {
 		t.Errorf("expected only DeleteActor call, got %v", calls)
 	}
@@ -165,9 +166,9 @@ func TestGluttonShutdown_StoppedActorOnlyDeleted(t *testing.T) {
 
 // newReplacementRuntime builds a one-actor-per-VU suspend-mode runtime whose
 // ResumeActor returns resumeErrs in order.
-func newReplacementRuntime(t *testing.T, resumeErrs ...error) (*taskRuntime, *fakeControlClient) {
+func newReplacementRuntime(t *testing.T, resumeErrs ...error) (*taskRuntime, *controlclienttest.Fake) {
 	t.Helper()
-	fakeCtrl := &fakeControlClient{resumeErrs: resumeErrs}
+	fakeCtrl := &controlclienttest.Fake{ResumeActorFunc: resumeActorFunc(resumeErrs...)}
 	cfg := newTestConfig(t, &fake.Server{}, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
@@ -195,7 +196,7 @@ func TestGluttonIterate_ReplacesActorOnTerminalResumeFailure(t *testing.T) {
 
 	rt.iterate()
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if got := countCalls(calls, "CreateActor"); got != 2 {
 		t.Errorf("CreateActor count = %d, want 2 (initial + replacement); calls = %v", got, calls)
 	}
@@ -218,7 +219,7 @@ func TestGluttonIterate_KeepsActorOnTransientResumeFailure(t *testing.T) {
 		rt.iterate()
 	}
 
-	calls := fakeCtrl.recordedCalls()
+	calls := fakeCtrl.RecordedCalls()
 	if got := countCalls(calls, "DeleteActor"); got != 0 {
 		t.Errorf("DeleteActor count = %d, want 0 (capacity shortage is not the actor's fault); calls = %v", got, calls)
 	}
@@ -238,7 +239,7 @@ func TestGluttonIterate_ReplacesActorAfterRepeatedConflicts(t *testing.T) {
 
 	for i := range maxConsecutiveFailures {
 		rt.iterate()
-		got := countCalls(fakeCtrl.recordedCalls(), "DeleteActor")
+		got := countCalls(fakeCtrl.RecordedCalls(), "DeleteActor")
 		want := 0
 		if i == maxConsecutiveFailures-1 {
 			want = 1
@@ -253,8 +254,8 @@ func TestGluttonIterate_ReplacesActorAfterRepeatedConflicts(t *testing.T) {
 // iteration re-drives the suspend rather than resume, which would fail
 // FailedPrecondition and cost the actor for a transient error.
 func TestGluttonIterate_RetriesStrandedHibernate(t *testing.T) {
-	fakeCtrl := &fakeControlClient{
-		suspendErrs: []error{status.Error(codes.Unavailable, "ate-api-server restarting")},
+	fakeCtrl := &controlclienttest.Fake{
+		SuspendActorFunc: suspendActorFunc(status.Error(codes.Unavailable, "ate-api-server restarting")),
 	}
 	cfg := newTestConfig(t, &fake.Server{}, &userclass.Config{
 		APIStub:  fakeCtrl,
@@ -266,10 +267,10 @@ func TestGluttonIterate_RetriesStrandedHibernate(t *testing.T) {
 	rt := &taskRuntime{cfg: cfg}
 
 	rt.iterate() // resume, ping, suspend → suspend fails
-	before := fakeCtrl.recordedCalls()
+	before := fakeCtrl.RecordedCalls()
 	rt.iterate() // must re-drive the suspend, not resume
 
-	after := fakeCtrl.recordedCalls()
+	after := fakeCtrl.RecordedCalls()
 	if got := after[len(after)-1]; got != "SuspendActor" {
 		t.Errorf("last call = %q, want SuspendActor; calls = %v", got, after)
 	}
@@ -281,7 +282,7 @@ func TestGluttonIterate_RetriesStrandedHibernate(t *testing.T) {
 	}
 
 	rt.iterate() // the suspend succeeded, so the normal cycle resumes
-	final := fakeCtrl.recordedCalls()
+	final := fakeCtrl.RecordedCalls()
 	if got, want := countCalls(final, "ResumeActor"), countCalls(after, "ResumeActor")+1; got != want {
 		t.Errorf("ResumeActor count = %d, want %d after the suspend cleared; calls = %v", got, want, final)
 	}

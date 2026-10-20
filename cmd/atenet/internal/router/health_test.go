@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/controlclienttest"
 	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
@@ -36,19 +37,6 @@ type healthRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f healthRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
-}
-
-type healthControlClient struct {
-	ateapi.ControlClient
-	listActorsFn func(context.Context, *ateapi.ListActorsRequest, ...grpc.CallOption) (*ateapi.ListActorsResponse, error)
-}
-
-func (c *healthControlClient) ListActors(
-	ctx context.Context,
-	req *ateapi.ListActorsRequest,
-	opts ...grpc.CallOption,
-) (*ateapi.ListActorsResponse, error) {
-	return c.listActorsFn(ctx, req, opts...)
 }
 
 func newHealthTestClientset(t *testing.T, server *httptest.Server) kubernetes.Interface {
@@ -261,8 +249,8 @@ func TestHealthChecksRunConcurrently(t *testing.T) {
 	}))
 	defer server.Close()
 
-	apiClient := &healthControlClient{
-		listActorsFn: func(ctx context.Context, _ *ateapi.ListActorsRequest, _ ...grpc.CallOption) (*ateapi.ListActorsResponse, error) {
+	apiClient := &controlclienttest.Fake{
+		ListActorsFunc: func(ctx context.Context, _ *ateapi.ListActorsRequest, _ ...grpc.CallOption) (*ateapi.ListActorsResponse, error) {
 			started <- "ateapi"
 			select {
 			case <-release:
