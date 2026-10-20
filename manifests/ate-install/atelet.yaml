@@ -183,6 +183,7 @@ spec:
         # Reads and writes snapshot and asset files under the /var/lib/ate
         # hostPath as root, like atelet; needs no capabilities.
         securityContext:
+          allowPrivilegeEscalation: false
           runAsUser: 0
           runAsGroup: 0
           capabilities:
@@ -257,6 +258,7 @@ spec:
         # runAsUser is pinned explicitly rather than relying on the base image's
         # default user.
         securityContext:
+          allowPrivilegeEscalation: false
           runAsUser: 0
           runAsGroup: 0
           capabilities:

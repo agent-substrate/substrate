@@ -251,6 +251,12 @@ spec:
         # generous route ceiling cannot stretch every rollout to the worst case.
         # If long turns must survive a shutdown, raise --drain-timeout and
         # terminationGracePeriodSeconds above together.
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
         env:
         - name: POD_NAME
           valueFrom:
@@ -317,6 +323,14 @@ spec:
         - "/usr/local/bin/envoy"
         - "-c"
         - "/etc/envoy/envoy.yaml"
+        # The Envoy image sets no USER, so runAsNonRoot needs a numeric UID.
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 65532
+          capabilities:
+            drop:
+            - ALL
         # Prevents Envoy from fast-exiting on SIGTERM before atenet-router finishes
         # its drain sequence. Polls for the drain-complete marker written by the
         # router on the shared emptyDir, terminating Envoy as soon as the drain
