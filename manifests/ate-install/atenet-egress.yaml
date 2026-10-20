@@ -925,9 +925,8 @@ data:
         # Pools are create using hashes of filter state, which includes filter state objects that use
         # envoy.hashable_string factory.
         connect_timeout: 1s
-        # Each open tunnel holds one connection and one request here, so these
-        # cap concurrent tunnels per replica (Envoy's default is 1024); past
-        # them a CONNECT gets a 503. Sized for a million tunnels on one replica.
+        # Envoy always opens a new pool's first connection.
+        # Past the limit, a second tunnel in the same pool waits for one to close.
         circuit_breakers:
           thresholds:
           - priority: DEFAULT
