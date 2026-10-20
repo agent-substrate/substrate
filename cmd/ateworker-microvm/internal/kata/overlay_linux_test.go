@@ -114,22 +114,31 @@ func TestUnmount_NonExistent(t *testing.T) {
 }
 
 // image volumes are rbound into the share, so submounts must go read-only too
-// without losing their other flags
+// without losing their other flags, and later mounts under the source must not
+// propagate in
 func TestRemountReadOnlyAndUnmount(t *testing.T) {
 	roottest.Require(t, "bind mounts")
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src")
 	dst := filepath.Join(dir, "dst")
 	sub := filepath.Join(src, "sub")
-	for _, d := range []string{src, dst, sub} {
+	later := filepath.Join(src, "later")
+	for _, d := range []string{src, dst, sub, later} {
 		if err := os.Mkdir(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// a shared source, so mounts under it propagate to binds of it
+	if err := unix.Mount(src, src, "", unix.MS_BIND, ""); err != nil {
+		t.Fatalf("self-binding %q: %v", src, err)
+	}
+	t.Cleanup(func() { _ = unix.Unmount(src, unix.MNT_DETACH) })
+	if err := unix.Mount("", src, "", unix.MS_SHARED, ""); err != nil {
+		t.Fatalf("making %q shared: %v", src, err)
+	}
 	if err := unix.Mount("tmpfs", sub, "tmpfs", 0, ""); err != nil {
 		t.Fatalf("mounting nested tmpfs: %v", err)
 	}
-	t.Cleanup(func() { _ = unix.Unmount(sub, unix.MNT_DETACH) })
 	if err := unix.Mount(src, dst, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 		t.Fatalf("Mount(%q, %q, BIND|REC) = %v", src, dst, err)
 	}
@@ -149,8 +158,11 @@ func TestRemountReadOnlyAndUnmount(t *testing.T) {
 	if err := RemountReadOnly(dst); err != nil {
 		t.Fatalf("RemountReadOnly(%q) = %v", dst, err)
 	}
+	if err := unix.Mount("tmpfs", later, "tmpfs", 0, ""); err != nil {
+		t.Fatalf("mounting tmpfs after remount: %v", err)
+	}
 
-	for _, f := range testFiles {
+	for _, f := range append(testFiles, filepath.Join(dst, "later", "test.txt")) {
 		if err := os.WriteFile(f, []byte("should fail"), 0o644); !errors.Is(err, syscall.EROFS) {
 			t.Errorf("WriteFile(%q) after remount = %v, want EROFS", f, err)
 		}

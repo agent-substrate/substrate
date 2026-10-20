@@ -207,9 +207,10 @@ func Unmount(dst string) {
 }
 
 // RemountReadOnly makes the mount at dst and every mount beneath it read-only,
-// keeping their other flags.
+// keeping their other flags. They are also made private, otherwise a mount made
+// under the source later would propagate in writable.
 func RemountReadOnly(dst string) error {
-	attr := &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY}
+	attr := &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY, Propagation: unix.MS_PRIVATE}
 	return unix.MountSetattr(unix.AT_FDCWD, dst, unix.AT_RECURSIVE, attr)
 }
 
