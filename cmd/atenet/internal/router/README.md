@@ -138,8 +138,23 @@ a request are declared once, in `extproc/attributes.go`.
 | `dev.ate.actor.atespace` | ingress | carries the atespace across CONNECT re-entry |
 | `dev.ate.connect.authority` | ingress, egress | carries the outer CONNECT authority across re-entry: target-port selection on ingress, the dialed port the request legs match `ports` against on egress |
 | `dev.ate.actor.identity` | egress | carries the authenticated actor identity to the policy ext_proc, the logs and additional ext_proc services |
+| `dev.ate.actor.peer_certificate` | egress | carries the URL-encoded PEM of the verified peer certificate to the CONNECT leg's ext_proc, which re-verifies it in Go; leaf only, not shared with the inner legs |
 | `dev.ate.egress:dial` | egress | dynamic metadata: a request leg's answer, `name` or `address`, which picks the route |
 | `dev.ate.extproc.direction` | egress | selects the egress handler for dataplanes without Envoy filter chains |
+
+### pick a lane
+
+Find the nearest existing key in the table first. If none fits, say why in the
+PR. Then choose how the value travels:
+
+* **Filter state** for anything derived from the connection (identity,
+  certificate, authority). Set it with `set_filter_state` command operators and
+  read it through `request_attributes`.
+* **Dynamic metadata** for an ext_proc answer going back to Envoy
+  (`dev.ate.egress:dial`, the dialed port, the policy). Envoy must list the
+  namespace in `receiving_namespaces`.
+* **Headers** only for data that is HTTP-level. Connection-derived identity does
+  not travel in a header, because header contents are logged and copied.
 
 ### name it
 
