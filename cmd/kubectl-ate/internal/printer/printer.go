@@ -151,15 +151,15 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 		return printProto(out, &ateapipb.ListWorkersResponse{Workers: workers}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tPOOL\tSTATE\tACTORS\tCPU(MILLICORES)\tMEMORY\tPOD\tAGE")
+		fmt.Fprintln(w, "NAME\tPOOL\tCLASS\tSTATE\tACTORS\tCPU(MILLICORES)\tMEMORY\tPOD\tAGE")
 		for _, worker := range workers {
 			name := worker.GetMetadata().GetName()
 			pool := worker.GetWorkerPool()
 			state := worker.GetStatus().GetState().String()
 			pod := worker.GetWorkerNamespace() + "/" + worker.GetWorkerPod()
 			age := formatAge(worker.GetMetadata().GetCreateTime())
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				name, pool, state, workerActorsColumn(worker),
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				name, pool, worker.GetSandboxClass(), state, workerActorsColumn(worker),
 				workerResourceColumn(worker.GetStatus().GetAllocated().GetCpuMillicores(),
 					worker.GetStatus().GetCapacity().GetCpuMillicores(), formatInt),
 				workerResourceColumn(worker.GetStatus().GetAllocated().GetMemoryBytes(),

@@ -161,10 +161,10 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 		"space-b": {actorOn("space-b", "actor-b", "worker-3")},
 	}}
 
-	header := "NAME       POOL      STATE                 ACTORS   CPU(MILLICORES)   MEMORY   POD          AGE\n"
-	row1 := "worker-1   counter   WORKER_STATE_ACTIVE   1/1      -                 -        ns-1/pod-1   5m\n"
-	row2 := "worker-2   other     WORKER_STATE_ACTIVE   0/0      -                 -        ns-1/pod-2   3h\n"
-	row3 := "worker-3   counter   WORKER_STATE_ACTIVE   1/1      -                 -        ns-2/pod-3   3d\n"
+	header := "NAME       POOL      CLASS     STATE                 ACTORS   CPU(MILLICORES)   MEMORY   POD          AGE\n"
+	row1 := "worker-1   counter   microvm   WORKER_STATE_ACTIVE   1/1      -                 -        ns-1/pod-1   5m\n"
+	row2 := "worker-2   other     gvisor    WORKER_STATE_ACTIVE   0/0      -                 -        ns-1/pod-2   3h\n"
+	row3 := "worker-3   counter   gvisor    WORKER_STATE_ACTIVE   1/1      -                 -        ns-2/pod-3   3d\n"
 
 	tests := []struct {
 		name         string
@@ -178,10 +178,13 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 		{name: "namespace", namespace: "ns-1", expected: header + row1 + row2},
 		{name: "atespace", atespace: "space-a", expected: header + row1},
 		// With no matching rows the tabwriter sizes columns to the header alone.
-		{name: "atespace excludes free workers", atespace: "no-such-space", expected: "NAME   POOL   STATE   ACTORS   CPU(MILLICORES)   MEMORY   POD   AGE\n"},
+		{name: "atespace excludes free workers", atespace: "no-such-space", expected: "NAME   POOL   CLASS   STATE   ACTORS   CPU(MILLICORES)   MEMORY   POD   AGE\n"},
 		{name: "selector", selector: "ate.dev/worker-pool=counter", expected: header + row1 + row3},
 		{name: "sandbox class", sandboxClass: "microvm", expected: header + row1},
-		{name: "sandbox class gvisor", sandboxClass: "gvisor", expected: header + row2 + row3},
+		// gvisor-only rows shrink the CLASS column to the widest survivor.
+		{name: "sandbox class gvisor", sandboxClass: "gvisor", expected: "NAME       POOL      CLASS    STATE                 ACTORS   CPU(MILLICORES)   MEMORY   POD          AGE\n" +
+			"worker-2   other     gvisor   WORKER_STATE_ACTIVE   0/0      -                 -        ns-1/pod-2   3h\n" +
+			"worker-3   counter   gvisor   WORKER_STATE_ACTIVE   1/1      -                 -        ns-2/pod-3   3d\n"},
 		{name: "combined", namespace: "ns-1", selector: "ate.dev/worker-pool=counter", expected: header + row1},
 	}
 
@@ -255,9 +258,9 @@ func TestGetWorkersRunner_GetByName(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := "NAME       POOL      STATE                   ACTORS   CPU(MILLICORES)   MEMORY    POD          AGE\n" +
-		"worker-1   counter   WORKER_STATE_ACTIVE     1/4      500/2000          1Gi/4Gi   ns-1/pod-1   5m\n" +
-		"worker-2   counter   WORKER_STATE_DRAINING   0/0      -                 -         ns-1/pod-2   3d\n"
+	expected := "NAME       POOL      CLASS   STATE                   ACTORS   CPU(MILLICORES)   MEMORY    POD          AGE\n" +
+		"worker-1   counter           WORKER_STATE_ACTIVE     1/4      500/2000          1Gi/4Gi   ns-1/pod-1   5m\n" +
+		"worker-2   counter           WORKER_STATE_DRAINING   0/0      -                 -         ns-1/pod-2   3d\n"
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}
