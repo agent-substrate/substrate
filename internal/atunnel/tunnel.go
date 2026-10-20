@@ -14,10 +14,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package tunnel wires atunnel into a worker: its flags, listeners, DNS
+// Package atunnel wires the tunnel into a worker: its flags, listeners, DNS
 // relay, and per-actor ingress and egress. Both workers build their tunnel here
 // so they cannot drift.
-package tunnel
+package atunnel
 
 import (
 	"context"

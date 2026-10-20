@@ -44,8 +44,8 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
-	"go.ate.dev/substrate/internal/ateworker/tunnel"
 	"go.ate.dev/substrate/internal/ateworkervalidation"
+	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -76,7 +76,7 @@ func flagsConfigPath() string {
 var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
-	tunnelConfig = tunnel.RegisterFlags(pflag.CommandLine)
+	tunnelConfig = atunnel.RegisterFlags(pflag.CommandLine)
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
@@ -234,7 +234,7 @@ func do(ctx context.Context) error {
 	}
 
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
-	tunnel, err := tunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
+	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
 	if err != nil {
 		return err
 	}
@@ -345,7 +345,7 @@ type AteWorkerService struct {
 	maxActors int
 
 	actorLogger *actorlog.ActorLogger
-	tunnel      *tunnel.Tunnel
+	tunnel      *atunnel.Tunnel
 	// usage writes the usage records. Nil writes none.
 	usage *workerstats.UsageEmitter
 
@@ -375,7 +375,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(tunnel *tunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteWorkerService {
+func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteWorkerService {
 	return &AteWorkerService{
 		locks:       actorlock.New(),
 		inFlight:    actorlock.NewInFlight(),

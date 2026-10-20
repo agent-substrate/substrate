@@ -46,7 +46,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
-	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/otlprelay"
 	"go.ate.dev/substrate/internal/preview"
@@ -75,7 +75,7 @@ var (
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
-	tunnelConfig = tunnel.RegisterFlags(pflag.CommandLine)
+	tunnelConfig = atunnel.RegisterFlags(pflag.CommandLine)
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
@@ -229,7 +229,7 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while delegating the worker cgroup: %w", err)
 	}
 
-	tunnel, err := tunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
+	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
 	if err != nil {
 		return err
 	}
@@ -376,7 +376,7 @@ type AteWorkerService struct {
 	// stdout as ate.dev/*-labeled JSON and emits actor lifecycle events (parity
 	// with ateworker-gvisor).
 	actorLogger *actorlog.ActorLogger
-	tunnel      *tunnel.Tunnel
+	tunnel      *atunnel.Tunnel
 	// usage writes the usage records. Nil writes none.
 	usage *workerstats.UsageEmitter
 
@@ -398,7 +398,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActors int, tunnel *tunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
+func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
 	return &AteWorkerService{
 		locks:         actorlock.New(),
 		inFlight:      actorlock.NewInFlight(),

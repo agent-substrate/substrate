@@ -15,7 +15,7 @@
 //go:build linux
 
 // Package workerhost hosts atunnel the way an ateworker does, with the
-// worker's own code: tunnel.Start once, then per actor the calls
+// worker's own code: atunnel.Start once, then per actor the calls
 // cmd/ateworker-gvisor makes to run one, in its order. Only the sandbox itself
 // is missing: each actor's network namespaces, veth, nftables redirect, egress
 // listener, and DNS relay are real, but no gVisor runs in them.
@@ -30,7 +30,7 @@ import (
 	"sync"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
-	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -62,7 +62,7 @@ type Info struct {
 
 // Host is a running atunnel with its actors.
 type Host struct {
-	tunnel *tunnel.Tunnel
+	tunnel *atunnel.Tunnel
 
 	mu     sync.Mutex
 	actors []*actor
@@ -75,8 +75,8 @@ type actor struct {
 
 // Start starts atunnel from cfg, as a worker's main does, and hosts actors
 // actors whose egress tunnels to gatewayAddress.
-func Start(ctx context.Context, cfg tunnel.Config, actors int, gatewayAddress string) (*Host, error) {
-	t, err := tunnel.Start(ctx, cfg, actornet.ActorHTTPUpstream)
+func Start(ctx context.Context, cfg atunnel.Config, actors int, gatewayAddress string) (*Host, error) {
+	t, err := atunnel.Start(ctx, cfg, actornet.ActorHTTPUpstream)
 	if err != nil {
 		return nil, err
 	}

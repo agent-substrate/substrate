@@ -29,7 +29,7 @@ import (
 
 	"go.ate.dev/substrate/benchmarking/atunnel/internal/procstats"
 	"go.ate.dev/substrate/benchmarking/atunnel/internal/workerhost"
-	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/atunnel"
 )
 
 // tunnelCommand is process B of the benchmark: atunnel started and hosting
@@ -40,7 +40,7 @@ import (
 func tunnelCommand() *cobra.Command {
 	var actors int
 	var gateway, adminListen, logLevel string
-	var cfg *tunnel.Config
+	var cfg *atunnel.Config
 	cmd := &cobra.Command{
 		Use:   "tunnel",
 		Short: "Run atunnel, hosting actors with the worker's own code",
@@ -56,7 +56,7 @@ func tunnelCommand() *cobra.Command {
 			return runTunnel(cmd.Context(), *cfg, actors, gateway, adminListen)
 		},
 	}
-	cfg = tunnel.RegisterFlags(cmd.Flags())
+	cfg = atunnel.RegisterFlags(cmd.Flags())
 	cmd.Flags().IntVar(&actors, "actors", 10, "actors to host")
 	cmd.Flags().StringVar(&gateway, "gateway", "atunnel-sink:9443", "egress gateway every actor tunnels to, host:port")
 	cmd.Flags().StringVar(&adminListen, "admin", ":9090", "address for /stats, /healthz, and /debug/pprof")
@@ -64,7 +64,7 @@ func tunnelCommand() *cobra.Command {
 	return cmd
 }
 
-func runTunnel(ctx context.Context, cfg tunnel.Config, actors int, gateway, adminListen string) error {
+func runTunnel(ctx context.Context, cfg atunnel.Config, actors int, gateway, adminListen string) error {
 	host, err := workerhost.Start(ctx, cfg, actors, gateway)
 	if err != nil {
 		return err

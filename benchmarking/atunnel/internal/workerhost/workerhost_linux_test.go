@@ -30,7 +30,7 @@ import (
 	"go.ate.dev/substrate/benchmarking/atunnel/internal/pki"
 	"go.ate.dev/substrate/benchmarking/atunnel/internal/sink"
 	"go.ate.dev/substrate/internal/atenet"
-	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/installdefaults"
@@ -73,7 +73,7 @@ func TestHostsActorsWithTheWorkersCode(t *testing.T) {
 	go func() { _ = gateway.Serve(ctx, gatewayLis) }()
 
 	ingressAddr := freeAddress(t)
-	host, err := Start(ctx, tunnel.Config{
+	host, err := Start(ctx, atunnel.Config{
 		ListenAddress:        ingressAddr,
 		ConnectListenAddress: freeAddress(t),
 		CredentialBundle:     filepath.Join(dir, pki.WorkerBundle),
@@ -180,7 +180,7 @@ func listen(t *testing.T) net.Listener {
 }
 
 // freeAddress returns a loopback address with a port free a moment ago, for
-// listeners tunnel.Start binds itself.
+// listeners atunnel.Start binds itself.
 func freeAddress(t *testing.T) string {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
