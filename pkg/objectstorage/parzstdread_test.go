@@ -114,12 +114,18 @@ func TestReadZstdFrameSplitsParZstdOutput(t *testing.T) {
 	}
 }
 
-// Frames under 256 bytes carry no declared size; their block count still bounds
-// them, so they decode in parallel.
+// A multi-segment frame under 256 bytes carries no declared size; its block count
+// still bounds it, so it decodes in parallel. parZstd writes single-segment frames,
+// which always declare their size, so the frames come from another encoder.
 func TestReadZstdFrameBoundsUnsizedSmallFrames(t *testing.T) {
+	enc, err := zstd.NewWriter(nil, zstd.WithSingleSegment(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enc.Close()
 	for _, n := range []int{1, 100, 255} {
 		data := compressibleData(t, n)
-		frame, size, maxSize, ok, err := readZstdFrame(bytes.NewReader(parFrames(t, data)))
+		frame, size, maxSize, ok, err := readZstdFrame(bytes.NewReader(enc.EncodeAll(data, nil)))
 		if err != nil || !ok || frame == nil {
 			t.Fatalf("n=%d: ok=%v err=%v, want a parallel-decodable frame", n, ok, err)
 		}
