@@ -23,10 +23,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/puddle/v2"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -111,6 +111,7 @@ func TestPoolMetricsZeroCountsAndUnregister(t *testing.T) {
 		{ateattr.DBConnectionPoolMain, 7},
 		{ateattr.DBConnectionPoolWatch, watchPoolMaxConns},
 		{ateattr.DBConnectionPoolOwner, ownerPoolMaxConns},
+		{ateattr.DBConnectionPoolProbe, probePoolMaxConns},
 	} {
 		cfg, err := pgxpool.ParseConfig("postgres://unused@127.0.0.1:1/test?sslmode=disable")
 		if err != nil {
@@ -286,6 +287,37 @@ func TestPoolMetricsContention(t *testing.T) {
 	}
 }
 
+func TestPoolMetricsPreservesQueryTracing(t *testing.T) {
+	requirePool(t)
+	instruments, reader := newPoolMetrics(t)
+	qt, tp, sr := newTestQueryTracer(t)
+	cfg, err := pgxpool.ParseConfig(containerDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ConnConfig.Tracer = qt
+	instruments.configurePool(cfg, ateattr.DBConnectionPoolMain)
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	ctx, parent := tp.Tracer("test").Start(t.Context(), "parent")
+	if _, err := pool.Exec(ctx, "SELECT 1"); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+	span := findSpan(t, sr, "SELECT")
+	if span.Parent().SpanID() != parent.SpanContext().SpanID() {
+		t.Error("query span lost its parent")
+	}
+	histogram := collectPoolMetrics(t, reader)[connectionWaitMetric].Data.(metricdata.Histogram[float64])
+	if len(histogram.DataPoints) != 1 || histogram.DataPoints[0].Count != 1 {
+		t.Fatalf("acquisition histogram = %+v, want one sample", histogram)
+	}
+	assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
+}
+
 func TestPoolMetricsConnectAndClose(t *testing.T) {
 	requirePool(t)
 	instruments, reader := newPoolMetrics(t)
@@ -298,13 +330,30 @@ func TestPoolMetricsConnectAndClose(t *testing.T) {
 	}
 	t.Cleanup(p.Pool().Close)
 	t.Cleanup(p.Close)
+	acquisitionCounts := func() map[attribute.Set]uint64 {
+		counts := make(map[attribute.Set]uint64)
+		histogram := collectPoolMetrics(t, reader)[connectionWaitMetric].Data.(metricdata.Histogram[float64])
+		for _, point := range histogram.DataPoints {
+			counts[point.Attributes] = point.Count
+		}
+		return counts
+	}
 	for _, pool := range []namedPool{
 		{ateattr.DBConnectionPoolMain, p.pool},
 		{ateattr.DBConnectionPoolWatch, p.watchPool},
 		{ateattr.DBConnectionPoolOwner, p.ownerPool},
+		{ateattr.DBConnectionPoolProbe, p.probePool},
 	} {
+		want := acquisitionCounts()
+		want[attribute.NewSet(
+			ateattr.DBConnectionPoolNameKey.String(pool.name),
+			ateattr.StoreConnectionAcquireOutcomeKey.String(ateattr.StoreConnectionAcquireSuccess),
+		)]++
 		if _, err := pool.pool.Exec(t.Context(), "SELECT 1"); err != nil {
 			t.Fatal(err)
+		}
+		if got := acquisitionCounts(); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s acquisition counts = %v, want %v", pool.name, got, want)
 		}
 	}
 	want := make(map[string][3]int64)
@@ -312,6 +361,7 @@ func TestPoolMetricsConnectAndClose(t *testing.T) {
 		{ateattr.DBConnectionPoolMain, p.pool},
 		{ateattr.DBConnectionPoolWatch, p.watchPool},
 		{ateattr.DBConnectionPoolOwner, p.ownerPool},
+		{ateattr.DBConnectionPoolProbe, p.probePool},
 	} {
 		stats := pool.pool.Stat()
 		want[pool.name] = [3]int64{int64(stats.AcquiredConns()), int64(stats.IdleConns()), int64(stats.MaxConns())}
@@ -323,8 +373,8 @@ func TestPoolMetricsConnectAndClose(t *testing.T) {
 		pool, _ := point.Attributes.Value(ateattr.DBConnectionPoolNameKey)
 		seen[pool.AsString()] = true
 	}
-	if len(seen) != 3 {
-		t.Errorf("acquisition pools = %v, want main, watch, owner", seen)
+	if len(seen) != 4 {
+		t.Errorf("acquisition pools = %v, want main, watch, owner, probe", seen)
 	}
 	p.Close()
 	assertPoolCounts(t, reader, nil)

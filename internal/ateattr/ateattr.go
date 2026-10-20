@@ -299,6 +299,7 @@ const (
 	DBConnectionPoolMain  = "main"
 	DBConnectionPoolWatch = "watch"
 	DBConnectionPoolOwner = "owner"
+	DBConnectionPoolProbe = "probe"
 )
 
 // Values for DBConnectionStateKey.
