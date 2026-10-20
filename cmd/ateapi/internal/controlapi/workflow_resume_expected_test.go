@@ -16,7 +16,11 @@ package controlapi
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
+
+	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -44,6 +48,7 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 		name, phase string
 		mutate      func(*ateapi.Actor)
 		request     func(*ateapi.ExpectedSnapshot)
+		apiUpdate   bool
 		want        codes.Code
 	}{
 		{name: "matching checkpoint/durable"},
@@ -62,7 +67,9 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 		{name: "RUNNING", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING }, want: codes.FailedPrecondition},
 		{name: "newer pending checkpoint/older completed refused", mutate: newer, want: codes.FailedPrecondition},
 		{name: "newer pending checkpoint/matching upload unavailable", mutate: newer, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }, want: codes.Unavailable},
-		{name: "template change/assignment conflict", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Name = "tmpl2" }, want: codes.FailedPrecondition},
+		{name: "template change/assignment conflict", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Name = "tmpl2" }, apiUpdate: true, want: codes.FailedPrecondition},
+		{name: "matching checkpoint/assignment refresh rejects changed snapshot", phase: "conflict", mutate: func(a *ateapi.Actor) { a.Status.Snapshots[0].Uuid = "other" }, want: codes.FailedPrecondition},
+		{name: "template change/unrelated update retries", phase: "conflict", mutate: func(a *ateapi.Actor) { a.WorkerSelector = &ateapi.Selector{} }},
 		{name: "malformed expectation", phase: "malformed", request: func(e *ateapi.ExpectedSnapshot) { e.ActorUid = "not-a-uuid" }, want: codes.InvalidArgument},
 		{name: "no expectation", phase: "unconditional", mutate: func(a *ateapi.Actor) { local(a); pending(a) }},
 	} {
@@ -70,6 +77,9 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 			ctx := context.Background()
 			st := newTestPersistence(t)
 			newTestActorWorkflow(t, st, "ns", "tmpl1")
+			if tc.apiUpdate {
+				newTestActorWorkflow(t, st, "ns", "tmpl2")
+			}
 			seedRuntimeWorker(t, ctx, st, "pod-1", "node-1", testSandboxRuntime())
 			w, atelet, _ := newWireFinalizeWorkflow(t, st)
 			scheduling := newSchedulingWorkflow(t, ctx, st)
@@ -94,7 +104,11 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 			}
 			injected := false
 			mutate := func() {
-				actor, err = st.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error { tc.mutate(a); return nil })
+				update := st.UpdateActor
+				if tc.apiUpdate {
+					update = (&ServiceImpl{store: st}).UpdateActor
+				}
+				actor, err = update(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error { tc.mutate(a); return nil })
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -165,15 +179,20 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 				if !proto.Equal(restore, previousRestore) || !proto.Equal(run, previousRun) || !proto.Equal(after, actor) {
 					t.Error("rejected resume called atelet or changed actor")
 				}
-				if tc.phase != "conflict" {
-					if _, err := st.FindWorkerHostingActor(ctx, actor.GetMetadata().GetUid()); err != store.ErrNotFound {
-						t.Errorf("rejected resume acquired worker: %v", err)
-					}
+				if worker, err := st.FindWorkerHostingActor(ctx, actor.GetMetadata().GetUid()); err != store.ErrNotFound {
+					t.Errorf("rejected resume retained worker claim %q: %v", worker, err)
+				}
+				worker, err := st.GetWorker(ctx, testWorkerUID("pod-1"))
+				if err != nil || worker.GetStatus().GetAllocated().GetActors() != 0 {
+					t.Errorf("rejected resume retained capacity: worker=%v, err=%v", worker, err)
 				}
 				return
 			}
 			if !resp.GetResumed() || after.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
 				t.Errorf("resume did not finish: %v", resp)
+			}
+			if !proto.Equal(after.GetWorkerSelector(), actor.GetWorkerSelector()) {
+				t.Error("resume lost updated worker selector")
 			}
 			snapshot := actor.GetStatus().GetSnapshots()[0]
 			if restore.GetSnapshot().GetSnapshotUuid() != snapshot.GetUuid() || restore.GetSnapshot().GetGeneration() != snapshot.GetGeneration() || run != nil {
@@ -192,4 +211,101 @@ type resumeLeaseChangingStore struct {
 func (s *resumeLeaseChangingStore) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	s.beforeAcquire()
 	return s.Interface.AcquireLease(ctx, key)
+}
+
+func TestAssignWorkerAttempt_ExpectedRejectionCleanup(t *testing.T) {
+	releaseErr := errors.New("release unavailable")
+	for _, tc := range []struct {
+		name       string
+		resuming   bool
+		loseLease  bool
+		releaseErr error
+		want       codes.Code
+	}{
+		{name: "release failure is reported", releaseErr: releaseErr, want: codes.Internal},
+		{name: "RESUMING assignment keeps its claim", resuming: true, want: codes.FailedPrecondition},
+		{name: "lost lease does not release", loseLease: true, want: codes.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := newTestPersistence(t)
+			actor, wc := seedAssignFixture(t, ctx, st)
+			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+			w.scheduler, w.workerCache = scheduling.New(wc), wc
+			ref := resources.ActorRefFromActor(actor)
+			var err error
+			actor, err = st.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+				a.ActorTemplate = &ateapi.ObjectRef{Atespace: "ns", Name: "tmpl1"}
+				a.Status.Snapshots = []*ateapi.Snapshot{durableMemorySnapshot(t, testSandboxRuntime())}
+				a.Status.LastAssignedGeneration = 1
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tmpl, err := resolveActorTemplate(ctx, st, actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			callCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			refresh := &resumeRefreshStore{Interface: &conflictInjectingStore{Interface: st, inject: func() {
+				if _, err := st.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+					a.ActorTemplate.Name = "tmpl2"
+					if tc.resuming {
+						a.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+						a.Status.WorkerAssignment = &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: testWorkerUID("pod-1")}}
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}}}
+			if tc.loseLease {
+				refresh.cancel = cancel
+			}
+			if tc.releaseErr != nil {
+				refresh.Interface = failingReleaseStore{Interface: refresh.Interface, err: tc.releaseErr}
+			}
+			w.store = refresh
+			_, _, err = w.assignWorkerAttempt(callCtx, ref, actor, tmpl, &ateapi.ExpectedSnapshot{ActorUid: actor.GetMetadata().GetUid(), SnapshotUuid: "snap-1", Generation: 1})
+			if apierror.Code(err) != tc.want {
+				t.Fatalf("assignment rejection = %v, want %v", err, tc.want)
+			}
+			if tc.releaseErr != nil && (!errors.Is(err, releaseErr) || !strings.Contains(err.Error(), "actor template changed")) {
+				t.Errorf("cleanup error lost its cause or rejection context: %v", err)
+			}
+			wantReleases := 0
+			if tc.releaseErr != nil {
+				wantReleases = 1
+			}
+			if refresh.releases != wantReleases {
+				t.Errorf("release calls = %d, want %d", refresh.releases, wantReleases)
+			}
+			if _, err := st.FindWorkerHostingActor(ctx, actor.GetMetadata().GetUid()); err != nil {
+				t.Errorf("claim should remain for its owner or cleanup retry: %v", err)
+			}
+		})
+	}
+}
+
+// resumeRefreshStore can cancel the lease context immediately after the CAS
+// refresh returns, and counts attempts to release the resulting claim.
+type resumeRefreshStore struct {
+	store.Interface
+	cancel   context.CancelFunc
+	releases int
+}
+
+func (s *resumeRefreshStore) GetActor(ctx context.Context, ref resources.ActorRef) (*ateapi.Actor, error) {
+	actor, err := s.Interface.GetActor(ctx, ref)
+	if s.cancel != nil {
+		s.cancel()
+	}
+	return actor, err
+}
+
+func (s *resumeRefreshStore) ReleaseActorFromWorker(ctx context.Context, worker, uid string) (*ateapi.Worker, error) {
+	s.releases++
+	return s.Interface.ReleaseActorFromWorker(ctx, worker, uid)
 }

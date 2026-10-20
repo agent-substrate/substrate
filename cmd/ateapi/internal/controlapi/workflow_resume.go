@@ -599,11 +599,21 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			slog.WarnContext(ctx, "Failed to refresh actor after assignment conflict", slog.Any("err", gerr))
 			return nil, nil, err
 		}
-		if err := validateExpectedSnapshot(fresh, expected); err != nil {
-			return nil, nil, err
+		conditionErr := validateExpectedSnapshot(fresh, expected)
+		if conditionErr == nil && expected != nil && !proto.Equal(fresh.GetActorTemplate(), actor.GetActorTemplate()) {
+			conditionErr = apierror.FailedPrecondition("actor template changed during conditioned resume")
 		}
-		if expected != nil && !proto.Equal(fresh.GetActorTemplate(), actor.GetActorTemplate()) {
-			return nil, nil, apierror.FailedPrecondition("actor template changed during conditioned resume")
+		if conditionErr != nil {
+			// A terminal rejection must not leave a claim for an unassigned actor.
+			if fresh.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED && fresh.GetStatus().GetWorkerAssignment() == nil {
+				if err := ctx.Err(); err != nil {
+					return nil, nil, err
+				}
+				if _, err := w.store.ReleaseActorFromWorker(ctx, bound.GetMetadata().GetName(), actor.GetMetadata().GetUid()); err != nil {
+					return nil, nil, fmt.Errorf("while releasing worker claim after rejecting resume (%v): %w", conditionErr, err)
+				}
+			}
+			return nil, nil, conditionErr
 		}
 		switch fresh.GetStatus().GetState() {
 		case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
