@@ -78,3 +78,11 @@ kubectl --context kind-kind -n ate-system logs deploy/atenet-egress -c envoy --t
 For AgentGateway, use `-c agentgateway` for the last command. For a local TLS
 failure, check that `setup-e2e-egress-tls-kind.sh` completed and that the test
 URL uses the origin's Service DNS name.
+
+If the AgentGateway ingress router returns HTTP 503 with `dynamic backend
+resolved to a loopback or link-local address`, check its
+`config.backend.allowDynamicLoopback` setting. The router enables this because
+actor-local destinations are reached through authenticated atunnel connections,
+not on the router itself. The egress gateway leaves this setting disabled.
+Changes to this startup setting require restarting the router; a ConfigMap
+reload alone does not apply it.

@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/internal/clustertrustbundle"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -183,7 +184,7 @@ func TestActorEgressHTTPSByHostname(t *testing.T) {
 func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	ctx := t.Context()
 	dataplane := e2e.CurrentAtenetDataplane()
-	_, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
+	origin, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name:       "passthrough-origin",
 		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http"},
@@ -201,6 +202,19 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	// Ask egres actor to POST to /fetch on the test server. Test server /fetch handler
 	// waits for the entire body before responding.
 	url := "https://" + address + "/fetch"
+	bundles, err := clustertrustbundle.NewClient(e2e.GetClients().K8s, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := bundles.Get(ctx, e2e.EgressTrustBundleObjectName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("getting egress MITM trust bundle: %v", err)
+	}
+	if bundle.Spec.TrustBundle == "" {
+		t.Fatal("egress MITM trust bundle is empty")
+	}
+	// Trust the origin before revocation and the intercepting gateway afterward.
+	rootCA += "\n" + bundle.Spec.TrustBundle
 	postPayload, err := json.Marshal(map[string]string{"url": url, "rootCA": rootCA})
 	if err != nil {
 		t.Fatalf("marshaling /post request: %v", err)
@@ -220,7 +234,8 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	// Allow connection to be fully established before changing the policy.
 	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, "443")
 
-	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef(), e2e.EgressAllowPassthrough("foo.bar.baz"))
+	// Keep DNS authorized so the second connection tests the PEP, not the DNS relay.
+	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef(), e2e.EgressAllowHTTP(origin.SvcName()+".cluster.local"))
 	// Wait for the policy cached in ext_proc server to expire, so it will fetch the new one.
 	// ext_proc cache freshness interval is 10 seconds.
 	time.Sleep(11 * time.Second)
