@@ -129,7 +129,7 @@ func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkload
 	return &ateworkerpb.RunWorkloadResponse{}, nil
 }
 
-func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
+func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
 	f.recordFidelity("CheckpointWorkload", req.GetFidelity())
 	dir := req.GetActorDirs().GetCheckpointDir()
@@ -142,6 +142,9 @@ func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.Chec
 	}
 	if f.onCheckpoint != nil {
 		f.onCheckpoint()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
 }
@@ -262,6 +265,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		anonGCSClient:     fakeObjectStorage{data: release.tarball},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+		checkpointTimeout: defaultCheckpointTimeout,
 	}
 	sandboxRec := testSandboxRecord(release)
 	spec := &ateletpb.WorkloadSpec{
@@ -445,6 +449,7 @@ func TestRestoreUsesRequestSandboxRuntime(t *testing.T) {
 		anonGCSClient:     fakeObjectStorage{data: checkpointRelease.tarball},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+		checkpointTimeout: defaultCheckpointTimeout,
 	}
 	checkpointRec, restoreRec := testSandboxRecord(checkpointRelease), testSandboxRecord(restoreRelease)
 	spec := &ateletpb.WorkloadSpec{
@@ -3641,5 +3646,150 @@ func TestRestoreLocalSnapshotFromEarlierBoot(t *testing.T) {
 		if !errors.Is(err, errUnusableLocalSnapshot) {
 			t.Errorf("Restore error = %v, want it to wrap %v", err, errUnusableLocalSnapshot)
 		}
+	})
+}
+
+// TestCheckpointFinishesWhenCallerCancels verifies that once Checkpoint has
+// acquired the actor's lock and begun the checkpoint, canceling the caller's
+// context mid-flight does not abort the worker checkpoint or snapshot commit,
+// a longer caller deadline is preserved past checkpointTimeout, and a retry
+// waits on the actor lock and answers from the committed snapshot.
+func TestCheckpointFinishesWhenCallerCancels(t *testing.T) {
+	for _, mode := range []ateletpb.UploadMode{
+		ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
+		ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE,
+	} {
+		t.Run(mode.String(), func(t *testing.T) {
+			a := runPluginActor(t)
+			a.s.checkpointTimeout = 10 * time.Millisecond
+			snap := a.snapshot("snap-1", 1)
+
+			var workerCheckpoints atomic.Int32
+			started := make(chan struct{})
+			release := make(chan struct{})
+			a.worker.onCheckpoint = func() {
+				if workerCheckpoints.Add(1) == 1 {
+					close(started)
+					<-release
+				}
+			}
+
+			// Give the caller a deadline longer than checkpointTimeout so the
+			// detached context keeps the caller's longer deadline.
+			callerCtx, cancelCaller := context.WithTimeout(t.Context(), time.Minute)
+			defer cancelCaller()
+
+			type cpResult struct {
+				resp *ateletpb.CheckpointResponse
+				err  error
+			}
+			resCh := make(chan cpResult, 1)
+			go func() {
+				resp, err := a.s.Checkpoint(callerCtx, &ateletpb.CheckpointRequest{
+					Atespace:              "ate-demo",
+					ActorName:             "counter",
+					ActorUid:              pluginActorUID,
+					ActorTemplateAtespace: "default",
+					ActorTemplateName:     "counter",
+					WorkerPodUid:          pluginWorkerPodUID,
+					Spec:                  a.spec,
+					Snapshot:              snap,
+					UploadConfig:          &ateletpb.UploadConfig{Mode: mode},
+				})
+				resCh <- cpResult{resp, err}
+			}()
+
+			select {
+			case <-started:
+			case <-time.After(10 * time.Second):
+				t.Fatal("timed out waiting for Checkpoint to reach worker")
+			}
+
+			cancelCaller()
+
+			retryCh := make(chan cpResult, 1)
+			go func() {
+				resp, err := a.checkpoint(t, snap, mode)
+				retryCh <- cpResult{resp, err}
+			}()
+			// Wait past checkpointTimeout while the retry is queued behind the
+			// first call's actor lock, verifying both that the retry blocks and
+			// that the caller's 1-minute deadline was not shortened to 10ms.
+			select {
+			case res := <-retryCh:
+				t.Fatalf("retried Checkpoint returned (%v, %v) while first Checkpoint was still in flight", res.resp, res.err)
+			case <-time.After(25 * time.Millisecond):
+			}
+
+			close(release)
+
+			for _, call := range []struct {
+				name string
+				ch   <-chan cpResult
+			}{
+				{name: "first", ch: resCh},
+				{name: "retry", ch: retryCh},
+			} {
+				res := <-call.ch
+				if res.err != nil {
+					t.Fatalf("%s Checkpoint: %v", call.name, res.err)
+				}
+				st := res.resp.GetState()
+				if got := st.GetLatestLocal().GetSnapshot(); !proto.Equal(got, snap) {
+					t.Errorf("%s latest_local = %v, want %v", call.name, got, snap)
+				}
+				if mode == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+					if got := st.GetLatestDurable().GetSnapshot(); !proto.Equal(got, snap) {
+						t.Errorf("%s latest_durable = %v, want %v", call.name, got, snap)
+					}
+				}
+			}
+			if n := workerCheckpoints.Load(); n != 1 {
+				t.Errorf("worker checkpointed the actor %d times, want once", n)
+			}
+		})
+	}
+
+	t.Run("bounded_by_checkpoint_timeout", func(t *testing.T) {
+		a := runPluginActor(t)
+		a.s.checkpointTimeout = 100 * time.Millisecond
+
+		started := make(chan struct{})
+		release := make(chan struct{})
+		defer close(release)
+		a.worker.onCheckpoint = func() {
+			close(started)
+			<-release
+		}
+
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := a.checkpoint(t, a.snapshot("snap-timeout", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+			errCh <- err
+		}()
+
+		select {
+		case <-started:
+		case err := <-errCh:
+			t.Fatalf("Checkpoint returned before reaching worker: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for Checkpoint to reach worker")
+		}
+
+		var err error
+		select {
+		case err = <-errCh:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for Checkpoint to fail after checkpointTimeout")
+		}
+		if !errors.Is(err, context.DeadlineExceeded) && status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("Checkpoint err = %v, want DeadlineExceeded", err)
+		}
+
+		unlock, err := a.s.lockActor(t.Context(), pluginActorUID)
+		if err != nil {
+			t.Fatalf("lockActor after timed-out Checkpoint: %v", err)
+		}
+		unlock()
 	})
 }

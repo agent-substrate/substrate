@@ -734,7 +734,14 @@ type Atelet struct {
 	// of each local snapshot. A local snapshot recording another, or none,
 	// was written before the node last rebooted.
 	bootID string
+	// checkpointTimeout is defaultCheckpointTimeout. Shortened in tests.
+	checkpointTimeout time.Duration
 }
+
+// defaultCheckpointTimeout bounds a Checkpoint once it detaches from the
+// caller's context, so a hung worker or object-store upload cannot hold the
+// actor's lock forever.
+const defaultCheckpointTimeout = 5 * time.Minute
 
 var _ ateletpb.AteletServer = (*Atelet)(nil)
 
@@ -785,6 +792,7 @@ func NewService(
 		snapshots:             snapshots,
 		workerActorJWTs:       newWorkerActorJWTs(workers),
 		bootID:                bootID,
+		checkpointTimeout:     defaultCheckpointTimeout,
 	}
 	return wms
 }
@@ -1020,6 +1028,19 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		return &ateletpb.CheckpointResponse{State: state}, nil
 	}
 
+	// Detach from caller cancellation once the checkpoint is underway so a
+	// caller timeout does not abort the checkpoint after the worker has
+	// started stopping the workload; a retry waits on lockActor for this
+	// attempt to finish and commit. Keep the later of the caller's deadline
+	// and checkpointTimeout so a hung worker or upload cannot hold the
+	// actor's lock forever without shortening a longer caller deadline.
+	deadline := time.Now().Add(s.checkpointTimeout)
+	if d, ok := ctx.Deadline(); ok && d.After(deadline) {
+		deadline = d
+	}
+	opCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	defer cancel()
+
 	// Checkpoint requests no longer carry the sandbox config; recover the
 	// version this actor was started with from the on-node record and re-fetch
 	// it (a cache hit) so worker can drive runsc, and so we can pin it into the
@@ -1031,7 +1052,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	op.sandboxClass = sandboxRec.SandboxClass
 
 	tAssets := time.Now()
-	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec, ateletpath.SandboxAssetsDir(actorUID))
+	assetPaths, err := s.ensureSandboxAssets(opCtx, sandboxRec, ateletpath.SandboxAssetsDir(actorUID))
 	dAssets = time.Since(tAssets)
 	if err != nil {
 		return nil, err
@@ -1039,7 +1060,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 
 	checkpointDir := ateletpath.CheckpointStateDir(actorUID)
 
-	client, err := s.dialWorker(ctx, req.GetWorkerPodUid())
+	client, err := s.dialWorker(opCtx, req.GetWorkerPodUid())
 	if err != nil {
 		return nil, err
 	}
@@ -1053,7 +1074,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	}
 
 	tWorker := time.Now()
-	resp, err := client.CheckpointWorkload(ctx, &ateworkerpb.CheckpointWorkloadRequest{
+	resp, err := client.CheckpointWorkload(opCtx, &ateworkerpb.CheckpointWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -1091,7 +1112,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	var state *ateletpb.ActorSnapshotState
 	switch mode := req.GetUploadConfig().GetMode(); mode {
 	case ateletpb.UploadMode_UPLOAD_MODE_DEFERRED:
-		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
+		if err := s.moveLocalCheckpoint(opCtx, req, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while moving to local snapshot: %w", err)
 		}
@@ -1099,10 +1120,10 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	case ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE:
 		// CheckpointWorkload has already deleted the workload, so a retried
 		// Checkpoint cannot redo this upload. It waits for the object-store plugin
-		// as long as ctx allows, and a plugin error reaches the control plane as
+		// as long as opCtx allows, and a plugin error reaches the control plane as
 		// Internal, which crashes the actor.
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
-		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
+		if err := s.uploadExternalCheckpoint(opCtx, req, checkpointDir, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while uploading external snapshot: %w", err)
 		}
@@ -1112,8 +1133,8 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		// The snapshot is durable now, so the local copy only saves a
 		// download: failing to keep it must not fail the checkpoint.
 		// RemoveActorFilesExceptState cleans up checkpointDir if the move fails.
-		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
-			slog.WarnContext(ctx, "Failed to keep a local copy of the uploaded snapshot", slog.Any("actor", actorRef), slog.Any("err", err))
+		if err := s.moveLocalCheckpoint(opCtx, req, sandboxRec); err != nil {
+			slog.WarnContext(opCtx, "Failed to keep a local copy of the uploaded snapshot", slog.Any("actor", actorRef), slog.Any("err", err))
 		} else {
 			state = s.snapshots.CommitLocal(actorUID, snap)
 		}
@@ -1123,7 +1144,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	dPersist = time.Since(tPersist)
 
 	tCleanup := time.Now()
-	err = s.cleanUpAfterCheckpoint(ctx, req, state.GetLatestLocal() != nil)
+	err = s.cleanUpAfterCheckpoint(opCtx, req, state.GetLatestLocal() != nil)
 	dCleanup = time.Since(tCleanup)
 	if err != nil {
 		return nil, err
