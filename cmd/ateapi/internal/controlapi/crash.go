@@ -71,7 +71,7 @@ func ateletErrorCrashesActor(ctx context.Context, isTerminateRPC bool, err error
 
 	// Workflow's own context ended: the caller went away or the actor lease
 	// was lost.
-	if ctx.Err() != nil {
+	if contextEnded(ctx) != nil {
 		return false
 	}
 
@@ -99,8 +99,8 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 
 	// The caller went away or its deadline passed: report that, not atelet's
 	// error. The actor keeps its assignment, so a retry can finish the operation.
-	if ctx.Err() != nil {
-		return fmt.Errorf("while calling atelet %s: %w: %w", rpc, err, ctx.Err())
+	if ctxErr := contextEnded(ctx); ctxErr != nil {
+		return fmt.Errorf("while calling atelet %s: %w: %w", rpc, err, ctxErr)
 	}
 	if status.Code(err) == codes.Unavailable {
 		return apierror.Unavailable("while calling atelet %s: %w", rpc, err)

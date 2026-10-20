@@ -368,9 +368,10 @@ func (w *ActorWorkflow) ensureTagSourceSnapshotDurable(ctx context.Context, acto
 // promoteSnapshotError maps an error from atelet's PromoteSnapshot to the
 // error the tag fails with.
 func promoteSnapshotError(ctx context.Context, err error) error {
-	// The caller went away or the lease was lost: report that, not atelet's error.
-	if ctx.Err() != nil {
-		return fmt.Errorf("while calling atelet PromoteSnapshot: %w: %w", err, ctx.Err())
+	// The caller went away, its deadline passed or the lease was lost: report
+	// that, not atelet's error.
+	if ctxErr := contextEnded(ctx); ctxErr != nil {
+		return fmt.Errorf("while calling atelet PromoteSnapshot: %w: %w", err, ctxErr)
 	}
 	switch status.Code(err) {
 	case codes.Aborted:
