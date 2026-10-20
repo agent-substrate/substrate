@@ -55,10 +55,7 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 	if actor, err = w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), node); err != nil {
 		return nil, err
 	}
-	constraints, err := schedulingConstraints(actor, actorTemplate)
-	if err != nil {
-		return nil, err
-	}
+	constraints := schedulingConstraints(actor, actorTemplate)
 	constraints.RequiredNodes = nil
 	constraints.RequiredRuntime = hardware.Requirement{}
 	if _, err := w.scheduler.Schedule(ctx, constraints); err != nil {
