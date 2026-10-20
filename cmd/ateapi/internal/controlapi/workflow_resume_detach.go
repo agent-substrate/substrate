@@ -124,7 +124,7 @@ func (w *ActorWorkflow) loadPinnedActor(ctx context.Context, actorRef resources.
 		return nil, err
 	}
 	if expected != nil && !proto.Equal(actor.GetActorTemplate(), previous.GetActorTemplate()) {
-		return nil, apierror.FailedPrecondition("actor template changed during conditioned resume")
+		return nil, apierror.Aborted("actor template changed during conditioned resume, please retry")
 	}
 	if actor.GetMetadata().GetUid() != previous.GetMetadata().GetUid() ||
 		actor.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED ||

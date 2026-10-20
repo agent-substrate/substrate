@@ -924,11 +924,37 @@ func TestValidateDeleteActorRequest(t *testing.T) {
 }
 
 func TestValidateResumeActorRequest(t *testing.T) {
+	withExpected := func(expected *ateapi.ExpectedSnapshot) *ateapi.ResumeActorRequest {
+		return &ateapi.ResumeActorRequest{
+			Actor:    &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Expected: expected,
+		}
+	}
 	tests := []struct {
 		name string
 		req  *ateapi.ResumeActorRequest
 		want field.ErrorList
 	}{{
+		"valid expected",
+		withExpected(&ateapi.ExpectedSnapshot{ActorUid: "c4652e88-7079-448b-94ce-55b45fa12c43", SnapshotUuid: "snap-1", Generation: 1}),
+		nil,
+	}, {
+		"empty expected",
+		withExpected(&ateapi.ExpectedSnapshot{}),
+		field.ErrorList{
+			field.Required(field.NewPath("expected", "actor_uid"), ""),
+			field.Required(field.NewPath("expected", "snapshot_uuid"), ""),
+			field.Required(field.NewPath("expected", "generation"), ""),
+		},
+	}, {
+		"expected generation zero",
+		withExpected(&ateapi.ExpectedSnapshot{ActorUid: "c4652e88-7079-448b-94ce-55b45fa12c43", SnapshotUuid: "snap-1", Generation: 0}),
+		field.ErrorList{field.Required(field.NewPath("expected", "generation"), "")},
+	}, {
+		"malformed expected snapshot_uuid",
+		withExpected(&ateapi.ExpectedSnapshot{ActorUid: "c4652e88-7079-448b-94ce-55b45fa12c43", SnapshotUuid: "Bad/Snapshot", Generation: 1}),
+		field.ErrorList{field.Invalid(field.NewPath("expected", "snapshot_uuid"), "Bad/Snapshot", "").WithOrigin("format=k8s-short-name")},
+	}, {
 		"valid",
 		&ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"}},
 		nil,

@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -50,10 +51,14 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 		request     func(*ateapi.ExpectedSnapshot)
 		apiUpdate   bool
 		workerGone  bool
+		noop        bool
+		diagnostic  string
 		want        codes.Code
 	}{
 		{name: "matching checkpoint/durable"},
-		{name: "matching checkpoint/UUID mismatch", request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid = "other" }, want: codes.FailedPrecondition},
+		{name: "matching checkpoint/UUID mismatch", request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid = "other" }, diagnostic: "newest held snapshot", want: codes.FailedPrecondition},
+		{name: "matching checkpoint/generation mismatch", request: func(e *ateapi.ExpectedSnapshot) { e.Generation = 2 }, diagnostic: "newest held snapshot", want: codes.FailedPrecondition},
+		{name: "matching checkpoint/lost response identical retry", phase: "lost response"},
 		{name: "matching checkpoint/retryable RESUMING", phase: "resuming"},
 		{name: "matching checkpoint/local restore differs", mutate: func(a *ateapi.Actor) {
 			local(a)
@@ -61,15 +66,24 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 			next.Uuid, next.Generation, next.Locality = "snap-2", 2, ""
 			a.Status.Snapshots = append(a.Status.Snapshots, next)
 			a.Status.LastAssignedGeneration = 2
-		}, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }, want: codes.FailedPrecondition},
+		}, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }, diagnostic: "local restore source", want: codes.FailedPrecondition},
 		{name: "GetActor-ResumeActor race/intervening suspend", phase: "suspend", want: codes.FailedPrecondition},
 		{name: "GetActor-ResumeActor race/source changes after preflight", phase: "lease", mutate: changed, want: codes.FailedPrecondition},
-		{name: "same-name replacement", phase: "replace", want: codes.FailedPrecondition},
-		{name: "RUNNING", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING }, want: codes.FailedPrecondition},
+		{name: "same-name replacement", phase: "replace", diagnostic: "actor UID", want: codes.FailedPrecondition},
+		{name: "RUNNING/matching checkpoint", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING }, noop: true},
+		{name: "RUNNING/pending held checkpoint", mutate: func(a *ateapi.Actor) {
+			a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
+			pending(a)
+		}, noop: true},
+		{name: "RUNNING/UUID mismatch", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING }, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid = "other" }, diagnostic: "newest held snapshot", want: codes.FailedPrecondition},
+		{name: "RUNNING/newer held snapshot under lease", phase: "lease", mutate: func(a *ateapi.Actor) {
+			a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
+			newer(a)
+		}, diagnostic: "newest held snapshot", want: codes.FailedPrecondition},
 		{name: "newer pending checkpoint/older completed refused", mutate: newer, want: codes.FailedPrecondition},
 		{name: "newer pending checkpoint/matching upload unavailable", mutate: newer, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }, want: codes.Unavailable},
-		{name: "template change/assignment conflict", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Name = "tmpl2" }, apiUpdate: true, want: codes.FailedPrecondition},
-		{name: "template change/worker deleted before cleanup", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Name = "tmpl2" }, apiUpdate: true, workerGone: true, want: codes.FailedPrecondition},
+		{name: "template change/assignment conflict", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Name = "tmpl2" }, apiUpdate: true, want: codes.Aborted},
+		{name: "template change/worker deleted before cleanup", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Name = "tmpl2" }, apiUpdate: true, workerGone: true, want: codes.Aborted},
 		{name: "matching checkpoint/assignment refresh rejects changed snapshot", phase: "conflict", mutate: func(a *ateapi.Actor) { a.Status.Snapshots[0].Uuid = "other" }, want: codes.FailedPrecondition},
 		{name: "template change/unrelated update retries", phase: "conflict", mutate: func(a *ateapi.Actor) { a.WorkerSelector = &ateapi.Selector{} }},
 		{name: "malformed expectation", phase: "malformed", request: func(e *ateapi.ExpectedSnapshot) { e.ActorUid = "not-a-uuid" }, want: codes.InvalidArgument},
@@ -185,6 +199,23 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 			restore, run := atelet.requests()
 			after := mustReadActor(t, ctx, st, ref)
 			if tc.want != codes.OK {
+				if tc.diagnostic != "" {
+					var details []string
+					if tc.diagnostic == "actor UID" {
+						details = []string{after.GetMetadata().GetUid(), req.GetExpected().GetActorUid()}
+					} else {
+						held := latestSnapshot(after.GetStatus(), func(*ateapi.Snapshot) bool { return true })
+						if tc.diagnostic == "local restore source" {
+							held = findLatestLocalSnapshot(after.GetStatus())
+						}
+						details = []string{held.GetUuid(), fmt.Sprintf("generation %d", held.GetGeneration()), req.GetExpected().GetSnapshotUuid(), fmt.Sprintf("generation %d", req.GetExpected().GetGeneration())}
+					}
+					for _, detail := range append(details, tc.diagnostic, "expected") {
+						if !strings.Contains(err.Error(), detail) {
+							t.Errorf("rejection %q omits %q", err, detail)
+						}
+					}
+				}
 				if tc.workerGone && !strings.Contains(err.Error(), "actor template changed") {
 					t.Errorf("lost original rejection: %v", err)
 				}
@@ -202,6 +233,24 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 				} else if err != nil || worker.GetStatus().GetAllocated().GetActors() != 0 {
 					t.Errorf("rejected resume retained capacity: worker=%v, err=%v", worker, err)
 				}
+				if tc.want != codes.Aborted || tc.workerGone {
+					return
+				}
+				// The same checkpoint can resume after reloading the new template.
+				resp, err = s.ResumeActor(ctx, req)
+				if err != nil {
+					t.Fatalf("identical retry after template change: %v", err)
+				}
+				if counted.acquireCalls != 2 {
+					t.Errorf("lease acquisitions after retry = %d, want 2", counted.acquireCalls)
+				}
+				after = mustReadActor(t, ctx, st, ref)
+				restore, run = atelet.requests()
+			}
+			if tc.noop {
+				if resp.GetResumed() || !proto.Equal(resp.GetActor(), actor) || !proto.Equal(after, actor) || !proto.Equal(restore, previousRestore) || !proto.Equal(run, previousRun) {
+					t.Errorf("already-running resume was not a no-op: %v", resp)
+				}
 				return
 			}
 			if !resp.GetResumed() || after.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
@@ -213,6 +262,23 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 			snapshot := actor.GetStatus().GetSnapshots()[0]
 			if restore.GetSnapshot().GetSnapshotUuid() != snapshot.GetUuid() || restore.GetSnapshot().GetGeneration() != snapshot.GetGeneration() || run != nil {
 				t.Errorf("restore = %v, run = %v; want snapshot %v", restore, run, snapshot)
+			}
+			if tc.phase == "lost response" {
+				// The first response is lost; retry the original request unchanged.
+				atelet.mu.Lock()
+				atelet.restore, atelet.run = nil, nil
+				atelet.mu.Unlock()
+				retry, err := s.ResumeActor(ctx, req)
+				if err != nil {
+					t.Fatalf("identical retry after success: %v", err)
+				}
+				restore, run = atelet.requests()
+				if retry.GetResumed() || !proto.Equal(retry.GetActor(), after) || !proto.Equal(mustReadActor(t, ctx, st, ref), after) || restore != nil || run != nil {
+					t.Errorf("identical retry was not a no-op: %v", retry)
+				}
+				if counted.acquireCalls != 2 {
+					t.Errorf("lease acquisitions after retry = %d, want 2", counted.acquireCalls)
+				}
 			}
 		})
 	}
@@ -239,7 +305,7 @@ func TestAssignWorkerAttempt_ExpectedRejectionCleanup(t *testing.T) {
 		want       codes.Code
 	}{
 		{name: "release failure is reported", releaseErr: releaseErr, want: codes.Internal},
-		{name: "RESUMING assignment keeps its claim", resuming: true, want: codes.FailedPrecondition},
+		{name: "RESUMING assignment keeps its claim", resuming: true, want: codes.Aborted},
 		{name: "lost lease does not release", loseLease: true, want: codes.Canceled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
