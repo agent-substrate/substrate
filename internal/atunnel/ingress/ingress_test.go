@@ -158,7 +158,7 @@ func TestRelayWithHalfClose(t *testing.T) {
 	var downstreamOutput bytes.Buffer
 	done := make(chan struct{})
 	go func() {
-		relayWithHalfClose(context.Background(), slog.New(slog.DiscardHandler), upstream, downstreamReader, &downstreamOutput, downstreamReader)
+		relayWithHalfClose(context.Background(), slog.New(slog.DiscardHandler), upstream, downstreamReader, &downstreamOutput, downstreamReader, func() {})
 		close(done)
 	}()
 
@@ -207,7 +207,7 @@ func TestRelayIngressClosesDownstreamWhenActorCloses(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	done := make(chan struct{})
 	go func() {
-		relayWithHalfClose(context.Background(), log, upstream, downstreamReader, &downstreamOutput, downstreamReader)
+		relayWithHalfClose(context.Background(), log, upstream, downstreamReader, &downstreamOutput, downstreamReader, func() {})
 		close(done)
 	}()
 
@@ -243,7 +243,7 @@ func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	done := make(chan struct{})
 	go func() {
-		relayWithHalfClose(ctx, log, upstream, downstreamReader, io.Discard, downstreamReader)
+		relayWithHalfClose(ctx, log, upstream, downstreamReader, io.Discard, downstreamReader, func() {})
 		close(done)
 	}()
 
@@ -265,6 +265,51 @@ func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
 		t.Errorf("relay logs = %q, want a line containing %q", logs.String(), want)
 	}
 }
+
+// The relay must not return while its actor-to-router copy is inside a Write:
+// an HTTP/2 ResponseWriter panics when used after its handler returned. On
+// cancel the relay aborts the downstream, which is what makes such a Write
+// return, and waits for the copy.
+func TestRelayIngressCancellationWaitsForActorCopy(t *testing.T) {
+	upstream, actor := net.Pipe()
+	defer actor.Close()
+	downstreamReader, downstreamInput := io.Pipe()
+	defer downstreamInput.Close()
+	writer := &blockingWriter{entered: make(chan struct{}), release: make(chan struct{}), aborted: make(chan struct{})}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	done := make(chan struct{})
+	go func() {
+		relayWithHalfClose(ctx, slog.New(slog.DiscardHandler), upstream, downstreamReader, writer, downstreamReader, writer.abort)
+		close(done)
+	}()
+
+	go func() { _, _ = actor.Write([]byte("x")) }()
+	receiveWithin(t, writer.entered, "actor copy to enter Write")
+	cancel(errActorDeactivated)
+	receiveWithin(t, writer.aborted, "downstream abort")
+	select {
+	case <-done:
+		t.Fatal("relay returned while the actor copy was inside Write")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(writer.release)
+	receiveWithin(t, done, "relay return")
+}
+
+// blockingWriter stays inside Write until released, like an HTTP/2 write on
+// an exhausted flow-control window.
+type blockingWriter struct {
+	entered, release, aborted chan struct{}
+	once                      sync.Once
+}
+
+func (w *blockingWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.entered) })
+	<-w.release
+	return len(p), nil
+}
+
+func (w *blockingWriter) abort() { close(w.aborted) }
 
 // syncBuffer collects logs from the relay's goroutines.
 type syncBuffer struct {
@@ -1270,6 +1315,77 @@ func TestServeConnectHTTPDialsTheSandbox(t *testing.T) {
 	}
 	if want := "actor.internal:9090"; dialed != want {
 		t.Errorf("dialed %q through the sandbox dialer, want %q", dialed, want)
+	}
+}
+
+// A router that stops reading leaves the actor-to-router copy blocked on the
+// HTTP/2 flow-control window. Deactivate must still return: the relay resets
+// the stream and waits for the copy instead of leaving it to write into a
+// finished handler.
+func TestServeH2ConnectDeactivateResetsStalledTunnel(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, upstreamURL)
+	upstream, actor := net.Pipe()
+	defer actor.Close()
+	dial := func(context.Context, string, string) (net.Conn, error) { return upstream, nil }
+	if err := s.Activate("team-a", "actor-1", "uid-actor-1", dial); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(s.serveConnectHTTP))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	routerInput, routerOutput := io.Pipe()
+	defer routerOutput.Close()
+	req, err := http.NewRequest(http.MethodConnect, srv.URL, routerInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev:9090"
+	req.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.Proto != "HTTP/2.0" || res.StatusCode != http.StatusOK {
+		t.Fatalf("tunnel opened as %s %d, want HTTP/2.0 200", res.Proto, res.StatusCode)
+	}
+
+	// The actor keeps sending while the router reads nothing, until the copy
+	// blocks on the stream window and stops taking the actor's writes.
+	var sent atomic.Int64
+	go func() {
+		chunk := make([]byte, 64<<10)
+		for {
+			n, err := actor.Write(chunk)
+			sent.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for last, stable := int64(-1), 0; stable < 20 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+		if n := sent.Load(); n != last {
+			last, stable = n, 0
+			continue
+		}
+		stable++
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.Deactivate(ctx, "team-a", "actor-1", "uid-actor-1"); err != nil {
+		t.Fatalf("Deactivate with a stalled router: %v", err)
+	}
+	if _, err := io.Copy(io.Discard, res.Body); err == nil {
+		t.Error("the stalled tunnel ended cleanly, want a stream reset")
 	}
 }
 
