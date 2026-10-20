@@ -609,7 +609,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 				if err := ctx.Err(); err != nil {
 					return nil, nil, err
 				}
-				if _, err := w.store.ReleaseActorFromWorker(ctx, bound.GetMetadata().GetName(), actor.GetMetadata().GetUid()); err != nil {
+				if _, err := w.store.ReleaseActorFromWorker(ctx, bound.GetMetadata().GetName(), actor.GetMetadata().GetUid()); err != nil && !errors.Is(err, store.ErrNotFound) {
 					return nil, nil, fmt.Errorf("while releasing worker claim after rejecting resume (%v): %w", conditionErr, err)
 				}
 			}

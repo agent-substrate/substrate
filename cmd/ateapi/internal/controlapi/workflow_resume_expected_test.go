@@ -49,6 +49,7 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 		mutate      func(*ateapi.Actor)
 		request     func(*ateapi.ExpectedSnapshot)
 		apiUpdate   bool
+		workerGone  bool
 		want        codes.Code
 	}{
 		{name: "matching checkpoint/durable"},
@@ -68,6 +69,7 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 		{name: "newer pending checkpoint/older completed refused", mutate: newer, want: codes.FailedPrecondition},
 		{name: "newer pending checkpoint/matching upload unavailable", mutate: newer, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }, want: codes.Unavailable},
 		{name: "template change/assignment conflict", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Name = "tmpl2" }, apiUpdate: true, want: codes.FailedPrecondition},
+		{name: "template change/worker deleted before cleanup", phase: "conflict", mutate: func(a *ateapi.Actor) { a.ActorTemplate.Name = "tmpl2" }, apiUpdate: true, workerGone: true, want: codes.FailedPrecondition},
 		{name: "matching checkpoint/assignment refresh rejects changed snapshot", phase: "conflict", mutate: func(a *ateapi.Actor) { a.Status.Snapshots[0].Uuid = "other" }, want: codes.FailedPrecondition},
 		{name: "template change/unrelated update retries", phase: "conflict", mutate: func(a *ateapi.Actor) { a.WorkerSelector = &ateapi.Selector{} }},
 		{name: "malformed expectation", phase: "malformed", request: func(e *ateapi.ExpectedSnapshot) { e.ActorUid = "not-a-uuid" }, want: codes.InvalidArgument},
@@ -157,6 +159,13 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 					req.Expected = nil
 				}
 			}
+			if tc.workerGone {
+				counted.Interface = &resumeRefreshStore{Interface: counted.Interface, beforeRelease: func(ctx context.Context, worker string) {
+					if _, err := st.DeleteWorker(ctx, worker, store.DeletePreconditions{}); err != nil {
+						t.Fatal(err)
+					}
+				}}
+			}
 			w.store = counted
 			previousRestore, previousRun := atelet.requests()
 			resp, err := s.ResumeActor(ctx, req)
@@ -176,6 +185,9 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 			restore, run := atelet.requests()
 			after := mustReadActor(t, ctx, st, ref)
 			if tc.want != codes.OK {
+				if tc.workerGone && !strings.Contains(err.Error(), "actor template changed") {
+					t.Errorf("lost original rejection: %v", err)
+				}
 				if !proto.Equal(restore, previousRestore) || !proto.Equal(run, previousRun) || !proto.Equal(after, actor) {
 					t.Error("rejected resume called atelet or changed actor")
 				}
@@ -183,7 +195,11 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 					t.Errorf("rejected resume retained worker claim %q: %v", worker, err)
 				}
 				worker, err := st.GetWorker(ctx, testWorkerUID("pod-1"))
-				if err != nil || worker.GetStatus().GetAllocated().GetActors() != 0 {
+				if tc.workerGone {
+					if err != store.ErrNotFound {
+						t.Errorf("worker was not deleted before cleanup: %v", err)
+					}
+				} else if err != nil || worker.GetStatus().GetAllocated().GetActors() != 0 {
 					t.Errorf("rejected resume retained capacity: worker=%v, err=%v", worker, err)
 				}
 				return
@@ -293,8 +309,9 @@ func TestAssignWorkerAttempt_ExpectedRejectionCleanup(t *testing.T) {
 // refresh returns, and counts attempts to release the resulting claim.
 type resumeRefreshStore struct {
 	store.Interface
-	cancel   context.CancelFunc
-	releases int
+	cancel        context.CancelFunc
+	beforeRelease func(context.Context, string)
+	releases      int
 }
 
 func (s *resumeRefreshStore) GetActor(ctx context.Context, ref resources.ActorRef) (*ateapi.Actor, error) {
@@ -307,5 +324,8 @@ func (s *resumeRefreshStore) GetActor(ctx context.Context, ref resources.ActorRe
 
 func (s *resumeRefreshStore) ReleaseActorFromWorker(ctx context.Context, worker, uid string) (*ateapi.Worker, error) {
 	s.releases++
+	if s.beforeRelease != nil {
+		s.beforeRelease(ctx, worker)
+	}
 	return s.Interface.ReleaseActorFromWorker(ctx, worker, uid)
 }
