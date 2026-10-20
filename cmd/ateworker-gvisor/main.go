@@ -75,6 +75,7 @@ func flagsConfigPath() string {
 
 var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
+	podIPs = pflag.String("pod-ips", "", "The comma-separated IPs of the current pod")
 
 	tunnelConfig = atunnel.RegisterFlags(pflag.CommandLine)
 
@@ -257,6 +258,7 @@ func do(ctx context.Context) error {
 	ateworkerpb.RegisterWorkerServer(svr, ateworkerService)
 	reflection.Register(svr)
 	readiness := &serverboot.Readiness{}
+	readiness.AddCheck("registered", ateworkerService.epoch.Registered)
 
 	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination
 	// grace period) and propagate it into the sandbox so the actor can save its
@@ -286,6 +288,7 @@ func do(ctx context.Context) error {
 		TrustBundlePath:      tunnelConfig.TrustBundle,
 		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 		Actors:               *maxActors,
+		PodIPs:               register.ParsePodIPs(*podIPs),
 		SandboxClass:         string(atev1alpha1.SandboxClassGvisor),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 	}
@@ -295,7 +298,7 @@ func do(ctx context.Context) error {
 		ateworkerService.crashReporter = reporter
 	}
 	go func() {
-		err := register.Report(ctx, reportConfig)
+		err := register.Report(ctx, reportConfig, &ateworkerService.epoch)
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
@@ -353,6 +356,10 @@ type AteWorkerService struct {
 	// workload RPCs are rejected with codes.Unavailable.
 	shuttingDown atomic.Bool
 
+	// epoch is the epoch this process registered with. It starts no workload
+	// before registering.
+	epoch register.Epoch
+
 	// cgroupRoot is where the sandbox's cgroup v2 leaves live: the worker pod's
 	// own cgroup scope, which cgroup.Delegate prepares. A field rather
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
@@ -399,7 +406,7 @@ func (s *AteWorkerService) beginRPC(actorUID, name string, cancel context.Cancel
 }
 
 // rejectIfDraining returns a codes.Unavailable error if ateworker has begun graceful
-// shutdown, so the control plane reschedules the actor onto a live worker.
+// shutdown.
 func (s *AteWorkerService) rejectIfDraining() error {
 	if s.shuttingDown.Load() {
 		return apierror.Unavailable("worker draining: not accepting new workloads")
@@ -601,6 +608,10 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := ateworkervalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
+	epoch, err := s.epoch.Require()
+	if err != nil {
+		return nil, err
+	}
 	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
@@ -723,7 +734,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	s.recordInitial(ctx, hosted)
 	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
 
-	return &ateworkerpb.RunWorkloadResponse{}, nil
+	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch}, nil
 }
 
 // Allow checkpointing even if the pod is shutting down. This will allow actors
@@ -992,6 +1003,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err := ateworkervalidation.ValidateRestoreWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
+	epoch, err := s.epoch.Require()
+	if err != nil {
+		return nil, err
+	}
 	// Taken before the lock, so prep covers the wait for it.
 	tStart := time.Now()
 	if err := validateFidelity(req.GetFidelity()); err != nil {
@@ -1196,7 +1211,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	s.recordInitial(ctx, hosted)
 	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), containers)
 
-	return &ateworkerpb.RestoreWorkloadResponse{}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch}, nil
 }
 
 func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {

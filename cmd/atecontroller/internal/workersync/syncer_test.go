@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"slices"
 	"testing"
 	"time"
 
@@ -51,8 +50,9 @@ const (
 	otherPodUID = "22222222-2222-2222-2222-222222222222"
 )
 
-// workerPod builds a pod the informer's label selector matches. An empty ip
-// leaves the pod unregistrable, the shape a pod has before its sandbox is up.
+// workerPod builds a pod the informer's label selector matches, scheduled to a
+// node. An empty ip leaves the pod with no status, so not Ready, the shape a
+// pod has before its sandbox is up.
 func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -92,14 +92,13 @@ func workerPool(ns, name string, labels map[string]string) *atev1alpha1.WorkerPo
 
 // registeredWorker is a Worker in the shape the syncer would have registered
 // for the given pod, for seeding the fake API before a test runs.
-func registeredWorker(ns, poolName, podName, uid, ip string) *ateapipb.Worker {
+func registeredWorker(ns, poolName, podName, uid string) *ateapipb.Worker {
 	return &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: uid},
 		WorkerNamespace: ns,
 		WorkerPool:      poolName,
 		WorkerPod:       podName,
 		WorkerPodUid:    uid,
-		Ips:             []string{ip},
 		NodeName:        "node1",
 	}
 }
@@ -210,8 +209,9 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	api := newFakeControl()
 	fakeK8s, _ := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, map[string]string{"foo": "bar"}))
 
-	// A pod with no IP is not registered: there is nothing to route to yet.
+	// A pod not yet scheduled is not registered: node_name is required.
 	pod := workerPod(ns, podName, poolName, testPodUID, "")
+	pod.Spec.NodeName = ""
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod: %v", err)
 	}
@@ -219,24 +219,21 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	// wrong in: the poll only ends early if a worker shows up.
 	err := wait.PollUntilContextTimeout(ctx, 20*time.Millisecond, 300*time.Millisecond, true, func(context.Context) (bool, error) {
 		if got := api.names(); len(got) != 0 {
-			return false, fmt.Errorf("registry holds %v for a pod with no IP, want it empty", got)
+			return false, fmt.Errorf("registry holds %v for a pod with no node, want it empty", got)
 		}
 		return false, nil
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("while checking a pod with no IP stays unregistered: %v", err)
+		t.Fatalf("while checking a pod with no node stays unregistered: %v", err)
 	}
 
-	// Once the pod reports an IP it is registered, with the fields the syncer
-	// copies off its pool.
+	// Once the pod is scheduled and Ready it is registered, with the fields the
+	// syncer copies off its pool.
 	if _, err := fakeK8s.CoreV1().Pods(ns).Update(ctx, workerPod(ns, podName, poolName, testPodUID, "127.0.0.1"), metav1.UpdateOptions{}); err != nil {
 		t.Fatalf("update pod: %v", err)
 	}
 
 	got := waitForWorker(t, ctx, api, testPodUID, workerActive)
-	if want := []string{"127.0.0.1"}; !slices.Equal(got.GetIps(), want) {
-		t.Errorf("worker ips = %q, want %q", got.GetIps(), want)
-	}
 	if !maps.Equal(got.GetLabels(), map[string]string{"foo": "bar"}) {
 		t.Errorf("worker labels = %v, want map[foo:bar]", got.GetLabels())
 	}
@@ -312,7 +309,7 @@ func TestSyncer_SoftDelete_MarksDraining(t *testing.T) {
 	ns, poolName, podName, ip := "ns-drain", "pool1", "worker-drain", "10.0.0.2"
 
 	api := newFakeControl()
-	api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
+	api.put(registeredWorker(ns, poolName, podName, testPodUID))
 	s, pods, _ := setupReconcileTest(t, api)
 
 	pod := workerPod(ns, podName, poolName, testPodUID, ip)
@@ -335,7 +332,7 @@ func TestSyncer_SoftDelete_NoPodIP(t *testing.T) {
 	ns, poolName, podName := "ns-drain-noip", "pool1", "worker-drain-noip"
 
 	api := newFakeControl()
-	api.put(registeredWorker(ns, poolName, podName, testPodUID, "10.0.0.3"))
+	api.put(registeredWorker(ns, poolName, podName, testPodUID))
 	s, pods, _ := setupReconcileTest(t, api)
 
 	// Same pod as the draining test above, minus the pod IP.
@@ -365,7 +362,7 @@ func TestMarkWorkerDraining(t *testing.T) {
 
 	t.Run("already draining returns nil without a write", func(t *testing.T) {
 		api := newFakeControl()
-		w := registeredWorker(ns, poolName, podName, testPodUID, "10.0.0.4")
+		w := registeredWorker(ns, poolName, podName, testPodUID)
 		w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
 		seeded := api.put(w)
 
@@ -382,7 +379,7 @@ func TestMarkWorkerDraining(t *testing.T) {
 
 	t.Run("active worker marked draining", func(t *testing.T) {
 		api := newFakeControl()
-		api.put(registeredWorker(ns, poolName, podName, testPodUID, "10.0.0.4"))
+		api.put(registeredWorker(ns, poolName, podName, testPodUID))
 
 		s := &WorkerPoolSyncer{client: api}
 		if err := s.markWorkerDraining(ctx, key); err != nil {
@@ -404,7 +401,7 @@ func TestReconcileDeadWorker(t *testing.T) {
 
 	t.Run("registered worker is removed", func(t *testing.T) {
 		api := newFakeControl()
-		api.put(registeredWorker(ns, poolName, podName, testPodUID, "10.0.0.5"))
+		api.put(registeredWorker(ns, poolName, podName, testPodUID))
 
 		s := &WorkerPoolSyncer{client: api}
 		if err := s.reconcileDeadWorker(ctx, key); err != nil {
@@ -433,8 +430,8 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 
 	ns, poolName := "ns-recon", "pool1"
 	api := newFakeControl()
-	api.put(registeredWorker(ns, poolName, "worker-live", testPodUID, "10.0.0.9"))
-	api.put(registeredWorker(ns, poolName, "worker-orphan", otherPodUID, "10.0.0.10"))
+	api.put(registeredWorker(ns, poolName, "worker-live", testPodUID))
+	api.put(registeredWorker(ns, poolName, "worker-orphan", otherPodUID))
 
 	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 	// The cache holds only the live pod, so it is an authoritative snapshot.
@@ -464,7 +461,7 @@ func TestSyncer_EnqueueRegisteredWorkers_RetriesTransientListError(t *testing.T)
 	defer cancel()
 
 	api := newFakeControl()
-	api.put(registeredWorker("ns-enq-retry", "pool1", "worker-1", testPodUID, "10.0.0.10"))
+	api.put(registeredWorker("ns-enq-retry", "pool1", "worker-1", testPodUID))
 
 	failsLeft := 1
 	api.setListHook(func(*ateapipb.ListWorkersRequest) error {
@@ -520,7 +517,7 @@ func TestSyncer_EnqueueRegisteredWorkers_StreamsPagesAndRetriesLatePage(t *testi
 		"bbbbbbbb-0000-0000-0000-000000000000",
 		"cccccccc-0000-0000-0000-000000000000",
 	} {
-		api.put(registeredWorker("ns", "p", fmt.Sprintf("w%d", i), uid, "10.0.0.1"))
+		api.put(registeredWorker("ns", "p", fmt.Sprintf("w%d", i), uid))
 	}
 
 	// The second page fails once before serving.
@@ -545,21 +542,31 @@ func TestSyncer_EnqueueRegisteredWorkers_StreamsPagesAndRetriesLatePage(t *testi
 	}
 }
 
-// A dual-stack pod registers every IP Kubernetes reports, in order.
-func TestSyncer_CreateWorker_DualStack(t *testing.T) {
+// A scheduled pod is registered before it has an IP, and unavailable: its IPs
+// are the worker process's to report when it registers, not the syncer's to
+// copy off the pod.
+func TestSyncer_CreateWorker_BeforePodIP(t *testing.T) {
 	ctx := context.Background()
 
-	ns, podName, poolName := "ns-syncer-dual-stack", "worker-unit-dual-stack", "pool-dual-stack"
+	ns, podName, poolName := "ns-syncer-no-ip", "worker-unit-no-ip", "pool-no-ip"
 
 	api := newFakeControl()
 	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
-	pod := workerPod(ns, podName, poolName, testPodUID, "fd00::1")
-	pod.Status.PodIPs = append(pod.Status.PodIPs, corev1.PodIP{IP: "10.0.0.1"})
-	key := seedPod(t, pods, pod)
+	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, ""))
 
 	mustReconcile(t, ctx, s, key)
-	if got, want := api.get(testPodUID).GetIps(), []string{"fd00::1", "10.0.0.1"}; !slices.Equal(got, want) {
-		t.Fatalf("worker ips = %q, want %q", got, want)
+	got := api.get(testPodUID)
+	if got == nil {
+		t.Fatal("no worker registered for a scheduled pod with no IP")
+	}
+	if got.GetNodeName() != "node1" {
+		t.Errorf("worker node = %q, want node1", got.GetNodeName())
+	}
+	if state := got.GetStatus().GetState(); state != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Errorf("worker state = %v, want %v", state, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	}
+	if ips := got.GetStatus().GetIps(); len(ips) != 0 {
+		t.Errorf("worker ips = %q, want none until its worker process registers", ips)
 	}
 }
 
@@ -595,8 +602,8 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"))
 
 	mustReconcile(t, ctx, s, key)
-	if got, want := api.get(testPodUID).GetIps(), []string{"10.0.0.1"}; !slices.Equal(got, want) {
-		t.Fatalf("worker ips = %q, want %q", got, want)
+	if api.get(testPodUID) == nil {
+		t.Fatal("worker not registered")
 	}
 
 	// Change a mutable worker field on the pool, so the next reconcile has an
@@ -772,7 +779,7 @@ func TestSyncer_DeletedWorkerPool(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			api := newFakeControl()
-			api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
+			api.put(registeredWorker(ns, poolName, podName, testPodUID))
 			s, pods, _ := setupReconcileTest(t, api)
 
 			pod := workerPod(ns, podName, poolName, testPodUID, ip)
@@ -809,7 +816,7 @@ func TestSyncer_DeletedWorkerPool_NotReadyPod(t *testing.T) {
 	ns, poolName, podName, ip := "ns-deleted-pool-notready", "pool1", "worker-1", "10.0.0.5"
 
 	api := newFakeControl()
-	api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
+	api.put(registeredWorker(ns, poolName, podName, testPodUID))
 	s, pods, _ := setupReconcileTest(t, api)
 
 	pod := workerPod(ns, podName, poolName, testPodUID, ip)
@@ -835,7 +842,7 @@ func TestSyncer_DeletedWorkerPool_Errors(t *testing.T) {
 	ns, poolName, podName, ip := "ns-deleted-pool-err", "pool1", "worker-1", "10.0.0.5"
 
 	api := newFakeControl()
-	api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
+	api.put(registeredWorker(ns, poolName, podName, testPodUID))
 	s, pods, _ := setupReconcileTest(t, api)
 
 	pod := workerPod(ns, podName, poolName, testPodUID, ip)
@@ -924,7 +931,7 @@ func TestSyncer_StartWaitsForWorkerPoolCache(t *testing.T) {
 	poolLabels := map[string]string{"foo": "bar"}
 
 	api := newFakeControl()
-	api.put(registeredWorker(ns, poolName, podName, testPodUID, "10.0.0.8"))
+	api.put(registeredWorker(ns, poolName, podName, testPodUID))
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset(workerPod(ns, podName, poolName, testPodUID, "10.0.0.8"))
@@ -1050,7 +1057,7 @@ func TestSyncer_TerminalPod_DeletesPod(t *testing.T) {
 		t.Run(string(phase), func(t *testing.T) {
 			ctx := context.Background()
 			api := newFakeControl()
-			api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
+			api.put(registeredWorker(ns, poolName, podName, testPodUID))
 			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 
 			pod := workerPod(ns, podName, poolName, testPodUID, ip)
@@ -1145,8 +1152,8 @@ func TestSyncer_TerminalPod_ViaInformer(t *testing.T) {
 }
 
 // TestSyncer_PodRecreatedWithNewUID verifies that when a pod is deleted and
-// recreated under the same name, the registry converges to the new pod's UID
-// and IP. A coalesced Delete+Create surfaces as a single update event, which
+// recreated under the same name, the registry converges to the new pod's UID.
+// A coalesced Delete+Create surfaces as a single update event, which
 // enqueues both incarnations' keys, so both are reconciled here.
 func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 	ctx := context.Background()
@@ -1177,9 +1184,6 @@ func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 	if got == nil {
 		t.Fatal("the recreated pod's worker was not registered")
 	}
-	if want := []string{"10.0.0.8"}; !slices.Equal(got.GetIps(), want) {
-		t.Errorf("worker ips = %q, want %q", got.GetIps(), want)
-	}
 	if got.GetWorkerPodUid() != otherPodUID {
 		t.Errorf("worker pod uid = %q, want %q", got.GetWorkerPodUid(), otherPodUID)
 	}
@@ -1189,26 +1193,30 @@ func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 	}
 }
 
-// TestSyncer_DeletePodWithoutIP verifies that deleting a pod that never got an
-// IP (and so was never registered) is a no-op rather than an error, which is
-// what keeps it from error-looping.
-func TestSyncer_DeletePodWithoutIP(t *testing.T) {
+// TestSyncer_DeleteUnscheduledPod verifies that deleting a pod that was never
+// scheduled (and so was never registered) is a no-op rather than an error,
+// which is what keeps it from error-looping.
+func TestSyncer_DeleteUnscheduledPod(t *testing.T) {
 	ctx := context.Background()
 
-	ns, podName, poolName := "ns-syncer-neverip", "worker-noip-1", "pool1"
+	ns, podName, poolName := "ns-syncer-unscheduled", "worker-unscheduled-1", "pool1"
 
 	api := newFakeControl()
 	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 	pod := workerPod(ns, podName, poolName, testPodUID, "")
+	pod.Spec.NodeName = ""
 	key := seedPod(t, pods, pod)
 
 	mustReconcile(t, ctx, s, key)
+	if got := api.names(); len(got) != 0 {
+		t.Fatalf("registry holds %v for an unscheduled pod, want it empty", got)
+	}
 	if err := pods.Delete(pod); err != nil {
 		t.Fatalf("deleting pod: %v", err)
 	}
 
-	// The pod never had an IP so nothing was registered, and the delete path is
-	// an idempotent no-op: no error, so nothing requeues.
+	// The pod was never scheduled so nothing was registered, and the delete
+	// path is an idempotent no-op: no error, so nothing requeues.
 	mustReconcile(t, ctx, s, key)
 	if got := api.names(); len(got) != 0 {
 		t.Errorf("registry holds %v, want it empty", got)
@@ -1287,22 +1295,16 @@ func TestSyncer_RegisteredPodWithoutIPIsUnavailable(t *testing.T) {
 
 	api := newFakeControl()
 	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
-	key := seedPod(t, pods, withWorkerRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.9"), 0))
+	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.9"))
 	mustReconcile(t, ctx, s, key)
 
-	if err := pods.Update(withWorkerRestarts(workerPod(ns, podName, poolName, testPodUID, ""), 1)); err != nil {
+	if err := pods.Update(workerPod(ns, podName, poolName, testPodUID, "")); err != nil {
 		t.Fatalf("updating pod: %v", err)
 	}
 	mustReconcile(t, ctx, s, key)
 	got := api.get(testPodUID)
 	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
 		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
-	}
-	if got.GetEpoch() != 2 {
-		t.Errorf("epoch = %d, want 2", got.GetEpoch())
-	}
-	if want := []string{"10.0.0.9"}; !slices.Equal(got.GetIps(), want) {
-		t.Errorf("ips = %v, want the registered %v kept", got.GetIps(), want)
 	}
 }
 

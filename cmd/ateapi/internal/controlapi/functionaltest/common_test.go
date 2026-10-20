@@ -692,7 +692,6 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			WorkerPool:      poolName,
 			WorkerPod:       name,
 			WorkerPodUid:    string(createdPod.UID),
-			Ips:             []string{"127.0.0.1"},
 			NodeName:        nodeName,
 			Labels:          pool.GetLabels(),
 			// Capacity is not settable here: a Worker gets it from its own

@@ -3221,6 +3221,7 @@ func TestResumeActor(t *testing.T) {
 				WorkerPodUid:    podUID,
 				WorkerPodIps:    []string{"127.0.0.1"},
 				NodeName:        "node1",
+				WorkerEpoch:     reportedEpoch,
 				SandboxRuntime:  defaultWorkerRuntime("gvisor"),
 			},
 		},
@@ -3251,11 +3252,12 @@ func TestResumeActor(t *testing.T) {
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
 		WorkerPodUid:    podUID,
-		Ips:             []string{"127.0.0.1"},
 		NodeName:        "node1",
 		Labels:          map[string]string{poolLabelKey: ns},
 		Status: &ateapipb.WorkerStatus{
-			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			RegisteredEpoch: reportedEpoch,
+			Ips:             []string{"127.0.0.1"},
 			// Only the ceiling the worker reported.
 			Capacity: &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 512 << 20},
 			// All a listing reports of the assignments: one actor and the

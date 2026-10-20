@@ -395,10 +395,17 @@ func TestValidateActorUpdate(t *testing.T) {
 		oldVal: validInput(withStatus(withWorkerAssignment())),
 		newVal: validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.WorkerAssignment = nil })),
 	}, {
-		name:   "modify actor.status.worker_assignment",
+		name:   "modify actor.status.worker_assignment identity",
 		oldVal: validInput(withStatus(withWorkerAssignment())),
 		newVal: validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPod = "pod2" }))),
-		want:   field.ErrorList{field.Invalid(field.NewPath("status", "worker_assignment"), nil, "").WithOrigin("update")},
+		want:   field.ErrorList{field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod"), nil, "").WithOrigin("update")},
+	}, {
+		name:   "modify actor.status.worker_assignment worker process",
+		oldVal: validInput(withStatus(withWorkerAssignment())),
+		newVal: validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.WorkerEpoch = 2
+			wa.WorkerPodIps = []string{"10.9.8.7"}
+		}))),
 	}, {
 		name:   "empty actor.status.worker_assignment",
 		oldVal: validInput(),

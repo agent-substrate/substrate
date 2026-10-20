@@ -326,7 +326,9 @@ var defaultRPCPermissions = map[string]rpcRule{
 
 	// WorkerService is served only to atelet, which each handler
 	// authenticates by its mTLS SPIFFE ID.
+	ateapipb.WorkerService_AcquireWorkerEpoch_FullMethodName:         inHandler("ateletauth: caller is atelet on the Worker's node"),
 	ateapipb.WorkerService_RegisterWorker_FullMethodName:             inHandler("ateletauth: caller is atelet on the Worker's node"),
+	ateapipb.WorkerService_SetWorkerSandboxRuntimes_FullMethodName:   inHandler("ateletauth: caller is atelet on the Worker's node"),
 	ateapipb.WorkerService_ReportActorCrashed_FullMethodName:         inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
 	ateapipb.WorkerService_RequestActorSuspend_FullMethodName:        inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
 	ateapipb.WorkerService_MintWorkerActorCertificate_FullMethodName: inHandler("ateletauth: caller is atelet on the node of the Worker the Actor is assigned to"),

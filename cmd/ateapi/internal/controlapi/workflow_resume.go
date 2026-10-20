@@ -118,11 +118,12 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	if err != nil {
 		return nil, false, err
 	}
-	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts); err != nil {
+	var workerEpoch int64
+	if tele, workerEpoch, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts); err != nil {
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
-	if running, err = w.finalizeRunning(leaseCtx, actorRef); err != nil {
+	if running, err = w.finalizeRunning(leaseCtx, actorRef, workerEpoch); err != nil {
 		return nil, false, err
 	}
 	actor = running
@@ -370,9 +371,13 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		return nil, apierror.Aborted("actor %s crashed", actorRef.String())
 	}
 	// An unavailable worker may come back with its Actors intact. If its worker
-	// restarted instead, the raised epoch has this Actor crashed for it.
+	// process restarted instead, a retried resume restores this Actor on the
+	// new process.
 	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
 		return nil, apierror.Unavailable("worker %s assigned to actor %s is unavailable", worker.GetMetadata().GetName(), actorRef)
+	}
+	if !scheduling.Registered(worker) {
+		return nil, apierror.Unavailable("worker %s assigned to actor %s has not finished registering", worker.GetMetadata().GetName(), actorRef)
 	}
 	// Verify the worker is still hosting this Actor.
 	hosted, err := workerHostsActor(ctx, w.store, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
@@ -541,9 +546,6 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 
 	newAssignment := workerAssignmentFrom(bound, snapRuntime)
-	// The cached Worker may predate a raised epoch; the bind read it under the
-	// Worker's row lock.
-	newAssignment.WorkerEpoch = assignment.GetWorkerEpoch()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
 		toUpdate.Status.WorkerAssignment = newAssignment
@@ -592,7 +594,7 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime hardware.Requirement) 
 		WorkerPool:      w.GetWorkerPool(),
 		WorkerPod:       w.GetWorkerPod(),
 		WorkerPodUid:    w.GetWorkerPodUid(),
-		WorkerPodIps:    slices.Clone(w.GetIps()),
+		WorkerPodIps:    slices.Clone(w.GetStatus().GetIps()),
 		NodeName:        w.GetNodeName(),
 		WorkerSpiffeId:  w.GetWorkerSpiffeId(),
 		// The runtime the actor is started or restored under. Snapshots taken
@@ -755,25 +757,25 @@ func checkVolumesAttachable(volumes []*ateapipb.ExternalVolumeStatus) error {
 // the worker pod UID, so a re-entered workflow re-sends the same semantic
 // request; once atelet's Restore/Run are idempotent on those keys this step
 // becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, volumePublishContexts map[string]map[string]string) (tele restoreTelemetry, err error) {
+func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, volumePublishContexts map[string]map[string]string) (tele restoreTelemetry, workerEpoch int64, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
 
 	// A re-entered resume skips assignWorkerAttempt, which checks this too.
 	if err := checkSnapshotURI(actorRef, actor); err != nil {
-		return tele, err
+		return tele, 0, err
 	}
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
-		return tele, err
+		return tele, 0, err
 	}
 	client := ateletpb.NewAteletClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, volumePublishContexts)
 	if err != nil {
-		return tele, err
+		return tele, 0, err
 	}
 	egressGateway := w.egressGateway()
 
@@ -804,10 +806,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			EgressGateway:         egressGateway,
 			Resources:             actorResources,
 		}
-		if _, err = client.Run(ctx, req); err != nil {
-			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Run", false, err)
+		resp, err := client.Run(ctx, req)
+		if err != nil {
+			return tele, 0, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Run", false, err)
 		}
-		return tele, nil
+		return tele, resp.GetWorkerEpoch(), nil
 	}
 
 	slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot", slog.String("snapshot_uuid", snap.GetUuid()))
@@ -857,10 +860,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		EgressGateway:  egressGateway,
 		Resources:      actorResources,
 	}
-	if _, err = client.Restore(ctx, req); err != nil {
-		return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
+	resp, err := client.Restore(ctx, req)
+	if err != nil {
+		return tele, 0, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
 	}
-	return tele, nil
+	return tele, resp.GetWorkerEpoch(), nil
 }
 
 // logRuntimeFallback records a resume that restores without memory state
@@ -881,8 +885,16 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 	return &ateletpb.EgressGateway{Address: w.egressGatewayAddress}
 }
 
-// finalizeRunning re-reads the actor for a fresh version and commits RUNNING.
-func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+// finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
+// stamped with workerEpoch, the epoch of the worker process that ran it.
+//
+// The worker process registered that epoch, with its pod IPs, before it took
+// the workload. If it is still the Worker's registered epoch, the Actor is
+// stamped with it and with those IPs, which a resume bound before the process
+// started did not carry. If a later epoch is registered, that process has exited and taken
+// the sandbox with it, so RUNNING is not committed: the error is Unavailable,
+// and the retried resume restores the Actor on the current process.
+func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, workerEpoch int64) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeRunning")
 	defer func() { err = done(err) }()
 
@@ -891,8 +903,30 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		return nil, err
 	}
 
+	workerName := latestActor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
+	worker, err := w.store.GetWorker(ctx, workerName)
+	if errors.Is(err, store.ErrNotFound) {
+		// Deleting the Worker crashes the Actors bound to it.
+		return nil, apierror.Aborted("worker %s of actor %s is gone", workerName, actorRef)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while getting worker %s: %w", workerName, err)
+	}
+	switch registered := worker.GetStatus().GetRegisteredEpoch(); {
+	case workerEpoch < registered:
+		slog.WarnContext(ctx, "Worker process that ran the actor has been replaced; restoring it again",
+			slog.String("worker", workerName),
+			slog.Int64("worker_epoch", workerEpoch),
+			slog.Int64("registered_epoch", registered))
+		return nil, apierror.Unavailable("worker %s restarted while actor %s was being restored, please retry", workerName, actorRef)
+	case workerEpoch > registered:
+		return nil, apierror.Internal("worker %s reported epoch %d, above its registered epoch %d", workerName, workerEpoch, registered)
+	}
+
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+		toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch
+		toUpdate.Status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())
 		return nil
 	})
 	if err != nil {

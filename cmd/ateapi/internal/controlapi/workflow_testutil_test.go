@@ -284,6 +284,28 @@ func seedSuspendTemplate(t *testing.T, ctx context.Context, st store.Interface, 
 	return stored
 }
 
+// registeredEpoch is the epoch registered sets, and the one the fake atelets
+// report their workloads ran under.
+const registeredEpoch = 1
+
+// registered fills in what a Worker's worker process reports when it
+// registers, which the scheduler requires: a registered epoch and, unless
+// status names them, sandbox classes with a default runtime no snapshot
+// requires.
+func registered(status *ateapipb.WorkerStatus) *ateapipb.WorkerStatus {
+	status.RegisteredEpoch = max(status.RegisteredEpoch, registeredEpoch)
+	if len(status.SandboxClasses) == 0 {
+		status.SandboxClasses = workerSandboxClasses(&ateapipb.ActorSandboxRuntime{
+			SandboxClass: "gvisor",
+			Version: &ateapipb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes:    []*ateapipb.AttributeEntry{{Key: "architecture", Value: "fixture"}},
+			},
+		})
+	}
+	return status
+}
+
 // seedWireWorker stores the Worker wireTestAssignment names and places
 // assignment on it (none when nil), so a finalize step has a real assignment
 // to release.

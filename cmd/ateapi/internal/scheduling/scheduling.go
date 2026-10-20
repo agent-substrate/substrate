@@ -212,15 +212,19 @@ func utilization(capacity, used *ateapipb.WorkerResources) float64 {
 	return maxRatio
 }
 
+// Registered reports whether worker's current worker process has registered
+// and reported its sandbox class and runtimes. The assignment records the
+// runtime and atelet requires it on Run/Restore, so a worker without one
+// cannot host anything yet.
+func Registered(worker *ateapipb.Worker) bool {
+	return worker.GetStatus().GetRegisteredEpoch() != 0 && hardware.SandboxClass(worker.GetStatus()) != ""
+}
+
 func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bool {
-	// The class is the one the worker registered with WorkerService. Until
-	// that report lands the Worker has no class, and nothing is placed on it
-	// (see ServiceImpl.CreateWorker): the assignment records the runtime,
-	// and atelet requires it on Run and Restore.
-	workerClass := hardware.SandboxClass(worker.GetStatus())
-	if workerClass == "" {
+	if !Registered(worker) {
 		return false
 	}
+	workerClass := hardware.SandboxClass(worker.GetStatus())
 	if constraints.SandboxClass != "" && workerClass != constraints.SandboxClass {
 		return false
 	}

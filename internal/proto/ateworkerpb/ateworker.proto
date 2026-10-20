@@ -424,6 +424,8 @@ message HttpGetAction {
 }
 
 message RunWorkloadResponse {
+  // The epoch this worker process registered with.
+  int64 worker_epoch = 1;
 }
 
 // SnapshotFidelity mirrors the public ateapi enum: the state layers a
@@ -556,6 +558,8 @@ message RestoreWorkloadRequest {
 }
 
 message RestoreWorkloadResponse {
+  // The epoch this worker process registered with.
+  int64 worker_epoch = 1;
 }
 
 message GetWorkloadStatsRequest {

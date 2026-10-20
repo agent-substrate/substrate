@@ -26,7 +26,9 @@ import (
 
 // capacityClient is the part of ateapipb.WorkerServiceClient the relay uses.
 type capacityClient interface {
+	AcquireWorkerEpoch(ctx context.Context, in *ateapipb.AcquireWorkerEpochRequest, opts ...grpc.CallOption) (*ateapipb.AcquireWorkerEpochResponse, error)
 	RegisterWorker(ctx context.Context, in *ateapipb.RegisterWorkerRequest, opts ...grpc.CallOption) (*ateapipb.RegisterWorkerResponse, error)
+	SetWorkerSandboxRuntimes(ctx context.Context, in *ateapipb.SetWorkerSandboxRuntimesRequest, opts ...grpc.CallOption) (*ateapipb.SetWorkerSandboxRuntimesResponse, error)
 }
 
 // relay forwards fake-workersync's capacity reports to ate-api-server under
@@ -42,6 +44,28 @@ type relay struct {
 	ateapipb.UnimplementedWorkerServiceServer
 
 	client capacityClient
+	// epochs records the epoch of each registration ate-api-server accepts.
+	epochs *workerEpochs
+}
+
+func (r *relay) AcquireWorkerEpoch(ctx context.Context, in *ateapipb.AcquireWorkerEpochRequest) (*ateapipb.AcquireWorkerEpochResponse, error) {
+	resp, err := r.client.AcquireWorkerEpoch(ctx, in)
+	if err != nil {
+		slog.WarnContext(ctx, "Epoch acquire rejected",
+			slog.String("worker", in.GetWorker().GetName()), slog.Any("err", err))
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (r *relay) SetWorkerSandboxRuntimes(ctx context.Context, in *ateapipb.SetWorkerSandboxRuntimesRequest) (*ateapipb.SetWorkerSandboxRuntimesResponse, error) {
+	resp, err := r.client.SetWorkerSandboxRuntimes(ctx, in)
+	if err != nil {
+		slog.WarnContext(ctx, "Sandbox runtimes report rejected",
+			slog.String("worker", in.GetWorker().GetName()), slog.Any("err", err))
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (r *relay) RegisterWorker(ctx context.Context, in *ateapipb.RegisterWorkerRequest) (*ateapipb.RegisterWorkerResponse, error) {
@@ -51,6 +75,7 @@ func (r *relay) RegisterWorker(ctx context.Context, in *ateapipb.RegisterWorkerR
 			slog.String("worker", in.GetWorker().GetName()), slog.Any("err", err))
 		return nil, err
 	}
+	r.epochs.set(in.GetWorker().GetName(), in.GetEpoch())
 	slog.DebugContext(ctx, "Relayed capacity report",
 		slog.String("worker", in.GetWorker().GetName()), slog.Any("capacity", in.GetCapacity()))
 	return resp, nil

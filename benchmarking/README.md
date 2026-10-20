@@ -658,7 +658,14 @@ fakes from `cmd/benchmarking/isolate/` instead of worker pods:
   time, so it adds to `--delay`, the data plane's share of the call.
   It also relays fake-workersync's capacity reports, as atelet relays ateworker's:
   ate-api-server accepts a report only from the atelet on the Worker's node.
-  The relay admits only fake-workersync's pod identity.
+  The relay admits only fake-workersync's pod identity. fake-atelet remembers
+  the epoch each Worker registers with and reports it from every run and
+  restore, as a worker process does; ate-api-server commits a resumed actor
+  only under its Worker's current epoch. It keeps the epochs in memory only,
+  and fake-workersync registers a Worker once, so a fake-atelet that restarts
+  after its Workers registered, in a DaemonSet rollout for example, fails
+  every resume on those Workers with Unavailable until they are replaced,
+  such as by redeploying the benchmark.
 
 The install also scales ate-controller to zero, whose worker syncer would
 delete the fake Workers. Its other controllers stop with it: no NetworkPolicy

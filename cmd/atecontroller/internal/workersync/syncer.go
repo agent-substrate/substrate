@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"slices"
 	"time"
 
 	"go.ate.dev/substrate/internal/installdefaults"
@@ -292,25 +291,10 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 	return s.createOrUpdateWorker(ctx, key, pod)
 }
 
-// workerContainer is the name of the worker pod's worker container.
-const workerContainer = "worker"
-
-// podEpoch counts the runs of the pod's worker container: 1 for its first run
-// and one more for each restart. 0 until kubelet reports the container.
-func podEpoch(pod *corev1.Pod) int64 {
-	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Name == workerContainer {
-			return int64(cs.RestartCount) + 1
-		}
-	}
-	return 0
-}
-
 // createOrUpdateWorker registers the pod's Worker, or brings the registered
 // one in line with the pod. A Worker is registered UNAVAILABLE and marked
-// available only while its pod is Ready, and only once its epoch matches the
-// worker running, so nothing is placed on it under the epoch of a worker that
-// has since restarted.
+// available only while its pod is Ready. Its epochs, IPs, capacity and runtimes
+// are its worker process's to report, through WorkerService.
 func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
 	poolName := pod.Labels[workerPodLabel]
 	poolObject, exists, err := s.workerPoolInformer.GetIndexer().GetByKey(key.namespace + "/" + poolName)
@@ -329,9 +313,9 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 
 	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
 	if status.Code(err) == codes.NotFound {
-		// ips and node_name are required and immutable, so the pod is registered
-		// once it has an IP; the update that reports it re-enqueues the pod.
-		if len(pod.Status.PodIPs) == 0 {
+		// node_name is required and immutable, so the pod is registered once it
+		// is scheduled; the update that binds it re-enqueues the pod.
+		if pod.Spec.NodeName == "" {
 			return nil
 		}
 		slog.InfoContext(ctx, "Syncer: registering worker", key.logAttrs()...)
@@ -342,15 +326,10 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			WorkerNamespace: pod.Namespace,
 			WorkerPool:      poolName,
 			WorkerPod:       pod.Name,
-			Ips:             podIPs(pod),
 			WorkerPodUid:    string(pod.UID),
 			NodeName:        pod.Spec.NodeName,
 			WorkerSpiffeId:  workerSPIFFEID(pod),
 			Labels:          pool.GetLabels(),
-			Epoch:           podEpoch(pod),
-			// Capacity and runtimes are the Worker's to report, not the
-			// syncer's to infer from the pod: they are what the worker can
-			// actually supply.
 		}
 		// status is output-only: CreateWorker registers the Worker UNAVAILABLE.
 		//
@@ -384,24 +363,10 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 	// after create, so drift there cannot be repaired by an update; it takes a
 	// new pod, which arrives under a new key.
 	var changed bool
-	if epoch := podEpoch(pod); epoch > w.GetEpoch() {
-		slog.InfoContext(ctx, "Syncer: updating worker (worker restarted)",
-			append(key.logAttrs(), slog.Int64("epoch", epoch))...)
-		w.Epoch = epoch
-		changed = true
-	}
 	if !maps.Equal(w.GetLabels(), pool.GetLabels()) {
 		slog.InfoContext(ctx, "Syncer: updating worker (labels changed)", key.logAttrs()...)
 		w.Labels = pool.GetLabels()
 		changed = true
-	}
-	if ips := podIPs(pod); len(ips) > 0 && !slices.Equal(w.GetIps(), ips) {
-		// TODO: I don't think this is possible, but handling this case so we can
-		// log it just in case we can reproduce it. It is logged rather than
-		// repaired because ips is immutable on a registered Worker: writing the
-		// pod's value back would be rejected rather than applied.
-		slog.WarnContext(ctx, "Syncer: registered worker IPs disagree with its pod",
-			append(key.logAttrs(), slog.Any("registered", w.GetIps()), slog.Any("pod_ips", ips))...)
 	}
 	if changed {
 		w, err = s.client.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{Worker: w})
@@ -410,8 +375,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		}
 	}
 
-	// Last, so the Worker takes Actors only at the epoch written above. A
-	// DRAINING Worker is left alone: its pod is on its way out.
+	// A DRAINING Worker is left alone: its pod is on its way out.
 	if available && w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
 		slog.InfoContext(ctx, "Syncer: marking worker available (pod Ready)", key.logAttrs()...)
 		_, err = s.client.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: key.workerRef()})
@@ -539,16 +503,6 @@ func (s *WorkerPoolSyncer) getOwner(ctx context.Context, namespace string, ref *
 		return nil, nil
 	}
 	return owner, nil
-}
-
-// podIPs returns the pod's IP addresses, one per IP family, in the order
-// Kubernetes reports them.
-func podIPs(pod *corev1.Pod) []string {
-	ips := make([]string, 0, len(pod.Status.PodIPs))
-	for _, ip := range pod.Status.PodIPs {
-		ips = append(ips, ip.IP)
-	}
-	return ips
 }
 
 // workerSPIFFEID returns the SPIFFE ID the podidentity signer issues to pod.

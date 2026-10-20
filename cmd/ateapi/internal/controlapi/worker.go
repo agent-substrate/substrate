@@ -124,17 +124,9 @@ func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorke
 func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worker) (*ateapipb.Worker, error) {
 	// A Worker takes no Actors until MarkWorkerAvailable.
 	outWorker := proto.CloneOf(inWorker)
-	// A new Worker hosts no Actors, so none are left from an earlier epoch.
 	outWorker.Status = &ateapipb.WorkerStatus{
-		State:         ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
-		ObservedEpoch: inWorker.GetEpoch(),
+		State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
 	}
-
-	// Capacity and runtimes are left unset: a Worker holds nothing and runs no
-	// sandbox until its own worker says what it has, through
-	// WorkerService.RegisterWorker. Nothing is placed on it in the meantime,
-	// which is the point -- the alternative is guessing on the Worker's behalf
-	// and placing against the guess.
 
 	// Verify that the result is properly valid before storing it.
 	if errs := apivalidation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), outWorker, inWorker, true); len(errs) > 0 {
@@ -153,7 +145,7 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 }
 
 // UpdateWorker replaces the stored Worker with the one the request carries.
-// Only labels and epoch are the caller's to change; a request that alters an
+// Only labels are the caller's to change; a request that alters an
 // immutable field — including by leaving it unset, which would clear it — is
 // rejected.
 // The service layer enforces that with declarative validation against the

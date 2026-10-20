@@ -874,6 +874,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithImage(wp.Spec.WorkerImage).
 			WithArgs(
 				"--pod-uid=$(POD_UID)",
+				"--pod-ips=$(POD_IPS)",
 				"--atunnel-listen-address=:443",
 				"--atunnel-connect-listen-address=:8443",
 				"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
@@ -937,6 +938,11 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithValueFrom(corev1ac.EnvVarSource().
 						WithFieldRef(corev1ac.ObjectFieldSelector().
 							WithFieldPath("spec.nodeName"))),
+				corev1ac.EnvVar().
+					WithName("POD_IPS").
+					WithValueFrom(corev1ac.EnvVarSource().
+						WithFieldRef(corev1ac.ObjectFieldSelector().
+							WithFieldPath("status.podIPs"))),
 				corev1ac.EnvVar().
 					WithName("OTEL_RESOURCE_ATTRIBUTES").
 					WithValue(workerOTelResourceAttributes),

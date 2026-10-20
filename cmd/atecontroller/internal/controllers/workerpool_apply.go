@@ -123,6 +123,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel workerOTelSetti
 
 	args := []string{
 		"--pod-uid=$(POD_UID)",
+		"--pod-ips=$(POD_IPS)",
 		"--atunnel-listen-address=:443",
 		"--atunnel-connect-listen-address=:8443",
 		"--atunnel-credential-bundle=" + atunnelIdentityMountPath + "/credential-bundle.pem",
@@ -301,6 +302,9 @@ func workerContainerEnv(otel workerOTelSettings) []*corev1ac.EnvVarApplyConfigur
 		fieldRefEnv("WORKER_POOL_NAME", "metadata.labels['"+workerPoolLabel+"']"),
 		fieldRefEnv("POD_NAME", "metadata.name"),
 		fieldRefEnv("NODE_NAME", "spec.nodeName"),
+		// Resolved when the container starts, so a worker process started in a
+		// recreated pod sandbox registers the sandbox's new IPs.
+		fieldRefEnv("POD_IPS", "status.podIPs"),
 	}
 	if otel.Endpoint != "" {
 		envs = append(envs, corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint))

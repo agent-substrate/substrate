@@ -366,6 +366,26 @@ func TestSchedule(t *testing.T) {
 	}
 }
 
+func TestRegistered(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ateapipb.Worker)
+		want   bool
+	}{
+		{name: "registered with runtimes", mutate: func(*ateapipb.Worker) {}, want: true},
+		{name: "no registered epoch", mutate: func(w *ateapipb.Worker) { w.Status.RegisteredEpoch = 0 }},
+		{name: "no sandbox class", mutate: func(w *ateapipb.Worker) { w.Status.SandboxClasses = nil }},
+		{name: "no status", mutate: func(w *ateapipb.Worker) { w.Status = nil }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Registered(worker("w", "gvisor", "node-a", nil, tc.mutate)); got != tc.want {
+				t.Errorf("Registered() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestApplies(t *testing.T) {
 	tierSel := labels.SelectorFromSet(labels.Set{"tier": "1"})
 	workloadSel := labels.SelectorFromSet(labels.Set{"workload": "a"})
@@ -392,6 +412,14 @@ func TestApplies(t *testing.T) {
 		{
 			name:        "worker with no sandbox class",
 			worker:      worker("w", "", "node-a", nil),
+			constraints: Constraints{},
+			want:        false,
+		},
+		{
+			name: "worker process not registered",
+			worker: worker("w", "gvisor", "node-a", nil, func(w *ateapipb.Worker) {
+				w.Status.RegisteredEpoch = 0
+			}),
 			constraints: Constraints{},
 			want:        false,
 		},
@@ -513,8 +541,9 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 		Labels:    lbls,
 		// A stored Worker always carries a ceiling; CreateWorker reifies one.
 		Status: &ateapipb.WorkerStatus{
-			State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity: &ateapipb.WorkerResources{Actors: 1},
+			State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			RegisteredEpoch: 1,
+			Capacity:        &ateapipb.WorkerResources{Actors: 1},
 		},
 	}
 	if class != "" {

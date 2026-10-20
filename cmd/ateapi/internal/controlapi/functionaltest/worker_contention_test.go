@@ -154,6 +154,10 @@ func setWorkerActorCapacity(t *testing.T, tc *testContext, pool string, actors i
 	}
 }
 
+// reportedEpoch is the epoch reportWorkerCapacity registers, and the one the
+// fake atelet reports its workloads ran under.
+const reportedEpoch = 1
+
 // defaultWorkerRuntime returns the default ActorSandboxRuntime that
 // reportWorkerCapacity records on a test worker of the given sandbox class.
 func defaultWorkerRuntime(class string) *ateapipb.ActorSandboxRuntime {
@@ -185,10 +189,12 @@ func workerSandboxClasses(def *ateapipb.ActorSandboxRuntime, restorable ...*atea
 	return []*ateapipb.WorkerSandboxClass{class}
 }
 
-// reportWorkerCapacity stands in for the worker's capacity report, which atelet
-// forwards to WorkerService in a real cluster, with compute for actors of the
-// size test templates declare. It waits for the worker cache, which placement
-// reads, to catch up.
+// reportWorkerCapacity stands in for the worker process's registration and
+// runtimes report, which atelet forwards to WorkerService in a real cluster,
+// with compute for actors of the size test templates declare. A Worker not yet
+// registered gets reportedEpoch, an IP and a default runtime; one already
+// registered keeps them. It waits for the worker cache, which placement reads,
+// to catch up.
 func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int32) {
 	t.Helper()
 	ctx := context.Background()
@@ -197,6 +203,10 @@ func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int
 		t.Fatalf("getting worker %s: %v", name, err)
 	}
 	if _, err := tc.persistence.UpdateWorker(ctx, name, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+		if toUpdate.Status.RegisteredEpoch == 0 {
+			toUpdate.Status.RegisteredEpoch = reportedEpoch
+			toUpdate.Status.Ips = []string{"127.0.0.1"}
+		}
 		toUpdate.Status.Capacity = &ateapipb.WorkerResources{
 			Actors:        actors,
 			CpuMillicores: int64(actors) * 1000, MemoryBytes: int64(actors) * 512 << 20,

@@ -70,10 +70,12 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 					WorkerPod:       w.pod,
 					WorkerPodUid:    w.podUID,
 					NodeName:        node,
+					// Registered, with a sandbox class, so the scheduler takes it.
 					Status: &ateapipb.WorkerStatus{
-						State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-						Capacity:       &ateapipb.WorkerResources{Actors: 1},
-						SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+						State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+						RegisteredEpoch: 1,
+						Capacity:        &ateapipb.WorkerResources{Actors: 1},
+						SandboxClasses:  []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 					},
 				}); err != nil {
 					t.Fatalf("CreateWorker(%s): %v", w.name, err)

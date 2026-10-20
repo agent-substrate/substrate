@@ -133,7 +133,8 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
 	workers := ateapipb.NewWorkerServiceClient(ateapiConn)
-	h := &herder{delays: callDelays, storage: storage}
+	epochs := newWorkerEpochs()
+	h := &herder{delays: callDelays, storage: storage, epochs: epochs}
 	if *mintActorCertificate {
 		if h.csr, err = newActorCSR(); err != nil {
 			serverboot.Fatal(ctx, "Failed to create the actor CSR", err)
@@ -154,7 +155,7 @@ func main() {
 	// Its own server and listener, so each port admits only its own caller:
 	// ate-api-server on the herder's, fake-workersync on the relay's.
 	relaySrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(relayTLS)))
-	ateapipb.RegisterWorkerServiceServer(relaySrv, &relay{client: workers})
+	ateapipb.RegisterWorkerServiceServer(relaySrv, &relay{client: workers, epochs: epochs})
 	health := &http.Server{Addr: *healthListenAddr, Handler: healthHandler(), ReadHeaderTimeout: 10 * time.Second}
 
 	slog.WarnContext(ctx, "Serving the fake atelet: actor lifecycle calls succeed without running any workload",

@@ -86,15 +86,38 @@ func newGRPCRelay(clientBundlePath, trustBundlePath, ateletID string) (*grpcRela
 	return &grpcRelay{creds: credentials.NewTLS(cfg), conns: map[string]*grpc.ClientConn{}}, nil
 }
 
-// Report sends req to the relay at addr (host:port).
-func (g *grpcRelay) Report(ctx context.Context, addr string, req *ateapipb.RegisterWorkerRequest) error {
+// Report registers report's Worker through the relay at addr (host:port), as a
+// worker process does at startup.
+func (g *grpcRelay) Report(ctx context.Context, addr string, report workerReport) error {
 	conn, err := g.conn(addr)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	_, err = ateapipb.NewWorkerServiceClient(conn).RegisterWorker(ctx, req)
+	client := ateapipb.NewWorkerServiceClient(conn)
+	ref := &ateapipb.ObjectRef{Name: report.Name}
+	epoch := report.Epoch
+	if epoch == 0 {
+		resp, err := client.AcquireWorkerEpoch(ctx, &ateapipb.AcquireWorkerEpochRequest{Worker: ref})
+		if err != nil {
+			return err
+		}
+		epoch = resp.GetEpoch()
+	}
+	if _, err := client.RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{
+		Worker:   ref,
+		Epoch:    epoch,
+		Ips:      report.IPs,
+		Capacity: report.Capacity,
+	}); err != nil {
+		return err
+	}
+	_, err = client.SetWorkerSandboxRuntimes(ctx, &ateapipb.SetWorkerSandboxRuntimesRequest{
+		Worker:         ref,
+		Epoch:          epoch,
+		SandboxClasses: report.SandboxClasses,
+	})
 	return err
 }
 

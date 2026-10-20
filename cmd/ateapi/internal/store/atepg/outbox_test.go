@@ -21,7 +21,6 @@ package atepg
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1092,7 +1091,7 @@ func TestLocalPublishReachesWatchers(t *testing.T) {
 	}
 
 	updated, err := p.UpdateWorker(ctx, created.GetMetadata().GetName(), store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
-		toUpdate.Ips = []string{"10.0.0.9"}
+		toUpdate.Labels = map[string]string{"tier": "batch"}
 		return nil
 	})
 	if err != nil {
@@ -1102,8 +1101,8 @@ func TestLocalPublishReachesWatchers(t *testing.T) {
 	if got, want := ev.Worker.GetMetadata().GetVersion(), updated.GetMetadata().GetVersion(); got != want {
 		t.Errorf("updated event version = %d, want committed version %d", got, want)
 	}
-	if !slices.Equal(ev.Worker.GetIps(), []string{"10.0.0.9"}) {
-		t.Errorf("updated event carries Ips %q, want the committed mutation", ev.Worker.GetIps())
+	if got := ev.Worker.GetLabels()["tier"]; got != "batch" {
+		t.Errorf("updated event carries label tier=%q, want the committed mutation", got)
 	}
 	// The watcher's copy must be isolated from the caller's returned Worker.
 	if ev.Worker == updated {

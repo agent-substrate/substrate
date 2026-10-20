@@ -886,7 +886,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 
 	// Tell worker to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
-	if _, err := client.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{
+	workerResp, err := client.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -898,11 +898,12 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		ActorDirs:             ateletpath.ActorDirs(actorUID),
 		EgressGateway:         toWorkerEgressGateway(req.GetEgressGateway()),
 		Resources:             toAteworkerResources(req.GetResources()),
-	}); err != nil {
-		return nil, fmt.Errorf("while calling worker RunWorkload: %w", err)
+	})
+	if err != nil {
+		return nil, workerCallError("RunWorkload", err)
 	}
 
-	return &ateletpb.RunResponse{}, nil
+	return &ateletpb.RunResponse{WorkerEpoch: workerResp.GetWorkerEpoch()}, nil
 }
 
 var snapshotSizeBytes metric.Int64Histogram
@@ -1808,7 +1809,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// The worker_restore phase is opaque from here; worker logs its own breakdown of
 	// this call as "Actor restore phases".
 	tWorker := time.Now()
-	_, err = client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{
+	workerResp, err := client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -1828,7 +1829,18 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		return nil, s.boundRetryableRestoreError(actorUID, req.GetSnapshot().GetSnapshotUuid(), workerRestoreError(ctx, err))
 	}
 
-	return &ateletpb.RestoreResponse{}, nil
+	return &ateletpb.RestoreResponse{WorkerEpoch: workerResp.GetWorkerEpoch()}, nil
+}
+
+// workerCallError is atelet's error for a failed call to the worker's rpc. A
+// worker that is unavailable, refusing workloads until it registers or gone
+// with a restart, is reported as Unavailable, so the caller retries once the
+// worker process has registered. Anything else reaches the caller as Internal.
+func workerCallError(rpc string, err error) error {
+	if status.Code(err) == codes.Unavailable {
+		return apierror.Unavailable("worker %s: the worker is unavailable: %s", rpc, status.Convert(err).Message())
+	}
+	return fmt.Errorf("while calling worker %s: %w", rpc, err)
 }
 
 // DetachActor makes the actor's latest local snapshot durable, then deletes the

@@ -1231,7 +1231,9 @@ func (x *HttpGetAction) GetPort() int32 {
 }
 
 type RunWorkloadResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The epoch this worker process registered with.
+	WorkerEpoch   int64 `protobuf:"varint,1,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1264,6 +1266,13 @@ func (x *RunWorkloadResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RunWorkloadResponse.ProtoReflect.Descriptor instead.
 func (*RunWorkloadResponse) Descriptor() ([]byte, []int) {
 	return file_ateworker_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *RunWorkloadResponse) GetWorkerEpoch() int64 {
+	if x != nil {
+		return x.WorkerEpoch
+	}
+	return 0
 }
 
 type CheckpointWorkloadRequest struct {
@@ -1635,7 +1644,9 @@ func (x *RestoreWorkloadRequest) GetPreserveRestoreDir() bool {
 }
 
 type RestoreWorkloadResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The epoch this worker process registered with.
+	WorkerEpoch   int64 `protobuf:"varint,1,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1668,6 +1679,13 @@ func (x *RestoreWorkloadResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RestoreWorkloadResponse.ProtoReflect.Descriptor instead.
 func (*RestoreWorkloadResponse) Descriptor() ([]byte, []int) {
 	return file_ateworker_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *RestoreWorkloadResponse) GetWorkerEpoch() int64 {
+	if x != nil {
+		return x.WorkerEpoch
+	}
+	return 0
 }
 
 type GetWorkloadStatsRequest struct {
@@ -2108,8 +2126,9 @@ const file_ateworker_proto_rawDesc = "" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHttpGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\x05R\x04port\"\x15\n" +
-	"\x13RunWorkloadResponse\"\x95\x03\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04port\"8\n" +
+	"\x13RunWorkloadResponse\x12!\n" +
+	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"\x95\x03\n" +
 	"\x19CheckpointWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2147,8 +2166,9 @@ const file_ateworker_proto_rawDesc = "" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
-	"\x0f_egress_gateway\"\x19\n" +
-	"\x17RestoreWorkloadResponse\"6\n" +
+	"\x0f_egress_gateway\"<\n" +
+	"\x17RestoreWorkloadResponse\x12!\n" +
+	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"6\n" +
 	"\x17GetWorkloadStatsRequest\x12\x1b\n" +
 	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\xc2\x04\n" +
 	"\x13WorkloadStatsSample\x12\x1a\n" +

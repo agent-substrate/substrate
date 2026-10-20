@@ -102,17 +102,36 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 	}
 }
 
-// RegisterWorker registers the calling worker with the control plane: what the
-// worker says its capacity and sandbox runtimes are, in one
-// WorkerService.RegisterWorker call so capacity and runtimes land atomically.
+// AcquireWorkerEpoch hands the calling worker process a new epoch from the
+// control plane's WorkerService.AcquireWorkerEpoch.
 //
-// It returns the control plane's error unwrapped so the caller retries: an
-// accepted call is the only thing that puts capacity and the current runtimes
-// on the Worker, and a Worker record the syncer has not created yet is the
-// ordinary reason for a first attempt to fail.
+// Each of the registration calls below returns the control plane's error
+// unwrapped, so the caller can tell a refusal from a failure to retry: a Worker
+// record the syncer has not created yet is the ordinary reason for a first
+// attempt to fail.
+func (s *workerSupportServer) AcquireWorkerEpoch(ctx context.Context, _ *ateletpb.AcquireWorkerEpochRequest) (*ateletpb.AcquireWorkerEpochResponse, error) {
+	// Identity comes only from the mTLS certificate, never from the request:
+	// a worker can acquire an epoch for itself and no one else.
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.workers.AcquireWorkerEpoch(ctx, &ateapipb.AcquireWorkerEpochRequest{
+		// Workers are global-scoped and named by their pod UID.
+		Worker: &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ateletpb.AcquireWorkerEpochResponse{Epoch: resp.GetEpoch()}, nil
+}
+
+// RegisterWorker registers the calling worker process with the control plane:
+// it activates the epoch the process acquired and records its pod IPs and
+// capacity, in one WorkerService.RegisterWorker call.
 func (s *workerSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.RegisterWorkerRequest) (*ateletpb.RegisterWorkerResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request:
-	// a worker can report its own capacity and runtimes and no one else's.
+	// a worker can register itself and no one else.
 	workerIdentity, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
@@ -125,17 +144,45 @@ func (s *workerSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.
 	}
 	if _, err := s.workers.RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{
 		// Workers are global-scoped and named by their pod UID.
+		Worker:   &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
+		Epoch:    req.GetEpoch(),
+		Ips:      req.GetIps(),
+		Capacity: toWorkerResources(req.GetCapacity()),
+	}); err != nil {
+		return nil, err
+	}
+	slog.InfoContext(ctx, "Registered worker",
+		slog.String("pod_uid", workerIdentity.PodUID),
+		slog.Int64("epoch", req.GetEpoch()),
+		slog.Any("ips", req.GetIps()),
+		slog.Any("capacity", req.GetCapacity()))
+	return &ateletpb.RegisterWorkerResponse{}, nil
+}
+
+// SetWorkerSandboxRuntimes records the sandbox runtimes of the calling worker
+// process through WorkerService.SetWorkerSandboxRuntimes.
+func (s *workerSupportServer) SetWorkerSandboxRuntimes(ctx context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) (*ateletpb.SetWorkerSandboxRuntimesResponse, error) {
+	// Identity comes only from the mTLS certificate, never from the request:
+	// a worker can report its own runtimes and no one else's.
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if errs := apivalidation.ValidateSetWorkerSandboxRuntimesRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
+	}
+	if _, err := s.workers.SetWorkerSandboxRuntimes(ctx, &ateapipb.SetWorkerSandboxRuntimesRequest{
 		Worker:         &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		Capacity:       toWorkerResources(req.GetCapacity()),
+		Epoch:          req.GetEpoch(),
 		SandboxClasses: toAteAPISandboxClasses(req.GetSandboxClasses()),
 	}); err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, "Registered worker capacity and sandbox classes",
+	slog.InfoContext(ctx, "Recorded worker sandbox runtimes",
 		slog.String("pod_uid", workerIdentity.PodUID),
-		slog.Any("capacity", req.GetCapacity()),
+		slog.Int64("epoch", req.GetEpoch()),
 		slog.Any("sandbox_classes", req.GetSandboxClasses()))
-	return &ateletpb.RegisterWorkerResponse{}, nil
+	return &ateletpb.SetWorkerSandboxRuntimesResponse{}, nil
 }
 
 // toWorkerResources converts atelet's WorkerResources to the control plane's,

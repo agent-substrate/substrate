@@ -115,13 +115,27 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 	}
 }
 
-// TestFinalizeRunning_CommitsRunning verifies the last step of a resume moves
-// the actor out of RESUMING against a freshly read version, and keeps the
-// locality of the local snapshot it restored from: resume does not delete the
-// snapshot's files from the node.
-func TestFinalizeRunning_CommitsRunning(t *testing.T) {
-	ctx := context.Background()
-	persistence := newTestPersistence(t)
+// seedFinalizeActor stores a RESUMING actor bound to a Worker whose registered
+// epoch is registered and whose registered IPs are newIPs. The actor's
+// assignment still carries epoch 1 and the IPs it was bound with.
+func seedFinalizeActor(t *testing.T, ctx context.Context, persistence store.Interface, registered int64, newIPs []string) {
+	t.Helper()
+	workerName := testWorkerUID("pod-1")
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
+		WorkerNamespace: "worker-ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod-1",
+		WorkerPodUid:    workerName,
+		NodeName:        "node-1",
+		Status: &ateapipb.WorkerStatus{
+			State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			RegisteredEpoch: registered,
+			Ips:             newIPs,
+		},
+	}); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
 	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"},
@@ -129,14 +143,29 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 			State:                  ateapipb.ActorState_ACTOR_STATE_RESUMING,
 			AssignedNode:           "node-1",
 			LastAssignedGeneration: 1,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:       &ateapipb.ObjectRef{Name: workerName},
+				WorkerPodIps: []string{"10.0.0.1"},
+				WorkerEpoch:  1,
+			},
 			Snapshots: []*ateapipb.Snapshot{
 				newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
 			},
 		},
 	})
+}
+
+// TestFinalizeRunning_CommitsRunning verifies the last step of a resume moves
+// the actor out of RESUMING against a freshly read version, and keeps the
+// locality of the local snapshot it restored from: resume does not delete the
+// snapshot's files from the node.
+func TestFinalizeRunning_CommitsRunning(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	seedFinalizeActor(t, ctx, persistence, 1, []string{"10.0.0.1"})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 1)
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -145,6 +174,60 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	}
 	if locality := findLatestLocalSnapshot(got.GetStatus()).GetLocality(); locality != "node-1" {
 		t.Errorf("local snapshot locality = %q, want %q kept after resume", locality, "node-1")
+	}
+}
+
+// A resume bound before the worker restarted, whose restore ran on the new
+// worker process, is stamped with that process's epoch and the IPs it
+// registered, so the reconciler keeps it and traffic reaches it.
+func TestFinalizeRunning_StampsReportedEpochAndIPs(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
+	w := &ActorWorkflow{store: persistence}
+
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 2)
+	if err != nil {
+		t.Fatalf("finalizeRunning: %v", err)
+	}
+	assignment := got.GetStatus().GetWorkerAssignment()
+	if assignment.GetWorkerEpoch() != 2 {
+		t.Errorf("worker_epoch = %d, want 2", assignment.GetWorkerEpoch())
+	}
+	if diff := cmp.Diff([]string{"10.0.0.2"}, assignment.GetWorkerPodIps()); diff != "" {
+		t.Errorf("worker_pod_ips mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// A restore that ran on a worker process that has since been replaced left no
+// sandbox behind, so RUNNING is not committed and the resume is retried.
+func TestFinalizeRunning_ReplacedWorkerProcess(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		reported int64
+		want     codes.Code
+	}{
+		{name: "replaced process", reported: 1, want: codes.Unavailable},
+		{name: "epoch above the active one", reported: 3, want: codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
+			w := &ActorWorkflow{store: persistence}
+
+			_, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, tc.reported)
+			if got := apierror.Code(err); got != tc.want {
+				t.Fatalf("finalizeRunning() = %v (err %v), want %v", got, err, tc.want)
+			}
+			actor, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+				t.Errorf("state = %v, want RESUMING", got)
+			}
+		})
 	}
 }
 
@@ -206,11 +289,11 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    testWorkerUID("pod-1"),
-		Status: &ateapipb.WorkerStatus{
+		Status: registered(&ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
-		},
+		}),
 	}
 	if _, err := persistence.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
@@ -330,11 +413,11 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		WorkerPod:       "stale-pod",
 		WorkerPodUid:    testWorkerUID("stale-pod"),
 		NodeName:        "node-1",
-		Status: &ateapipb.WorkerStatus{
+		Status: registered(&ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
-		},
+		}),
 	}
 	free := &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("free-pod")},
@@ -344,11 +427,11 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		WorkerPodUid:    testWorkerUID("free-pod"),
 		NodeName:        "node-1",
 		Labels:          map[string]string{"pool": "b"},
-		Status: &ateapipb.WorkerStatus{
+		Status: registered(&ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
-		},
+		}),
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {
 		if _, err := persistence.CreateWorker(ctx, w); err != nil {
@@ -404,11 +487,11 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		WorkerPod:       "contested-pod",
 		WorkerPodUid:    testWorkerUID("contested-pod"),
 		NodeName:        "node-1",
-		Status: &ateapipb.WorkerStatus{
+		Status: registered(&ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
 			SandboxClasses: workerSandboxClasses(wantRuntime),
-		},
+		}),
 	}
 	fallback := &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("fallback-pod")},
@@ -417,11 +500,11 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		WorkerPod:       "fallback-pod",
 		WorkerPodUid:    testWorkerUID("fallback-pod"),
 		NodeName:        "node-1",
-		Status: &ateapipb.WorkerStatus{
+		Status: registered(&ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
 			SandboxClasses: workerSandboxClasses(wantRuntime),
-		},
+		}),
 	}
 	for _, w := range []*ateapipb.Worker{contested, fallback} {
 		if _, err := persistence.CreateWorker(ctx, w); err != nil {
@@ -512,11 +595,11 @@ func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Inte
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    testWorkerUID("pod-1"),
 		NodeName:        "node-1",
-		Status: &ateapipb.WorkerStatus{
+		Status: registered(&ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
-		},
+		}),
 	}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
@@ -821,11 +904,11 @@ func TestValidateAssignedWorker(t *testing.T) {
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
 		ActorUid: "stale-incarnation-uid",
 	}
-	activeStatus := &ateapipb.WorkerStatus{
+	activeStatus := registered(&ateapipb.WorkerStatus{
 		State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 		Capacity:       &ateapipb.WorkerResources{Actors: 1},
 		SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
-	}
+	})
 	drainingStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING, Capacity: &ateapipb.WorkerResources{Actors: 1}, SandboxClasses: workerSandboxClasses(testSandboxRuntime())}
 	unavailableStatus := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE, Capacity: &ateapipb.WorkerResources{Actors: 1}, SandboxClasses: workerSandboxClasses(testSandboxRuntime())}
 
@@ -865,6 +948,20 @@ func TestValidateAssignedWorker(t *testing.T) {
 		{
 			name:           "leaves actor and worker untouched when worker is unavailable",
 			workerStatus:   unavailableStatus,
+			assignment:     ownAssignment,
+			wantCode:       codes.Unavailable,
+			wantActorState: ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			wantAssignment: ownAssignment,
+		},
+		{
+			// A restarted worker process between registering and reporting
+			// its runtimes takes Actors again shortly.
+			name: "leaves actor and worker untouched while the worker process finishes registering",
+			workerStatus: &ateapipb.WorkerStatus{
+				State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				RegisteredEpoch: 2,
+				Capacity:        &ateapipb.WorkerResources{Actors: 1},
+			},
 			assignment:     ownAssignment,
 			wantCode:       codes.Unavailable,
 			wantActorState: ateapipb.ActorState_ACTOR_STATE_RESUMING,
@@ -1060,14 +1157,14 @@ func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequ
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.restore = proto.Clone(req).(*ateletpb.RestoreRequest)
-	return &ateletpb.RestoreResponse{}, nil
+	return &ateletpb.RestoreResponse{WorkerEpoch: registeredEpoch}, nil
 }
 
 func (f *capturingAtelet) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.run = proto.Clone(req).(*ateletpb.RunRequest)
-	return &ateletpb.RunResponse{}, nil
+	return &ateletpb.RunResponse{WorkerEpoch: registeredEpoch}, nil
 }
 
 func (f *capturingAtelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
@@ -1870,7 +1967,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor, loadedTmpl, err := w.loadActorForResume(ctx, actorRef)
 			var tele restoreTelemetry
 			if err == nil {
-				tele, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
+				tele, _, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
 			}
 			if got := apierror.Code(err); got != tt.want.code {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
@@ -2216,11 +2313,11 @@ func contendedWorker(podName string) *ateapipb.Worker {
 		WorkerPod:       podName,
 		WorkerPodUid:    testWorkerUID(podName),
 		NodeName:        "node-1",
-		Status: &ateapipb.WorkerStatus{
+		Status: registered(&ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
-		},
+		}),
 	}
 }
 
@@ -2535,9 +2632,10 @@ func seedRuntimeWorker(t *testing.T, ctx context.Context, st store.Interface, po
 		WorkerPodUid:    testWorkerUID(pod),
 		NodeName:        node,
 		Status: &ateapipb.WorkerStatus{
-			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			SandboxClasses: workerSandboxClasses(def, restorable...),
+			State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			RegisteredEpoch: registeredEpoch,
+			Capacity:        &ateapipb.WorkerResources{Actors: 1},
+			SandboxClasses:  workerSandboxClasses(def, restorable...),
 		},
 	})
 	if err != nil {
@@ -2567,8 +2665,9 @@ func seedMicroVMWorker(t *testing.T, ctx context.Context, st store.Interface, po
 		WorkerPodUid:    testWorkerUID(pod),
 		NodeName:        node,
 		Status: &ateapipb.WorkerStatus{
-			State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity: &ateapipb.WorkerResources{Actors: 1},
+			State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			RegisteredEpoch: registeredEpoch,
+			Capacity:        &ateapipb.WorkerResources{Actors: 1},
 			SandboxClasses: []*ateapipb.WorkerSandboxClass{{
 				SandboxClass: "microvm",
 				DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: &ateapipb.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: []*ateapipb.AttributeEntry{
@@ -3052,11 +3151,11 @@ func seedVolumeAssignFixture(t *testing.T, ctx context.Context, persistence stor
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    testWorkerUID("pod-1"),
 		NodeName:        node,
-		Status: &ateapipb.WorkerStatus{
+		Status: registered(&ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
-		},
+		}),
 	}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}

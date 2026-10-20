@@ -16,7 +16,6 @@ package apivalidation
 
 import (
 	"context"
-	"fmt"
 
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -72,9 +71,19 @@ func ValidateDrainWorkerRequest(ctx context.Context, req *ateapipb.DrainWorkerRe
 	return Validate_DrainWorkerRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateAcquireWorkerEpochRequest(ctx context.Context, req *ateapipb.AcquireWorkerEpochRequest) field.ErrorList {
+	op := MakeCreateOp(ctx)
+	return Validate_AcquireWorkerEpochRequest(ctx, op, nil, req, nil)
+}
+
 func ValidateRegisterWorkerRequest(ctx context.Context, req *ateapipb.RegisterWorkerRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_RegisterWorkerRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateSetWorkerSandboxRuntimesRequest(ctx context.Context, req *ateapipb.SetWorkerSandboxRuntimesRequest) field.ErrorList {
+	op := MakeCreateOp(ctx)
+	return Validate_SetWorkerSandboxRuntimesRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapipb.RequestActorSuspendRequest) field.ErrorList {
@@ -135,25 +144,18 @@ func ValidateCustom_WorkerSandboxClass_SandboxClass(_ context.Context, _ operati
 }
 
 // This is needed because DV doesn't have a standard format for IP addresses yet.
-func ValidateCustom_Worker_Ips(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
+func ValidateCustom_WorkerStatus_Ips(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
+	return validateDualStackIPs(fldPath, value)
+}
+
+// This is needed because DV doesn't have a standard format for IP addresses yet.
+func ValidateCustom_RegisterWorkerRequest_Ips(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return validateDualStackIPs(fldPath, value)
 }
 
 // This is needed because DV doesn't have a format for SPIFFE IDs.
 func ValidateCustom_Worker_WorkerSpiffeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validateSPIFFEID(fldPath, *value)
-}
-
-// epoch only moves forward: a lower value would make Actors placed during the
-// current run look older than it, and crash them.
-func ValidateCustom_Worker_Epoch(_ context.Context, op operation.Operation, fldPath *field.Path, value, oldValue *int64) field.ErrorList {
-	if op.Type != operation.Update || value == nil || oldValue == nil {
-		return nil
-	}
-	if *value < *oldValue {
-		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("may not decrease from %d", *oldValue))}
-	}
-	return nil
 }
 
 // This exists only because nested subfield tags are not supported yet.

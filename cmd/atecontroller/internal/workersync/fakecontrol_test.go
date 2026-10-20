@@ -49,9 +49,6 @@ type fakeControl struct {
 	mu      sync.Mutex
 	workers map[string]*ateapipb.Worker
 	uidSeq  int
-	// history holds every Worker written, in order, so a test can check the
-	// states in between the ones it reads back.
-	history []*ateapipb.Worker
 
 	// createHook, when set, decides CreateWorker's outcome: a non-nil error is
 	// returned and nothing is registered.
@@ -111,20 +108,9 @@ func (f *fakeControl) putLocked(w *ateapipb.Worker) *ateapipb.Worker {
 	return proto.Clone(stored).(*ateapipb.Worker)
 }
 
-// storeLocked writes w and records it in the write history.
+// storeLocked writes w.
 func (f *fakeControl) storeLocked(w *ateapipb.Worker) {
 	f.workers[w.GetMetadata().GetName()] = w
-	f.history = append(f.history, proto.Clone(w).(*ateapipb.Worker))
-}
-
-// writes returns every Worker written since the history was last taken, in
-// order, and clears it.
-func (f *fakeControl) writes() []*ateapipb.Worker {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	history := f.history
-	f.history = nil
-	return history
 }
 
 func (f *fakeControl) setCreateHook(hook func(*ateapipb.Worker) error) {
@@ -214,16 +200,11 @@ func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerR
 	updated.Metadata = proto.Clone(stored.GetMetadata()).(*ateapipb.ResourceMetadata)
 	updated.Status = proto.Clone(stored.GetStatus()).(*ateapipb.WorkerStatus)
 
-	// labels and epoch are the only fields an update may change, so pinning
-	// them to what is stored leaves any remaining difference on a field that is
-	// immutable after create — including one the request cleared by omitting
-	// it.
-	if updated.GetEpoch() < stored.GetEpoch() {
-		return nil, status.Error(codes.InvalidArgument, "update decreased epoch")
-	}
+	// labels are the only field an update may change, so pinning them to what
+	// is stored leaves any remaining difference on a field that is immutable
+	// after create, including one the request cleared by omitting it.
 	probe := proto.Clone(updated).(*ateapipb.Worker)
 	probe.Labels = stored.GetLabels()
-	probe.Epoch = stored.GetEpoch()
 	if !proto.Equal(probe, stored) {
 		return nil, status.Error(codes.InvalidArgument, "update changed a field that is immutable after create")
 	}

@@ -75,6 +75,9 @@ type herder struct {
 	// leaves the mint out. csr is sent with every mint.
 	minter actorCertMinter
 	csr    []byte
+	// epochs is where Run and Restore read the epoch they report; the relay
+	// records it when the Worker registers. Workers are named by their pod UID.
+	epochs *workerEpochs
 }
 
 // newActorCSR returns a CSR for a fresh key. ate-api-server takes only the
@@ -159,7 +162,7 @@ func (h *herder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.R
 	if err := wait(ctx, time.Now(), h.delays.run); err != nil {
 		return nil, err
 	}
-	return &ateletpb.RunResponse{}, nil
+	return &ateletpb.RunResponse{WorkerEpoch: h.epochs.get(req.GetWorkerPodUid())}, nil
 }
 
 func (h *herder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -169,7 +172,7 @@ func (h *herder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*at
 	if err := wait(ctx, time.Now(), h.delays.restore); err != nil {
 		return nil, err
 	}
-	return &ateletpb.RestoreResponse{}, nil
+	return &ateletpb.RestoreResponse{WorkerEpoch: h.epochs.get(req.GetWorkerPodUid())}, nil
 }
 
 func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {

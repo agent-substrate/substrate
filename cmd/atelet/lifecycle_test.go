@@ -90,6 +90,8 @@ type fakeWorker struct {
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
 	// recent RestoreWorkload request.
 	preserveRestoreDir bool
+	// workerEpoch is the epoch RunWorkload and RestoreWorkload report.
+	workerEpoch int64
 	// fidelities records the fidelity each checkpoint or restore arrived
 	// with, by RPC name.
 	fidelities map[string]ateworkerpb.SnapshotFidelity
@@ -126,7 +128,7 @@ func (f *fakeWorker) recordActorDirs(rpc string, actorDirs *ateworkerpb.ActorDir
 
 func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkloadRequest) (*ateworkerpb.RunWorkloadResponse, error) {
 	f.recordActorDirs("RunWorkload", req.GetActorDirs())
-	return &ateworkerpb.RunWorkloadResponse{}, nil
+	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: f.workerEpoch}, nil
 }
 
 func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
@@ -165,7 +167,7 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 		}
 		f.restored[name] = string(body)
 	}
-	return &ateworkerpb.RestoreWorkloadResponse{}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: f.workerEpoch}, nil
 }
 
 func (f *fakeWorker) TerminateWorkload(_ context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
@@ -247,7 +249,8 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		snapshotName2 = "pause-snap-2"
 	)
 
-	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}}
+	const workerEpoch = 7
+	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}, workerEpoch: workerEpoch}
 	serveFakeWorker(t, worker)
 
 	host := imageVolumeTestRegistry(t)
@@ -269,7 +272,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 	}
 
 	advertiseRuntime(t, s, sandboxRec)
-	if _, err := s.Run(ctx, &ateletpb.RunRequest{
+	runResp, err := s.Run(ctx, &ateletpb.RunRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -278,8 +281,14 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		WorkerPodUid:          workerPodUID,
 		SandboxRuntime:        runtimeFor(t, sandboxRec),
 		Spec:                  spec,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+	// The control plane stamps the Actor with the epoch of the worker process
+	// that started it.
+	if got := runResp.GetWorkerEpoch(); got != workerEpoch {
+		t.Errorf("Run worker_epoch = %d, want %d", got, workerEpoch)
 	}
 
 	// Async suspend: a deferred checkpoint, which leaves the snapshot on this node.
@@ -316,7 +325,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 
 	// Resume: atelet must restore from that local snapshot, not from
 	// Snapshot.Object.
-	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
+	restoreResp, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -326,8 +335,12 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		SandboxRuntime:        runtimeFor(t, sandboxRec),
 		Spec:                  spec,
 		Snapshot:              lifecycleSnapshot(actorUID, snapshotName, 1, fidelity),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Restore: %v", err)
+	}
+	if got := restoreResp.GetWorkerEpoch(); got != workerEpoch {
+		t.Errorf("Restore worker_epoch = %d, want %d", got, workerEpoch)
 	}
 	if got := worker.restored["checkpoint.img"]; got != "guest-memory" {
 		t.Fatalf("restore staged %q for worker, want the pause snapshot's %q", got, "guest-memory")

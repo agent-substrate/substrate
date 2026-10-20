@@ -78,15 +78,25 @@ func (f *fakeControl) CrashActorReportedByWorker(_ context.Context, actorRef res
 	return f.crashResp, f.err
 }
 
-// seedReportedWorker registers a Worker on nodeName that has already reported
-// capacity and its default runtime: identity from the pod, the way the syncer
-// writes it, plus the result of an earlier registration. A Worker that has
-// never registered carries none, so what a fresh registration replaces is what
-// this seeds.
+// testEpoch is the epoch seedReportedWorker records as acquired and active.
+const testEpoch = 3
+
+// testIPs are the pod IPs seedReportedWorker records as registered.
+var testIPs = []string{"10.1.2.3"}
+
+// seedReportedWorker registers a Worker on nodeName whose worker process has
+// already registered with testEpoch, testIPs and capacity, and reported its
+// default runtime: identity from the pod, the way the syncer writes it, plus
+// the result of an earlier registration.
 func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capacity *ateapipb.WorkerResources) *ateapipb.Worker {
 	t.Helper()
 	return seedWorker(t, st, testWorkerName, nodeName, &ateapipb.WorkerStatus{
-		State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity, SandboxClasses: testSandboxClasses,
+		State:           ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		IssuedEpoch:     testEpoch,
+		RegisteredEpoch: testEpoch,
+		Ips:             testIPs,
+		Capacity:        capacity,
+		SandboxClasses:  testSandboxClasses,
 	})
 }
 
@@ -101,7 +111,6 @@ func seedWorker(t *testing.T, st store.Interface, name, nodeName string, status 
 		WorkerPod:       "worker-pod-1",
 		WorkerPodUid:    name,
 		NodeName:        nodeName,
-		Ips:             []string{"10.1.2.3"},
 		Status:          status,
 	})
 	if err != nil {

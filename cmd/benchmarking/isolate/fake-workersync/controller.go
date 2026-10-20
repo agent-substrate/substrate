@@ -54,9 +54,22 @@ type workerClient interface {
 	ListWorkerActorAssignments(ctx context.Context, in *ateapipb.ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ateapipb.ListWorkerActorAssignmentsResponse, error)
 }
 
-// capacityRelay sends a capacity report to the fake-atelet relay at addr.
+// workerReport is what a fake worker process registers and reports.
+type workerReport struct {
+	Name string
+	// Epoch is the Worker's registered epoch to register again, or 0 to acquire a
+	// new one. Reusing it keeps a restarted fake-workersync from raising the
+	// epoch, which would make ate-api-server crash every Actor on the Worker.
+	Epoch          int64
+	IPs            []string
+	Capacity       *ateapipb.WorkerResources
+	SandboxClasses []*ateapipb.WorkerSandboxClass
+}
+
+// capacityRelay registers a fake worker process through the fake-atelet relay
+// at addr: it acquires an epoch if needed, registers, and reports runtimes.
 type capacityRelay interface {
-	Report(ctx context.Context, addr string, req *ateapipb.RegisterWorkerRequest) error
+	Report(ctx context.Context, addr string, report workerReport) error
 	// Prune lets go of every relay not in live, the relay addresses by node.
 	Prune(live map[string]string)
 }
@@ -208,7 +221,9 @@ func (c *controller) adopt(ctx context.Context) error {
 				node:      w.GetNodeName(),
 				labels:    w.GetLabels(),
 				capacity:  w.GetStatus().GetCapacity(),
-				reported:  w.GetStatus().GetCapacity() != nil,
+				// Its runtimes are reported last, so a Worker without them is
+				// registered again.
+				reported: len(w.GetStatus().GetSandboxClasses()) > 0,
 				// One never marked available goes back through create, which
 				// marks it.
 				created:  w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
@@ -414,8 +429,21 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	if addr == "" {
 		return fmt.Errorf("no fake-atelet on node %s yet for Worker %s", w.node, name)
 	}
-	if err := c.relay.Report(ctx, addr, &ateapipb.RegisterWorkerRequest{
-		Worker:   &ateapipb.ObjectRef{Name: name},
+	current, err := c.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: &ateapipb.ObjectRef{Name: name}})
+	if err != nil {
+		return fmt.Errorf("while reading Worker %s: %w", name, err)
+	}
+	ips := []string{fakeworker.IP(w.index)}
+	// An epoch's registration never changes, so a Worker registered with other
+	// IPs or capacity takes a new epoch, as a restarted worker process does.
+	epoch := current.GetStatus().GetRegisteredEpoch()
+	if !slices.Equal(current.GetStatus().GetIps(), ips) || !proto.Equal(current.GetStatus().GetCapacity(), fixed) {
+		epoch = 0
+	}
+	if err := c.relay.Report(ctx, addr, workerReport{
+		Name:     name,
+		Epoch:    epoch,
+		IPs:      ips,
 		Capacity: fixed,
 		SandboxClasses: []*ateapipb.WorkerSandboxClass{{
 			SandboxClass:   string(d.pool.Spec.DefaultSandboxClass()),
@@ -441,8 +469,7 @@ func hostCompat() *ateapipb.VersionedSandboxCompat {
 
 // create registers the Worker with the fields the worker syncer would copy
 // from the pool and its pod, then marks it available as the syncer does once
-// the pod is Ready. Epoch stays 0: a rising epoch makes ate-api-server crash
-// every Actor on the Worker.
+// the pod is Ready.
 func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.WorkerPool) error {
 	name := w.name
 	_, err := c.client.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: &ateapipb.Worker{
@@ -452,7 +479,6 @@ func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.
 		WorkerPod:       w.pod,
 		WorkerPodUid:    name,
 		NodeName:        w.node,
-		Ips:             []string{fakeworker.IP(w.index)},
 		Labels:          maps.Clone(wp.GetLabels()),
 	}})
 	if err != nil && status.Code(err) != codes.AlreadyExists {

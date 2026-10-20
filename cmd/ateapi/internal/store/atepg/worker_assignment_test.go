@@ -50,7 +50,7 @@ func TestSaveWorker_RejectsAStaleWrite(t *testing.T) {
 
 	// Move the stored Worker on, so the copy above is a version behind.
 	if _, err := p.UpdateWorker(ctx, created.GetMetadata().GetName(), store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
-		toUpdate.Ips = []string{"10.0.0.1"}
+		toUpdate.Labels = map[string]string{"tier": "batch"}
 		return nil
 	}); err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)

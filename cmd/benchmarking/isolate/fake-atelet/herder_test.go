@@ -132,6 +132,38 @@ func TestHerderSucceedsAfterDelay(t *testing.T) {
 	}
 }
 
+// Run and Restore report the epoch the Worker registered with through the
+// relay, as its worker process would, and 0 for a Worker that never did.
+func TestHerderReportsTheRegisteredEpoch(t *testing.T) {
+	epochs := newWorkerEpochs()
+	epochs.set("pod-a", 4)
+	h := &herder{storage: &recordingStorage{}, epochs: epochs}
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		pod  string
+		want int64
+	}{
+		{pod: "pod-a", want: 4},
+		{pod: "pod-unregistered", want: 0},
+	} {
+		run, err := h.Run(ctx, &ateletpb.RunRequest{WorkerPodUid: tc.pod})
+		if err != nil {
+			t.Fatalf("Run(%s): %v", tc.pod, err)
+		}
+		if got := run.GetWorkerEpoch(); got != tc.want {
+			t.Errorf("Run(%s) worker_epoch = %d, want %d", tc.pod, got, tc.want)
+		}
+		restore, err := h.Restore(ctx, &ateletpb.RestoreRequest{WorkerPodUid: tc.pod})
+		if err != nil {
+			t.Fatalf("Restore(%s): %v", tc.pod, err)
+		}
+		if got := restore.GetWorkerEpoch(); got != tc.want {
+			t.Errorf("Restore(%s) worker_epoch = %d, want %d", tc.pod, got, tc.want)
+		}
+	}
+}
+
 func TestHerderZeroDelay(t *testing.T) {
 	for name, call := range herderCalls(&herder{storage: &recordingStorage{}}) {
 		if err := call(context.Background()); err != nil {

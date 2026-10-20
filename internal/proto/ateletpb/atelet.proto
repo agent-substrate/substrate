@@ -32,8 +32,20 @@ service WorkerSupport {
   // the actor filesystem, when/if we support those).
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
 
-  // Register capacity and supported sandbox runtimes for this worker with atelet.
+  // AcquireWorkerEpoch hands out a new epoch for this worker process, for
+  // atelet to forward to the control plane's WorkerService, which this
+  // mirrors. A worker process calls it once at startup, before RegisterWorker.
+  rpc AcquireWorkerEpoch(AcquireWorkerEpochRequest) returns (AcquireWorkerEpochResponse) {}
+
+  // RegisterWorker activates the epoch this worker process acquired and
+  // records its pod IPs and capacity. A worker process registers once, and
+  // takes no workloads until it has. FAILED_PRECONDITION means another worker
+  // process has registered since; this one must not serve.
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
+
+  // SetWorkerSandboxRuntimes records the sandbox runtimes this worker process
+  // can run. Called after RegisterWorker, and again whenever they change.
+  rpc SetWorkerSandboxRuntimes(SetWorkerSandboxRuntimesRequest) returns (SetWorkerSandboxRuntimesResponse) {}
 
   // RequestActorSuspend asks that the actor this worker hosts be suspended,
   // for atelet to forward to the control plane's WorkerService, which this
@@ -58,12 +70,42 @@ service WorkerSupport {
   rpc ReportActorCrashed(ReportActorCrashedRequest) returns (ReportActorCrashedResponse) {}
 }
 
+message AcquireWorkerEpochRequest {
+}
+
+message AcquireWorkerEpochResponse {
+  // The epoch handed out, for this worker process to register with.
+  int64 epoch = 1;
+}
+
 message RegisterWorkerRequest {
+  // The epoch this worker process acquired through AcquireWorkerEpoch.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int64 epoch = 2;
+
+  // The worker pod's IPs, at most one per IP family, in the order Kubernetes
+  // reports them.
+  //
+  // +k8s:required
+  // +k8s:maxItems=2
+  // +k8s:listType=atomic
+  repeated string ips = 3;
+
   // What the worker can supply. atelet converts it to the control plane's
   // WorkerResources when forwarding.
   //
   // +k8s:required
   WorkerResources capacity = 1;
+}
+
+message SetWorkerSandboxRuntimesRequest {
+  // The epoch this worker process registered with.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int64 epoch = 1;
 
   // The sandbox classes this worker runs and the compatibility versions it
   // runs them under. atelet converts it to the control plane's
@@ -75,6 +117,9 @@ message RegisterWorkerRequest {
   // +k8s:listType=map
   // +k8s:listMapKey=sandbox_class
   repeated WorkerSandboxClass sandbox_classes = 2;
+}
+
+message SetWorkerSandboxRuntimesResponse {
 }
 
 // WorkerSandboxClass is one sandbox class a worker runs, with the runtimes
@@ -844,6 +889,9 @@ message HttpGetAction {
 }
 
 message RunResponse {
+  // The epoch of the worker process that started the workload, as it
+  // registered with the control plane.
+  int64 worker_epoch = 1;
 }
 
 // SnapshotFidelity mirrors the public ateapi enum: the state layers a
@@ -1152,6 +1200,9 @@ message RestoreRequest {
 }
 
 message RestoreResponse {
+  // The epoch of the worker process that restored the workload, as it
+  // registered with the control plane.
+  int64 worker_epoch = 1;
 }
 
 message PromoteSnapshotRequest {

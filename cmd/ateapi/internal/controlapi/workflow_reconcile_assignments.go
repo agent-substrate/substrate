@@ -25,17 +25,18 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
-// needsAssignmentReconcile reports whether worker's epoch has risen past the
-// last one its earlier Actors were released for.
+// needsAssignmentReconcile reports whether worker's registered epoch has risen
+// past the last one its earlier Actors were released for.
 func needsAssignmentReconcile(worker *ateapipb.Worker) bool {
-	return worker.GetEpoch() > worker.GetStatus().GetObservedEpoch()
+	return worker.GetStatus().GetRegisteredEpoch() > worker.GetStatus().GetObservedEpoch()
 }
 
-// ReconcileAssignments brings a Worker's status.observed_epoch up to its epoch.
-// A raised epoch means its worker restarted, taking with it the sandboxes of the
-// Actors placed during an earlier epoch, so those Actors are crashed and their
-// assignments released before observed_epoch records it. A failure leaves
-// observed_epoch where it was, so the next pass redoes the release.
+// ReconcileAssignments brings a Worker's status.observed_epoch up to its
+// registered_epoch. A raised registered_epoch means a new worker process registered,
+// and every earlier one has exited and lost the sandboxes of the Actors that
+// ran under it, so those Actors are crashed and their assignments released
+// before observed_epoch records it. A failure leaves observed_epoch where it
+// was, so the next pass redoes the release.
 //
 // Nothing to do, including a Worker that is gone, is success.
 func (w *WorkerWorkflow) ReconcileAssignments(ctx context.Context, name string) (err error) {
@@ -55,15 +56,9 @@ func (w *WorkerWorkflow) ReconcileAssignments(ctx context.Context, name string) 
 		markSkipped(ctx, "epoch already observed")
 		return nil
 	}
-	epoch := worker.GetEpoch()
-
-	// A Worker whose observed_epoch is 0 was registered before epochs were
-	// reported, so its current epoch is recorded without releasing anything:
-	// nothing says which of its Actors predate it.
-	if worker.GetStatus().GetObservedEpoch() != 0 {
-		if err := w.releaseAssignmentsBefore(ctx, worker, epoch); err != nil {
-			return err
-		}
+	epoch := worker.GetStatus().GetRegisteredEpoch()
+	if err := w.releaseAssignmentsBefore(ctx, worker, epoch); err != nil {
+		return err
 	}
 	return w.recordObservedEpoch(ctx, name, worker.GetMetadata().GetUid(), epoch)
 }
@@ -77,11 +72,9 @@ const recordObservedEpochAttempts = 5
 // alone.
 //
 // A write that lands on the Worker after the sweep does not make the record
-// wrong, so a version conflict is retried against a fresh read. Every
-// assignment is stamped with the Worker's epoch under its row lock, the same
-// lock that raises the epoch, so a row stamped before epoch was committed
-// before epoch was read and the sweep found it. Later binds are stamped epoch
-// or higher.
+// wrong, so a version conflict is retried against a fresh read. An Actor
+// recorded RUNNING under an epoch before epoch was bound, and its assignment
+// row written, before that epoch was activated, so the sweep found the row.
 func (w *WorkerWorkflow) recordObservedEpoch(ctx context.Context, name, uid string, epoch int64) error {
 	for attempt := 1; ; attempt++ {
 		worker, err := w.store.GetWorker(ctx, name)
@@ -110,9 +103,9 @@ func (w *WorkerWorkflow) recordObservedEpoch(ctx context.Context, name, uid stri
 // Actor's lease.
 var errActorBusy = errors.New("actor has an operation in progress")
 
-// releaseAssignmentsBefore releases every assignment on worker made during an
-// epoch before epoch. An assignment whose Actor is busy is skipped until the
-// rest are released, then reported, so the pass is retried.
+// releaseAssignmentsBefore releases every assignment on worker whose Actor ran
+// under an epoch before epoch. An assignment whose Actor is busy is skipped
+// until the rest are released, then reported, so the pass is retried.
 func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *ateapipb.Worker, epoch int64) error {
 	name := worker.GetMetadata().GetName()
 	busy := 0
@@ -124,9 +117,6 @@ func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *a
 			return fmt.Errorf("while listing the assignments of worker %s: %w", name, err)
 		}
 		for _, assignment := range page.Items {
-			if assignment.GetWorkerEpoch() >= epoch {
-				continue
-			}
 			err := w.releaseEarlierAssignment(ctx, worker, assignment, epoch)
 			if errors.Is(err, errActorBusy) {
 				busy++
@@ -147,15 +137,15 @@ func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *a
 	return nil
 }
 
-// releaseEarlierAssignment clears one assignment made during an epoch of the
-// Worker before epoch, under its Actor's lease so no operation on the Actor is
-// midway. The Actor, read under the lease, may have been bound here again in
-// the current epoch since the list; its assignment then carries that epoch, as
-// the rebound row does, and is left alone. An Actor still running on it is
-// crashed first and its row released after, so a failure in between leaves the
-// row for a retry to find, and the Actor already CRASHED. A row whose Actor
-// does not point here is left over from an operation that failed partway, and
-// is released.
+// releaseEarlierAssignment clears one assignment whose Actor ran under an epoch
+// of the Worker before epoch, under its Actor's lease so no operation on the
+// Actor is midway. An Actor recorded RUNNING under epoch or later is left
+// alone, and so is a RESUMING Actor, which is left to its resume. An Actor
+// still running on it is crashed first and its row released after, so a
+// failure in between leaves the row for a retry to find, and the Actor already
+// CRASHED. A row whose Actor does not point here names nothing that ran on the
+// Worker, so the restart lost nothing of it and it is left alone: it is a claim
+// a resume is still recording, or one the Actor's next resume recovers.
 func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment, epoch int64) error {
 	name := worker.GetMetadata().GetName()
 	release := func() error {
@@ -191,9 +181,16 @@ func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *a
 	}
 
 	if actor.GetStatus().GetWorkerAssignment().GetWorker().GetName() != name {
-		return release()
+		return nil
 	}
 	if actor.GetStatus().GetWorkerAssignment().GetWorkerEpoch() >= epoch {
+		return nil
+	}
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RESUMING {
+		// A RESUMING Actor is left to its resume, which records the epoch of
+		// the worker process that restores it, and restores it again if that
+		// process is gone, whether finalizeRunning finds it replaced or the
+		// Restore was cut short by the restart.
 		return nil
 	}
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {

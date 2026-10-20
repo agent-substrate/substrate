@@ -254,38 +254,59 @@ func (f *fakeControl) uid(pod string) string {
 }
 
 // fakeRelay records accepted reports, as ate-api-server's view of capacity,
-// and refuses Workers listed in reject with their code. An accepted report is
-// also written to control's Worker, as RegisterWorker records it.
+// and refuses Workers listed in reject with their code. A report with no epoch
+// acquires the Worker's next one, as AcquireWorkerEpoch does. An accepted
+// report is also written to control's Worker, as RegisterWorker and
+// SetWorkerSandboxRuntimes record it.
 type fakeRelay struct {
 	control  *fakeControl
 	mu       sync.Mutex
 	reported map[string]*ateapipb.WorkerResources      // by Worker name
 	classes  map[string][]*ateapipb.WorkerSandboxClass // sandbox classes, by Worker name
 	via      map[string]string                         // relay address, by Worker name
+	ips      map[string][]string                       // by Worker name
+	epochs   map[string]int64                          // registered epoch, by Worker name
+	acquired map[string]int                            // epochs acquired, by Worker name
 	reject   map[string]codes.Code
 	calls    int
 	live     map[string]string // as last pruned to
 }
 
 func newFakeRelay() *fakeRelay {
-	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, classes: map[string][]*ateapipb.WorkerSandboxClass{}, via: map[string]string{}, reject: map[string]codes.Code{}}
+	return &fakeRelay{
+		reported: map[string]*ateapipb.WorkerResources{},
+		classes:  map[string][]*ateapipb.WorkerSandboxClass{},
+		via:      map[string]string{},
+		ips:      map[string][]string{},
+		epochs:   map[string]int64{},
+		acquired: map[string]int{},
+		reject:   map[string]codes.Code{},
+	}
 }
 
-func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.RegisterWorkerRequest) error {
+func (f *fakeRelay) Report(_ context.Context, addr string, report workerReport) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	name := req.GetWorker().GetName()
+	name := report.Name
 	if code, ok := f.reject[name]; ok {
 		return status.Error(code, "rejected")
 	}
-	f.reported[name] = req.GetCapacity()
-	f.classes[name] = req.GetSandboxClasses()
+	epoch := report.Epoch
+	if epoch == 0 {
+		f.acquired[name]++
+		epoch = f.epochs[name] + 1
+	}
+	f.epochs[name] = epoch
+	f.reported[name] = report.Capacity
+	f.classes[name] = report.SandboxClasses
+	f.ips[name] = report.IPs
 	f.via[name] = addr
 	if f.control != nil {
 		f.control.mu.Lock()
 		if w, ok := f.control.workers[name]; ok {
-			w.Status.Capacity, w.Status.SandboxClasses = req.GetCapacity(), req.GetSandboxClasses()
+			w.Status.RegisteredEpoch, w.Status.Ips = epoch, report.IPs
+			w.Status.Capacity, w.Status.SandboxClasses = report.Capacity, report.SandboxClasses
 		}
 		f.control.mu.Unlock()
 	}
@@ -440,12 +461,20 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 		t.Errorf("sandbox class = %q", hardware.SandboxClass(w.GetStatus()))
 	case w.GetLabels()["workload"] != "bench":
 		t.Errorf("Labels = %v, want the pool's, which template selectors match", w.GetLabels())
-	case w.GetWorkerPodUid() != w.GetMetadata().GetName() || w.GetEpoch() != 0:
-		t.Errorf("WorkerPodUid/Epoch = %q/%d", w.GetWorkerPodUid(), w.GetEpoch())
+	case w.GetWorkerPodUid() != w.GetMetadata().GetName():
+		t.Errorf("WorkerPodUid = %q, want the Worker's name", w.GetWorkerPodUid())
 	}
 
 	if got := rel.via[ctl.uid(name)]; got != "10.0.0.2:8086" {
 		t.Errorf("capacity for %s sent via %q, want node-b's fake-atelet", name, got)
+	}
+	// A new Worker has no epoch, so its fake worker process acquires one and
+	// registers with its fake pod IP.
+	if got := rel.acquired[ctl.uid(name)]; got != 1 {
+		t.Errorf("acquired %d epochs for a new Worker, want 1", got)
+	}
+	if got, want := rel.ips[ctl.uid(name)], []string{fakeworker.IP(1)}; !slices.Equal(got, want) {
+		t.Errorf("registered IPs %v, want %v", got, want)
 	}
 	if got, want := rel.reported[ctl.uid(name)], wantCapacity(1000, "1500m", "4Gi"); !proto.Equal(got, want) {
 		t.Errorf("reported %v, want %v from the pool's limits", got, want)
@@ -950,7 +979,7 @@ func TestPoolLabelChangeUpdatesWorkers(t *testing.T) {
 	}
 }
 
-// A Worker's sandbox class is fixed on its first RegisterWorker report, so a
+// A worker pod runs one sandbox class for its lifetime, so a
 // sandboxClass edit replaces the pool's Workers the way it replaces real
 // worker pods: each pod gets a new Worker, under a new name and pod UID, at
 // once; an idle old Worker is deleted at once, a held one once its Actors
@@ -1191,6 +1220,51 @@ func TestAdoptReportsAWorkerNeverAccepted(t *testing.T) {
 	}
 	if got := cl.statuses["bench"]; got.Replicas != 1 || got.ReadyReplicas != 1 {
 		t.Errorf("status = %+v, want 1 replica, 1 ready", got)
+	}
+}
+
+// A report for a Worker that already registered its epoch with the same
+// IPs and capacity registers that epoch again instead of acquiring a new one: a
+// raised epoch would make ate-api-server crash every Actor on the Worker. One
+// registered with other values acquires a new epoch, since ate-api-server
+// refuses to change an epoch's registration.
+func TestReportReusesTheRegisteredEpoch(t *testing.T) {
+	tests := []struct {
+		name         string
+		ip           string
+		capacity     *ateapipb.WorkerResources
+		wantAcquired int
+		wantEpoch    int64
+	}{
+		{name: "same registration", ip: fakeworker.IP(0), capacity: wantCapacity(1000, "86", "160Gi"), wantEpoch: 5},
+		{name: "other capacity", ip: fakeworker.IP(0), capacity: wantCapacity(10, "86", "160Gi"), wantAcquired: 1, wantEpoch: 6},
+		{name: "other IPs", ip: fakeworker.IP(1), capacity: wantCapacity(1000, "86", "160Gi"), wantAcquired: 1, wantEpoch: 6},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, ctl, rel, _ := newTestController(pool("bench", 1, nil))
+			const first = "worker-1" // the first name newTestController's controller mints
+			rel.reject[first] = codes.Unavailable
+			if err := reconcile(t, c); err == nil {
+				t.Fatal("reconcile succeeded with a rejected report")
+			}
+			delete(rel.reject, first)
+			rel.epochs[first] = 5
+			ctl.mu.Lock()
+			status := ctl.workers[first].Status
+			status.RegisteredEpoch, status.Ips, status.Capacity = 5, []string{tc.ip}, tc.capacity
+			ctl.mu.Unlock()
+
+			if err := reconcile(t, c); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if got := rel.acquired[first]; got != tc.wantAcquired {
+				t.Errorf("acquired %d epochs, want %d", got, tc.wantAcquired)
+			}
+			if got := rel.epochs[first]; got != tc.wantEpoch {
+				t.Errorf("registered epoch %d, want %d", got, tc.wantEpoch)
+			}
+		})
 	}
 }
 

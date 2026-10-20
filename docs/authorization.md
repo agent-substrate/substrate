@@ -217,7 +217,9 @@ certificate.
 
 | RPC | The caller must be |
 |---|---|
+| `AcquireWorkerEpoch` | `atelet` on the worker's node |
 | `RegisterWorker` | `atelet` on the worker's node |
+| `SetWorkerSandboxRuntimes` | `atelet` on the worker's node |
 | `RequestActorSuspend` | `atelet` on the node of the worker hosting the actor |
 | `MintWorkerActorJwt` | `atelet` on the node hosting the actor |
 | `MintWorkerActorCertificate` | `atelet` on the node of the worker the actor is assigned to |

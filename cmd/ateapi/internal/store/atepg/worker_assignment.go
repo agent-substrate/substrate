@@ -89,9 +89,6 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 			worker.Status = &ateapipb.WorkerStatus{}
 		}
 
-		// Read under the row lock, so an epoch raised concurrently is either
-		// seen here or raised after this bind commits.
-		assignment.WorkerEpoch = worker.GetEpoch()
 		assignmentBytes, err := proto.Marshal(assignment)
 		if err != nil {
 			return nil, fmt.Errorf("marshaling assignment: %w", err)

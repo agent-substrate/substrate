@@ -1887,7 +1887,9 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	WorkerService_AcquireWorkerEpoch_FullMethodName         = "/ateapi.WorkerService/AcquireWorkerEpoch"
 	WorkerService_RegisterWorker_FullMethodName             = "/ateapi.WorkerService/RegisterWorker"
+	WorkerService_SetWorkerSandboxRuntimes_FullMethodName   = "/ateapi.WorkerService/SetWorkerSandboxRuntimes"
 	WorkerService_MintWorkerActorCertificate_FullMethodName = "/ateapi.WorkerService/MintWorkerActorCertificate"
 	WorkerService_MintWorkerActorJwt_FullMethodName         = "/ateapi.WorkerService/MintWorkerActorJwt"
 	WorkerService_RequestActorSuspend_FullMethodName        = "/ateapi.WorkerService/RequestActorSuspend"
@@ -1904,17 +1906,39 @@ const (
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceClient interface {
-	// RegisterWorker records what a Worker can hold and its supported sandbox
-	// runtimes in one write, so a Worker is never schedulable without runtime
-	// compatibility information to match snapshots against. Capacity and
-	// runtimes are the Worker's to report rather than the control plane's to
-	// infer: they are what the worker can actually supply and expose, only its
-	// node can observe them, and a fleet may run mixed versions.
+	// AcquireWorkerEpoch hands out a new epoch for a worker process, the first
+	// step of its startup. Nothing becomes active until the process registers
+	// with the epoch through RegisterWorker, so an acquire from a process that
+	// exits before it sees the reply changes nothing the scheduler or the
+	// reconciler acts on.
+	//
+	// atelet calls this with its own client certificate, for a Worker on its own
+	// node. Not idempotent: each call hands out a new epoch.
+	AcquireWorkerEpoch(ctx context.Context, in *AcquireWorkerEpochRequest, opts ...grpc.CallOption) (*AcquireWorkerEpochResponse, error)
+	// RegisterWorker activates the epoch a worker process acquired and records
+	// its pod IPs and capacity, in one write. A worker process registers once.
+	// The epoch must be one AcquireWorkerEpoch handed out, and higher than the
+	// Worker's registered_epoch; once it is registered, the Actors that ran under
+	// an earlier epoch are crashed, and the Worker takes no Actors until the new
+	// worker process reports its sandbox runtimes. Capacity and IPs are the Worker's to report:
+	// only its node can observe them.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
-	// write.
+	// MintCert. Re-sending the registered epoch with the same IPs and capacity is
+	// not a write. An older epoch, one that was never handed out, or the
+	// registered epoch with other IPs or capacity gets FailedPrecondition: an epoch's
+	// registration does not change once made.
 	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
+	// SetWorkerSandboxRuntimes records the sandbox runtimes a registered worker
+	// process can run. A worker process reports them after it registers, and
+	// again whenever they change. The epoch must be the Worker's registered_epoch,
+	// so a report from a worker process that has since been replaced gets
+	// FailedPrecondition, as does an entry of another class than the one this
+	// worker process reported first.
+	//
+	// atelet calls this with its own client certificate. Re-sending the same
+	// runtimes is not a write.
+	SetWorkerSandboxRuntimes(ctx context.Context, in *SetWorkerSandboxRuntimesRequest, opts ...grpc.CallOption) (*SetWorkerSandboxRuntimesResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts a worker acting
 	// on behalf of a particular actor.
 	//
@@ -1991,10 +2015,30 @@ func NewWorkerServiceClient(cc grpc.ClientConnInterface) WorkerServiceClient {
 	return &workerServiceClient{cc}
 }
 
+func (c *workerServiceClient) AcquireWorkerEpoch(ctx context.Context, in *AcquireWorkerEpochRequest, opts ...grpc.CallOption) (*AcquireWorkerEpochResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcquireWorkerEpochResponse)
+	err := c.cc.Invoke(ctx, WorkerService_AcquireWorkerEpoch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterWorkerResponse)
 	err := c.cc.Invoke(ctx, WorkerService_RegisterWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) SetWorkerSandboxRuntimes(ctx context.Context, in *SetWorkerSandboxRuntimesRequest, opts ...grpc.CallOption) (*SetWorkerSandboxRuntimesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetWorkerSandboxRuntimesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_SetWorkerSandboxRuntimes_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2060,17 +2104,39 @@ func (c *workerServiceClient) ReportActorCrashed(ctx context.Context, in *Report
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceServer interface {
-	// RegisterWorker records what a Worker can hold and its supported sandbox
-	// runtimes in one write, so a Worker is never schedulable without runtime
-	// compatibility information to match snapshots against. Capacity and
-	// runtimes are the Worker's to report rather than the control plane's to
-	// infer: they are what the worker can actually supply and expose, only its
-	// node can observe them, and a fleet may run mixed versions.
+	// AcquireWorkerEpoch hands out a new epoch for a worker process, the first
+	// step of its startup. Nothing becomes active until the process registers
+	// with the epoch through RegisterWorker, so an acquire from a process that
+	// exits before it sees the reply changes nothing the scheduler or the
+	// reconciler acts on.
+	//
+	// atelet calls this with its own client certificate, for a Worker on its own
+	// node. Not idempotent: each call hands out a new epoch.
+	AcquireWorkerEpoch(context.Context, *AcquireWorkerEpochRequest) (*AcquireWorkerEpochResponse, error)
+	// RegisterWorker activates the epoch a worker process acquired and records
+	// its pod IPs and capacity, in one write. A worker process registers once.
+	// The epoch must be one AcquireWorkerEpoch handed out, and higher than the
+	// Worker's registered_epoch; once it is registered, the Actors that ran under
+	// an earlier epoch are crashed, and the Worker takes no Actors until the new
+	// worker process reports its sandbox runtimes. Capacity and IPs are the Worker's to report:
+	// only its node can observe them.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
-	// write.
+	// MintCert. Re-sending the registered epoch with the same IPs and capacity is
+	// not a write. An older epoch, one that was never handed out, or the
+	// registered epoch with other IPs or capacity gets FailedPrecondition: an epoch's
+	// registration does not change once made.
 	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
+	// SetWorkerSandboxRuntimes records the sandbox runtimes a registered worker
+	// process can run. A worker process reports them after it registers, and
+	// again whenever they change. The epoch must be the Worker's registered_epoch,
+	// so a report from a worker process that has since been replaced gets
+	// FailedPrecondition, as does an entry of another class than the one this
+	// worker process reported first.
+	//
+	// atelet calls this with its own client certificate. Re-sending the same
+	// runtimes is not a write.
+	SetWorkerSandboxRuntimes(context.Context, *SetWorkerSandboxRuntimesRequest) (*SetWorkerSandboxRuntimesResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts a worker acting
 	// on behalf of a particular actor.
 	//
@@ -2147,8 +2213,14 @@ type WorkerServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedWorkerServiceServer struct{}
 
+func (UnimplementedWorkerServiceServer) AcquireWorkerEpoch(context.Context, *AcquireWorkerEpochRequest) (*AcquireWorkerEpochResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AcquireWorkerEpoch not implemented")
+}
 func (UnimplementedWorkerServiceServer) RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterWorker not implemented")
+}
+func (UnimplementedWorkerServiceServer) SetWorkerSandboxRuntimes(context.Context, *SetWorkerSandboxRuntimesRequest) (*SetWorkerSandboxRuntimesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetWorkerSandboxRuntimes not implemented")
 }
 func (UnimplementedWorkerServiceServer) MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintWorkerActorCertificate not implemented")
@@ -2186,6 +2258,24 @@ func RegisterWorkerServiceServer(s grpc.ServiceRegistrar, srv WorkerServiceServe
 	s.RegisterService(&WorkerService_ServiceDesc, srv)
 }
 
+func _WorkerService_AcquireWorkerEpoch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquireWorkerEpochRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).AcquireWorkerEpoch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_AcquireWorkerEpoch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).AcquireWorkerEpoch(ctx, req.(*AcquireWorkerEpochRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_RegisterWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterWorkerRequest)
 	if err := dec(in); err != nil {
@@ -2200,6 +2290,24 @@ func _WorkerService_RegisterWorker_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).RegisterWorker(ctx, req.(*RegisterWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_SetWorkerSandboxRuntimes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetWorkerSandboxRuntimesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).SetWorkerSandboxRuntimes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_SetWorkerSandboxRuntimes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).SetWorkerSandboxRuntimes(ctx, req.(*SetWorkerSandboxRuntimesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2302,8 +2410,16 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*WorkerServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "AcquireWorkerEpoch",
+			Handler:    _WorkerService_AcquireWorkerEpoch_Handler,
+		},
+		{
 			MethodName: "RegisterWorker",
 			Handler:    _WorkerService_RegisterWorker_Handler,
+		},
+		{
+			MethodName: "SetWorkerSandboxRuntimes",
+			Handler:    _WorkerService_SetWorkerSandboxRuntimes_Handler,
 		},
 		{
 			MethodName: "MintWorkerActorCertificate",

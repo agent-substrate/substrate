@@ -31,10 +31,21 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// recordingWorkerService records the last report and answers with err.
+// recordingWorkerService records the last request of each kind and answers
+// with err.
 type recordingWorkerService struct {
-	got *ateapipb.RegisterWorkerRequest
-	err error
+	got         *ateapipb.RegisterWorkerRequest
+	acquireGot  *ateapipb.AcquireWorkerEpochRequest
+	runtimesGot *ateapipb.SetWorkerSandboxRuntimesRequest
+	err         error
+}
+
+func (f *recordingWorkerService) AcquireWorkerEpoch(_ context.Context, in *ateapipb.AcquireWorkerEpochRequest, _ ...grpc.CallOption) (*ateapipb.AcquireWorkerEpochResponse, error) {
+	f.acquireGot = in
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &ateapipb.AcquireWorkerEpochResponse{Epoch: 4}, nil
 }
 
 func (f *recordingWorkerService) RegisterWorker(_ context.Context, in *ateapipb.RegisterWorkerRequest, _ ...grpc.CallOption) (*ateapipb.RegisterWorkerResponse, error) {
@@ -43,6 +54,53 @@ func (f *recordingWorkerService) RegisterWorker(_ context.Context, in *ateapipb.
 		return nil, f.err
 	}
 	return &ateapipb.RegisterWorkerResponse{}, nil
+}
+
+func (f *recordingWorkerService) SetWorkerSandboxRuntimes(_ context.Context, in *ateapipb.SetWorkerSandboxRuntimesRequest, _ ...grpc.CallOption) (*ateapipb.SetWorkerSandboxRuntimesResponse, error) {
+	f.runtimesGot = in
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &ateapipb.SetWorkerSandboxRuntimesResponse{}, nil
+}
+
+func runtimesReport() *ateapipb.SetWorkerSandboxRuntimesRequest {
+	return &ateapipb.SetWorkerSandboxRuntimesRequest{
+		Worker: &ateapipb.ObjectRef{Name: "fake-r1-c52b9bd3-0"},
+		Epoch:  4,
+		SandboxClasses: []*ateapipb.WorkerSandboxClass{{
+			SandboxClass: "gvisor",
+			DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: &ateapipb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes:    []*ateapipb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+			}},
+		}},
+	}
+}
+
+func TestRelayForwardsTheAcquireUnchanged(t *testing.T) {
+	svc := &recordingWorkerService{}
+	in := &ateapipb.AcquireWorkerEpochRequest{Worker: &ateapipb.ObjectRef{Name: "fake-r1-c52b9bd3-0"}}
+	resp, err := (&relay{client: svc}).AcquireWorkerEpoch(context.Background(), in)
+	if err != nil {
+		t.Fatalf("AcquireWorkerEpoch: %v", err)
+	}
+	if !proto.Equal(svc.acquireGot, in) {
+		t.Errorf("forwarded %v, want %v", svc.acquireGot, in)
+	}
+	if got := resp.GetEpoch(); got != 4 {
+		t.Errorf("epoch = %d, want ate-api-server's 4", got)
+	}
+}
+
+func TestRelayForwardsTheRuntimesUnchanged(t *testing.T) {
+	svc := &recordingWorkerService{}
+	if _, err := (&relay{client: svc}).SetWorkerSandboxRuntimes(context.Background(), runtimesReport()); err != nil {
+		t.Fatalf("SetWorkerSandboxRuntimes: %v", err)
+	}
+	if !proto.Equal(svc.runtimesGot, runtimesReport()) {
+		t.Errorf("forwarded %v, want %v", svc.runtimesGot, runtimesReport())
+	}
 }
 
 func report() *ateapipb.RegisterWorkerRequest {
@@ -65,17 +123,57 @@ func TestRelayForwardsTheReportUnchanged(t *testing.T) {
 	}
 }
 
+// The herder reports the epoch a Worker registered with, so the relay records
+// it, and only once ate-api-server has accepted the registration.
+func TestRelayRecordsTheRegisteredEpoch(t *testing.T) {
+	in := report()
+	in.Epoch = 4
+
+	refused := newWorkerEpochs()
+	svc := &recordingWorkerService{err: status.Error(codes.FailedPrecondition, "epoch superseded")}
+	if _, err := (&relay{client: svc, epochs: refused}).RegisterWorker(context.Background(), in); err == nil {
+		t.Fatal("RegisterWorker succeeded, want ate-api-server's refusal")
+	}
+	if got := refused.get(in.GetWorker().GetName()); got != 0 {
+		t.Errorf("epoch after a refused registration = %d, want 0", got)
+	}
+
+	accepted := newWorkerEpochs()
+	if _, err := (&relay{client: &recordingWorkerService{}, epochs: accepted}).RegisterWorker(context.Background(), in); err != nil {
+		t.Fatalf("RegisterWorker: %v", err)
+	}
+	if got := accepted.get(in.GetWorker().GetName()); got != 4 {
+		t.Errorf("epoch after an accepted registration = %d, want 4", got)
+	}
+}
+
 // fake-workersync retries a Worker ate-api-server has not seen yet and gives up
 // on a rejected report, so the relay must keep ate-api-server's status.
 func TestRelayPassesThroughAteAPIServersStatus(t *testing.T) {
-	for _, code := range []codes.Code{codes.NotFound, codes.InvalidArgument, codes.PermissionDenied, codes.Unavailable, codes.Internal} {
-		svc := &recordingWorkerService{err: status.Error(code, "from ate-api-server")}
-		_, err := (&relay{client: svc}).RegisterWorker(context.Background(), report())
-		if got := status.Code(err); got != code {
-			t.Errorf("%v: code = %v", code, got)
-		}
-		if !strings.Contains(status.Convert(err).Message(), "from ate-api-server") {
-			t.Errorf("%v: %v does not carry ate-api-server's message", code, err)
+	calls := map[string]func(*relay) error{
+		"AcquireWorkerEpoch": func(r *relay) error {
+			_, err := r.AcquireWorkerEpoch(context.Background(), &ateapipb.AcquireWorkerEpochRequest{})
+			return err
+		},
+		"RegisterWorker": func(r *relay) error {
+			_, err := r.RegisterWorker(context.Background(), report())
+			return err
+		},
+		"SetWorkerSandboxRuntimes": func(r *relay) error {
+			_, err := r.SetWorkerSandboxRuntimes(context.Background(), runtimesReport())
+			return err
+		},
+	}
+	for name, call := range calls {
+		for _, code := range []codes.Code{codes.NotFound, codes.InvalidArgument, codes.PermissionDenied, codes.Unavailable, codes.Internal} {
+			svc := &recordingWorkerService{err: status.Error(code, "from ate-api-server")}
+			err := call(&relay{client: svc})
+			if got := status.Code(err); got != code {
+				t.Errorf("%s %v: code = %v", name, code, got)
+			}
+			if !strings.Contains(status.Convert(err).Message(), "from ate-api-server") {
+				t.Errorf("%s %v: %v does not carry ate-api-server's message", name, code, err)
+			}
 		}
 	}
 }

@@ -906,8 +906,10 @@ message ActorStatus {
   // worker_assignment points at the worker currently hosting this Actor.
   // Unset whenever the Actor has no worker (SUSPENDED, CRASHED).
   //
+  // It can be set and cleared, but not pointed at another Worker in place:
+  // the fields that identify the Worker cannot change while it is set.
+  //
   // +k8s:optional
-  // +k8s:update=NoModify # can be set and cleared, but not changed in place
   WorkerAssignment worker_assignment = 2;
 
   // external_volumes is the state of the external volumes attached to the
@@ -971,8 +973,11 @@ message ActorCrash {
 //
 // This is a denormalized snapshot, not merely a reference: atenet reads
 // worker_pod_ips on the request-routing path and must not need a second lookup,
-// and kubectl-ate displays the pod name. The copies stay valid for the life of
-// the assignment because a Worker's identity fields are immutable.
+// and kubectl-ate displays the pod name. The copies of the Worker's identity
+// fields stay valid for the life of the assignment because those fields are
+// immutable, and cannot change in place. worker_pod_ips and worker_epoch
+// describe the worker process the Actor runs under, and are updated when the
+// Actor becomes RUNNING.
 //
 // Pass `worker` to GetWorker; none of the denormalized fields identify the
 // Worker to the API.
@@ -985,33 +990,39 @@ message WorkerAssignment {
   //
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   // +k8s:required
+  // +k8s:update=NoModify
   ObjectRef worker = 6;
 
   // worker_namespace is the Kubernetes namespace of the WorkerPool and worker Pod.
   //
   // +k8s:required
   // +k8s:format=k8s-short-name
+  // +k8s:update=NoModify
   string worker_namespace = 1;
 
   // worker_pool is the name of the WorkerPool the worker belongs to.
   //
   // +k8s:required
   // +k8s:format=k8s-long-name
+  // +k8s:update=NoModify
   string worker_pool = 2;
 
   // worker_pod is the name of the Kubernetes pod hosting the Actor.
   //
   // +k8s:required
   // +k8s:format=k8s-long-name
+  // +k8s:update=NoModify
   string worker_pod = 3;
 
   // worker_pod_uid is the Kubernetes UID of worker_pod.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
+  // +k8s:update=NoModify
   string worker_pod_uid = 4;
 
-  // worker_pod_ips are the IPs of worker_pod, copied from Worker.ips.
+  // worker_pod_ips are the IPs of worker_pod, copied from Worker.status.ips
+  // when the Actor is placed, and again when it becomes RUNNING.
   //
   // +k8s:required
   // +k8s:maxItems=2
@@ -1023,10 +1034,12 @@ message WorkerAssignment {
   //
   // +k8s:required
   // +k8s:format=k8s-long-name
+  // +k8s:update=NoModify
   string node_name = 7;
 
-  // worker_epoch is the Worker's epoch when the Actor was placed on it. 0 if
-  // the Worker had not reported one.
+  // worker_epoch is the epoch of the worker process the Actor runs under, as
+  // that process reports it from Run or Restore. 0 until the Actor becomes
+  // RUNNING.
   //
   // +k8s:optional
   // +k8s:minimum=0
@@ -1036,6 +1049,7 @@ message WorkerAssignment {
   // was started or restored under on this Worker.
   //
   // +k8s:optional
+  // +k8s:update=NoModify
   ActorSandboxRuntime sandbox_runtime = 9;
 
   // worker_spiffe_id is the SPIFFE ID worker_pod's certificate carries, copied
@@ -1044,6 +1058,7 @@ message WorkerAssignment {
   // +k8s:optional
   // +k8s:maxLength=2048
   // +k8s:customValidation # a SPIFFE ID
+  // +k8s:update=NoModify
   string worker_spiffe_id = 10;
 }
 
@@ -2332,15 +2347,6 @@ message Worker {
   // +k8s:format=k8s-long-name
   // +k8s:immutable
   string node_name = 6;
-  // ips are the worker pod's IPs, at most one per IP family, in the order
-  // Kubernetes reports them; the first is in the cluster's primary family.
-  //
-  // +k8s:required
-  // +k8s:maxItems=2
-  // +k8s:listType=atomic
-  // +k8s:customValidation # until `format=k8s-ip` is supported
-  // +k8s:immutable
-  repeated string ips = 7;
   // worker_spiffe_id is the SPIFFE ID the worker pod's certificate carries.
   // atenet-router requires it on the certificate of the worker's atunnel.
   //
@@ -2348,7 +2354,7 @@ message Worker {
   // +k8s:maxLength=2048
   // +k8s:customValidation # a SPIFFE ID
   // +k8s:immutable
-  string worker_spiffe_id = 8;
+  string worker_spiffe_id = 7;
 
   // labels mirror the WorkerPool object's Kubernetes labels, which selectors
   // match against.
@@ -2359,21 +2365,7 @@ message Worker {
   // +k8s:maxProperties=64
   // +k8s:eachKey=+k8s:format=k8s-label-key
   // +k8s:eachVal=+k8s:format=k8s-label-value
-  map<string, string> labels = 9;
-
-  // epoch counts the runs of the worker pod's worker container: 1 for its first
-  // run and one more for each restart. 0 means it has not been reported.
-  //
-  // A restarted worker has lost the sandboxes of the Actors it was hosting, so
-  // once epoch rises the control plane crashes every Actor placed during an
-  // earlier epoch; status.observed_epoch reports when that is done. It may only
-  // increase.
-  //
-  // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:update=NoUnset
-  // +k8s:customValidation
-  int64 epoch = 10;
+  map<string, string> labels = 8;
 
   // Output-only server-managed state. Absent from Create/Update request
   // payloads; whatever a request carries here is ignored. A client moves
@@ -2381,7 +2373,7 @@ message Worker {
   // MarkWorkerUnavailable, and the assignments are the scheduler's.
   //
   // +k8s:optional
-  WorkerStatus status = 11;
+  WorkerStatus status = 9;
 }
 
 enum WorkerState {
@@ -2423,24 +2415,55 @@ message WorkerStatus {
   WorkerResources allocated = 3;
 
   // observed_epoch is the latest epoch whose earlier Actors the control plane
-  // has crashed and released. While it is below epoch, Actors placed before
-  // the worker's last restart may still be reported as running.
+  // has crashed and released. While it is below registered_epoch, Actors placed
+  // before the worker's last restart may still be reported as running.
   //
   // +k8s:optional
   // +k8s:minimum=0
   int64 observed_epoch = 4;
 
-  // The sandbox classes this Worker runs and the runtimes it runs them
-  // under, as reported by the Worker at registration; empty until then, and
-  // nothing is placed on the Worker until then. One entry today, like
-  // WorkerPoolSpec.sandboxClasses. Its sandbox_class is the Worker's class,
-  // fixed by the first RegisterWorker call.
+  // The sandbox classes this Worker runs and the runtimes it runs them under,
+  // as the registered worker process reports them through
+  // WorkerService.SetWorkerSandboxRuntimes. Cleared when a new worker process
+  // registers, and nothing is placed on the Worker until it reports them. One
+  // entry today, like WorkerPoolSpec.sandboxClasses. Its sandbox_class is the
+  // Worker's class.
   //
   // +k8s:optional
   // +k8s:maxItems=1 # keep in sync with WorkerPoolSpec.sandboxClasses
   // +k8s:listType=map
   // +k8s:listMapKey=sandbox_class
   repeated WorkerSandboxClass sandbox_classes = 5;
+
+  // ips are the worker pod's IPs, at most one per IP family, in the order
+  // Kubernetes reports them; the first is in the cluster's primary family.
+  // The worker process reports them when it registers, so they follow a pod
+  // sandbox that is recreated with new IPs.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=2
+  // +k8s:listType=atomic
+  // +k8s:customValidation # until `format=k8s-ip` is supported
+  repeated string ips = 6;
+
+  // issued_epoch is the last epoch handed out by
+  // WorkerService.AcquireWorkerEpoch. Each worker process acquires one at
+  // startup.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 issued_epoch = 7;
+
+  // registered_epoch is the epoch of the worker process that registered last,
+  // through WorkerService.RegisterWorker. Only one worker process runs in a pod
+  // at a time, and a process registers only an epoch it acquired, so a rise
+  // means every earlier process has exited and lost its sandboxes. The control
+  // plane then crashes the Actors that ran under an earlier epoch. 0 until the
+  // first registration; a Worker takes no Actors before then.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 registered_epoch = 8;
 }
 
 // WorkerSandboxClass is one sandbox class a Worker runs, with the runtimes
@@ -2611,12 +2634,6 @@ message ActorAssignment {
   //
   // +k8s:optional
   Resources resources = 4;
-
-  // worker_epoch is the Worker's epoch when the Actor was bound.
-  //
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 worker_epoch = 5;
 }
 
 // WorkerService is how a Worker tells the control plane what it observes. It is
@@ -2624,17 +2641,41 @@ message ActorAssignment {
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 service WorkerService {
-  // RegisterWorker records what a Worker can hold and its supported sandbox
-  // runtimes in one write, so a Worker is never schedulable without runtime
-  // compatibility information to match snapshots against. Capacity and
-  // runtimes are the Worker's to report rather than the control plane's to
-  // infer: they are what the worker can actually supply and expose, only its
-  // node can observe them, and a fleet may run mixed versions.
+  // AcquireWorkerEpoch hands out a new epoch for a worker process, the first
+  // step of its startup. Nothing becomes active until the process registers
+  // with the epoch through RegisterWorker, so an acquire from a process that
+  // exits before it sees the reply changes nothing the scheduler or the
+  // reconciler acts on.
+  //
+  // atelet calls this with its own client certificate, for a Worker on its own
+  // node. Not idempotent: each call hands out a new epoch.
+  rpc AcquireWorkerEpoch(AcquireWorkerEpochRequest) returns (AcquireWorkerEpochResponse);
+
+  // RegisterWorker activates the epoch a worker process acquired and records
+  // its pod IPs and capacity, in one write. A worker process registers once.
+  // The epoch must be one AcquireWorkerEpoch handed out, and higher than the
+  // Worker's registered_epoch; once it is registered, the Actors that ran under
+  // an earlier epoch are crashed, and the Worker takes no Actors until the new
+  // worker process reports its sandbox runtimes. Capacity and IPs are the Worker's to report:
+  // only its node can observe them.
   //
   // atelet calls this with its own client certificate, as it does for
-  // MintCert. Idempotent: re-sending the same capacity and runtimes is not a
-  // write.
+  // MintCert. Re-sending the registered epoch with the same IPs and capacity is
+  // not a write. An older epoch, one that was never handed out, or the
+  // registered epoch with other IPs or capacity gets FailedPrecondition: an epoch's
+  // registration does not change once made.
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+
+  // SetWorkerSandboxRuntimes records the sandbox runtimes a registered worker
+  // process can run. A worker process reports them after it registers, and
+  // again whenever they change. The epoch must be the Worker's registered_epoch,
+  // so a report from a worker process that has since been replaced gets
+  // FailedPrecondition, as does an entry of another class than the one this
+  // worker process reported first.
+  //
+  // atelet calls this with its own client certificate. Re-sending the same
+  // runtimes is not a write.
+  rpc SetWorkerSandboxRuntimes(SetWorkerSandboxRuntimesRequest) returns (SetWorkerSandboxRuntimesResponse);
 
   // Create a Substrate-issued SPIFFE certificate that asserts a worker acting
   // on behalf of a particular actor.
@@ -2708,6 +2749,20 @@ service WorkerService {
   rpc ReportActorCrashed(ReportActorCrashedRequest) returns (ReportActorCrashedResponse);
 }
 
+message AcquireWorkerEpochRequest {
+  // The Worker whose worker process is starting. atespace is always empty;
+  // Workers are global-scoped.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+}
+
+message AcquireWorkerEpochResponse {
+  // The epoch handed out, for the worker process to register with.
+  int64 epoch = 1;
+}
+
 message RegisterWorkerRequest {
   // The Worker being registered. atespace is always empty; Workers are
   // global-scoped.
@@ -2716,17 +2771,52 @@ message RegisterWorkerRequest {
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef worker = 1;
 
+  // The epoch the worker process acquired through AcquireWorkerEpoch.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int64 epoch = 3;
+
+  // The worker pod's IPs, at most one per IP family, in the order Kubernetes
+  // reports them. They replace what is recorded.
+  //
+  // +k8s:required
+  // +k8s:maxItems=2
+  // +k8s:listType=atomic
+  // +k8s:customValidation # until `format=k8s-ip` is supported
+  repeated string ips = 4;
+
   // Everything the Worker can hold. This replaces what is recorded rather than
   // merging into it: a dimension left out is one the Worker no longer supplies,
   // and an Actor asking for that dimension will not be placed here.
   //
   // +k8s:required
   WorkerResources capacity = 2;
+}
 
-  // The sandbox classes this worker runs and the runtimes it runs them
-  // under. The first registration fixes the Worker's sandbox class; later
-  // reports replace the runtimes, but an entry of another class is refused.
-  // Like capacity, this replaces what is recorded on the Worker.
+message RegisterWorkerResponse {
+  // The Worker as recorded, so a caller sees what its report resolved to.
+  Worker worker = 1;
+}
+
+message SetWorkerSandboxRuntimesRequest {
+  // The Worker whose runtimes these are. atespace is always empty; Workers are
+  // global-scoped.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+
+  // The epoch the worker process registered with.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int64 epoch = 2;
+
+  // The sandbox classes this worker process runs and the runtimes it runs them
+  // under. The first report of a worker process fixes the Worker's sandbox
+  // class; later reports replace the runtimes, but an entry of another class is
+  // refused. This replaces what is recorded on the Worker.
   //
   // +k8s:required
   // +k8s:minItems=1
@@ -2736,8 +2826,8 @@ message RegisterWorkerRequest {
   repeated WorkerSandboxClass sandbox_classes = 3;
 }
 
-message RegisterWorkerResponse {
-  // The Worker as recorded, so a caller sees what its report resolved to.
+message SetWorkerSandboxRuntimesResponse {
+  // The Worker as recorded.
   Worker worker = 1;
 }
 

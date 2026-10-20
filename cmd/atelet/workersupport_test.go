@@ -88,10 +88,21 @@ func workerCertificate(t *testing.T, podUID, nodeName string) *x509.Certificate 
 type fakeWorkerService struct {
 	ateapipb.WorkerServiceClient
 
-	got      []*ateapipb.RegisterWorkerRequest
-	mintGot  []*ateapipb.MintWorkerActorCertificateRequest
-	mintResp *ateapipb.MintWorkerActorCertificateResponse
-	err      error
+	got         []*ateapipb.RegisterWorkerRequest
+	acquireGot  []*ateapipb.AcquireWorkerEpochRequest
+	runtimesGot []*ateapipb.SetWorkerSandboxRuntimesRequest
+	epoch       int64
+	mintGot     []*ateapipb.MintWorkerActorCertificateRequest
+	mintResp    *ateapipb.MintWorkerActorCertificateResponse
+	err         error
+}
+
+func (s *fakeWorkerService) AcquireWorkerEpoch(_ context.Context, in *ateapipb.AcquireWorkerEpochRequest, _ ...grpc.CallOption) (*ateapipb.AcquireWorkerEpochResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.acquireGot = append(s.acquireGot, in)
+	return &ateapipb.AcquireWorkerEpochResponse{Epoch: s.epoch}, nil
 }
 
 func (s *fakeWorkerService) RegisterWorker(_ context.Context, in *ateapipb.RegisterWorkerRequest, _ ...grpc.CallOption) (*ateapipb.RegisterWorkerResponse, error) {
@@ -100,6 +111,14 @@ func (s *fakeWorkerService) RegisterWorker(_ context.Context, in *ateapipb.Regis
 	}
 	s.got = append(s.got, in)
 	return &ateapipb.RegisterWorkerResponse{}, nil
+}
+
+func (s *fakeWorkerService) SetWorkerSandboxRuntimes(_ context.Context, in *ateapipb.SetWorkerSandboxRuntimesRequest, _ ...grpc.CallOption) (*ateapipb.SetWorkerSandboxRuntimesResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.runtimesGot = append(s.runtimesGot, in)
+	return &ateapipb.SetWorkerSandboxRuntimesResponse{}, nil
 }
 
 func (s *fakeWorkerService) MintWorkerActorCertificate(_ context.Context, in *ateapipb.MintWorkerActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintWorkerActorCertificateResponse, error) {
@@ -113,7 +132,137 @@ func (s *fakeWorkerService) MintWorkerActorCertificate(_ context.Context, in *at
 	return &ateapipb.MintWorkerActorCertificateResponse{}, nil
 }
 
+func TestAcquireWorkerEpoch(t *testing.T) {
+	tests := []struct {
+		name            string
+		unauthenticated bool
+		serviceErr      error
+		wantCode        codes.Code
+		wantEpoch       int64
+		wantForwarded   []*ateapipb.AcquireWorkerEpochRequest
+	}{{
+		// The Worker is named after the worker pod UID from the certificate.
+		name:          "acquires for the calling worker",
+		wantEpoch:     7,
+		wantForwarded: []*ateapipb.AcquireWorkerEpochRequest{{Worker: &ateapipb.ObjectRef{Name: "pod-a"}}},
+	}, {
+		name:            "requires a certificate",
+		unauthenticated: true,
+		wantCode:        codes.Unauthenticated,
+	}, {
+		name:       "surfaces the control plane's rejection",
+		serviceErr: status.Error(codes.NotFound, "no such worker"),
+		wantCode:   codes.NotFound,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workers := &fakeWorkerService{err: tt.serviceErr, epoch: 7}
+			svc := &workerSupportServer{workers: workers}
+			ctx := workerContext(t, "pod-a")
+			if tt.unauthenticated {
+				ctx = context.Background()
+			}
+
+			resp, err := svc.AcquireWorkerEpoch(ctx, &ateletpb.AcquireWorkerEpochRequest{})
+			if got := status.Code(err); got != tt.wantCode {
+				t.Errorf("AcquireWorkerEpoch() code = %v (%v), want %v", got, err, tt.wantCode)
+			}
+			if got := resp.GetEpoch(); got != tt.wantEpoch {
+				t.Errorf("AcquireWorkerEpoch() epoch = %d, want %d", got, tt.wantEpoch)
+			}
+			if diff := cmp.Diff(tt.wantForwarded, workers.acquireGot, protocmp.Transform()); diff != "" {
+				t.Errorf("forwarded requests mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestRegisterWorker(t *testing.T) {
+	ips := []string{"10.0.0.1"}
+	forwarded := func(capacity *ateapipb.WorkerResources) []*ateapipb.RegisterWorkerRequest {
+		// The Worker is named after the worker pod UID, taken from the
+		// certificate rather than the request; epoch, IPs and capacity come
+		// from what the worker reported.
+		return []*ateapipb.RegisterWorkerRequest{{
+			Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
+			Epoch:    3,
+			Ips:      ips,
+			Capacity: capacity,
+		}}
+	}
+
+	tests := []struct {
+		name string
+		// unauthenticated drops the peer certificate from the context.
+		unauthenticated bool
+		// serviceErr is what the control plane answers with.
+		serviceErr    error
+		req           *ateletpb.RegisterWorkerRequest
+		wantCode      codes.Code
+		wantForwarded []*ateapipb.RegisterWorkerRequest
+	}{{
+		name: "records what the worker says",
+		req: &ateletpb.RegisterWorkerRequest{
+			Epoch:    3,
+			Ips:      ips,
+			Capacity: &ateletpb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
+		},
+		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4294967296}),
+	}, {
+		name:          "omits undetermined compute",
+		req:           &ateletpb.RegisterWorkerRequest{Epoch: 3, Ips: ips, Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}),
+	}, {
+		name:          "forwards empty capacity",
+		req:           &ateletpb.RegisterWorkerRequest{Epoch: 3, Ips: ips, Capacity: &ateletpb.WorkerResources{}},
+		wantForwarded: forwarded(&ateapipb.WorkerResources{}),
+	}, {
+		name: "rejects invalid capacity without forwarding",
+		req: &ateletpb.RegisterWorkerRequest{
+			Epoch:    3,
+			Ips:      ips,
+			Capacity: &ateletpb.WorkerResources{CpuMillicores: -1},
+		},
+		wantCode: codes.InvalidArgument,
+	}, {
+		name:     "rejects missing capacity without forwarding",
+		req:      &ateletpb.RegisterWorkerRequest{Epoch: 3, Ips: ips},
+		wantCode: codes.InvalidArgument,
+	}, {
+		// A worker may report only what its certificate proves it is.
+		name:            "requires a certificate",
+		unauthenticated: true,
+		req:             &ateletpb.RegisterWorkerRequest{Epoch: 3, Ips: ips, Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		wantCode:        codes.Unauthenticated,
+	}, {
+		// The Worker record may not exist yet. The error must reach the
+		// worker so it retries.
+		name:       "surfaces the control plane's rejection",
+		serviceErr: errors.New("no such worker"),
+		req:        &ateletpb.RegisterWorkerRequest{Epoch: 3, Ips: ips, Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		wantCode:   codes.Unknown,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workers := &fakeWorkerService{err: tt.serviceErr}
+			svc := &workerSupportServer{workers: workers}
+			ctx := workerContext(t, "pod-a")
+			if tt.unauthenticated {
+				ctx = context.Background()
+			}
+
+			_, err := svc.RegisterWorker(ctx, tt.req)
+			if got := status.Code(err); got != tt.wantCode {
+				t.Errorf("RegisterWorker() code = %v (%v), want %v", got, err, tt.wantCode)
+			}
+			if diff := cmp.Diff(tt.wantForwarded, workers.got, protocmp.Transform()); diff != "" {
+				t.Errorf("forwarded requests mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestSetWorkerSandboxRuntimes(t *testing.T) {
 	reqCompat := func(hash string) *ateletpb.VersionedSandboxCompat {
 		return &ateletpb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -145,10 +294,10 @@ func TestRegisterWorker(t *testing.T) {
 		}
 		return []*ateletpb.WorkerSandboxClass{c}
 	}
-	forwarded := func(capacity *ateapipb.WorkerResources, restorable ...*ateapipb.VersionedSandboxCompat) []*ateapipb.RegisterWorkerRequest {
+	forwarded := func(restorable ...*ateapipb.VersionedSandboxCompat) []*ateapipb.SetWorkerSandboxRuntimesRequest {
 		// The Worker is named after the worker pod UID, taken from the
-		// certificate rather than the request; capacity and sandbox classes
-		// come from what the worker reported.
+		// certificate rather than the request; epoch and sandbox classes come
+		// from what the worker reported.
 		c := &ateapipb.WorkerSandboxClass{
 			SandboxClass:   "gvisor",
 			DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: wantDefault},
@@ -156,9 +305,9 @@ func TestRegisterWorker(t *testing.T) {
 		for _, r := range restorable {
 			c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapipb.WorkerSandboxRuntime{Version: r})
 		}
-		return []*ateapipb.RegisterWorkerRequest{{
+		return []*ateapipb.SetWorkerSandboxRuntimesRequest{{
 			Worker:         &ateapipb.ObjectRef{Name: "pod-a"},
-			Capacity:       capacity,
+			Epoch:          3,
 			SandboxClasses: []*ateapipb.WorkerSandboxClass{c},
 		}}
 	}
@@ -169,50 +318,29 @@ func TestRegisterWorker(t *testing.T) {
 		unauthenticated bool
 		// serviceErr is what the control plane answers with.
 		serviceErr    error
-		req           *ateletpb.RegisterWorkerRequest
+		req           *ateletpb.SetWorkerSandboxRuntimesRequest
 		wantCode      codes.Code
-		wantForwarded []*ateapipb.RegisterWorkerRequest
+		wantForwarded []*ateapipb.SetWorkerSandboxRuntimesRequest
 	}{{
-		name: "records what the worker says",
-		req: &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
-			SandboxClasses: reqClasses(),
-		},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4294967296}),
+		name:          "records what the worker says",
+		req:           &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: reqClasses()},
+		wantForwarded: forwarded(),
 	}, {
-		name: "forwards restorable runtimes",
-		req: &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{Actors: 1},
-			SandboxClasses: reqClasses(reqCompat("d547")),
-		},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}, wantCompat("d547")),
-	}, {
-		name:          "omits undetermined compute",
-		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, SandboxClasses: reqClasses()},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}),
-	}, {
-		name:          "forwards empty capacity",
-		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{}, SandboxClasses: reqClasses()},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{}),
-	}, {
-		name: "rejects invalid capacity without forwarding",
-		req: &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{CpuMillicores: -1},
-			SandboxClasses: reqClasses(),
-		},
-		wantCode: codes.InvalidArgument,
-	}, {
-		name:     "rejects missing capacity without forwarding",
-		req:      &ateletpb.RegisterWorkerRequest{SandboxClasses: reqClasses()},
-		wantCode: codes.InvalidArgument,
+		name:          "forwards restorable runtimes",
+		req:           &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: reqClasses(reqCompat("d547"))},
+		wantForwarded: forwarded(wantCompat("d547")),
 	}, {
 		name:     "rejects missing sandbox classes without forwarding",
-		req:      &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		req:      &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3},
+		wantCode: codes.InvalidArgument,
+	}, {
+		name:     "rejects missing epoch without forwarding",
+		req:      &ateletpb.SetWorkerSandboxRuntimesRequest{SandboxClasses: reqClasses()},
 		wantCode: codes.InvalidArgument,
 	}, {
 		name: "rejects missing default runtime without forwarding",
-		req: &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{Actors: 1},
+		req: &ateletpb.SetWorkerSandboxRuntimesRequest{
+			Epoch:          3,
 			SandboxClasses: []*ateletpb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 		},
 		wantCode: codes.InvalidArgument,
@@ -220,8 +348,8 @@ func TestRegisterWorker(t *testing.T) {
 		// A worker runs one class until WorkerPoolSpec.sandboxClasses
 		// allows more.
 		name: "rejects two sandbox classes without forwarding",
-		req: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{Actors: 1},
+		req: &ateletpb.SetWorkerSandboxRuntimesRequest{
+			Epoch: 3,
 			SandboxClasses: []*ateletpb.WorkerSandboxClass{
 				{SandboxClass: "gvisor", DefaultRuntime: &ateletpb.WorkerSandboxRuntime{Version: reqDefault}},
 				{SandboxClass: "microvm", DefaultRuntime: &ateletpb.WorkerSandboxRuntime{Version: reqDefault}},
@@ -232,16 +360,15 @@ func TestRegisterWorker(t *testing.T) {
 		// A worker may report only what its certificate proves it is.
 		name:            "requires a certificate",
 		unauthenticated: true,
-		req:             &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, SandboxClasses: reqClasses()},
+		req:             &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: reqClasses()},
 		wantCode:        codes.Unauthenticated,
 	}, {
-		// The Worker record may not exist yet. The error must reach the
-		// worker so it retries: it reports once, so a swallowed failure
-		// leaves the Worker with no capacity forever.
-		name:       "surfaces the control plane's rejection",
-		serviceErr: errors.New("no such worker"),
-		req:        &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, SandboxClasses: reqClasses()},
-		wantCode:   codes.Unknown,
+		// A refused epoch must reach the worker unchanged: it is what tells
+		// the worker process to stop serving.
+		name:       "surfaces the control plane's refusal",
+		serviceErr: status.Error(codes.FailedPrecondition, "epoch superseded"),
+		req:        &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: reqClasses()},
+		wantCode:   codes.FailedPrecondition,
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -252,11 +379,11 @@ func TestRegisterWorker(t *testing.T) {
 				ctx = context.Background()
 			}
 
-			_, err := svc.RegisterWorker(ctx, tt.req)
+			_, err := svc.SetWorkerSandboxRuntimes(ctx, tt.req)
 			if got := status.Code(err); got != tt.wantCode {
-				t.Errorf("RegisterWorker() code = %v (%v), want %v", got, err, tt.wantCode)
+				t.Errorf("SetWorkerSandboxRuntimes() code = %v (%v), want %v", got, err, tt.wantCode)
 			}
-			if diff := cmp.Diff(tt.wantForwarded, workers.got, protocmp.Transform()); diff != "" {
+			if diff := cmp.Diff(tt.wantForwarded, workers.runtimesGot, protocmp.Transform()); diff != "" {
 				t.Errorf("forwarded requests mismatch (-want +got):\n%s", diff)
 			}
 		})

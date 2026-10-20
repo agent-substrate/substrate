@@ -590,6 +590,7 @@ func TestRestoreGuestReadyError(t *testing.T) {
 
 func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
 	s := &AteWorkerService{}
+	s.epoch.Store(1)
 	ctx := context.Background()
 	assets := map[string]string{assetCH: "/bin/sh"}
 	for name, call := range map[string]func() error{

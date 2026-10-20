@@ -42,14 +42,29 @@ const (
 	testWorkerSyncID = "spiffe://cluster.local/ns/ate-system/sa/fake-workersync"
 )
 
-// stubRelay is a stand-in fake-atelet relay: it records each report and
+// stubEpoch is the epoch stubRelay hands out.
+const stubEpoch = 9
+
+// stubRelay is a stand-in fake-atelet relay: it records each request and
 // answers with err.
 type stubRelay struct {
 	ateapipb.UnimplementedWorkerServiceServer
 
-	mu  sync.Mutex
-	got []*ateapipb.RegisterWorkerRequest
-	err error
+	mu          sync.Mutex
+	acquireGot  []*ateapipb.AcquireWorkerEpochRequest
+	got         []*ateapipb.RegisterWorkerRequest
+	runtimesGot []*ateapipb.SetWorkerSandboxRuntimesRequest
+	err         error
+}
+
+func (s *stubRelay) AcquireWorkerEpoch(_ context.Context, in *ateapipb.AcquireWorkerEpochRequest) (*ateapipb.AcquireWorkerEpochResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acquireGot = append(s.acquireGot, in)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &ateapipb.AcquireWorkerEpochResponse{Epoch: stubEpoch}, nil
 }
 
 func (s *stubRelay) RegisterWorker(_ context.Context, in *ateapipb.RegisterWorkerRequest) (*ateapipb.RegisterWorkerResponse, error) {
@@ -60,6 +75,16 @@ func (s *stubRelay) RegisterWorker(_ context.Context, in *ateapipb.RegisterWorke
 		return nil, s.err
 	}
 	return &ateapipb.RegisterWorkerResponse{}, nil
+}
+
+func (s *stubRelay) SetWorkerSandboxRuntimes(_ context.Context, in *ateapipb.SetWorkerSandboxRuntimesRequest) (*ateapipb.SetWorkerSandboxRuntimesResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runtimesGot = append(s.runtimesGot, in)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &ateapipb.SetWorkerSandboxRuntimesResponse{}, nil
 }
 
 // relayServer serves svc with a certificate for serverID from ca, requiring
@@ -107,13 +132,27 @@ func newTestRelay(t *testing.T, ca *fakeworkertest.CA) *grpcRelay {
 	return relay
 }
 
-func capacityReport() *ateapipb.RegisterWorkerRequest {
-	return &ateapipb.RegisterWorkerRequest{
-		Worker:   &ateapipb.ObjectRef{Name: "fake-r1-c52b9bd3-0"},
-		Capacity: &ateapipb.WorkerResources{Actors: 1000},
+func testClasses() []*ateapipb.WorkerSandboxClass {
+	return []*ateapipb.WorkerSandboxClass{{
+		SandboxClass: "gvisor",
+		DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes:    []*ateapipb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+		}},
+	}}
+}
+
+func capacityReport() workerReport {
+	return workerReport{
+		Name:           "fake-r1-c52b9bd3-0",
+		IPs:            []string{"10.0.0.7"},
+		Capacity:       &ateapipb.WorkerResources{Actors: 1000},
+		SandboxClasses: testClasses(),
 	}
 }
 
+// A Worker with no epoch acquires one, registers with it, then reports its
+// runtimes under it, as a worker process does at startup.
 func TestRelayClientSendsTheReport(t *testing.T) {
 	ca := fakeworkertest.NewCA(t)
 	svc := &stubRelay{}
@@ -124,11 +163,48 @@ func TestRelayClientSendsTheReport(t *testing.T) {
 			t.Fatalf("Report: %v", err)
 		}
 	}
-	if len(svc.got) != 2 || !proto.Equal(svc.got[0], capacityReport()) {
-		t.Errorf("relay received %v, want %v twice", svc.got, capacityReport())
+	ref := &ateapipb.ObjectRef{Name: "fake-r1-c52b9bd3-0"}
+	wantAcquire := &ateapipb.AcquireWorkerEpochRequest{Worker: ref}
+	wantRegister := &ateapipb.RegisterWorkerRequest{
+		Worker:   ref,
+		Epoch:    stubEpoch,
+		Ips:      []string{"10.0.0.7"},
+		Capacity: &ateapipb.WorkerResources{Actors: 1000},
+	}
+	wantRuntimes := &ateapipb.SetWorkerSandboxRuntimesRequest{Worker: ref, Epoch: stubEpoch, SandboxClasses: testClasses()}
+	if len(svc.acquireGot) != 2 || !proto.Equal(svc.acquireGot[0], wantAcquire) {
+		t.Errorf("relay received acquires %v, want %v twice", svc.acquireGot, wantAcquire)
+	}
+	if len(svc.got) != 2 || !proto.Equal(svc.got[0], wantRegister) {
+		t.Errorf("relay received registrations %v, want %v twice", svc.got, wantRegister)
+	}
+	if len(svc.runtimesGot) != 2 || !proto.Equal(svc.runtimesGot[0], wantRuntimes) {
+		t.Errorf("relay received runtimes %v, want %v twice", svc.runtimesGot, wantRuntimes)
 	}
 	if len(relay.conns) != 1 {
 		t.Errorf("%d connections to one relay, want 1", len(relay.conns))
+	}
+}
+
+// A Worker that already has a registered epoch registers it again without
+// acquiring a new one.
+func TestRelayClientReusesTheGivenEpoch(t *testing.T) {
+	ca := fakeworkertest.NewCA(t)
+	svc := &stubRelay{}
+	addr := relayServer(t, ca, testAteletID, svc)
+	report := capacityReport()
+	report.Epoch = 3
+	if err := newTestRelay(t, ca).Report(context.Background(), addr, report); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if len(svc.acquireGot) != 0 {
+		t.Errorf("relay received acquires %v, want none", svc.acquireGot)
+	}
+	if len(svc.got) != 1 || svc.got[0].GetEpoch() != 3 {
+		t.Errorf("relay received registrations %v, want one with epoch 3", svc.got)
+	}
+	if len(svc.runtimesGot) != 1 || svc.runtimesGot[0].GetEpoch() != 3 {
+		t.Errorf("relay received runtimes %v, want one with epoch 3", svc.runtimesGot)
 	}
 }
 
