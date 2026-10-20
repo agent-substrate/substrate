@@ -43,11 +43,11 @@ type streamCopy struct {
 	written uint64
 }
 
-// Do copies src to dest until EOF or an error. Unlike io.Copy, it waits for
+// do copies src to dest until EOF or an error. Unlike io.Copy, it waits for
 // data with a small buffer and borrows a large one from a pool only while data
 // keeps arriving, so an idle stream holds little memory. Errors include the
 // bytes read and written so far.
-func (s *streamCopy) Do() (written int64, err error) {
+func (s *streamCopy) do() (written int64, err error) {
 	read := func(p []byte) (int, error) {
 		n, err := s.src.Read(p)
 		s.read += uint64(n)

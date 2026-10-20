@@ -58,12 +58,12 @@ func TestStreamCopyCopiesEverything(t *testing.T) {
 		t.Run(fmt.Sprint(sizes), func(t *testing.T) {
 			var got strings.Builder
 			c := &streamCopy{dest: &got, src: &chunkReader{data: data, sizes: sizes}}
-			n, err := c.Do()
+			n, err := c.do()
 			if err != nil {
-				t.Fatalf("Do: %v", err)
+				t.Fatalf("do: %v", err)
 			}
 			if n != int64(len(data)) || got.String() != string(data) {
-				t.Fatalf("Do copied %d bytes (%d match), want %d", n, len(got.String()), len(data))
+				t.Fatalf("do copied %d bytes (%d match), want %d", n, len(got.String()), len(data))
 			}
 			if c.read != uint64(len(data)) || c.written != uint64(len(data)) {
 				t.Errorf("read, written = %d, %d; want %d for both", c.read, c.written, len(data))
@@ -78,17 +78,17 @@ func (w errWriter) Write(p []byte) (int, error) { return len(p) / 2, w.err }
 
 func TestStreamCopyReturnsErrors(t *testing.T) {
 	readErr := errors.New("read failed")
-	_, err := (&streamCopy{dest: io.Discard, src: io.MultiReader(strings.NewReader("abc"), errReader{readErr})}).Do()
+	_, err := (&streamCopy{dest: io.Discard, src: io.MultiReader(strings.NewReader("abc"), errReader{readErr})}).do()
 	if !errors.Is(err, readErr) || !strings.Contains(err.Error(), "reading stream after 3 bytes read, 3 written") {
-		t.Errorf("Do with failing reader = %v, want %v after 3 bytes read and written", err, readErr)
+		t.Errorf("do with failing reader = %v, want %v after 3 bytes read and written", err, readErr)
 	}
 	writeErr := errors.New("write failed")
-	n, err := (&streamCopy{dest: errWriter{writeErr}, src: strings.NewReader("abcd")}).Do()
+	n, err := (&streamCopy{dest: errWriter{writeErr}, src: strings.NewReader("abcd")}).do()
 	if !errors.Is(err, writeErr) || n != 2 || !strings.Contains(err.Error(), "writing stream after 4 bytes read, 2 written") {
-		t.Errorf("Do with failing writer = %d, %v; want 2, %v after 4 bytes read and 2 written", n, err, writeErr)
+		t.Errorf("do with failing writer = %d, %v; want 2, %v after 4 bytes read and 2 written", n, err, writeErr)
 	}
-	if _, err := (&streamCopy{dest: errWriter{}, src: strings.NewReader("abcd")}).Do(); !errors.Is(err, io.ErrShortWrite) {
-		t.Errorf("Do with short writer = %v, want io.ErrShortWrite", err)
+	if _, err := (&streamCopy{dest: errWriter{}, src: strings.NewReader("abcd")}).do(); !errors.Is(err, io.ErrShortWrite) {
+		t.Errorf("do with short writer = %v, want io.ErrShortWrite", err)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestStreamCopyDeliversWithoutWaitingForMoreData(t *testing.T) {
 			dst := &notifyWriter{total: make(chan int, 16)}
 			done := make(chan error, 1)
 			go func() {
-				_, err := (&streamCopy{dest: dst, src: pr}).Do()
+				_, err := (&streamCopy{dest: dst, src: pr}).do()
 				done <- err
 			}()
 
@@ -128,8 +128,8 @@ func TestStreamCopyDeliversWithoutWaitingForMoreData(t *testing.T) {
 				}
 			}
 			_ = pw.Close()
-			if err := receiveWithin(t, done, "Do to return"); err != nil {
-				t.Fatalf("Do: %v", err)
+			if err := receiveWithin(t, done, "do to return"); err != nil {
+				t.Fatalf("do: %v", err)
 			}
 		})
 	}

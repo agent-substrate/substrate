@@ -346,7 +346,7 @@ func copyConn(dst, src net.Conn) (int64, error) {
 	if stream, ok := src.(*h2StreamConn); ok {
 		return stream.writeTo(dst)
 	}
-	return (&streamCopy{dest: dst, src: src}).Do()
+	return (&streamCopy{dest: dst, src: src}).do()
 }
 
 func closeWrite(conn net.Conn) {

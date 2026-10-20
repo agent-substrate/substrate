@@ -818,11 +818,11 @@ func (c *h2StreamConn) writeTo(w io.Writer) (int64, error) {
 	// A pending Read or a read deadline needs Read's background reader.
 	if c.readInFlight || c.readDeadline.isSet() {
 		c.readMu.Unlock()
-		n, err := (&streamCopy{dest: w, src: c}).Do()
+		n, err := (&streamCopy{dest: w, src: c}).do()
 		return written + n, err
 	}
 	defer c.readMu.Unlock()
-	n, err := (&streamCopy{dest: w, src: h2StreamBody{c}}).Do()
+	n, err := (&streamCopy{dest: w, src: h2StreamBody{c}}).do()
 	return written + n, err
 }
 
