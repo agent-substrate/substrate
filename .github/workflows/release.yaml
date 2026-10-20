@@ -81,25 +81,14 @@ jobs:
     - name: Log in to ghcr.io
       env:
         TOKEN: ${{ github.token }}
-      run: docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<<"${TOKEN}"
+      run: .github/scripts/release/ghcr-login.sh
     # Overwriting replaces the digests that operators of a published release
-    # install by tag, so it is refused once the release is published. A draft
-    # is not returned by tag, so a 404 means there is no published release; any
-    # other failure stops the job rather than being read as "none".
+    # install by tag, so it is refused once the release is published.
     - name: Refuse to overwrite a published release
       if: inputs.overwrite
       env:
         GH_TOKEN: ${{ github.token }}
-      run: |
-        if out="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" --jq .draft 2>&1)"; then
-          if [[ "${out}" == false ]]; then
-            echo "::error::${VERSION} has a published release; its images cannot be overwritten"
-            exit 1
-          fi
-        elif [[ "${out}" != *"HTTP 404"* ]]; then
-          echo "::error::checking for a published ${VERSION} release: ${out}"
-          exit 1
-        fi
+      run: .github/scripts/release/refuse-published-overwrite.sh
     # Builds nothing if every image already exists for the tag, unless overwrite
     # is set, and after pushing checks that every tag names the pushed image on
     # every platform.
@@ -178,9 +167,4 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ inputs.tag || github.ref_name }}
-      run: |
-        if [[ "$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" != true ]]; then
-          echo "${TAG} is published; its binaries are left unchanged."
-          exit 0
-        fi
-        gh release upload "${TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber
+      run: .github/scripts/release/attach-binaries.sh dist
