@@ -87,6 +87,10 @@ func ValidateCustom_ActorSandboxRuntime_SandboxClass(_ context.Context, _ operat
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
+func ValidateCustom_WorkerSandboxClass_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
+}
+
 func ValidateCustom_ObjectStorage_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validateSnapshotURI(fldPath, *value)
 }

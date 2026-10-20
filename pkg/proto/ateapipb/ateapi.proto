@@ -2394,25 +2394,65 @@ message WorkerStatus {
   // +k8s:minimum=0
   int64 observed_epoch = 4;
 
-  // Runtime that new and cold-booted actors start under, as reported by the
-  // Worker at registration. Snapshots matching default_runtime can also
-  // warm-boot on this worker. Its sandbox_class is the Worker's class, fixed
-  // by the first RegisterWorker call.
+  // The sandbox classes this Worker runs and the runtimes it runs them
+  // under, as reported by the Worker at registration; empty until then, and
+  // nothing is placed on the Worker until then. One entry today, like
+  // WorkerPoolSpec.sandboxClasses. Its sandbox_class is the Worker's class,
+  // fixed by the first RegisterWorker call.
   //
   // +k8s:optional
-  ActorSandboxRuntime default_runtime = 5;
+  // +k8s:maxItems=1 # keep in sync with WorkerPoolSpec.sandboxClasses
+  // +k8s:listType=map
+  // +k8s:listMapKey=sandbox_class
+  repeated WorkerSandboxClass sandbox_classes = 5;
+}
 
-  // Additional runtimes (excluding default_runtime) that this worker can
-  // restore snapshots from right now.
+// WorkerSandboxClass is one sandbox class a Worker runs, with the runtimes
+// it runs it under. A Worker has one entry per WorkerPool sandboxClasses
+// entry, so exactly one today.
+message WorkerSandboxClass {
+  // e.g. "gvisor", "microvm", as on WorkerPool.spec.sandboxClasses[].name.
+  //
+  // +k8s:required
+  // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
+  string sandbox_class = 1;
+
+  // Runtime new and cold-booted actors of this class start under. Snapshots
+  // matching its version can also warm-boot on this worker.
+  //
+  // +k8s:required
+  WorkerSandboxRuntime default_runtime = 2;
+
+  // Additional runtimes of this class (excluding default_runtime) that this
+  // worker can restore snapshots from right now.
   //
   // +k8s:optional
   // +k8s:maxItems=32
   // +k8s:listType=atomic
-  repeated ActorSandboxRuntime restorable_runtimes = 6;
+  repeated WorkerSandboxRuntime restorable_runtimes = 3;
 }
 
-// ActorSandboxRuntime describes a sandbox runtime and its compatibility identity as
-// reported by a Worker or recorded on a snapshot.
+// WorkerSandboxRuntime is one runtime a Worker runs for the class of its
+// WorkerSandboxClass entry. ActorSandboxRuntime, the stamp on an assignment
+// or snapshot, pairs the entry's sandbox_class with this runtime's version.
+message WorkerSandboxRuntime {
+  // Compatibility version stamped onto an actor's snapshot when a checkpoint
+  // is taken on this runtime. Snapshots matching it can warm-boot on this
+  // runtime.
+  // TODO: Add the additional compatibility versions this runtime can also
+  // restore snapshots from.
+  //
+  // +k8s:required
+  VersionedSandboxCompat version = 1;
+
+  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
+  // once workers report one.
+}
+
+// ActorSandboxRuntime is the runtime an actor runs under, as recorded on its
+// assignment and on the snapshots taken from it: one class and one of the
+// compatibility versions a Worker reports for it.
 message ActorSandboxRuntime {
   // e.g. "gvisor", "microvm"
   //
@@ -2421,10 +2461,8 @@ message ActorSandboxRuntime {
   // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
-  // Primary compatibility version stamped onto an actor's snapshot when a
-  // checkpoint is taken on this runtime. Snapshots matching `version`
-  // can warm-boot on this runtime.
-  // TODO: Add support for additional compatibility versions.
+  // Compatibility version of the runtime. A snapshot stamped with it can
+  // warm-boot on a worker whose runtime of this class matches it.
   //
   // +k8s:required
   VersionedSandboxCompat version = 2;
@@ -2434,7 +2472,7 @@ message ActorSandboxRuntime {
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
-// key-value compatibility attributes for an ActorSandboxRuntime.
+// key-value compatibility attributes of a sandbox runtime.
 message VersionedSandboxCompat {
   // Compatibility schema version (e.g. "v1") defining which runtime and
   // hardware attributes are recorded and how they are computed.
@@ -2649,22 +2687,17 @@ message RegisterWorkerRequest {
   // +k8s:required
   WorkerResources capacity = 2;
 
-  // Runtime that new and cold-booted actors start under.
-  // Snapshots matching default_runtime can also warm-boot on this worker.
-  // The first registration fixes the Worker's sandbox_class; later reports
-  // replace version and compatibility attributes, but a different
-  // sandbox_class is refused.
+  // The sandbox classes this worker runs and the runtimes it runs them
+  // under. The first registration fixes the Worker's sandbox class; later
+  // reports replace the runtimes, but an entry of another class is refused.
+  // Like capacity, this replaces what is recorded on the Worker.
   //
   // +k8s:required
-  ActorSandboxRuntime default_runtime = 3;
-
-  // Additional runtimes (excluding default_runtime) that this worker can
-  // restore snapshots from right now.
-  //
-  // +k8s:optional
-  // +k8s:maxItems=32
-  // +k8s:listType=atomic
-  repeated ActorSandboxRuntime restorable_runtimes = 4;
+  // +k8s:minItems=1
+  // +k8s:maxItems=1 # keep in sync with WorkerPoolSpec.sandboxClasses
+  // +k8s:listType=map
+  // +k8s:listMapKey=sandbox_class
+  repeated WorkerSandboxClass sandbox_classes = 3;
 }
 
 message RegisterWorkerResponse {

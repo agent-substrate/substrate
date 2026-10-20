@@ -130,6 +130,10 @@ func ValidateCustom_ActorSandboxRuntime_SandboxClass(_ context.Context, _ operat
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
+func ValidateCustom_WorkerSandboxClass_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
+}
+
 // This is needed because DV doesn't have a standard format for IP addresses yet.
 func ValidateCustom_Worker_Ips(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return validateDualStackIPs(fldPath, value)
