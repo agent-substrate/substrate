@@ -156,8 +156,9 @@ jobs:
         BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
       run: hack/verify/postgresql-migrations.sh "origin/${BASE_REF#refs/heads/}"
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
-  # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
-  # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
+  # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh's KVM probe
+  # passes, the nodes carry the device, and the micro-VM (kata + cloud-hypervisor)
+  # sandbox class works alongside gVisor.
   #
   # Each matrix entry is an independent job on a fresh cluster, so the steps
   # below are written once and run for every dataplane and preview mode. The
@@ -266,8 +267,8 @@ jobs:
         path: bin/microvm-assets/amd64
         key: microvm-assets-amd64-${{ hashFiles('hack/microvm-assets/assemble.sh') }}
     - name: Enable KVM
-      # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it into
-      # the node and labels it for the micro-VM sandbox class.
+      # Grant the runner access to /dev/kvm so create-kind-cluster.sh's KVM probe
+      # passes and the nodes carry the device for the micro-VM sandbox class.
       run: |
         echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
           | sudo tee /etc/udev/rules.d/99-kvm4all.rules
