@@ -65,6 +65,9 @@ const (
 	// EgressPolicyHashFilterStateKey holds the hash the inner listener uses to
 	// find those rules in the egress-policy module's per-thread store.
 	EgressPolicyHashFilterStateKey = "dev.ate.policy.egress.hash"
+	// EgressPolicyCreatedAtFilterStateKey holds the initial timestamp of the
+	// policy retrieval on the outer CONNECT chain.
+	EgressPolicyCreatedAtFilterStateKey = "dev.ate.egress.policy.created_at"
 	// EgressPolicyJSONKey, under EgressPolicyMetadataNamespace, holds the
 	// JSON-serialized SNI rules.
 	EgressPolicyJSONKey = "policy_json"
