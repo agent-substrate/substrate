@@ -48,6 +48,11 @@ type resumeSnapshotSource struct {
 	// snapshot, which takes precedence at restore).
 	SnapshotURI resources.SnapshotURI
 	Fidelity    ateapipb.SnapshotFidelity
+	// Owner is who the durable snapshot belongs to: the actor, whose next
+	// suspend replaces it, or a tag, whose snapshot is immutable and read by
+	// every actor created from it. It decides what the restore declares as
+	// the snapshot's sharing.
+	Owner ateapipb.SnapshotOwner
 	// TemplateReplaced is true when the external snapshot's recorded template
 	// UID differs from the actor's current template.
 	TemplateReplaced bool
@@ -198,6 +203,7 @@ func resolveResumeSource(actorRef resources.ActorRef, actor *ateapipb.Actor, act
 		src.SnapshotUUID = snap.GetUuid()
 		src.Generation = snap.GetGeneration()
 		src.Fidelity = snap.GetFidelity()
+		src.Owner = snap.GetOwner()
 		src.TemplateReplaced = templateReplaced(snap, actorTemplate)
 	}
 	// A local restore also names the local snapshot's upload, so a URI that
@@ -215,6 +221,18 @@ func resolveResumeSource(actorRef resources.ActorRef, actor *ateapipb.Actor, act
 func templateReplaced(snap *ateapipb.Snapshot, tmpl *ateapipb.ActorTemplate) bool {
 	capturedUnder := snap.GetActorTemplateUid()
 	return capturedUnder != "" && capturedUnder != tmpl.GetMetadata().GetUid()
+}
+
+// snapshotSharing is what a restore declares about a snapshot with the
+// given owner. A tag's snapshot is immutable once published and read by
+// every actor created from it, so atelet may serve its files from the
+// node-local cache; the actor's own is replaced by its next suspend, so
+// never, and so is one whose owner is not recorded.
+func snapshotSharing(owner ateapipb.SnapshotOwner) ateletpb.SnapshotSharing {
+	if owner == ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG {
+		return ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED
+	}
+	return ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE
 }
 
 // ensureVolumesCreated provisions any actor volumes that have no storage
@@ -827,7 +845,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 				// report of the upload lands. atelet reads it only when it
 				// holds no usable local copy, and the manifest, uploaded
 				// last, tells a complete upload from a partial one.
-				Object: &ateletpb.ObjectStorage{SnapshotUri: localSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()},
+				Object: &ateletpb.ObjectStorage{
+					SnapshotUri: localSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(),
+					Sharing:     snapshotSharing(localSnap.GetOwner()),
+				},
 			},
 			SandboxRuntime: sandboxRuntime,
 			ActorUid:       actor.GetMetadata().Uid,
@@ -855,14 +876,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)
-		// A snapshot the actor does not own is a tag's, borrowed at creation:
-		// immutable once published and read by every actor created from it,
-		// so atelet may serve its files from the node-local cache. The
-		// actor's own snapshot is replaced by its next suspend, so never.
-		sharing := ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE
-		if !src.SnapshotURI.OwnedBy(actorSnapshotOwner(actor)) {
-			sharing = ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED
-		}
 		req := &ateletpb.RestoreRequest{
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
@@ -876,7 +889,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 				Fidelity:     scope,
 				Object: &ateletpb.ObjectStorage{
 					SnapshotUri: src.SnapshotURI.String(),
-					Sharing:     sharing,
+					Sharing:     snapshotSharing(src.Owner),
 				},
 			},
 			SandboxRuntime: sandboxRuntime,
