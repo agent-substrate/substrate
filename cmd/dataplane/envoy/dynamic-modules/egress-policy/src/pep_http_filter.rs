@@ -49,6 +49,9 @@ pub const EGRESS_DIAL_HOST_KEY: &str = "host";
 /// Response body returned when a WebSocket upgrade request is rejected.
 const WEBSOCKET_DENIED_BODY: &[u8] = b"WebSocket egress is not supported";
 
+/// Response body returned when a CONNECT request is rejected.
+const CONNECT_DENIED_BODY: &[u8] = b"CONNECT egress is not supported";
+
 /// Response body returned when SNI is missing for MITM policy enforcement.
 const MISSING_SNI_BODY: &[u8] = b"Missing SNI in TLS connection";
 
@@ -95,6 +98,13 @@ fn is_websocket_upgrade<EHF: EnvoyHttpFilter>(envoy_filter: &mut EHF) -> bool {
     && envoy_filter
       .get_request_header_value(":method")
       .is_some_and(|v| v.as_slice() == b"GET")
+}
+
+/// Reports whether the current request is an HTTP CONNECT request.
+fn is_connect_request<EHF: EnvoyHttpFilter>(envoy_filter: &mut EHF) -> bool {
+  envoy_filter
+    .get_request_header_value(":method")
+    .is_some_and(|v| v.as_slice().eq_ignore_ascii_case(b"CONNECT"))
 }
 
 impl EgressPolicyPepFilter {
@@ -144,6 +154,10 @@ impl EgressPolicyPepFilter {
     // check is not needed.
     if is_websocket_upgrade(envoy_filter) {
       envoy_filter.send_response(403, &[], Some(WEBSOCKET_DENIED_BODY), None);
+      return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
+    }
+    if is_connect_request(envoy_filter) {
+      envoy_filter.send_response(403, &[], Some(CONNECT_DENIED_BODY), None);
       return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
     }
 
@@ -224,7 +238,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyPepFilter {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use envoy_proxy_dynamic_modules_rust_sdk::{MockEnvoyHttpFilter};
+  use envoy_proxy_dynamic_modules_rust_sdk::{EnvoyBuffer, MockEnvoyHttpFilter};
 
   fn test_filter() -> EgressPolicyPepFilter {
     EgressPolicyPepFilter {
@@ -243,5 +257,36 @@ mod tests {
       .withf(|key| key == "upgrade")
       .times(1)
       .returning(|_| None);
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_rejects_connect() {
+    let filter = test_filter();
+    let policy = EgressPolicy {
+      rules: Vec::new(),
+      hash: 1,
+    };
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    expect_no_websocket_upgrade(&mut mock_filter);
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":method")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"CONNECT")));
+    mock_filter
+      .expect_send_response()
+      .withf(|status, headers, body, details| {
+        *status == 403
+          && headers.is_empty()
+          && *body == Some(CONNECT_DENIED_BODY)
+          && details.is_none()
+      })
+      .times(1)
+      .returning(|_, _, _, _| {});
+
+    assert_eq!(
+      filter.enforce_egress_policy(&mut mock_filter, &policy),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
   }
 }
