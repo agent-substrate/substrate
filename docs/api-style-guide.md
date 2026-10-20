@@ -742,3 +742,37 @@ Rules:
 - Add the label in the same change that adds the field. A label added later does not help lines already logged.
 
 Which processes use the shared log handler, and what it does and does not cover, is described in [Logging Best Practices](dev/best-practices/logging.md#logging-protos-that-hold-secrets).
+
+---
+
+## 13. Documentation Comments
+
+Every service, method, message, field, enum, and enum value **must** have a leading doc comment. The comment is the API reference: `apitool generate-docs` renders it as the reference page, and `protoc-gen-go` copies it into the generated Go code.
+
+### 13.1 Anatomy of a comment
+
+A doc comment has up to four parts, in this order:
+
+```proto
+// worker_selector restricts which worker pools actors from this template may use.
+//
+// The scheduler evaluates the AND of this selector and the actor's own
+// `worker_selector`. Changes take effect on the next ResumeActor call.
+//
+// (-- This is an internal comment, for API maintainers only. It is not
+// rendered in the API reference. --)
+//
+// +k8s:optional
+Selector worker_selector = 2;
+```
+
+1. **Summary**: the first paragraph, one or two sentences saying what the element is or does. It stands on its own: a reader who stops after it knows what the element is for. Every element's comment starts with one, fields and enum values included.
+2. **Details**: any further paragraphs, for what a user needs beyond the summary, such as constraints, defaults, and how the element interacts with others.
+3. **Internal notes**: text for API maintainers rather than API users, such as why a bound was chosen or a `TODO`, wrapped in `(--` and `--)`, as in [AIP-192](https://google.aip.dev/192#internal-comments). A note may span lines and may sit anywhere before the directives. It is not part of the API's documentation.
+4. **Directives**: the `+k8s:` validation directives (see section #10) and `+ate:` tags such as `+ate:preview` (see [Preview Gates](dev/preview-gates.md)), last. Nothing may follow them: a `#` note on a directive stays on that directive's line.
+
+### 13.2 Formatting
+
+Comments are CommonMark, and are also read as plain text in the `.proto` file and in generated code, so use only the parts that read well both ways: paragraphs, code spans, emphasis, bulleted and numbered lists, links (`[text](url)`), and fenced code blocks for multi-line examples. Do not use headings, tables, strikethrough, task lists, images, or raw HTML; tables and the like are not rendered, and raw HTML is dropped. Anything tag-shaped outside a code span is raw HTML, so put a placeholder such as `<name>` in a code span, with the rest of the URI, format string, or value it is part of, as in `ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>`.
+
+Write the following in code spans: field names and paths (`metadata.atespace`), enum values (`ACTOR_STATE_SUSPENDED`), gRPC status codes (`FAILED_PRECONDITION`), and literal values (`default`, `*.example.com`). Use lists for enumerations, and emphasis rather than capitals. Message and RPC names stay plain prose.

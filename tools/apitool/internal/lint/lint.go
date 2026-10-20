@@ -57,4 +57,5 @@ var All = []Rule{
 	ResourceStatusFieldShape,
 	NoOneofs,
 	Documented,
+	DocFormat,
 }

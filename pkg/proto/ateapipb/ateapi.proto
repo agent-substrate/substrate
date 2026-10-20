@@ -500,8 +500,7 @@ message ExternalVolumeStatus {
   // +k8s:required
   // +k8s:format=k8s-short-name
   // +k8s:update=NoModify
-  // +k8s:update=NoUnset # set-once; immutable would reject the create
-  // ratchet's nil->set when the final object is validated as an update
+  // +k8s:update=NoUnset # set-once; immutable would reject the create ratchet's nil->set when the final object is validated as an update
   string name = 1;
 
   // The globally unique volume_id returned from the storage system.
@@ -803,7 +802,7 @@ message HttpRuleEffects {
 
 // CredentialHeader replaces the value of an HTTP request header with a
 // credential. The Actor sends the header with a placeholder value, such as
-// "Authorization: <something>"; the gateway discards that value and forwards
+// `Authorization: <something>`; the gateway discards that value and forwards
 // the header with the credential instead. The placeholder itself is not
 // inspected, so any value works. A request without the header is not
 // modified.
@@ -822,7 +821,7 @@ message CredentialHeader {
   string prefix = 2;
 
   // Source-agnostic reference interpreted by a registered credential provider:
-  // ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>
+  // `ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>`
   //
   // Exactly one of credential_uri and actor_jwt must be set.
   //
@@ -1214,7 +1213,7 @@ message GoldenSnapshotStatus {
   google.protobuf.Timestamp snapshot_time = 2;
 
   // error_message is set when the golden snapshot build fails and will not be
-  // retried, formatted as "<Reason>: <detail>". A nonempty value is terminal.
+  // retried, formatted as `<Reason>: <detail>`. A nonempty value is terminal.
   //
   // +k8s:optional
   // +k8s:maxLength=4096
