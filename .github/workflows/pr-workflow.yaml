@@ -51,10 +51,12 @@ jobs:
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
-    # Unconditional: a released migration becoming permanent is exactly what
-    # this guards, and that happens on the push to main, not on the PR.
+    # A merge group has no base_ref. It exposes the base branch as refs/heads/<branch>.
     - name: Verify immutable PostgreSQL migrations
-      run: hack/verify/postgresql-migrations.sh
+      if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+      env:
+        BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
+      run: hack/verify/postgresql-migrations.sh "origin/${BASE_REF#refs/heads/}"
     # we only test on amd64, make sure everything still builds for arm64
     - name: build for arm64
       run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...

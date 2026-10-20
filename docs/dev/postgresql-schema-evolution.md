@@ -63,7 +63,7 @@ Standalone Substrate defaults to the `substrate` schema, including under Kagent'
 
 Migrations up to v0.5.0 were squashed into `000001_initial.sql`. A database created by v0.5.0 or earlier cannot be upgraded. Recreate it.
 
-From v0.6.0 on, do not change or delete a released migration file. Add a new migration to correct it.
+Do not change or delete a migration file after it merges. Add a new migration to correct it.
 
 Do not edit the `schema_migrations` ledger manually.
 
@@ -76,6 +76,6 @@ Do not edit the `schema_migrations` ledger manually.
 5. Run the migration verifier and PostgreSQL store tests.
 
 ```sh
-hack/verify/postgresql-migrations.sh
+hack/verify/postgresql-migrations.sh origin/main
 go test ./cmd/ateapi/internal/store/atepg
 ```

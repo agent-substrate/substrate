@@ -23,8 +23,8 @@ export LC_ALL=C
 
 MIGRATIONS_DIR="cmd/ateapi/internal/store/atepg/migrations"
 
-if (( $# > 1 )); then
-  echo "Usage: $0 [released-ref]" >&2
+if (( $# != 1 )); then
+  echo "Usage: $0 base-ref" >&2
   exit 2
 fi
 
@@ -74,25 +74,9 @@ for migration in "${migrations[@]}"; do
   expected=$((expected + 1))
 done
 
-released_ref="${1:-}"
-if [[ -z "${released_ref}" ]]; then
-  while read -r tag; do
-    if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      continue
-    fi
-    # Migrations were squashed after v0.5.0, so older releases don't match.
-    if [[ "${tag}" =~ ^v0\.[0-5]\. ]]; then
-      break
-    fi
-    if [[ "$(git ls-tree -r --name-only "${tag}" -- "${MIGRATIONS_DIR}")" == *".sql"* ]]; then
-      released_ref="${tag}"
-      break
-    fi
-  done < <(git tag --merged HEAD --sort=-version:refname)
-fi
-
-if [[ -n "${released_ref}" ]] && ! git diff --quiet --no-renames --diff-filter=MD "${released_ref}" HEAD -- "${MIGRATIONS_DIR}"; then
-  echo "Do not change or delete released PostgreSQL migrations." >&2
-  git diff --name-only --no-renames --diff-filter=MD "${released_ref}" HEAD -- "${MIGRATIONS_DIR}" >&2
+base="$(git merge-base HEAD "$1")"
+if ! git diff --quiet --no-renames --diff-filter=MD "${base}" HEAD -- "${MIGRATIONS_DIR}"; then
+  echo "Do not change or delete merged PostgreSQL migrations." >&2
+  git diff --name-only --no-renames --diff-filter=MD "${base}" HEAD -- "${MIGRATIONS_DIR}" >&2
   exit 1
 fi
