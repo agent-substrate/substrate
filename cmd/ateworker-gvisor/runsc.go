@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/sizing"
@@ -94,20 +95,21 @@ func noRootContainerArgs(containerName string) []string {
 // writeSpec builds the container's OCI spec, shapes it for gVisor, and saves it
 // into the container's bundle.
 func (r *runsc) writeSpec(containerName string) error {
-	container := &ateworkerpb.Container{Name: ocispec.SandboxID}
-	if containerName != ocispec.SandboxID {
+	var spec *specs.Spec
+	if containerName == ocispec.SandboxID {
+		spec = ocispec.BuildSandbox(r.actorUID)
+	} else {
 		i := slices.IndexFunc(r.containers, func(c *ateworkerpb.Container) bool { return c.GetName() == containerName })
 		if i < 0 {
 			return fmt.Errorf("container %q is not in the workload spec", containerName)
 		}
-		container = r.containers[i]
+		spec = ocispec.Build(ocispec.Options{ActorUID: r.actorUID, ActorDirs: r.actorDirs, Container: r.containers[i]})
 	}
 	// atelet makes the bundles of the application containers only.
 	bundlePath := ociBundlePath(r.actorDirs, containerName)
 	if err := os.MkdirAll(bundlePath, 0o700); err != nil {
 		return fmt.Errorf("while creating bundle %q: %w", bundlePath, err)
 	}
-	spec := ocispec.Build(ocispec.Options{ActorUID: r.actorUID, ActorDirs: r.actorDirs, Container: container})
 	ocispec.ShapeGVisor(spec, ocispec.GVisorOptions{
 		ActorUID:       r.actorUID,
 		ActorDirs:      r.actorDirs,

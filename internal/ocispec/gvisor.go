@@ -46,17 +46,13 @@ func GVisorCgroupLeaf(actorUID, containerName string) string {
 }
 
 // ShapeGVisor adds runsc CRI annotations, durable-dir mount hints, and
-// per-container cgroups to the spec. It removes the process, rootfs, and
-// mounts from the sandbox spec. It is idempotent.
+// per-container cgroups to the spec. It is idempotent.
 func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	if spec.Annotations == nil {
 		spec.Annotations = make(map[string]string)
 	}
 	spec.Annotations["io.kubernetes.cri.container-name"] = o.ContainerName
 	if o.ContainerName == SandboxID {
-		spec.Process = nil
-		spec.Root = nil
-		spec.Mounts = nil
 		spec.Annotations["io.kubernetes.cri.container-type"] = "sandbox"
 		for _, v := range o.DurableVolumes {
 			spec.Annotations["dev.gvisor.spec.mount."+v+".type"] = "tmpfs"
