@@ -41,7 +41,7 @@ spec:
   tls:
     enabled: true
     usePodIdentity: true
-    serverName: csi-nfs-controller.kube-system.svc.cluster.local
+    serverName: csi-nfs-controller.kube-system.svc
 ```
 
 ### Specification (`CSIDriverConfigSpec`)
@@ -143,7 +143,7 @@ spec:
   tls:
     enabled: true
     usePodIdentity: true
-    serverName: csi-nfs-controller.kube-system.svc.cluster.local
+    serverName: csi-nfs-controller.kube-system.svc
 ```
 
 ### Step 3: Define WorkerPool and ActorTemplate

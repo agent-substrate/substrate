@@ -162,10 +162,17 @@ spec:
             - "-c"
             - "/etc/envoy/envoy.yaml"
           securityContext:
-            # This is necessary only for systems with SELinux, where
-            # non-privileged sidecar containers cannot access unix domain socket
-            # created by privileged CSI driver container.
-            privileged: true
+            # Root, because the driver creates csi.sock mode 0755 and nothing
+            # else can connect to it; not privileged, because nothing here
+            # needs more than that. (On SELinux systems an unprivileged sidecar
+            # cannot reach a socket created by a privileged container, but the
+            # hostpath driver is Kind only.)
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+              - ALL
           volumeMounts:
           - mountPath: /etc/envoy
             name: envoy-config
