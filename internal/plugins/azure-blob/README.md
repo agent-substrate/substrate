@@ -235,12 +235,15 @@ go run ./cmd/ate-setup deploy ate-system \
   --context <context> \
   --ko-docker-repo <registry> \
   --ko-default-platforms linux/amd64 \
-  --credential-provider='{"name":"k8s.io"}'
+  --credential-provider='{"name":"k8s.io"}' \
+  --snapshot-location=azblob://<container>/<snapshot-root>/
 ```
 
 `--kind` selects the kind overlay. It does not create a kind cluster, but it
 defaults several settings to a local kind setup, including the context,
-registry, and build platform, so name all three for any other cluster.
+registry, and build platform, so name all three for any other cluster. It
+also defaults the snapshot location to `gs://ate-snapshots/`, which this plugin
+rejects, so set `--snapshot-location` on kind too.
 
 Only `deploy ate-system` renders that overlay. `deploy atelet` and
 `deploy apiserver` apply their manifests without it, which puts the base
@@ -252,16 +255,14 @@ image credential provider from the chosen overlay to pull private actor
 images: `base` uses GKE's credential provider paths, and the kind overlay pulls
 actor images without credentials.
 
-## Actor templates
+## Snapshot location
 
-Every ActorTemplate that uses this plugin must set
-`snapshotConfig.storageLocation` to a URI rooted in one of the configured
-containers:
-
-```yaml
-snapshotConfig:
-  storageLocation: azblob://<container>/<snapshot-root>
-```
+ate-api-server stores snapshots under `--snapshot-location`, which must be an
+`azblob://` URI in one of the configured containers. With the
+`PerTemplateSnapshotLocation` preview gate, an ActorTemplate's
+`snapshotConfig.storageLocation` overrides it and must meet the same rule.
+Without the gate, ate-api-server ignores that field. See
+[Snapshot storage](../../../docs/operator-install.md#snapshot-storage).
 
 ## Error behavior
 
