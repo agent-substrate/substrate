@@ -178,6 +178,10 @@ func (c *RouterClient) do(ctx context.Context, method string, actorRef resources
 	return c.http.Do(req)
 }
 
+func (c *RouterClient) DoReq(req *http.Request) (*http.Response, error) {
+	return c.http.Do(req)
+}
+
 // Connect opens a CONNECT tunnel through the router to port on actorRef,
 // exercising atenet-router's arbitrary-port ingress support: the target port
 // travels in the CONNECT authority (e.g. "my-actor.team-a...:9090"), the same
