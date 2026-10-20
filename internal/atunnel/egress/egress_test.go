@@ -676,10 +676,10 @@ func TestRelayCopiesEverything(t *testing.T) {
 	}
 	for _, sizes := range [][]int{
 		{1},
-		{relayWaitSize - 1},
-		{relayWaitSize},
-		{relayWaitSize + 1},
-		{relayWaitSize, 1, relayBufSize, 3},
+		{relaySmallBufSize - 1},
+		{relaySmallBufSize},
+		{relaySmallBufSize + 1},
+		{relaySmallBufSize, 1, relayBufSize, 3},
 		{relayBufSize},
 		{1 << 20},
 	} {
@@ -729,7 +729,7 @@ func (w *notifyWriter) Write(p []byte) (int, error) {
 func TestRelayDeliversWithoutWaitingForMoreData(t *testing.T) {
 	// A message that exactly fills a buffer must reach dst while src stays
 	// open and quiet, as when a client sends a request and awaits the reply.
-	for _, size := range []int{relayWaitSize, relayBufSize} {
+	for _, size := range []int{relaySmallBufSize, relayBufSize} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			pr, pw := io.Pipe()
 			dst := &notifyWriter{total: make(chan int, 16)}
@@ -739,7 +739,7 @@ func TestRelayDeliversWithoutWaitingForMoreData(t *testing.T) {
 				done <- err
 			}()
 
-			messages := []int{relayWaitSize}
+			messages := []int{relaySmallBufSize}
 			if size == relayBufSize {
 				messages = append(messages, relayBufSize)
 			}

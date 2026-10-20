@@ -353,8 +353,8 @@ func copyConn(dst, src net.Conn) (int64, error) {
 }
 
 const (
-	// relayWaitSize is the buffer relay holds while src is idle.
-	relayWaitSize = 512
+	// relaySmallBufSize is the buffer relay holds while src is idle.
+	relaySmallBufSize = 512
 	// relayBufSize is the buffer relay borrows while data is arriving.
 	relayBufSize = 32 << 10
 )
@@ -393,16 +393,16 @@ func relay(dst io.Writer, src io.Reader) (written int64, err error) {
 		return written, readErr
 	}
 
-	wait := make([]byte, relayWaitSize)
+	smallBuf := make([]byte, relaySmallBufSize)
 	for {
-		n, readErr := src.Read(wait)
-		if err := write(wait[:n]); err != nil {
+		n, readErr := src.Read(smallBuf)
+		if err := write(smallBuf[:n]); err != nil {
 			return written, err
 		}
 		if readErr != nil {
 			return finish(readErr)
 		}
-		if n < len(wait) {
+		if n < len(smallBuf) {
 			continue
 		}
 

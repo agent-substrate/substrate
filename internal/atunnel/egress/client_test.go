@@ -892,7 +892,7 @@ func TestCopyBothWaysHTTP2Stream(t *testing.T) {
 
 	// Mix write sizes around relay's buffer sizes, then end the stream.
 	var sent []byte
-	for i, size := range []int{1, relayWaitSize, relayWaitSize + 1, relayBufSize, 3 << 20} {
+	for i, size := range []int{1, relaySmallBufSize, relaySmallBufSize + 1, relayBufSize, 3 << 20} {
 		chunk := make([]byte, size)
 		for j := range chunk {
 			chunk[j] = byte(i + j)
