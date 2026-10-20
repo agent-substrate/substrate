@@ -23,10 +23,13 @@ import "go.ate.dev/substrate/pkg/proto/ateapipb"
 //   - SUSPENDING: a suspend uploads the snapshot.
 //   - SUSPENDED: a paused actor's background upload runs.
 //
-// In every other state no node acts for the actor, so no node may hold a
-// credential for its snapshots. The mint's host check and the objectstore
-// plugin's credential exchange both refuse the other states, and read the
-// list here so they cannot disagree.
+// In every other state no node acts for the actor. ate-api-server's
+// worker-for-actor mints and the objectstore plugin's credential exchange
+// refuse a new credential outside this list; one already issued stays valid
+// until it expires. Inside the list they can disagree: the mints' HostingNode
+// also needs the store's worker row, so between a suspend's releaseWorker and
+// its finalize write the mints refuse while the exchange, which reads only
+// the state and status.assigned_node, still issues.
 var TransferStates = []ateapipb.ActorState{
 	ateapipb.ActorState_ACTOR_STATE_RESUMING,
 	ateapipb.ActorState_ACTOR_STATE_RUNNING,

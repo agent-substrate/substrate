@@ -53,8 +53,8 @@ const (
 	// served with, so a transfer never starts on a token about to expire. There
 	// is no mid-transfer refresh.
 	minServeLifetime = 20 * time.Minute
-	// defaultCacheSize bounds the per-actor cache. A miss costs an exchange,
-	// never correctness.
+	// defaultCacheSize bounds the token cache. A miss costs an exchange, never
+	// correctness.
 	defaultCacheSize = 100_000
 	// stsTimeout bounds one exchange. The downscope package does not take a
 	// per-call context, so the client's timeout is the only bound.
@@ -62,12 +62,20 @@ const (
 )
 
 // Issuer exchanges the pod's credential for per-actor downscoped tokens and
-// caches them by actor UID.
+// caches them by actor UID and node.
 type Issuer struct {
 	source oauth2.TokenSource
 	client *http.Client
 	now    func() time.Time
 	cache  *lru.Cache
+}
+
+// cacheKey is the actor and the node a token was minted for. The node is part
+// of the key so a token one node holds is never handed to another: a node
+// keeps its token until it expires, whether or not the actor has left it.
+type cacheKey struct {
+	actorUID string
+	node     string
 }
 
 // entry is a cached token with the grants it was minted for, so a request can
@@ -131,23 +139,29 @@ func New(ctx context.Context, opts ...Option) (*Issuer, error) {
 // that stretch every exchange reaches STS and the node plugin re-exchanges
 // once if a transfer outlives its token.
 //
-// The cache is keyed by actor UID and each entry remembers its grants. Grants
-// narrow when the tag an actor was created from drops out after its first
-// completed suspend, and the cached token still covers that, a hit. They
+// The cache is keyed by actor UID and the node the token is for, so a node
+// never gets a token issued to another, and each entry remembers its grants.
+// Grants narrow when the tag an actor was created from drops out after its
+// first completed suspend, and the cached token still covers that, a hit. They
 // widen when a never-suspended actor is repointed to another storage
 // location, and the cached token lacks it, a mint. So the common path costs
 // nothing and a repoint never hands out a token GCS would refuse.
 //
-// A grant set the access boundary cannot express fails with codes.Internal.
-// Every other failure is an STS or network error and carries no code.
-func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (credential.Token, error) {
+// A grant set the access boundary cannot express, or an empty node, fails with
+// codes.Internal. Every other failure is an STS or network error and carries
+// no code.
+func (i *Issuer) Issue(ctx context.Context, actorUID, node string, grants []actorscope.Grant, force bool) (credential.Token, error) {
 	if len(grants) == 0 {
 		// Checked before the cache: an empty set is covered by any cached
 		// token, but an actor with no grants must get nothing.
 		return credential.Token{}, status.Error(codes.Internal, "actor has no storage grants")
 	}
+	if node == "" {
+		return credential.Token{}, status.Error(codes.Internal, "no node to issue the token to")
+	}
+	key := cacheKey{actorUID: actorUID, node: node}
 	if !force {
-		if v, ok := i.cache.Get(actorUID); ok {
+		if v, ok := i.cache.Get(key); ok {
 			if e := v.(entry); covers(e.grants, grants) && e.token.Expiry.Sub(i.now()) >= minServeLifetime {
 				return e.token, nil
 			}
@@ -158,7 +172,7 @@ func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope
 		return credential.Token{}, err
 	}
 	if tok.Expiry.Sub(i.now()) >= minServeLifetime {
-		i.cache.Add(actorUID, entry{token: tok, grants: slices.Clone(grants)})
+		i.cache.Add(key, entry{token: tok, grants: slices.Clone(grants)})
 	}
 	return tok, nil
 }

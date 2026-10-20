@@ -48,14 +48,15 @@ import (
 // for another audience is refused.
 const ActorJWTAudience = "objectstore-plugin.ate.dev"
 
-// Issuer mints a credential limited to grants for the actor. force skips any
-// cache the issuer keeps. An error carrying a gRPC status code other than
-// Unavailable is passed to the caller unchanged, for failures the same request
-// would hit again, and one wrapping the context's error keeps the caller's
-// code. Any other error is reported as Unavailable. The GCS issuer is
-// gcsissuer.
+// Issuer mints a credential limited to grants for the actor, for use by
+// node. A credential issued for one node is never returned for another, and
+// force skips any cache the issuer keeps. An error carrying a gRPC status
+// code other than Unavailable is passed to the caller unchanged, for failures
+// the same request would hit again, and one wrapping the context's error
+// keeps the caller's code. Any other error is reported as Unavailable. The
+// GCS issuer is gcsissuer.
 type Issuer interface {
-	Issue(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (credential.Token, error)
+	Issue(ctx context.Context, actorUID, node string, grants []actorscope.Grant, force bool) (credential.Token, error)
 }
 
 // Lookup resolves the actor a verified JWT names. actorlookup implements it.
@@ -126,7 +127,7 @@ func (s *Server) ExchangeActorJwt(ctx context.Context, req *exchangepb.ExchangeA
 	if len(grants) == 0 {
 		return nil, status.Error(codes.PermissionDenied, "actor has no snapshot location to grant")
 	}
-	tok, err := s.issuer.Issue(ctx, actor.GetMetadata().GetUid(), grants, req.GetForce())
+	tok, err := s.issuer.Issue(ctx, actor.GetMetadata().GetUid(), claims.Substrate.Node, grants, req.GetForce())
 	if err != nil {
 		return nil, status.Errorf(issueCode(err), "while issuing the credential: %v", err)
 	}

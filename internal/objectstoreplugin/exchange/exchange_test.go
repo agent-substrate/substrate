@@ -23,12 +23,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/oauth2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -37,6 +41,7 @@ import (
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorlookup"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
 	"go.ate.dev/substrate/internal/objectstoreplugin/credential"
+	"go.ate.dev/substrate/internal/objectstoreplugin/gcsissuer"
 	"go.ate.dev/substrate/internal/oidcjwt"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
 	"go.ate.dev/substrate/internal/resources"
@@ -49,6 +54,7 @@ const (
 	name     = "bot"
 	uid      = "9f1e0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a"
 	tagURI   = "gs://snaps/root/atespaces/ate-golden/tags/7a3c0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a"
+	ownURI   = "gs://snaps/root/atespaces/" + atespace + "/actors/" + uid + "/snapshots/2"
 )
 
 // signer mints real JWTs from a pool whose public keys the verifier reads.
@@ -122,14 +128,15 @@ type fakeIssuer struct {
 	err    error
 	calls  int
 	uid    string
+	node   string
 	grants []actorscope.Grant
 	force  bool
 	expiry time.Time
 }
 
-func (f *fakeIssuer) Issue(_ context.Context, actorUID string, grants []actorscope.Grant, force bool) (credential.Token, error) {
+func (f *fakeIssuer) Issue(_ context.Context, actorUID, node string, grants []actorscope.Grant, force bool) (credential.Token, error) {
 	f.calls++
-	f.uid, f.grants, f.force = actorUID, grants, force
+	f.uid, f.node, f.grants, f.force = actorUID, node, grants, force
 	if f.err != nil {
 		return credential.Token{}, f.err
 	}
@@ -263,8 +270,8 @@ func TestExchangeActorJwt(t *testing.T) {
 		if resp.GetAccessToken() != "downscoped" || !resp.GetExpireTime().AsTime().Equal(expiry) {
 			t.Errorf("force=%v: response = %v", force, resp)
 		}
-		if issuerOK.uid != uid || issuerOK.force != force {
-			t.Errorf("force=%v: issuer asked for uid=%s force=%v", force, issuerOK.uid, issuerOK.force)
+		if issuerOK.uid != uid || issuerOK.node != "node-1" || issuerOK.force != force {
+			t.Errorf("force=%v: issuer asked for uid=%s node=%s force=%v", force, issuerOK.uid, issuerOK.node, issuerOK.force)
 		}
 		// Read-write on the actor's own prefix at the tag's location, read-only
 		// on the tag it was created from.
@@ -278,6 +285,92 @@ func TestExchangeActorJwt(t *testing.T) {
 	}
 	if issuerOK.calls != 2 {
 		t.Errorf("issuer calls = %d, want 2", issuerOK.calls)
+	}
+}
+
+// fakeSTS answers every STS exchange with a new access token, so two mints
+// never return the same string.
+type fakeSTS struct{ calls int }
+
+func (f *fakeSTS) RoundTrip(*http.Request) (*http.Response, error) {
+	f.calls++
+	body := fmt.Sprintf(`{"access_token":"downscoped-%d","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}`, f.calls)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}, nil
+}
+
+// TestExchangeActorJwt_GCSTokenStaysOnItsNode runs the exchange against the
+// real GCS issuer and moves the actor between nodes: a token minted for one
+// node must never be handed to another.
+func TestExchangeActorJwt_GCSTokenStaysOnItsNode(t *testing.T) {
+	s, v := newSigner(t)
+	sts := &fakeSTS{}
+	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "source", Expiry: s.now.Add(time.Hour)})
+	issuer, err := gcsissuer.New(t.Context(), gcsissuer.WithTokenSource(src),
+		gcsissuer.WithHTTPClient(&http.Client{Transport: sts}), gcsissuer.WithClock(func() time.Time { return s.now }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup := &fakeLookup{}
+	srv := New(v, lookup, issuer)
+	srv.now = func() time.Time { return s.now }
+	exchangeOn := func(node string) (string, error) {
+		t.Helper()
+		s.node = node
+		resp, err := srv.ExchangeActorJwt(t.Context(), &exchangepb.ExchangeActorJwtRequest{ActorJwt: s.jwt(t, actoridjwt.KindWorkerForActor, ActorJWTAudience, uid)})
+		return resp.GetAccessToken(), err
+	}
+
+	lookup.actor = actorIn(ateapipb.ActorState_ACTOR_STATE_RUNNING, "node-1")
+	first, err := exchangeOn("node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := exchangeOn("node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != first || sts.calls != 1 {
+		t.Fatalf("a second exchange on the same node got %q after %q with %d STS calls, want the cached token and 1 call", again, first, sts.calls)
+	}
+
+	// The actor suspends, which prunes its snapshots to the one it uploaded,
+	// and resumes on node-2. Its grants shrink to its own prefix, which
+	// node-1's cached token still covers.
+	resumed := actorIn(ateapipb.ActorState_ACTOR_STATE_RUNNING, "node-2")
+	resumed.Status.Snapshots = []*ateapipb.Snapshot{{
+		Generation: 2, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+		DurableSnapshot: &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: ownURI},
+		},
+	}}
+	lookup.actor = resumed
+	moved, err := exchangeOn("node-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved == first {
+		t.Fatalf("node-2 was handed node-1's token %q", first)
+	}
+	if sts.calls != 2 {
+		t.Errorf("STS calls = %d, want a fresh mint for node-2", sts.calls)
+	}
+	if _, err := exchangeOn("node-1"); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("node-1 after the move: code = %v (%v), want PermissionDenied", status.Code(err), err)
+	}
+
+	// An actor's own token is still refused before the issuer is reached.
+	s.node = "node-2"
+	_, err = srv.ExchangeActorJwt(t.Context(), &exchangepb.ExchangeActorJwtRequest{ActorJwt: s.jwt(t, actoridjwt.KindActor, ActorJWTAudience, uid)})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("actor's own token: code = %v (%v), want PermissionDenied", status.Code(err), err)
+	}
+	if sts.calls != 2 {
+		t.Errorf("STS calls = %d after an actor's own token, want 2", sts.calls)
 	}
 }
 
