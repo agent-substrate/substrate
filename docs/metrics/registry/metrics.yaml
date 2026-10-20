@@ -777,9 +777,10 @@ groups:
         brief: >
           The pool's name, unique within the instrumented application. Ateapi
           emits only main (store and authorization), watch (worker-event
-          polling and expired-lease cleanup), and owner (migrations and outbox
-          partition maintenance), never a DSN or hostname.
-        examples: [main, watch, owner]
+          polling and expired-lease cleanup), owner (migrations and outbox
+          partition maintenance), and probe (readiness checks), never a DSN
+          or hostname.
+        examples: [main, watch, owner, probe]
       - id: db.client.connection.state
         stability: development
         type: string

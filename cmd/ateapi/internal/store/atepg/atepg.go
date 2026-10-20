@@ -173,12 +173,12 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 	ownerConfig.MinConns = 0
 	ownerConfig.MinIdleConns = 0
 
-	watchCfg := readWriteConfig.Copy()
-	watchCfg.MaxConns = watchPoolMaxConns
-	watchCfg.MinConns = watchPoolMinConns
+	watchCfg := resizedPoolConfig(readWriteConfig, watchPoolMaxConns, watchPoolMinConns)
+	probeCfg := resizedPoolConfig(readWriteConfig, probePoolMaxConns, probePoolMinConns)
 	config.Instruments.configurePool(readWriteConfig, ateattr.DBConnectionPoolMain)
 	config.Instruments.configurePool(watchCfg, ateattr.DBConnectionPoolWatch)
 	config.Instruments.configurePool(ownerConfig, ateattr.DBConnectionPoolOwner)
+	config.Instruments.configurePool(probeCfg, ateattr.DBConnectionPoolProbe)
 
 	pool, err := pgxpool.NewWithConfig(ctx, readWriteConfig)
 	if err != nil {
@@ -211,7 +211,7 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 		pool.Close()
 		return nil, fmt.Errorf("opening PostgreSQL watch pool: %w", err)
 	}
-	probePool, err := pgxpool.NewWithConfig(ctx, resizedPoolConfig(readWriteConfig, probePoolMaxConns, probePoolMinConns))
+	probePool, err := pgxpool.NewWithConfig(ctx, probeCfg)
 	if err != nil {
 		watchPool.Close()
 		ownerPool.Close()
@@ -234,6 +234,7 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 		namedPool{ateattr.DBConnectionPoolMain, pool},
 		namedPool{ateattr.DBConnectionPoolWatch, watchPool},
 		namedPool{ateattr.DBConnectionPoolOwner, ownerPool},
+		namedPool{ateattr.DBConnectionPoolProbe, probePool},
 	)
 	if err != nil {
 		p.Close()
