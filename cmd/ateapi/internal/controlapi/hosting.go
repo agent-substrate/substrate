@@ -82,3 +82,25 @@ func HostingNode(ctx context.Context, st store.Interface, actor *ateapipb.Actor)
 	}
 	return worker.GetNodeName(), nil
 }
+
+// ActorLocator reports whether a node hosts an Actor, looking up the Actor in
+// Store and its node with HostingNode. It implements authz.ActorLocator.
+type ActorLocator struct {
+	Store store.Interface
+}
+
+// ActorHostedOnNode reports whether node hosts the Actor named by actorRef. It
+// returns false, not an error, if the Actor does not exist.
+func (l ActorLocator) ActorHostedOnNode(ctx context.Context, actorRef resources.ActorRef, node string) (bool, error) {
+	actor, err := l.Store.GetActor(ctx, actorRef)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("while retrieving actor %s: %w", actorRef, err)
+	}
+	hostingNode, err := HostingNode(ctx, l.Store, actor)
+	if err != nil {
+		return false, err
+	}
+	return hostingNode != "" && hostingNode == node, nil
+}

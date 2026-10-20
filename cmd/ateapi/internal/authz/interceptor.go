@@ -26,7 +26,11 @@ import (
 // permissions registered in defaultRPCPermissions using authorizer. When
 // enforce is false, only rules marked alwaysEnforce are checked. When enforce
 // is true, an RPC with no rule is denied.
-func UnaryServerInterceptor(authorizer *Authorizer, enforce bool) grpc.UnaryServerInterceptor {
+//
+// For an RPC whose rule declares ateletOnNode, atelet is authorized by node
+// instead of OpenFGA: it may call the RPC only for an Actor hosted on its own
+// node.
+func UnaryServerInterceptor(authorizer *Authorizer, enforce bool, atelet *AteletAuthorizer) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if IsBypassed(ctx) {
 			return handler(ctx, req)
@@ -46,6 +50,19 @@ func UnaryServerInterceptor(authorizer *Authorizer, enforce bool) grpc.UnaryServ
 		// rather than a validation error for its request.
 		if p, ok := principal.FromContext(ctx); !ok || p.ID == "" {
 			return nil, apierror.Unauthenticated("unauthenticated: missing principal in context")
+		}
+		// atelet is checked by node instead of OpenFGA.
+		if rule.ateletByNode {
+			node, isAtelet, err := atelet.node(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if isAtelet {
+				if err := atelet.authorizeOnNode(ctx, rule, req, node); err != nil {
+					return nil, err
+				}
+				return handler(ctx, req)
+			}
 		}
 		checks, err := rule.extract(req)
 		if err != nil {

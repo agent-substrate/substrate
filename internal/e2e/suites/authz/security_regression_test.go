@@ -41,6 +41,7 @@ func testSecurityRegression(t *testing.T, ctx context.Context, f *fixture) {
 	t.Run("recreated atespace drops old grants", func(t *testing.T) { testAtespaceRecreated(t, ctx, f) })
 	t.Run("recreated AccessPolicy rejects stale updates", func(t *testing.T) { testAccessPolicyRecreated(t, ctx, f) })
 	t.Run("WorkerService accepts only atelet", func(t *testing.T) { testWorkerServiceRequiresAtelet(t, ctx, f) })
+	t.Run("atelet reads egress policies only with its certificate", func(t *testing.T) { testEgressPolicyNeedsAteletCert(t, ctx, f) })
 }
 
 // testEnforcedByDefault checks that a default install enforces
@@ -334,5 +335,21 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 		{"MintWorkerActorJwt", ateletToken, mintWorkerJWT, rejected},
 		{"ReportActorSnapshotState", f.bootstrap, reportSnapshotState, rejected},
 		{"ReportActorSnapshotState", ateletToken, reportSnapshotState, rejected},
+	})
+}
+
+// testEgressPolicyNeedsAteletCert checks that atelet's ServiceAccount token
+// cannot read an actor's egress policy. ateapi lets atelet read the egress
+// policies of actors on its node only when it presents its pod certificate;
+// the token holds no grant.
+func testEgressPolicyNeedsAteletCert(t *testing.T, ctx context.Context, f *fixture) {
+	ateletToken := principalFor(t, ctx, f.clients, e2e.SystemNamespace(), installdefaults.AteletServiceAccount)
+	getEgressPolicy := func(ctx context.Context, api *ateclient.Client) error {
+		_, err := api.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: f.actor, Name: resources.SingletonName})
+		return err
+	}
+	expectAll(t, ctx, []call{
+		{"GetActorEgressPolicy", f.bootstrap, getEgressPolicy, passedCheck},
+		{"GetActorEgressPolicy", ateletToken, getEgressPolicy, denied},
 	})
 }

@@ -59,7 +59,6 @@ func setTestPolicyManager(t *testing.T, p *Persistence) {
 		ControllerSPIFFEID:       installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
 		EgressGatewaySPIFFEID:    installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
 		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
-		AteletSPIFFEID:           installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
 		APIServerSidecarSPIFFEID: installdefaults.APIServerSPIFFEID(installdefaults.SystemNamespace),
 	})
 	if err != nil {

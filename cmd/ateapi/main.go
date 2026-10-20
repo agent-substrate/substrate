@@ -261,7 +261,6 @@ func main() {
 		ControllerSPIFFEID:       *controllerSPIFFEID,
 		EgressGatewaySPIFFEID:    *egressGatewaySPIFFEID,
 		IngressRouterSPIFFEID:    *ingressRouterSPIFFEID,
-		AteletSPIFFEID:           ateletSPIFFEID,
 		APIServerSidecarSPIFFEID: *apiServerSidecarSPIFFEID,
 	})
 	if err != nil {
@@ -375,11 +374,16 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
 
+	ateletAuthorizer, err := authz.NewAteletAuthorizer(ateletSPIFFEID, controlapi.ActorLocator{Store: persistence})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create atelet authorizer", err)
+	}
+
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		apiauthn.UnaryServerInterceptor(authCfg),
 		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 		ateinterceptors.ServerUnaryInterceptor,
-		authz.UnaryServerInterceptor(authorizer, *experimentalEnableAuthz),
+		authz.UnaryServerInterceptor(authorizer, *experimentalEnableAuthz, ateletAuthorizer),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
 		preview.UnaryServerInterceptor,
 	}

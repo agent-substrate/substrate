@@ -712,6 +712,9 @@ func TestDefaultRPCPermissions_CoversEveryServedRPC(t *testing.T) {
 		if r.authorizedInHandler != "" && r.alwaysEnforce {
 			t.Errorf("%s: authorizedInHandler and alwaysEnforce are exclusive", fullMethod)
 		}
+		if r.ateletByNode && r.actor == nil {
+			t.Errorf("%s: ateletOnNode needs a rule built by actorRule", fullMethod)
+		}
 	}
 	for fullMethod := range defaultRPCPermissions {
 		if !served[fullMethod] {
