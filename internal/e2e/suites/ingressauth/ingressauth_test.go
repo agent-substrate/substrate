@@ -185,6 +185,12 @@ func isRemoteTLSAlert(err error) bool {
 	return errors.As(err, &opErr) && opErr.Op == "remote error"
 }
 
+// refusalAttempts bounds the tries one refused client gets, each on a fresh
+// port-forward. The router closes right after its alert, and the port-forward
+// or Go's HTTP/2 client sometimes reports that close first ("http2: client
+// conn could not be established"), so the alert never reaches the test.
+const refusalAttempts = 3
+
 // TestIngressAuthentication checks each kind of client against both TLS
 // listeners.
 //
@@ -192,7 +198,9 @@ func isRemoteTLSAlert(err error) bool {
 // shown to carry the allowlisted client through: a port-forward tears down its
 // whole tunnel once one forwarded connection fails, so a shared one would turn
 // every check after the first refusal into a dial error. The refusal itself
-// has to be a TLS alert from the router, which a broken tunnel cannot fake.
+// has to be a TLS alert from the router, which a broken tunnel cannot fake; a
+// failure without one is retried on a fresh port-forward, refusalAttempts
+// times at most.
 func TestIngressAuthentication(t *testing.T) {
 	requireStaticMTLS(t)
 	ctx := context.Background()
@@ -212,22 +220,28 @@ func TestIngressAuthentication(t *testing.T) {
 				{name: "allowlisted SPIFFE ID signed by an untrusted CA", cert: &foreign},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					address := forwardRouterPort(t, ctx, listener.servicePort)
+					for attempt := 1; ; attempt++ {
+						address := forwardRouterPort(t, ctx, listener.servicePort)
 
-					status, err := listener.request(ctx, address, routerTLSConfig(t, ctx, &allowed))
-					if err != nil {
-						t.Fatalf("allowlisted client %s got no response: %v", e2e.RouterClientSPIFFEID(e2e.RouterClientServiceAccount), err)
-					}
-					t.Logf("allowlisted client let through (status %d)", status)
+						status, err := listener.request(ctx, address, routerTLSConfig(t, ctx, &allowed))
+						if err != nil {
+							t.Fatalf("allowlisted client %s got no response: %v", e2e.RouterClientSPIFFEID(e2e.RouterClientServiceAccount), err)
+						}
+						t.Logf("allowlisted client let through (status %d)", status)
 
-					status, err = listener.request(ctx, address, routerTLSConfig(t, ctx, tc.cert))
-					if err == nil {
-						t.Fatalf("router let the client through (status %d); want the TLS handshake refused", status)
+						status, err = listener.request(ctx, address, routerTLSConfig(t, ctx, tc.cert))
+						if err == nil {
+							t.Fatalf("router let the client through (status %d); want the TLS handshake refused", status)
+						}
+						if isRemoteTLSAlert(err) {
+							t.Logf("refused: %v", err)
+							return
+						}
+						if attempt == refusalAttempts {
+							t.Fatalf("request failed without a TLS alert from the router %d times, so the refusal is unproven: %v", attempt, err)
+						}
+						t.Logf("attempt %d failed without a TLS alert from the router; retrying on a fresh port-forward: %v", attempt, err)
 					}
-					if !isRemoteTLSAlert(err) {
-						t.Fatalf("request failed without a TLS alert from the router, so the refusal is unproven: %v", err)
-					}
-					t.Logf("refused: %v", err)
 				})
 			}
 		})
