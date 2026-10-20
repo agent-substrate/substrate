@@ -103,7 +103,7 @@ kubectl -n ate-system rollout status ds/atelet
 
 - **Progress:** `Waiting for daemon set "atelet" rollout to finish: 2 out of 5 new pods have been updated...`, then `... 4 of 5 updated pods are available...`.
 - **Done:** `daemon set "atelet" successfully rolled out`.
-- **Stuck:** the `N out of M` count does not move for more than about 6 minutes. A new atelet pod that cannot start stops the roll and leaves its node without atelet; if you cannot fix it quickly, [roll back step 2](#roll-back-step-2). A pod stuck in ContainerCreating usually means podcertificate-controller is not running. If `deploy atelet` times out, the roll still goes on; keep watching.
+- **Stuck:** the `N out of M` count does not move for more than about 6 minutes. A new atelet pod that cannot start stops the roll and leaves its node without atelet; if you cannot fix it quickly, [roll back step 2](#roll-back-step-2). If its log says the image cache has a layout version this atelet does not support, [rebuild the node's image cache](#rebuild-a-nodes-image-cache). A pod stuck in ContainerCreating usually means podcertificate-controller is not running. If `deploy atelet` times out, the roll still goes on; keep watching.
 - **Actors:** running actors keep running. A node's atelet is down for a few seconds while it restarts.
 
 ### Step 3. Move each WorkerPool to the new worker image
@@ -256,6 +256,18 @@ kubectl -n $NS rollout resume deployment/$WORKERPOOL
 
 Workers already removed still get their 30 minutes. Do not leave a pool paused, and do not start step 4 while one is: a paused pool ignores every later change to its workers.
 
+### Rebuild a node's image cache
+
+atelet refuses to start on an image cache whose layout version it does not support, and its log names both versions. The cache holds no unique state, but the actors on the node run from it, so delete it only once no actor runs on the node. atelet rebuilds it as actors start:
+
+```bash
+NODE=my-node   # change me
+kubectl debug node/$NODE -it --image=busybox -- rm -rf /host/var/lib/ate/image-cache
+kubectl delete pod -n ate-system -l app=atelet --field-selector spec.nodeName=$NODE
+# kubectl debug leaves its finished pod behind.
+kubectl get pods -o name | grep "^pod/node-debugger-$NODE-" | xargs kubectl delete
+```
+
 ### Roll back
 
 To go back to the old release, roll back every step you began, finished or not, starting with the last. To fix one pool, roll back only that pool. Rollback runs from the old checkout, with `old.yaml`:
@@ -307,6 +319,8 @@ Only workers already on the new image are replaced, and their actors get `SIGTER
 ```bash
 go run ./cmd/ate-setup deploy atelet --config ~/ate-upgrade/old.yaml --rollout-timeout 1h
 ```
+
+If the new release changed the image cache layout, the old atelet refuses the cache the new one wrote and does not start; [rebuild the node's image cache](#rebuild-a-nodes-image-cache) on each node where that happens.
 
 #### Roll back step 1
 
