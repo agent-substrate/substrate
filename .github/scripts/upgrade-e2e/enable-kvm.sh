@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Grants the runner access to /dev/kvm, so hack/create-kind-cluster.sh mounts
-# it into the kind node for microVM workers.
+# Grants the runner access to /dev/kvm, so hack/create-kind-cluster.sh's KVM
+# probe passes and the kind nodes carry the device for microVM workers.
 #
 # Used by .github/workflows/upgrade-e2e.yaml.
 
