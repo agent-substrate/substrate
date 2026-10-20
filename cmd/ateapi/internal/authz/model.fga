@@ -80,8 +80,10 @@ type atespace
     define editor: [user] or owner
     define viewer: [user] or editor or viewer from parent_global
 
-    # System component roles, inherited from global only.
-    define egress_gateway: egress_gateway from parent_global
+    # Gateway membership is injected from the administrator-owned Atespace
+    # binding, never inherited from the global health-check grant.
+    define egress_gateway: [user]
+    # Other system component roles are inherited from global.
     define ingress_router: ingress_router from parent_global
     define atelet: atelet from parent_global
     define api_server_sidecar: api_server_sidecar from parent_global
@@ -95,7 +97,7 @@ type atespace
     # --- 3. Atespace Lifecycle & Container Operations ---
     define can_create_actor: editor
     define can_create_actor_template: editor
-    define can_list_actors: viewer
+    define can_list_actors: viewer or egress_gateway
     define can_list_actor_templates: viewer
     define can_create_tag: editor
     define can_list_tags: viewer

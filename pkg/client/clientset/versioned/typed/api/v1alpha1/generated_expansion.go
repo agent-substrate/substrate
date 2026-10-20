@@ -18,6 +18,8 @@ package v1alpha1
 
 type CSIDriverConfigExpansion interface{}
 
+type EgressGatewayExpansion interface{}
+
 type SandboxConfigExpansion interface{}
 
 type WorkerPoolExpansion interface{}

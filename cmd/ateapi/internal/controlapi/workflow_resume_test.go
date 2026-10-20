@@ -37,6 +37,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -1262,7 +1263,9 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 	dialer := NewAteletDialer(newTestAteletIndexer(t, ateletPod), installdefaults.SystemNamespace, "", "")
 	dialer.ateletConns.Add("atelet-uid", &ateletConn{ip: "10.0.0.1", conn: conn})
 
-	return &ActorWorkflow{store: persistence, dialer: dialer}, fake
+	return &ActorWorkflow{store: persistence, dialer: dialer, resolveEgressGateway: func(_ context.Context, atespace string) (*atev1alpha1.EgressGatewaySpec, error) {
+		return &atev1alpha1.EgressGatewaySpec{Address: atespace + ".gateway:443"}, nil
+	}}, fake
 }
 
 // TestResumeActor_AteletWireRequest is the characteristic test for the
@@ -1824,6 +1827,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				if run == nil || restore != nil {
 					t.Fatalf("atelet requests = (restore=%v, run=%v), want exactly one Run", restore, run)
 				}
+				if got := run.GetEgressGateway().GetAddress(); got != "team-a.gateway:443" {
+					t.Errorf("Run gateway = %q", got)
+				}
 				if !proto.Equal(run.GetSandboxRuntime(), wantSandboxRuntime) {
 					t.Errorf("run SandboxRuntime = %v, want %v", run.GetSandboxRuntime(), wantSandboxRuntime)
 				}
@@ -1831,6 +1837,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			}
 			if restore == nil || run != nil {
 				t.Fatalf("atelet requests = (restore=%v, run=%v), want exactly one Restore", restore, run)
+			}
+			if got := restore.GetEgressGateway().GetAddress(); got != "team-a.gateway:443" {
+				t.Errorf("Restore gateway = %q", got)
 			}
 			if !proto.Equal(restore.GetSandboxRuntime(), wantSandboxRuntime) {
 				t.Errorf("restore SandboxRuntime = %v, want %v", restore.GetSandboxRuntime(), wantSandboxRuntime)

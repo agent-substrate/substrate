@@ -144,10 +144,21 @@ through their pod certificates. `ate-api-server`'s `--controller-spiffe-id`,
 | Role | Held by | Allows |
 |---|---|---|
 | `controller` | `ate-controller` | Create, get, list, update, delete and drain workers |
-| `egress_gateway` | `atenet-egress` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs and certificates |
+| `egress_gateway` | The mTLS identity in the Atespace’s `EgressGateway` | Get actors and their egress policies, list actors, and mint actor JWTs and certificates within the bound Atespace |
 | `ingress_router` | `atenet-router` | Resume actors; list actors across all atespaces |
 | `atelet` | `atelet` | Get actors' egress policies, for the worker that enforces them |
 | `api_server_sidecar` | the `ate-api-server` pod identity, which its sidecars share, today the objectstore control plugin | Get actors, to derive the snapshot prefixes a per-actor storage credential may cover |
+
+The `--egress-gateway-spiffe-id` flag grants only the built-in gateway's global
+actor-list health check. It does not grant actor policy reads or credential
+minting. Those grants come from each Atespace's gateway binding and require mTLS;
+a JWT subject matching a gateway identity does not qualify. Missing, terminating,
+or invalid gateways grant no authority. Kubernetes writes to `EgressGateway`
+resources must be restricted to trusted administrators.
+
+When experimental API authorization enforcement is disabled, Atespace creation
+can use the default gateway but rejects explicit gateway assignments. With
+enforcement enabled, global owners choose the gateway.
 
 Only `egress_gateway` can mint actor credentials: not even a global owner can,
 since a credential lets its holder act as the actor.

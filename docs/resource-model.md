@@ -67,6 +67,7 @@ Global
 | `WorkerPool` | Namespaced |
 | `SandboxConfig` | Cluster |
 | `CSIDriverConfig` | Cluster |
+| `EgressGateway` | Cluster |
 
 ## Relationships
 
@@ -108,3 +109,7 @@ classDiagram
     WorkerPool "1" *-- "*" WorkerPod
     Worker "1" --> "1" WorkerPod
 ```
+
+An Atespace may reference a Kubernetes `EgressGateway` through `egress_gateway`.
+An omitted reference selects `default`. The reference is fixed at Atespace creation,
+which requires a global owner; Actors and ActorTemplates cannot override it.

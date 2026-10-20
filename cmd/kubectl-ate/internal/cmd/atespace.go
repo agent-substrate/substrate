@@ -70,6 +70,8 @@ var getAtespacesCmd = &cobra.Command{
 	},
 }
 
+var createAtespaceEgressGateway string
+
 var createAtespaceCmd = &cobra.Command{
 	Use:   "atespace <atespace-name>",
 	Short: "Create an atespace",
@@ -82,8 +84,13 @@ var createAtespaceCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
+		var gateway *ateapipb.ObjectRef
+		if createAtespaceEgressGateway != "" {
+			gateway = &ateapipb.ObjectRef{Name: createAtespaceEgressGateway}
+		}
 		resp, err := apiClient.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 			Atespace: &ateapipb.Atespace{
+				EgressGateway: gateway,
 				Metadata: &ateapipb.ResourceMetadata{
 					Name: args[0],
 				},
@@ -122,5 +129,6 @@ var deleteAtespaceCmd = &cobra.Command{
 func init() {
 	getCmd.AddCommand(getAtespacesCmd)
 	createCmd.AddCommand(createAtespaceCmd)
+	createAtespaceCmd.Flags().StringVar(&createAtespaceEgressGateway, "egress-gateway", "", "Cluster-scoped EgressGateway name (defaults to default)")
 	deleteCmd.AddCommand(deleteAtespaceCmd)
 }

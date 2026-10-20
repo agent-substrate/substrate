@@ -84,6 +84,9 @@ tuples:
   - user: user:sys-egress
     relation: egress_gateway
     object: global:root
+  - user: user:sys-egress
+    relation: egress_gateway
+    object: atespace:space-1
   - user: user:sys-router
     relation: ingress_router
     object: global:root
@@ -417,7 +420,7 @@ tests:
         object: atespace:space-1
         assertions:
           viewer: false
-          can_list_actors: false
+          can_list_actors: true
           can_get: false
       - user: user:sys-atelet # atelet reads egress policies for the worker that enforces them
         object: actor:runner-1

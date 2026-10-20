@@ -137,7 +137,7 @@ func TestNewRejectsInvalidSystemPrincipals(t *testing.T) {
 			tc.mutate(&p)
 			// Principals are validated before the store is touched, so no
 			// database is needed.
-			if _, _, err := New(context.Background(), nil, nil, nil, p); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			if _, _, err := New(context.Background(), nil, nil, nil, p, nil); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("New(%+v) error = %v, want substring %q", p, err, tc.wantErr)
 			}
 		})

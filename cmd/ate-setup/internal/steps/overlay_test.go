@@ -1246,6 +1246,9 @@ func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render() error = %v", err)
 			}
+			if got := strings.Contains(string(out), "kind: EgressGateway"); got != (tc.name == "egress") {
+				t.Errorf("EgressGateway present = %v in %s manifest", got, tc.name)
+			}
 			if !strings.Contains(string(out), "image: "+want) {
 				t.Errorf("rendered manifest does not install %s:\n%s", want, out)
 			}

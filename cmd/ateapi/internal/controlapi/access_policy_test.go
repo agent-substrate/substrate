@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/cmd/ateapi/internal/egressgateway/egressgatewaytest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
@@ -42,13 +43,14 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 
 	// alice@example.com is a bootstrap owner: a global owner through server
 	// configuration, never through a stored AccessPolicy.
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, []string{"alice@example.com"}, storetest.DefaultSystemPrincipals())
+	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, []string{"alice@example.com"}, storetest.DefaultSystemPrincipals(), nil)
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
 	persistence.SetPolicyManager(policyManager)
 
-	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, "", nil, nil, "", nil, nil, "")
+	gateways := egressgatewaytest.New(t, persistence)
+	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, gateways, nil, nil, "", nil, nil, "")
 	interceptor := authz.UnaryServerInterceptor(authorizer, true)
 
 	userCtx := func(id string) context.Context {
@@ -196,7 +198,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	// 6. Removing Alice from the bootstrap owners (a restart with a different
 	// configuration) leaves only her stored grant; once that is gone too she
 	// is denied, while the new bootstrap owner is allowed.
-	restarted, _, err := authz.New(ctx, pool, fgaServer, []string{"charlie@example.com"}, storetest.DefaultSystemPrincipals())
+	restarted, _, err := authz.New(ctx, pool, fgaServer, []string{"charlie@example.com"}, storetest.DefaultSystemPrincipals(), nil)
 	if err != nil {
 		t.Fatalf("authz.New after restart failed: %v", err)
 	}

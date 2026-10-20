@@ -88,7 +88,7 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 		t.Fatalf("creating OpenFGA server: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(ctx, pool, fgaServer, nil, DefaultSystemPrincipals())
+	_, policyManager, err := authz.New(ctx, pool, fgaServer, nil, DefaultSystemPrincipals(), nil)
 	if err != nil {
 		t.Fatalf("initializing OpenFGA authz: %v", err)
 	}
