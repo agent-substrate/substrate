@@ -979,7 +979,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if findLatestDurableSnapshot(loaded.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == nil {
+			if snapshotToResume(loaded.GetStatus()) == nil {
 				t.Fatalf("missing snapshot source for %s", scenario)
 			}
 		})

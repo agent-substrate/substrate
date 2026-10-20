@@ -1297,6 +1297,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		sourceTag *ateapipb.ObjectRef
 		// assignedRuntime seeds WorkerAssignment.SandboxRuntime.
 		assignedRuntime *ateapipb.ActorSandboxRuntime
+		// externalNewer gives externalSnapshot a higher generation than
+		// localSnapshot. By default the local snapshot is newer.
+		externalNewer bool
 	}
 	// templateSeed is the ActorTemplate configuration a row persists.
 	type templateSeed struct {
@@ -1316,8 +1319,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		snapshotName string
 		snapshotURI  string
 		scope        ateletpb.SnapshotFidelity
-		// kind is the restore's snapshot kind label: local for a local
-		// snapshot, otherwise latest.
+		// kind is the restore's snapshot kind label: local when the
+		// restored snapshot is on a node, otherwise latest.
 		kind string
 	}
 
@@ -1606,6 +1609,20 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "18a newer durable snapshot wins over an older local snapshot",
+			actor: actorSeed{
+				localSnapshot:    localSnap(localSnapshotName, fullScope),
+				externalSnapshot: extSnap(actorURI, rootfsScope),
+				externalNewer:    true,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+		},
+		{
 			name: "19 stamped Full durable snapshot on matching worker restores in Full",
 			actor: actorSeed{
 				externalSnapshot: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, amd64RT),
@@ -1803,7 +1820,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					return uid
 				}
 				var gen int32
-				if tt.actor.externalSnapshot != nil {
+				seedExternal := func() {
+					if tt.actor.externalSnapshot == nil {
+						return
+					}
 					gen++
 					extGen = gen
 					ext := proto.CloneOf(tt.actor.externalSnapshot)
@@ -1813,7 +1833,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					}
 					a.Status.Snapshots = append(a.Status.Snapshots, ext)
 				}
-				if tt.actor.localSnapshot != nil {
+				seedLocal := func() {
+					if tt.actor.localSnapshot == nil {
+						return
+					}
 					gen++
 					localGen = gen
 					a.Status.AssignedNode = "node-1"
@@ -1825,6 +1848,13 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 						loc.ActorTemplateUid = createdTmpl.GetMetadata().GetUid()
 					}
 					a.Status.Snapshots = append(a.Status.Snapshots, loc)
+				}
+				if tt.actor.externalNewer {
+					seedLocal()
+					seedExternal()
+				} else {
+					seedExternal()
+					seedLocal()
 				}
 				a.Status.LastAssignedGeneration = gen
 			})

@@ -156,20 +156,16 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	return actor, actorTemplate, nil
 }
 
-// checkSnapshotURI fails with DataLoss when a snapshot the resume may restore
-// has a URI that does not parse. A local restore also names the local
-// snapshot's upload, so its URI must parse too.
+// checkSnapshotURI fails with DataLoss when the URI of snapshotToResume does
+// not parse. A local restore also names the snapshot's upload, so its URI
+// must parse too.
 func checkSnapshotURI(actorRef resources.ActorRef, actor *ateapipb.Actor) error {
-	for _, snap := range []*ateapipb.Snapshot{
-		findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-		findLatestLocalSnapshot(actor.GetStatus()),
-	} {
-		if snap == nil {
-			continue
-		}
-		if _, err := resources.ParseSnapshotURI(snap.GetDurableSnapshot().GetObject().GetSnapshotUri()); err != nil {
-			return apierror.DataLoss("Actor %s snapshot %s: %v", actorRef, snap.GetUuid(), err)
-		}
+	snap := snapshotToResume(actor.GetStatus())
+	if snap == nil {
+		return nil
+	}
+	if _, err := resources.ParseSnapshotURI(snap.GetDurableSnapshot().GetObject().GetSnapshotUri()); err != nil {
+		return apierror.DataLoss("Actor %s snapshot %s: %v", actorRef, snap.GetUuid(), err)
 	}
 	return nil
 }
@@ -640,6 +636,15 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 	return c
 }
 
+// snapshotToResume returns the snapshot ResumeActor restores from: the latest
+// one that is local or has a completed durable copy (a tag borrowed at
+// creation included), or nil when the actor has none and cold-boots.
+func snapshotToResume(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
+	return latestSnapshot(status, func(s *ateapipb.Snapshot) bool {
+		return s.GetLocality() != "" || s.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	})
+}
+
 // snapshotSandboxClass returns the sandbox class of the snapshot ResumeActor
 // will restore from, the actor's local snapshot or else its latest durable
 // one (a golden tag borrowed at creation included), or "" when the actor has
@@ -765,9 +770,9 @@ func checkVolumesAttachable(volumes []*ateapipb.ExternalVolumeStatus) error {
 }
 
 // ensureAteletRestored brings the workload up on the assigned worker:
-// restoring the actor's local snapshot when one exists, else its external
-// snapshot, else cold-booting from the template spec. This is the
-// atelet reentrancy seam (#372): the request is keyed by the actor UID and
+// restoring snapshotToResume, or cold-booting from the template spec when the
+// actor has no snapshot. This is the atelet reentrancy seam (#372): the
+// request is keyed by the actor UID and
 // the worker pod UID, so a re-entered workflow re-sends the same semantic
 // request; once atelet's Restore/Run are idempotent on those keys this step
 // becomes fully reentrant with no changes here.
@@ -792,12 +797,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	// to the actor (replacing the worker-pod downward-API approach).
 	actorResources := toAteletResources(actorTemplate.GetResources())
 
-	// A local checkpoint wins over a completed durable snapshot (a tag
-	// borrowed at creation included).
-	snap := findLatestLocalSnapshot(actor.GetStatus())
-	if snap == nil {
-		snap = findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
-	}
+	snap := snapshotToResume(actor.GetStatus())
 
 	// The assignment is what the next checkpoint is stamped from, so it is also
 	// what decides how this restore runs.
