@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/yaml"
 )
 
@@ -64,6 +65,9 @@ type ServerPod struct {
 	// publish a port the container -- uid 65532, every capability dropped --
 	// cannot bind, such as 80; the Service maps Port down to it.
 	TargetPort int
+	// UDPPorts are Service ports published over UDP alongside the TCP port
+	// above, all mapped to the container's target port.
+	UDPPorts []int
 	// TLSPort, when set, publishes the HTTPS listener testserver's http and
 	// websocket subcommands open on container port 8443 when given a
 	// certificate, beside the cleartext one on Port. The readiness probe then
@@ -78,6 +82,9 @@ type ServerPod struct {
 	// an HTTP GET. A gRPC server answers an HTTP request with a protocol error,
 	// so a server speaking grpc must set this and register the health service.
 	GRPCProbe bool
+	// TCPProbe asks kubelet to probe with a TCP socket check instead of HTTP.
+	// Ignored when GRPCProbe is set.
+	TCPProbe bool
 	// HealthPath is the HTTP readiness path, defaulting to /healthz. Ignored
 	// when GRPCProbe is set.
 	HealthPath string
@@ -146,7 +153,12 @@ type Server struct {
 
 // Address is the host:port to dial the server at.
 func (s Server) Address() string {
-	return net.JoinHostPort(s.ClusterIP, strconv.Itoa(s.Port))
+	return s.AddressOnPort(s.Port)
+}
+
+// AddressOnPort returns the server's ClusterIP joined with port.
+func (s Server) AddressOnPort(port int) string {
+	return net.JoinHostPort(s.ClusterIP, strconv.Itoa(port))
 }
 
 // TLSAddress is the host:port to dial the server's HTTPS listener at.
@@ -217,6 +229,7 @@ func renderServerPod(t *testing.T, spec ServerPod, namespace string) string {
 		"${PORT}":        strconv.Itoa(spec.Port),
 		"${TARGET_PORT}": targetPortStr,
 	}
+	servicePorts, containerPorts := serverUDPPorts(t, spec, targetPort)
 	blocks := map[string]string{
 		"${ARGS}":            serverArgs(spec, targetPortStr),
 		"${READINESS_PROBE}": serverReadinessProbe(spec, targetPortStr),
@@ -225,8 +238,10 @@ func renderServerPod(t *testing.T, spec ServerPod, namespace string) string {
 		"${TLS_SERVICE_PORT}":   serverTLSPort(spec, "  - name: serve-tls\n    port: %d\n    targetPort: %d", spec.TLSPort, serverTLSTargetPort),
 		// Indented to their parents: volumeMounts is a container field, volumes
 		// a pod one. An empty list takes its whole line, key included.
-		"${VOLUME_MOUNTS}": yamlListBlock(t, "volumeMounts", spec.VolumeMounts, 4),
-		"${VOLUMES}":       yamlListBlock(t, "volumes", spec.Volumes, 2),
+		"${VOLUME_MOUNTS}":       yamlListBlock(t, "volumeMounts", spec.VolumeMounts, 4),
+		"${VOLUMES}":             yamlListBlock(t, "volumes", spec.Volumes, 2),
+		"${UDP_SERVICE_PORTS}":   servicePorts,
+		"${UDP_CONTAINER_PORTS}": containerPorts,
 	}
 	return renderManifest(t, serverPodTemplate, inline, blocks)
 }
@@ -244,14 +259,41 @@ func serverArgs(spec ServerPod, targetPort string) string {
 	return strings.Join(out, "\n")
 }
 
+// serverUDPPorts renders spec's UDP ports for the Service's and the container's
+// `ports:` lists.
+func serverUDPPorts(t *testing.T, spec ServerPod, targetPort int) (service, container string) {
+	t.Helper()
+	if len(spec.UDPPorts) == 0 {
+		return "", ""
+	}
+	servicePorts := make([]corev1.ServicePort, 0, len(spec.UDPPorts))
+	for _, port := range spec.UDPPorts {
+		servicePorts = append(servicePorts, corev1.ServicePort{
+			Name:       fmt.Sprintf("udp-%d", port),
+			Protocol:   corev1.ProtocolUDP,
+			Port:       int32(port),
+			TargetPort: intstr.FromInt32(int32(targetPort)),
+		})
+	}
+	containerPorts := []corev1.ContainerPort{{
+		Name:          "serve-udp",
+		ContainerPort: int32(targetPort),
+		Protocol:      corev1.ProtocolUDP,
+	}}
+	return yamlItemsBlock(t, servicePorts, 2), yamlItemsBlock(t, containerPorts, 4)
+}
+
 // serverReadinessProbe renders the probe fragment for spec, indented to sit
 // under the template's `readinessProbe:` key. kubelet dials the container
 // directly, so the probe names the listen port rather than the published one.
 // A server with TLSPort is probed over HTTPS, on the listener that depends on
 // its certificate.
 func serverReadinessProbe(spec ServerPod, targetPort string) string {
-	if spec.GRPCProbe {
+	switch {
+	case spec.GRPCProbe:
 		return "      grpc:\n        port: " + targetPort
+	case spec.TCPProbe:
+		return "      tcpSocket:\n        port: " + targetPort
 	}
 	healthPath := spec.HealthPath
 	if healthPath == "" {

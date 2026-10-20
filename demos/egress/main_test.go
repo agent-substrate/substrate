@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -1027,4 +1028,150 @@ func TestConnectRejectsInvalidRequests(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTCPProbe(t *testing.T) {
+	tests := []struct {
+		name         string
+		serve        func(net.Conn)
+		skipBanner   bool
+		wantBanner   string
+		wantReceived string
+		wantClosed   bool
+	}{
+		{
+			name: "server speaks first",
+			serve: func(c net.Conn) {
+				_, _ = io.WriteString(c, "TESTBANNER/1.0\r\n")
+				buf := make([]byte, 64)
+				if n, err := c.Read(buf); err == nil {
+					_, _ = c.Write(buf[:n])
+				}
+			},
+			wantBanner:   "TESTBANNER/1.0\r\n",
+			wantReceived: "ping",
+		},
+		{
+			name:       "skip banner writes first",
+			skipBanner: true,
+			serve: func(c net.Conn) {
+				buf := make([]byte, 64)
+				if n, err := c.Read(buf); err == nil {
+					_, _ = c.Write(buf[:n])
+				}
+			},
+			wantReceived: "ping",
+		},
+		{
+			name:       "peer closes before speaking",
+			serve:      func(c net.Conn) { _ = c.Close() },
+			wantClosed: true,
+		},
+		{
+			name:       "peer closes after reading",
+			skipBanner: true,
+			serve: func(c net.Conn) {
+				_, _ = c.Read(make([]byte, 64))
+				_ = c.Close()
+			},
+			wantClosed: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			address := startTestPeer(t, tt.serve)
+			got := probe(t, tcpProbeRequest{
+				Address:    address,
+				Send:       "ping",
+				SkipBanner: tt.skipBanner,
+				Timeout:    "5s",
+			}, http.StatusOK)
+			if got.Banner != tt.wantBanner || got.Received != tt.wantReceived || got.Closed != tt.wantClosed {
+				t.Errorf("probe = %+v, want banner=%q received=%q closed=%v", got, tt.wantBanner, tt.wantReceived, tt.wantClosed)
+			}
+		})
+	}
+
+	for _, bad := range []tcpProbeRequest{
+		{Address: ":2222"},
+		{Address: "127.0.0.1:0"},
+		{Address: "127.0.0.1:2222", Timeout: "0s"},
+	} {
+		_ = probe(t, bad, http.StatusBadRequest)
+	}
+}
+
+func TestUDPEcho(t *testing.T) {
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, peer, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = conn.WriteTo(buf[:n], peer)
+		}
+	}()
+
+	req := httptest.NewRequest(http.MethodGet, "/udpecho?addr="+url.QueryEscape(conn.LocalAddr().String()), nil)
+	rec := httptest.NewRecorder()
+	newHandler(http.DefaultClient).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	var got udpEchoResponse
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Echoed || got.Attempts != 1 || got.Error != "" {
+		t.Errorf("handleUDPEcho = %+v, want echoed on attempt 1", got)
+	}
+}
+
+func probe(t *testing.T, input tcpProbeRequest, wantStatus int) tcpProbeResponse {
+	t.Helper()
+	payload, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/tcp", strings.NewReader(string(payload)))
+	newHandler(http.DefaultClient).ServeHTTP(recorder, request)
+
+	if recorder.Code != wantStatus {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, wantStatus, recorder.Body.String())
+	}
+	var got tcpProbeResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	return got
+}
+
+func startTestPeer(t *testing.T, serve func(net.Conn)) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	t.Cleanup(func() { listener.Close() })
+
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer connection.Close()
+				serve(connection)
+			}()
+		}
+	}()
+	return listener.Addr().String()
 }
