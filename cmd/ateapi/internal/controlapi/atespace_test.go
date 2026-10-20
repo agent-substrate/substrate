@@ -73,7 +73,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	svc := &RPCService{
 		impl: newServiceImpl(persistence, nil),
 	}
-	interceptor := authz.UnaryServerInterceptor(authorizer, true, nil)
+	interceptor := authz.UnaryServerInterceptor(authorizer, true, authz.AteletCheck{})
 
 	asUser := func(id string) context.Context {
 		return principal.InjectContext(ctx, principal.PrincipalInfo{

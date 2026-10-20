@@ -261,7 +261,6 @@ func main() {
 		ControllerSPIFFEID:       *controllerSPIFFEID,
 		EgressGatewaySPIFFEID:    *egressGatewaySPIFFEID,
 		IngressRouterSPIFFEID:    *ingressRouterSPIFFEID,
-		AteletSPIFFEID:           ateletSPIFFEID,
 		APIServerSidecarSPIFFEID: *apiServerSidecarSPIFFEID,
 	})
 	if err != nil {
@@ -379,7 +378,10 @@ func main() {
 		apiauthn.UnaryServerInterceptor(authCfg),
 		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 		ateinterceptors.ServerUnaryInterceptor,
-		authz.UnaryServerInterceptor(authorizer, *experimentalEnableAuthz, controlapi.ActorNodes{Store: persistence}),
+		authz.UnaryServerInterceptor(authorizer, *experimentalEnableAuthz, authz.AteletCheck{
+			SPIFFEID:     ateletSPIFFEID,
+			ActorLocator: controlapi.ActorLocator{Store: persistence},
+		}),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
 		preview.UnaryServerInterceptor,
 	}

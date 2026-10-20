@@ -264,8 +264,8 @@ var defaultRPCPermissions = map[string]rpcRule{
 
 	// Actor egress policies.
 	//
-	// atelet reads the policy of an Actor on its node, for the worker that
-	// enforces it.
+	// atelet reads the egress policy of an Actor on its node, for the worker
+	// that enforces it.
 	ateapipb.Control_GetActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorEgressPolicyRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanGetEgressPolicy, r.GetActor(), field.NewPath("actor"))
 	})).ateletOnNode(actorOf(func(r *ateapipb.GetActorEgressPolicyRequest) (resourceRef, *field.Path) {

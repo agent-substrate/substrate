@@ -138,19 +138,21 @@ one **atespace**.
 Substrate's components hold roles that access policies cannot grant, and only
 through their pod certificates. `ate-api-server`'s `--controller-spiffe-id`,
 `--egress-gateway-spiffe-id`, `--ingress-router-spiffe-id` and
-`--api-server-sidecar-spiffe-id` flags bind them, defaulting to the install's;
-`atelet`'s comes from `--atelet-service-account`.
+`--api-server-sidecar-spiffe-id` flags bind them, defaulting to the install's.
 
 | Role | Held by | Allows |
 |---|---|---|
 | `controller` | `ate-controller` | Create, get, list, update, delete and drain workers |
 | `egress_gateway` | `atenet-egress` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs and certificates |
 | `ingress_router` | `atenet-router` | Resume actors; list actors across all atespaces |
-| `atelet` | `atelet` | Get the egress policies of actors on its node |
 | `api_server_sidecar` | the `ate-api-server` pod identity, which its sidecars share, today the objectstore control plugin | Get actors, to derive the snapshot prefixes a per-actor storage credential may cover |
 
 Only `egress_gateway` can mint actor credentials: not even a global owner can,
 since a credential lets its holder act as the actor.
+
+`atelet` holds no role. `ate-api-server` recognizes it by the SPIFFE ID that
+`--atelet-service-account` implies, and lets it get the egress policies of
+actors on its node only.
 
 ## Checks per RPC
 
@@ -343,3 +345,7 @@ For a shared cluster, beyond replacing the default bootstrap owner:
   System roles are unaffected: they need the component's pod certificate.
 - **The atespace is the only boundary.** There are no per-actor or
   per-template grants.
+- **Any worker can read the egress policy of any actor on its node.**
+  `ate-api-server` limits `atelet` to actors on its node, but `atelet` doesn't
+  check which worker on the node is asking
+  ([#1564](https://github.com/agent-substrate/substrate/issues/1564)).

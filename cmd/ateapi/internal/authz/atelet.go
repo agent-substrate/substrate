@@ -17,7 +17,6 @@ package authz
 import (
 	"context"
 	"log/slog"
-	"slices"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
 	"go.ate.dev/substrate/internal/apierror"
@@ -26,13 +25,20 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// ActorNodes reports where Actors are hosted. The interceptor uses it to
+// ActorLocator reports where Actors are hosted. The interceptor uses it to
 // authorize atelet, whose access is limited to the Actors on its own node,
 // which OpenFGA cannot express yet.
-type ActorNodes interface {
+type ActorLocator interface {
 	// ActorHostedOnNode reports whether node hosts the Actor. It returns
 	// false, not an error, if the Actor does not exist.
 	ActorHostedOnNode(ctx context.Context, actor resources.ActorRef, node string) (bool, error)
+}
+
+// AteletCheck lets the interceptor recognize atelet by its SPIFFE ID and
+// authorize it by node. An empty AteletCheck treats no caller as atelet.
+type AteletCheck struct {
+	SPIFFEID     string
+	ActorLocator ActorLocator
 }
 
 // actorExtractor returns the Actor a request names. A missing or malformed
@@ -62,39 +68,36 @@ func (r rpcRule) ateletOnNode(actor actorExtractor) rpcRule {
 	return r
 }
 
-// ateletNode returns the node of the calling atelet, and whether the caller is
-// atelet at all. The caller is atelet when it authenticated over mTLS as the
-// atelet system principal; its node then comes from its certificate.
-func (a *Authorizer) ateletNode(ctx context.Context) (string, bool, error) {
+// node returns the node of the calling atelet, and whether the caller is
+// atelet at all. The caller is atelet when it authenticated over mTLS as
+// SPIFFEID; its node then comes from its certificate.
+func (c AteletCheck) node(ctx context.Context) (string, bool, error) {
 	p, ok := principal.FromContext(ctx)
-	if !ok || p.Kind != principal.KindMTLS || a == nil {
+	if !ok || p.Kind != principal.KindMTLS || c.SPIFFEID == "" || p.ID != c.SPIFFEID {
 		return "", false, nil
 	}
-	if !slices.Contains(a.systemPrincipals[formatUser(p.ID)], RoleAtelet) {
-		return "", false, nil
-	}
-	caller, err := ateletauth.Authenticate(ctx, p.ID)
+	caller, err := ateletauth.Authenticate(ctx, c.SPIFFEID)
 	if err != nil {
 		return "", true, err
 	}
 	return caller.NodeName, true, nil
 }
 
-// authorizeAteletOnNode allows atelet, on node, to call an RPC for the Actor
-// that rule's ateletActor extracts from req only if node hosts it.
+// authorizeOnNode allows atelet, on node, to call an RPC for the Actor that
+// rule's ateletActor extracts from req only if node hosts it.
 //
 // Every refusal is NotFound, whether the Actor is on another node, on none, or
 // does not exist, so a node learns nothing about Actors it does not host, not
 // even that they exist.
-func authorizeAteletOnNode(ctx context.Context, actorNodes ActorNodes, rule rpcRule, req any, node string) error {
+func (c AteletCheck) authorizeOnNode(ctx context.Context, rule rpcRule, req any, node string) error {
 	actorRef, err := rule.ateletActor(req)
 	if err != nil {
 		return err
 	}
-	if actorNodes == nil {
+	if c.ActorLocator == nil {
 		return apierror.Internal("authz: atelet authorization is not configured")
 	}
-	hosted, err := actorNodes.ActorHostedOnNode(ctx, actorRef, node)
+	hosted, err := c.ActorLocator.ActorHostedOnNode(ctx, actorRef, node)
 	if err != nil {
 		return err
 	}

@@ -30,9 +30,9 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// fakeActorNodes hosts each Actor in hosted on the node it maps to, and
+// fakeActorLocator hosts each Actor in hosted on the node it maps to, and
 // records every query.
-type fakeActorNodes struct {
+type fakeActorLocator struct {
 	hosted  map[resources.ActorRef]string
 	err     error
 	queries []actorNodeQuery
@@ -43,7 +43,7 @@ type actorNodeQuery struct {
 	node  string
 }
 
-func (f *fakeActorNodes) ActorHostedOnNode(_ context.Context, actor resources.ActorRef, node string) (bool, error) {
+func (f *fakeActorLocator) ActorHostedOnNode(_ context.Context, actor resources.ActorRef, node string) (bool, error) {
 	f.queries = append(f.queries, actorNodeQuery{actor: actor, node: node})
 	if f.err != nil {
 		return false, f.err
@@ -59,17 +59,7 @@ func (f *fakeActorNodes) ActorHostedOnNode(_ context.Context, actor resources.Ac
 // OpenFGA server, so reaching OpenFGA shows up as Internal.
 func TestUnaryServerInterceptor_AteletOnNode(t *testing.T) {
 	ateletID := installdefaults.SPIFFEID(installdefaults.SystemNamespace, installdefaults.AteletServiceAccount)
-	systemPrincipals, err := parseSystemPrincipals(SystemPrincipals{
-		ControllerSPIFFEID:       "spiffe://cluster.local/ns/ate-system/sa/ate-controller",
-		EgressGatewaySPIFFEID:    "spiffe://cluster.local/ns/ate-system/sa/atenet-egress",
-		IngressRouterSPIFFEID:    "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
-		AteletSPIFFEID:           ateletID,
-		APIServerSidecarSPIFFEID: "spiffe://cluster.local/ns/ate-system/sa/ate-api-server",
-	})
-	if err != nil {
-		t.Fatalf("parseSystemPrincipals: %v", err)
-	}
-	authorizer := &Authorizer{systemPrincipals: systemPrincipals}
+	authorizer := &Authorizer{}
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "runner"}
 	actor := &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name}
@@ -89,16 +79,18 @@ func TestUnaryServerInterceptor_AteletOnNode(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		ctx        context.Context
-		enforce    bool
-		method     string
-		req        any
-		actorNodes *fakeActorNodes
-		// noActorNodes leaves the interceptor without an ActorNodes.
-		noActorNodes bool
-		wantCode     codes.Code
-		wantQueries  []actorNodeQuery
+		name    string
+		ctx     context.Context
+		enforce bool
+		method  string
+		req     any
+		locator *fakeActorLocator
+		// noLocator leaves the AteletCheck without an ActorLocator.
+		noLocator bool
+		// zeroCheck gives the interceptor the zero AteletCheck.
+		zeroCheck   bool
+		wantCode    codes.Code
+		wantQueries []actorNodeQuery
 	}{
 		{
 			name:        "atelet on the hosting node",
@@ -125,7 +117,7 @@ func TestUnaryServerInterceptor_AteletOnNode(t *testing.T) {
 			enforce:     true,
 			method:      getEgressMethod,
 			req:         getEgress,
-			actorNodes:  &fakeActorNodes{err: apierror.Unavailable("store unavailable")},
+			locator:     &fakeActorLocator{err: apierror.Unavailable("store unavailable")},
 			wantCode:    codes.Unavailable,
 			wantQueries: []actorNodeQuery{{actor: actorRef, node: "node-1"}},
 		},
@@ -138,13 +130,22 @@ func TestUnaryServerInterceptor_AteletOnNode(t *testing.T) {
 			wantCode: codes.InvalidArgument,
 		},
 		{
-			name:         "no ActorNodes configured",
-			ctx:          ateletOn("node-1"),
-			enforce:      true,
-			method:       getEgressMethod,
-			req:          getEgress,
-			noActorNodes: true,
-			wantCode:     codes.Internal,
+			name:      "no ActorLocator configured",
+			ctx:       ateletOn("node-1"),
+			enforce:   true,
+			method:    getEgressMethod,
+			req:       getEgress,
+			noLocator: true,
+			wantCode:  codes.Internal,
+		},
+		{
+			name:      "zero AteletCheck sends atelet to OpenFGA",
+			ctx:       ateletOn("node-1"),
+			enforce:   true,
+			method:    getEgressMethod,
+			req:       getEgress,
+			zeroCheck: true,
+			wantCode:  codes.Internal,
 		},
 		{
 			// The node comes from the certificate, so without one the request
@@ -200,15 +201,18 @@ func TestUnaryServerInterceptor_AteletOnNode(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			actorNodes := tc.actorNodes
-			if actorNodes == nil {
-				actorNodes = &fakeActorNodes{hosted: map[resources.ActorRef]string{actorRef: "node-1"}}
+			locator := tc.locator
+			if locator == nil {
+				locator = &fakeActorLocator{hosted: map[resources.ActorRef]string{actorRef: "node-1"}}
 			}
-			var configured ActorNodes = actorNodes
-			if tc.noActorNodes {
-				configured = nil
+			ateletCheck := AteletCheck{SPIFFEID: ateletID, ActorLocator: locator}
+			if tc.noLocator {
+				ateletCheck.ActorLocator = nil
 			}
-			interceptor := UnaryServerInterceptor(authorizer, tc.enforce, configured)
+			if tc.zeroCheck {
+				ateletCheck = AteletCheck{}
+			}
+			interceptor := UnaryServerInterceptor(authorizer, tc.enforce, ateletCheck)
 
 			handlerCalled := false
 			_, err := interceptor(tc.ctx, tc.req, &grpc.UnaryServerInfo{FullMethod: tc.method}, func(context.Context, any) (any, error) {
@@ -221,8 +225,8 @@ func TestUnaryServerInterceptor_AteletOnNode(t *testing.T) {
 			if wantHandler := tc.wantCode == codes.OK; handlerCalled != wantHandler {
 				t.Errorf("handlerCalled = %v, want %v", handlerCalled, wantHandler)
 			}
-			if diff := cmp.Diff(tc.wantQueries, actorNodes.queries, cmp.AllowUnexported(actorNodeQuery{})); diff != "" {
-				t.Errorf("ActorNodes queries mismatch (-want +got):\n%s", diff)
+			if diff := cmp.Diff(tc.wantQueries, locator.queries, cmp.AllowUnexported(actorNodeQuery{})); diff != "" {
+				t.Errorf("ActorLocator queries mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

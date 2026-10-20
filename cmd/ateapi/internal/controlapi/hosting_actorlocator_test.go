@@ -25,7 +25,7 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
-var _ authz.ActorNodes = ActorNodes{}
+var _ authz.ActorLocator = ActorLocator{}
 
 // fakeHostingStore serves the reads HostingNode makes: one Actor, the Workers
 // in workers, and the worker assignments in assignments (actor UID to worker).
@@ -62,7 +62,7 @@ func (f *fakeHostingStore) GetWorkerAssignment(_ context.Context, workerName, ac
 	return &ateapipb.ActorAssignment{ActorUid: actorUID}, nil
 }
 
-func TestActorNodes(t *testing.T) {
+func TestActorLocator(t *testing.T) {
 	const actorUID = "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "runner"}
 	running := func() *ateapipb.Actor {
@@ -116,7 +116,7 @@ func TestActorNodes(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ActorNodes{Store: tc.store()}.ActorHostedOnNode(context.Background(), tc.actor, tc.node)
+			got, err := ActorLocator{Store: tc.store()}.ActorHostedOnNode(context.Background(), tc.actor, tc.node)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("ActorHostedOnNode() error = %v, wantErr %v", err, tc.wantErr)
 			}
