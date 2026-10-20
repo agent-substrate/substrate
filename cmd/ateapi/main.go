@@ -285,7 +285,6 @@ func main() {
 	}
 
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
@@ -302,7 +301,7 @@ func main() {
 	ateFactory.WaitForCacheSync(stopCh)
 	scInformerFactory.WaitForCacheSync(stopCh)
 
-	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List); err != nil {
+	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers); err != nil {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
 	}
 	if err := controlapi.RegisterActorCrashes(otel.Meter("ateapi")); err != nil {

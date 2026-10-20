@@ -23,31 +23,26 @@ import (
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 )
 
 // newWorkerCountReader registers ate.workerpool.workers against a local
 // ManualReader-backed provider so tests stay parallel-safe and never touch the
 // global meter provider.
-func newWorkerCountReader(t *testing.T, workers func() ([]*ateapipb.Worker, error), listPools func(labels.Selector) ([]*atev1alpha1.WorkerPool, error)) *sdkmetric.ManualReader {
+func newWorkerCountReader(t *testing.T, workers func() ([]*ateapipb.Worker, error)) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	if err := RegisterWorkerCount(mp.Meter("ateapi"), workers, listPools); err != nil {
+	if err := RegisterWorkerCount(mp.Meter("ateapi"), workers); err != nil {
 		t.Fatalf("RegisterWorkerCount: %v", err)
 	}
 	return reader
 }
-
-func noPools(labels.Selector) ([]*atev1alpha1.WorkerPool, error) { return nil, nil }
 
 func collectMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) (metricdata.Metrics, bool) {
 	t.Helper()
@@ -90,7 +85,8 @@ func worker(namespace, pool, class string, allocated, capacity int32) *ateapipb.
 
 type series struct{ namespace, pool, state, class string }
 
-// seeded adds the zero series ateapi reports for every state of a known pool.
+// seeded adds the zero series ateapi reports for every state of a pool with
+// registered workers.
 func seeded(m map[series]int64, namespace, pool, class string) map[series]int64 {
 	if m == nil {
 		m = make(map[series]int64)
@@ -136,7 +132,7 @@ func TestWorkerCountTally(t *testing.T) {
 			worker("ns-2", "pool-a", "gvisor", 0, 1),
 		}, nil
 	}
-	reader := newWorkerCountReader(t, workers, noPools)
+	reader := newWorkerCountReader(t, workers)
 
 	m := mustMetric(t, reader, workerpoolWorkersMetric)
 	if m.Unit != "{worker}" {
@@ -151,19 +147,20 @@ func TestWorkerCountTally(t *testing.T) {
 	}
 
 	got := seriesCounts(sum)
-	want := map[series]int64{
-		{"ns-1", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:       2,
-		{"ns-1", "pool-a", ateattr.WorkerStateAtCapacity, "gvisor"}: 1,
-		{"ns-1", "pool-a", ateattr.WorkerStatePartial, "gvisor"}:    1,
-		{"ns-1", "pool-b", ateattr.WorkerStateIdle, "microvm"}:      1,
-		{"ns-2", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:       1,
-	}
+	want := seeded(nil, "ns-1", "pool-a", "gvisor")
+	want = seeded(want, "ns-1", "pool-b", "microvm")
+	want = seeded(want, "ns-2", "pool-a", "gvisor")
+	want[series{"ns-1", "pool-a", ateattr.WorkerStateIdle, "gvisor"}] = 2
+	want[series{"ns-1", "pool-a", ateattr.WorkerStateAtCapacity, "gvisor"}] = 1
+	want[series{"ns-1", "pool-a", ateattr.WorkerStatePartial, "gvisor"}] = 1
+	want[series{"ns-1", "pool-b", ateattr.WorkerStateIdle, "microvm"}] = 1
+	want[series{"ns-2", "pool-a", ateattr.WorkerStateIdle, "gvisor"}] = 1
 	if len(got) != len(want) {
 		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
 	}
 	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("series %v = %d, want %d", k, got[k], v)
+		if gv, ok := got[k]; !ok || gv != v {
+			t.Errorf("series %v = %d (present=%v), want %d", k, gv, ok, v)
 		}
 	}
 }
@@ -174,7 +171,7 @@ func TestWorkerCountSkipsWhenCacheNotReady(t *testing.T) {
 	notReady := func() ([]*ateapipb.Worker, error) {
 		return nil, context.DeadlineExceeded
 	}
-	reader := newWorkerCountReader(t, notReady, noPools)
+	reader := newWorkerCountReader(t, notReady)
 
 	if _, ok := collectMetric(t, reader, workerpoolWorkersMetric); ok {
 		t.Errorf("%s was collected, want no datapoints while cache not ready", workerpoolWorkersMetric)
@@ -408,33 +405,24 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 	}
 }
 
-func workerPool(namespace, name string, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPool {
-	return &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
-		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: class}}},
-	}
-}
-
-// TestWorkerCountSeedsZeroForKnownPools covers the saturation cases: a pool whose
-// only state has no workers, and a pool with no workers at all, both report 0
-// rather than an absent series. Empty pool class defaults to gvisor.
-func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
-	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
-		return []*atev1alpha1.WorkerPool{
-			workerPool("ns-1", "pool-a", ""),
-			workerPool("ns-2", "pool-a", atev1alpha1.SandboxClassMicroVM),
+// TestWorkerCountSeedsZeroForPoolsWithWorkers covers the saturation case: a pool whose
+// only worker is at_capacity still reports 0 for idle, partial, and
+// unschedulable rather than an absent series.
+func TestWorkerCountSeedsZeroForPoolsWithWorkers(t *testing.T) {
+	workers := func() ([]*ateapipb.Worker, error) {
+		return []*ateapipb.Worker{
+			worker("ns-1", "pool-a", "gvisor", 1, 1),
+			worker("ns-2", "pool-a", "microvm", 1, 1),
 		}, nil
 	}
-	workers := func() ([]*ateapipb.Worker, error) {
-		return []*ateapipb.Worker{worker("ns-1", "pool-a", "gvisor", 1, 1)}, nil
-	}
-	reader := newWorkerCountReader(t, workers, pools)
+	reader := newWorkerCountReader(t, workers)
 
 	sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
 	got := seriesCounts(sum)
 	want := seeded(nil, "ns-1", "pool-a", "gvisor")
 	want = seeded(want, "ns-2", "pool-a", "microvm")
 	want[series{"ns-1", "pool-a", ateattr.WorkerStateAtCapacity, "gvisor"}] = 1
+	want[series{"ns-2", "pool-a", ateattr.WorkerStateAtCapacity, "microvm"}] = 1
 	if len(got) != len(want) {
 		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
 	}
@@ -448,42 +436,42 @@ func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
 // TestWorkerCountEmptyClassWorker covers the workers that CreateWorker accepted
 // with no sandbox class. They report as unknown, not as an empty-string class,
 // and not as capacity of the pool they name: the scheduler puts no actor on
-// them, thus the pool's own series stays at 0 and an idle==0 alert on it still
-// fires.
+// them, thus the pool's own idle series stays at 0 and an idle==0 alert on it
+// still fires.
 func TestWorkerCountEmptyClassWorker(t *testing.T) {
-	const (
-		gvisor  = string(atev1alpha1.SandboxClassGvisor)
-		microvm = string(atev1alpha1.SandboxClassMicroVM)
-	)
 	tests := []struct {
 		name    string
-		pools   []*atev1alpha1.WorkerPool
 		workers []*ateapipb.Worker
 		want    map[series]int64
 	}{
 		{
-			name:  "gvisor pool",
-			pools: []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-empty", "")},
+			name: "gvisor pool with saturated worker and empty-class workers",
 			workers: []*ateapipb.Worker{
+				worker("ns-1", "pool-empty", "gvisor", 1, 1),
 				worker("ns-1", "pool-empty", "", 0, 1),
 				worker("ns-1", "pool-empty", "", 0, 1),
 				worker("ns-1", "pool-empty", "", 0, 1),
 			},
-			want: withCount(seeded(nil, "ns-1", "pool-empty", gvisor),
+			want: withCount(
+				withCount(seeded(nil, "ns-1", "pool-empty", "gvisor"),
+					series{"ns-1", "pool-empty", ateattr.WorkerStateAtCapacity, "gvisor"}, 1),
 				series{"ns-1", "pool-empty", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}, 3),
 		},
 		{
-			// No gvisor series shows for a pool that runs no gvisor.
-			name:    "microvm pool",
-			pools:   []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-micro", atev1alpha1.SandboxClassMicroVM)},
-			workers: []*ateapipb.Worker{worker("ns-1", "pool-micro", "", 0, 1)},
-			want: withCount(seeded(nil, "ns-1", "pool-micro", microvm),
+			// No gvisor series shows for a pool that runs only microvm.
+			name: "microvm pool with saturated worker and empty-class worker",
+			workers: []*ateapipb.Worker{
+				worker("ns-1", "pool-micro", "microvm", 1, 1),
+				worker("ns-1", "pool-micro", "", 0, 1),
+			},
+			want: withCount(
+				withCount(seeded(nil, "ns-1", "pool-micro", "microvm"),
+					series{"ns-1", "pool-micro", ateattr.WorkerStateAtCapacity, "microvm"}, 1),
 				series{"ns-1", "pool-micro", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}, 1),
 		},
 		{
-			// A worker that matches no pool has no class to fall back to.
-			name:    "orphan worker",
-			pools:   nil,
+			// A worker with no class does not seed zero series for unknown.
+			name:    "only empty-class worker",
 			workers: []*ateapipb.Worker{worker("ns-1", "pool-orphan", "", 0, 1)},
 			want: map[series]int64{
 				{"ns-1", "pool-orphan", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 1,
@@ -493,9 +481,8 @@ func TestWorkerCountEmptyClassWorker(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) { return tt.pools, nil }
 			workers := func() ([]*ateapipb.Worker, error) { return tt.workers, nil }
-			reader := newWorkerCountReader(t, workers, pools)
+			reader := newWorkerCountReader(t, workers)
 
 			sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
 			got := seriesCounts(sum)
@@ -556,10 +543,7 @@ func TestWorkerCountSumsToPool(t *testing.T) {
 		draining,
 		unreported,
 	}
-	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
-		return []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-a", "")}, nil
-	}
-	reader := newWorkerCountReader(t, func() ([]*ateapipb.Worker, error) { return ws, nil }, pools)
+	reader := newWorkerCountReader(t, func() ([]*ateapipb.Worker, error) { return ws, nil })
 
 	got := seriesCounts(mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64]))
 	want := seeded(nil, "ns-1", "pool-a", "gvisor")
