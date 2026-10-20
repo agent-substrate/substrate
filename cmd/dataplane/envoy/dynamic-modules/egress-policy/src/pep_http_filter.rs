@@ -99,10 +99,15 @@ fn is_websocket_upgrade<EHF: EnvoyHttpFilter>(envoy_filter: &mut EHF) -> bool {
 
 impl EgressPolicyPepFilter {
   fn get_policy<EHF: EnvoyHttpFilter>(&self, envoy_filter: &mut EHF,) -> Option<Rc<EgressPolicy>> {
-    envoy_filter
+    let Some(policy) = envoy_filter
       .get_filter_state_bytes(ATE_POLICY_EGRESS_HASH)
       .and_then(|value| std::str::from_utf8(value.as_slice()).ok()?.parse::<u64>().ok())
-      .and_then(|hash| GlobalEgressPolicyStore::get_local_store().lookup(hash))
+      .and_then(|hash| GlobalEgressPolicyStore::get_local_store().lookup(hash)) else {
+        let _ = envoy_filter.increment_counter(self.cache_miss_counter, 1);
+        return None;
+      };
+      let _ = envoy_filter.increment_counter(self.cache_hit_counter, 1);
+      Some(policy)
   }
 
   fn apply_matched_rule<EHF: EnvoyHttpFilter>(
