@@ -105,9 +105,9 @@ class SummarizeTest(unittest.TestCase):
         got = self.summarize(answers)
         self.assertEqual(got["ateapi_cores_per_replica"], [435.0, 290.0])
 
-    def test_fake_atelet_cores_come_from_the_atelet_container(self):
+    def test_atelet_cores_come_from_the_atelet_container(self):
         got = self.summarize([('container="atelet"', value(0.25))])
-        self.assertEqual(got["fake_atelet_cores"], 0.25)
+        self.assertEqual(got["atelet_cores"], 0.25)
 
     def test_cache_hit_ratio(self):
         got = self.summarize([("blks_hit", value(990)), ("blks_read", value(10))])

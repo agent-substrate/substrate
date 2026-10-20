@@ -157,8 +157,9 @@ def summarize(prom: str, s: dict[str, Any]) -> dict[str, Any]:
         "ateapi_cores_per_replica": sorted(per_replica.values(), reverse=True),
         "ateapi_throttled_ratio": q(thr % (d, d)),
         "postgres_cores": q(cpu % ("postgres", d, secs)),
-        # fake-atelet runs in atelet's DaemonSet, under atelet's container name.
-        "fake_atelet_cores": q(cpu % ("atelet", d, secs)),
+        # On the fake data plane this is fake-atelet, which runs in atelet's
+        # DaemonSet under atelet's container name.
+        "atelet_cores": q(cpu % ("atelet", d, secs)),
         "pg_active_conns": q(pg_conns % (',state="active"', d)),
         "pg_conns": q(pg_conns % ("", d)),
         "pg_commits_per_s": q(f'sum(increase(pg_stat_database_xact_commit{{datname="atepg"}}[{d}]))/{secs}'),
