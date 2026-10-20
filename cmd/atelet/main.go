@@ -942,7 +942,9 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 
 	// A detach in progress finishes first, and no detach starts until the
 	// checkpoint returns, so it cannot delete the snapshot being written.
-	endCheckpoint, err := s.snapshots.BeginCheckpoint(ctx, actorUID, req.GetSnapshot())
+	// Under UPLOAD_MODE_IMMEDIATE, no background upload starts either, so
+	// none competes with this checkpoint's upload.
+	endCheckpoint, err := s.snapshots.BeginCheckpoint(ctx, actorUID, req.GetSnapshot(), req.GetUploadConfig().GetMode())
 	if err != nil {
 		return nil, err
 	}

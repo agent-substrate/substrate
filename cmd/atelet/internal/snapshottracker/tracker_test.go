@@ -788,14 +788,16 @@ func TestTrackerCheckGeneration(t *testing.T) {
 	}
 	checkBegin := func(t *testing.T, tr *Tracker, r SnapshotRef, wantCode codes.Code) {
 		t.Helper()
-		end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, r.Snapshot)
-		if err == nil {
-			end()
+		for _, mode := range []ateletpb.UploadMode{ateletpb.UploadMode_UPLOAD_MODE_DEFERRED, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE} {
+			end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, r.Snapshot, mode)
+			if err == nil {
+				end()
+			}
+			if got := apierror.Code(err); got != wantCode {
+				t.Errorf("BeginCheckpoint(%v, %v) code = %v, want %v", r.Snapshot, mode, got, wantCode)
+			}
 		}
-		if got := apierror.Code(err); got != wantCode {
-			t.Errorf("BeginCheckpoint(%v) code = %v, want %v", r.Snapshot, got, wantCode)
-		}
-		_, end, err = tr.BeginPromote(t.Context(), trackedActorUID, r)
+		_, end, err := tr.BeginPromote(t.Context(), trackedActorUID, r)
 		if err == nil {
 			end()
 		}

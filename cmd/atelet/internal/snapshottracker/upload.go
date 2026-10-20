@@ -183,13 +183,12 @@ func (t *Tracker) recordUploadLocked(a *actorSnapshots, target SnapshotRef, uplo
 
 // removeSupersededLocalCopyLocked deletes the local copy of target, an upload's
 // snapshot that a newer snapshot superseded, once no upload needs it: the copy
-// was kept only for the upload. It leaves the copy while a Run, Restore,
-// Checkpoint, or PromoteSnapshot of the actor is in progress, since a Restore
-// or PromoteSnapshot may be reading it, and deletes it under the actor's lock
+// was kept only for the upload. It leaves the copy while a Run or Restore in
+// progress may use it (see localInUse), and deletes it under the actor's lock
 // so that none begins reading it meanwhile. Best-effort: the actor's next
 // checkpoint, detach, or terminate prunes a copy left behind.
 func (t *Tracker) removeSupersededLocalCopyLocked(actorUID string, target SnapshotRef) {
-	if t.heldLocked(actorUID) {
+	if t.localInUseLocked(actorUID) {
 		return
 	}
 	if err := removeLocalCheckpoint(t.ctx, actorUID, target.uuid()); err != nil {

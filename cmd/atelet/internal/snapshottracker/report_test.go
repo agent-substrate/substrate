@@ -295,9 +295,12 @@ func TestTrackerDoesNotReportWhenNothingChanged(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		snap SnapshotRef
+		// cancels is set when snap is newer than the upload's snapshot, so
+		// CommitDurable cancels the upload and waits for it to stop.
+		cancels bool
 	}{
-		{"newer durable snapshot", committedRef("s2", 2, time.Time{})},
-		{"same generation already durable", committedRef("s1", 1, time.Time{})},
+		{"newer durable snapshot", committedRef("s2", 2, time.Time{}), true},
+		{"same generation already durable", committedRef("s1", 1, time.Time{}), false},
 	} {
 		t.Run("upload overtaken by "+tc.name, func(t *testing.T) {
 			store := newFakeSnapshotStore()
@@ -311,7 +314,9 @@ func TestTrackerDoesNotReportWhenNothingChanged(t *testing.T) {
 			durable.UploadTime = durable.CommitTime.Add(time.Second)
 			tr.CommitDurable(trackedActorUID, durable)
 
-			store.release <- nil
+			if !tc.cancels {
+				store.release <- nil
+			}
 			waitClosed(t, done, "the upload of s1")
 			if reportDue(tr) || tr.reporting.queue.Len() != 0 {
 				t.Errorf("report due = %v, queued = %d after an overtaken upload, want neither", reportDue(tr), tr.reporting.queue.Len())
@@ -1135,7 +1140,17 @@ func TestTrackerDefersReportDuringHold(t *testing.T) {
 		{
 			name: "BeginCheckpoint",
 			begin: func(t *testing.T, tr *Tracker) func() {
-				end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, committedRef("s2", 2, tr.clock.Now()).Snapshot)
+				end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, committedRef("s2", 2, tr.clock.Now()).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+				if err != nil {
+					t.Fatalf("BeginCheckpoint: %v", err)
+				}
+				return end
+			},
+		},
+		{
+			name: "BeginCheckpoint immediate",
+			begin: func(t *testing.T, tr *Tracker) func() {
+				end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, committedRef("s2", 2, tr.clock.Now()).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
 				if err != nil {
 					t.Fatalf("BeginCheckpoint: %v", err)
 				}
@@ -1232,7 +1247,7 @@ func TestTrackerDefersReportDuringHold(t *testing.T) {
 		uploadNow(t, tr, store, nil)
 
 		s2 := committedRef("s2", 2, tr.clock.Now())
-		end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s2.Snapshot)
+		end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s2.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 		if err != nil {
 			t.Fatalf("BeginCheckpoint: %v", err)
 		}

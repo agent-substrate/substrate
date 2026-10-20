@@ -321,9 +321,8 @@ func TestTrackerTerminateHoldsOffBackgroundWork(t *testing.T) {
 	}
 }
 
-// A Checkpoint's commits and LocalSnapshotsToKeep, PromoteSnapshot's commit,
-// and State neither wait for the actor's background operation in progress nor
-// cancel it.
+// CommitLocal, LocalSnapshotsToKeep, and State neither wait for the actor's
+// background upload in progress nor cancel it.
 func TestCommitsDoNotWaitForInFlightOp(t *testing.T) {
 	useActorDir(t)
 	tr := newTracker(t)
@@ -338,8 +337,6 @@ func TestCommitsDoNotWaitForInFlightOp(t *testing.T) {
 	}{
 		{"CommitLocal", func() { tr.CommitLocal(trackedActorUID, testRef("s2", 2, t0)) }},
 		{"LocalSnapshotsToKeep", func() { tr.LocalSnapshotsToKeep(trackedActorUID) }},
-		{"CommitDurable", func() { tr.CommitDurable(trackedActorUID, testRef("s3", 3, t0)) }},
-		{"CommitPromoted", func() { tr.CommitPromoted(trackedActorUID, testRef("s4", 4, t0)) }},
 		{"State", func() { tr.State(trackedActorUID) }},
 	} {
 		returnsPromptly(t, c.name+" during a background operation", c.call)

@@ -402,7 +402,7 @@ func TestTrackerDetachTimer(t *testing.T) {
 
 	tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
 	due := detachDueOf(tr, trackedActorUID)
-	endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s3", 3, time.Time{}).Snapshot)
+	endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s3", 3, time.Time{}).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 	if err != nil {
 		t.Fatalf("beginCheckpoint: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestTrackerWaitsForDetach(t *testing.T) {
 		{
 			name: "BeginCheckpoint",
 			begin: func(tr *Tracker, ctx context.Context, uid string) (func(), error) {
-				return tr.BeginCheckpoint(ctx, uid, testRef("s2", 2, time.Time{}).Snapshot)
+				return tr.BeginCheckpoint(ctx, uid, testRef("s2", 2, time.Time{}).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 			},
 		},
 	} {
@@ -539,7 +539,7 @@ func TestTrackerDetachWaitChecksGeneration(t *testing.T) {
 
 	stale := testRef("s0", 1, time.Time{})
 	returnsPromptly(t, "BeginCheckpoint of stale generation during detach", func() {
-		if _, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, stale.Snapshot); apierror.Code(err) != codes.Aborted {
+		if _, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, stale.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); apierror.Code(err) != codes.Aborted {
 			t.Errorf("BeginCheckpoint = %v, want Aborted", err)
 		}
 	})
@@ -652,7 +652,7 @@ func TestTrackerHoldsFirstCheckpoint(t *testing.T) {
 	store := newFakeSnapshotStore()
 	tr := newIdleTestTracker(t, store)
 	s1 := testRef("s1", 1, tr.clock.Now())
-	end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s1.Snapshot)
+	end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s1.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 	if err != nil {
 		t.Fatalf("beginCheckpoint: %v", err)
 	}
