@@ -280,7 +280,7 @@ func (s *Atelet) fetchSnapshotFile(ctx context.Context, actor actorRef, snapshot
 	// configuration, so it is said once, with the detail per file at debug.
 	s.snapshotCacheCrossMount.Do(func() {
 		slog.WarnContext(ctx, "Snapshot cache is on a different filesystem than the restore dirs; serving every hit as a copy instead of a hard link",
-			slog.String("snapshot_cache_dir", *snapshotCacheDir), slog.String("actors_dir", nodepath.ActorsDir))
+			slog.String("snapshot_cache_dir", *snapshotCacheDir), slog.String("snapshots_dir", nodepath.SnapshotsDir))
 	})
 	slog.DebugContext(ctx, "Snapshot cache hit served as a copy across mounts",
 		slog.String("snapshot_uri", redactURL(u)), slog.String("file", fileName))

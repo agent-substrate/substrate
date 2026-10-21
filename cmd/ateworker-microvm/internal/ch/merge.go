@@ -112,8 +112,8 @@ func MergeSparseOverlay(ctx context.Context, baseFile, deltaFile, outFile string
 // baseFile in restore-state/ ensures a retry can still find it if a sibling
 // checkpoint step (e.g. rootfs or volume tar) fails and wipes checkpoint-state/.
 //
-// baseFile and deltaFile are siblings under the actor dir (restore-state/ and
-// checkpoint-state/), so the link is same-filesystem (metadata-only). If they
+// baseFile and deltaFile are siblings under the actor snapshot dir (restore-state/
+// and checkpoint-state/), so the link is same-filesystem (metadata-only). If they
 // straddle a mount boundary or baseFile carries a second link, it falls back to
 // the copying MergeSparseOverlay.
 func MergeDeltaIntoBase(ctx context.Context, baseFile, deltaFile string) error {

@@ -215,8 +215,11 @@ spec:
         - configMapRef:
             name: ate-otel-config
         volumeMounts:
+        # HostToContainer so we also see mounts made under /var/lib/ate after
+        # the pod starts, e.g. a snapshots disk or CSI volumes.
         - name: ate-base
           mountPath: /var/lib/ate
+          mountPropagation: HostToContainer
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
         - name: servicedns-ca
@@ -316,8 +319,11 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
         volumeMounts:
+        # HostToContainer so we also see mounts made under /var/lib/ate after
+        # the pod starts, e.g. a snapshots disk or CSI volumes.
         - name: ate-base
           mountPath: /var/lib/ate
+          mountPropagation: HostToContainer
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
         - name: podidentity

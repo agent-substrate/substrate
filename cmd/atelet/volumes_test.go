@@ -25,7 +25,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
-	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
@@ -73,17 +72,6 @@ func (f *fakeWorkerPlugin) UnmountVolume(ctx context.Context, volumeID string, t
 }
 
 var _ volume.VolumePluginWorkerPlane = (*fakeWorkerPlugin)(nil)
-
-// withTempActorsDir redirects nodepath.ActorsDir at a temp dir for the
-// duration of the test. Every path derived from ActorsDir moves with it,
-// including the ones resetActorDirs and the bundle preparation compute
-// independently of the volume mount code.
-func withTempActorsDir(t *testing.T) {
-	t.Helper()
-	orig := nodepath.ActorsDir
-	nodepath.ActorsDir = filepath.Join(t.TempDir(), "actors")
-	t.Cleanup(func() { nodepath.ActorsDir = orig })
-}
 
 func TestUnmountExternalVolumes(t *testing.T) {
 	ctx := context.Background()
@@ -191,7 +179,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	}
 
 	t.Run("success mounts external volumes and creates mount directory", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
 		s := &Atelet{
@@ -235,7 +223,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	})
 
 	t.Run("target directory already exists is handled cleanly", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		expectedPath := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
 		if err := os.MkdirAll(expectedPath, 0o750); err != nil {
@@ -259,7 +247,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	})
 
 	t.Run("plugin lookup failure returns error", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		unknownVol := &ateletpb.Volume{
 			Name: "vol-unknown",
@@ -283,7 +271,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	})
 
 	t.Run("plugin mount failure returns error", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{
 			mountErr: errors.New("mount operation failed: device or resource busy"),
@@ -304,7 +292,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	})
 
 	t.Run("multi-volume partial failure aborts on first failure", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{
 			mountErr: errors.New("cannot mount volume"),
@@ -325,7 +313,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	})
 
 	t.Run("multi-volume partial failure does not roll back already mounted volume", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		expectedPath1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
 		expectedPath2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
@@ -394,7 +382,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 	}
 
 	t.Run("unmountExternalVolumes preserves host mount directories", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
 		s := &Atelet{
@@ -428,7 +416,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 	})
 
 	t.Run("resetActorDirs removes empty unmounted volume host directories", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
 		s := &Atelet{
@@ -476,7 +464,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 	})
 
 	t.Run("resetActorDirs preserves non-empty volume directories and returns error", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
 		s := &Atelet{
@@ -511,7 +499,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 	})
 
 	t.Run("resetActorDirs succeeds cleanly when volumes directory does not exist", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		if err := resetActorDirs(actorUID); err != nil {
 			t.Fatalf("resetActorDirs failed when volumes dir does not exist: %v", err)

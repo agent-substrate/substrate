@@ -58,10 +58,11 @@ import (
 func useTempNodeDirs(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
-	origActors := nodepath.ActorsDir
+	origActors, origSnapshots := nodepath.ActorsDir, nodepath.SnapshotsDir
 	nodepath.ActorsDir = filepath.Join(root, "actors")
+	nodepath.SnapshotsDir = filepath.Join(root, "snapshots")
 	t.Cleanup(func() {
-		nodepath.ActorsDir = origActors
+		nodepath.ActorsDir, nodepath.SnapshotsDir = origActors, origSnapshots
 	})
 }
 
@@ -215,12 +216,14 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 	} {
-		t.Run(fidelity.String(), func(t *testing.T) { runLocalSnapshotGC(t, fidelity) })
+		t.Run(fidelity.String(), func(t *testing.T) { runLocalSnapshotGC(t, fidelity, useTempNodeDirs) })
 	}
 }
 
-func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
-	useTempNodeDirs(t)
+// runLocalSnapshotGC runs the TestLocalSnapshotGC flow on the node dirs useDirs
+// sets up.
+func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDirs func(*testing.T)) {
+	useDirs(t)
 	ctx := t.Context()
 
 	const (
@@ -391,16 +394,8 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 
 	// Terminate is the only chance to reclaim the actor's directory: nothing
 	// else on the node deletes it.
-	actorDir := ateletpath.ActorPath(actorUID)
-	if entries, err := os.ReadDir(actorDir); err == nil {
-		left := make([]string, 0, len(entries))
-		for _, e := range entries {
-			left = append(left, e.Name())
-		}
-		t.Errorf("actor dir %s survived terminate with %d entries: %v", actorDir, len(left), left)
-	} else if !os.IsNotExist(err) {
-		t.Errorf("reading actor dir %s: %v", actorDir, err)
-	}
+	assertDirGone(t, "actor dir", ateletpath.ActorPath(actorUID))
+	assertDirGone(t, "actor snapshot dir", ateletpath.ActorSnapshotPath(actorUID))
 }
 
 // TestRestoreUsesRequestSandboxRuntime checks that Restore runs the actor with
@@ -519,13 +514,19 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 		failure     string
 		wantErr     string
 		wantPresent bool
+		// publishedVolume leaves an external volume mount point with
+		// content in it, as a failed earlier attempt that published the
+		// volume would.
+		publishedVolume bool
 	}{
 		{name: "Run asset failure preserves projection", failure: "asset", wantErr: "asset unavailable", wantPresent: true},
-		{name: "Run partial reset removes registration", failure: "reset", wantErr: "while removing volume dir"},
+		{name: "Run partial reset removes registration", failure: "reset", wantErr: "while creating volumes dir"},
 		{name: "Run record failure removes registration", failure: "record", wantErr: "while recording sandbox assets"},
-		{name: "Restore partial reset removes registration", restore: true, failure: "reset", wantErr: "while removing volume dir"},
+		{name: "Restore partial reset removes registration", restore: true, failure: "reset", wantErr: "while creating volumes dir"},
 		{name: "Restore manifest failure removes registration", restore: true, failure: "manifest", wantErr: "no uploaded copy"},
 		{name: "Restore asset failure removes registration", restore: true, failure: "asset", wantErr: "asset unavailable"},
+		{name: "Run retry keeps a published volume", failure: "record", publishedVolume: true, wantErr: "while recording sandbox assets"},
+		{name: "Restore retry keeps a published volume", restore: true, failure: "manifest", publishedVolume: true, wantErr: "no uploaded copy"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useTempNodeDirs(t)
@@ -556,18 +557,26 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 				}, map[string]string{"checkpoint.img": "guest-memory"})
 			}
 			if tc.failure == "reset" {
-				// Reset refuses to remove a populated external-volume directory,
-				// but has already removed the system-info roots by then.
-				dir := ateletpath.ExternalVolumeHostPath(actorUID, "mounted")
-				if err := os.MkdirAll(dir, 0o750); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(dir, "keep"), []byte("volume data"), 0o600); err != nil {
+				// A file where the volumes dir goes fails the reset after it
+				// has removed the system-info roots.
+				if err := os.WriteFile(ateletpath.ExternalVolumeMountsDir(actorUID), nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if tc.failure == "record" {
 				if err := os.MkdirAll(ateletpath.ActorSandboxAssetsFile(actorUID), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// A non-empty dir fails os.Remove like a live mount (EBUSY)
+			// would, so the activation only gets past the reset to fail
+			// later with wantErr if the reset leaves volumes/ alone.
+			volumeFile := filepath.Join(ateletpath.ExternalVolumeHostPath(actorUID, "data"), "data.txt")
+			if tc.publishedVolume {
+				if err := os.MkdirAll(filepath.Dir(volumeFile), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(volumeFile, []byte("volume data"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -609,6 +618,11 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			}
 			if _, err := os.Lstat(ateletpath.SandboxAssetsStagingDir(actorUID)); !os.IsNotExist(err) {
 				t.Errorf("failed activation left the staging dir behind (lstat err = %v)", err)
+			}
+			if tc.publishedVolume {
+				if got, err := os.ReadFile(volumeFile); err != nil || string(got) != "volume data" {
+					t.Errorf("activation touched the published volume: %q, %v", got, err)
+				}
 			}
 
 			// Inspect disk and registry before changing the bundle hash: a later
@@ -1100,6 +1114,9 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 	}
 	if _, err := os.Stat(ateletpath.LocalCheckpointsDir(actorUID)); !os.IsNotExist(err) {
 		t.Errorf("local checkpoint dir survived terminate: %v", err)
+	}
+	if _, err := os.Stat(ateletpath.ActorSnapshotPath(actorUID)); !os.IsNotExist(err) {
+		t.Errorf("actor snapshot dir survived terminate: %v", err)
 	}
 	if _, err := os.Stat(ateletpath.ActorPath(actorUID)); !os.IsNotExist(err) {
 		t.Errorf("actor dir survived terminate: %v", err)
