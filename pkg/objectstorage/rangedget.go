@@ -45,7 +45,10 @@ type fetchRangeFunc func(ctx context.Context, i int, off, n int64, buf []byte) e
 // rangedReader reassembles parallel ranged reads into one ordered stream. head, if
 // set, is the already-open body of the first range, so the size probe is not wasted.
 type rangedReader struct {
-	size    int64
+	size int64
+	// read is how many bytes Read has taken from ordered.
+	read    int64
+	ctx     context.Context
 	cancel  context.CancelFunc
 	head    io.ReadCloser
 	ordered chan chan rangeResult
@@ -67,6 +70,7 @@ func newRangedReader(ctx context.Context, size int64, head io.ReadCloser, fetch 
 	ctx, cancel := context.WithCancel(ctx)
 	r := &rangedReader{
 		size:    size,
+		ctx:     ctx,
 		cancel:  cancel,
 		head:    head,
 		ordered: make(chan chan rangeResult, downloadConcurrency),
@@ -123,6 +127,10 @@ func (r *rangedReader) Read(p []byte) (int, error) {
 		out, ok := <-r.ordered
 		if !ok {
 			r.err = io.EOF
+			if r.read < r.size {
+				// schedule stops early only when ctx is done.
+				r.err = fmt.Errorf("ranged read stopped after %d of %d bytes: %w", r.read, r.size, context.Cause(r.ctx))
+			}
 			return 0, r.err
 		}
 		res := <-out
@@ -130,6 +138,7 @@ func (r *rangedReader) Read(p []byte) (int, error) {
 			r.err = res.err
 			return 0, r.err
 		}
+		r.read += int64(len(res.buf))
 		r.cur = res.buf
 		r.curFull = res.buf[:cap(res.buf)]
 	}
