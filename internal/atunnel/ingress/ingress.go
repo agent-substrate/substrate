@@ -146,7 +146,6 @@ func NewServer(cfg Config) (*Server, error) {
 			}
 			return fmt.Errorf("ingress: client is not %q", cfg.AllowedClientID)
 		},
-		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"h2", "http/1.1"},
 	})
 	if err != nil {

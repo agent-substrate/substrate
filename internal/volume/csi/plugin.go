@@ -467,7 +467,6 @@ func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Confi
 		GetClientCertificate: credbundle.ClientLoader(paths.clientCert),
 		TrustBundlePath:      paths.caCert,
 		ServerName:           tlsCfg.ServerName,
-		MinVersion:           tls.VersionTLS13,
 		// NextProtos configures ALPN h2 for gRPC over TLS.
 		NextProtos: []string{"h2"},
 	})

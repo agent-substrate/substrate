@@ -45,12 +45,12 @@ type ServerConfig struct {
 	// matching where ClientCAs-based chain verification itself runs.
 	VerifyPeer func(tls.ConnectionState) error
 
-	MinVersion uint16
 	NextProtos []string
 }
 
 // PrepareServerTLSConfig builds a *tls.Config for serving TLS whose client
-// trust root can rotate during the process's lifetime.
+// trust root can rotate during the process's lifetime. It always requires
+// TLS 1.3.
 //
 // A server can rebuild its config per connection via GetConfigForClient, so
 // when ClientCAPath is set this reloads the pool (via PoolLoader) there and
@@ -64,7 +64,7 @@ func PrepareServerTLSConfig(cfg ServerConfig) (*tls.Config, error) {
 
 	if cfg.ClientCAPath == "" {
 		return &tls.Config{
-			MinVersion:     cfg.MinVersion,
+			MinVersion:     tls.VersionTLS13,
 			NextProtos:     cfg.NextProtos,
 			GetCertificate: cfg.GetCertificate,
 			ClientAuth:     cfg.ClientAuth,
@@ -77,7 +77,7 @@ func PrepareServerTLSConfig(cfg ServerConfig) (*tls.Config, error) {
 	}
 
 	return &tls.Config{
-		MinVersion: cfg.MinVersion,
+		MinVersion: tls.VersionTLS13,
 		// GetConfigForClient's returned Config replaces this one entirely for
 		// the handshake, so every field the handshake needs — including
 		// NextProtos — must be repeated inside it rather than left here.
@@ -98,7 +98,7 @@ func PrepareServerTLSConfig(cfg ServerConfig) (*tls.Config, error) {
 				}
 			}
 			return &tls.Config{
-				MinVersion:       cfg.MinVersion,
+				MinVersion:       tls.VersionTLS13,
 				NextProtos:       cfg.NextProtos,
 				GetCertificate:   cfg.GetCertificate,
 				ClientAuth:       cfg.ClientAuth,

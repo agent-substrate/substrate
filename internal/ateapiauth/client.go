@@ -15,7 +15,6 @@
 package ateapiauth
 
 import (
-	"crypto/tls"
 	"fmt"
 
 	"go.ate.dev/substrate/internal/credbundle"
@@ -64,7 +63,6 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 		GetClientCertificate: credbundle.ClientLoader(cfg.ClientCredBundle),
 		TrustBundlePath:      cfg.CAFile,
 		ServerName:           cfg.ServerName,
-		MinVersion:           tls.VersionTLS13,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ateapiauth: %w", err)

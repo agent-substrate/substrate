@@ -51,7 +51,6 @@ func TLSConfig(credentialBundlePath, trustBundlePath, ateletSPIFFEID string) (*t
 	return credbundle.PrepareClientTLSConfig(credbundle.ClientConfig{
 		GetClientCertificate: credbundle.ClientLoader(credentialBundlePath),
 		TrustBundlePath:      trustBundlePath,
-		MinVersion:           tls.VersionTLS13,
 		VerifyPeer: func(state tls.ConnectionState) error {
 			leaf := state.PeerCertificates[0]
 			if len(leaf.URIs) != 1 || leaf.URIs[0].String() != ateletSPIFFEID {
