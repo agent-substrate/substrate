@@ -1130,7 +1130,7 @@ func TestTrackerDefersReportDuringHold(t *testing.T) {
 		{
 			name: "BeginStart",
 			begin: func(t *testing.T, tr *Tracker) func() {
-				end, err := tr.BeginStart(t.Context(), trackedActorUID)
+				end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 				if err != nil {
 					t.Fatalf("BeginStart: %v", err)
 				}
@@ -1274,7 +1274,7 @@ func TestTrackerDefersReportDuringHold(t *testing.T) {
 		failedAt := tr.clock.Now()
 		processNextReport(t, tr)
 
-		end, err := tr.BeginStart(t.Context(), trackedActorUID)
+		end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 		if err != nil {
 			t.Fatalf("BeginStart: %v", err)
 		}

@@ -325,7 +325,7 @@ For the `ate.filecache.*` instruments, one series per cache under `ate.filecache
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
 * `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (the copy on the node: an asynchronous suspend writes it, and a resume reads it while the node still has it, whether or not its upload to durable storage has finished. A synchronous suspend is `latest`, but it also keeps a copy on the node, so the resume after it can be `local`), `latest` (a durable snapshot, including a template's golden snapshot), or `boot` (from scratch, so it never appears on the atelet histograms).
 * `ate.snapshot.fidelity`: what state it holds. `volumes`, `rootfs`, or `memory`.
-* `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `worker_restore` on restore; `sandbox_assets`, `worker_checkpoint`, `persist`, `cleanup` on checkpoint; `total` on both.
+* `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `worker_restore` on restore; `sandbox_assets`, `worker_checkpoint`, `persist`, `cleanup` on checkpoint (`cleanup` is the unmount and directory reset after the commit; the superseded local snapshot is deleted by a background prune afterwards, logged as `Pruned the actor's superseded local snapshots`. A checkpoint that finds the previous pause's prune still due runs it before it writes, inside `total` with no phase of its own); `total` on both.
 
 Golden snapshots use `latest` on both control-plane and atelet histograms, so
 the resulting series also includes other durable restores and does not isolate
