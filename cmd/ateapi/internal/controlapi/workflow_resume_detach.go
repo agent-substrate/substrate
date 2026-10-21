@@ -23,7 +23,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -43,7 +42,8 @@ func shouldDetachFromNode(actor *ateapipb.Actor, assignErr error) bool {
 
 // detachFromFullNode releases the node binding so scheduling can retry.
 // Unreachable nodes can be forgotten when the latest local snapshot is durable.
-// A deleted node crashes the actor when that snapshot is not durable.
+// A deleted node is released even when that snapshot is not durable, so resume
+// tries its upload.
 func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, assignErr error) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "DetachFromFullNode")
 	defer func() { err = done(err) }()
@@ -157,9 +157,11 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 	return stored, nil
 }
 
-// recordGoneNode crashes an actor whose latest snapshot went with its deleted
-// node. It reads the actor again first, so an upload recorded during the node
-// lookup detaches it instead, and it crashes only the version it checked.
+// recordGoneNode releases an actor from its deleted node when its latest
+// snapshot is not recorded durable. atelet may have uploaded it without
+// reporting, so the snapshot keeps its locality and resume restores it from
+// the upload on another node. It reads the actor again first, so an upload
+// recorded during the node lookup detaches it instead.
 func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, node string) (*ateapipb.Actor, error) {
 	actor, err := w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), node)
 	if err != nil {
@@ -168,13 +170,28 @@ func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.A
 	if !latestLocalNotDurable(actor) {
 		return w.recordDetach(ctx, actorRef, actor, node, nil)
 	}
-	if err := crashActorVersion(ctx, w.store, actorRef, actor, ateattr.OperationResume, crashMessageLocalSnapshotNodeGone); err != nil {
+	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.AssignedNode = ""
+		return nil
+	})
+	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef)
 		}
-		return nil, err
+		return nil, fmt.Errorf("while releasing Actor %s from deleted node %q: %w", actorRef, node, err)
 	}
-	return nil, apierror.FailedPrecondition("actor %s is CRASHED: %s", actorRef, crashMessageLocalSnapshotNodeGone)
+	slog.InfoContext(ctx, "Released actor from its deleted node to restore its snapshot's upload on another node",
+		slog.Any("actor", actorRef),
+		slog.String("node", node),
+		slog.Int("generation", int(findLatestLocalSnapshot(stored.GetStatus()).GetGeneration())))
+	return stored, nil
+}
+
+// localElsewhere reports whether snap is recorded local on a node other than
+// node. Resume restores such a snapshot from its upload after recordGoneNode
+// released its deleted node.
+func localElsewhere(snap *ateapipb.Snapshot, node string) bool {
+	return snap.GetLocality() != "" && snap.GetLocality() != node
 }
 
 // latestLocalNotDurable reports whether the actor's latest local snapshot has

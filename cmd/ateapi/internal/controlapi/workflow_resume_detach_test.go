@@ -136,7 +136,8 @@ func TestDetachFromFullNode(t *testing.T) {
 		detachState  func(*ateapipb.Snapshot) *ateletpb.ActorSnapshotState
 		detachErr    error
 		wantDetached bool
-		wantCrashed  bool
+		// wantReleased expects the node released with the snapshot unchanged.
+		wantReleased bool
 		wantCode     codes.Code
 		// wantErrText is text the error must contain.
 		wantErrText string
@@ -268,12 +269,11 @@ func TestDetachFromFullNode(t *testing.T) {
 		nodeGone:     true,
 		wantDetached: true,
 	}, {
-		name:        "node gone, upload PENDING: crashes on its node",
-		node:        "node-3",
-		otherNode:   true,
-		nodeGone:    true,
-		wantCrashed: true,
-		wantCode:    codes.FailedPrecondition,
+		name:         "node gone, upload PENDING: releases the node, keeps the snapshot",
+		node:         "node-3",
+		otherNode:    true,
+		nodeGone:     true,
+		wantReleased: true,
 	}, {
 		name:                 "node gone, upload completes during the node lookup: detaches",
 		node:                 "node-3",
@@ -454,17 +454,16 @@ func TestDetachFromFullNode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
-			if tt.wantCrashed {
-				// Only the state and crash change. The node and the PENDING
-				// snapshot stay for revert to clean up.
-				crashed := proto.CloneOf(want.GetStatus())
-				crashed.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
-				crashed.Crash = after.GetStatus().GetCrash()
-				if !proto.Equal(after.GetStatus(), crashed) {
-					t.Errorf("status = %v, want %v", after.GetStatus(), crashed)
+			if tt.wantReleased {
+				// Only assigned_node changes. The PENDING snapshot keeps its
+				// locality, so the resume restores it from its upload.
+				released := proto.CloneOf(want.GetStatus())
+				released.AssignedNode = ""
+				if !proto.Equal(after.GetStatus(), released) {
+					t.Errorf("status = %v, want %v", after.GetStatus(), released)
 				}
-				if got := after.GetStatus().GetCrash().GetMessage(); !strings.Contains(got, crashMessageLocalSnapshotNodeGone) {
-					t.Errorf("crash message = %q, want %q", got, crashMessageLocalSnapshotNodeGone)
+				if !proto.Equal(stored, after) {
+					t.Errorf("returned actor = %v, want the stored %v", stored, after)
 				}
 				return
 			}
@@ -569,61 +568,127 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 	}
 }
 
-// TestResumeActor_NodeGoneWithPendingUpload resumes a paused actor whose node
-// was deleted before atelet uploaded its latest snapshot. The resume crashes
-// the actor, a revert returns it to its older durable snapshot, and the next
-// resume restores that snapshot on another node.
+// TestResumeActor_NodeGoneWithPendingUpload resumes a suspended actor whose
+// node was deleted before atelet reported the upload of its latest snapshot.
+// Resume restores that snapshot from its upload on another node. When atelet
+// finds no upload, the actor crashes, a revert returns it to its older durable
+// snapshot, and the next resume restores that one.
 func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
-	ctx := context.Background()
-	st := newTestPersistence(t)
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	for _, tt := range []struct {
+		name string
+		// assignedNode is node-3, the deleted node, or empty when an earlier
+		// resume already released it.
+		assignedNode string
+		// uploaded is false when atelet finds no upload to restore.
+		uploaded bool
+		// otherRuntime gives the only free worker a runtime other than the
+		// snapshot's, so the restore falls back to ROOTFS.
+		otherRuntime bool
+	}{
+		{name: "uploaded: restores on another node", assignedNode: "node-3", uploaded: true},
+		{name: "released by an earlier resume: restores on another node", uploaded: true},
+		{name: "uploaded, only another runtime has room: restores at ROOTFS", assignedNode: "node-3", uploaded: true, otherRuntime: true},
+		{name: "never uploaded: crashes, then revert and resume restore the older snapshot", assignedNode: "node-3"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := newTestPersistence(t)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
-	storetest.MustCreateAtespace(t, ctx, st, "ns")
-	if _, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
-	}); err != nil {
-		t.Fatalf("create template: %v", err)
-	}
-	worker := seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", testSandboxRuntime())
-	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	durable := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "durable-1",
-		someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
-	paused := newPausedSnapshot(t, 2, memory, "", "pause-snap-2", "node-3")
-	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
-		a.Status.AssignedNode = "node-3"
-		a.Status.LastAssignedGeneration = 2
-		a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(durable), proto.CloneOf(paused)}
-	})
-	w, atelet := newDetachTestWorkflow(t, ctx, st)
-	addAteletOnNode(t, w, "node-2")
-	WithNodeGetter(nodeGetter(nil, "node-1", "node-2"))(w.dialer)
+			storetest.MustCreateAtespace(t, ctx, st, "ns")
+			if _, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+				Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+				SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+			}); err != nil {
+				t.Fatalf("create template: %v", err)
+			}
+			workerRuntime := testSandboxRuntime()
+			wantFidelity := ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+			if tt.otherRuntime {
+				workerRuntime = testRuntime("arm64", "")
+				wantFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+			}
+			worker := seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", workerRuntime)
+			memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+			durable := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "durable-1",
+				someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			pending := newPausedSnapshot(t, 2, memory, "", "pending-2", "node-3")
+			if tt.otherRuntime {
+				pending.SandboxRuntime = testRuntime("amd64", "")
+			}
+			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+				a.Status.AssignedNode = tt.assignedNode
+				a.Status.LastAssignedGeneration = 2
+				a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(durable), proto.CloneOf(pending)}
+			})
+			w, atelet := newDetachTestWorkflow(t, ctx, st)
+			addAteletOnNode(t, w, "node-2")
+			WithNodeGetter(nodeGetter(nil, "node-1", "node-2"))(w.dialer)
+			if !tt.uploaded {
+				atelet.restoreErr = apierror.NotFound("snapshot has no usable local copy and no uploaded copy")
+			}
 
-	if _, _, err := w.ResumeActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("first ResumeActor = %v, want FailedPrecondition", err)
-	}
-	if got, err := st.GetActor(ctx, actorRef); err != nil || got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Fatalf("after first resume: state %v, err %v, want CRASHED", got.GetStatus().GetState(), err)
-	}
+			got, resumed, err := w.ResumeActor(ctx, actorRef)
+			restore, _ := atelet.requests()
+			if restore.GetWorkerPodUid() != worker.GetWorkerPodUid() || restore.GetSnapshot().GetSnapshotUuid() != pending.GetUuid() {
+				t.Fatalf("Restore = (worker %q, snapshot %q), want (%q, %q)", restore.GetWorkerPodUid(), restore.GetSnapshot().GetSnapshotUuid(), worker.GetWorkerPodUid(), pending.GetUuid())
+			}
+			if got := restore.GetSnapshot().GetFidelity(); got != wantFidelity {
+				t.Errorf("Restore fidelity = %v, want %v", got, wantFidelity)
+			}
 
-	reverted, err := w.RevertActor(ctx, actorRef)
-	if err != nil {
-		t.Fatalf("RevertActor: %v", err)
-	}
-	if s := reverted.GetStatus(); s.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || s.GetAssignedNode() != "" {
-		t.Fatalf("after revert: state %v, assigned node %q, want SUSPENDED with no node", s.GetState(), s.GetAssignedNode())
-	}
+			if tt.uploaded {
+				if err != nil {
+					t.Fatalf("ResumeActor: %v", err)
+				}
+				s := got.GetStatus()
+				if !resumed || s.GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || s.GetAssignedNode() != "node-2" {
+					t.Fatalf("ResumeActor = (state %v, node %q, resumed %v), want RUNNING on node-2", s.GetState(), s.GetAssignedNode(), resumed)
+				}
+				// The restore proved the upload complete.
+				snap := findSnapshotByGeneration(s.GetSnapshots(), 2)
+				if snap.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED || snap.GetLocality() != "" {
+					t.Errorf("generation 2 = %v, want COMPLETED with no locality", snap)
+				}
+				return
+			}
 
-	got, resumed, err := w.ResumeActor(ctx, actorRef)
-	if err != nil {
-		t.Fatalf("second ResumeActor: %v", err)
-	}
-	if !resumed || got.GetStatus().GetAssignedNode() != "node-2" {
-		t.Fatalf("second ResumeActor = (node %q, resumed %v), want node-2 and resumed", got.GetStatus().GetAssignedNode(), resumed)
-	}
-	restore, _ := atelet.requests()
-	if restore.GetWorkerPodUid() != worker.GetWorkerPodUid() || restore.GetSnapshot().GetSnapshotUuid() != durable.GetUuid() {
-		t.Errorf("Restore = (worker %q, snapshot %q), want (%q, %q)", restore.GetWorkerPodUid(), restore.GetSnapshot().GetSnapshotUuid(), worker.GetWorkerPodUid(), durable.GetUuid())
+			if apierror.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("ResumeActor = %v, want FailedPrecondition", err)
+			}
+			crashed, err := st.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			s := crashed.GetStatus()
+			if s.GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED || !strings.Contains(s.GetCrash().GetMessage(), crashMessageLocalSnapshotNodeGone) {
+				t.Fatalf("after resume: state %v, crash %v, want CRASHED with %q", s.GetState(), s.GetCrash(), crashMessageLocalSnapshotNodeGone)
+			}
+			// Both snapshots stay, so a revert can delete the partial upload
+			// and return to generation 1.
+			if snaps := s.GetSnapshots(); len(snaps) != 2 || !proto.Equal(snaps[0], durable) || !proto.Equal(snaps[1], pending) {
+				t.Errorf("snapshots = %v, want %v and %v unchanged", snaps, durable, pending)
+			}
+
+			// The crash leaves the actor on node-2, so revert terminates it
+			// there rather than skipping a deleted node.
+			reverted, err := w.RevertActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("RevertActor: %v", err)
+			}
+			if s := reverted.GetStatus(); s.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || s.GetAssignedNode() != "" {
+				t.Fatalf("after revert: state %v, assigned node %q, want SUSPENDED with no node", s.GetState(), s.GetAssignedNode())
+			}
+			atelet.mu.Lock()
+			atelet.restoreErr = nil
+			atelet.mu.Unlock()
+			if _, _, err := w.ResumeActor(ctx, actorRef); err != nil {
+				t.Fatalf("second ResumeActor: %v", err)
+			}
+			if restore, _ := atelet.requests(); restore.GetSnapshot().GetSnapshotUuid() != durable.GetUuid() {
+				t.Errorf("second Restore snapshot = %q, want %q", restore.GetSnapshot().GetSnapshotUuid(), durable.GetUuid())
+			}
+		})
 	}
 }
 

@@ -1131,6 +1131,8 @@ type capturingAtelet struct {
 	checkpoints int
 	promotes    int
 
+	// restoreErr, when set, fails Restore after it is recorded.
+	restoreErr error
 	// onCheckpoint, when set, runs before Checkpoint returns, standing in for
 	// whatever else happens while the workload checkpoints. Its error fails
 	// the RPC.
@@ -1157,6 +1159,9 @@ func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequ
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.restore = proto.Clone(req).(*ateletpb.RestoreRequest)
+	if f.restoreErr != nil {
+		return nil, f.restoreErr
+	}
 	return &ateletpb.RestoreResponse{WorkerEpoch: registeredEpoch}, nil
 }
 
@@ -1223,7 +1228,7 @@ func (f *capturingAtelet) Terminate(ctx context.Context, req *ateletpb.Terminate
 	if err != nil {
 		return nil, err
 	}
-	return f.UnimplementedAteletServer.Terminate(ctx, req)
+	return &ateletpb.TerminateResponse{}, nil
 }
 
 func (f *capturingAtelet) detachRequest() *ateletpb.DetachActorRequest {
@@ -3379,6 +3384,21 @@ func TestCanRelaxRuntime(t *testing.T) {
 			node:      "node-1",
 			snapshots: []*ateapipb.Snapshot{local(1), durable(2)},
 			required:  rt,
+		},
+		{
+			name:      "pending checkpoint released from its deleted node may fall back",
+			state:     suspended,
+			snapshots: []*ateapipb.Snapshot{localDurable(2, pending)},
+			required:  rt,
+			want:      true,
+		},
+		{
+			name:      "resuming pending checkpoint from a deleted node keeps its relaxed assignment",
+			state:     resuming,
+			node:      "node-2",
+			snapshots: []*ateapipb.Snapshot{localDurable(2, pending)},
+			required:  rt,
+			want:      true,
 		},
 		{
 			name:      "newer durable snapshot may fall back beside an older pending checkpoint",
