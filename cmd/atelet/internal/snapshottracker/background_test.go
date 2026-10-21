@@ -481,7 +481,7 @@ func TestForgetWaitsForInFlightOp(t *testing.T) {
 	opCtx, op := beginOp(t, tr, s1)
 
 	forgetDone := make(chan error, 1)
-	go func() { forgetDone <- tr.Forget(trackedActorUID) }()
+	go func() { _, err := tr.Forget(trackedActorUID); forgetDone <- err }()
 	select {
 	case <-opCtx.Done():
 	case <-time.After(10 * time.Second):
@@ -557,7 +557,7 @@ func TestTrackerTerminateHoldsOffBackgroundWork(t *testing.T) {
 					<-opCtx.Done()
 					endOp(tr, op)
 				}()
-				if err := tr.Forget(trackedActorUID); err != nil {
+				if _, err := tr.Forget(trackedActorUID); err != nil {
 					t.Fatalf("Forget: %v", err)
 				}
 			}
@@ -665,7 +665,7 @@ func TestTrackerBackoff(t *testing.T) {
 		{"CommitDurable", func() { tr.CommitDurable(trackedActorUID, testRef("s2", 2, clk.Now())) }},
 		{"CommitPromoted", func() { tr.CommitPromoted(trackedActorUID, testRef("s3", 3, clk.Now())) }},
 		{"Forget", func() {
-			if err := tr.Forget(trackedActorUID); err != nil {
+			if _, err := tr.Forget(trackedActorUID); err != nil {
 				t.Fatalf("Forget: %v", err)
 			}
 		}},

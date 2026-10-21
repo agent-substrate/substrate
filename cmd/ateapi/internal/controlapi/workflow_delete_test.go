@@ -124,7 +124,7 @@ func TestEnsureAteletTerminated_NodeGone(t *testing.T) {
 			w := newTestActorWorkflow(t, newTestPersistence(t), "team-a", "tmpl")
 			w.dialer = NewAteletDialer(newTestAteletIndexer(t), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
 				WithNodeGetter(nodeGetter(tc.lookupErr, tc.nodes...)))
-			err := w.ensureAteletTerminated(context.Background(), actorRef, actor, nil, "revert")
+			_, err := w.ensureAteletTerminated(context.Background(), actorRef, actor, nil, "revert")
 			if tc.wantErr != (err != nil) {
 				t.Fatalf("ensureAteletTerminated = %v, want error %v", err, tc.wantErr)
 			}

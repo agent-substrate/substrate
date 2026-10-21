@@ -441,7 +441,7 @@ func TestDetachDurationOutcomes(t *testing.T) {
 		// Forget cancels the detach as its upload finishes, and waits for it
 		// to end.
 		forgetDone := make(chan error, 1)
-		go func() { forgetDone <- tr.Forget(trackedActorUID) }()
+		go func() { _, err := tr.Forget(trackedActorUID); forgetDone <- err }()
 		waitCanceled(t, store)
 		store.release <- nil
 		returnsPromptly(t, "Forget", func() {
@@ -698,7 +698,7 @@ func TestUndurableActorsInstrumentsDropActor(t *testing.T) {
 		if got, want := readUndurable(t, reader), (undurableReading{age: 60}); got != want {
 			t.Errorf("before Forget: %+v, want %+v", got, want)
 		}
-		if err := tr.Forget(trackedActorUID); err != nil {
+		if _, err := tr.Forget(trackedActorUID); err != nil {
 			t.Fatalf("Forget: %v", err)
 		}
 		if got, want := readUndurable(t, reader), (undurableReading{}); got != want {
@@ -799,7 +799,7 @@ func TestUndurableActorsInstrumentsMultipleActors(t *testing.T) {
 		t.Errorf("split across bands: %+v, want %+v", got, want)
 	}
 
-	if err := tr.Forget(trackedActorUID); err != nil {
+	if _, err := tr.Forget(trackedActorUID); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
 	if got, want := readUndurable(t, reader), (undurableReading{

@@ -24,6 +24,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -336,56 +337,96 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 	}
 }
 
-// TestRevertActor_PausedSnapshotAlreadyUploaded verifies a revert of a
-// suspended actor whose local snapshot atelet uploaded returns it to that
-// upload, its latest durable snapshot, and collects the durable snapshot the
-// upload replaced. The actor has no assigned node, so there is nothing to
-// terminate, as in TestRevertActor_ReturnsActorToItsSnapshot.
+// TestRevertActor_PausedSnapshotAlreadyUploaded verifies a revert returns the
+// actor to a local snapshot atelet uploaded, its latest durable snapshot, and
+// collects the durable snapshot the upload replaced. The revert learns of the
+// upload from the record, or from Terminate when atelet's report has not
+// landed. An upload atelet does not report is deleted as in progress.
 func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	ctx := context.Background()
-	st, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
-	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
-	objects := objectstoretest.New()
-	w.objectStorePlugin = objectstoreplugintest.ControlClient(objects)
+	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	for _, tc := range []struct {
+		name  string
+		state ateapipb.ActorState
+		// recorded is the upload's status on the record.
+		recorded ateapipb.SnapshotStorageStatus
+		// node is the actor's assigned node, which the revert terminates on.
+		node string
+		// terminateReports makes Terminate return the upload as durable.
+		terminateReports bool
+		wantUploadKept   bool
+	}{
+		{name: "upload recorded", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, recorded: completed, wantUploadKept: true},
+		{name: "paused, upload reported by terminate", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, recorded: pending, node: "node-1", terminateReports: true, wantUploadKept: true},
+		{name: "crashed, upload reported by terminate", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, recorded: pending, node: "node-1", terminateReports: true, wantUploadKept: true},
+		{name: "upload not reported", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, recorded: pending, node: "node-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+			objects := objectstoretest.New()
+			w.objectStorePlugin = objectstoreplugintest.ControlClient(objects)
+			wire, atelet := newWireCaptureWorkflow(t, st)
+			w.dialer = wire.dialer
 
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-	actor, err := st.GetActor(ctx, actorRef)
-	if err != nil {
-		t.Fatalf("get seeded actor: %v", err)
-	}
-	// newTestActorWorkflow's template stores snapshots under gs://snapshots.
-	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
-	old := mustActorSnapshotURI(t, tmpl, actor, "old")
-	uploaded := mustActorSnapshotURI(t, tmpl, actor, "pause-snap")
-	objects.PutSnapshot(t, old, "manifest.json")
-	objects.PutSnapshot(t, uploaded, "manifest.json")
-	mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
-		paused := newPausedSnapshot(t, 2, memory, "", "pause-snap", "node-1")
-		paused.DurableSnapshot = &ateapipb.SnapshotStorage{Status: completed, Object: &ateapipb.ObjectSnapshot{SnapshotUri: uploaded.String()}}
-		s.LastAssignedGeneration = 2
-		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", old.Name(), old.String(), completed),
-			paused,
-		}
-	})
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", tc.state)
+			actor, err := st.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("get seeded actor: %v", err)
+			}
+			// newTestActorWorkflow's template stores snapshots under gs://snapshots.
+			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
+			old := mustActorSnapshotURI(t, tmpl, actor, "old")
+			uploaded := mustActorSnapshotURI(t, tmpl, actor, "pause-snap")
+			objects.PutSnapshot(t, old, "manifest.json")
+			objects.PutSnapshot(t, uploaded, "manifest.json")
+			mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
+				paused := newPausedSnapshot(t, 2, memory, "", "pause-snap", "node-1")
+				paused.DurableSnapshot = &ateapipb.SnapshotStorage{Status: tc.recorded, Object: &ateapipb.ObjectSnapshot{SnapshotUri: uploaded.String()}}
+				s.AssignedNode = tc.node
+				s.LastAssignedGeneration = 2
+				s.Snapshots = []*ateapipb.Snapshot{
+					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", old.Name(), old.String(), completed),
+					paused,
+				}
+				if tc.state == ateapipb.ActorState_ACTOR_STATE_CRASHED {
+					s.Crash = newActorCrash("ResumeActor", "interrupted execution")
+				}
+			})
+			atelet.terminateErr = apierror.NotFound("atelet holds nothing for the actor")
+			if tc.terminateReports {
+				atelet.terminateErr = nil
+				atelet.terminateState = &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
+					SnapshotUuid: "pause-snap",
+					Generation:   2,
+					Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Object:       &ateletpb.ObjectStorage{SnapshotUri: uploaded.String()},
+				}}}
+			}
 
-	reverted, err := w.RevertActor(ctx, actorRef)
-	if err != nil {
-		t.Fatalf("RevertActor: %v", err)
-	}
-	want := []snapshotOutcome{{generation: 2, fidelity: memory, durable: completed}}
-	if diff := cmp.Diff(want, describeSnapshots(reverted.GetStatus()), cmp.AllowUnexported(snapshotOutcome{})); diff != "" {
-		t.Errorf("snapshots mismatch (-want +got):\n%s", diff)
-	}
-	if len(objects.Snapshot(t, old)) != 0 {
-		t.Error("the durable snapshot the upload replaced was not released")
-	}
-	if len(objects.Snapshot(t, uploaded)) == 0 {
-		t.Error("the upload the revert returned the actor to was released")
+			reverted, err := w.RevertActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("RevertActor: %v", err)
+			}
+			want := []snapshotOutcome{{generation: 1, fidelity: memory, durable: completed}}
+			if tc.wantUploadKept {
+				want = []snapshotOutcome{{generation: 2, fidelity: memory, durable: completed}}
+			}
+			if diff := cmp.Diff(want, describeSnapshots(reverted.GetStatus()), cmp.AllowUnexported(snapshotOutcome{})); diff != "" {
+				t.Errorf("snapshots mismatch (-want +got):\n%s", diff)
+			}
+			// A kept upload replaces the old snapshot, which the revert collects.
+			if got, want := len(objects.Snapshot(t, old)) != 0, !tc.wantUploadKept; got != want {
+				t.Errorf("old snapshot kept = %v, want %v", got, want)
+			}
+			if got := len(objects.Snapshot(t, uploaded)) != 0; got != tc.wantUploadKept {
+				t.Errorf("uploaded snapshot kept = %v, want %v", got, tc.wantUploadKept)
+			}
+		})
 	}
 }
 

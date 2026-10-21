@@ -500,7 +500,9 @@ type AteletClient interface {
 	// snapshot durable, such as when it has no `snapshot.object`.
 	DetachActor(ctx context.Context, in *DetachActorRequest, opts ...grpc.CallOption) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
-	// unmount its volumes, and clean up actor state on the node.
+	// unmount its volumes, and clean up actor state on the node. It returns the
+	// actor's state as atelet forgets it, so the caller can record an upload
+	// atelet has not reported yet.
 	Terminate(ctx context.Context, in *TerminateRequest, opts ...grpc.CallOption) (*TerminateResponse, error)
 }
 
@@ -631,7 +633,9 @@ type AteletServer interface {
 	// snapshot durable, such as when it has no `snapshot.object`.
 	DetachActor(context.Context, *DetachActorRequest) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
-	// unmount its volumes, and clean up actor state on the node.
+	// unmount its volumes, and clean up actor state on the node. It returns the
+	// actor's state as atelet forgets it, so the caller can record an upload
+	// atelet has not reported yet.
 	Terminate(context.Context, *TerminateRequest) (*TerminateResponse, error)
 	mustEmbedUnimplementedAteletServer()
 }

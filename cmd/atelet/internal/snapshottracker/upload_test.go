@@ -346,21 +346,31 @@ func TestTrackerForgetCancelsUpload(t *testing.T) {
 	done := startUpload(t, tr, store)
 	tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
 
-	forgetDone := make(chan error, 1)
-	go func() { forgetDone <- tr.Forget(trackedActorUID) }()
+	type forgetResult struct {
+		state *ateletpb.ActorSnapshotState
+		err   error
+	}
+	forgetDone := make(chan forgetResult, 1)
+	go func() {
+		state, err := tr.Forget(trackedActorUID)
+		forgetDone <- forgetResult{state, err}
+	}()
 	if got := waitCanceled(t, store); got != "s1" {
 		t.Fatalf("canceled upload = %q, want s1", got)
 	}
 	select {
-	case err := <-forgetDone:
-		t.Fatalf("Forget returned (%v) before the canceled upload ended", err)
+	case res := <-forgetDone:
+		t.Fatalf("Forget returned (%v) before the canceled upload ended", res.err)
 	case <-time.After(50 * time.Millisecond):
 	}
 	store.release <- context.Canceled
 	select {
-	case err := <-forgetDone:
-		if err != nil {
-			t.Errorf("Forget: %v", err)
+	case res := <-forgetDone:
+		if res.err != nil {
+			t.Errorf("Forget: %v", res.err)
+		}
+		if got := res.state.GetLatestDurable(); got != nil {
+			t.Errorf("Forget returned latest durable %v, want nil: the canceled upload did not finish", got)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for Forget to return")
@@ -1048,7 +1058,7 @@ func TestTrackerTerminateHoldsOffSupersededUploadingCleanup(t *testing.T) {
 			}
 
 			if tc.forget {
-				if err := tr.Forget(trackedActorUID); err != nil {
+				if _, err := tr.Forget(trackedActorUID); err != nil {
 					t.Fatalf("Forget: %v", err)
 				}
 				end()

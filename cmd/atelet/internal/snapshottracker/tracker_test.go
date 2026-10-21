@@ -474,8 +474,12 @@ func TestTrackerState(t *testing.T) {
 		t.Errorf("State() on a fresh tracker = %v, want %v from the state file", got, st)
 	}
 
-	if err := tr.Forget(trackedActorUID); err != nil {
+	forgotten, err := tr.Forget(trackedActorUID)
+	if err != nil {
 		t.Fatalf("forget: %v", err)
+	}
+	if want := (&ateletpb.ActorSnapshotState{LatestDurable: st.GetLatestDurable()}); !proto.Equal(forgotten, want) {
+		t.Errorf("Forget returned %v, want %v: s2 durable and nothing local", forgotten, want)
 	}
 	if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(trackedActorUID)); !os.IsNotExist(err) {
 		t.Errorf("state file after forget: stat = %v, want it deleted", err)

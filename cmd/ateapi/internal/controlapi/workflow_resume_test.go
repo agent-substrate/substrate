@@ -1151,6 +1151,9 @@ type capturingAtelet struct {
 	onDetach     func()
 	terminateErr error
 	onTerminate  func()
+	// terminateState, when set, is the snapshot state Terminate returns.
+	// Terminate is unimplemented otherwise.
+	terminateState *ateletpb.ActorSnapshotState
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1218,10 +1221,13 @@ func (f *capturingAtelet) Terminate(ctx context.Context, req *ateletpb.Terminate
 		hook()
 	}
 	f.mu.Lock()
-	err := f.terminateErr
+	err, state := f.terminateErr, proto.CloneOf(f.terminateState)
 	f.mu.Unlock()
 	if err != nil {
 		return nil, err
+	}
+	if state != nil {
+		return &ateletpb.TerminateResponse{State: state}, nil
 	}
 	return f.UnimplementedAteletServer.Terminate(ctx, req)
 }

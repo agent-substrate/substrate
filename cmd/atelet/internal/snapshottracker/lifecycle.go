@@ -346,12 +346,15 @@ func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots, kind holdKind) 
 	}
 }
 
-// Forget drops the actor's state, in memory and on disk. It first cancels any
-// background upload or detach of the actor in progress and waits for it to
-// end, releasing the actor's lock meanwhile.
-func (t *Tracker) Forget(actorUID string) error {
+// Forget drops the actor's state, in memory and on disk, and returns the state
+// it dropped with only its latest durable snapshot, since the caller deletes
+// the actor's local snapshots. It first cancels any background upload or
+// detach of the actor in progress and waits for it to end, releasing the
+// actor's lock meanwhile.
+func (t *Tracker) Forget(actorUID string) (*ateletpb.ActorSnapshotState, error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
+	state := &ateletpb.ActorSnapshotState{}
 	if a := t.findLocked(actorUID); a != nil {
 		t.addLocked(a)
 		a.hold = holdTerminate
@@ -362,12 +365,13 @@ func (t *Tracker) Forget(actorUID string) error {
 			<-op.done
 			t.lock(actorUID)
 		}
+		state.LatestDurable = a.LatestDurable.report()
 	}
 	t.retries.Forget(actorUID)
 	t.reporting.retries.Forget(actorUID)
 	t.dropLocked(actorUID)
 	t.undurableActorsTally.forget(actorUID)
-	return removeSnapshotState(actorUID)
+	return state, removeSnapshotState(actorUID)
 }
 
 // setLatestLocalLocked records snap as the actor's latest local snapshot and

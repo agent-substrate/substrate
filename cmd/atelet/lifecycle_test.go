@@ -1143,7 +1143,11 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 		Containers: []*ateletpb.Container{{Name: "app", Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 	}
 
-	if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+	// atelet uploaded the snapshot, and the control plane has not recorded it.
+	uploaded := lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+	s.snapshots.CommitDurable(actorUID, snapshottracker.SnapshotRef{Snapshot: uploaded})
+
+	resp, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -1151,10 +1155,14 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          "",
 		Spec:                  spec,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Terminate: %v", err)
 	}
 
+	if got := resp.GetState().GetLatestDurable().GetSnapshot(); !proto.Equal(got, uploaded) {
+		t.Errorf("TerminateResponse.state.latest_durable = %v, want the uploaded snapshot %v", got, uploaded)
+	}
 	if got := worker.actorDirs["TerminateWorkload"]; got != nil {
 		t.Errorf("TerminateWorkload was called on worker (%v), want skipped when WorkerPodUid is empty", got)
 	}

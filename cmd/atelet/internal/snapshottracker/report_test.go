@@ -1213,7 +1213,7 @@ func TestTrackerForgetDuringReport(t *testing.T) {
 	waitReported(t, reporter)
 
 	returnsPromptly(t, "Forget during a report", func() {
-		if err := tr.Forget(trackedActorUID); err != nil {
+		if _, err := tr.Forget(trackedActorUID); err != nil {
 			t.Errorf("Forget: %v", err)
 		}
 	})
