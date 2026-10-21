@@ -120,7 +120,9 @@ requests 2×`envoyCpu` CPUs; the runner requests `clientConcurrency`+1).
 
 ```bash
 # .ate-dev-env.sh at the repo root, then:
-hack/install-ate.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
+hack/install-ate.sh deploy ate-system \
+  --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner
 benchmarking/workloads/deploy.sh --deploy --worker-count 50 --sandbox-class gvisor
 ```
 
