@@ -124,7 +124,7 @@ func TestEnsureAteletTerminated_NodeGone(t *testing.T) {
 			w := newTestActorWorkflow(t, newTestPersistence(t), "team-a", "tmpl")
 			w.dialer = NewAteletDialer(newTestAteletIndexer(t), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
 				WithNodeGetter(nodeGetter(tc.lookupErr, tc.nodes...)))
-			err := w.ensureAteletTerminated(context.Background(), actorRef, actor, nil, "revert")
+			_, gone, err := w.ensureAteletTerminated(context.Background(), actorRef, actor, nil, "revert", true)
 			if tc.wantErr != (err != nil) {
 				t.Fatalf("ensureAteletTerminated = %v, want error %v", err, tc.wantErr)
 			}
@@ -133,6 +133,9 @@ func TestEnsureAteletTerminated_NodeGone(t *testing.T) {
 			}
 			if tc.lookupErr != nil && !strings.Contains(err.Error(), tc.lookupErr.Error()) {
 				t.Fatalf("ensureAteletTerminated = %v, want the node lookup error in it", err)
+			}
+			if gone != !tc.wantErr {
+				t.Errorf("node gone = %v, want %v", gone, !tc.wantErr)
 			}
 		})
 	}
@@ -165,9 +168,9 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 		// wantDetachErr expects the plugin's detach error back.
 		wantDetachErr bool
 	}{
-		{name: "paused, node gone", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, paused: true},
+		{name: "local snapshot, node gone", state: ateapi.ActorState_ACTOR_STATE_CRASHED, paused: true},
 		{name: "crashed, node gone", state: ateapi.ActorState_ACTOR_STATE_CRASHED},
-		{name: "paused, node kept", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, paused: true, nodeKept: true, wantErr: ErrNoAteletOnNode},
+		{name: "local snapshot, node kept", state: ateapi.ActorState_ACTOR_STATE_CRASHED, paused: true, nodeKept: true, wantErr: ErrNoAteletOnNode},
 		{name: "crashed, node kept", state: ateapi.ActorState_ACTOR_STATE_CRASHED, nodeKept: true, wantErr: ErrNoAteletOnNode},
 		{name: "node gone, volume detach OK", state: ateapi.ActorState_ACTOR_STATE_CRASHED, volume: true},
 		{name: "node gone, volume detach NotFound", state: ateapi.ActorState_ACTOR_STATE_CRASHED, volume: true, detachErr: status.Error(codes.NotFound, "no such node")},
