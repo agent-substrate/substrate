@@ -24,6 +24,7 @@ package images
 import (
 	"fmt"
 	"path"
+	"slices"
 )
 
 // ModulePath is this repository's module path. A ko:// reference is it joined
@@ -38,7 +39,7 @@ const ModulePath = "go.ate.dev/substrate"
 // that was never pushed. TestComponentsCoverTheManifests keeps it in step with
 // the manifests, which is half of it: a new component also has to be published
 // under the same repository and tag as the rest before a pre-built install can
-// use it.
+// use it, and a release publishes it only once it is added to released.
 var Components = []string{
 	"cmd/ate-idp-server",
 	"cmd/ateapi",
@@ -58,29 +59,28 @@ var Components = []string{
 	"demos/sandbox",
 }
 
-// unreleased maps each of Components that a release does not publish to what
-// it is. Such an image exists only in a build from source, so a pre-built
-// install that needs one fails naming it rather than with a registry 404.
-var unreleased = map[string]string{
-	"cmd/benchmarking/isolate/fake-atelet":       "a benchmarking fake",
-	"cmd/benchmarking/isolate/fake-workersync":   "a benchmarking fake",
-	"cmd/credential-provider/kubernetes-secrets": "the Kubernetes Secrets credential provider",
-	"demos/counter":                  "a demo",
-	"demos/egress":                   "a demo",
-	"demos/multi-template/fspersist": "a demo",
-	"demos/sandbox":                  "a demo",
+// released is the allowlist of Components a release publishes. A component is
+// published only after it is added here, so one added to Components stays out
+// of releases until someone decides, in review, to publish it. An image not
+// listed exists only in a build from source, and a pre-built install that needs
+// one fails naming it rather than with a registry 404.
+var released = []string{
+	"cmd/ate-idp-server",
+	"cmd/ateapi",
+	"cmd/atecontroller",
+	"cmd/atelet",
+	"cmd/atenet",
+	"cmd/ateworker-gvisor",
+	"cmd/ateworker-microvm",
+	"cmd/objectstore-plugin",
+	"cmd/podcertcontroller",
 }
 
-// ReleaseComponents returns the Components a release publishes, in order.
-func ReleaseComponents() []string {
-	var pkgs []string
-	for _, pkg := range Components {
-		if _, ok := unreleased[pkg]; !ok {
-			pkgs = append(pkgs, pkg)
-		}
-	}
-	return pkgs
-}
+// ReleaseComponents returns the Components a release publishes.
+func ReleaseComponents() []string { return slices.Clone(released) }
+
+// IsReleased reports whether a release publishes pkg.
+func IsReleased(pkg string) bool { return slices.Contains(released, pkg) }
 
 // KoReference is the ko:// reference the manifests name pkg by.
 //

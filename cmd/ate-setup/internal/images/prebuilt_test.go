@@ -243,9 +243,9 @@ func TestPrebuiltRejectsUnreleasedImages(t *testing.T) {
 		t.Fatal("ResolveBytes() = nil error, want failures for unreleased images")
 	}
 	for _, want := range []string{
-		"demos/counter is a demo, which releases do not publish",
-		"fake-atelet is a benchmarking fake, which releases do not publish",
-		"kubernetes-secrets is the Kubernetes Secrets credential provider, which releases do not publish",
+		"demos/counter is not in the release set",
+		"fake-atelet is not in the release set",
+		"kubernetes-secrets is not in the release set",
 		"dropping --image-repo",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -415,7 +415,7 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 					t.Errorf("ResolveBytes() reported %d problem(s), want only the %d unreleased image(s):\n%v", len(lines), len(excluded), err)
 				}
 				for _, ref := range excluded {
-					if !strings.Contains(err.Error(), ref+" is ") || !strings.Contains(err.Error(), "which releases do not publish") {
+					if !strings.Contains(err.Error(), ref+" is not in the release set") {
 						t.Errorf("error does not name %s as unreleased:\n%v", ref, err)
 					}
 				}

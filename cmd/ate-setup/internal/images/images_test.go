@@ -142,22 +142,3 @@ func TestImageNameOfANestedPackage(t *testing.T) {
 		t.Errorf("ImageName() = %q, want fspersist", got)
 	}
 }
-
-// The release set is a decision, not a derivation: a component added to
-// Components is left out of releases or put into them on purpose, here.
-func TestReleaseComponents(t *testing.T) {
-	want := []string{
-		"cmd/ate-idp-server",
-		"cmd/ateapi",
-		"cmd/atecontroller",
-		"cmd/atelet",
-		"cmd/atenet",
-		"cmd/ateworker-gvisor",
-		"cmd/ateworker-microvm",
-		"cmd/objectstore-plugin",
-		"cmd/podcertcontroller",
-	}
-	if got := images.ReleaseComponents(); !slices.Equal(got, want) {
-		t.Errorf("ReleaseComponents() = %v, want %v", got, want)
-	}
-}

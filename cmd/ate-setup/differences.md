@@ -145,12 +145,14 @@ than an install — though only the list is checked that way. The release also h
 to publish the new image under the same repository and tag as the rest, and
 until it does, the component can only be installed by building it.
 
-Releases publish only `images.ReleaseComponents`: the Kubernetes Secrets
-credential provider, the demos, and the benchmarking fakes are left out, and so
-is `envoy-dataplane`. A ko reference to one of those under
-`--image-repo` fails before any registry lookup, naming what it is and saying to
-build it from source, rather than as a 404 for a tag that was never pushed.
-Release images alone are therefore not a complete install.
+Releases publish only `images.ReleaseComponents`, an allowlist: a component is
+published only once it is added to it, so a new entry in `images.Components`
+stays out of releases until someone adds it on purpose. Today the Kubernetes
+Secrets credential provider, the demos, and the benchmarking fakes are not on
+it, and neither is `envoy-dataplane`. A ko reference to a component that is not
+on the allowlist fails under `--image-repo` before any registry lookup, naming
+it and saying to build it from source, rather than as a 404 for a tag that was
+never pushed. Release images alone are therefore not a complete install.
 
 ## Cluster access
 

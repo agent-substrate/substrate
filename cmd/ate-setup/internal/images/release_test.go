@@ -32,12 +32,23 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
-// An entry in unreleased that is not a component excludes nothing, and hides
-// that the component it meant was renamed or removed.
-func TestUnreleasedAreComponents(t *testing.T) {
-	for pkg := range unreleased {
+// An allowlist entry that is not a component publishes nothing and hides that
+// the component it meant was renamed or removed. A component not on the
+// allowlist is never released, however it got into Components.
+func TestReleasedAreComponents(t *testing.T) {
+	seen := make(map[string]bool, len(released))
+	for _, pkg := range released {
 		if !slices.Contains(Components, pkg) {
-			t.Errorf("unreleased names %s, which is not in Components", pkg)
+			t.Errorf("released names %s, which is not in Components", pkg)
+		}
+		if seen[pkg] {
+			t.Errorf("released lists %s twice", pkg)
+		}
+		seen[pkg] = true
+	}
+	for _, pkg := range Components {
+		if IsReleased(pkg) != seen[pkg] {
+			t.Errorf("IsReleased(%s) = %v, want %v", pkg, IsReleased(pkg), seen[pkg])
 		}
 	}
 }

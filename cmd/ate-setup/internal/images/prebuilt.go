@@ -119,7 +119,7 @@ func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error)
 	// registry that is unreachable or a tag that was never pushed fails for
 	// every component at once.
 	unknown := make(map[string]bool)
-	notReleased := make(map[string]string)
+	notReleased := make(map[string]bool)
 	unpinned := make(map[string]error)
 
 	out := koRef.ReplaceAllFunc(manifest, func(match []byte) []byte {
@@ -128,8 +128,8 @@ func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error)
 			unknown[string(match)] = true
 			return match
 		}
-		if what, ok := unreleased[strings.TrimPrefix(string(match), "ko://"+ModulePath+"/")]; ok {
-			notReleased[string(match)] = what
+		if !IsReleased(strings.TrimPrefix(string(match), "ko://"+ModulePath+"/")) {
+			notReleased[string(match)] = true
 			return match
 		}
 		ref, err := p.Pin(ctx, image)
@@ -152,8 +152,7 @@ func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error)
 			ModulePath, strings.Join(Components, ", ")))
 	}
 	for _, ref := range slices.Sorted(maps.Keys(notReleased)) {
-		errs = append(errs, fmt.Errorf("%s is %s, which releases do not publish; build it from source by dropping --image-repo",
-			ref, notReleased[ref]))
+		errs = append(errs, fmt.Errorf("%s is not in the release set, so releases do not publish it; build it from source by dropping --image-repo", ref))
 	}
 	for _, image := range slices.Sorted(maps.Keys(unpinned)) {
 		errs = append(errs, unpinned[image])
