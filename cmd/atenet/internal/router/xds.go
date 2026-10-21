@@ -842,8 +842,8 @@ func internalListenerAssignment(clusterName, listenerName string) *endpointv3.Cl
 	}
 }
 
-// MainInternalCluster is a simple cluster that sends traffic to the main_internal
-// internal listener (used only for CONNECT requests).
+// buildMainInternalCluster builds a simple cluster that sends traffic to the
+// main_internal internal listener (used only for CONNECT requests).
 func (x *XdsServer) buildMainInternalCluster() *clusterv3.Cluster {
 	return &clusterv3.Cluster{
 		Name: MainInternalName,
@@ -1501,21 +1501,25 @@ func dualStackAdditionalAddresses(port int) []*listenerv3.AdditionalAddress {
 }
 
 func (x *XdsServer) buildListener() *listenerv3.Listener {
-	hcm := x.buildHcm("ingress_http", true)
+	return ingressListener(IngressHTTPListener, x.ingressPort, x.buildHcm("ingress_http", true), nil)
+}
 
+// ingressListener is a wildcard, dual-stack listener on port with one filter
+// chain running hcm, TLS-wrapped by ts when it is not nil.
+func ingressListener(name string, port int, hcm *anypb.Any, ts *corev3.TransportSocket) *listenerv3.Listener {
 	return &listenerv3.Listener{
-		Name: IngressHTTPListener,
+		Name: name,
 		Address: &corev3.Address{
 			Address: &corev3.Address_SocketAddress{
 				SocketAddress: &corev3.SocketAddress{
 					Address: WildcardIP,
 					PortSpecifier: &corev3.SocketAddress_PortValue{
-						PortValue: uint32(x.ingressPort),
+						PortValue: uint32(port),
 					},
 				},
 			},
 		},
-		AdditionalAddresses: dualStackAdditionalAddresses(x.ingressPort),
+		AdditionalAddresses: dualStackAdditionalAddresses(port),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
@@ -1526,6 +1530,7 @@ func (x *XdsServer) buildListener() *listenerv3.Listener {
 						},
 					},
 				},
+				TransportSocket: ts,
 			},
 		},
 	}
@@ -1588,111 +1593,26 @@ func (x *XdsServer) buildDownstreamTlsTransportSocket(alpnProtocols []string) *c
 }
 
 func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
-	hcm := x.buildHcm("ingress_https", true)
-
 	// gRPC requires a negotiated "h2"; http/1.1 keeps plain HTTPS clients
 	// working alongside it. HTTP/1.1-only actors are safe either way: atunnel
 	// downgrades every non-gRPC request to HTTP/1.1 on the actor leg (see
 	// atunnelingress.protocolMirrorTransport), so offering h2 at the edge cannot
 	// change what an actor receives.
 	alpn := []string{"h2", "http/1.1"}
-
-	return &listenerv3.Listener{
-		Name: IngressHTTPSListener,
-		Address: &corev3.Address{
-			Address: &corev3.Address_SocketAddress{
-				SocketAddress: &corev3.SocketAddress{
-					Address: WildcardIP,
-					PortSpecifier: &corev3.SocketAddress_PortValue{
-						PortValue: uint32(x.httpsPort),
-					},
-				},
-			},
-		},
-		AdditionalAddresses: dualStackAdditionalAddresses(x.httpsPort),
-		FilterChains: []*listenerv3.FilterChain{
-			{
-				Filters: []*listenerv3.Filter{
-					{
-						Name: "envoy.filters.network.http_connection_manager",
-						ConfigType: &listenerv3.Filter_TypedConfig{
-							TypedConfig: hcm,
-						},
-					},
-				},
-				TransportSocket: x.buildDownstreamTlsTransportSocket(alpn),
-			},
-		},
-	}
+	return ingressListener(IngressHTTPSListener, x.httpsPort, x.buildHcm("ingress_https", true), x.buildDownstreamTlsTransportSocket(alpn))
 }
 
 func (x *XdsServer) buildConnectTerminateListener() *listenerv3.Listener {
-	hcm := x.buildConnectTerminateHCM("connect_terminate")
-
-	return &listenerv3.Listener{
-		Name: "connect_terminate",
-		Address: &corev3.Address{
-			Address: &corev3.Address_SocketAddress{
-				SocketAddress: &corev3.SocketAddress{
-					Address: WildcardIP,
-					PortSpecifier: &corev3.SocketAddress_PortValue{
-						PortValue: uint32(x.connectPlainTextPort),
-					},
-				},
-			},
-		},
-		AdditionalAddresses: dualStackAdditionalAddresses(x.connectPlainTextPort),
-		FilterChains: []*listenerv3.FilterChain{
-			{
-				Filters: []*listenerv3.Filter{
-					{
-						Name: "envoy.filters.network.http_connection_manager",
-						ConfigType: &listenerv3.Filter_TypedConfig{
-							TypedConfig: hcm,
-						},
-					},
-				},
-			},
-		},
-	}
+	return ingressListener("connect_terminate", x.connectPlainTextPort, x.buildConnectTerminateHCM("connect_terminate"), nil)
 }
 
 // buildConnectTerminateTLSListener is buildConnectTerminateListener's TLS
 // twin: same CONNECT-terminating HCM, but downstream TLS-wrapped like
 // buildHttpsListener, sharing the same SDS-fetched certificate.
 func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
-	hcm := x.buildConnectTerminateHCM("connect_terminate_tls")
-
-	return &listenerv3.Listener{
-		Name: "connect_terminate_tls",
-		Address: &corev3.Address{
-			Address: &corev3.Address_SocketAddress{
-				SocketAddress: &corev3.SocketAddress{
-					Address: WildcardIP,
-					PortSpecifier: &corev3.SocketAddress_PortValue{
-						PortValue: uint32(x.connectTLSPort),
-					},
-				},
-			},
-		},
-		AdditionalAddresses: dualStackAdditionalAddresses(x.connectTLSPort),
-		FilterChains: []*listenerv3.FilterChain{
-			{
-				Filters: []*listenerv3.Filter{
-					{
-						Name: "envoy.filters.network.http_connection_manager",
-						ConfigType: &listenerv3.Filter_TypedConfig{
-							TypedConfig: hcm,
-						},
-					},
-				},
-				// No ALPN: CONNECT-TLS clients speak HTTP/1.1 CONNECT
-				// today, and the HTTPS listener's h2 offer deliberately
-				// leaves this listener alone.
-				TransportSocket: x.buildDownstreamTlsTransportSocket(nil),
-			},
-		},
-	}
+	// No ALPN: CONNECT-TLS clients speak HTTP/1.1 CONNECT today, and the HTTPS
+	// listener's h2 offer deliberately leaves this listener alone.
+	return ingressListener("connect_terminate_tls", x.connectTLSPort, x.buildConnectTerminateHCM("connect_terminate_tls"), x.buildDownstreamTlsTransportSocket(nil))
 }
 
 // adsConfigSource points an SDS secret reference at this control plane's own

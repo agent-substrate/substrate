@@ -45,7 +45,6 @@ type Handlers map[Direction]Handler
 // Server implements the external processing gRPC server, dispatching each
 // request to the Handler for the direction it arrived on.
 type Server struct {
-	port          int
 	handlers      Handlers
 	recorder      *QueryRecorder
 	routeDuration metric.Float64Histogram
@@ -54,23 +53,16 @@ type Server struct {
 // NewServer builds the ext_proc mux serving the given handlers. Passing a
 // subset of the directions is how --mode restricts an instance to the traffic
 // its deployment fronts.
-func NewServer(port int, routeDuration metric.Float64Histogram, handlers Handlers) *Server {
+func NewServer(routeDuration metric.Float64Histogram, handlers Handlers) *Server {
 	return &Server{
-		port:          port,
 		handlers:      handlers,
 		recorder:      NewQueryRecorder(100),
 		routeDuration: routeDuration,
 	}
 }
 
-// Queries returns the most recently processed requests, newest first, for the
-// /statusz page.
-func (s *Server) Queries() []RecordedQuery {
-	return s.recorder.Get()
-}
-
-// Recorder exposes the query ring buffer so tests and the status page can seed
-// or read it.
+// Recorder is the ring of recently processed requests behind the /statusz
+// page.
 func (s *Server) Recorder() *QueryRecorder { return s.recorder }
 
 // NewGRPCServer builds the gRPC server with the ext_proc service registered.

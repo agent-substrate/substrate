@@ -76,18 +76,11 @@ func (qr *QueryRecorder) Get() []RecordedQuery {
 		return nil
 	}
 
+	// index is 0 until the ring is full, so one walk covers both cases.
 	res := make([]RecordedQuery, n)
-	if n < qr.size {
-		for i := 0; i < n; i++ {
-			res[i] = qr.queries[n-1-i]
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			pos := (qr.index - 1 - i + n) % n
-			res[i] = qr.queries[pos]
-		}
+	for i := range res {
+		res[i] = qr.queries[(qr.index-1-i+n)%n]
 	}
-
 	return res
 }
 

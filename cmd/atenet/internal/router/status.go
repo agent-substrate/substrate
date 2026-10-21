@@ -122,7 +122,7 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 
 	var rawQueries []extproc.RecordedQuery
 	if s.extprocSrv != nil {
-		rawQueries = s.extprocSrv.Queries()
+		rawQueries = s.extprocSrv.Recorder().Get()
 	}
 
 	formattedQueries := make([]FormattedQuery, len(rawQueries))
@@ -177,15 +177,11 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	tmpl, err := template.New("dashboard").Parse(dashboardHTML)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Template parsing failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
 	w.WriteHeader(http.StatusOK)
-	_ = tmpl.Execute(w, data)
+	_ = dashboardTemplate.Execute(w, data)
 }
 
 //go:embed dashboard.html
 var dashboardHTML string
+
+var dashboardTemplate = template.Must(template.New("dashboard").Parse(dashboardHTML))

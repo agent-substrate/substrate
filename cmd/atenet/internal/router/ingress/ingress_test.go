@@ -40,15 +40,6 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
-type mockClient struct {
-	ateapipb.ControlClient
-	resumeFn func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error)
-}
-
-func (m *mockClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-	return m.resumeFn(ctx, in, opts...)
-}
-
 func requestMetadata(actorName, atespace string, headers ...*corev3.HeaderValue) *extproc.RequestMetadata {
 	headers = append(headers,
 		&corev3.HeaderValue{Key: atenet.TargetActorHeader, Value: atespace + "/" + actorName},
@@ -57,7 +48,7 @@ func requestMetadata(actorName, atespace string, headers ...*corev3.HeaderValue)
 }
 
 func TestHandleRequestHeadersAcceptsMixedCaseRoutingHeaders(t *testing.T) {
-	clientMock := &mockClient{
+	clientMock := &resumerMockClient{
 		resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			if got, want := in.GetActor().GetName(), "actor-1"; got != want {
 				t.Errorf("actor name = %q, want %q", got, want)
@@ -121,7 +112,7 @@ func TestHandleRequestHeadersRejectsDuplicateOrCommaHeaders(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var resumeCalls int32
-			clientMock := &mockClient{
+			clientMock := &resumerMockClient{
 				resumeFn: func(_ context.Context, _ *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 					atomic.AddInt32(&resumeCalls, 1)
 					return nil, errors.New("should not be called")
@@ -154,7 +145,7 @@ func TestHandleRequestHeadersRejectsDuplicateOrCommaHeaders(t *testing.T) {
 func TestHandleRequestHeadersConnectAttributeOverridesInnerHeader(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	var gotActorRef string
-	clientMock := &mockClient{
+	clientMock := &resumerMockClient{
 		resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			gotActorRef = in.GetActor().GetAtespace() + "/" + in.GetActor().GetName()
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
@@ -226,7 +217,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	h := New(&mockClient{
+	h := New(&resumerMockClient{
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
 		},
@@ -401,7 +392,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 			if atespace == "" {
 				atespace = "team-a"
 			}
-			clientMock := &mockClient{
+			clientMock := &resumerMockClient{
 				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 					if in.GetActor().GetName() != testUUID {
 						t.Errorf("unexpected identifier parsed in test context: %s", in.GetActor().GetName())
@@ -492,7 +483,7 @@ func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	authority := testUUID + ".team-a.actors.resources.substrate.ate.dev:9090"
 
-	clientMock := &mockClient{
+	clientMock := &resumerMockClient{
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
 		},
@@ -524,7 +515,7 @@ func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 
 func TestHandleRequestHeadersUsesRetainedConnectAuthorityForPort(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
-	clientMock := &mockClient{
+	clientMock := &resumerMockClient{
 		resumeFn: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
 				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
@@ -674,7 +665,7 @@ func TestHandleRequestHeadersConnectRequiresOuterTargetActor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var gotActorRef string
 			var resumeCalls int32
-			clientMock := &mockClient{
+			clientMock := &resumerMockClient{
 				resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 					atomic.AddInt32(&resumeCalls, 1)
 					gotActorRef = in.GetActor().GetAtespace() + "/" + in.GetActor().GetName()
@@ -733,7 +724,7 @@ func TestHandleRequestHeaders_FullLotServesRunningActor(t *testing.T) {
 	authority := testUUID + ".team-a.actors.resources.substrate.ate.dev"
 
 	var resumeCalled bool
-	clientMock := &mockClient{
+	clientMock := &resumerMockClient{
 		resumeFn: func(
 			ctx context.Context,
 			in *ateapipb.ResumeActorRequest,
@@ -827,7 +818,7 @@ func TestHandleRequestHeaders_FullLotShedsParkedRequest(t *testing.T) {
 				authority := testUUID + ".team-a.actors.resources.substrate.ate.dev"
 
 				var resumeCalls atomic.Int32
-				clientMock := &mockClient{
+				clientMock := &resumerMockClient{
 					resumeFn: func(
 						ctx context.Context,
 						in *ateapipb.ResumeActorRequest,

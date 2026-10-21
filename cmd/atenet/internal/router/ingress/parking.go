@@ -123,18 +123,6 @@ func (c ParkedRequestConfig) Validate() error {
 	return nil
 }
 
-// DefaultParkedRequestConfig returns the built-in parking configuration
-// (matching the NewRouterCmd flag defaults).
-func DefaultParkedRequestConfig() ParkedRequestConfig {
-	return ParkedRequestConfig{
-		Budget:        DefaultParkedRequestBudget,
-		Max:           DefaultParkedRequestMax,
-		RetryInterval: DefaultParkedRequestRetryInterval,
-		RetryFactor:   DefaultParkedRequestRetryFactor,
-		RetryJitter:   DefaultParkedRequestRetryJitter,
-	}
-}
-
 // parkingLot is a bounded, non-blocking admission gate for resume-gated
 // requests. A parked request holds a slot until its wait ends; when the lot is
 // full further requests are shed immediately so the router applies
