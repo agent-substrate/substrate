@@ -401,7 +401,8 @@ def substrate_args(test: dict[str, Any]) -> list[str]:
 # pod certificate as BENCHMARK_RUNNER_PRINCIPAL. Each test reinstalls
 # Substrate, so making the runner a bootstrap owner on every install grants it
 # global owner for exactly the life of that install. kubectl-ate's principal
-# stays an owner for the workload and teardown steps.
+# stays an owner for the workload and teardown steps. The Envoy ingress router
+# also requires an allowlist of client SPIFFE IDs on every install.
 BENCHMARK_RUNNER_PRINCIPAL = "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner"
 CLIENT_PRINCIPAL = "system:serviceaccount:ate-system:ate-client"
 
@@ -410,6 +411,7 @@ def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
     env = {
         **os.environ,
         "ATE_API_AUTHZ_BOOTSTRAP_OWNERS": f"{CLIENT_PRINCIPAL},{BENCHMARK_RUNNER_PRINCIPAL}",
+        "ATE_INGRESS_ALLOWED_SPIFFE_IDS": BENCHMARK_RUNNER_PRINCIPAL,
     }
     run(["hack/install-ate.sh", "deploy", "ate-system", *(str(a) for a in ate_args)], env=env)
 

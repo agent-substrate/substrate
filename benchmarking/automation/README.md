@@ -25,7 +25,9 @@ the router capacity benchmark — see
    images via `ko` as part of their deploy steps — there's no separate
    image build step). The install sets `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` to
    the `ate-client` and `benchmarking/benchmark-runner` ServiceAccounts so the
-   runner's calls pass [authorization](../../docs/authorization.md). For a `microvm` test the orchestrator also
+   runner's calls pass [authorization](../../docs/authorization.md), and sets
+   `ATE_INGRESS_ALLOWED_SPIFFE_IDS` to `benchmarking/benchmark-runner` for the
+   Envoy ingress router. For a `microvm` test the orchestrator also
    runs `hack/install-microvm-deps.sh --install` between the two, which
    stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
    store bucket and applies the cluster-wide `microvm` SandboxConfig.

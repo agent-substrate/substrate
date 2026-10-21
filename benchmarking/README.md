@@ -23,14 +23,16 @@ scenario ladder, read [observability.md](observability.md).
 > [!IMPORTANT]
 > The ate-api-server checks every call against
 > [authorization](../docs/authorization.md), and Locust calls it as the
-> `benchmarking/default` ServiceAccount. Install Substrate with that identity
-> as a bootstrap owner, alongside the default `ate-client` owner, or every
-> benchmark call is denied:
+> `benchmarking/default` ServiceAccount. The Envoy ingress router also requires
+> an allowlist of client SPIFFE IDs at install time. Install Substrate with
+> `benchmarking/default` in both settings alongside the default `ate-client`
+> owner:
 > ```bash
 > ATE_API_AUTHZ_BOOTSTRAP_OWNERS=system:serviceaccount:ate-system:ate-client,spiffe://cluster.local/ns/benchmarking/sa/default \
+> ATE_INGRESS_ALLOWED_SPIFFE_IDS=spiffe://cluster.local/ns/benchmarking/sa/default \
 >   ./hack/install-ate.sh deploy ate-system
 > ```
-> The nightly automation sets this itself; see
+> The nightly automation sets both itself; see
 > [automation/README.md](automation/README.md).
 
 Note that deploying the benchmarks does not run them. You must visit Locust's
