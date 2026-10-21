@@ -67,7 +67,7 @@ func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateap
 
 	// Validate the final value before storing it.
 	if errs := apivalidation.ValidateActorTemplateUpdate(ctx, field.NewPath("actor_template"), outTemplate, inTemplate); len(errs) > 0 {
-		return nil, toGRPCInternalError(errs)
+		return nil, resources.ToInternalError(errs)
 	}
 
 	// Reject a template whose actors could never be snapshotted, rather than

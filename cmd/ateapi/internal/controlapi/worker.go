@@ -138,7 +138,7 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 
 	// Verify that the result is properly valid before storing it.
 	if errs := apivalidation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), outWorker, inWorker, true); len(errs) > 0 {
-		return nil, toGRPCInternalError(errs)
+		return nil, resources.ToInternalError(errs)
 	}
 
 	// Save the data in the storage layer.
@@ -207,7 +207,7 @@ func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, preconditio
 
 		// Validate the final value before storing it.
 		if errs := apivalidation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), newVal, oldVal, true); len(errs) > 0 {
-			return toGRPCInternalError(errs)
+			return resources.ToInternalError(errs)
 		}
 
 		return nil

@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,8 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -656,5 +659,48 @@ func TestValidateSandboxAssetsDir(t *testing.T) {
 				t.Errorf("ValidateSandboxAssetsDir(%q, %q) = %v, wantErr %v", tc.actorUID, tc.dir, errs, tc.wantErr)
 			}
 		})
+	}
+}
+
+// A duplicate entry error carries the whole entry as its bad value, and the
+// error text renders it as JSON. The error is logged as a string, past the
+// logging handler's proto redaction, so a debug_redact field in the entry must
+// be masked before the text is built.
+func TestValidationErrorsRedactDebugRedactFields(t *testing.T) {
+	const secret = "sk-do-not-log"
+	env := []*ateapipb.EnvVar{
+		{Name: "API_KEY", Value: secret},
+		{Name: "API_KEY", Value: secret},
+	}
+	errs := validate.PtrSliceUnique(context.Background(), operation.Operation{Type: operation.Create},
+		field.NewPath("env"), env, nil,
+		func(a, b *ateapipb.EnvVar) bool { return a.Name == b.Name })
+	if len(errs) == 0 {
+		t.Fatal("PtrSliceUnique found no duplicate")
+	}
+
+	// A nil entry renders by panicking, so it is dropped and the rest of the
+	// list still reaches the message.
+	withNil := append(field.ErrorList{nil}, errs...)
+	for name, toErr := range map[string]func(field.ErrorList) error{
+		"ToAPIError":        ToAPIError,
+		"ToGRPCStatusError": ToGRPCStatusError,
+		"ToInternalError":   ToInternalError,
+	} {
+		for _, list := range []field.ErrorList{errs, withNil} {
+			msg := toErr(list).Error()
+			if strings.Contains(msg, secret) {
+				t.Errorf("%s: message %q contains the env value", name, msg)
+			}
+			if !strings.Contains(msg, "API_KEY") {
+				t.Errorf("%s: message %q does not name the duplicate", name, msg)
+			}
+		}
+		if msg := toErr(field.ErrorList{nil}).Error(); !strings.Contains(msg, "validation failed") {
+			t.Errorf("%s: message for a nil-only list = %q", name, msg)
+		}
+	}
+	if got := errs[0].BadValue.(*ateapipb.EnvVar).GetValue(); got != secret {
+		t.Errorf("caller's error list was modified: value = %q", got)
 	}
 }

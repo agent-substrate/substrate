@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -30,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/protoredact"
 	"go.ate.dev/substrate/internal/volumepath"
 	"go.ate.dev/substrate/pkg/sandboxclass"
 	"google.golang.org/grpc/codes"
@@ -46,7 +48,7 @@ import (
 // TODO: Delete once atelet's WorkerSupport server returns apierrors, and use
 // ToAPIError instead.
 func ToGRPCStatusError(errs field.ErrorList) error {
-	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	return status.Error(codes.InvalidArgument, validationMessage(errs))
 }
 
 // ToAPIError turns validation errors into the InvalidArgument error an RPC
@@ -55,7 +57,58 @@ func ToAPIError(errs field.ErrorList) error {
 	if len(errs) == 0 {
 		return nil
 	}
-	return apierror.InvalidArgument("%v", errs.ToAggregate())
+	return apierror.InvalidArgument("%s", validationMessage(errs))
+}
+
+// ToInternalError turns validation errors on an object the server built, such
+// as the final value about to be stored, into an Internal error. Callers check
+// len(errs) > 0 first.
+func ToInternalError(errs field.ErrorList) error {
+	return apierror.Internal("%s", validationMessage(errs))
+}
+
+// validationMessage renders errs as error text, with the debug_redact fields of
+// proto bad values masked and nil entries dropped.
+func validationMessage(errs field.ErrorList) string {
+	agg := redactBadValues(errs).ToAggregate()
+	if agg == nil {
+		return "validation failed"
+	}
+	return agg.Error()
+}
+
+// redactBadValues masks the debug_redact fields of any proto message an error
+// carries as its bad value. A duplicate entry error carries the whole entry
+// (an EnvVar with its value), and the error text renders it as JSON; the RPC
+// interceptors log that text as a string, which the logging handler's proto
+// redaction cannot see into. Nil entries are dropped, as rendering one panics.
+// errs is left unmodified.
+func redactBadValues(errs field.ErrorList) field.ErrorList {
+	var out field.ErrorList
+	copied := false
+	for i, e := range errs {
+		r := e
+		if e != nil {
+			if m, ok := e.BadValue.(proto.Message); ok {
+				if masked, changed := protoredact.Redacted(m); changed {
+					c := *e
+					c.BadValue = masked
+					r = &c
+				}
+			}
+		}
+		if !copied && (e == nil || r != e) {
+			out = slices.Clone(errs[:i])
+			copied = true
+		}
+		if copied && r != nil {
+			out = append(out, r)
+		}
+	}
+	if !copied {
+		return errs
+	}
+	return out
 }
 
 // DeepEqual compares two values of any type, using proto.Equal if both are
