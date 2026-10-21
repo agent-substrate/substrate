@@ -834,9 +834,14 @@ groups:
     stability: development
     brief: The number of workers in each pool, divided by state and by sandbox class.
     note: >
-      ateapi reads this value with a callback. You can add the counts together.
-      The sum across the states is the size of the pool. The sum across the
-      pools is the size of the fleet. Thus this instrument is an UpDownCounter
+      ateapi reads this value with a callback. Each ateapi replica reports the
+      whole fleet, and the default install runs two replicas. Thus a sum across
+      the replicas counts each worker once for each replica. Take the maximum
+      across the replicas first, by pool namespace, pool, state and sandbox
+      class, and add after that. Within one replica you can add the counts
+      together. The sum across the states is the size of the pool. The sum
+      across the pools is the size of the fleet. Thus this instrument is an
+      UpDownCounter
       and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
       full pool or an empty pool reports 0. An absent series would stop an alert
       on idle == 0.
