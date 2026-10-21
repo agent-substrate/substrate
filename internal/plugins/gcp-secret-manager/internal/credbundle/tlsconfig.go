@@ -24,9 +24,9 @@ import (
 // It is the server-side subset of substrate's internal/credbundle.ServerConfig,
 // copied so this module depends only on substrate's public packages.
 type ServerConfig struct {
-	// GetCertificate presents this side's serving identity, e.g. Loader.
-	// Required.
-	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+	// CertPath is a credential bundle file presenting this side's serving
+	// identity, in the format Loader reads. Required.
+	CertPath string
 
 	// ClientCAPath is a PEM file of CA certificates a client certificate must
 	// chain to. Empty leaves ClientCAs unset: ClientAuth still applies, but a
@@ -58,15 +58,20 @@ type ServerConfig struct {
 // — no InsecureSkipVerify or manual verification needed. VerifyPeer layers on
 // any identity check beyond that.
 func PrepareServerTLSConfig(cfg ServerConfig) (*tls.Config, error) {
-	if cfg.GetCertificate == nil {
-		return nil, fmt.Errorf("credbundle: GetCertificate is required")
+	if cfg.CertPath == "" {
+		return nil, fmt.Errorf("credbundle: CertPath is required")
+	}
+
+	getCertificate := Loader(cfg.CertPath)
+	if _, err := getCertificate(nil); err != nil {
+		return nil, fmt.Errorf("credbundle: loading credential bundle: %w", err)
 	}
 
 	if cfg.ClientCAPath == "" {
 		return &tls.Config{
 			MinVersion:     tls.VersionTLS13,
 			NextProtos:     cfg.NextProtos,
-			GetCertificate: cfg.GetCertificate,
+			GetCertificate: getCertificate,
 			ClientAuth:     cfg.ClientAuth,
 		}, nil
 	}
@@ -100,7 +105,7 @@ func PrepareServerTLSConfig(cfg ServerConfig) (*tls.Config, error) {
 			return &tls.Config{
 				MinVersion:       tls.VersionTLS13,
 				NextProtos:       cfg.NextProtos,
-				GetCertificate:   cfg.GetCertificate,
+				GetCertificate:   getCertificate,
 				ClientAuth:       cfg.ClientAuth,
 				ClientCAs:        clientCAs,
 				VerifyConnection: verifyConnection,

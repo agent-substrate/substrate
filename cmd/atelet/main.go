@@ -2357,13 +2357,13 @@ func ateletServerTLSConfig(servingBundlePath, clientCAPath string, verifyClient 
 		return nil, fmt.Errorf("client authorization callback is required")
 	}
 	cfg, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
-		GetCertificate: credbundle.Loader(servingBundlePath),
-		ClientCAPath:   clientCAPath,
-		ClientAuth:     tls.RequireAndVerifyClientCert,
-		VerifyPeer:     verifyClient,
+		CertPath:     servingBundlePath,
+		ClientCAPath: clientCAPath,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		VerifyPeer:   verifyClient,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("load CA bundle %s: %w", clientCAPath, err)
+		return nil, fmt.Errorf("configuring server TLS: %w", err)
 	}
 	return cfg, nil
 }

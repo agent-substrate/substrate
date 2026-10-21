@@ -32,7 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/credbundle"
 )
 
 func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
@@ -244,7 +244,7 @@ func TestLogFlagValuesDoesNotLogThePostgresPassword(t *testing.T) {
 }
 
 func TestBuildServerTLSConfigWithoutCACertsAllowsCertlessClients(t *testing.T) {
-	cfg, err := buildServerTLSConfig(context.Background(), "/nonexistent-cred-bundle.pem", "")
+	cfg, err := buildServerTLSConfig(context.Background(), testCredentialBundlePath(t), "")
 	if err != nil {
 		t.Fatalf("buildServerTLSConfig() error = %v", err)
 	}
@@ -254,7 +254,7 @@ func TestBuildServerTLSConfigWithoutCACertsAllowsCertlessClients(t *testing.T) {
 }
 
 func TestBuildServerTLSConfigRejectsUnreadableCACerts(t *testing.T) {
-	_, err := buildServerTLSConfig(context.Background(), "/nonexistent-cred-bundle.pem", filepath.Join(t.TempDir(), "absent.pem"))
+	_, err := buildServerTLSConfig(context.Background(), testCredentialBundlePath(t), filepath.Join(t.TempDir(), "absent.pem"))
 	if err == nil {
 		t.Fatalf("buildServerTLSConfig() error = nil, want an error for a missing CA file")
 	}
@@ -268,7 +268,7 @@ func TestBuildServerTLSConfigReloadsCACertsWithoutRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "trust-bundle.pem")
 	writeCA(t, path, "ca-one")
 
-	cfg, err := buildServerTLSConfig(context.Background(), "/nonexistent-cred-bundle.pem", path)
+	cfg, err := buildServerTLSConfig(context.Background(), testCredentialBundlePath(t), path)
 	if err != nil {
 		t.Fatalf("buildServerTLSConfig() error = %v", err)
 	}
@@ -348,3 +348,36 @@ func TestRejectStorageEnv(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// testCredentialBundlePath writes a self-signed cert and PKCS8 key, in the
+// format credbundle.Parse expects, and returns its path.
+func testCredentialBundlePath(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("CreateCertificate() error = %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("MarshalPKCS8PrivateKey() error = %v", err)
+	}
+	bundle := append(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...,
+	)
+	path := filepath.Join(t.TempDir(), "credential-bundle.pem")
+	if err := os.WriteFile(path, bundle, 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
+	}
+	return path
+}

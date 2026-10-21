@@ -34,17 +34,26 @@ import (
 
 const testCallerID = "spiffe://cluster.local/ns/ate-system/sa/caller"
 
-func TestPrepareServerTLSConfigRequiresGetCertificate(t *testing.T) {
+func TestPrepareServerTLSConfigRequiresCertPath(t *testing.T) {
 	if _, err := PrepareServerTLSConfig(ServerConfig{}); err == nil {
 		t.Fatalf("PrepareServerTLSConfig() error = nil, want an error")
 	}
 }
 
+func TestPrepareServerTLSConfigRejectsUnreadableCertPath(t *testing.T) {
+	cfg := ServerConfig{
+		CertPath: filepath.Join(t.TempDir(), "absent.pem"),
+	}
+	if _, err := PrepareServerTLSConfig(cfg); err == nil {
+		t.Fatalf("PrepareServerTLSConfig() error = nil, want a missing-file error")
+	}
+}
+
 func TestPrepareServerTLSConfigRejectsUnreadableClientCA(t *testing.T) {
 	cfg := ServerConfig{
-		GetCertificate: Loader(writeBundle(t, makeBundle(t, 1))),
-		ClientCAPath:   filepath.Join(t.TempDir(), "absent.pem"),
-		ClientAuth:     tls.RequireAndVerifyClientCert,
+		CertPath:     writeBundle(t, makeBundle(t, 1)),
+		ClientCAPath: filepath.Join(t.TempDir(), "absent.pem"),
+		ClientAuth:   tls.RequireAndVerifyClientCert,
 	}
 	if _, err := PrepareServerTLSConfig(cfg); err == nil {
 		t.Fatalf("PrepareServerTLSConfig() error = nil, want a missing-file error")
@@ -66,10 +75,10 @@ func TestPrepareServerTLSConfigHandshakeAndCARotation(t *testing.T) {
 	writeFileWithMtime(t, clientCAPath, callerCA1.certPEM, time.Now())
 
 	serverCfg, err := PrepareServerTLSConfig(ServerConfig{
-		GetCertificate: Loader(serverBundle),
-		ClientCAPath:   clientCAPath,
-		ClientAuth:     tls.RequireAndVerifyClientCert,
-		VerifyPeer:     verifyPeerURI(testCallerID),
+		CertPath:     serverBundle,
+		ClientCAPath: clientCAPath,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		VerifyPeer:   verifyPeerURI(testCallerID),
 	})
 	if err != nil {
 		t.Fatalf("PrepareServerTLSConfig() error = %v", err)

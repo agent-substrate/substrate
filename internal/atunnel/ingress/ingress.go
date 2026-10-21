@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,9 +75,8 @@ type Config struct {
 
 // Server is an HTTPS reverse proxy for the worker's active actors.
 type Server struct {
-	credentialBundlePath string
-	tlsConfig            *tls.Config
-	upstream             *url.URL
+	tlsConfig *tls.Config
+	upstream  *url.URL
 	// Overridable by tests to avoid dialing real sandboxes.
 	newProxy func(DialFunc) *httputil.ReverseProxy
 
@@ -116,26 +114,16 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("ingress: upstream URL is required")
 	}
 
-	// Load once at startup so a malformed or missing projection fails the pod
-	// promptly. GetCertificate reloads the bundle for every new TLS connection,
-	// allowing kubelet's projected certificate rotation to take effect.
-	if _, err := loadCredentialBundle(cfg.CredentialBundlePath); err != nil {
-		return nil, err
-	}
-
 	s := &Server{
-		credentialBundlePath: cfg.CredentialBundlePath,
-		upstream:             cfg.Upstream,
-		active:               map[resources.ActorRef]*activation{},
+		upstream: cfg.Upstream,
+		active:   map[resources.ActorRef]*activation{},
 	}
 	s.newProxy = func(dial DialFunc) *httputil.ReverseProxy {
 		return newActorProxy(cfg.Upstream, dial)
 	}
 
 	tlsConfig, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return loadCredentialBundle(s.credentialBundlePath)
-		},
+		CertPath:     cfg.CredentialBundlePath,
 		ClientCAPath: cfg.TrustBundlePath,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		VerifyPeer: func(cs tls.ConnectionState) error {
@@ -247,18 +235,6 @@ var _ interface{ CloseIdleConnections() } = protocolMirrorTransport{}
 func (t protocolMirrorTransport) CloseIdleConnections() {
 	t.h1.CloseIdleConnections()
 	t.h2c.CloseIdleConnections()
-}
-
-func loadCredentialBundle(path string) (*tls.Certificate, error) {
-	pemBytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("ingress: reading credential bundle: %w", err)
-	}
-	cert, err := tls.X509KeyPair(pemBytes, pemBytes)
-	if err != nil {
-		return nil, fmt.Errorf("ingress: parsing credential bundle: %w", err)
-	}
-	return &cert, nil
 }
 
 // Serve serves HTTPS on lis until ctx is canceled or the server fails.
