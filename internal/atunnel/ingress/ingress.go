@@ -122,10 +122,6 @@ func NewServer(cfg Config) (*Server, error) {
 	if _, err := loadCredentialBundle(cfg.CredentialBundlePath); err != nil {
 		return nil, err
 	}
-	loadClientCAs := credbundle.PoolLoader(cfg.TrustBundlePath)
-	if _, err := loadClientCAs(); err != nil {
-		return nil, fmt.Errorf("ingress: loading trust bundle: %w", err)
-	}
 
 	s := &Server{
 		credentialBundlePath: cfg.CredentialBundlePath,
@@ -135,42 +131,28 @@ func NewServer(cfg Config) (*Server, error) {
 	s.newProxy = func(dial DialFunc) *httputil.ReverseProxy {
 		return newActorProxy(cfg.Upstream, dial)
 	}
-	verifyConnection := func(cs tls.ConnectionState) error {
-		if len(cs.PeerCertificates) == 0 {
-			return fmt.Errorf("ingress: client certificate is required")
-		}
-		for _, uri := range cs.PeerCertificates[0].URIs {
-			if uri.String() == cfg.AllowedClientID {
-				return nil
-			}
-		}
-		return fmt.Errorf("ingress: client is not %q", cfg.AllowedClientID)
-	}
-	s.tlsConfig = &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		// GetConfigForClient reloads the trust bundle per connection: kubelet
-		// keeps the projected ClusterTrustBundle in sync with the signer, and
-		// this is what lets a long-lived worker see a CA rotation without a
-		// pod restart. Its returned Config replaces this one entirely for the
-		// handshake, so NextProtos must be repeated here rather than left to
-		// the outer Config.
-		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
-			clientCAs, err := loadClientCAs()
-			if err != nil {
-				return nil, err
-			}
-			return &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				NextProtos: []string{"h2", "http/1.1"},
-				GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-					return loadCredentialBundle(s.credentialBundlePath)
-				},
-				ClientAuth:       tls.RequireAndVerifyClientCert,
-				ClientCAs:        clientCAs,
-				VerifyConnection: verifyConnection,
-			}, nil
+
+	tlsConfig, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return loadCredentialBundle(s.credentialBundlePath)
 		},
+		ClientCAPath: cfg.TrustBundlePath,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		VerifyPeer: func(cs tls.ConnectionState) error {
+			for _, uri := range cs.PeerCertificates[0].URIs {
+				if uri.String() == cfg.AllowedClientID {
+					return nil
+				}
+			}
+			return fmt.Errorf("ingress: client is not %q", cfg.AllowedClientID)
+		},
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"h2", "http/1.1"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ingress: %w", err)
 	}
+	s.tlsConfig = tlsConfig
 	return s, nil
 }
 
