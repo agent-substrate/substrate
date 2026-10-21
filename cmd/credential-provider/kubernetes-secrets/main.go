@@ -53,7 +53,7 @@ var (
 	listenAddr   = pflag.String("listen-address", ":50051", "gRPC listen address")
 	metricsAddr  = pflag.String("metrics-address", ":9090", "Prometheus /metrics HTTP listen address")
 	healthAddr   = pflag.String("health-address", ":9091", "/readyz and /healthz HTTP listen address")
-	statusAddr   = pflag.String("status-address", ":4040", "/statusz HTTP listen address; empty disables the page")
+	statusAddr   = pflag.String("status-address", "127.0.0.1:4040", "/statusz HTTP listen address; defaults to loopback for port-forward access; empty disables the page")
 	serverBundle = pflag.String("server-cred-bundle", "", "credential bundle (PEM key+chain) presented for serving TLS (required)")
 	clientCAFile = pflag.String("client-ca-file", "", "CA bundle that caller (injector) client certificates must chain to (required)")
 	// The injector is the only caller allowed to fetch secrets. Its identity
