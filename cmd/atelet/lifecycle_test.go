@@ -346,9 +346,13 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		t.Fatalf("Checkpoint 2: %v", err)
 	}
 	snapshotFile2 := filepath.Join(ateletpath.LocalSnapshotDir(actorUID, snapshotName2), "checkpoint.img")
-	if _, err := os.Stat(ateletpath.LocalSnapshotDir(actorUID, snapshotName)); !os.IsNotExist(err) {
-		t.Fatalf("first local snapshot survived second checkpoint: %v", err)
-	}
+	// The first snapshot is pruned in the background once the second
+	// checkpoint has replied.
+	s.snapshots.Start()
+	waitFor(t, "the first local snapshot to be pruned", func() bool {
+		_, err := os.Stat(ateletpath.LocalSnapshotDir(actorUID, snapshotName))
+		return os.IsNotExist(err)
+	})
 	if _, err := os.Stat(snapshotFile2); err != nil {
 		t.Fatalf("second pause did not write the local snapshot: %v", err)
 	}
@@ -2665,9 +2669,9 @@ func TestCheckpointInFlightRejectsOlderGeneration(t *testing.T) {
 }
 
 // TestCheckpointSkipsStaleCommitAndKeepsNewerLocal checks that when a stalled
-// Checkpoint(gen=2) reaches CommitLocal and PruneLocalCheckpoints after a newer
-// snapshot (gen=3) has already committed locally, gen=3 stays tracked and its
-// local directory stays on disk while gen=2's local copy is pruned.
+// Checkpoint(gen=2) reaches CommitLocal after a newer snapshot (gen=3) has
+// already committed locally, gen=3 stays tracked and its local directory stays
+// on disk while gen=2's local copy is listed for a prune and pruned.
 func TestCheckpointSkipsStaleCommitAndKeepsNewerLocal(t *testing.T) {
 	a := runPluginActor(t)
 	started := make(chan struct{})
@@ -2715,10 +2719,12 @@ func TestCheckpointSkipsStaleCommitAndKeepsNewerLocal(t *testing.T) {
 	if !proto.Equal(res.resp.GetState(), wantState) {
 		t.Errorf("Checkpoint(pause-snap-2) state = %v, want %v (keeping pause-snap-3)", res.resp.GetState(), wantState)
 	}
+	a.s.snapshots.Start()
+	waitFor(t, "the stale local snapshot pause-snap-2 to be pruned", func() bool {
+		_, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2"))
+		return os.IsNotExist(err)
+	})
 	if _, err := os.Stat(snap3Dir); err != nil {
 		t.Errorf("newer local snapshot pause-snap-3: stat = %v, want kept", err)
-	}
-	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2")); !os.IsNotExist(err) {
-		t.Errorf("stale local snapshot pause-snap-2: stat = %v, want pruned", err)
 	}
 }

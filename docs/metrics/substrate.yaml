@@ -248,6 +248,15 @@ blind_spots:
       This component has no metrics. A relying party that cannot fetch the
       discovery document or key set sees only failed token verification; check
       the server's "Cannot publish the actor JWT keys" logs.
+  - area: local snapshot prune
+    code: cmd/atelet/internal/snapshottracker/prune.go
+    brief: >
+      The prune that deletes an actor's superseded local snapshots has no
+      instrument. Its duration shows only in the log line "Pruned the actor's
+      superseded local snapshots". A prune still due when the next Checkpoint
+      begins runs on the Checkpoint path, inside ate.snapshot.phase total with
+      no phase of its own, so a disk that cannot delete as fast as an actor
+      pauses shows as total exceeding the sum of the phases.
   - area: golden snapshot pipeline
     code: cmd/ateapi/internal/controlapi/template_reconciler.go
     brief: The template reconciler in ate-api has no instruments. Thus nothing measures a build of a golden image.

@@ -22,19 +22,18 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
 )
 
-// PruneLocalCheckpoints removes every local snapshot of the actor except those
-// named in keep. A missing directory is not an error, so retries are safe.
-func PruneLocalCheckpoints(ctx context.Context, actorUID string, keep ...string) error {
-	return pruneLocalCheckpointDir(ctx, ateletpath.LocalCheckpointsDir(actorUID), keep...)
+// PruneLocalCheckpoints removes every local snapshot of the actor, as a detach
+// or terminate does. A missing directory is not an error, so retries are safe.
+func PruneLocalCheckpoints(ctx context.Context, actorUID string) error {
+	return pruneLocalCheckpointDir(ctx, ateletpath.LocalCheckpointsDir(actorUID))
 }
 
-func pruneLocalCheckpointDir(ctx context.Context, dir string, keep ...string) error {
+func pruneLocalCheckpointDir(ctx context.Context, dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -45,12 +44,7 @@ func pruneLocalCheckpointDir(ctx context.Context, dir string, keep ...string) er
 	// Every entry is attempted: one undeletable snapshot must not strand the
 	// others on disk.
 	var errs []error
-	kept := false
 	for _, entry := range entries {
-		if slices.Contains(keep, entry.Name()) {
-			kept = true
-			continue
-		}
 		path := filepath.Join(dir, entry.Name())
 		if err := os.RemoveAll(path); err != nil {
 			errs = append(errs, fmt.Errorf("while pruning local checkpoint %s: %w", path, err))
@@ -61,10 +55,8 @@ func pruneLocalCheckpointDir(ctx context.Context, dir string, keep ...string) er
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	if !kept {
-		if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("while removing local checkpoints dir %s: %w", dir, err)
-		}
+	if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("while removing local checkpoints dir %s: %w", dir, err)
 	}
 	return nil
 }
