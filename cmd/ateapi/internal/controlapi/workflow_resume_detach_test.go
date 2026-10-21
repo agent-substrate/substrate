@@ -124,9 +124,11 @@ func TestDetachFromFullNode(t *testing.T) {
 		noIPs     bool
 		// nodeGone deletes node's Node object. nodeLookupErr fails every
 		// Node read, and cancelOnNodeLookup cancels the step during one.
-		nodeGone           bool
-		nodeLookupErr      error
-		cancelOnNodeLookup bool
+		// completeOnNodeLookup records the upload COMPLETED during one.
+		nodeGone             bool
+		nodeLookupErr        error
+		cancelOnNodeLookup   bool
+		completeOnNodeLookup bool
 		// before updates the actor after it was read and before the step
 		// runs, and during while atelet detaches it.
 		before, during func(*ateapipb.Actor)
@@ -273,6 +275,13 @@ func TestDetachFromFullNode(t *testing.T) {
 		wantCrashed: true,
 		wantCode:    codes.FailedPrecondition,
 	}, {
+		name:                 "node gone, upload completes during the node lookup: detaches",
+		node:                 "node-3",
+		otherNode:            true,
+		nodeGone:             true,
+		completeOnNodeLookup: true,
+		wantDetached:         true,
+	}, {
 		// A SUSPENDED actor never carries a crash record, so this state is
 		// synthetic. It checks that resume crashes only when the latest
 		// snapshot is not durable.
@@ -372,6 +381,21 @@ func TestDetachFromFullNode(t *testing.T) {
 				getNode = func(ctx context.Context, _ string) error {
 					cancel()
 					return ctx.Err()
+				}
+			}
+			if tt.completeOnNodeLookup {
+				lookup := getNode
+				getNode = func(ctx context.Context, name string) error {
+					cur, err := st.GetActor(ctx, actorRef)
+					if err != nil {
+						t.Errorf("GetActor: %v", err)
+					} else if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(cur), func(a *ateapipb.Actor) error {
+						a.Status.Snapshots[0].DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+						return nil
+					}); err != nil {
+						t.Errorf("UpdateActor: %v", err)
+					}
+					return lookup(ctx, name)
 				}
 			}
 			WithNodeGetter(getNode)(w.dialer)

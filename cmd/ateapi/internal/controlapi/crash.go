@@ -128,7 +128,12 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
+	return crashActorVersion(ctx, st, actorRef, actor, opName, message)
+}
 
+// crashActorVersion is crashActor for actor as already read. It fails with
+// store.ErrVersionConflict if the actor changed since.
+func crashActorVersion(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, actor *ateapipb.Actor, opName, message string) error {
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 	opName = ateattr.NormalizeOperationName(opName)
 
