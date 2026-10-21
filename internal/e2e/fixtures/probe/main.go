@@ -26,16 +26,20 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -350,6 +354,7 @@ func parseFetchHeaders(params []string) (http.Header, error) {
 // injected credential echoed back by a headers-echo endpoint). Failures land
 // in "error" rather than the HTTP status: a TLS verification failure is a
 // result for the suite to assert on, not a broken probe.
+// "tls_handshake" reports "complete", "closed", or "failed" when TLS was tried.
 //
 // Redirects are not followed — a cross-scheme redirect would silently hop
 // between the gateway's cleartext and TLS legs, flipping the very behavior
@@ -450,7 +455,24 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 	for name, values := range headers {
 		req.Header[name] = values
 	}
+	var handshake atomic.Value
+	// An HTTP failure alone can pass a denial test because of an unrelated
+	// certificate error or a close after TLS. Report handshake closure separately.
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+			result := "complete"
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) {
+				result = "closed"
+			} else if err != nil {
+				result = "failed"
+			}
+			handshake.Store(result)
+		},
+	}))
 	res, err := client.Do(req)
+	if result, ok := handshake.Load().(string); ok {
+		resp["tls_handshake"] = result
+	}
 	if err != nil {
 		resp["error"] = err.Error()
 		writeJSON(w, resp)

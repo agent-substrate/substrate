@@ -830,6 +830,166 @@ func TestRenderRouterAllowedSPIFFEIDs(t *testing.T) {
 	}
 }
 
+func TestRenderAgentgatewayStaticMTLS(t *testing.T) {
+	const (
+		idA = "spiffe://cluster.local/ns/a/sa/a"
+		idB = "spiffe://cluster.local/ns/b/sa/b"
+	)
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+	resolver := images.NewPrebuilt(src, func(context.Context, string) (string, error) {
+		return "sha256:" + strings.Repeat("2", 64), nil
+	})
+	for _, tc := range []struct {
+		name   string
+		render func(*Env) ([]byte, error)
+	}{
+		{
+			name: "system bundle",
+			render: func(e *Env) ([]byte, error) {
+				return e.renderSystemManifests(t.Context())
+			},
+		},
+		{
+			name: "router redeploy",
+			render: func(e *Env) ([]byte, error) {
+				return e.renderAtenetRouterManifest(t.Context())
+			},
+		},
+		{
+			name: "kind system bundle",
+			render: func(e *Env) ([]byte, error) {
+				e.Cfg.Kind = true
+				return e.renderSystemManifests(t.Context())
+			},
+		},
+		{
+			name: "egress redeploy",
+			render: func(e *Env) ([]byte, error) {
+				return e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Root:                    repoRoot(t),
+				Router:                  config.RouterAgentgateway,
+				IngressAllowedSPIFFEIDs: []string{idA, idB},
+				Images:                  src,
+			}
+			e := &Env{Cfg: cfg, resolver: resolver}
+			manifest, err := tc.render(e)
+			if err != nil {
+				t.Fatalf("rendering static-mtls AgentGateway manifests: %v", err)
+			}
+			cm := agentgatewayRouterConfig(t, manifest)
+			var gateway map[string]interface{}
+			if err := yaml.Unmarshal([]byte(cm.Data["config.yaml"]), &gateway); err != nil {
+				t.Fatalf("parsing rendered AgentGateway config: %v", err)
+			}
+			gateways, ok := gateway["gateways"].(map[string]interface{})
+			if !ok {
+				t.Fatal("rendered AgentGateway config has no gateways mapping")
+			}
+			if _, exists := gateways["http"]; exists {
+				t.Error("static-mtls config still has a plaintext HTTP gateway")
+			}
+			https, ok := gateways["https"].(map[string]interface{})
+			if !ok {
+				t.Fatal("static-mtls config has no HTTPS gateway")
+			}
+			assertAgentgatewayClientRoot(t, https)
+			policies := gateway["frontendPolicies"].(map[string]interface{})
+			authorization := policies["networkAuthorization"].(map[string]interface{})
+			wantRules := []interface{}{
+				map[string]interface{}{"allow": fmt.Sprintf("source.spiffeId in [%q,%q]", idA, idB)},
+			}
+			if got := authorization["rules"]; !reflect.DeepEqual(got, wantRules) {
+				t.Errorf("network authorization rules = %v, want %v", got, wantRules)
+			}
+
+			binds, ok := gateway["binds"].([]interface{})
+			if !ok {
+				t.Fatal("rendered AgentGateway config has no binds list")
+			}
+			var connectTLSListener map[string]interface{}
+			for _, item := range binds {
+				bind, ok := item.(map[string]interface{})
+				if !ok {
+					t.Fatalf("invalid bind in rendered AgentGateway config: %T", item)
+				}
+				port, ok := bind["port"].(float64)
+				if !ok {
+					if _, exists := bind["port"]; exists {
+						t.Fatalf("invalid bind port in rendered AgentGateway config: %v", bind["port"])
+					}
+					continue
+				}
+				if port == 8081 {
+					t.Error("static-mtls config still has a plaintext CONNECT bind")
+				}
+				if port != 8444 {
+					continue
+				}
+				listeners, ok := bind["listeners"].([]interface{})
+				if !ok {
+					t.Fatal("TLS CONNECT bind has no listeners")
+				}
+				for _, listenerValue := range listeners {
+					listener, ok := listenerValue.(map[string]interface{})
+					if ok && listener["protocol"] == "HTTPS" {
+						connectTLSListener = listener
+					}
+				}
+			}
+			if connectTLSListener == nil {
+				t.Fatal("static-mtls config has no TLS CONNECT listener")
+			}
+			assertAgentgatewayClientRoot(t, connectTLSListener)
+
+			t.Run("without IDs", func(t *testing.T) {
+				cfg.IngressAllowedSPIFFEIDs = nil
+				_, err := tc.render(e)
+				var required *config.RequiredError
+				if !errors.As(err, &required) {
+					t.Fatalf("render error = %v, want a RequiredError", err)
+				}
+			})
+		})
+	}
+}
+
+func agentgatewayRouterConfig(t *testing.T, manifest []byte) *corev1.ConfigMap {
+	t.Helper()
+	for _, doc := range strings.Split(string(manifest), "\n---\n") {
+		var cm corev1.ConfigMap
+		if err := yaml.Unmarshal([]byte(doc), &cm); err != nil {
+			t.Fatalf("rendered document is not valid YAML: %v", err)
+		}
+		if cm.Kind == "ConfigMap" && cm.Name == "atenet-router-agentgateway-config" {
+			if cm.Data["config.yaml"] == "" {
+				t.Fatal("AgentGateway router ConfigMap has no config.yaml")
+			}
+			return &cm
+		}
+	}
+	t.Fatal("rendered manifest has no AgentGateway router ConfigMap")
+	return nil
+}
+
+func assertAgentgatewayClientRoot(t *testing.T, config map[string]interface{}) {
+	t.Helper()
+	tls, ok := config["tls"].(map[string]interface{})
+	if !ok {
+		t.Fatal("TLS listener has no TLS config")
+	}
+	if got := tls["root"]; got != "/run/podidentity.podcert.ate.dev/trust-bundle.pem" {
+		t.Errorf("TLS client CA = %v, want podidentity trust bundle", got)
+	}
+	if _, exists := tls["allowedClientSpiffeIds"]; exists {
+		t.Error("allowlist must use the existing network authorization policy")
+	}
+}
+
 // routerArgs returns the atenet-router container's args from a rendered
 // manifest.
 func routerArgs(t *testing.T, manifest []byte) []string {
@@ -953,7 +1113,12 @@ func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
 			e := &Env{
-				Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterAgentgateway, Images: src},
+				Cfg: &config.Config{
+					Root:                    repoRoot(t),
+					Router:                  config.RouterAgentgateway,
+					Images:                  src,
+					IngressAllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/client/sa/client"},
+				},
 				resolver: images.NewPrebuilt(src, func(context.Context, string) (string, error) {
 					return "sha256:" + strings.Repeat("2", 64), nil
 				}),

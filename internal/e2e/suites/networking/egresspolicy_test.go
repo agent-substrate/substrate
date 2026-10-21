@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"go.ate.dev/substrate/internal/clustertrustbundle"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -169,7 +168,7 @@ func TestActorEgressHTTPSByHostname(t *testing.T) {
 		if !dataplane.IsEgressPolicyDenied(status, string(body)) {
 			t.Fatalf("fetch of %s, outside the policy, returned HTTP %d, want an egress-policy denial; body: %s", url, status, body)
 		}
-		// Envoy denies by closing the connection, which the actor reports as
+		// Denied TLS closes at ClientHello, which the actor reports as
 		// the same 502 as any failed fetch; a certificate error in it means the
 		// handshake reached the origin.
 		if got := decodeEgressFetch(t, body); strings.Contains(got.Error, "x509") || strings.Contains(got.Error, "certificate") {
@@ -202,19 +201,6 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	// Ask egres actor to POST to /fetch on the test server. Test server /fetch handler
 	// waits for the entire body before responding.
 	url := "https://" + address + "/fetch"
-	bundles, err := clustertrustbundle.NewClient(e2e.GetClients().K8s, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle, err := bundles.Get(ctx, e2e.EgressTrustBundleObjectName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("getting egress MITM trust bundle: %v", err)
-	}
-	if bundle.Spec.TrustBundle == "" {
-		t.Fatal("egress MITM trust bundle is empty")
-	}
-	// Trust the origin before revocation and the intercepting gateway afterward.
-	rootCA += "\n" + bundle.Spec.TrustBundle
 	postPayload, err := json.Marshal(map[string]string{"url": url, "rootCA": rootCA})
 	if err != nil {
 		t.Fatalf("marshaling /post request: %v", err)

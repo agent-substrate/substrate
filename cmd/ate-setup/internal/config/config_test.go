@@ -287,8 +287,7 @@ func TestLoadIngressAllowedSPIFFEIDs(t *testing.T) {
 	}
 }
 
-// Only the Envoy router authenticates clients against the allowlist, and it
-// refuses to start without one.
+// Both ingress dataplanes require an allowlist.
 func TestRequireIngressAllowedSPIFFEIDs(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -297,7 +296,8 @@ func TestRequireIngressAllowedSPIFFEIDs(t *testing.T) {
 	}{
 		{name: "envoy without IDs", cfg: Config{Router: RouterEnvoy}, wantErr: true},
 		{name: "envoy with IDs", cfg: Config{Router: RouterEnvoy, IngressAllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/a/sa/a"}}},
-		{name: "agentgateway without IDs", cfg: Config{Router: RouterAgentgateway}},
+		{name: "agentgateway without IDs", cfg: Config{Router: RouterAgentgateway}, wantErr: true},
+		{name: "agentgateway with IDs", cfg: Config{Router: RouterAgentgateway, IngressAllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/a/sa/a"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.cfg.RequireIngressAllowedSPIFFEIDs()
