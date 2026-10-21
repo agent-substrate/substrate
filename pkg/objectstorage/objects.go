@@ -424,12 +424,12 @@ func fetchFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL strin
 		}
 	}()
 
-	// An object of one chunk arrives as one stream. The serial decoder overlaps
-	// decoding with the download. parZstdReader cannot start a frame until all
-	// of it has arrived.
-	size, ok := ObjectSize(rc)
+	// Only a rangedReader downloads ahead of the decoder. From one stream, the
+	// serial decoder overlaps decoding with the download, while parZstdReader
+	// cannot start a frame until all of it has arrived.
+	_, ranged := rc.(*rangedReader)
 	t0 := time.Now()
-	res, err := decodeContent(out, rc, ok && size > downloadChunkSize)
+	res, err := decodeContent(out, rc, ranged)
 	if err != nil {
 		return err
 	}

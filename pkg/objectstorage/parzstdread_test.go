@@ -129,8 +129,9 @@ func TestReadZstdFrameBoundsUnsizedSmallFrames(t *testing.T) {
 		if err != nil || !ok || frame == nil {
 			t.Fatalf("n=%d: ok=%v err=%v, want a parallel-decodable frame", n, ok, err)
 		}
-		if maxSize < n || maxSize > parZstdMaxFrame {
-			t.Errorf("n=%d: maxSize=%d, want a bound in [n, parZstdMaxFrame]", n, maxSize)
+		// A declared size would make maxSize n.
+		if maxSize <= n || maxSize > parZstdMaxFrame {
+			t.Errorf("n=%d: maxSize=%d, want a block-count bound in (n, parZstdMaxFrame]", n, maxSize)
 		}
 	}
 }
