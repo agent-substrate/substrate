@@ -37,6 +37,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
@@ -420,6 +421,20 @@ func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.Res
 	}
 	if metadata.GetVersion() != version {
 		return fmt.Errorf("%s version projection %d does not match proto metadata version %d", resource, version, metadata.GetVersion())
+	}
+	return nil
+}
+
+// validateSnapshotURIs requires the URI of every durable snapshot to parse, so
+// readers can rely on resources.ParseSnapshotURI.
+func validateSnapshotURIs(resource string, snapshots ...*ateapipb.Snapshot) error {
+	for _, snap := range snapshots {
+		if snap.GetDurableSnapshot() == nil {
+			continue
+		}
+		if _, err := resources.ParseSnapshotURI(snap.GetDurableSnapshot().GetObject().GetSnapshotUri()); err != nil {
+			return fmt.Errorf("%s snapshot %s: %w", resource, snap.GetUuid(), err)
+		}
 	}
 	return nil
 }

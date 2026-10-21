@@ -643,6 +643,30 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 	})
 
+	t.Run("Actor_MalformedSnapshotURI", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		const malformedURI = "gs://private/not-a-snapshot"
+
+		actor := newTestSuspendedActor(testAtespace, "session-1")
+		actor.Status.Snapshots[0].DurableSnapshot.Object.SnapshotUri = malformedURI
+		if _, err := s.CreateActor(ctx, actor); err == nil {
+			t.Errorf("CreateActor with a malformed snapshot URI succeeded, want an error")
+		}
+
+		created, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, "session-2"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
+			toUpdate.Status.Snapshots[0].DurableSnapshot.Object.SnapshotUri = malformedURI
+			return nil
+		}); err == nil {
+			t.Errorf("UpdateActor to a malformed snapshot URI succeeded, want an error")
+		}
+	})
+
 	t.Run("UpdateActor_Success", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -1636,6 +1660,31 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		tag.Metadata.Atespace = "team-missing"
 		if _, err := s.CreateTag(ctx, tag); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("CreateTag in an unknown atespace = %v, want ErrFailedPrecondition", err)
+		}
+	})
+
+	t.Run("Tag_MalformedSnapshotURI", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		actor := seedSuspendedActor(t, s, "team-a", "actor-1")
+
+		malformed := newTestInProgressTag("production", actor)
+		malformed.Status.Snapshot.DurableSnapshot.Object.SnapshotUri = "gs://private/not-a-snapshot"
+		if _, err := s.CreateTag(ctx, malformed); err == nil {
+			t.Errorf("CreateTag with a malformed snapshot URI succeeded, want an error")
+		}
+
+		input := newTestInProgressTag("staging", actor)
+		input.Status.Snapshot = nil
+		reserved, err := s.CreateTag(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateTag without a snapshot failed: %v", err)
+		}
+		if _, err := s.UpdateTag(ctx, resources.TagRefFromTag(reserved), store.PreconditionFrom(reserved), func(toUpdate *ateapipb.Tag) error {
+			toUpdate.Status.Snapshot = proto.CloneOf(malformed.Status.Snapshot)
+			return nil
+		}); err == nil {
+			t.Errorf("recording a malformed snapshot URI succeeded, want an error")
 		}
 	})
 

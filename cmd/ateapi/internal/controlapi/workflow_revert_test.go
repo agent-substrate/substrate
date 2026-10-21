@@ -137,7 +137,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			// latest snapshot is the completed local one; the other origins
 			// also carry the half-written local snapshot an interrupted suspend
 			// leaves.
-			const keptURI = "gs://snapshots/team-a/actors/keep/snapshot"
+			const keptURI = "gs://snapshots/atespaces/team-a/actors/keep/snapshots/snapshot"
 			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
 			mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
 				local1 := newPausedSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1")
@@ -265,7 +265,7 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 					snap.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
 				}
 				s.Snapshots = []*ateapipb.Snapshot{
-					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, snap.GetFidelity(), "", "older", "gs://snapshots/team-a/actors/older/snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, snap.GetFidelity(), "", "older", "gs://snapshots/atespaces/team-a/actors/older/snapshots/snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					snap,
 				}
 				if tt.assigned {

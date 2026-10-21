@@ -157,16 +157,11 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	return actor, actorTemplate, nil
 }
 
-// checkSnapshotURI fails with DataLoss when the URI of snapshotToResume does
-// not parse. A local restore also names the snapshot's upload, so its URI
-// must parse too.
-func checkSnapshotURI(actorRef resources.ActorRef, actor *ateapipb.Actor) error {
-	snap := snapshotToResume(actor.GetStatus())
-	if snap == nil {
-		return nil
-	}
-	if _, err := resources.ParseSnapshotURI(snap.GetDurableSnapshot().GetObject().GetSnapshotUri()); err != nil {
-		return apierror.DataLoss("Actor %s snapshot %s: %v", actorRef, snap.GetUuid(), err)
+// checkSnapshotUpload fails with DataLoss when snapshotToResume records no
+// upload. A local restore also names the snapshot's upload.
+func checkSnapshotUpload(actorRef resources.ActorRef, actor *ateapipb.Actor) error {
+	if snap := snapshotToResume(actor.GetStatus()); snap != nil && snap.GetDurableSnapshot() == nil {
+		return apierror.DataLoss("Actor %s snapshot %s records no upload", actorRef, snap.GetUuid())
 	}
 	return nil
 }
@@ -462,7 +457,7 @@ func schedulerRecordable(err error) bool {
 // inputs; any other status aborts the resume.
 func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, _ *ateapipb.Worker, err error) {
 	// Checked before a worker is claimed.
-	if err := checkSnapshotURI(actorRef, actor); err != nil {
+	if err := checkSnapshotUpload(actorRef, actor); err != nil {
 		return nil, nil, err
 	}
 	start := time.Now()
@@ -762,7 +757,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	defer func() { err = done(err) }()
 
 	// A re-entered resume skips assignWorkerAttempt, which checks this too.
-	if err := checkSnapshotURI(actorRef, actor); err != nil {
+	if err := checkSnapshotUpload(actorRef, actor); err != nil {
 		return tele, 0, err
 	}
 

@@ -36,6 +36,9 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	// fix it later.
 	dbActor := proto.Clone(actor).(*ateapipb.Actor)
 	setCreateMetadata(dbActor.Metadata)
+	if err := validateSnapshotURIs("actor "+resources.ActorRefFromActor(dbActor).String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
+		return nil, err
+	}
 
 	protoBytes, err := proto.Marshal(dbActor)
 	if err != nil {
@@ -116,6 +119,9 @@ func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorR
 		if err := mutate(dbActor); err != nil {
 			return nil, err
 		}
+	}
+	if err := validateSnapshotURIs("actor "+actorRef.String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
+		return nil, err
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.

@@ -329,10 +329,10 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	}
 }
 
-// TestEnsureWorkerAssigned_MalformedSnapshotURIClaimsNoWorker verifies that a
-// snapshot URI that does not parse fails the resume before a worker is claimed,
+// TestEnsureWorkerAssigned_MissingUploadClaimsNoWorker verifies that a local
+// snapshot that records no upload fails the resume before a worker is claimed,
 // so the actor stays SUSPENDED and the worker stays free.
-func TestEnsureWorkerAssigned_MalformedSnapshotURIClaimsNoWorker(t *testing.T) {
+func TestEnsureWorkerAssigned_MissingUploadClaimsNoWorker(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 
@@ -362,9 +362,9 @@ func TestEnsureWorkerAssigned_MalformedSnapshotURIClaimsNoWorker(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
 		a.Status.LastAssignedGeneration = 1
-		a.Status.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "not-a-valid-snapshot-uri", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-		}
+		snap := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "node-1")
+		snap.DurableSnapshot = nil
+		a.Status.Snapshots = []*ateapipb.Snapshot{snap}
 	})
 	actor, err := persistence.GetActor(ctx, actorRef)
 	if err != nil {
@@ -1346,7 +1346,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	const localSnapshotName = "pause-snap-1"
 	// durableSnapshotName is the uuid of every durable snapshot a row seeds.
 	const durableSnapshotName = "snap-1"
-	const malformedURI = "not-a-valid-snapshot-uri"
 
 	actorURI := someActorSnapshotURI(t, testStorageLocation, "team-a", durableSnapshotName)
 	goldenURI := someActorSnapshotURI(t, "gs://bucket/golden-root", "team-a", "golden-1")
@@ -1479,12 +1478,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{run: true},
 		},
 		{
-			name:  "04 inherited golden snapshot rejects a malformed URI",
-			actor: actorSeed{externalSnapshot: extSnap(malformedURI, fullScope), tmplUID: "current"},
-			tmpl:  templateSeed{golden: extSnap(malformedURI, fullScope)},
-			want:  restoreWant{code: codes.DataLoss},
-		},
-		{
 			name:  "05 template repoint with a late golden still cold-boots",
 			actor: actorSeed{tmplUID: "old-template-uid"},
 			tmpl:  templateSeed{golden: extSnap(goldenURI, fullScope)},
@@ -1589,11 +1582,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 			},
-		},
-		{
-			name:  "12 malformed durable snapshot URI fails with DataLoss",
-			actor: actorSeed{externalSnapshot: extSnap(malformedURI, fullScope)},
-			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
 			// An async suspend snapshot's upload is PENDING until atelet reports
@@ -1858,19 +1846,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		},
 		{
 			// A local restore names the local snapshot's upload, so a record
-			// that cannot name it fails, as a malformed durable snapshot URI
-			// does.
+			// that cannot name it fails.
 			name:  "26 local snapshot with no upload recorded fails with DataLoss",
 			actor: actorSeed{localSnapshot: localSnapWithUpload(localSnapshotName, fullScope, nil)},
 			want:  restoreWant{code: codes.DataLoss},
-		},
-		{
-			name: "27 local snapshot with a malformed upload URI fails with DataLoss",
-			actor: actorSeed{localSnapshot: localSnapWithUpload(localSnapshotName, fullScope, &ateapipb.SnapshotStorage{
-				Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
-				Object: &ateapipb.ObjectSnapshot{SnapshotUri: malformedURI},
-			})},
-			want: restoreWant{code: codes.DataLoss},
 		},
 	}
 

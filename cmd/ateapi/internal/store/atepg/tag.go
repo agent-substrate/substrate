@@ -159,6 +159,9 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapi
 	name := tag.GetMetadata().GetName()
 	dbTag := proto.CloneOf(tag)
 	setCreateMetadata(dbTag.Metadata)
+	if err := validateSnapshotURIs(fmt.Sprintf("tag %s/%s", atespace, name), dbTag.GetStatus().GetSnapshot()); err != nil {
+		return nil, err
+	}
 	protoBytes, err := proto.Marshal(dbTag)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling tag: %w", err)
@@ -262,6 +265,9 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	// TODO: this should be done through DV and removed from here
 	if err := validateUpdateTagMutation(tagBeforeMutation, dbTag); err != nil {
 		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
+	}
+	if err := validateSnapshotURIs(fmt.Sprintf("tag %s/%s", atespace, name), dbTag.GetStatus().GetSnapshot()); err != nil {
+		return nil, err
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.

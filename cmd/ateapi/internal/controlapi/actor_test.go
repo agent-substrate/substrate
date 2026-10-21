@@ -462,10 +462,6 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		}
 		return uri.String()
 	}
-	unparseableSnapshot := func(*testing.T, *ateapipb.Actor) string {
-		return sameLocation + "/not-a-snapshot"
-	}
-
 	tests := []struct {
 		name     string
 		template string
@@ -540,13 +536,6 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			snapshot:  snapshotOwnedByActor,
 			repointTo: "different-location",
 			wantCode:  codes.FailedPrecondition,
-		},
-		{
-			name:      "unparseable snapshot",
-			template:  "same-location",
-			snapshot:  unparseableSnapshot,
-			repointTo: "different-location",
-			wantCode:  codes.Internal,
 		},
 		{
 			name:      "invalid storage location on the new template",
