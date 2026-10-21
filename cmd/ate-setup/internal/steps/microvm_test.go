@@ -436,7 +436,7 @@ func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 			}
 			for _, arch := range microvmArches {
 				for _, asset := range microvmAssets {
-					wantURL := tc.scheme + "://" + tc.bucket + "/kata-assets/" + arch + "/" + asset
+					wantURL := tc.scheme + "://" + tc.bucket + "/" + microvmAssetsPrefix + "/" + defaultMicroVMAssetVersion + "/" + arch + "/" + asset
 					if !strings.Contains(string(rendered), wantURL) {
 						t.Errorf("rendered manifest missing expected bucket URL %q:\n%s", wantURL, rendered)
 					}
@@ -454,6 +454,50 @@ func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 				t.Errorf("decoded objects = %v, want single SandboxConfig/%s", objs, microvmSandboxConfigName)
 			}
 		})
+	}
+}
+
+func TestStageMicroVMAssetsToGCS(t *testing.T) {
+	silenceStepLog(t)
+
+	root := t.TempDir()
+	binDir := t.TempDir()
+	callsFile := filepath.Join(t.TempDir(), "gcloud-calls.txt")
+	if err := os.WriteFile(filepath.Join(binDir, "gcloud"), []byte("#!/bin/sh\necho \"$*\" >> "+callsFile+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, arch := range microvmArches {
+		dir := filepath.Join(root, "bin", microvmAssetsPrefix, defaultMicroVMAssetVersion, arch)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range microvmAssets {
+			if err := os.WriteFile(filepath.Join(dir, f), []byte(f), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	env := &Env{Cfg: &config.Config{Root: root, BucketName: "test-bucket"}}
+	if err := env.stageMicroVMAssetsToGCS(t.Context(), "test-bucket-assets"); err != nil {
+		t.Fatalf("stageMicroVMAssetsToGCS() = %v", err)
+	}
+
+	gotBytes, err := os.ReadFile(callsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(gotBytes)
+	for _, arch := range microvmArches {
+		for _, f := range microvmAssets {
+			src := filepath.Join(root, "bin", microvmAssetsPrefix, defaultMicroVMAssetVersion, arch, f)
+			dst := "gs://test-bucket-assets/" + microvmAssetsPrefix + "/" + defaultMicroVMAssetVersion + "/" + arch + "/" + f
+			if want := "storage cp " + src + " " + dst; !strings.Contains(got, want) {
+				t.Errorf("missing expected gcloud upload %q in:\n%s", want, got)
+			}
+		}
 	}
 }
 

@@ -27,10 +27,10 @@ asset set is four files per architecture (`amd64` and `arm64`):
 - `rootfs.img` — the guest rootfs image (from `kata-static`)
 
 `go run ./cmd/ate-setup deploy ate-system` (and `deploy sandboxconfig`)
-assembles both architectures into `bin/microvm-assets/{amd64,arm64}/`, verifies
+assembles both architectures into `bin/microvm-assets/v1/{amd64,arm64}/`, verifies
 their SHA-256 digests against `manifests/ate-install/sandboxconfig-microvm.yaml.tmpl`,
-stages them into the cluster's object store under `kata-assets/<arch>/` (the
-shared `rustfs` bucket on kind, and `<BUCKET_NAME>-assets` on GKE, the only
+stages them into the cluster's object store under `microvm-assets/<version>/<arch>/`
+(the shared `rustfs` bucket on kind, and `<BUCKET_NAME>-assets` on GKE, the only
 bucket `setup-gcp` lets nodes read), and applies the cluster-wide `microvm`
 `SandboxConfig`. Assets must not be stored under a snapshot location (an
 ActorTemplate's `snapshotConfig.location` followed by `/atespaces/`), as the
@@ -179,8 +179,8 @@ cd <your substrate checkout>
 ```
 
 The first run of `run-microvm-demo-kind.sh` downloads the guest runtime
-releases and extracts them into `bin/microvm-assets/{amd64,arm64}/`; later runs
-reuse those directories when the version stamps and SHA-256 digests match.
+releases and extracts them into `bin/microvm-assets/v1/{amd64,arm64}/`; later
+runs reuse those directories when the version stamps and SHA-256 digests match.
 
 Verify as in Option A, step 4.
 
