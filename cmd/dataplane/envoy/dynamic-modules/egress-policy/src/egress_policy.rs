@@ -33,7 +33,7 @@ pub const ATE_POLICY_JSON_KEY: &str = "policy_json";
 /// The SNI rules for a connection.
 #[derive(Debug, Default, Deserialize, PartialEq, Eq, Hash)]
 pub struct EgressPolicy {
-  /// Most specific first; the first match wins.
+  // Most specific first; the first match wins.
   pub rules: Vec<SniRule>,
   #[serde(skip)]
   pub hash: u64,
@@ -45,6 +45,8 @@ pub struct SniRule {
   // TODO(yanavlasov): optimize this to use enum to reduce memory usage.
   // Mode determines which filter chain (MITM or passthrough) is selected if the patter matches.
   pub mode: String,
+  // has_effects signifies that this rule has key injection actions and needs to be
+  // dispatched through ext_proc. Local PEP does not currently support key injection.
   #[serde(default)]
   pub has_effects: bool,
 }

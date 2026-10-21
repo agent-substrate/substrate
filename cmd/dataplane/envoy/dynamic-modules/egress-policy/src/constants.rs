@@ -12,10 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Listener filter implementation for the egress-policy dynamic module.
+//! Various constants used by multiple dynamic modules.
+
+/// Filter state key holding the initial timestamp of the policy retrieval.
+pub const ATE_EGRESS_POLICY_CREATED_AT: &[u8] = b"dev.ate.egress.policy.created_at";
 
 /// Filter state holding the egress policy hash.
 pub const ATE_POLICY_EGRESS_HASH: &[u8] = b"dev.ate.policy.egress.hash";
+
+/// Filter state key where the unshared with upstream egress policy hash is written.
+pub const ATE_POLICY_EGRESS_HASH_NOT_SHARED: &[u8] = b"dev.ate.policy.egress.hash.not_shared";
 
 /// Mode of a rule whose match terminates the connection.
 pub const SNI_MODE_MITM: &str = "mitm";

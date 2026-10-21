@@ -24,11 +24,9 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   envoy_log_trace, EnvoyCounterId, EnvoyGaugeId, EnvoyHttpFilter, EnvoyHttpFilterConfig,
   HttpFilter, HttpFilterConfig,
 };
+use crate::constants::ATE_POLICY_EGRESS_HASH_NOT_SHARED;
 use crate::egress_policy::EgressPolicy;
 use crate::egress_policy_store::GlobalEgressPolicyStore;
-
-/// Filter state key where the unshared egress policy hash is written.
-pub const ATE_POLICY_EGRESS_HASH_NOT_SHARED: &[u8] = b"dev.ate.policy.egress.hash.not_shared";
 
 /// Gauge for the size of egress policy store.
 pub const EGRESS_POLICY_STORE_SIZE: &str = "ate_egress.policy_store_size";

@@ -12,7 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! HTTP filter implementation for refreshing the egress policy.
+//! HTTP filter for refreshing the egress policy.
+//! 
+//! If the policy is stale the egress-pep filter enables the ext_proc callout, which enforces the policy
+//! and also sends the fresh policy in the response metadata.
+//! The policy store filter computes the policy hash and if policy changed puts it in the
+//! thread local store. It then wites the hash of fetched policy to the "dev.ate.policy.egress.hash.not_shared"
+//! filter state.
+//! This filter reads the hash of the policy that was just fetched from "dev.ate.policy.egress.hash.not_shared"
+//! and compares hash to the original policy provided by the outer CONNECT filter chain in "dev.ate.policy.egress.hash".
+//! If hashes are the same, meaning policy did not change, the filters updates the "dev.ate.egress.policy.created_at"
+//! to the present time, allowing the policy to be used for the next TTL interval.
+//! If hashes are different, meaning polic changed, the filter increments the counter.
+//! In the future (pending new Envoy API version) the filter would gracefully drain this connections and make
+//! atunnel to open a new CONNECT tunnel to pick up updated policy. Meanwhile if the policy has changed than all
+//! subsequent requests will go to ext_proc for enforcement. 
 
 use std::time::SystemTime;
 
@@ -27,9 +41,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   HttpFilterConfig,
 };
 
-use crate::constants::ATE_POLICY_EGRESS_HASH;
-use crate::pep_http_filter::ATE_EGRESS_POLICY_CREATED_AT;
-use crate::policy_store_filter::ATE_POLICY_EGRESS_HASH_NOT_SHARED;
+use crate::constants::{ATE_POLICY_EGRESS_HASH, ATE_EGRESS_POLICY_CREATED_AT, ATE_POLICY_EGRESS_HASH_NOT_SHARED};
 
 /// Counter for policy changes detected on an active connection.
 pub const POLICY_CHANGE_FOR_ACTIVE_CONNECTION: &str =

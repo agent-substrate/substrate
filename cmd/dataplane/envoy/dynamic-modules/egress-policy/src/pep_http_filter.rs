@@ -12,13 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The egress-policy-pep HTTP filter enforces egress policy on HTTP requests
-//! and responses.
+//! The egress-policy-pep HTTP filter enforces egress policy on HTTPS requests
+//! in the MITM filter chain.
+//! The goal of this filter is to reduce the number of callouts in the egress
+//! filter chain.
+//! The filter first checks if the cache entry is fresh by reading the
+//! policy creation timestamp from the "dev.ate.egress.policy.created_at"
+//! filer state and checking it against the cache_ttl configuration value (5s default).
+//! The "dev.ate.egress.policy.created_at" filter state is first written in the outer CONNECT
+//! filter chain by the policy store filter. It is then refreshed in the policy_refresh_filter
+//! (see policy_refresh_filter.rs for more info on policy refresh).
+//! If the policy is stale the filter is a noop and ext_proc callout is invoked next.
+//! If the policy is fresh, the filter attempts local policy enforcement.
+//! It verifies the following:
+//! 1. Request is not a CONNECT or WebSocket upgrade.
+//! 2. Hostname from the :authority header matches SNI
+//! 
+//! If checks 1 or 2 have failed, the request is denied.
+//! The filter then checks if matching SNI rule does not have any `effects` configured.
+//! If it does not have effects, subsequent ext_proc callout is skipped.
+//! Otherwise ext_proc is called to apply effects to the request.
 
 use std::{rc::Rc, time::SystemTime};
 
 use chrono::{DateTime, Utc};
-use crate::constants::{ATE_POLICY_EGRESS_HASH, SNI_MODE_MITM};
+use crate::constants::{ATE_POLICY_EGRESS_HASH, SNI_MODE_MITM, ATE_EGRESS_POLICY_CREATED_AT};
 use crate::pep_config::{Config};
 use crate::egress_policy::{EgressPolicy, SniRule};
 use crate::egress_policy_store::GlobalEgressPolicyStore;
@@ -30,9 +48,6 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   envoy_log_trace, EnvoyCounterId,
   EnvoyHttpFilter, HttpFilter,
 };
-
-/// Filter state key holding the initial timestamp of the policy retrieval.
-pub const ATE_EGRESS_POLICY_CREATED_AT: &[u8] = b"dev.ate.egress.policy.created_at";
 
 /// Filter state key indicating that ext_proc callout should be skipped for the
 /// current request.
@@ -129,7 +144,7 @@ impl EgressPolicyPepFilter {
       .and_then(|hash| GlobalEgressPolicyStore::get_local_store().lookup(hash))
   }
 
-  fn apply_matched_rule<EHF: EnvoyHttpFilter>(
+  fn maybe_skip_extproc<EHF: EnvoyHttpFilter>(
     &self,
     envoy_filter: &mut EHF,
     rule: &SniRule,
@@ -153,13 +168,33 @@ impl EgressPolicyPepFilter {
     }
   }
 
+  fn check_rule_has_effects<EHF: EnvoyHttpFilter>(
+    &self,
+    envoy_filter: &mut EHF,
+    policy: &EgressPolicy,
+    sni_lower: Option<String>,
+  ) {
+    // Find a rule that matches this SNI and skip ext_proc if rule has no effects.
+    // If (weirdly) no rule matches, the ext_proc is called out.
+    if let Some(lower) = sni_lower {
+      let hostname = lower.strip_suffix('.').unwrap_or(&lower);
+      if let Some(rule) = policy
+        .rules
+        .iter()
+        .find(|rule| rule.mode == SNI_MODE_MITM && rule.pattern_matches(hostname))
+      {
+        self.maybe_skip_extproc(envoy_filter, rule, hostname);
+      }
+    }
+  }
+
   /// Enforces the egress policy on the current HTTP request.
   fn enforce_egress_policy<EHF: EnvoyHttpFilter>(
     &self,
     envoy_filter: &mut EHF,
     policy: &EgressPolicy,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
-    // TODO(yanavlasov): prevent upgrades in the filter chain config, so this additional
+    // TODO(yanavlasov): prevent upgrades or CONNECT in the filter chain config, so this additional
     // check is not needed.
     if is_websocket_upgrade(envoy_filter) {
       envoy_filter.send_response(403, &[], Some(WEBSOCKET_DENIED_BODY), None);
@@ -191,20 +226,11 @@ impl EgressPolicyPepFilter {
       envoy_filter.send_response(400, &[], Some(SNI_AUTHORITY_MISMATCH_BODY), Some(SNI_AUTHORITY_MISMATCH_DETAILS));
       return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
     }
-    if let Some(sni_host) = sni
+    let sni_lower = sni
       .as_ref()
       .and_then(|s| std::str::from_utf8(s.as_slice()).ok())
-    {
-      let lower = sni_host.to_ascii_lowercase();
-      let hostname = lower.strip_suffix('.').unwrap_or(&lower);
-      if let Some(rule) = policy
-        .rules
-        .iter()
-        .find(|rule| rule.mode == SNI_MODE_MITM && rule.pattern_matches(hostname))
-      {
-        self.apply_matched_rule(envoy_filter, rule, hostname);
-      }
-    }
+      .map(str::to_ascii_lowercase);
+    self.check_rule_has_effects(envoy_filter, policy, sni_lower);
     envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
   }
 }
@@ -272,6 +298,55 @@ mod tests {
       .returning(|_| None);
   }
 
+  fn expect_no_connect_or_websocket_upgrade(mock_filter: &mut MockEnvoyHttpFilter) {
+    expect_no_websocket_upgrade(mock_filter);
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":method")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_rejects_websocket_upgrade() {
+    let filter = test_filter();
+    let policy = EgressPolicy {
+      rules: Vec::new(),
+      hash: 1,
+    };
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == "upgrade")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"websocket")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == "connection")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"Upgrade")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":method")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
+    mock_filter
+      .expect_send_response()
+      .withf(|status, headers, body, details| {
+        *status == 403
+          && headers.is_empty()
+          && *body == Some(WEBSOCKET_DENIED_BODY)
+          && details.is_none()
+      })
+      .times(1)
+      .returning(|_, _, _, _| {});
+
+    assert_eq!(
+      filter.enforce_egress_policy(&mut mock_filter, &policy),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
+  }
+
   #[test]
   fn test_enforce_egress_policy_rejects_connect() {
     let filter = test_filter();
@@ -300,6 +375,177 @@ mod tests {
     assert_eq!(
       filter.enforce_egress_policy(&mut mock_filter, &policy),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_rejects_missing_sni() {
+    let filter = test_filter();
+    let policy = EgressPolicy {
+      rules: Vec::new(),
+      hash: 1,
+    };
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    expect_no_connect_or_websocket_upgrade(&mut mock_filter);
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|id| *id == envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName)
+      .times(1)
+      .returning(|_| None);
+    mock_filter
+      .expect_send_response()
+      .withf(|status, headers, body, details| {
+        *status == 400
+          && headers.is_empty()
+          && *body == Some(MISSING_SNI_BODY)
+          && details.is_none()
+      })
+      .times(1)
+      .returning(|_, _, _, _| {});
+
+    assert_eq!(
+      filter.enforce_egress_policy(&mut mock_filter, &policy),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_rejects_sni_authority_mismatch() {
+    let filter = test_filter();
+    let policy = EgressPolicy {
+      rules: Vec::new(),
+      hash: 1,
+    };
+
+    for authority in [
+      Some(&b"other.example.com"[..]),
+      Some(&b"other.example.com:8443"[..]),
+      None,
+    ] {
+      let mut mock_filter = MockEnvoyHttpFilter::new();
+      expect_no_connect_or_websocket_upgrade(&mut mock_filter);
+      mock_filter
+        .expect_get_attribute_string()
+        .withf(|id| *id == envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName)
+        .times(1)
+        .returning(|_| Some(EnvoyBuffer::new(b"example.com")));
+      mock_filter
+        .expect_get_request_header_value()
+        .withf(|key| key == ":authority")
+        .times(1)
+        .returning(move |_| authority.map(EnvoyBuffer::new));
+      mock_filter
+        .expect_send_response()
+        .withf(|status, headers, body, details| {
+          *status == 400
+            && headers.is_empty()
+            && *body == Some(SNI_AUTHORITY_MISMATCH_BODY)
+            && *details == Some(SNI_AUTHORITY_MISMATCH_DETAILS)
+        })
+        .times(1)
+        .returning(|_, _, _, _| {});
+
+      assert_eq!(
+        filter.enforce_egress_policy(&mut mock_filter, &policy),
+        envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+      );
+    }
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_rule_with_effects_does_not_skip_ext_proc() {
+    let filter = test_filter();
+    let policy = EgressPolicy {
+      rules: vec![SniRule {
+        pattern: "example.com".to_string(),
+        mode: SNI_MODE_MITM.to_string(),
+        has_effects: true,
+      }],
+      hash: 1,
+    };
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    expect_no_connect_or_websocket_upgrade(&mut mock_filter);
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|id| *id == envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"example.com")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"example.com:443")));
+    let has_effects_counter = filter.has_effects_counter;
+    mock_filter
+      .expect_increment_counter()
+      .withf(move |id, value| *id == has_effects_counter && *value == 1)
+      .times(1)
+      .returning(|_, _| Ok(()));
+    mock_filter.expect_set_filter_state_bytes().times(0);
+    mock_filter.expect_set_dynamic_metadata_string().times(0);
+    mock_filter.expect_clear_route_cache().times(0);
+
+    assert_eq!(
+      filter.enforce_egress_policy(&mut mock_filter, &policy),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_rule_without_effects_skips_ext_proc() {
+    let filter = test_filter();
+    let policy = EgressPolicy {
+      rules: vec![SniRule {
+        pattern: "example.com".to_string(),
+        mode: SNI_MODE_MITM.to_string(),
+        has_effects: false,
+      }],
+      hash: 1,
+    };
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    expect_no_connect_or_websocket_upgrade(&mut mock_filter);
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|id| *id == envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"example.com")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"example.com:443")));
+    mock_filter
+      .expect_set_filter_state_bytes()
+      .withf(|key, value| key == ATE_POLICY_EGRESS_SKIP_CALLOUT && value == b"true")
+      .times(1)
+      .returning(|_, _| true);
+    mock_filter
+      .expect_set_dynamic_metadata_string()
+      .withf(|namespace, key, value| {
+        namespace == EGRESS_METADATA_NAMESPACE
+          && key == EGRESS_DIAL_KEY
+          && value == EGRESS_DIAL_NAME
+      })
+      .times(1)
+      .returning(|_, _, _| {});
+    mock_filter
+      .expect_set_dynamic_metadata_string()
+      .withf(|namespace, key, value| {
+        namespace == EGRESS_METADATA_NAMESPACE
+          && key == EGRESS_DIAL_HOST_KEY
+          && value == "example.com"
+      })
+      .times(1)
+      .returning(|_, _, _| {});
+    mock_filter
+      .expect_clear_route_cache()
+      .times(1)
+      .returning(|| {});
+    mock_filter.expect_increment_counter().times(0);
+
+    assert_eq!(
+      filter.enforce_egress_policy(&mut mock_filter, &policy),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
   }
 
