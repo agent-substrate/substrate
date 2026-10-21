@@ -46,6 +46,7 @@ func loadEnv(t *testing.T) {
 		"ACTOR_JWT_ALGORITHM",
 		"ACTOR_JWT_ISSUER",
 		"ANTHROPIC_API_KEY",
+		"ATE_ADDITIONAL_EGRESS_EXTPROC_AUTHORITATIVE",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
 		"ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
 		"ATE_API_LOG_LEVEL",
@@ -187,6 +188,24 @@ func TestLoadClusterSize(t *testing.T) {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_CLUSTER_SIZE = %q for the default profile, want it absent", env["ATE_INSTALL_CLUSTER_SIZE"])
 			}
 		})
+	}
+}
+
+func TestLoadAuthoritativeExtproc(t *testing.T) {
+	loadEnv(t)
+	cfg, err := Load(Options{
+		AdditionalEgressExtprocService:       "ate-system/extproc:50051",
+		AdditionalEgressExtprocAuthoritative: true,
+		CredentialProvider:                   `{"enabled":false}`,
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.AdditionalEgressExtprocAuthoritative {
+		t.Error("AdditionalEgressExtprocAuthoritative = false, want true")
+	}
+	if got := scriptEnvMap(t, cfg)["ATE_ADDITIONAL_EGRESS_EXTPROC_AUTHORITATIVE"]; got != "true" {
+		t.Errorf("ScriptEnv()[ATE_ADDITIONAL_EGRESS_EXTPROC_AUTHORITATIVE] = %q, want true", got)
 	}
 }
 
@@ -941,6 +960,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"cluster size", Options{ClusterSize: "size5"}},
 		{"extproc invalid format", Options{AdditionalEgressExtprocService: "extproc:50051"}},
 		{"extproc agentgateway", Options{Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
+		{"authoritative extproc without a service", Options{AdditionalEgressExtprocAuthoritative: true}},
+		{"authoritative extproc with a provider", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051", AdditionalEgressExtprocAuthoritative: true, CredentialProvider: `{"name":"k8s.io"}`}},
 		{"provider not JSON", Options{CredentialProvider: "k8s.io"}},
 		{"provider as a JSON string", Options{CredentialProvider: `"off"`}},
 		{"provider null", Options{CredentialProvider: `null`}},

@@ -165,6 +165,14 @@ var Registry = []Setting{
 		Usage: "Run an additional ext_proc authorization filter served by NS/SVC:PORT " +
 			"(requires --atenet-dataplane=envoy)",
 	},
+	{
+		Key: "atenet.egress.additionalExtprocAuthoritative", Env: "ATE_ADDITIONAL_EGRESS_EXTPROC_AUTHORITATIVE",
+		Flag: "experimental-additional-egress-extproc-authoritative", Kind: KindBool, Default: "false",
+		Usage: "Let the additional ext_proc filter decide every egress request in place of the EgressPolicy " +
+			"http and https rules, and send it response headers too. Substrate still authenticates the actor " +
+			"and applies the SNI rules. Requires --experimental-additional-egress-extproc-service and a " +
+			"disabled credential provider",
+	},
 
 	{
 		// No default: an unset level keeps the one an existing install has,

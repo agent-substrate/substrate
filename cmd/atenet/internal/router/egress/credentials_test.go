@@ -57,7 +57,7 @@ func bearerTokenResponse(token string) *credproviderpb.FetchSecretResponse {
 }
 
 func injectionHandlerFor(policy *ateapipb.EgressPolicy, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
-	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, provider, providerName)
+	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, provider, providerName, false)
 }
 
 // withAuthorization adds the placeholder authorization header the sample
@@ -312,7 +312,7 @@ func TestActorJWTInjection(t *testing.T) {
 				actorJWTHeader("authorization"),
 				&ateapipb.CredentialHeader{Header: "x-api-key", CredentialUri: "ate-secret://k8s/default/token"},
 			)}
-			h := New(client, nil, 0, nil, "")
+			h := New(client, nil, 0, nil, "", false)
 
 			res, err := h.HandleRequestHeaders(context.Background(),
 				withAuthorization(innerMetadata(leg, "GET", "api.example.com", nil)))
@@ -347,7 +347,7 @@ func TestActorJWTInjection(t *testing.T) {
 
 func TestActorJWTInjectionSkippedWithoutHeader(t *testing.T) {
 	client := &egressMockClient{actor: runningActor(), policy: replaceHeadersPolicy(extproc.EgressTLSMITMFilterChainName, actorJWTHeader("authorization"))}
-	h := New(client, nil, 0, nil, "")
+	h := New(client, nil, 0, nil, "", false)
 	res, err := h.HandleRequestHeaders(context.Background(),
 		innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
 	if err != nil {
@@ -385,7 +385,7 @@ func TestActorJWTInjectionDenials(t *testing.T) {
 						policy:  replaceHeadersPolicy(leg, actorJWTHeader(header)),
 						mintErr: tc.mintErr,
 					}
-					h := New(mock, nil, 0, nil, "")
+					h := New(mock, nil, 0, nil, "", false)
 					md := innerMetadata(leg, "GET", "api.example.com", nil)
 					md.Headers[header] = "placeholder"
 					_, err := h.HandleRequestHeaders(context.Background(), md)

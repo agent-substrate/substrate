@@ -30,19 +30,20 @@ import (
 // Options carries the raw flag values the root command collects, before
 // defaulting and validation.
 type Options struct {
-	Kind                           bool
-	Kubeconfig                     string
-	Context                        string
-	Router                         string
-	RolloutTimeout                 string
-	PodcertWorkersPerSigner        int
-	EnvoyConcurrency               int
-	ClusterSize                    string
-	CordonControlPlane             bool
-	FakeDataPlane                  bool
-	AdditionalEgressExtprocService string
-	CredentialProvider             string
-	OtlpEndpoint                   string
+	Kind                                 bool
+	Kubeconfig                           string
+	Context                              string
+	Router                               string
+	RolloutTimeout                       string
+	PodcertWorkersPerSigner              int
+	EnvoyConcurrency                     int
+	ClusterSize                          string
+	CordonControlPlane                   bool
+	FakeDataPlane                        bool
+	AdditionalEgressExtprocService       string
+	AdditionalEgressExtprocAuthoritative bool
+	CredentialProvider                   string
+	OtlpEndpoint                         string
 
 	// Image source selection.
 	ImageRepo string
@@ -105,6 +106,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"kind", opts.Kind},
 		{"cordon-control-plane", opts.CordonControlPlane},
 		{"fake-data-plane", opts.FakeDataPlane},
+		{"experimental-additional-egress-extproc-authoritative", opts.AdditionalEgressExtprocAuthoritative},
 	} {
 		if kv.val {
 			if err := fs.Set(kv.flag, "true"); err != nil {

@@ -309,15 +309,20 @@ func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
 }
 
 // patchAtenetEgressInject replaces the #ATE_EGRESS_INJECT_FLAGS marker in the
-// egress sidecar's args with the credential-provider flags, or removes it when
-// injection is off, which leaves the gateway with no provider. It takes the
-// manifest bytes so it can run after the general patch.
+// egress sidecar's args with the credential-provider flags, and with
+// --egress-external-authorization when the additional ext_proc filter is
+// authoritative. It removes the marker when neither applies, which leaves the
+// gateway with no provider. It takes the manifest bytes so it can run after
+// the general patch.
 func (e *Env) patchAtenetEgressInject(raw []byte, provider config.CredentialProvider) ([]byte, error) {
-	var flagsBlock string
+	var flags []string
 	if provider.Enabled() {
-		flagsBlock = emitEgressInjectFlags(provider.Name, provider.Address, provider.ServerName())
+		flags = append(flags, emitEgressInjectFlags(provider.Name, provider.Address, provider.ServerName()))
 	}
-	return replaceManifestMarker(raw, "#ATE_EGRESS_INJECT_FLAGS", flagsBlock)
+	if e.Cfg.AdditionalEgressExtprocAuthoritative {
+		flags = append(flags, "- --egress-external-authorization")
+	}
+	return replaceManifestMarker(raw, "#ATE_EGRESS_INJECT_FLAGS", strings.Join(flags, "\n"))
 }
 
 // The HTTP and HTTPS listeners share the egress policy and its providers.
@@ -384,7 +389,7 @@ func (e *Env) patchAtenetEgressManifest() ([]byte, error) {
 	address := fmt.Sprintf("%s.%s.svc.cluster.local", service, namespace)
 	serverName := fmt.Sprintf("%s.%s.svc", service, namespace)
 
-	filterBlock := emitAdditionalEgressExtprocFilter()
+	filterBlock := emitAdditionalEgressExtprocFilter(e.Cfg.AdditionalEgressExtprocAuthoritative)
 	clusterBlock := emitAdditionalEgressExtprocCluster(address, port, serverName)
 
 	lines := strings.Split(string(raw), "\n")
@@ -431,8 +436,16 @@ func (e *Env) patchAtenetEgressManifest() ([]byte, error) {
 
 const additionalEgressExtprocCluster = "additional_egress_ext_proc"
 
-func emitAdditionalEgressExtprocFilter() string {
-	return `- name: envoy.filters.http.ext_proc
+// emitAdditionalEgressExtprocFilter is the additional processor's filter. It
+// gets the same trusted attributes as the policy filter. An authoritative
+// processor decides each request in place of the policy, so it also gets the
+// response headers.
+func emitAdditionalEgressExtprocFilter(authoritative bool) string {
+	responseHeaderMode := "SKIP"
+	if authoritative {
+		responseHeaderMode = "SEND"
+	}
+	return fmt.Sprintf(`- name: envoy.filters.http.ext_proc
   typed_config:
     "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
     grpc_service:
@@ -442,17 +455,20 @@ func emitAdditionalEgressExtprocFilter() string {
     failure_mode_allow: false
     message_timeout: 2s
     request_attributes:
+    - xds.filter_chain_name
     - filter_state['dev.ate.actor.identity']
+    - filter_state['dev.ate.connect.authority']
+    - connection.requested_server_name
     processing_mode:
       request_header_mode: SEND
-      response_header_mode: SKIP
+      response_header_mode: %s
       request_body_mode: NONE
       response_body_mode: NONE
       request_trailer_mode: SKIP
       response_trailer_mode: SKIP
     mutation_rules:
       disallow_system: true
-      disallow_is_error: true`
+      disallow_is_error: true`, responseHeaderMode)
 }
 
 func emitAdditionalEgressExtprocCluster(address, port, serverName string) string {

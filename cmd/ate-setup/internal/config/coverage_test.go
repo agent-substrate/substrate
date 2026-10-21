@@ -97,7 +97,9 @@ func valueFor(key string) string {
 	case "atenet.egress.additionalExtprocService":
 		return "ns/svc:8080"
 	case "atenet.egress.credentialProvider":
-		return `{"name":"k8s.io"}`
+		// Disabled, because every bool is true here, and an authoritative
+		// ext_proc refuses an enabled provider.
+		return `{"enabled":false}`
 	case "actorJWT.algorithm":
 		return "ES256"
 	case "actorJWT.issuer":

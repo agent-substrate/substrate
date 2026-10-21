@@ -88,6 +88,14 @@ is resolved and dialed through `dynamic_forward_proxy`, with TLS
 re-originated to it on the TLS leg. There is no route without an answer, and
 no by-name route without the name.
 
+With `--egress-external-authorization` the request legs skip the `http` and
+`https` rules and their credential effects. They still require the actor
+identity, refuse WebSocket and CONNECT, and answer the dial, so an external
+ext_proc filter later in the chain makes the decision. The CONNECT leg is
+unchanged and still hands the dataplane the SNI rules. On the MITM leg nothing
+then checks the request's `Host` against the connection's SNI, so the
+external processor has to, from `connection.requested_server_name`.
+
 The port a rule names, and the port the gateway dials, is the one the actor
 dialed, never a port in the request's `Host`. The outer chain shares the
 CONNECT authority with the inner listener as `dev.ate.connect.authority`, and

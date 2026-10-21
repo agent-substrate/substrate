@@ -93,6 +93,10 @@ type Handler struct {
 	// its ate-secret:// credential URIs); a credential URI naming another
 	// provider is refused.
 	providerName string
+	// externalAuthorization skips the http and https rules and their
+	// credential effects on the request legs. An external ext_proc filter
+	// later in the chain decides each request instead.
+	externalAuthorization bool
 }
 
 // New builds the egress handler. actorIdentityRoots is the egress listener's
@@ -104,14 +108,20 @@ type Handler struct {
 // denied. Actor JWT injections need no provider. providerName, when set, is
 // the provider this gateway serves; a credential URI naming another provider
 // is refused.
-func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
+//
+// externalAuthorization leaves each request inside the tunnel to an external
+// ext_proc filter: the request legs allow any request from an authenticated
+// actor and answer its dial, without evaluating rules or injecting
+// credentials. The CONNECT leg is unchanged.
+func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string, externalAuthorization bool) *Handler {
 	return &Handler{
-		apiClient:          apiClient,
-		actorIdentityRoots: actorIdentityRoots,
-		policies:           newPolicyCache(apiClient, policyCacheTTL),
-		actorJWTs:          actorjwt.New(apiClient),
-		provider:           provider,
-		providerName:       providerName,
+		apiClient:             apiClient,
+		actorIdentityRoots:    actorIdentityRoots,
+		policies:              newPolicyCache(apiClient, policyCacheTTL),
+		actorJWTs:             actorjwt.New(apiClient),
+		provider:              provider,
+		providerName:          providerName,
+		externalAuthorization: externalAuthorization,
 	}
 }
 

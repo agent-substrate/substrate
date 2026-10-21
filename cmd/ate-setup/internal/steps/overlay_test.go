@@ -44,8 +44,8 @@ import (
 )
 
 // Splicing the provider selection into the real egress manifest replaces the
-// marker: with the provider flags for a selected provider, with nothing when
-// injection is off. CI deploys the bundled provider on envoy, but only this
+// marker: with the provider flags for a selected provider, with the external
+// authorization flag for an authoritative ext_proc, with nothing otherwise. CI deploys the bundled provider on envoy, but only this
 // pins the spliced flags themselves and the off shape.
 func TestPatchAtenetEgressInject(t *testing.T) {
 	root, err := config.RepoRoot()
@@ -59,9 +59,10 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name     string
-		provider config.CredentialProvider
-		want     []string
+		name          string
+		provider      config.CredentialProvider
+		authoritative bool
+		want          []string
 	}{
 		{
 			name:     "kubernetes",
@@ -84,8 +85,14 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 			},
 		},
 		{name: "off"},
+		{
+			name:          "authoritative ext_proc",
+			authoritative: true,
+			want:          []string{"- --egress-external-authorization"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			env.Cfg.AdditionalEgressExtprocAuthoritative = tc.authoritative
 			patched, err := env.patchAtenetEgressInject(raw, tc.provider)
 			if err != nil {
 				t.Fatalf("patchAtenetEgressInject failed: %v", err)
@@ -102,6 +109,9 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 			}
 			if !tc.provider.Enabled() && strings.Contains(string(patched), "- --credential-provider-") {
 				t.Error("patched manifest carries provider flags with injection off")
+			}
+			if !tc.authoritative && strings.Contains(string(patched), "- --egress-external-authorization") {
+				t.Error("patched manifest skips the egress policy without an authoritative ext_proc")
 			}
 			assertEgressManifestParses(t, patched)
 		})
@@ -138,6 +148,41 @@ func assertEgressManifestParses(t *testing.T, manifest []byte) {
 
 // The emitted cluster must reference its TLS material through SDS: an inline
 // tls_certificates entry never picks up kubelet's certificate rotation.
+// An authoritative processor also sees response headers. Both see the trusted
+// context the policy filter gets.
+func TestEmitAdditionalEgressExtprocFilter(t *testing.T) {
+	for _, tc := range []struct {
+		authoritative bool
+		want          string
+	}{
+		{authoritative: false, want: "SKIP"},
+		{authoritative: true, want: "SEND"},
+	} {
+		var filters []struct {
+			TypedConfig struct {
+				RequestAttributes []string `json:"request_attributes"`
+				ProcessingMode    struct {
+					ResponseHeaderMode string `json:"response_header_mode"`
+				} `json:"processing_mode"`
+			} `json:"typed_config"`
+		}
+		if err := yaml.Unmarshal([]byte(emitAdditionalEgressExtprocFilter(tc.authoritative)), &filters); err != nil {
+			t.Fatalf("filter is not valid YAML: %v", err)
+		}
+		if len(filters) != 1 {
+			t.Fatalf("got %d filters, want 1", len(filters))
+		}
+		cfg := filters[0].TypedConfig
+		if got := cfg.ProcessingMode.ResponseHeaderMode; got != tc.want {
+			t.Errorf("authoritative=%v: response_header_mode = %q, want %q", tc.authoritative, got, tc.want)
+		}
+		if !slices.Contains(cfg.RequestAttributes, "xds.filter_chain_name") ||
+			!slices.Contains(cfg.RequestAttributes, "filter_state['dev.ate.connect.authority']") {
+			t.Errorf("authoritative=%v: request_attributes = %v, want the filter chain and CONNECT authority", tc.authoritative, cfg.RequestAttributes)
+		}
+	}
+}
+
 func TestEmitAdditionalEgressExtprocCluster(t *testing.T) {
 	out := emitAdditionalEgressExtprocCluster("foo.ate-system.svc.cluster.local", "50051", "foo.ate-system.svc")
 

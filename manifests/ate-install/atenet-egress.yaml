@@ -298,7 +298,12 @@ data:
       # with a generated block for an additional, external processor. The
       # marker sits below the policy filter, so that processor sees only
       # requests the policy allowed, including any headers the policy added; a
-      # request the policy denies never reaches it.
+      # request the policy denies never reaches it. With
+      # --experimental-additional-egress-extproc-authoritative the policy
+      # sidecar runs with --egress-external-authorization: it still
+      # authenticates the actor and answers the dial, but allows every
+      # request, and the external processor decides each one and also sees
+      # the response headers. The SNI rules still apply.
       #
       # The passthrough chain is a tcp_proxy, so it has no HTTP filters of its
       # own, and it decides nothing: the module already matched the SNI to a
