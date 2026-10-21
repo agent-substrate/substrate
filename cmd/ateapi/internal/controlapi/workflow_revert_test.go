@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
@@ -232,7 +231,6 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 		pending  bool
 		assigned bool
 		crashed  bool
-		conflict bool
 		wantCode codes.Code
 	}{
 		{name: "missing atelet", node: "node-3"},
@@ -242,7 +240,6 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 		{name: "worker still assigned", node: "node-1", err: apierror.Unavailable("offline"), assigned: true, wantCode: codes.Unavailable},
 		{name: "crashed execution still needs termination", node: "node-1", err: apierror.Unavailable("offline"), crashed: true, wantCode: codes.Unavailable},
 		{name: "other RPC failure", node: "node-1", err: apierror.Internal("injected failure"), wantCode: codes.Internal},
-		{name: "concurrent update", node: "node-1", err: apierror.Unavailable("offline"), conflict: true, wantCode: codes.Aborted},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -280,21 +277,6 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 			})
 			want := proto.CloneOf(actor.GetStatus().GetSnapshots()[1])
 			atelet.terminateErr = tt.err
-			if tt.conflict {
-				atelet.onTerminate = func() {
-					cur, err := st.GetActor(ctx, ref)
-					if err != nil {
-						t.Errorf("GetActor: %v", err)
-						return
-					}
-					if _, err := st.UpdateActor(ctx, ref, store.PreconditionFrom(cur), func(a *ateapipb.Actor) error {
-						a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"changed": "true"}}
-						return nil
-					}); err != nil {
-						t.Errorf("UpdateActor: %v", err)
-					}
-				}
-			}
 			reverted, err := w.RevertActor(ctx, ref)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("RevertActor = %v, want %v", err, tt.wantCode)
@@ -311,16 +293,7 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 				if !proto.Equal(got.GetSnapshots()[1], want) {
 					t.Fatalf("snapshot changed after failed revert: %v", got.GetSnapshots())
 				}
-				if !tt.conflict {
-					return
-				}
-				atelet.mu.Lock()
-				atelet.onTerminate = nil
-				atelet.mu.Unlock()
-				reverted, err = w.RevertActor(ctx, ref)
-				if err != nil {
-					t.Fatalf("retry after conflict: %v", err)
-				}
+				return
 			}
 			got := reverted.GetStatus()
 			if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || got.GetAssignedNode() != "" || got.GetWorkerAssignment() != nil {

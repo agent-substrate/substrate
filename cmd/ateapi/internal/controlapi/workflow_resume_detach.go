@@ -139,9 +139,6 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 	if err := applyDetach(applied, node, applied.GetLastAssignedGeneration()); err != nil {
 		return nil, err
 	}
-	if applied.GetState() == ateapipb.ActorState_ACTOR_STATE_REVERTING && applied.GetWorkerAssignment() == nil {
-		applied.AssignedNode = ""
-	}
 	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		// The precondition makes toUpdate the version applied was built from.
 		toUpdate.Status.Snapshots = applied.GetSnapshots()

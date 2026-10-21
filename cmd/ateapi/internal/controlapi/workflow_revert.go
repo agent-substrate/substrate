@@ -193,24 +193,19 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	defer func() { err = done(err) }()
 
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
-		forgetNode := false
 		state, err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert)
-		if err != nil {
-			if !canDetachWithoutAtelet(ctx, actor, err) {
-				return nil, err
-			}
-			forgetNode = true
+		// The revert can go on without an unreachable atelet when nothing runs
+		// on the node and its latest local snapshot is already uploaded.
+		// FinalizeReverted drops the node binding, and the actor resumes from
+		// the uploaded copy.
+		if err != nil && !canDetachWithoutAtelet(ctx, actor, err) {
+			return nil, err
 		}
 		if actor, err = w.recordTerminatedUpload(ctx, actorRef, actor, node, state); err != nil {
 			return nil, err
 		}
 		if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
 			return nil, err
-		}
-		if forgetNode {
-			if actor, err = w.recordDetach(ctx, actorRef, actor, node, nil); err != nil {
-				return nil, err
-			}
 		}
 		if actor.GetStatus().GetWorkerAssignment() != nil {
 			if _, err := releaseWorker(ctx, w.store, actor); err != nil {

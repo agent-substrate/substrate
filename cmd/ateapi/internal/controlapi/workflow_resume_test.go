@@ -1150,7 +1150,6 @@ type capturingAtelet struct {
 	// onDetach, when set, runs before DetachActor returns.
 	onDetach     func()
 	terminateErr error
-	onTerminate  func()
 	// terminateState, when set, is the snapshot state Terminate returns.
 	// Terminate is unimplemented otherwise.
 	terminateState *ateletpb.ActorSnapshotState
@@ -1214,12 +1213,6 @@ func (f *capturingAtelet) DetachActor(ctx context.Context, req *ateletpb.DetachA
 }
 
 func (f *capturingAtelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
-	f.mu.Lock()
-	hook := f.onTerminate
-	f.mu.Unlock()
-	if hook != nil {
-		hook()
-	}
 	f.mu.Lock()
 	err, state := f.terminateErr, proto.CloneOf(f.terminateState)
 	f.mu.Unlock()
