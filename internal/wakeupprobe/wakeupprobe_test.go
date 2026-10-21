@@ -16,6 +16,7 @@ package wakeupprobe
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -235,6 +236,143 @@ func TestWaitAll_SkipsContainersWithoutProbe(t *testing.T) {
 	if err := WaitAll(ctx, containers, "127.0.0.1", nil); err != nil {
 		t.Fatalf("WaitAll with no probes returned error: %v", err)
 	}
+}
+
+func TestWaitFast_RecoversQuicklyFromStalledFirstAttempt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wait func(ctx context.Context, probe *ateworkerpb.WakeupProbe, ip string, dial DialFunc) error
+	}{
+		{
+			name: "WaitAllFast",
+			wait: func(ctx context.Context, probe *ateworkerpb.WakeupProbe, ip string, dial DialFunc) error {
+				return WaitAllFast(ctx, []*ateworkerpb.Container{{Name: "app", WakeupProbe: probe}}, ip, dial)
+			},
+		},
+		{
+			name: "WaitFast",
+			wait: func(ctx context.Context, probe *ateworkerpb.WakeupProbe, ip string, dial DialFunc) error {
+				return WaitFast(ctx, "app", probe, ip, dial)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			ip, port := splitHostPort(t, srv.URL)
+			probe := &ateworkerpb.WakeupProbe{
+				HttpGet:        &ateworkerpb.HttpGetAction{Path: "/readyz", Port: int32(port)},
+				TimeoutSeconds: 2,
+			}
+
+			var attempts atomic.Int32
+			baseDialer := &net.Dialer{}
+			dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if attempts.Add(1) == 1 {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				return baseDialer.DialContext(ctx, network, addr)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			start := time.Now()
+			if err := tc.wait(ctx, probe, ip, dial); err != nil {
+				t.Fatalf("%s returned error: %v", tc.name, err)
+			}
+			elapsed := time.Since(start)
+			if elapsed >= RequestTimeout {
+				t.Errorf("%s took %v after stalled first dial, want < %v", tc.name, elapsed, RequestTimeout)
+			}
+			if got := attempts.Load(); got < 2 {
+				t.Errorf("dial attempts = %d, want >= 2", got)
+			}
+		})
+	}
+}
+
+func TestFastAttemptTimeout(t *testing.T) {
+	for attempt, want := range map[int]time.Duration{
+		1:  15 * time.Millisecond,
+		3:  15 * time.Millisecond,
+		4:  40 * time.Millisecond,
+		8:  40 * time.Millisecond,
+		9:  RequestTimeout,
+		20: RequestTimeout,
+	} {
+		if got := fastAttemptTimeout(attempt); got != want {
+			t.Errorf("fastAttemptTimeout(%d) = %v, want %v", attempt, got, want)
+		}
+	}
+}
+
+func BenchmarkWakeupProbe_StalledFirstAttempt(b *testing.B) {
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.DiscardHandler))
+	b.Cleanup(func() { slog.SetDefault(origLogger) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ip, portStr, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		b.Fatal(err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	probe := &ateworkerpb.WakeupProbe{
+		HttpGet:        &ateworkerpb.HttpGetAction{Path: "/readyz", Port: int32(port)},
+		TimeoutSeconds: 2,
+	}
+	baseDialer := &net.Dialer{}
+
+	b.Run("Wait_DefaultTimeout", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			var attempts atomic.Int32
+			dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if attempts.Add(1) == 1 {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				return baseDialer.DialContext(ctx, network, addr)
+			}
+			if err := Wait(b.Context(), "app", probe, ip, dial); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("WaitFast_AdaptiveTimeout", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			var attempts atomic.Int32
+			dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if attempts.Add(1) == 1 {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				return baseDialer.DialContext(ctx, network, addr)
+			}
+			if err := WaitFast(b.Context(), "app", probe, ip, dial); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func splitHostPort(t *testing.T, raw string) (string, int) {
