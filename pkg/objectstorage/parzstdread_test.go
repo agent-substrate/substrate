@@ -99,7 +99,7 @@ func TestReadZstdFrameSplitsParZstdOutput(t *testing.T) {
 	src := bytes.NewReader(parFrames(t, data))
 	var frames, total int
 	for {
-		frame, size, _, ok, err := readZstdFrame(src)
+		frame, size, ok, err := readZstdFrame(src)
 		if errors.Is(err, io.EOF) && frame == nil {
 			break
 		}
@@ -125,12 +125,12 @@ func TestReadZstdFrameBoundsUnsizedSmallFrames(t *testing.T) {
 	defer enc.Close()
 	for _, n := range []int{1, 100, 255} {
 		data := compressibleData(t, n)
-		frame, size, maxSize, ok, err := readZstdFrame(bytes.NewReader(enc.EncodeAll(data, nil)))
+		frame, maxSize, ok, err := readZstdFrame(bytes.NewReader(enc.EncodeAll(data, nil)))
 		if err != nil || !ok || frame == nil {
 			t.Fatalf("n=%d: ok=%v err=%v, want a parallel-decodable frame", n, ok, err)
 		}
-		if size != -1 || maxSize < n || maxSize > parZstdMaxFrame {
-			t.Errorf("n=%d: size=%d maxSize=%d, want an undeclared size bounded by [n, parZstdMaxFrame]", n, size, maxSize)
+		if maxSize < n || maxSize > parZstdMaxFrame {
+			t.Errorf("n=%d: maxSize=%d, want a bound in [n, parZstdMaxFrame]", n, maxSize)
 		}
 	}
 }
@@ -146,7 +146,7 @@ func TestParZstdReaderFallsBackForUnsizedFrames(t *testing.T) {
 	stream = append(stream, streamFrame(t, b)...)
 	stream = append(stream, parFrames(t, c)...)
 
-	if _, _, _, ok, err := readZstdFrame(bytes.NewReader(streamFrame(t, b))); ok || err != nil {
+	if _, _, ok, err := readZstdFrame(bytes.NewReader(streamFrame(t, b))); ok || err != nil {
 		t.Fatalf("streaming frame: ok=%v err=%v, want ok=false with no error", ok, err)
 	}
 	got, err := readAllPar(t, stream)
@@ -266,7 +266,7 @@ func TestParZstdReaderFallsBackForLargeFrames(t *testing.T) {
 		{"block over the maximum", bigBlock},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			frame, _, _, ok, _ := readZstdFrame(bytes.NewReader(tc.stream))
+			frame, _, ok, _ := readZstdFrame(bytes.NewReader(tc.stream))
 			if ok {
 				t.Error("readZstdFrame: ok=true, want the frame left to the serial decoder")
 			}
@@ -287,25 +287,33 @@ func TestParZstdReaderFallsBackForLargeFrames(t *testing.T) {
 	}
 }
 
-// BenchmarkParZstdReader compares parZstdReader with a serial zstd decoder on the
-// same parZstd stream.
+// BenchmarkParZstdReader compares parZstdReader with zstd's serial and default
+// (async) stream decoders on the same parZstd stream.
 func BenchmarkParZstdReader(b *testing.B) {
 	data := compressibleData(b, 128<<20)
 	stream := parFrames(b, data)
-	b.Run("serial", func(b *testing.B) {
-		b.SetBytes(int64(len(data)))
-		b.ReportAllocs()
-		for b.Loop() {
-			zr, err := zstd.NewReader(bytes.NewReader(stream), zstd.WithDecoderConcurrency(1))
-			if err != nil {
-				b.Fatal(err)
+	for _, tc := range []struct {
+		name string
+		opts []zstd.DOption
+	}{
+		{"serial", []zstd.DOption{zstd.WithDecoderConcurrency(1)}},
+		{"default", nil},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			b.ReportAllocs()
+			for b.Loop() {
+				zr, err := zstd.NewReader(bytes.NewReader(stream), tc.opts...)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err := io.Copy(io.Discard, zr); err != nil {
+					b.Fatal(err)
+				}
+				zr.Close()
 			}
-			if _, err := io.Copy(io.Discard, zr); err != nil {
-				b.Fatal(err)
-			}
-			zr.Close()
-		}
-	})
+		})
+	}
 	b.Run("parallel", func(b *testing.B) {
 		b.SetBytes(int64(len(data)))
 		b.ReportAllocs()

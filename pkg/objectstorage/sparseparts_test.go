@@ -136,7 +136,7 @@ func decodeSparse(t *testing.T, r io.Reader) []byte {
 	}
 	defer os.Remove(out.Name())
 	defer out.Close()
-	if _, err := readSparseZstd(out, r); err != nil {
+	if _, err := readSparseZstd(out, r, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := out.Seek(0, io.SeekStart); err != nil {
