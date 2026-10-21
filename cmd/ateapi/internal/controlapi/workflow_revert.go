@@ -224,6 +224,14 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 // upload as in progress. It writes at once because atelet forgot the actor, so
 // a retried Terminate returns nothing.
 func (w *ActorWorkflow) recordTerminatedUpload(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, node string, state *ateletpb.ActorSnapshotState) (*ateapipb.Actor, error) {
+	reportedGen := state.GetLatestDurable().GetSnapshot().GetGeneration()
+	snap := findSnapshotByGeneration(actor.GetStatus().GetSnapshots(), reportedGen)
+	if snap != nil && snap.GetLocality() == "" && snap.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
+		// A snapshot on no node is the one a crashed suspend minted and never
+		// finalized. It stays PENDING, so the revert deletes it with the rest of the
+		// discarded execution.
+		return actor, nil
+	}
 	applied := proto.CloneOf(actor.GetStatus())
 	if err := applyAteletResponseState(ctx, applied, state); err != nil {
 		return nil, apierror.Internal("atelet on node %q reported a durable snapshot for Actor %s that conflicts with its record: %w", node, actorRef, err)

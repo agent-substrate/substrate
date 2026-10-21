@@ -314,7 +314,8 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 // actor to a local snapshot atelet uploaded, its latest durable snapshot, and
 // collects the durable snapshot the upload replaced. The revert learns of the
 // upload from the record, or from Terminate when atelet's report has not
-// landed. An upload atelet does not report is deleted as in progress.
+// landed. An upload atelet does not report, or that a crashed suspend never
+// finalized, is deleted as in progress.
 func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
@@ -328,12 +329,16 @@ func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 		node string
 		// terminateReports makes Terminate return the upload as durable.
 		terminateReports bool
-		wantUploadKept   bool
+		// unfinalized seeds the upload as the snapshot of a suspend that
+		// crashed before it committed, which is on no node.
+		unfinalized    bool
+		wantUploadKept bool
 	}{
 		{name: "upload recorded", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, recorded: completed, wantUploadKept: true},
 		{name: "paused, upload reported by terminate", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, recorded: pending, node: "node-1", terminateReports: true, wantUploadKept: true},
 		{name: "crashed, upload reported by terminate", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, recorded: pending, node: "node-1", terminateReports: true, wantUploadKept: true},
 		{name: "upload not reported", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, recorded: pending, node: "node-1"},
+		{name: "crashed suspend, upload reported by terminate", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, recorded: pending, node: "node-1", terminateReports: true, unfinalized: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -368,6 +373,10 @@ func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 				}
 				if tc.state == ateapipb.ActorState_ACTOR_STATE_CRASHED {
 					s.Crash = newActorCrash("ResumeActor", "interrupted execution")
+				}
+				if tc.unfinalized {
+					paused.Locality = ""
+					s.Crash = newActorCrash("SuspendActor", "interrupted execution")
 				}
 			})
 			atelet.terminateErr = apierror.NotFound("atelet holds nothing for the actor")
