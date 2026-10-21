@@ -36,13 +36,15 @@ What it buys, concretely:
 ## The privilege split
 
 The design is shaped by an existing substrate boundary: **atelet runs as
-plain root with every Linux capability dropped** ("atelet does no mounts" —
-see `manifests/ate-install/atelet.yaml`), while the **worker pods are
-privileged** and own all mounts on the node. The module is split accordingly:
+root with every Linux capability dropped but `CAP_CHOWN`,
+`CAP_DAC_OVERRIDE`, `CAP_FOWNER` and `CAP_FSETID`** ("atelet does no
+mounts" — see `manifests/ate-install/atelet.yaml`), while the **worker pods
+are privileged** and own all mounts on the node. The module is split
+accordingly:
 
 | Half | Runs in | Files | Needs |
 |---|---|---|---|
-| Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | nothing but file I/O |
+| Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | file I/O; `CAP_CHOWN` to apply layer owners, `CAP_DAC_OVERRIDE` to hardlink, size and remove content owned by other users, `CAP_FOWNER` and `CAP_FSETID` to put back the setuid and setgid bits chown clears, `CAP_FOWNER` also to hardlink other users' symlinks and remove entries from their sticky directories |
 | Consumer: finalize, mount, unmount | ateworker-gvisor / ateworker-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
 
 The two halves communicate through the filesystem only: the shared cache
@@ -58,7 +60,7 @@ anywhere.
 
 ```
 <cache-root>/                        default: /var/lib/ate/image-cache
-  version                            layout version marker ("1")
+  version                            layout version marker ("2")
   layers/sha256/<diffid-hex>/
       fs/                            the unpacked layer tree (an overlay lowerdir)
       whiteouts.json                 whiteout state recorded at unpack time
@@ -100,12 +102,26 @@ layer diffIDs in order — layers shared by N images exist once.
    confinement (path traversal and symlink/hardlink escapes are refused),
    "later entry wins" within a layer, read-only-dir handling that works
    without `CAP_DAC_OVERRIDE`, and creation of parent directories that the
-   layer tar omits (they may exist only in lower layers). Character and
-   block device nodes are skipped (atelet runs without `CAP_MKNOD` and the
-   runtime mounts `/dev`). Whiteout entries (`.wh.*`) are **not** written
-   into the tree — overlayfs whiteouts are char devices atelet cannot
-   create — they are recorded in `whiteouts.json` for the consumer to
-   materialize.
+   layer tar omits (they may exist only in lower layers). Every entry keeps
+   the numeric owner its tar header records, as containerd and moby apply
+   it; run as root, a failed chown fails the unpack, and an unprivileged
+   process (unit tests, local tooling) leaves the tree owned by itself.
+   Entries keep their tar mode exactly, whatever atelet's umask, with
+   setgid and sticky on directories. Changing a file's owner clears its
+   setuid and setgid bits even for root, so atelet puts them back after
+   the chown, which takes `CAP_FOWNER` on a file another user owns and
+   `CAP_FSETID` for setgid to a group root is not in. Without them that
+   bit is dropped and logged rather than failing the unpack, but other
+   steps still fail without `CAP_FOWNER`: unpacking a hardlink to another
+   user's symlink, and removing entries from another user's sticky
+   directory. A root atelet inside a user namespace (rootless or
+   userns-remapped nodes) can only give files to uids and gids the
+   namespace maps, so a layer with an owner outside that range fails to
+   unpack, as it does under rootless Docker. Character and block device
+   nodes are skipped (atelet runs without `CAP_MKNOD` and the runtime
+   mounts `/dev`). Whiteout entries (`.wh.*`) are **not** written into the
+   tree — overlayfs whiteouts are char devices atelet cannot create — they
+   are recorded in `whiteouts.json` for the consumer to materialize.
 5. **Verify** before the layer enters the pool. Images share layers by
    diffID, but each image's author chooses the diffIDs in its config. So
    the uncompressed stream is hashed as it unpacks and must match the
@@ -115,8 +131,8 @@ layer diffIDs in order — layers shared by N images exist once.
 
    A layer already in the pool is reused without re-hashing, because it
    was checked when it was written. The reusing image's own blob is never
-   downloaded, so it is never checked. Layers unpacked by an atelet that
-   lacked this check stay in the pool until eviction retires them.
+   downloaded, so it is never checked. Every atelet that writes layout
+   version `2` has this check, so the pool holds no unchecked layer.
 6. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
 
