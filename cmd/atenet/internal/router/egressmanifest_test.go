@@ -15,6 +15,7 @@
 package router
 
 import (
+	"regexp"
 	"slices"
 	"testing"
 	"time"
@@ -207,4 +208,42 @@ func chainAccessLogsByLeg(tree node) map[string][]node {
 		}
 	}
 	return out
+}
+
+// queryPathCommand matches an access log command that prints the request path
+// with its query string: %REQ(:PATH)%, %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% and
+// the like, or %PATH% asked to keep the query.
+var queryPathCommand = regexp.MustCompile(`%REQ\([^)]*PATH[^)]*\)%|%PATH\(WQ`)
+
+// The mitm leg logs requests the gateway has decrypted, and actor traffic can
+// carry credentials in the query (API keys, signed URL tokens, OAuth codes).
+// Every access log prints the path with %PATH(NQ:...)%, as the router's does.
+func TestEgressManifestsLogPathsWithoutTheQuery(t *testing.T) {
+	t.Parallel()
+	var formats int
+	var walk func(v any, inFormat bool)
+	walk = func(v any, inFormat bool) {
+		switch v := v.(type) {
+		case node:
+			for k, c := range v {
+				walk(c, inFormat || k == "log_format")
+			}
+		case []any:
+			for _, c := range v {
+				walk(c, inFormat)
+			}
+		case string:
+			if !inFormat {
+				return
+			}
+			formats++
+			if m := queryPathCommand.FindString(v); m != "" {
+				t.Errorf("access log format %q logs the query string with %s; use %%PATH(NQ:ORIG_OR_PATH)%%", v, m)
+			}
+		}
+	}
+	walk(bootstrapTree(t), false)
+	if formats == 0 {
+		t.Fatal("no access log formats found; the manifest changed shape and this test is checking nothing")
+	}
 }
