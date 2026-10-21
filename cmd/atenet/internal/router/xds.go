@@ -217,9 +217,13 @@ const upstreamSANsFilterStateKey = "envoy.network.upstream_subject_alt_names"
 // domain.
 const trustDomainSPIFFEPrefix = "spiffe://" + installdefaults.AteletTrustDomain + "/"
 
-// tunnelCircuitBreakerLimit lifts Envoy's default of 1024: there is a tunnel
-// per active actor and port, and idle ones count too.
-const tunnelCircuitBreakerLimit = 65536
+// tunnelCircuitBreakerLimit lifts Envoy's default of 1024 on the actor_tunnel
+// clusters.
+const tunnelCircuitBreakerLimit = 1048576
+
+// actorConnectCircuitBreakerLimit lifts Envoy's default of 1024 on
+// actor_connect.
+const actorConnectCircuitBreakerLimit = 1048576
 
 // tunnelIdleTimeout closes unused tunnels, which hold actor connections.
 const tunnelIdleTimeout = 60 * time.Second
@@ -939,7 +943,14 @@ func buildActorTunnelCluster(name string, http2 bool) *clusterv3.Cluster {
 				}),
 			},
 		},
-		CircuitBreakers: tunnelCircuitBreakers(),
+		CircuitBreakers: &clusterv3.CircuitBreakers{
+			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
+				Priority:           corev3.RoutingPriority_DEFAULT,
+				MaxConnections:     wrapperspb.UInt32(tunnelCircuitBreakerLimit),
+				MaxPendingRequests: wrapperspb.UInt32(tunnelCircuitBreakerLimit),
+				MaxRequests:        wrapperspb.UInt32(tunnelCircuitBreakerLimit),
+			}},
+		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
 			httpProtocolOptionsName: newAny(&httpv3.HttpProtocolOptions{
 				CommonHttpProtocolOptions: &corev3.HttpProtocolOptions{
@@ -970,7 +981,14 @@ func (x *XdsServer) buildActorConnectCluster() *clusterv3.Cluster {
 			},
 		},
 		TransportSocket: x.buildUpstreamTransportSocket(),
-		CircuitBreakers: tunnelCircuitBreakers(),
+		CircuitBreakers: &clusterv3.CircuitBreakers{
+			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
+				Priority:           corev3.RoutingPriority_DEFAULT,
+				MaxConnections:     wrapperspb.UInt32(actorConnectCircuitBreakerLimit),
+				MaxPendingRequests: wrapperspb.UInt32(actorConnectCircuitBreakerLimit),
+				MaxRequests:        wrapperspb.UInt32(actorConnectCircuitBreakerLimit),
+			}},
+		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
 			httpProtocolOptionsName: newAny(&httpv3.HttpProtocolOptions{
 				UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
@@ -982,17 +1000,6 @@ func (x *XdsServer) buildActorConnectCluster() *clusterv3.Cluster {
 				},
 			}),
 		},
-	}
-}
-
-func tunnelCircuitBreakers() *clusterv3.CircuitBreakers {
-	return &clusterv3.CircuitBreakers{
-		Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
-			Priority:           corev3.RoutingPriority_DEFAULT,
-			MaxConnections:     wrapperspb.UInt32(tunnelCircuitBreakerLimit),
-			MaxPendingRequests: wrapperspb.UInt32(tunnelCircuitBreakerLimit),
-			MaxRequests:        wrapperspb.UInt32(tunnelCircuitBreakerLimit),
-		}},
 	}
 }
 
