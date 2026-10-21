@@ -141,15 +141,17 @@ func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeR
 	if err := tw.Close(); err != nil {
 		return fmt.Errorf("closing tar %q: %w", tarPath, err)
 	}
-	// The buffer has to reach the file before the sync below, or the sync
-	// durably persists a truncated archive.
+	// The end of the archive is still in the buffer; flush it before returning.
 	if err := bw.Flush(); err != nil {
 		return fmt.Errorf("flushing tar %q: %w", tarPath, err)
 	}
 	// No fsync: local-only snapshots aren't guaranteed to survive a node
-	// restart, and restore falls back to object storage if the local
-	// checkpoint is missing (#2658). fsync here also waits behind other
-	// actors' writes in the shared ext4 journal. See #1954.
+	// restart, and atelet doesn't trust a local snapshot written before the
+	// current boot (#3050). fsync here also waits behind other actors' writes
+	// in the shared ext4 journal. See #1954.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing %q: %w", tarPath, err)
+	}
 	return nil
 }
 
