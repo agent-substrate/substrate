@@ -95,9 +95,10 @@ type Handler struct {
 }
 
 // New builds the egress handler. loadActorIdentityRoots yields the egress
-// listener's trusted_ca; It is called on every CONNECT, so a rotated bundle
-// applies to the next tunnel. A nil loadActorIdentityRoots fails every
-// CONNECT with 503. policyCacheTTL of 0 fetches the policy on every callout.
+// listener's trusted_ca; see verifyActorCertificate for why it is checked
+// again here. It is called on every CONNECT, so a rotated bundle applies to
+// the next tunnel. A nil loadActorIdentityRoots fails every CONNECT with 503.
+// policyCacheTTL of 0 fetches the policy on every callout.
 //
 // provider resolves an allowed rule's credential_uri injections on the
 // TLS-terminated MITM leg; nil leaves them off, so a request that needs one is
@@ -155,7 +156,6 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	// as 503 rather than 403: this is our misconfiguration, not the actor's.
 	roots, err := h.loadActorIdentityRoots()
 	if err != nil {
-		slog.ErrorContext(ctx, "egress unavailable: loading the actor-identity CA failed", slog.Any("err", err))
 		return extproc.Result{}, extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err,
 			"egress unavailable: actor-identity CA failed to load")
 	}

@@ -225,6 +225,7 @@ func TestPatchAtenetEgressManifest(t *testing.T) {
 		"sds-servicedns-cert.yaml",
 		"sds-podidentity-cert.yaml",
 		"sds-servicedns-validation.yaml",
+		"sds-actor-identity-validation.yaml",
 	} {
 		content, ok := data[key]
 		if !ok {
@@ -256,7 +257,7 @@ func TestPatchAtenetEgressManifest(t *testing.T) {
 			t.Errorf("patched envoy.yaml contains watched_directory outside the SDS resource files: %q", line)
 		}
 	}
-	for _, key := range []string{"sds-servicedns-cert.yaml", "sds-podidentity-cert.yaml", "sds-servicedns-validation.yaml"} {
+	for _, key := range []string{"sds-servicedns-cert.yaml", "sds-podidentity-cert.yaml", "sds-servicedns-validation.yaml", "sds-actor-identity-validation.yaml"} {
 		if !strings.Contains(data[key], "watched_directory") {
 			t.Errorf("SDS resource %q is missing watched_directory; rotation would be silently broken", key)
 		}
