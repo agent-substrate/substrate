@@ -60,13 +60,13 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 		{name: "matching checkpoint/generation mismatch", request: func(e *ateapi.ExpectedSnapshot) { e.Generation = 2 }, diagnostic: "newest held snapshot", want: codes.FailedPrecondition},
 		{name: "matching checkpoint/lost response identical retry", phase: "lost response"},
 		{name: "matching checkpoint/retryable RESUMING", phase: "resuming"},
-		{name: "matching checkpoint/local restore differs", mutate: func(a *ateapi.Actor) {
+		{name: "matching checkpoint/newer durable overrides older local", mutate: func(a *ateapi.Actor) {
 			local(a)
 			next := proto.CloneOf(a.Status.Snapshots[0])
 			next.Uuid, next.Generation, next.Locality = "snap-2", 2, ""
 			a.Status.Snapshots = append(a.Status.Snapshots, next)
 			a.Status.LastAssignedGeneration = 2
-		}, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }, diagnostic: "local restore source", want: codes.FailedPrecondition},
+		}, request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid, e.Generation = "snap-2", 2 }},
 		{name: "GetActor-ResumeActor race/intervening suspend", phase: "suspend", want: codes.FailedPrecondition},
 		{name: "GetActor-ResumeActor race/source changes after preflight", phase: "lease", mutate: changed, want: codes.FailedPrecondition},
 		{name: "same-name replacement", phase: "replace", diagnostic: "actor UID", want: codes.FailedPrecondition},
@@ -205,9 +205,6 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 						details = []string{after.GetMetadata().GetUid(), req.GetExpected().GetActorUid()}
 					} else {
 						held := latestSnapshot(after.GetStatus(), func(*ateapi.Snapshot) bool { return true })
-						if tc.diagnostic == "local restore source" {
-							held = findLatestLocalSnapshot(after.GetStatus())
-						}
 						details = []string{held.GetUuid(), fmt.Sprintf("generation %d", held.GetGeneration()), req.GetExpected().GetSnapshotUuid(), fmt.Sprintf("generation %d", req.GetExpected().GetGeneration())}
 					}
 					for _, detail := range append(details, tc.diagnostic, "expected") {
@@ -259,9 +256,12 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 			if !proto.Equal(after.GetWorkerSelector(), actor.GetWorkerSelector()) {
 				t.Error("resume lost updated worker selector")
 			}
-			snapshot := actor.GetStatus().GetSnapshots()[0]
-			if restore.GetSnapshot().GetSnapshotUuid() != snapshot.GetUuid() || restore.GetSnapshot().GetGeneration() != snapshot.GetGeneration() || run != nil {
-				t.Errorf("restore = %v, run = %v; want snapshot %v", restore, run, snapshot)
+			wantUUID, wantGeneration := "snap-1", int32(1)
+			if req.Expected != nil {
+				wantUUID, wantGeneration = req.Expected.GetSnapshotUuid(), req.Expected.GetGeneration()
+			}
+			if restore.GetSnapshot().GetSnapshotUuid() != wantUUID || restore.GetSnapshot().GetGeneration() != wantGeneration || run != nil {
+				t.Errorf("restore = %v, run = %v; want snapshot %q generation %d", restore, run, wantUUID, wantGeneration)
 			}
 			if tc.phase == "lost response" {
 				// The first response is lost; retry the original request unchanged.
