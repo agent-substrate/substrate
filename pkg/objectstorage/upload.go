@@ -76,6 +76,13 @@ func NewUploader(client ObjectStorage, capacity int64) (*Uploader, error) {
 }
 
 // uploadBufferMemory includes buffers retained while the compressor is running.
+// WithClient returns an Uploader that sends through client and shares u's
+// memory budget, for a transfer that runs with its own credentials. client
+// must be the same kind of backend as u's, since the budget was sized for it.
+func (u *Uploader) WithClient(client ObjectStorage) *Uploader {
+	return &Uploader{client: client, budget: u.budget}
+}
+
 func uploadBufferMemory(client ObjectStorage) int64 {
 	switch client.(type) {
 	case *s3Client:

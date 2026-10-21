@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
+	"go.ate.dev/substrate/internal/hardware"
 	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
@@ -258,16 +259,16 @@ func (f *fakeControl) uid(pod string) string {
 type fakeRelay struct {
 	control  *fakeControl
 	mu       sync.Mutex
-	reported map[string]*ateapipb.WorkerResources // by Worker name
-	runtimes map[string]*ateapipb.SandboxRuntime  // default runtime, by Worker name
-	via      map[string]string                    // relay address, by Worker name
+	reported map[string]*ateapipb.WorkerResources      // by Worker name
+	classes  map[string][]*ateapipb.WorkerSandboxClass // sandbox classes, by Worker name
+	via      map[string]string                         // relay address, by Worker name
 	reject   map[string]codes.Code
 	calls    int
 	live     map[string]string // as last pruned to
 }
 
 func newFakeRelay() *fakeRelay {
-	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, runtimes: map[string]*ateapipb.SandboxRuntime{}, via: map[string]string{}, reject: map[string]codes.Code{}}
+	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, classes: map[string][]*ateapipb.WorkerSandboxClass{}, via: map[string]string{}, reject: map[string]codes.Code{}}
 }
 
 func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.RegisterWorkerRequest) error {
@@ -279,12 +280,12 @@ func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.Registe
 		return status.Error(code, "rejected")
 	}
 	f.reported[name] = req.GetCapacity()
-	f.runtimes[name] = req.GetDefaultRuntime()
+	f.classes[name] = req.GetSandboxClasses()
 	f.via[name] = addr
 	if f.control != nil {
 		f.control.mu.Lock()
 		if w, ok := f.control.workers[name]; ok {
-			w.Status.Capacity, w.Status.DefaultRuntime = req.GetCapacity(), req.GetDefaultRuntime()
+			w.Status.Capacity, w.Status.SandboxClasses = req.GetCapacity(), req.GetSandboxClasses()
 		}
 		f.control.mu.Unlock()
 	}
@@ -435,8 +436,8 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 		t.Errorf("index 1 placed on %q, want node-b (round robin)", w.GetNodeName())
 	case w.GetWorkerNamespace() != "benchmark-workloads" || w.GetWorkerPool() != "bench":
 		t.Errorf("WorkerNamespace/WorkerPool = %q/%q", w.GetWorkerNamespace(), w.GetWorkerPool())
-	case w.GetSandboxClass() != "gvisor":
-		t.Errorf("SandboxClass = %q", w.GetSandboxClass())
+	case hardware.SandboxClass(w.GetStatus()) != "gvisor":
+		t.Errorf("sandbox class = %q", hardware.SandboxClass(w.GetStatus()))
 	case w.GetLabels()["workload"] != "bench":
 		t.Errorf("Labels = %v, want the pool's, which template selectors match", w.GetLabels())
 	case w.GetWorkerPodUid() != w.GetMetadata().GetName() || w.GetEpoch() != 0:
@@ -449,9 +450,9 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 	if got, want := rel.reported[ctl.uid(name)], wantCapacity(1000, "1500m", "4Gi"); !proto.Equal(got, want) {
 		t.Errorf("reported %v, want %v from the pool's limits", got, want)
 	}
-	wantRuntime := &ateapipb.SandboxRuntime{SandboxClass: "gvisor", Version: hostCompat()}
-	if got := rel.runtimes[ctl.uid(name)]; !proto.Equal(got, wantRuntime) {
-		t.Errorf("default runtime %v, want %v: the pool's class on this host, which ate-api-server requires", got, wantRuntime)
+	wantClass := &ateapipb.WorkerSandboxClass{SandboxClass: "gvisor", DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: hostCompat()}}
+	if got := rel.classes[ctl.uid(name)]; len(got) != 1 || !proto.Equal(got[0], wantClass) {
+		t.Errorf("sandbox classes %v, want one, %v: the pool's class on this host, which ate-api-server requires", got, wantClass)
 	}
 	if got, want := cl.statuses["bench"], (atev1alpha1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("status = %+v, want %+v", got, want)
@@ -949,10 +950,11 @@ func TestPoolLabelChangeUpdatesWorkers(t *testing.T) {
 	}
 }
 
-// sandbox_class is immutable on a Worker, so a sandboxClass edit replaces the
-// pool's Workers the way it replaces real worker pods: each pod gets a new
-// Worker, under a new name and pod UID, at once; an idle old Worker is deleted
-// at once, a held one once its Actors leave.
+// A Worker's sandbox class is fixed on its first RegisterWorker report, so a
+// sandboxClass edit replaces the pool's Workers the way it replaces real
+// worker pods: each pod gets a new Worker, under a new name and pod UID, at
+// once; an idle old Worker is deleted at once, a held one once its Actors
+// leave.
 func TestPoolSandboxClassChangeReplacesWorkers(t *testing.T) {
 	c, ctl, _, cl := newTestController(pool("bench", 2, nil))
 	if err := reconcile(t, c); err != nil {
@@ -971,15 +973,15 @@ func TestPoolSandboxClassChangeReplacesWorkers(t *testing.T) {
 	}
 	for _, pod := range []string{idle, busy} {
 		w := ctl.worker(pod)
-		if w.GetSandboxClass() != "microvm" || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-			t.Errorf("Worker for %s = %q/%v, want microvm and active", pod, w.GetSandboxClass(), w.GetStatus().GetState())
+		if hardware.SandboxClass(w.GetStatus()) != "microvm" || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+			t.Errorf("Worker for %s = %q/%v, want microvm and active", pod, hardware.SandboxClass(w.GetStatus()), w.GetStatus().GetState())
 		}
 		if w.GetWorkerPodUid() != w.GetMetadata().GetName() {
 			t.Errorf("Worker %s has pod UID %s, want its name", w.GetMetadata().GetName(), w.GetWorkerPodUid())
 		}
 	}
-	if w := ctl.draining(busy); w.GetMetadata().GetName() != oldBusy || w.GetSandboxClass() != "gvisor" {
-		t.Errorf("draining Worker for %s = %s/%q, want the old gvisor one, %s", busy, w.GetMetadata().GetName(), w.GetSandboxClass(), oldBusy)
+	if w := ctl.draining(busy); w.GetMetadata().GetName() != oldBusy || hardware.SandboxClass(w.GetStatus()) != "gvisor" {
+		t.Errorf("draining Worker for %s = %s/%q, want the old gvisor one, %s", busy, w.GetMetadata().GetName(), hardware.SandboxClass(w.GetStatus()), oldBusy)
 	}
 	if got := cl.statuses["bench"]; got.Replicas != 2 || got.ReadyReplicas != 2 {
 		t.Errorf("status = %+v, want 2 replicas, 2 ready: the draining Worker is no replica", got)
@@ -1013,7 +1015,7 @@ func TestFailedDrainOfAReplacedWorkerIsNoReplica(t *testing.T) {
 	}
 	var replacement *ateapipb.Worker
 	for _, w := range ctl.all() {
-		if w.GetSandboxClass() == "microvm" {
+		if hardware.SandboxClass(w.GetStatus()) == "microvm" {
 			replacement = w
 		}
 	}

@@ -82,8 +82,8 @@ func (f testRoundTripper) RoundTrip(request *http.Request) (*http.Response, erro
 	return f(request)
 }
 
-// With the router in static-mtls mode, Connect has to complete a TLS
-// handshake, presenting the client certificate, before it sends the CONNECT.
+// Connect has to complete a TLS handshake, presenting the client certificate,
+// before it sends the CONNECT.
 func TestRouterClientConnectTLS(t *testing.T) {
 	clientCert := selfSignedClientCert(t, "spiffe://cluster.local/ns/test/sa/client")
 	clientCAs := x509.NewCertPool()

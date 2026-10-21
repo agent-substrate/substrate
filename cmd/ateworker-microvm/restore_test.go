@@ -446,7 +446,7 @@ func TestMergeOnDemandDeltaPreservesRestoreSource(t *testing.T) {
 		}
 	})
 
-	t.Run("preserveRestoreSource=false moves expendable base into checkpointDir", func(t *testing.T) {
+	t.Run("preserveRestoreSource=false merges expendable base in place and links into checkpointDir", func(t *testing.T) {
 		restoreDir := t.TempDir()
 		checkpointDir := t.TempDir()
 		basePath := filepath.Join(restoreDir, "memory-ranges")
@@ -459,8 +459,16 @@ func TestMergeOnDemandDeltaPreservesRestoreSource(t *testing.T) {
 			t.Fatalf("mergeOnDemandDelta: %v", err)
 		}
 
-		if _, err := os.Stat(basePath); !os.IsNotExist(err) {
-			t.Errorf("expendable base memory-ranges still in restoreDir (stat err = %v), want moved", err)
+		bi, err := os.Stat(basePath)
+		if err != nil {
+			t.Fatalf("stat base memory-ranges in restoreDir: %v", err)
+		}
+		di, err := os.Stat(deltaPath)
+		if err != nil {
+			t.Fatalf("stat merged memory-ranges in checkpointDir: %v", err)
+		}
+		if !os.SameFile(bi, di) {
+			t.Errorf("expected basePath and deltaPath to share an inode after in-place merge")
 		}
 		gotMerged, err := os.ReadFile(deltaPath)
 		if err != nil {

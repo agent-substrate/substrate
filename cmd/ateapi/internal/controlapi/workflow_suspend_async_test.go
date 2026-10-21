@@ -198,7 +198,7 @@ func TestSuspendActorAsync_Finalized_RecordsFidelity(t *testing.T) {
 			w, _ := newWireCaptureWorkflow(t, st)
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
-			wantRuntime := &ateapipb.SandboxRuntime{
+			wantRuntime := &ateapipb.ActorSandboxRuntime{
 				SandboxClass: "gvisor",
 				Version: &ateapipb.VersionedSandboxCompat{
 					SchemaVersion: "v1",

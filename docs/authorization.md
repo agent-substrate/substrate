@@ -24,29 +24,20 @@ callers authenticate, see [authentication.md](authentication.md).
 
 ## Settings
 
-These are `ate-setup` settings, so the environment variable is read by
-`ate-setup`. It passes them to `ate-api-server` as the
-`--experimental-enable-authz` and `--authz-bootstrap-owners` flags on its
-container; an install that doesn't use `ate-setup` sets those flags in its
-manifest. A change rolls `ate-api-server`.
+Authorization is always enforced. `ate-setup` reads the setting below and
+passes it to `ate-api-server` as the `--authz-bootstrap-owners` flag on its
+container; an install that doesn't use `ate-setup` sets that flag in its
+manifest. `ate-api-server` won't start without a bootstrap owner. A change
+rolls `ate-api-server`.
 
 | Setting | Environment variable | Example |
 |---|---|---|
-| `ateapi.authz.enabled` | `ATE_API_EXPERIMENTAL_ENABLE_AUTHZ` | `true` (the default) |
 | `ateapi.authz.bootstrapOwners` | `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` | `alice@example.com,bob@example.com` |
 
 If you don't set `ateapi.authz.bootstrapOwners`, `ate-setup` uses the shared
 `ate-client` ServiceAccount (`system:serviceaccount:<namespace>:ate-client`),
 so the demos, benchmarks and e2e tests work. See the warning at the top of
 this page.
-
-```sh
-ATE_API_EXPERIMENTAL_ENABLE_AUTHZ=false hack/install-ate.sh --deploy-ate-system   # turn it off
-```
-
-With authorization off, access policy RPCs are still checked, so nobody can
-grant themselves access while it is off and keep it once it is on. Bootstrap
-owners still apply, so they can set up policies before turning it on.
 
 ## Principals
 
@@ -69,7 +60,7 @@ policies say. They write an install's first access policies and recover access
 if those break.
 
 - They come from configuration, not the API. `ate-api-server` reads them at
-  startup and exits if authorization is on and the list is empty. Restarting
+  startup and exits if the list is empty. Restarting
   it with a new list takes effect immediately.
 - Any principal `ate-api-server` can authenticate can be one.
 - `ate-setup` warns whenever `ate-client` is one.
@@ -176,8 +167,6 @@ viewer, and a global role holds the same role in every atespace. So
 | `GetAtespaceAccessPolicy` | `can_get_access_policy`, the atespace | Atespace viewer |
 | `CreateAtespaceAccessPolicy`, `UpdateAtespaceAccessPolicy`, `DeleteAtespaceAccessPolicy` | `can_create_access_policy` / `can_update_access_policy` / `can_delete_access_policy`, the atespace | Atespace owner |
 
-The access policy RPCs are checked even with authorization off.
-
 ### Actor templates and actors
 
 | RPC | Permission, on | Allowed for |
@@ -235,8 +224,6 @@ certificate.
 | `ReportActorSnapshotState` | `atelet` on the node the actor is placed on or holds a local snapshot of it |
 
 ### Every RPC
-
-With authorization on:
 
 - An RPC with no rule is denied, and a test fails the build if a served RPC
   has none.

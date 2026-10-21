@@ -76,47 +76,49 @@ func TestFromFilesMissing(t *testing.T) {
 	}
 }
 
-func TestBuildRuntime(t *testing.T) {
-	got := buildRuntime("gvisor", sandboxruntimes.Attributes{
+func TestBuildCompat(t *testing.T) {
+	got := buildCompat(sandboxruntimes.Attributes{
 		hardware.AttrSandboxBundleHash: "sha256:abc",
 		hardware.AttrCPUFeatures:       "3f",
 		hardware.AttrArchitecture:      runtime.GOARCH,
 	})
-	want := &ateletpb.SandboxRuntime{
-		SandboxClass: "gvisor",
-		Version: &ateletpb.VersionedSandboxCompat{
-			SchemaVersion: hardware.SchemaVersionV1,
-			Attributes: []*ateletpb.AttributeEntry{
-				{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
-				{Key: hardware.AttrCPUFeatures, Value: "3f"},
-				{Key: hardware.AttrSandboxBundleHash, Value: "sha256:abc"},
-			},
+	want := &ateletpb.VersionedSandboxCompat{
+		SchemaVersion: hardware.SchemaVersionV1,
+		Attributes: []*ateletpb.AttributeEntry{
+			{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
+			{Key: hardware.AttrCPUFeatures, Value: "3f"},
+			{Key: hardware.AttrSandboxBundleHash, Value: "sha256:abc"},
 		},
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
-		t.Errorf("buildRuntime() mismatch (-want +got):\n%s", diff)
+		t.Errorf("buildCompat() mismatch (-want +got):\n%s", diff)
 	}
+}
+
+// gvisorFile is a sandbox runtimes file naming one class, gvisor, with def
+// as its default runtime and restorable as the others.
+func gvisorFile(def sandboxruntimes.Attributes, restorable ...sandboxruntimes.Attributes) *sandboxruntimes.File {
+	c := sandboxruntimes.Class{SandboxClass: "gvisor", DefaultRuntime: sandboxruntimes.Runtime{Version: def}}
+	for _, r := range restorable {
+		c.RestorableRuntimes = append(c.RestorableRuntimes, sandboxruntimes.Runtime{Version: r})
+	}
+	return &sandboxruntimes.File{SandboxClasses: []sandboxruntimes.Class{c}}
 }
 
 func TestReconcilerSync(t *testing.T) {
 	capacity := &ateletpb.WorkerResources{Actors: testActors}
-	v1 := &sandboxruntimes.File{
-		DefaultRuntime: sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:      runtime.GOARCH,
-			hardware.AttrCPUFeatures:       "3",
-			hardware.AttrSandboxBundleHash: "sha256:v1",
-		},
-	}
-	v2 := &sandboxruntimes.File{
-		DefaultRuntime: sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:      runtime.GOARCH,
-			hardware.AttrCPUFeatures:       "7",
-			hardware.AttrSandboxBundleHash: "sha256:v2",
-		},
-		RestorableRuntimes: []sandboxruntimes.Attributes{v1.DefaultRuntime},
-	}
-	reqV1 := buildRequest(capacity, "gvisor", v1)
-	reqV2 := buildRequest(capacity, "gvisor", v2)
+	v1 := gvisorFile(sandboxruntimes.Attributes{
+		hardware.AttrArchitecture:      runtime.GOARCH,
+		hardware.AttrCPUFeatures:       "3",
+		hardware.AttrSandboxBundleHash: "sha256:v1",
+	})
+	v2 := gvisorFile(sandboxruntimes.Attributes{
+		hardware.AttrArchitecture:      runtime.GOARCH,
+		hardware.AttrCPUFeatures:       "7",
+		hardware.AttrSandboxBundleHash: "sha256:v2",
+	}, v1.SandboxClasses[0].DefaultRuntime.Version)
+	reqV1 := buildRequest(capacity, &v1.SandboxClasses[0])
+	reqV2 := buildRequest(capacity, &v2.SandboxClasses[0])
 
 	tests := []struct {
 		name           string
@@ -141,9 +143,30 @@ func TestReconcilerSync(t *testing.T) {
 			},
 		},
 		{
-			name: "empty default runtime",
+			name: "no classes",
 			setupFile: func(t *testing.T, path string) {
 				if _, err := sandboxruntimes.Write(path, &sandboxruntimes.File{}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			// The file names a class this worker does not implement.
+			name: "other class only",
+			setupFile: func(t *testing.T, path string) {
+				f := &sandboxruntimes.File{SandboxClasses: []sandboxruntimes.Class{{
+					SandboxClass:   "microvm",
+					DefaultRuntime: v1.SandboxClasses[0].DefaultRuntime,
+				}}}
+				if _, err := sandboxruntimes.Write(path, f); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "empty default runtime",
+			setupFile: func(t *testing.T, path string) {
+				if _, err := sandboxruntimes.Write(path, gvisorFile(nil)); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -239,9 +262,7 @@ func TestReconcilerRunBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	file := &sandboxruntimes.File{
-		DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"},
-	}
+	file := gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"})
 	changes := make(chan struct{}, 1)
 
 	const (
@@ -266,9 +287,7 @@ func TestReconcilerRunBackoff(t *testing.T) {
 				return errors.New("transient failure")
 			case 4:
 				// Succeed on attempt 4, then trigger a file update on changes.
-				file = &sandboxruntimes.File{
-					DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v2"},
-				}
+				file = gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v2"})
 				changes <- struct{}{}
 				return nil
 			case 5:
@@ -318,9 +337,7 @@ func TestReconcilerIgnoresChangesDuringBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	file := &sandboxruntimes.File{
-		DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"},
-	}
+	file := gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"})
 	changes := make(chan struct{}, 1)
 	// started reports each registration attempt as it begins; release lets
 	// the second one return.
@@ -406,9 +423,7 @@ func TestReconcilerRunResync(t *testing.T) {
 			if reads >= 2 {
 				cancel()
 			}
-			return &sandboxruntimes.File{
-				DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"},
-			}, nil
+			return gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"}), nil
 		},
 		func(context.Context, *ateletpb.RegisterWorkerRequest) error { return nil },
 	)
@@ -544,20 +559,18 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 
 	// Write the file after WatchFilePath has started, as happens when a worker comes up
 	// before atelet has reconciled the pod.
-	v1 := &sandboxruntimes.File{
-		DefaultRuntime: sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:      runtime.GOARCH,
-			hardware.AttrCPUFeatures:       "3",
-			hardware.AttrSandboxBundleHash: "sha256:v1",
-		},
-	}
+	v1 := gvisorFile(sandboxruntimes.Attributes{
+		hardware.AttrArchitecture:      runtime.GOARCH,
+		hardware.AttrCPUFeatures:       "3",
+		hardware.AttrSandboxBundleHash: "sha256:v1",
+	})
 	if _, err := sandboxruntimes.Write(path, v1); err != nil {
 		t.Fatalf("writing v1: %v", err)
 	}
 	select {
 	case req := <-got:
-		if diff := cmp.Diff(buildRuntime("gvisor", v1.DefaultRuntime), req.GetDefaultRuntime(), protocmp.Transform()); diff != "" {
-			t.Errorf("initial registration default_runtime mismatch (-want +got):\n%s", diff)
+		if diff := cmp.Diff(buildRequest(r.capacity, &v1.SandboxClasses[0]), req, protocmp.Transform()); diff != "" {
+			t.Errorf("initial registration mismatch (-want +got):\n%s", diff)
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for initial registration after file creation")
@@ -565,24 +578,18 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 
 	// Rewrite the file via atomic rename and verify the watcher triggers a
 	// second registration.
-	v2 := &sandboxruntimes.File{
-		DefaultRuntime: sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:      runtime.GOARCH,
-			hardware.AttrCPUFeatures:       "7",
-			hardware.AttrSandboxBundleHash: "sha256:v2",
-		},
-		RestorableRuntimes: []sandboxruntimes.Attributes{v1.DefaultRuntime},
-	}
+	v2 := gvisorFile(sandboxruntimes.Attributes{
+		hardware.AttrArchitecture:      runtime.GOARCH,
+		hardware.AttrCPUFeatures:       "7",
+		hardware.AttrSandboxBundleHash: "sha256:v2",
+	}, v1.SandboxClasses[0].DefaultRuntime.Version)
 	if _, err := sandboxruntimes.Write(path, v2); err != nil {
 		t.Fatalf("writing v2: %v", err)
 	}
 	select {
 	case req := <-got:
-		if diff := cmp.Diff(buildRuntime("gvisor", v2.DefaultRuntime), req.GetDefaultRuntime(), protocmp.Transform()); diff != "" {
-			t.Errorf("updated registration default_runtime mismatch (-want +got):\n%s", diff)
-		}
-		if len(req.GetRestorableRuntimes()) != 1 {
-			t.Fatalf("got %d restorable runtimes, want 1", len(req.GetRestorableRuntimes()))
+		if diff := cmp.Diff(buildRequest(r.capacity, &v2.SandboxClasses[0]), req, protocmp.Transform()); diff != "" {
+			t.Errorf("updated registration mismatch (-want +got):\n%s", diff)
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for registration after file update")

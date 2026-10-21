@@ -346,13 +346,11 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			WorkerPodUid:    string(pod.UID),
 			NodeName:        pod.Spec.NodeName,
 			WorkerSpiffeId:  workerSPIFFEID(pod),
-			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			Epoch:           podEpoch(pod),
-			// Capacity is the Worker's to report, not the syncer's to infer
-			// from the pod: it is what the worker can actually supply. Until
-			// that report lands, CreateWorker's reified ceiling holds the
-			// Worker to a single Actor.
+			// Capacity and runtimes are the Worker's to report, not the
+			// syncer's to infer from the pod: they are what the worker can
+			// actually supply.
 		}
 		// status is output-only: CreateWorker registers the Worker UNAVAILABLE.
 		//
@@ -396,16 +394,6 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		slog.InfoContext(ctx, "Syncer: updating worker (labels changed)", key.logAttrs()...)
 		w.Labels = pool.GetLabels()
 		changed = true
-	}
-	if w.GetSandboxClass() != string(pool.Spec.DefaultSandboxClass()) {
-		// Expected mid-rollout: sandboxClass drives the worker pod's shape, so
-		// editing it on the pool replaces every pod rather than reclassifying
-		// any. This pod predates that edit and is on its way out; its successor
-		// registers under a new key with the new class. Writing the pool's value
-		// back would be rejected, and would misreport this pod's shape to the
-		// scheduler if it were not.
-		slog.DebugContext(ctx, "Syncer: registered worker sandbox class predates its pool",
-			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.DefaultSandboxClass())))...)
 	}
 	if ips := podIPs(pod); len(ips) > 0 && !slices.Equal(w.GetIps(), ips) {
 		// TODO: I don't think this is possible, but handling this case so we can

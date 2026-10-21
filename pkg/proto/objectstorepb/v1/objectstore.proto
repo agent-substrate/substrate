@@ -58,8 +58,8 @@ message FetchSnapshotRequest {
   // minted for the node hosting the actor, with the audience
   // "objectstore-plugin.ate.dev". That audience belongs to this API, so every
   // plugin serving it verifies the same value. The token names the node it
-  // was minted for and is refused once the actor has left it. Substrate does
-  // not set the field yet, so it is currently always empty.
+  // was minted for and is refused once the actor has left it. atelet sets it
+  // on every transfer. A plugin without per-actor authorization ignores it.
   string actor_jwt = 2 [ debug_redact = true ];
 
   // Full local path of the directory the files are written into. It must
@@ -82,8 +82,8 @@ message UploadSnapshotRequest {
   // minted for the node hosting the actor, with the audience
   // "objectstore-plugin.ate.dev". That audience belongs to this API, so every
   // plugin serving it verifies the same value. The token names the node it
-  // was minted for and is refused once the actor has left it. Substrate does
-  // not set the field yet, so it is currently always empty.
+  // was minted for and is refused once the actor has left it. atelet sets it
+  // on every transfer. A plugin without per-actor authorization ignores it.
   string actor_jwt = 2 [ debug_redact = true ];
 
   // Full local path of the directory the files are read from.

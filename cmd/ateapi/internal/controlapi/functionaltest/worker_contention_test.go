@@ -26,6 +26,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestResumeActor_ConcurrentOntoOneWorker is the regression test for a refusal
@@ -153,13 +154,13 @@ func setWorkerActorCapacity(t *testing.T, tc *testContext, pool string, actors i
 	}
 }
 
-// defaultWorkerRuntime returns the default SandboxRuntime that
+// defaultWorkerRuntime returns the default ActorSandboxRuntime that
 // reportWorkerCapacity records on a test worker of the given sandbox class.
-func defaultWorkerRuntime(class string) *ateapipb.SandboxRuntime {
+func defaultWorkerRuntime(class string) *ateapipb.ActorSandboxRuntime {
 	if class == "" {
 		class = "gvisor"
 	}
-	return &ateapipb.SandboxRuntime{
+	return &ateapipb.ActorSandboxRuntime{
 		SandboxClass: class,
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: hardware.SchemaVersionV1,
@@ -169,6 +170,19 @@ func defaultWorkerRuntime(class string) *ateapipb.SandboxRuntime {
 			},
 		},
 	}
+}
+
+// workerSandboxClasses is the sandbox_classes a worker reports to run def as
+// its default runtime and restore restorable beyond it, all of def's class.
+// The arguments are the ActorSandboxRuntimes a test also expects on snapshots and
+// assignments, so both sides of a match derive from one value; the compats
+// are copied so the stored row never aliases them.
+func workerSandboxClasses(def *ateapipb.ActorSandboxRuntime, restorable ...*ateapipb.ActorSandboxRuntime) []*ateapipb.WorkerSandboxClass {
+	class := &ateapipb.WorkerSandboxClass{SandboxClass: def.GetSandboxClass(), DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: proto.CloneOf(def.GetVersion())}}
+	for _, r := range restorable {
+		class.RestorableRuntimes = append(class.RestorableRuntimes, &ateapipb.WorkerSandboxRuntime{Version: proto.CloneOf(r.GetVersion())})
+	}
+	return []*ateapipb.WorkerSandboxClass{class}
 }
 
 // reportWorkerCapacity stands in for the worker's capacity report, which atelet
@@ -187,8 +201,8 @@ func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int
 			Actors:        actors,
 			CpuMillicores: int64(actors) * 1000, MemoryBytes: int64(actors) * 512 << 20,
 		}
-		if toUpdate.Status.DefaultRuntime == nil {
-			toUpdate.Status.DefaultRuntime = defaultWorkerRuntime(toUpdate.GetSandboxClass())
+		if len(toUpdate.Status.SandboxClasses) == 0 {
+			toUpdate.Status.SandboxClasses = workerSandboxClasses(defaultWorkerRuntime("gvisor"))
 		}
 		return nil
 	}); err != nil {

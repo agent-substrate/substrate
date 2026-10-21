@@ -16,7 +16,6 @@ package authz
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"go.ate.dev/substrate/internal/apierror"
@@ -57,7 +56,7 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 		Kind: principal.KindJWT,
 	})
 
-	interceptor := UnaryServerInterceptor(authorizer, true)
+	interceptor := UnaryServerInterceptor(authorizer)
 
 	tests := []struct {
 		name        string
@@ -152,7 +151,7 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 
 func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenFailsClosed(t *testing.T) {
 	authorizer := setupTestAuthorizer(t)
-	interceptor := UnaryServerInterceptor(authorizer, true)
+	interceptor := UnaryServerInterceptor(authorizer)
 
 	// 1. Unauthenticated caller with empty atespace name -> Unauthenticated
 	_, err := interceptor(context.Background(), &ateapipb.GetAtespaceRequest{}, &grpc.UnaryServerInfo{
@@ -196,74 +195,8 @@ func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenFailsClosed
 
 }
 
-func TestUnaryServerInterceptor_EnforcementDisabled(t *testing.T) {
-	authorizer := setupTestAuthorizer(t)
-	interceptor := UnaryServerInterceptor(authorizer, false)
-	bobCtx := principal.InjectContext(context.Background(), principal.PrincipalInfo{
-		ID:   "bob@example.com",
-		Kind: principal.KindJWT,
-	})
-	aliceCtx := principal.InjectContext(context.Background(), principal.PrincipalInfo{
-		ID:   "alice@example.com",
-		Kind: principal.KindJWT,
-	})
-
-	tests := []struct {
-		name       string
-		ctx        context.Context
-		fullMethod string
-		req        any
-		wantCode   codes.Code
-	}{
-		{
-			name:       "regular RPC skips the check",
-			ctx:        bobCtx,
-			fullMethod: ateapipb.Control_CreateAtespace_FullMethodName,
-			req:        &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team1"}}},
-			wantCode:   codes.OK,
-		},
-		{
-			name:       "governance RPC is still denied",
-			ctx:        bobCtx,
-			fullMethod: ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName,
-			req:        &ateapipb.UpdateGlobalAccessPolicyRequest{},
-			wantCode:   codes.PermissionDenied,
-		},
-		{
-			name:       "governance RPC is still allowed for an owner",
-			ctx:        aliceCtx,
-			fullMethod: ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName,
-			req:        &ateapipb.UpdateGlobalAccessPolicyRequest{},
-			wantCode:   codes.OK,
-		},
-		{
-			name:       "governance RPC still requires a principal",
-			ctx:        context.Background(),
-			fullMethod: ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName,
-			req:        &ateapipb.GetAtespaceAccessPolicyRequest{},
-			wantCode:   codes.Unauthenticated,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			handlerCalled := false
-			_, err := interceptor(tc.ctx, tc.req, &grpc.UnaryServerInfo{FullMethod: tc.fullMethod}, func(ctx context.Context, req any) (any, error) {
-				handlerCalled = true
-				return "ok", nil
-			})
-			if apierror.Code(err) != tc.wantCode {
-				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", apierror.Code(err), tc.wantCode, err)
-			}
-			if wantHandler := tc.wantCode == codes.OK; handlerCalled != wantHandler {
-				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, wantHandler)
-			}
-		})
-	}
-}
-
-// An RPC with no rule is denied when enforcement is on and passes through when
-// it is off; an RPC its handler authorizes passes through either way. Neither
-// reaches OpenFGA, so the authorizer is nil.
+// An RPC with no rule is denied, and an RPC its handler authorizes passes
+// through. Neither reaches OpenFGA, so the authorizer is nil.
 func TestUnaryServerInterceptor_UnregisteredAndHandlerAuthorizedRPCs(t *testing.T) {
 	const unregistered = "/ateapi.Control/NotARealMethod"
 	aliceCtx := principal.InjectContext(context.Background(), principal.PrincipalInfo{
@@ -273,23 +206,20 @@ func TestUnaryServerInterceptor_UnregisteredAndHandlerAuthorizedRPCs(t *testing.
 
 	tests := []struct {
 		name       string
-		enforce    bool
 		ctx        context.Context
 		fullMethod string
 		wantCode   codes.Code
 	}{
-		{"unregistered RPC is denied with enforcement on", true, aliceCtx, unregistered, codes.PermissionDenied},
-		{"unregistered RPC is denied without a principal", true, context.Background(), unregistered, codes.PermissionDenied},
-		{"unregistered RPC passes with enforcement off", false, aliceCtx, unregistered, codes.OK},
-		{"RegisterWorker passes with enforcement on", true, context.Background(), ateapipb.WorkerService_RegisterWorker_FullMethodName, codes.OK},
-		{"RequestActorSuspend passes with enforcement on", true, context.Background(), ateapipb.WorkerService_RequestActorSuspend_FullMethodName, codes.OK},
-		{"MintWorkerActorCertificate passes with enforcement on", true, context.Background(), ateapipb.WorkerService_MintWorkerActorCertificate_FullMethodName, codes.OK},
-		{"MintWorkerActorJwt passes with enforcement on", true, context.Background(), ateapipb.WorkerService_MintWorkerActorJwt_FullMethodName, codes.OK},
-		{"RegisterWorker passes with enforcement off", false, context.Background(), ateapipb.WorkerService_RegisterWorker_FullMethodName, codes.OK},
+		{"unregistered RPC is denied", aliceCtx, unregistered, codes.PermissionDenied},
+		{"unregistered RPC is denied without a principal", context.Background(), unregistered, codes.PermissionDenied},
+		{"RegisterWorker passes", context.Background(), ateapipb.WorkerService_RegisterWorker_FullMethodName, codes.OK},
+		{"RequestActorSuspend passes", context.Background(), ateapipb.WorkerService_RequestActorSuspend_FullMethodName, codes.OK},
+		{"MintWorkerActorCertificate passes", context.Background(), ateapipb.WorkerService_MintWorkerActorCertificate_FullMethodName, codes.OK},
+		{"MintWorkerActorJwt passes", context.Background(), ateapipb.WorkerService_MintWorkerActorJwt_FullMethodName, codes.OK},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			interceptor := UnaryServerInterceptor(nil, tc.enforce)
+			interceptor := UnaryServerInterceptor(nil)
 			handlerCalled := false
 			_, err := interceptor(tc.ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: tc.fullMethod}, func(context.Context, any) (any, error) {
 				handlerCalled = true
@@ -302,32 +232,6 @@ func TestUnaryServerInterceptor_UnregisteredAndHandlerAuthorizedRPCs(t *testing.
 				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, wantHandler)
 			}
 		})
-	}
-}
-
-// TestAccessPolicyRPCsAlwaysEnforced guards against an AccessPolicy RPC being
-// added without a governance rule, which would leave it unchecked while
-// enforcement is disabled.
-func TestAccessPolicyRPCsAlwaysEnforced(t *testing.T) {
-	desc := ateapipb.Control_ServiceDesc
-	found := 0
-	for _, m := range desc.Methods {
-		if !strings.Contains(m.MethodName, "AccessPolicy") {
-			continue
-		}
-		found++
-		fullMethod := "/" + desc.ServiceName + "/" + m.MethodName
-		rule, ok := defaultRPCPermissions[fullMethod]
-		if !ok {
-			t.Errorf("%s has no permission rule", fullMethod)
-			continue
-		}
-		if !rule.alwaysEnforce {
-			t.Errorf("%s is not marked alwaysEnforce", fullMethod)
-		}
-	}
-	if found == 0 {
-		t.Fatal("found no AccessPolicy RPCs in Control_ServiceDesc")
 	}
 }
 
@@ -460,7 +364,7 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 		{"global viewer cannot delete template", "global-viewer", deleteTemplate, codes.PermissionDenied},
 	}
 
-	interceptor := UnaryServerInterceptor(authorizer, true)
+	interceptor := UnaryServerInterceptor(authorizer)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			userCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: tc.user, Kind: principal.KindJWT})
@@ -652,7 +556,7 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		{"bootstrap owner cannot mint actor certificate", "bootstrap-owner", mintCert, codes.PermissionDenied},
 	}
 
-	interceptor := UnaryServerInterceptor(authorizer, true)
+	interceptor := UnaryServerInterceptor(authorizer)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			userCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: tc.user, Kind: principal.KindJWT})
@@ -808,7 +712,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"other mTLS identity cannot create worker", mtls(otherID), createWorker, codes.PermissionDenied},
 	}
 
-	interceptor := UnaryServerInterceptor(authorizer, true)
+	interceptor := UnaryServerInterceptor(authorizer)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			userCtx := principal.InjectContext(ctx, tc.principal)

@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
@@ -154,7 +155,7 @@ func filterWorkers(ctx context.Context, actors ActorLister, workers []*ateapipb.
 		if labelSel != nil && !labelSel.Matches(labels.Set(w.GetLabels())) {
 			continue
 		}
-		if sandboxClass != "" && w.GetSandboxClass() != sandboxClass {
+		if sandboxClass != "" && hardware.SandboxClass(w.GetStatus()) != sandboxClass {
 			continue
 		}
 		filtered = append(filtered, w)
@@ -332,7 +333,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 		items = append(items, &printer.WorkerTopItem{
 			Pod:       podName,
 			Pool:      pool,
-			Class:     w.GetSandboxClass(),
+			Class:     hardware.SandboxClass(w.GetStatus()),
 			Status:    printer.WorkerOccupancy(w),
 			CPU:       cpuStr,
 			Memory:    memStr,

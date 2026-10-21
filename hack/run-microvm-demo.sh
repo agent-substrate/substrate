@@ -79,13 +79,13 @@ log() {
 }
 
 # --- 1. deploy the control plane -------------------------------------------
-log "Deploying the ate control plane (--deploy-ate-system)..."
+log "Deploying the ate control plane (deploy ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
   KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh deploy ate-system
 else
   # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh depoy ate-system
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh deploy ate-system
 fi
 
 # --- 2. install micro-VM deps (assets + cluster-wide SandboxConfig) --------

@@ -523,22 +523,22 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
 		},
 		{
-			name:        "no filter excludes pause container diagnostics",
-			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]","labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_pause"}}`,
+			name:        "no filter excludes sandbox diagnostics",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _sandbox]","labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_sandbox"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: false,
 		},
 		{
-			name:        "explicit pause filter shows runsc diagnostics",
-			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_pause"}}`,
+			name:        "explicit sandbox filter shows runsc diagnostics",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _sandbox]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_sandbox"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
-			container:   "_pause",
+			container:   "_sandbox",
 			wantMatched: true,
-			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]"}`,
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _sandbox]"}`,
 		},
 		{
-			name:        "application filter excludes pause container diagnostics",
-			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_pause"}}`,
+			name:        "application filter excludes sandbox diagnostics",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _sandbox]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_sandbox"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			container:   "counter",
 			wantMatched: false,
@@ -785,9 +785,9 @@ func TestLogsActorRunner_Run_OneShot_SourceFilter(t *testing.T) {
 	startedLine := `{"time":"2026-05-16T01:03:37Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
 	counterLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"counter"}}`
 	sidecarLine := `{"time":"2026-05-16T01:03:39Z","level":"info","msg":"from sidecar","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"sidecar"}}`
-	pauseLine := `{"time":"2026-05-16T01:03:39Z","message":"Args: [runsc create _pause]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"_pause"}}`
+	sandboxLine := `{"time":"2026-05-16T01:03:39Z","message":"Args: [runsc create _sandbox]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"_sandbox"}}`
 	checkpointingLine := `{"time":"2026-05-16T01:03:40Z","message":"Actor checkpointing","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
-	stream := strings.Join([]string{startedLine, counterLine, sidecarLine, pauseLine, checkpointingLine}, "\n") + "\n"
+	stream := strings.Join([]string{startedLine, counterLine, sidecarLine, sandboxLine, checkpointingLine}, "\n") + "\n"
 
 	tests := []struct {
 		name       string
@@ -800,7 +800,7 @@ func TestLogsActorRunner_Run_OneShot_SourceFilter(t *testing.T) {
 			wantOutput: []string{"Actor started", "from counter", "from sidecar", "Actor checkpointing"},
 		},
 		{
-			name:       "source=all excludes pause diagnostics",
+			name:       "source=all excludes sandbox diagnostics",
 			source:     "all",
 			wantOutput: []string{"Actor started", "from counter", "from sidecar", "Actor checkpointing"},
 		},
@@ -810,15 +810,15 @@ func TestLogsActorRunner_Run_OneShot_SourceFilter(t *testing.T) {
 			wantOutput: []string{"from counter"},
 		},
 		{
-			name:       "explicit pause container filter",
-			container:  "_pause",
-			wantOutput: []string{"Args: [runsc create _pause]"},
+			name:       "explicit sandbox filter",
+			container:  "_sandbox",
+			wantOutput: []string{"Args: [runsc create _sandbox]"},
 		},
 		{
-			name:       "source=containers with explicit pause filter",
+			name:       "source=containers with explicit sandbox filter",
 			source:     "containers",
-			container:  "_pause",
-			wantOutput: []string{"Args: [runsc create _pause]"},
+			container:  "_sandbox",
+			wantOutput: []string{"Args: [runsc create _sandbox]"},
 		},
 		{
 			name:       "source=containers drops lifecycle events",

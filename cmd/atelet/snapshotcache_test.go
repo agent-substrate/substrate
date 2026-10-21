@@ -246,7 +246,7 @@ func TestFetchManifestCached(t *testing.T) {
 	}
 
 	for i := range 2 {
-		got, err := s.fetchManifestCached(ctx, testSnapshotURI, cacheModeLink)
+		got, err := s.fetchManifestCached(ctx, testActor, testSnapshotURI, cacheModeLink)
 		if err != nil {
 			t.Fatalf("fetchManifestCached #%d: %v", i+1, err)
 		}
@@ -262,7 +262,7 @@ func TestFetchManifestCached(t *testing.T) {
 	}
 
 	// Not shared: read from object storage, as before the cache existed.
-	if _, err := s.fetchManifestCached(ctx, testSnapshotURI, cacheModeOff); err != nil {
+	if _, err := s.fetchManifestCached(ctx, testActor, testSnapshotURI, cacheModeOff); err != nil {
 		t.Fatal(err)
 	}
 	if n := store.gets.Load(); n != 2 {
@@ -278,7 +278,7 @@ func TestDownloadExternalCheckpointServesFromCache(t *testing.T) {
 	// Two cached restores: one download, both destinations share the inode.
 	first, second := restoreDir(t, base, "first"), restoreDir(t, base, "second")
 	for _, dir := range []string{first, second} {
-		if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, dir, files, cacheModeLink); err != nil {
+		if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, dir, files, cacheModeLink); err != nil {
 			t.Fatalf("downloadExternalCheckpoint into %s: %v", dir, err)
 		}
 		if got, err := os.ReadFile(filepath.Join(dir, "memory-ranges")); err != nil || string(got) != "golden memory" {
@@ -299,7 +299,7 @@ func TestDownloadExternalCheckpointServesFromCache(t *testing.T) {
 
 	// A non-cacheable restore downloads fresh and shares nothing.
 	direct := restoreDir(t, base, "direct")
-	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, direct, files, cacheModeOff); err != nil {
+	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, direct, files, cacheModeOff); err != nil {
 		t.Fatalf("direct downloadExternalCheckpoint: %v", err)
 	}
 	if n := store.gets.Load(); n != 2 {
@@ -320,7 +320,7 @@ func TestDownloadExternalCheckpointCopyMode(t *testing.T) {
 
 	first, second := restoreDir(t, base, "first"), restoreDir(t, base, "second")
 	for _, dir := range []string{first, second} {
-		if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, dir, files, cacheModeCopy); err != nil {
+		if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, dir, files, cacheModeCopy); err != nil {
 			t.Fatalf("downloadExternalCheckpoint into %s: %v", dir, err)
 		}
 	}
@@ -342,7 +342,7 @@ func TestDownloadExternalCheckpointCopyMode(t *testing.T) {
 		t.Fatalf("consumer write to its copy: %v", err)
 	}
 	third := restoreDir(t, base, "third")
-	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, third, files, cacheModeCopy); err != nil {
+	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, third, files, cacheModeCopy); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(third, "memory-ranges")); err != nil || string(got) != "golden memory" {
@@ -358,7 +358,7 @@ func TestDownloadExternalCheckpointWithoutCacheDownloads(t *testing.T) {
 	s.snapshotCache = nil // caching disabled (--snapshot-cache-dir="")
 
 	dir := restoreDir(t, base, "out")
-	if err := s.downloadExternalCheckpoint(context.Background(), testSnapshotURI, dir, []string{"memory-ranges"}, cacheModeLink); err != nil {
+	if err := s.downloadExternalCheckpoint(context.Background(), testActor, testSnapshotURI, dir, []string{"memory-ranges"}, cacheModeLink); err != nil {
 		t.Fatalf("downloadExternalCheckpoint with nil cache: %v", err)
 	}
 	if got, err := os.ReadFile(filepath.Join(dir, "memory-ranges")); err != nil || string(got) != "golden memory" {
@@ -372,7 +372,7 @@ func TestDownloadExternalCheckpointWithoutCacheDownloads(t *testing.T) {
 func TestDownloadExternalCheckpointCachedFetchErrorReachesCaller(t *testing.T) {
 	s, _, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory"})
 	dir := restoreDir(t, base, "out")
-	err := s.downloadExternalCheckpoint(context.Background(), testSnapshotURI, dir, []string{"missing"}, cacheModeLink)
+	err := s.downloadExternalCheckpoint(context.Background(), testActor, testSnapshotURI, dir, []string{"missing"}, cacheModeLink)
 	if err == nil {
 		t.Fatal("downloadExternalCheckpoint succeeded for a missing file")
 	}
@@ -394,7 +394,7 @@ func TestDownloadExternalCheckpointSharesOneDownload(t *testing.T) {
 	for i := range restores {
 		dir := restoreDir(t, base, fmt.Sprintf("actor-%d", i))
 		wg.Go(func() {
-			errs[i] = s.downloadExternalCheckpoint(context.Background(), testSnapshotURI, dir, files, cacheModeLink)
+			errs[i] = s.downloadExternalCheckpoint(context.Background(), testActor, testSnapshotURI, dir, files, cacheModeLink)
 		})
 	}
 	wg.Wait()
@@ -424,7 +424,7 @@ func TestDownloadExternalCheckpointCachedSubdirAndSymlinks(t *testing.T) {
 	// Two files share the subdirectory and are fetched in parallel: the
 	// directory is made once, before either, not raced into by both.
 	dir := restoreDir(t, base, "subdir")
-	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, dir, []string{"memory-ranges", "fs/data.tar", "fs/rootfs-upper-app.tar"}, cacheModeLink); err != nil {
+	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, dir, []string{"memory-ranges", "fs/data.tar", "fs/rootfs-upper-app.tar"}, cacheModeLink); err != nil {
 		t.Fatalf("downloadExternalCheckpoint with subdirectory files: %v", err)
 	}
 	for name, want := range map[string]string{"fs/data.tar": "fs delta", "fs/rootfs-upper-app.tar": "rootfs delta"} {
@@ -445,14 +445,14 @@ func TestDownloadExternalCheckpointCachedSubdirAndSymlinks(t *testing.T) {
 	if err := os.Symlink(keep, filepath.Join(fileLink, "memory-ranges")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, fileLink, []string{"memory-ranges"}, cacheModeLink); err == nil {
+	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, fileLink, []string{"memory-ranges"}, cacheModeLink); err == nil {
 		t.Error("a symlink in place of the restore file was followed")
 	}
 	dirLink := restoreDir(t, base, "dir-link")
 	if err := os.Symlink(outside, filepath.Join(dirLink, "fs")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, dirLink, []string{"fs/data.tar"}, cacheModeCopy); err == nil {
+	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, dirLink, []string{"fs/data.tar"}, cacheModeCopy); err == nil {
 		t.Error("a symlink in place of the checkpoint subdirectory was followed")
 	}
 	if got, err := os.ReadFile(keep); err != nil || string(got) != "keep me" {

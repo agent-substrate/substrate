@@ -1381,6 +1381,69 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
+// A delete that fails partway leaves the actor DELETING. Losing its worker
+// before the retry must keep it DELETING, since a CRASHED actor can be
+// reverted and resumed, and the retry must still finish the delete.
+func TestDeleteActor_RetryAfterWorkerDelete(t *testing.T) {
+	ns := namespaceForTest("ns-delete-retry-worker-gone")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	ctx := context.Background()
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailTerminate = status.Error(codes.Unavailable, "node unavailable")
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef}); err == nil {
+		t.Fatal("DeleteActor succeeded, want it to fail on Terminate")
+	}
+
+	// This would crash a RUNNING Actor. But, should keep a DELETING actor
+	// unchanged.
+	deleteWorkerPod(t, tc, ns, "worker-1")
+	actor, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+		t.Fatalf("state after worker delete = %v, want DELETING", got)
+	}
+
+	// Retry deleting the actor after its worker is gone.
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailTerminate = nil
+	tc.fakeAtelet.TerminateRequest = nil
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("retried DeleteActor failed: %v", err)
+	}
+
+	// The worker is gone, so the retry must not name its pod.
+	tc.fakeAtelet.Lock.Lock()
+	terminate := tc.fakeAtelet.TerminateRequest
+	tc.fakeAtelet.Lock.Unlock()
+	if terminate == nil {
+		t.Error("retried DeleteActor did not call atelet Terminate")
+	} else if gotUID := terminate.GetWorkerPodUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.WorkerPodUid = %q, want empty", gotUID)
+	}
+	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
+}
+
 func TestDeleteActor_NotFound(t *testing.T) {
 	ns := namespaceForTest("ns-delete-notfound")
 	tc := setupTest(t, ns)
@@ -3184,7 +3247,6 @@ func TestResumeActor(t *testing.T) {
 		WorkerPodUid:    podUID,
 		Ips:             []string{"127.0.0.1"},
 		NodeName:        "node1",
-		SandboxClass:    "gvisor",
 		Labels:          map[string]string{poolLabelKey: ns},
 		Status: &ateapipb.WorkerStatus{
 			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
@@ -3193,7 +3255,7 @@ func TestResumeActor(t *testing.T) {
 			// All a listing reports of the assignments: one actor and the
 			// compute its template declares.
 			Allocated:      &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 512 << 20},
-			DefaultRuntime: defaultWorkerRuntime("gvisor"),
+			SandboxClasses: workerSandboxClasses(defaultWorkerRuntime("gvisor")),
 		},
 	}
 
@@ -4440,7 +4502,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 }
 
 func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
-	rtA := &ateapipb.SandboxRuntime{
+	rtA := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -4459,7 +4521,7 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 		failDetach     bool
 		wantWorker     string
 		wantNode       string
-		wantRuntime    *ateapipb.SandboxRuntime
+		wantRuntime    *ateapipb.ActorSandboxRuntime
 		wantFidelity   ateletpb.SnapshotFidelity
 	}{
 		{
@@ -4586,7 +4648,7 @@ func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
 	ctx := context.Background()
 	createTemplate(t, tc, ns)
 
-	rtA := &ateapipb.SandboxRuntime{
+	rtA := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -4596,7 +4658,7 @@ func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
 			},
 		},
 	}
-	rtB := &ateapipb.SandboxRuntime{
+	rtB := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -4697,7 +4759,7 @@ func TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot(t *testing.
 	ctx := context.Background()
 	createTemplate(t, tc, ns)
 
-	rtA := &ateapipb.SandboxRuntime{
+	rtA := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -4707,7 +4769,7 @@ func TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot(t *testing.
 			},
 		},
 	}
-	rtB := &ateapipb.SandboxRuntime{
+	rtB := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -6901,20 +6963,17 @@ func TestDeleteActor_Preconditions(t *testing.T) {
 }
 
 // reportWorkerRuntime writes defaultRT and restorableRTs to workerName's status
-// and waits for the worker cache to observe the update.
-func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defaultRT *ateapipb.SandboxRuntime, restorableRTs ...*ateapipb.SandboxRuntime) {
+// as its one sandbox class and waits for the worker cache to observe the update.
+func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defaultRT *ateapipb.ActorSandboxRuntime, restorableRTs ...*ateapipb.ActorSandboxRuntime) {
 	t.Helper()
 	ctx := context.Background()
 	cur, err := tc.persistence.GetWorker(ctx, workerName)
 	if err != nil {
 		t.Fatalf("GetWorker(%s): %v", workerName, err)
 	}
+	want := workerSandboxClasses(defaultRT, restorableRTs...)
 	if _, err := tc.persistence.UpdateWorker(ctx, workerName, store.PreconditionFrom(cur), func(toUpdate *ateapipb.Worker) error {
-		toUpdate.Status.DefaultRuntime = proto.Clone(defaultRT).(*ateapipb.SandboxRuntime)
-		toUpdate.Status.RestorableRuntimes = nil
-		for _, r := range restorableRTs {
-			toUpdate.Status.RestorableRuntimes = append(toUpdate.Status.RestorableRuntimes, proto.Clone(r).(*ateapipb.SandboxRuntime))
-		}
+		toUpdate.Status.SandboxClasses = workerSandboxClasses(defaultRT, restorableRTs...)
 		return nil
 	}); err != nil {
 		t.Fatalf("UpdateWorker(%s): %v", workerName, err)
@@ -6922,8 +6981,7 @@ func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defau
 	if err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
 		got, err := tc.workerCache.Worker(workerName)
 		return err == nil &&
-			proto.Equal(got.GetStatus().GetDefaultRuntime(), defaultRT) &&
-			slices.EqualFunc(got.GetStatus().GetRestorableRuntimes(), restorableRTs, func(a, b *ateapipb.SandboxRuntime) bool { return proto.Equal(a, b) }), nil
+			slices.EqualFunc(got.GetStatus().GetSandboxClasses(), want, func(a, b *ateapipb.WorkerSandboxClass) bool { return proto.Equal(a, b) }), nil
 	}); err != nil {
 		t.Fatalf("worker %s runtime never reached worker cache: %v", workerName, err)
 	}
@@ -6952,7 +7010,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	ctx := context.Background()
 	tmpl := createTemplate(t, tc, ns)
 
-	rtA := &ateapipb.SandboxRuntime{
+	rtA := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -6962,7 +7020,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 			},
 		},
 	}
-	rtB := &ateapipb.SandboxRuntime{
+	rtB := &ateapipb.ActorSandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -7089,7 +7147,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	// worker-a is full and it falls back onto worker-b, restores the golden at
 	// ROOTFS fidelity like any other durable snapshot rather than cold-booting.
 	goldenSnap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t))
-	goldenSnap.SandboxRuntime = proto.Clone(rtA).(*ateapipb.SandboxRuntime)
+	goldenSnap.SandboxRuntime = proto.Clone(rtA).(*ateapipb.ActorSandboxRuntime)
 	stampedGoldenTag, err := tc.persistence.CreateTag(ctx, &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "golden-rt-a"},
 		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()},

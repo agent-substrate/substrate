@@ -250,9 +250,10 @@ func outcomeAttrs(ctx context.Context, target SnapshotRef, err error) []attribut
 }
 
 // errorType returns the error.type of a failed upload or detach: Canceled or
-// DeadlineExceeded once ctx has ended (when Terminate, an atelet shutdown, or
-// the background upload timeout ends it), and otherwise the code an apierror
-// or a plugin's gRPC status carries, or Internal.
+// DeadlineExceeded once ctx has ended (when Terminate, an atelet shutdown, a
+// newer durable snapshot, or the background upload timeout ends it), and
+// otherwise the code an apierror or a plugin's gRPC status carries, or
+// Internal.
 func errorType(ctx context.Context, err error) string {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return status.FromContextError(ctxErr).Code().String()

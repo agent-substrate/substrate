@@ -50,9 +50,8 @@ const (
 	cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 
 	// minServeLifetime is the least remaining lifetime a token is cached and
-	// served with, so a transfer never starts on a token about to expire. There
-	// is no mid-transfer refresh.
-	minServeLifetime = 20 * time.Minute
+	// served with, the same on the node plugin's side.
+	minServeLifetime = credential.MinServeLifetime
 	// defaultCacheSize bounds the per-actor cache. A miss costs an exchange,
 	// never correctness.
 	defaultCacheSize = 100_000

@@ -54,7 +54,7 @@ func TestDownloadExternalCheckpointLinkFallsBackToCopyAcrossMounts(t *testing.T)
 	if err := os.Mkdir(first, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, first, files, cacheModeLink); err != nil {
+	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, first, files, cacheModeLink); err != nil {
 		t.Fatalf("cross-mount link-mode restore: %v", err)
 	}
 	if got, err := os.ReadFile(filepath.Join(first, "memory-ranges")); err != nil || string(got) != "golden memory" {
@@ -70,7 +70,7 @@ func TestDownloadExternalCheckpointLinkFallsBackToCopyAcrossMounts(t *testing.T)
 	if err := os.Mkdir(second, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, second, files, cacheModeLink); err != nil {
+	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, second, files, cacheModeLink); err != nil {
 		t.Fatal(err)
 	}
 	if n := store.gets.Load(); n != 1 {

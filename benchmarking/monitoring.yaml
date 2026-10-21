@@ -81,6 +81,30 @@ subjects:
   name: prometheus
   namespace: benchmarking
 ---
+# The postgres-exporter job discovers pods in ate-system. A Role there would
+# go with the namespace, which every automated test deletes and recreates.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-benchmarking-pods
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-benchmarking-pods
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-benchmarking-pods
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: benchmarking
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -137,7 +161,8 @@ data:
             target_label: pod
 
       # The locust pod annotates port 8000 for the Python locust process. The
-      # boomer-worker sidecar exposes its Prometheus metrics on port 8001.
+      # boomer-worker sidecar exposes its Prometheus metrics on port 8001, and
+      # so does boomer inside an automation runner Job.
       - job_name: 'boomer-worker'
         kubernetes_sd_configs:
           - role: pod
@@ -149,7 +174,27 @@ data:
               - __meta_kubernetes_pod_label_app
               - __meta_kubernetes_pod_container_port_number
             action: keep
-            regex: locust;8001
+            regex: (locust|substrate-benchmark-runner);8001
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+
+      # The postgres_exporter sidecar that an automation test with a
+      # `controlPlane:` block adds to Postgres (benchmarking/automation/
+      # controlplane.py): connections by state, commits, cache hits, and
+      # pg_stat_statements.
+      - job_name: 'postgres-exporter'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - ate-system
+        relabel_configs:
+          - source_labels:
+              - __meta_kubernetes_pod_label_app
+              - __meta_kubernetes_pod_container_port_number
+            action: keep
+            regex: postgres;9187
           - source_labels: [__meta_kubernetes_pod_name]
             action: replace
             target_label: pod

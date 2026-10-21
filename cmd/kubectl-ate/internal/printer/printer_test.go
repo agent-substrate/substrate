@@ -281,7 +281,6 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 			WorkerNamespace: "default",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			SandboxClass:    "gvisor",
 			Status: &ateapipb.WorkerStatus{
 				State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 				Capacity:  &ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},

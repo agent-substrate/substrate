@@ -42,8 +42,6 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atelet"
-	"go.ate.dev/substrate/internal/imagecache"
-	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -57,8 +55,6 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
-
-const testPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
 
 const (
 	snapshotOwnerUID = "3d7f1b62-8a04-4c19-b5e6-2f9c7a1d0e38"
@@ -309,7 +305,7 @@ func TestSnapshotManifestActorMetadata(t *testing.T) {
 // Run/Restore, which has no fidelity, parses back with an empty fidelity and
 // does not serialize a fidelity key at all.
 func TestSnapshotManifestFidelityAbsent(t *testing.T) {
-	legacy := []byte(`{"sandboxClass":"gvisor","pauseImage":"` + testPauseImage + `","snapshotFiles":["checkpoint.img"]}`)
+	legacy := []byte(`{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`)
 	rec, err := unmarshalSandboxRecord(legacy)
 	if err != nil {
 		t.Fatalf("unmarshalSandboxRecord(legacy manifest): %v", err)
@@ -324,70 +320,6 @@ func TestSnapshotManifestFidelityAbsent(t *testing.T) {
 	}
 	if bytes.Contains(got, []byte(`"fidelity"`)) {
 		t.Errorf("fidelity-less record serialized a fidelity key: %s", got)
-	}
-}
-
-// TestSnapshotManifestPauseImage pins that only a gVisor manifest needs a
-// pause image: micro-VM sandboxes run no pause container.
-func TestSnapshotManifestPauseImage(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		manifest string
-		wantErr  bool
-	}{
-		{"gvisor without pause image", `{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`, true},
-		{"gvisor with pause image", `{"sandboxClass":"gvisor","pauseImage":"` + testPauseImage + `","snapshotFiles":["checkpoint.img"]}`, false},
-		{"microvm without pause image", `{"sandboxClass":"microvm","snapshotFiles":["checkpoint.img"]}`, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := unmarshalSandboxRecord([]byte(tc.manifest))
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("unmarshalSandboxRecord succeeded, want an error")
-				}
-				if !strings.Contains(err.Error(), "pauseImage") {
-					t.Errorf("error = %v, want it to name pauseImage", err)
-				}
-			} else if err != nil {
-				t.Fatalf("unmarshalSandboxRecord: %v", err)
-			}
-		})
-	}
-}
-
-// TestPrepareOCIBundlesPause pins that the pause bundle is built only when the
-// sandbox has a pause image.
-func TestPrepareOCIBundlesPause(t *testing.T) {
-	host := imageVolumeTestRegistry(t)
-	image := host + "/actor:v1"
-	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
-	spec := &ateletpb.WorkloadSpec{
-		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
-	}
-
-	for _, tc := range []struct {
-		name       string
-		pauseImage string
-		wantPause  bool
-	}{
-		{"with pause image", image, true},
-		{"without pause image", "", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			useTempNodeDirs(t)
-			const actorUID = "actor-uid-1"
-			s := &Atelet{imageCache: newImageVolumeStore(t)}
-			if _, err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec, tc.pauseImage); err != nil {
-				t.Fatalf("prepareOCIBundles: %v", err)
-			}
-			if _, err := os.Stat(filepath.Join(ateletpath.OCIBundlePath(actorUID, "app"), imagecache.OverlaySpecFileName)); err != nil {
-				t.Errorf("app bundle: %v", err)
-			}
-			_, err := os.Stat(ateletpath.OCIBundlePath(actorUID, ocispec.PauseContainer))
-			if gotPause := err == nil; gotPause != tc.wantPause {
-				t.Errorf("pause bundle exists = %v, want %v (stat: %v)", gotPause, tc.wantPause, err)
-			}
-		})
 	}
 }
 
@@ -413,7 +345,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 	}
 
 	s := &Atelet{imageCache: newImageVolumeStore(t)}
-	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec, "")
+	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec)
 	if err != nil {
 		t.Fatalf("prepareOCIBundles: %v", err)
 	}
@@ -431,7 +363,6 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 func TestSnapshotManifestRejectsNonLocalFile(t *testing.T) {
 	manifest, err := json.Marshal(sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    testPauseImage,
 		SnapshotFiles: []string{"../outside"},
 	})
 	if err != nil {
@@ -445,7 +376,6 @@ func TestSnapshotManifestRejectsNonLocalFile(t *testing.T) {
 func TestSnapshotManifestRejectsDataFileNotInSnapshotFiles(t *testing.T) {
 	manifest, err := json.Marshal(sandboxAssetsRecord{
 		SandboxClass:      "gvisor",
-		PauseImage:        testPauseImage,
 		SnapshotFiles:     []string{"checkpoint.img"},
 		DataSnapshotFiles: []string{"data.tar"},
 	})
@@ -508,7 +438,7 @@ func TestUploadSnapshotRejectsSymlinkOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &recordingObjectStorage{}
-	err = newPluginHerder(t, store).uploadSnapshot(context.Background(), uri, checkpointDir,
+	err = newPluginHerder(t, store).uploadSnapshot(context.Background(), testActor, uri, checkpointDir,
 		&sandboxAssetsRecord{SnapshotFiles: []string{"checkpoint.img"}})
 	if err == nil {
 		t.Fatal("uploadSnapshot() followed a symlink outside the checkpoint directory")
@@ -541,7 +471,7 @@ func TestDownloadExternalCheckpointRejectsSymlinkOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := newPluginHerder(t, store).downloadExternalCheckpoint(
-		context.Background(), testSnapshotURI, restoreDir, []string{"checkpoint.img"}, cacheModeOff)
+		context.Background(), testActor, testSnapshotURI, restoreDir, []string{"checkpoint.img"}, cacheModeOff)
 	if err == nil {
 		t.Fatal("downloadExternalCheckpoint() followed a symlink outside the restore directory")
 	}
@@ -1462,7 +1392,6 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	fullRec := func(class string) sandboxAssetsRecord {
 		return sandboxAssetsRecord{
 			SandboxClass:      class,
-			PauseImage:        testPauseImage,
 			SnapshotFiles:     []string{"config.json", "memory-ranges", "data.tar"},
 			DataSnapshotFiles: []string{"data.tar"},
 			Fidelity:          ateattr.SnapshotFidelityMemory,
@@ -1513,7 +1442,6 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:      "microvm",
-			PauseImage:        testPauseImage,
 			SnapshotFiles:     []string{"rootfs-upper-app.tar", "data.tar"},
 			DataSnapshotFiles: []string{"data.tar"},
 			Fidelity:          ateattr.SnapshotFidelityRootfs,
@@ -1577,7 +1505,6 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
-			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{"data.tar"},
 		}, map[string]string{"data.tar": "data"})
 

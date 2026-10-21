@@ -267,9 +267,9 @@ groups:
               brief: >
                 The source has no class, or a class that is not in this list.
                 The default is not gvisor. Thus a bad record stays visible.
-                ateapi reports it for a Worker that CreateWorker accepted with
-                no class. atelet reports it for a snapshot manifest with no
-                class.
+                ateapi reports it for a Worker that has not registered a
+                sandbox class. atelet reports it for a snapshot
+                manifest with no class.
       - id: ate.sandbox.oom_kills
         stability: development
         type: int
@@ -802,9 +802,8 @@ groups:
       Substrate can also lose the data that it did not write. Some moves into
       this state are not a loss of data. They are careful responses to a control
       plane problem.
-      ate.sandbox.class is unknown when ateapi could not read the class of the
-      worker: the worker record is already gone, or its assignment is already
-      clear.
+      ate.sandbox.class is unknown when the actor's worker assignment is already
+      clear or carries no sandbox runtime.
     annotations:
       substrate:
         emitted_by: [ateapi]
@@ -1070,13 +1069,14 @@ groups:
     note: >
       atelet uploads deferred snapshots in the background once the upload delay
       or the detach delay elapses. A probe that finds the manifest committed
-      already without uploading is not recorded. An upload that Terminate or an
-      atelet shutdown cancels records error.type Canceled, and one that runs
-      past its timeout (--snapshot-upload-timeout plus the time the snapshot
-      takes at --snapshot-upload-est-throughput-mib, doubled for each
-      consecutive failure to at most 8 times that) records DeadlineExceeded.
-      Synchronous uploads from UPLOAD_MODE_IMMEDIATE checkpoints and
-      PromoteSnapshot are recorded on ate.actor.checkpoint.duration instead.
+      already without uploading is not recorded. An upload that Terminate, an
+      atelet shutdown, or a newer durable snapshot cancels records error.type
+      Canceled, and one that runs past its timeout (--snapshot-upload-timeout
+      plus the time the snapshot takes at --snapshot-upload-est-throughput-mib,
+      doubled for each consecutive failure to at most 8 times that) records
+      DeadlineExceeded. Synchronous uploads from UPLOAD_MODE_IMMEDIATE
+      checkpoints and PromoteSnapshot are recorded on
+      ate.actor.checkpoint.duration instead.
     annotations:
       substrate:
         emitted_by: [atelet]

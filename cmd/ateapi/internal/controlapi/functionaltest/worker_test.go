@@ -49,7 +49,6 @@ func newTestWorker(ns string) *ateapipb.Worker {
 		WorkerPodUid:    testWorkerName,
 		NodeName:        "node1",
 		Ips:             []string{"10.1.2.3"},
-		SandboxClass:    "gvisor",
 	}
 }
 
@@ -164,12 +163,11 @@ func TestListWorkers(t *testing.T) {
 			WorkerPodUid:    podUID,
 			NodeName:        "node1",
 			Ips:             []string{"127.0.0.1"},
-			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
 			Status: &ateapipb.WorkerStatus{
 				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 				Capacity:       &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 512 << 20},
-				DefaultRuntime: defaultWorkerRuntime("gvisor"),
+				SandboxClasses: workerSandboxClasses(defaultWorkerRuntime("gvisor")),
 			},
 		},
 	}

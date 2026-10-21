@@ -24,3 +24,9 @@ type Token struct {
 	AccessToken string
 	Expiry      time.Time
 }
+
+// MinServeLifetime is the least remaining lifetime a cached Token is served
+// with, on both sides of the exchange, so a transfer never starts on a token
+// about to expire. There is no mid-transfer refresh. A token with less left is
+// still returned to the caller that asked for it, but not cached.
+const MinServeLifetime = 20 * time.Minute

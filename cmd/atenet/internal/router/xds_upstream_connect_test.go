@@ -44,8 +44,9 @@ import (
 func upstreamConnectSnapshot(t *testing.T) *cachev3.Snapshot {
 	t.Helper()
 	server := NewXdsServer(18000)
-	server.SetConfig(8085, 50053, "127.0.0.1")
-	server.SetConnectPorts(8081, 0)
+	server.SetConfig(50053, "127.0.0.1")
+	server.SetConnectTLSPort(8444)
+	setIngressTLS(server)
 	server.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem")
 	server.SetUpstreamConnect(true)
 	if err := server.UpdateSnapshot(); err != nil {
@@ -89,12 +90,20 @@ func TestUpstreamConnectFlag(t *testing.T) {
 			wantErr: "--upstream-connect=false",
 		},
 	}
+	caPath, certPath := writeTestTLSMaterial(t)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var cfg routerConfig
 			fs := pflag.NewFlagSet("router", pflag.ContinueOnError)
 			bindRouterFlags(fs, &cfg)
-			if err := fs.Parse(append([]string{"--mode=ingress", "--otlp-collector-address="}, tc.args...)); err != nil {
+			args := []string{
+				"--mode=ingress",
+				"--otlp-collector-address=",
+				"--envoy-cert-path=" + certPath,
+				"--ingress-client-ca-file=" + caPath,
+				"--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/demo/sa/client",
+			}
+			if err := fs.Parse(append(args, tc.args...)); err != nil {
 				t.Fatalf("parsing flags: %v", err)
 			}
 			err := cfg.validate()
@@ -175,7 +184,7 @@ func TestXdsServer_UpstreamConnectResources(t *testing.T) {
 	// The tunnel filter copies ext_proc's decision, and the router picks a
 	// tunnel by it. The worker identity filter follows it (see
 	// TestXdsServer_WorkerIdentityFilter).
-	for _, name := range []string{IngressHTTPListener, MainInternalName} {
+	for _, name := range []string{IngressHTTPSListener, MainInternalName} {
 		hcm := &hcmv3.HttpConnectionManager{}
 		if err := listeners[name].(*listenerv3.Listener).GetFilterChains()[0].GetFilters()[0].GetTypedConfig().UnmarshalTo(hcm); err != nil {
 			t.Fatalf("listener %s: unmarshal HCM: %v", name, err)

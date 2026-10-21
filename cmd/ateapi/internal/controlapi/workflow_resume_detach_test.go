@@ -114,9 +114,9 @@ func TestDetachFromFullNode(t *testing.T) {
 		// otherNode adds a free worker on node-2 with otherRuntime, or the
 		// test runtime when unset.
 		otherNode    bool
-		otherRuntime *ateapipb.SandboxRuntime
+		otherRuntime *ateapipb.ActorSandboxRuntime
 		// snapRuntime stamps the MEMORY snapshot.
-		snapRuntime *ateapipb.SandboxRuntime
+		snapRuntime *ateapipb.ActorSandboxRuntime
 		// completed records the snapshot's upload COMPLETED.
 		completed bool
 		cancel    bool

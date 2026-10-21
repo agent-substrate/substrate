@@ -158,11 +158,7 @@ func checkIndexedRuntime(hash string, e indexedRuntimeFile) error {
 	if e.Record == nil {
 		return errors.New("no record")
 	}
-	got, err := versionBundleHash(e.Record)
-	if err != nil {
-		return fmt.Errorf("while hashing the record: %w", err)
-	}
-	if got != hash {
+	if got := bundleHash(e.Record); got != hash {
 		return fmt.Errorf("record hashes to %s", got)
 	}
 	return nil
@@ -237,9 +233,9 @@ func (x *runtimeIndex) registerRuntimes(config string, hashed []hashedVersion) e
 
 // addRuntime records v under its hash, unless the hash is already known,
 // persisting the index first when it has a path. The hash covers every
-// asset's name and digest and the pause image, so two versions with one
-// hash differ at most in where identical bytes are fetched from; keeping
-// the first keeps the version the file was built from. Called with mu held.
+// asset's name and digest, so two versions with one hash differ at most in
+// where identical bytes are fetched from; keeping the first keeps the version
+// the file was built from. Called with mu held.
 func (x *runtimeIndex) addRuntime(config string, v hashedVersion) error {
 	if _, ok := x.runtimes[v.hash]; ok {
 		return nil
@@ -288,7 +284,7 @@ func (x *runtimeIndex) worker(podUID string) (*workerRuntime, bool) {
 // A miss means the request reached a node whose workers never advertised the
 // runtime, which must surface. A runtime registered before an atelet restart
 // is no miss: the index is loaded from disk before atelet serves.
-func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.SandboxRuntime) (*sandboxAssetsRecord, error) {
+func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.ActorSandboxRuntime) (*sandboxAssetsRecord, error) {
 	hash, err := bundleHashOf(rt)
 	if err != nil {
 		return nil, apierror.InvalidArgument("sandbox_runtime: %v", err)
@@ -308,7 +304,7 @@ func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.SandboxRunt
 
 // bundleHashOf returns the sandbox_bundle_hash attribute of rt, which names
 // the SandboxConfig version a worker runs an actor under.
-func bundleHashOf(rt *ateletpb.SandboxRuntime) (string, error) {
+func bundleHashOf(rt *ateletpb.ActorSandboxRuntime) (string, error) {
 	if rt == nil {
 		return "", errors.New("missing")
 	}

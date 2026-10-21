@@ -25,8 +25,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -36,6 +38,8 @@ import (
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/objectstore"
 	"go.ate.dev/substrate/internal/objectstoreplugin"
+	"go.ate.dev/substrate/internal/objectstoreplugin/exchange"
+	"go.ate.dev/substrate/internal/objectstoreplugin/exchangeclient"
 	"go.ate.dev/substrate/internal/pluginsocket"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
@@ -63,6 +67,11 @@ func main() {
 	assetStagingDir := flags.String("asset-staging-dir", "/var/lib/objectstore-plugin/asset-staging", "node mode: directory sandbox assets are downloaded into and verified before they are copied below --root; must not be below --root or readable by the caller")
 	assetStagingCapacity := flags.String("asset-staging-capacity", "8Gi", "node mode: the most sandbox asset downloads in --asset-staging-dir may hold at once, as a Kubernetes quantity; downloads wait for space, and an asset larger than this is refused")
 	timeout := flags.Duration("timeout", 5*time.Second, "healthcheck mode: how long to wait for the plugin to report that it is serving")
+	apiHost := installdefaults.APIServiceHost(installdefaults.NamespaceFromPodEnv())
+	var ncfg exchangeclient.Config
+	flags.StringVar(&ncfg.Address, "exchange-address", net.JoinHostPort(apiHost, strconv.Itoa(exchange.DefaultPort)), "node mode on GCS: address of the credential exchange the control sidecar serves, where each transfer's actor JWT is traded for a token scoped to the actor")
+	flags.StringVar(&ncfg.CAFile, "exchange-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "node mode on GCS: CA bundle used to verify the exchange")
+	flags.StringVar(&ncfg.ServerName, "exchange-server-name", apiHost, "node mode on GCS: DNS name expected on the exchange's certificate, the API Service in the pod's namespace")
 	var xcfg exchangeConfig
 	flags.StringVar(&xcfg.listen, "exchange-listen", "", "control mode: TCP address to serve the credential exchange on over TLS, for example :8445. Empty leaves it unserved.")
 	flags.StringVar(&xcfg.credBundle, "exchange-cred-bundle", "/run/servicedns.podcert.ate.dev/credential-bundle.pem", "control mode: PEM credential bundle the exchange serves with, the pod's service DNS certificate")
@@ -115,7 +124,18 @@ func main() {
 		if err != nil {
 			serverboot.Fatal(ctx, "Invalid --upload-memory-budget", err)
 		}
-		plugin, err := objectstoreplugin.NewNodePlugin(objects, *root, uploadCapacity)
+		// On GCS every transfer runs on a token scoped to its actor, from the
+		// exchange. S3 has no per-actor credential and keeps the pod's own.
+		var nodeOpts []objectstoreplugin.NodeOption
+		if !objectstorage.UsesS3() {
+			creds, err := exchangeclient.New(ncfg)
+			if err != nil {
+				serverboot.Fatal(ctx, "Failed to set up the credential exchange client", err)
+			}
+			defer creds.Close()
+			nodeOpts = append(nodeOpts, objectstoreplugin.WithCredentials(creds))
+		}
+		plugin, err := objectstoreplugin.NewNodePlugin(objects, *root, uploadCapacity, nodeOpts...)
 		if err != nil {
 			serverboot.Fatal(ctx, "Invalid node upload configuration", err)
 		}

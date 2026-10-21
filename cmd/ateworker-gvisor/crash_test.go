@@ -51,7 +51,7 @@ func exitingSandbox(t *testing.T) *ateworkerpb.ActorDirs {
 	if err := os.MkdirAll(pidFileDir(actorDirs), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(pidFilePath(actorDirs, ocispec.PauseContainer), []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
+	if err := os.WriteFile(pidFilePath(actorDirs, ocispec.SandboxID), []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return actorDirs

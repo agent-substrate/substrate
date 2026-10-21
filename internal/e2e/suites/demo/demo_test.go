@@ -149,8 +149,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get assigned Worker %s: %v", assignment.GetWorker().GetName(), err)
 	}
-	if diff := cmp.Diff(worker.GetStatus().GetDefaultRuntime(), assignment.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Fatalf("worker_assignment.sandbox_runtime mismatch (-worker default_runtime +assignment):\n%s", diff)
+	if diff := cmp.Diff(hardware.ColdBootRuntime(worker.GetStatus()), assignment.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("worker_assignment.sandbox_runtime mismatch (-worker default runtime +assignment):\n%s", diff)
 	}
 	if !hardware.Matches(assignment.GetSandboxRuntime(), goldenStamp) {
 		t.Fatalf("assigned runtime %v cannot restore the golden stamp %v", assignment.GetSandboxRuntime(), goldenStamp)
@@ -778,7 +778,7 @@ func hasLocalSnapshot(status *ateapipb.ActorStatus) bool {
 	return localSnapshot(status) != nil
 }
 
-func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clients, at *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
+func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clients, at *ateapipb.ActorTemplate) *ateapipb.ActorSandboxRuntime {
 	t.Helper()
 	current, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: e2e.TemplateRef(at)})
 	if err != nil {
@@ -799,7 +799,7 @@ func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clien
 	return stamp
 }
 
-func runtimeAttribute(rt *ateapipb.SandboxRuntime, key string) string {
+func runtimeAttribute(rt *ateapipb.ActorSandboxRuntime, key string) string {
 	for _, attr := range rt.GetVersion().GetAttributes() {
 		if attr.GetKey() == key {
 			return attr.GetValue()

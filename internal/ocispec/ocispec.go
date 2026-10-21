@@ -77,6 +77,27 @@ func ociResources(r *ateworkerpb.ResourceRequirements) *specs.LinuxResources {
 	return out
 }
 
+// BuildSandbox returns the OCI spec of a sandbox with no root container: the
+// hostname and namespaces, and no process, rootfs, or mounts.
+func BuildSandbox(actorUID string) *specs.Spec {
+	return &specs.Spec{
+		Hostname: Hostname,
+		Linux:    &specs.Linux{Namespaces: namespaces(actorUID)},
+	}
+}
+
+// namespaces returns the namespaces of an actor's sandbox and containers. The
+// network namespace is the actor's.
+func namespaces(actorUID string) []specs.LinuxNamespace {
+	return []specs.LinuxNamespace{
+		{Type: "pid"},
+		{Type: "network", Path: nodepath.ActorNetNSPath(actorUID)},
+		{Type: "ipc"},
+		{Type: "uts"},
+		{Type: "mount"},
+	}
+}
+
 // Build returns a runtime-neutral OCI spec for an actor container.
 func Build(o Options) *specs.Spec {
 	container := o.Container
@@ -138,25 +159,8 @@ func Build(o Options) *specs.Spec {
 			},
 		},
 		Linux: &specs.Linux{
-			Namespaces: []specs.LinuxNamespace{
-				{
-					Type: "pid",
-				},
-				{
-					Type: "network",
-					Path: nodepath.ActorNetNSPath(o.ActorUID),
-				},
-				{
-					Type: "ipc",
-				},
-				{
-					Type: "uts",
-				},
-				{
-					Type: "mount",
-				},
-			},
-			Resources: ociResources(containerSpec.GetResources()),
+			Namespaces: namespaces(o.ActorUID),
+			Resources:  ociResources(containerSpec.GetResources()),
 		},
 	}
 

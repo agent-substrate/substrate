@@ -191,11 +191,6 @@ jobs:
       # --preview, so tests of a disabled gate skip themselves (see
       # internal/e2e/preview.go).
       ATE_PREVIEW: ${{ matrix.preview == 'on' && 'ALL' || '' }}
-      # Job-wide for the same reason, and E2E_INGRESS_AUTH_MODE has to match
-      # it so the suites dial the router's mTLS listeners. The agentgateway
-      # dataplane does not support static-mtls.
-      ATE_INGRESS_AUTH_MODE: ${{ matrix.dataplane == 'agentgateway' && 'deprecated-insecure' || 'static-mtls' }}
-      E2E_INGRESS_AUTH_MODE: ${{ matrix.dataplane == 'agentgateway' && 'deprecated-insecure' || 'static-mtls' }}
       # The suites' router client (internal/e2e/ingressauth.go). Only e2e
       # installs allowlist it, so the suites can reach actors through the
       # router's mTLS listeners.

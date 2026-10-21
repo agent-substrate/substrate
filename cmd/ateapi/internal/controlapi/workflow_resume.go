@@ -58,7 +58,7 @@ type resumeSnapshotSource struct {
 	TemplateReplaced bool
 	// RequiredRuntime is the runtime resolved from the snapshot's memory state
 	// (via requiredSnapshotRuntime), or nil when memory state is not restored.
-	RequiredRuntime *ateapipb.SandboxRuntime
+	RequiredRuntime *ateapipb.ActorSandboxRuntime
 }
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
@@ -477,7 +477,7 @@ func (w *ActorWorkflow) workerHoldingStaleClaim(ctx context.Context, actor *atea
 	}
 
 	// The Actor's allocation makes HasRoom unsuitable for an existing claim.
-	if w.appliesWithFallback(worker, constraints, relaxable) {
+	if worker.GetNodeName() != "" && w.appliesWithFallback(worker, constraints, relaxable) {
 		return worker, nil
 	}
 
@@ -544,6 +544,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		constraints.RequiredRuntime = hardware.Requirement{}
 	}
 
+	if assignedWorker.GetNodeName() == "" {
+		return nil, nil, apierror.FailedPrecondition("worker %s has no node name", assignedWorker.GetMetadata().GetName())
+	}
+
 	assignment := &ateapipb.ActorAssignment{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: actor.GetMetadata().GetAtespace(),
@@ -608,7 +612,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 	poolNamespace = bound.GetWorkerNamespace()
 	pool = bound.GetWorkerPool()
-	class = bound.GetSandboxClass()
+	class = hardware.SandboxClass(bound.GetStatus())
 	outcome = ateattr.SchedulerOutcomeAssigned
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, bound, nil
@@ -640,13 +644,13 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime hardware.Requirement) 
 	}
 }
 
-// toAteletSandboxRuntime converts the control plane's SandboxRuntime to
+// toAteletSandboxRuntime converts the control plane's ActorSandboxRuntime to
 // atelet's, which it mirrors field for field.
-func toAteletSandboxRuntime(in *ateapipb.SandboxRuntime) *ateletpb.SandboxRuntime {
+func toAteletSandboxRuntime(in *ateapipb.ActorSandboxRuntime) *ateletpb.ActorSandboxRuntime {
 	if in == nil {
 		return nil
 	}
-	out := &ateletpb.SandboxRuntime{SandboxClass: in.GetSandboxClass()}
+	out := &ateletpb.ActorSandboxRuntime{SandboxClass: in.GetSandboxClass()}
 	if v := in.GetVersion(); v != nil {
 		out.Version = &ateletpb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
 		for _, a := range v.GetAttributes() {
@@ -690,11 +694,11 @@ func snapshotSandboxClass(actor *ateapipb.Actor) string {
 	return ""
 }
 
-// requiredSnapshotRuntime returns the SandboxRuntime stamped on the snapshot
+// requiredSnapshotRuntime returns the ActorSandboxRuntime stamped on the snapshot
 // that ResumeActor will restore memory state from, or nil when the resume does
 // not restore memory state (cold boot, ROOTFS or VOLUMES fidelity, or replaced
 // template).
-func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
+func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) *ateapipb.ActorSandboxRuntime {
 	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
 		if localSnap.GetFidelity() != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 			return nil
@@ -745,8 +749,9 @@ func (w *ActorWorkflow) appliesWithFallback(worker *ateapipb.Worker, constraints
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the
 // assigned worker's node and returns each driver's attachment metadata by
-// volume name, for the Restore call that follows. Attachment is idempotent, so
-// a re-entered workflow safely runs it again.
+// volume name, for the Restore call that follows. Every volume must be
+// provisioned with a storage volume ID; otherwise nothing is attached.
+// Attachment is idempotent, so a re-entered workflow safely runs it again.
 // TODO replace re-execution with a proper check on the volumes' attach state.
 func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *ateapipb.ActorTemplate) (_ map[string]map[string]string, err error) {
 	ctx, done := stepSpan(ctx, "AttachVolumes")
@@ -762,8 +767,14 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 	}
 
 	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
+	volumes := getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes().GetVolumes(), actorTemplate)
+	// Check every volume before attaching any, so a bad one cannot leave the
+	// ones before it published.
+	if err := checkVolumesAttachable(volumes); err != nil {
+		return nil, err
+	}
 	volumePublishContexts := make(map[string]map[string]string)
-	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes().GetVolumes(), actorTemplate) {
+	for _, vol := range volumes {
 		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := w.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
@@ -778,6 +789,17 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 		}
 	}
 	return volumePublishContexts, nil
+}
+
+// checkVolumesAttachable returns FailedPrecondition unless every volume has a
+// storage volume ID.
+func checkVolumesAttachable(volumes []*ateapipb.ExternalVolumeStatus) error {
+	for _, vol := range volumes {
+		if vol.GetStorageVolumeId() == "" {
+			return apierror.FailedPrecondition("volume %q has no storage volume ID to attach", vol.GetName())
+		}
+	}
+	return nil
 }
 
 // ensureAteletRestored brings the workload up on the assigned worker:
@@ -922,7 +944,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 // logRuntimeFallback records a resume that restores without memory state
 // because the assigned worker does not run the runtime the snapshot's memory
 // state was captured under.
-func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapipb.WorkerAssignment, required *ateapipb.SandboxRuntime) {
+func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapipb.WorkerAssignment, required *ateapipb.ActorSandboxRuntime) {
 	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring without memory state",
 		slog.String("actor", actorRef.String()),
 		slog.String("worker", assignment.GetWorkerPod()),

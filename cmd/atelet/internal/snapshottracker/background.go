@@ -89,8 +89,8 @@ func (k opKind) String() string {
 
 // logOp logs how an upload or detach ended. Foreground failures are returned
 // to the RPC caller, so only background failures are logged here: as a
-// warning, or at info level once ctx has ended, as when Terminate or an atelet
-// shutdown cancels the operation.
+// warning, or at info level once ctx has ended, as when Terminate, an atelet
+// shutdown, or a newer durable snapshot cancels the operation.
 func logOp(ctx context.Context, actorUID string, kind opKind, target SnapshotRef, uploaded, background bool, elapsed time.Duration, err error) {
 	attrs := []any{
 		slog.String("op", kind.String()),
@@ -123,7 +123,11 @@ func logOp(ctx context.Context, actorUID string, kind opKind, target SnapshotRef
 //   - Forget cancels any operation in progress and waits for it to end before
 //     it drops the actor's state. No operation begins during the Terminate
 //     that calls it.
-//   - Checkpoint never waits for an upload.
+//   - CommitDurable and CommitPromoted cancel an upload of a snapshot older
+//     than LatestDurable and wait for it to end; a deferred Checkpoint never
+//     waits for an upload.
+//   - No upload begins during a Checkpoint under UPLOAD_MODE_IMMEDIATE or a
+//     PromoteSnapshot, though one already running goes on.
 //   - Run, Restore, and Checkpoint wait for a detach to end, so it never
 //     deletes the actor's local snapshots underneath them.
 type actorOp struct {
@@ -260,8 +264,9 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 	case opUpload:
 		if due, ok := t.uploadDueLocked(a); ok && !due.After(now) {
 			if a.hold.blocksUploads() {
-				// A PromoteSnapshot of the actor is in progress, and queues
-				// the actor again when it ends (see holdLocked).
+				// A Checkpoint under UPLOAD_MODE_IMMEDIATE or a PromoteSnapshot
+				// of the actor is in progress, and queues the actor again when
+				// it ends (see holdLocked).
 				return nil
 			}
 			run := t.beginUploadLocked(t.ctx, a)

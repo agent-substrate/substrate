@@ -335,7 +335,7 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
 ### Sandbox Classes
 
-A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from the cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image. They come at runtime from the cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default). Each snapshot records the sandbox runtime it was taken on, and a memory restore runs on a worker that still offers that runtime, so restores stay reproducible across runtime upgrades.
 
   * **gVisor** (`ateworker-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree. `DurableDir` volumes and each container's rootfs overlay are saved as separate filesystem checkpoint bundles (`fs/` and `rootfs/`). A `MEMORY` snapshot splits them out of the process checkpoint; `VOLUMES` and `ROOTFS` snapshots save only the bundles they need with `runsc fscheckpoint`, without memory, and restore them on a cold boot.
 
@@ -547,8 +547,7 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     security context even as they migrate across physical nodes or code
     versions.
 
-  * **API Authorization**: With enforcement on, the default in installs from
-    `ate-setup`, every `ate-api-server` RPC is authorized. Users
+  * **API Authorization**: Every `ate-api-server` RPC is authorized. Users
     and automation get owner, editor, or viewer roles on the global scope or
     on an atespace through AccessPolicy (`kubectl ate access-policy`), and
     Substrate's components hold fixed system roles bound to their pod
@@ -558,11 +557,10 @@ Agent Substrate is built on a **Defense-in-Depth** model:
 
   * **Ingress Authentication and Routing**: The gateway routes each request to
     the actor its `ate-target-actor` header names, and only to recognized,
-    registered actors. With `--ingress-auth-mode=static-mtls`, it accepts only
-    clients whose SPIFFE ID is on a static allowlist; any listed client may
-    reach any actor, as per-actor ingress authorization is not yet supported.
-    The default mode, `deprecated-insecure`, also serves plaintext listeners
-    that accept any client.
+    registered actors. It accepts only mTLS clients whose SPIFFE ID is on a
+    static allowlist; any listed client may reach any actor, as per-actor
+    ingress authorization is not yet supported. The agentgateway dataplane
+    does not authenticate clients yet.
 
   * **Network Policy**: Agent Substrate leverages standard Kubernetes
     NetworkPolicy for connectivity control. Policies can be applied at the

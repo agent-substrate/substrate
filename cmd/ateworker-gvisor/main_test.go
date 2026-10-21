@@ -162,9 +162,9 @@ func validTerminateRequest() *ateworkerpb.TerminateWorkloadRequest {
 	return &ateworkerpb.TerminateWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs()}
 }
 
-// TestPauseContainerLogAttribution covers the actor and _pause labels on runsc
+// TestSandboxLogAttribution covers the actor and _sandbox labels on runsc
 // CLI output, JSON field preservation, and rejection of forged attribution.
-func TestPauseContainerLogAttribution(t *testing.T) {
+func TestSandboxLogAttribution(t *testing.T) {
 	attribution := resources.ActorAttribution{
 		Ref:              resources.ActorRef{Atespace: "default", Name: "act-1"},
 		UID:              "uid-1",
@@ -174,7 +174,7 @@ func TestPauseContainerLogAttribution(t *testing.T) {
 	var buf syncLogBuffer
 	logger := actorlog.NewActorLogger(&buf, false)
 
-	pw, err := logger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
+	pw, err := logger.StartJSONLogPipe(attribution, ocispec.SandboxID)
 	if err != nil {
 		t.Fatalf("StartJSONLogPipe: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestPauseContainerLogAttribution(t *testing.T) {
 	if _, err := fmt.Fprintln(pw, jsonLine); err != nil {
 		t.Fatalf("write json line: %v", err)
 	}
-	const plainLine = "I1008 03:40:00.000000 1234 main.go:123] Args: [runsc --alsologtostderr create _pause]"
+	const plainLine = "I1008 03:40:00.000000 1234 main.go:123] Args: [runsc --alsologtostderr create _sandbox]"
 	if _, err := fmt.Fprintln(pw, plainLine); err != nil {
 		t.Fatalf("write plain line: %v", err)
 	}
@@ -220,8 +220,8 @@ func TestPauseContainerLogAttribution(t *testing.T) {
 		if got := labels[actorName]; got != "act-1" {
 			t.Errorf("%s label %s = %v, want act-1 (the forged value must not survive)", name, actorName, got)
 		}
-		if got := labels[containerName]; got != ocispec.PauseContainer {
-			t.Errorf("%s label %s = %v, want %q", name, containerName, got, ocispec.PauseContainer)
+		if got := labels[containerName]; got != ocispec.SandboxID {
+			t.Errorf("%s label %s = %v, want %q", name, containerName, got, ocispec.SandboxID)
 		}
 	}
 }

@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
+	"time"
 
 	"cloud.google.com/go/storage"
 	"golang.org/x/sync/errgroup"
@@ -92,7 +94,7 @@ const (
 
 // putComposite uploads head followed by rest as concurrent parts, then composes them
 // into object. Only for objects past uploadCompositeMin; putSingle handles the rest.
-func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, head io.Reader, rest io.Reader) (err error) {
+func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, head io.Reader, rest io.Reader) error {
 	bkt := g.client.Bucket(bucket)
 	runID, err := newRunID()
 	if err != nil {
@@ -100,7 +102,8 @@ func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, hea
 	}
 
 	var parts []*storage.ObjectHandle
-	defer func() { err = removeScratch(ctx, parts, err) }()
+	// Parts are scratch either way. A closure, because parts grows below.
+	defer func() { removeScratch(ctx, parts) }()
 
 	// The stream is read in order here and whole parts handed to the uploaders; buffers
 	// cycle through free so the peak stays at uploadConcurrency of them.
@@ -155,17 +158,49 @@ func newRunID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// removeScratch deletes objs, which are scratch whether or not the upload succeeded.
-// It returns err, or the first delete failure if err is nil, so cleanup never masks
-// the real error.
-func removeScratch(ctx context.Context, objs []*storage.ObjectHandle, err error) error {
+// cleanupTimeout bounds removeScratch. Cleanup runs on a context detached from
+// the upload's, which may be the reason it is unwinding, and setRetry retries
+// until the context ends.
+var cleanupTimeout = 30 * time.Second
+
+// cleanupConcurrency is how many objects removeScratch deletes at once, as
+// internal/objectstore's DeletePrefix does. Deleting a large upload's parts one
+// at a time would leave little of cleanupTimeout for retries.
+const cleanupConcurrency = 8
+
+// removeScratch deletes objs, which are scratch whether or not the upload
+// succeeded, cleanupConcurrency at a time and all within one cleanupTimeout. It
+// is best-effort and never fails the upload: objects it cannot delete are left
+// behind, and how many, with the first error, is logged.
+func removeScratch(ctx context.Context, objs []*storage.ObjectHandle) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	var (
+		mu    sync.Mutex
+		left  int
+		first error
+		g     errgroup.Group
+	)
+	g.SetLimit(cleanupConcurrency)
 	for _, o := range objs {
-		if delErr := o.Delete(context.WithoutCancel(ctx)); delErr != nil &&
-			!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
-			err = fmt.Errorf("while removing scratch object %q: %w", o.ObjectName(), delErr)
-		}
+		g.Go(func() error {
+			err := o.Delete(ctx)
+			if err == nil || errors.Is(err, storage.ErrObjectNotExist) {
+				return nil
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			left++
+			if first == nil {
+				first = fmt.Errorf("while removing scratch object %q: %w", o.ObjectName(), err)
+			}
+			return nil
+		})
 	}
-	return err
+	_ = g.Wait()
+	if left > 0 {
+		slog.WarnContext(ctx, "Leaving scratch objects behind", slog.Int("count", left), slog.Any("err", first))
+	}
 }
 
 // writeObject writes data to obj in one request.
@@ -183,12 +218,12 @@ func writeObject(ctx context.Context, obj *storage.ObjectHandle, data []byte, si
 // composeAll composes parts into object, folding in rounds when there are more parts
 // than GCS accepts in one call. The intermediates it creates are removed on return; the
 // caller removes parts.
-func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, parts []*storage.ObjectHandle, runID string) (err error) {
+func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, parts []*storage.ObjectHandle, runID string) error {
 	if len(parts) == 0 {
 		return fmt.Errorf("no parts to compose into %q", object)
 	}
 	var mids []*storage.ObjectHandle
-	defer func() { err = removeScratch(ctx, mids, err) }()
+	defer func() { removeScratch(ctx, mids) }()
 
 	round := 0
 	for len(parts) > maxComposeSources {

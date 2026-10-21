@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -42,6 +43,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -246,7 +248,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
-	sandboxRec := testSandboxRecord(release, pinnedImage)
+	sandboxRec := testSandboxRecord(release)
 	spec := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
@@ -422,26 +424,27 @@ func TestRestoreUsesRequestSandboxRuntime(t *testing.T) {
 	host := imageVolumeTestRegistry(t)
 	image := host + "/actor:v1"
 	pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
-	checkpointPause := pushTestImage(t, host+"/pause:v1", singleFileLayer(t, "pause", "pause-v1"))
-	restorePause := pushTestImage(t, host+"/pause:v2", singleFileLayer(t, "pause", "pause-v2"))
 
-	release := newGVisorTestRelease(t)
+	// The two releases differ in content, so they have distinct bundle hashes.
+	release := func(runsc string) gvisorTestRelease {
+		tarball := gvisorReleaseTarballWith(t, runsc)
+		return gvisorTestRelease{tarball: tarball, entry: assetEntry{URL: "gs://test-bucket/gvisor.tar", SHA256: fmt.Sprintf("%x", sha256.Sum256(tarball))}}
+	}
+	checkpointRelease, restoreRelease := release("runsc v1"), release("runsc v2")
 	s := &Atelet{
 		workerDialer:      newWorkerDialer(1),
 		imageCache:        newImageVolumeStore(t),
 		sandboxAssetCache: newTestAssetCache(t),
-		anonGCSClient:     fakeObjectStorage{data: release.tarball},
+		anonGCSClient:     fakeObjectStorage{data: checkpointRelease.tarball},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
-	recWithPause := func(pause string) *sandboxAssetsRecord {
-		return testSandboxRecord(release, pause)
-	}
+	checkpointRec, restoreRec := testSandboxRecord(checkpointRelease), testSandboxRecord(restoreRelease)
 	spec := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 
-	advertiseRuntime(t, s, recWithPause(checkpointPause))
+	advertiseRuntime(t, s, checkpointRec)
 	if _, err := s.Run(ctx, &ateletpb.RunRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -449,7 +452,7 @@ func TestRestoreUsesRequestSandboxRuntime(t *testing.T) {
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
-		SandboxRuntime:        runtimeFor(t, recWithPause(checkpointPause)),
+		SandboxRuntime:        runtimeFor(t, checkpointRec),
 		Spec:                  spec,
 	}); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -477,11 +480,12 @@ func TestRestoreUsesRequestSandboxRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unmarshalling snapshot manifest: %v", err)
 	}
-	if manifestRec.PauseImage != checkpointPause {
-		t.Fatalf("manifest pause image = %q, want %q", manifestRec.PauseImage, checkpointPause)
+	if got, want := manifestRec.Assets[gvisorAssetName].SHA256, checkpointRelease.entry.SHA256; got != want {
+		t.Fatalf("manifest gvisor sha256 = %q, want %q", got, want)
 	}
 
-	advertiseRuntime(t, s, recWithPause(restorePause))
+	s.anonGCSClient = fakeObjectStorage{data: restoreRelease.tarball}
+	advertiseRuntime(t, s, restoreRec)
 	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -489,7 +493,7 @@ func TestRestoreUsesRequestSandboxRuntime(t *testing.T) {
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
-		SandboxRuntime:        runtimeFor(t, recWithPause(restorePause)),
+		SandboxRuntime:        runtimeFor(t, restoreRec),
 		Spec:                  spec,
 		Snapshot:              lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 	}); err != nil {
@@ -500,8 +504,8 @@ func TestRestoreUsesRequestSandboxRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading on-node sandbox record: %v", err)
 	}
-	if got.PauseImage != restorePause {
-		t.Errorf("restored actor pause image = %q, want the request's %q", got.PauseImage, restorePause)
+	if sha, want := got.Assets[gvisorAssetName].SHA256, restoreRelease.entry.SHA256; sha != want {
+		t.Errorf("restored actor gvisor sha256 = %q, want the request's %q", sha, want)
 	}
 }
 
@@ -546,7 +550,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			release := newGVisorTestRelease(t)
 			if tc.restore && tc.failure != "manifest" {
 				writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
-					SandboxClass: "gvisor", PauseImage: testPauseImage,
+					SandboxClass:  "gvisor",
 					Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
 					SnapshotFiles: []string{"checkpoint.img"},
 				}, map[string]string{"checkpoint.img": "guest-memory"})
@@ -586,7 +590,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			s := newPluginHerder(t, &recordingObjectStorage{})
 			s.anonGCSClient = storage
 			s.systemInfoVolumes = refresher
-			rec := testSandboxRecord(release, testPauseImage)
+			rec := testSandboxRecord(release)
 			advertiseRuntime(t, s, rec)
 			if tc.restore {
 				_, err = s.Restore(ctx, &ateletpb.RestoreRequest{
@@ -674,12 +678,13 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
 	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: missingImage(t)}},
 		Volumes: []*ateletpb.Volume{{
 			Name:       "trust",
 			SystemInfo: trustVolumeSpec("ca.pem"),
 		}},
 	}
-	rec := testSandboxRecord(release, missingPauseImage(t))
+	rec := testSandboxRecord(release)
 	advertiseRuntime(t, s, rec)
 	_, err := s.Run(t.Context(), &ateletpb.RunRequest{
 		Atespace:       "team-a",
@@ -689,7 +694,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		SandboxRuntime: runtimeFor(t, rec),
 		Spec:           spec,
 	})
-	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
+	if err == nil || !strings.Contains(err.Error(), `while creating "app" OCI bundle`) {
 		t.Fatalf("Run error = %v, want the post-registration OCI preparation failure", err)
 	}
 	if _, err := os.ReadFile(filepath.Join(ateletpath.SystemInfoVolumeRoot(actorUID, "trust"), "ca.pem")); err != nil {
@@ -700,12 +705,12 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	}
 }
 
-// missingPauseImage returns a digest-pinned reference that passes request
+// missingImage returns a digest-pinned reference that passes request
 // validation but names a manifest the local test registry does not serve, so
 // the pull fails only once OCI bundle preparation starts.
-func missingPauseImage(t *testing.T) string {
+func missingImage(t *testing.T) string {
 	t.Helper()
-	return imageVolumeTestRegistry(t) + "/pause@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	return imageVolumeTestRegistry(t) + "/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 }
 
 func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
@@ -714,22 +719,24 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		actorUID     = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a63"
 		snapshotName = "pause-snap-after"
 	)
-	pauseImage := missingPauseImage(t)
+	image := missingImage(t)
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
 	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	release := newGVisorTestRelease(t)
 	writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    pauseImage,
 		Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
 		SnapshotFiles: []string{"checkpoint.img"},
 	}, map[string]string{"checkpoint.img": "guest-memory"})
 
-	spec := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{{
-		Name:       "trust",
-		SystemInfo: trustVolumeSpec("ca.pem"),
-	}}}
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: image}},
+		Volumes: []*ateletpb.Volume{{
+			Name:       "trust",
+			SystemInfo: trustVolumeSpec("ca.pem"),
+		}},
+	}
 	s := &Atelet{
 		sandboxAssetCache: newTestAssetCache(t),
 		anonGCSClient:     fakeObjectStorage{data: release.tarball},
@@ -737,7 +744,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		systemInfoVolumes: refresher,
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
-	rec := testSandboxRecord(release, pauseImage)
+	rec := testSandboxRecord(release)
 	advertiseRuntime(t, s, rec)
 	_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
 		Atespace:       "team-a",
@@ -748,7 +755,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		Spec:           spec,
 		Snapshot:       lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 	})
-	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
+	if err == nil || !strings.Contains(err.Error(), `while creating "app" OCI bundle`) {
 		t.Fatalf("Restore error = %v, want the post-registration OCI preparation failure", err)
 	}
 	if _, err := os.ReadFile(filepath.Join(ateletpath.SystemInfoVolumeRoot(actorUID, "trust"), "ca.pem")); err != nil {
@@ -780,13 +787,12 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
 
 	release := newGVisorTestRelease(t)
-	sandboxRec := testSandboxRecord(release, pinnedImage)
+	sandboxRec := testSandboxRecord(release)
 	spec := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 	manifestRec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    pinnedImage,
 		Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
 		SnapshotFiles: []string{"checkpoint.img"},
 	}
@@ -806,7 +812,7 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 	}
 	remoteSrcDir := t.TempDir()
 	writeLocalSnapshot(t, remoteSrcDir, manifestRec, map[string]string{"checkpoint.img": "object-storage-memory"})
-	if err := s.uploadSnapshot(t.Context(), uri, remoteSrcDir, &manifestRec); err != nil {
+	if err := s.uploadSnapshot(t.Context(), testActor, uri, remoteSrcDir, &manifestRec); err != nil {
 		t.Fatalf("uploadSnapshot: %v", err)
 	}
 
@@ -919,10 +925,9 @@ func TestRestoreFailureRemovesStagedSnapshotFiles(t *testing.T) {
 	host := imageVolumeTestRegistry(t)
 	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
 	release := newGVisorTestRelease(t)
-	sandboxRec := testSandboxRecord(release, pinnedImage)
+	sandboxRec := testSandboxRecord(release)
 	manifestRec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    pinnedImage,
 		Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
 		SnapshotFiles: []string{"checkpoint.img"},
 	}
@@ -944,7 +949,7 @@ func TestRestoreFailureRemovesStagedSnapshotFiles(t *testing.T) {
 	}
 	srcDir := t.TempDir()
 	writeLocalSnapshot(t, srcDir, manifestRec, map[string]string{"checkpoint.img": "shared-memory"})
-	if err := s.uploadSnapshot(t.Context(), uri, srcDir, &manifestRec); err != nil {
+	if err := s.uploadSnapshot(t.Context(), testActor, uri, srcDir, &manifestRec); err != nil {
 		t.Fatalf("uploadSnapshot: %v", err)
 	}
 	advertiseRuntime(t, s, sandboxRec)
@@ -993,7 +998,7 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 		snapshotName = "pause-snap-1"
 	)
 	release := newGVisorTestRelease(t)
-	rec := testSandboxRecord(release, testPauseImage)
+	rec := testSandboxRecord(release)
 	for _, tc := range []struct {
 		name string
 		// unusableLocal writes a manifest that lists a file that is not there.
@@ -1011,7 +1016,7 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 			useTempNodeDirs(t)
 			if tc.unusableLocal {
 				writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
-					SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"checkpoint.img"},
+					SandboxClass: "gvisor", SnapshotFiles: []string{"checkpoint.img"},
 				}, nil)
 			}
 			// The object store is empty: nothing was ever uploaded.
@@ -1138,7 +1143,7 @@ func runPluginActor(t *testing.T) *pluginActor {
 	a.s.sandboxAssetCache = newTestAssetCache(t)
 	a.s.anonGCSClient = fakeObjectStorage{data: release.tarball}
 	a.s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
-	a.rec = testSandboxRecord(release, pinnedImage)
+	a.rec = testSandboxRecord(release)
 	a.spec = &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
@@ -1254,9 +1259,13 @@ func TestImmediateCheckpointKeepsLocalCopy(t *testing.T) {
 
 // TestImmediateCheckpointWithoutLocalCopy suspends a running actor whose
 // snapshot cannot be stored locally: the snapshot is durable, so the
-// checkpoint still succeeds, and reports no local snapshot.
+// checkpoint still succeeds, and reports no local snapshot. A retry of that
+// checkpoint answers from the durable snapshot without checkpointing or
+// uploading again, and finishes the first call's cleanup.
 func TestImmediateCheckpointWithoutLocalCopy(t *testing.T) {
 	a := runPluginActor(t)
+	var workerCheckpoints atomic.Int32
+	a.worker.onCheckpoint = func() { workerCheckpoints.Add(1) }
 	snap := a.snapshot("suspend-snap-1", 1)
 	// A file where the local checkpoint directory belongs fails the move.
 	if err := os.WriteFile(ateletpath.LocalCheckpointsDir(pluginActorUID), nil, 0o600); err != nil {
@@ -1279,6 +1288,181 @@ func TestImmediateCheckpointWithoutLocalCopy(t *testing.T) {
 	}
 	if got := a.s.snapshots.State(pluginActorUID); !proto.Equal(got, st) {
 		t.Errorf("tracked state = %v, want %v, as Checkpoint returned", got, st)
+	}
+
+	a.store.mu.Lock()
+	a.store.putErr = errors.New("retried Checkpoint uploaded a snapshot that was already durable")
+	a.store.mu.Unlock()
+	// What the first call's cleanup leaves behind when it fails.
+	leftover := filepath.Join(ateletpath.OCIBundleDir(pluginActorUID), "leftover")
+	if err := os.WriteFile(leftover, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	retryResp, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+	if err != nil {
+		t.Fatalf("retried Checkpoint: %v", err)
+	}
+	if n := workerCheckpoints.Load(); n != 1 {
+		t.Errorf("worker checkpointed the actor %d times, want once", n)
+	}
+	if !proto.Equal(retryResp.GetState(), st) {
+		t.Errorf("retried Checkpoint state = %v, want %v", retryResp.GetState(), st)
+	}
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Errorf("leftover in the bundle dir after the retry: stat = %v, want it cleaned up", err)
+	}
+}
+
+// TestStaleCheckpointRetryLeavesRestoredActorAlone retries a Checkpoint
+// after the actor was restored from the snapshot it committed, from its local
+// copy or, once atelet detached it, from its upload: atelet answers from that
+// snapshot without checkpointing or cleaning up, since the actor's
+// directories and volumes belong to the restored activation now.
+func TestStaleCheckpointRetryLeavesRestoredActorAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		detach bool
+	}{
+		{name: "restored from the local copy"},
+		{name: "restored from the upload", detach: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+			var workerCheckpoints atomic.Int32
+			a.worker.onCheckpoint = func() { workerCheckpoints.Add(1) }
+			snap := a.snapshot("pause-snap-1", 1)
+			if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			if tc.detach {
+				if _, err := a.s.snapshots.Detach(t.Context(), pluginActorUID); err != nil {
+					t.Fatalf("Detach: %v", err)
+				}
+			}
+			// Restore reads the local copy if there is one, and otherwise the
+			// upload.
+			if _, err := a.s.Restore(t.Context(), &ateletpb.RestoreRequest{
+				Atespace:              "ate-demo",
+				ActorName:             "counter",
+				ActorUid:              pluginActorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          pluginWorkerPodUID,
+				SandboxRuntime:        runtimeFor(t, a.rec),
+				Spec:                  a.spec,
+				Snapshot:              snap,
+			}); err != nil {
+				t.Fatalf("Restore: %v", err)
+			}
+			inUse := filepath.Join(ateletpath.OCIBundleDir(pluginActorUID), "in-use")
+			if err := os.WriteFile(inUse, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			resp, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+			if err != nil {
+				t.Fatalf("stale retry of the Checkpoint: %v", err)
+			}
+			if n := workerCheckpoints.Load(); n != 1 {
+				t.Errorf("worker checkpointed the actor %d times, want once", n)
+			}
+			st := resp.GetState()
+			committed := st.GetLatestLocal().GetSnapshot()
+			if tc.detach {
+				committed = st.GetLatestDurable().GetSnapshot()
+			}
+			if !proto.Equal(committed, snap) {
+				t.Errorf("state = %v, want %v as committed", st, snap)
+			}
+			if _, err := os.Stat(inUse); err != nil {
+				t.Errorf("restored activation's bundle dir after the stale retry: stat = %v, want it untouched", err)
+			}
+		})
+	}
+}
+
+// TestRetriedCheckpointAnswersFromCommittedSnapshot retries a Checkpoint
+// that committed its snapshot, as the control plane does when the first
+// call's response is lost: atelet answers without checkpointing the worker
+// again, which has no workload left to checkpoint, and finishes the first
+// call's cleanup. A retry under UPLOAD_MODE_IMMEDIATE uploads the snapshot
+// first if the first Checkpoint deferred its upload, and a retry under
+// UPLOAD_MODE_DEFERRED after atelet detached the snapshot returns no local
+// snapshot. A retry records no checkpoint duration.
+func TestRetriedCheckpointAnswersFromCommittedSnapshot(t *testing.T) {
+	const (
+		deferred  = ateletpb.UploadMode_UPLOAD_MODE_DEFERRED
+		immediate = ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE
+	)
+	for _, tc := range []struct {
+		name         string
+		first, retry ateletpb.UploadMode
+		detachFirst  bool
+		wantLocal    bool
+		wantDurable  bool
+	}{
+		{name: "deferred", first: deferred, retry: deferred, wantLocal: true},
+		{name: "immediate", first: immediate, retry: immediate, wantLocal: true, wantDurable: true},
+		{name: "deferred then immediate", first: deferred, retry: immediate, wantLocal: true, wantDurable: true},
+		{name: "immediate then deferred", first: immediate, retry: deferred, wantLocal: true, wantDurable: true},
+		{name: "deferred after detach", first: deferred, retry: deferred, detachFirst: true, wantDurable: true},
+		{name: "immediate after detach", first: deferred, retry: immediate, detachFirst: true, wantDurable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+			var workerCheckpoints atomic.Int32
+			a.worker.onCheckpoint = func() { workerCheckpoints.Add(1) }
+			snap := a.snapshot("snap-1", 1)
+			if _, err := a.checkpoint(t, snap, tc.first); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			if tc.detachFirst {
+				if _, err := a.s.snapshots.Detach(t.Context(), pluginActorUID); err != nil {
+					t.Fatalf("Detach: %v", err)
+				}
+			}
+			// What the first call's cleanup leaves behind when it fails.
+			leftover := filepath.Join(ateletpath.OCIBundleDir(pluginActorUID), "leftover")
+			if err := os.WriteFile(leftover, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			inst, reader := newTestInstruments(t)
+			a.s.instruments = inst
+
+			resp, err := a.checkpoint(t, snap, tc.retry)
+			if err != nil {
+				t.Fatalf("retried Checkpoint: %v", err)
+			}
+			if n := workerCheckpoints.Load(); n != 1 {
+				t.Errorf("worker checkpointed the actor %d times, want once", n)
+			}
+			if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+				t.Errorf("leftover in the bundle dir after the retry: stat = %v, want it cleaned up", err)
+			}
+			st := resp.GetState()
+			if got := st.GetLatestLocal().GetSnapshot(); proto.Equal(got, snap) != tc.wantLocal {
+				t.Errorf("latest_local = %v, want local = %v", got, tc.wantLocal)
+			}
+			if got := st.GetLatestDurable().GetSnapshot(); proto.Equal(got, snap) != tc.wantDurable {
+				t.Errorf("latest_durable = %v, want durable = %v", got, tc.wantDurable)
+			}
+			if got := slices.Contains(a.store.keys(), manifestKey("snap-1")); got != tc.wantDurable {
+				t.Errorf("snapshot uploaded = %v, want %v", got, tc.wantDurable)
+			}
+			if got := a.s.snapshots.State(pluginActorUID); !proto.Equal(got, st) {
+				t.Errorf("tracked state = %v, want %v, as the retry returned", got, st)
+			}
+			var rm metricdata.ResourceMetrics
+			if err := reader.Collect(t.Context(), &rm); err != nil {
+				t.Fatalf("collect: %v", err)
+			}
+			if len(rm.ScopeMetrics) != 0 {
+				t.Error("the retry recorded a checkpoint duration, want none")
+			}
+		})
 	}
 }
 
@@ -1512,7 +1696,7 @@ func TestConcurrentRunsShareOneAssetDownload(t *testing.T) {
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
-	sandboxRec := testSandboxRecord(release, pinnedImage)
+	sandboxRec := testSandboxRecord(release)
 	spec := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
@@ -2004,10 +2188,9 @@ func TestPromoteSnapshotFoundAlreadyUploaded(t *testing.T) {
 
 // testSandboxRecord is the record of a gVisor runtime whose only asset is
 // release, as the syncer plans it from a SandboxConfig version.
-func testSandboxRecord(release gvisorTestRelease, pauseImage string) *sandboxAssetsRecord {
+func testSandboxRecord(release gvisorTestRelease) *sandboxAssetsRecord {
 	return &sandboxAssetsRecord{
 		SandboxClass: "gvisor",
-		PauseImage:   pauseImage,
 		Assets:       map[string]assetEntry{gvisorAssetName: release.entry},
 	}
 }
@@ -2021,10 +2204,7 @@ func advertiseRuntime(t *testing.T, s *Atelet, rec *sandboxAssetsRecord) {
 	if s.runtimes == nil {
 		s.runtimes = newRuntimeIndex()
 	}
-	hash, err := versionBundleHash(rec)
-	if err != nil {
-		t.Fatalf("versionBundleHash: %v", err)
-	}
+	hash := bundleHash(rec)
 	s.runtimes.register("test-worker-pod", advertisedClass{
 		class:  v1alpha1.SandboxClass(rec.SandboxClass),
 		config: "test-config",
@@ -2050,14 +2230,14 @@ func TestRunAndRestoreRejectUnadvertisedRuntime(t *testing.T) {
 		anonGCSClient:     fakeObjectStorage{data: release.tarball, gets: &gets},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 	}
-	rec := testSandboxRecord(release, testPauseImage)
+	rec := testSandboxRecord(release)
 
 	for _, tc := range []struct {
 		name string
-		call func(t *testing.T, rt *ateletpb.SandboxRuntime) error
+		call func(t *testing.T, rt *ateletpb.ActorSandboxRuntime) error
 	}{{
 		name: "Run",
-		call: func(t *testing.T, rt *ateletpb.SandboxRuntime) error {
+		call: func(t *testing.T, rt *ateletpb.ActorSandboxRuntime) error {
 			_, err := s.Run(t.Context(), &ateletpb.RunRequest{
 				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: workerPodUID,
 				SandboxRuntime: rt, Spec: &ateletpb.WorkloadSpec{},
@@ -2066,7 +2246,7 @@ func TestRunAndRestoreRejectUnadvertisedRuntime(t *testing.T) {
 		},
 	}, {
 		name: "Restore",
-		call: func(t *testing.T, rt *ateletpb.SandboxRuntime) error {
+		call: func(t *testing.T, rt *ateletpb.ActorSandboxRuntime) error {
 			_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
 				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: workerPodUID,
 				SandboxRuntime: rt, Spec: &ateletpb.WorkloadSpec{},
@@ -2101,16 +2281,13 @@ func TestRunAndRestoreRejectUnadvertisedRuntime(t *testing.T) {
 	}
 }
 
-// runtimeFor returns the SandboxRuntime ate-api-server sends for an actor
+// runtimeFor returns the ActorSandboxRuntime ate-api-server sends for an actor
 // placed on a worker that advertises the runtime rec describes: the worker's
 // registration, whose sandbox_bundle_hash is the hash of rec.
-func runtimeFor(t *testing.T, rec *sandboxAssetsRecord) *ateletpb.SandboxRuntime {
+func runtimeFor(t *testing.T, rec *sandboxAssetsRecord) *ateletpb.ActorSandboxRuntime {
 	t.Helper()
-	hash, err := versionBundleHash(rec)
-	if err != nil {
-		t.Fatalf("versionBundleHash: %v", err)
-	}
-	return &ateletpb.SandboxRuntime{
+	hash := bundleHash(rec)
+	return &ateletpb.ActorSandboxRuntime{
 		SandboxClass: rec.SandboxClass,
 		Version: &ateletpb.VersionedSandboxCompat{
 			SchemaVersion: hardware.SchemaVersionV1,
@@ -2128,6 +2305,10 @@ type gatingTrackerStore struct {
 	objects *recordingObjectStorage
 	started chan struct{}
 	release chan struct{}
+	// canceled, if set, receives once an upload's context ends, and that
+	// upload still waits for release before it returns, as an object-store
+	// call that is finishing would.
+	canceled chan struct{}
 }
 
 func (s *gatingTrackerStore) UploadLocalSnapshot(ctx context.Context, actorUID string, ref snapshottracker.SnapshotRef) (bool, error) {
@@ -2135,6 +2316,10 @@ func (s *gatingTrackerStore) UploadLocalSnapshot(ctx context.Context, actorUID s
 	select {
 	case <-s.release:
 	case <-ctx.Done():
+		if s.canceled != nil {
+			s.canceled <- struct{}{}
+			<-s.release
+		}
 		return false, ctx.Err()
 	}
 	uploaded, err := s.inner.UploadLocalSnapshot(ctx, actorUID, ref)
@@ -2281,6 +2466,92 @@ func TestCheckpointKeepsSnapshotBeingUploaded(t *testing.T) {
 	}
 }
 
+// TestImmediateCheckpointCancelsBackgroundUpload suspends a resumed actor with
+// an immediate upload while the background upload of its previous pause
+// snapshot still runs: the checkpoint checkpoints the worker without waiting
+// for that upload, then cancels it, and returns only once it has stopped, so
+// the control plane can delete the older snapshot's objects.
+func TestImmediateCheckpointCancelsBackgroundUpload(t *testing.T) {
+	a := runPluginActor(t)
+	clk := clocktesting.NewFakeClock(time.Now())
+	store := &gatingTrackerStore{
+		inner:    &trackerStore{s: a.s},
+		started:  make(chan struct{}, 1),
+		release:  make(chan struct{}),
+		canceled: make(chan struct{}, 1),
+	}
+	a.s.snapshots = snapshottracker.New(t.Context(), store, clk,
+		snapshottracker.WithUploadDelay(time.Second),
+		snapshottracker.WithDetachDelay(time.Hour))
+	a.s.snapshots.Start()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := a.s.snapshots.Wait(ctx); err != nil {
+			t.Errorf("Wait: %v", err)
+		}
+	})
+	// A canceled upload holds on until released; release it before Wait
+	// even when the test stops early.
+	release := sync.OnceFunc(func() { close(store.release) })
+	t.Cleanup(release)
+
+	cpResp, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+	if err != nil {
+		t.Fatalf("Checkpoint (pause-snap-1): %v", err)
+	}
+	stepToUpload(t, clk, cpResp.GetState().GetUploadDueTime().AsTime(), store.started)
+	a.restoreLocal(t, "pause-snap-1", 1)
+	a.worker.mu.Lock()
+	delete(a.worker.actorDirs, "CheckpointWorkload")
+	a.worker.mu.Unlock()
+
+	type checkpointResult struct {
+		state *ateletpb.ActorSnapshotState
+		err   error
+	}
+	resCh := make(chan checkpointResult, 1)
+	go func() {
+		resp, err := a.checkpoint(t, a.snapshot("suspend-snap-2", 2), ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+		resCh <- checkpointResult{resp.GetState(), err}
+	}()
+	select {
+	case <-store.canceled:
+	case res := <-resCh:
+		t.Fatalf("immediate Checkpoint returned (%v, %v) without canceling the background upload", res.state, res.err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the immediate Checkpoint to cancel the background upload")
+	}
+	a.worker.mu.Lock()
+	_, checkpointed := a.worker.actorDirs["CheckpointWorkload"]
+	a.worker.mu.Unlock()
+	if !checkpointed {
+		t.Error("background upload canceled before the worker was checkpointed, want the checkpoint not to wait for it")
+	}
+	select {
+	case res := <-resCh:
+		t.Fatalf("immediate Checkpoint returned (%v, %v) before the canceled upload stopped", res.state, res.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	var res checkpointResult
+	select {
+	case res = <-resCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the immediate Checkpoint once the canceled upload stopped")
+	}
+	if res.err != nil {
+		t.Fatalf("Checkpoint (suspend-snap-2): %v", res.err)
+	}
+	if got := res.state.GetLatestDurable().GetSnapshot().GetSnapshotUuid(); got != "suspend-snap-2" {
+		t.Errorf("latest_durable = %q, want suspend-snap-2", got)
+	}
+	if res.state.GetUploading() != nil {
+		t.Errorf("uploading = %v, want no upload in progress once the checkpoint returns", res.state.GetUploading())
+	}
+}
+
 // resumedWithPendingUpload runs a plugin actor, pauses it into pause-snap-1
 // with a deferred upload, and resumes it from that snapshot's local copy
 // before the upload is due. It returns the actor, its gated tracker store, and
@@ -2330,6 +2601,34 @@ func resumedWithPendingUpload(t *testing.T) (*pluginActor, *gatingTrackerStore, 
 		return false
 	}
 	return a, store, stepPastDue
+}
+
+// TestImmediateCheckpointHoldsOffBackgroundUpload checkpoints an actor resumed
+// from its pause snapshot while that snapshot's background upload comes due:
+// under UPLOAD_MODE_IMMEDIATE the upload does not start, since the checkpoint
+// would only cancel it, while under UPLOAD_MODE_DEFERRED it starts.
+func TestImmediateCheckpointHoldsOffBackgroundUpload(t *testing.T) {
+	for _, tc := range []struct {
+		mode        ateletpb.UploadMode
+		snapshot    string
+		wantStarted bool
+	}{
+		{mode: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE, snapshot: "suspend-snap-2"},
+		{mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED, snapshot: "pause-snap-2", wantStarted: true},
+	} {
+		t.Run(tc.mode.String(), func(t *testing.T) {
+			a, _, stepPastDue := resumedWithPendingUpload(t)
+			var started atomic.Bool
+			a.worker.onCheckpoint = func() { started.Store(stepPastDue()) }
+
+			if _, err := a.checkpoint(t, a.snapshot(tc.snapshot, 2), tc.mode); err != nil {
+				t.Fatalf("Checkpoint (%s): %v", tc.snapshot, err)
+			}
+			if got := started.Load(); got != tc.wantStarted {
+				t.Errorf("background upload of pause-snap-1 started during the checkpoint = %v, want %v", got, tc.wantStarted)
+			}
+		})
+	}
 }
 
 // TestTerminateHoldsOffBackgroundUpload terminates an actor resumed from its
@@ -2447,7 +2746,6 @@ func TestPromoteSnapshotRejectsStaleGeneration(t *testing.T) {
 	} {
 		writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(pluginActorUID, stale.GetSnapshotUuid()), sandboxAssetsRecord{
 			SandboxClass:  "gvisor",
-			PauseImage:    a.rec.PauseImage,
 			SnapshotFiles: []string{"checkpoint.img"},
 			Fidelity:      "MEMORY",
 		}, map[string]string{"checkpoint.img": "stale-memory"})
@@ -2581,7 +2879,6 @@ func TestCheckpointSkipsStaleCommitAndKeepsNewerLocal(t *testing.T) {
 	snap3Dir := ateletpath.LocalSnapshotDir(pluginActorUID, snap3.GetSnapshotUuid())
 	writeLocalSnapshot(t, snap3Dir, sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    a.rec.PauseImage,
 		SnapshotFiles: []string{"checkpoint.img"},
 		Fidelity:      "MEMORY",
 	}, map[string]string{"checkpoint.img": "newer-memory"})

@@ -198,10 +198,19 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 
 // crashBoundActor moves an Actor that lost its sandbox on the Worker to
 // ACTOR_STATE_CRASHED and clears its pointers at the Worker. crashMsg is
-// recorded in the Actor's status. The Actor's assignment row in the worker is
-// left for the caller to release.
+// recorded in the Actor's status. An Actor in ACTOR_STATE_DELETING is left
+// untouched. The Actor's assignment row in the worker is left for the caller to
+// release.
 // A concurrent write to the Actor fails this as ABORTED.
 func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.Worker, actorRef resources.ActorRef, actor *ateapipb.Actor, logMsg, crashMsg string) error {
+	// DELETING is final. A CRASHED actor can be reverted and resumed, and the
+	// delete may already have collected its volumes and snapshots. The delete's
+	// retry clears the actor's pointers.
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_DELETING {
+		markSkipped(ctx, "actor is DELETING")
+		return nil
+	}
+
 	name := worker.GetMetadata().GetName()
 	opName := ateattr.OperationUnknown
 	switch actor.GetStatus().GetState() {
@@ -211,14 +220,13 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 		opName = ateattr.OperationSuspend
 	case ateapipb.ActorState_ACTOR_STATE_REVERTING:
 		opName = ateattr.OperationRevert
-	case ateapipb.ActorState_ACTOR_STATE_DELETING:
-		opName = ateattr.OperationDelete
 	}
 
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
-	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName)
+	sandboxClass := actor.GetStatus().GetWorkerAssignment().GetSandboxRuntime().GetSandboxClass()
+	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName)
 
 	slog.LogAttrs(ctx, slog.LevelInfo, logMsg,
 		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),

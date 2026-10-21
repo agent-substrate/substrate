@@ -137,9 +137,9 @@ func TestBuild_Capabilities(t *testing.T) {
 	}
 }
 
-// The pause container gets no capabilities.
-func TestBuild_NoCapabilitiesForPause(t *testing.T) {
-	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/pause"}}}})
+// A container that declares no capabilities gets none.
+func TestBuild_NoCapabilities(t *testing.T) {
+	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
 
 	caps := spec.Process.Capabilities
 	if caps == nil {

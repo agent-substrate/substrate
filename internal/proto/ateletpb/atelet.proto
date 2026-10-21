@@ -65,26 +65,22 @@ message RegisterWorkerRequest {
   // +k8s:required
   WorkerResources capacity = 1;
 
-  // Runtime that new and cold-booted actors start under.
-  // Snapshots matching default_runtime can also warm-boot on this worker.
-  // atelet converts it to the control plane's SandboxRuntime when forwarding.
+  // The sandbox classes this worker runs and the compatibility versions it
+  // runs them under. atelet converts it to the control plane's
+  // WorkerSandboxClass when forwarding.
   //
   // +k8s:required
-  SandboxRuntime default_runtime = 2;
-
-  // Additional runtimes (excluding default_runtime) that this worker can
-  // restore snapshots from right now.
-  //
-  // +k8s:optional
-  // +k8s:maxItems=32
-  // +k8s:listType=atomic
-  repeated SandboxRuntime restorable_runtimes = 3;
+  // +k8s:minItems=1
+  // +k8s:maxItems=1 # keep in sync with WorkerPoolSpec.sandboxClasses
+  // +k8s:listType=map
+  // +k8s:listMapKey=sandbox_class
+  repeated WorkerSandboxClass sandbox_classes = 2;
 }
 
-// SandboxRuntime describes a sandbox runtime and its compatibility identity as
-// reported by a worker. It mirrors the control plane's SandboxRuntime and is
+// WorkerSandboxClass is one sandbox class a worker runs, with the runtimes
+// it runs it under. It mirrors the control plane's WorkerSandboxClass and is
 // validated by the same rules.
-message SandboxRuntime {
+message WorkerSandboxClass {
   // e.g. "gvisor", "microvm"
   //
   // +k8s:required
@@ -92,20 +88,52 @@ message SandboxRuntime {
   // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
-  // Primary compatibility version stamped onto an actor's snapshot when a
-  // checkpoint is taken on this runtime. Snapshots matching `version`
-  // can warm-boot on this runtime.
-  // TODO: Add support for additional compatibility versions.
+  // Runtime new and cold-booted actors of this class start under. Snapshots
+  // matching its version can also warm-boot on this worker.
+  //
+  // +k8s:required
+  WorkerSandboxRuntime default_runtime = 2;
+
+  // Additional runtimes of this class (excluding default_runtime) that this
+  // worker can restore snapshots from right now.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated WorkerSandboxRuntime restorable_runtimes = 3;
+}
+
+// WorkerSandboxRuntime is one runtime a worker runs for the class of its
+// WorkerSandboxClass entry. It mirrors the control plane's
+// WorkerSandboxRuntime and is validated by the same rules.
+message WorkerSandboxRuntime {
+  // Compatibility version stamped onto an actor's snapshot when a checkpoint
+  // is taken on this runtime. Snapshots matching it can warm-boot on this
+  // runtime.
+  //
+  // +k8s:required
+  VersionedSandboxCompat version = 1;
+}
+
+// ActorSandboxRuntime is the runtime an actor runs under, as named on Run and
+// Restore. It mirrors the control plane's ActorSandboxRuntime and is validated by
+// the same rules.
+message ActorSandboxRuntime {
+  // e.g. "gvisor", "microvm"
+  //
+  // +k8s:required
+  // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
+  string sandbox_class = 1;
+
+  // Compatibility version of the runtime.
   //
   // +k8s:required
   VersionedSandboxCompat version = 2;
-
-  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
-  // once workers report one.
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
-// key-value compatibility attributes for a SandboxRuntime.
+// key-value compatibility attributes of a sandbox runtime.
 message VersionedSandboxCompat {
   // Compatibility schema version (e.g. "v1") defining which runtime and
   // hardware attributes are recorded and how they are computed.
@@ -366,6 +394,11 @@ service Atelet {
   // atelet deletes the actor's older local snapshots, except one still being
   // uploaded, which it deletes after that upload ends. A Checkpoint that fails
   // before then leaves the actor's previous local snapshot in place.
+  //
+  // A Checkpoint of a snapshot already committed, as a retry's is, returns the
+  // actor's state without checkpointing the workload again; under
+  // UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+  // yet.
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
 
   // Restore restores a workload from a snapshot onto a worker.
@@ -485,12 +518,12 @@ message RunRequest {
   ResourceRequirements resources = 10;
 
   // The runtime the assigned worker runs this actor under, from
-  // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
-  // sandbox binaries through its advertised-runtime index and records the
-  // runtime for the actor so a later Checkpoint pins the snapshot to it.
+  // WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+  // through its advertised-runtime index and records the runtime for the
+  // actor so a later Checkpoint pins the snapshot to it.
   //
   // +k8s:required
-  SandboxRuntime sandbox_runtime = 12;
+  ActorSandboxRuntime sandbox_runtime = 12;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -1101,13 +1134,13 @@ message RestoreRequest {
   ResourceRequirements resources = 10;
 
   // The runtime the assigned worker restores this actor under, from
-  // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
-  // sandbox binaries through its advertised-runtime index and records the
-  // runtime for the actor so the next Checkpoint pins the snapshot to what ran
-  // this activation, not what the restored snapshot was taken under.
+  // WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+  // through its advertised-runtime index and records the runtime for the
+  // actor so the next Checkpoint pins the snapshot to what ran this
+  // activation, not what the restored snapshot was taken under.
   //
   // +k8s:required
-  SandboxRuntime sandbox_runtime = 12;
+  ActorSandboxRuntime sandbox_runtime = 12;
 }
 
 message RestoreResponse {

@@ -370,10 +370,10 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 			if refs := koRefPattern.FindAllString(string(out), -1); len(refs) > 0 {
 				t.Errorf("unresolved references survived: %v", refs)
 			}
-			// Every reference has to name a digest. ActorTemplate images,
-			// image volume references, and a SandboxConfig's pauseImage all
-			// carry the CEL rule self.contains('@'), so an unpinned reference
-			// is not applied at all, it is rejected by admission.
+			// Every reference has to name a digest. ActorTemplate images and
+			// image volume references carry the CEL rule self.contains('@'), so
+			// an unpinned reference is not applied at all, it is rejected by
+			// admission.
 			for _, ref := range resolvedRef.FindAllString(string(out), -1) {
 				if !strings.Contains(ref, "@sha256:") {
 					t.Errorf("%s is not pinned to a digest", ref)

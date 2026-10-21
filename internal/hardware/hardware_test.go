@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestProbeHost(t *testing.T) {
@@ -33,8 +34,8 @@ func TestProbeHost(t *testing.T) {
 }
 
 func TestMatches(t *testing.T) {
-	runtimeWith := func(class, ver string, attrs ...*ateapipb.AttributeEntry) *ateapipb.SandboxRuntime {
-		return &ateapipb.SandboxRuntime{
+	runtimeWith := func(class, ver string, attrs ...*ateapipb.AttributeEntry) *ateapipb.ActorSandboxRuntime {
+		return &ateapipb.ActorSandboxRuntime{
 			SandboxClass: class,
 			Version: &ateapipb.VersionedSandboxCompat{
 				SchemaVersion: ver,
@@ -70,8 +71,8 @@ func TestMatches(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		worker *ateapipb.SandboxRuntime
-		snap   *ateapipb.SandboxRuntime
+		worker *ateapipb.ActorSandboxRuntime
+		snap   *ateapipb.ActorSandboxRuntime
 		want   bool
 	}{
 		{"nil snapshot imposes no constraint", amd64GVisor, nil, true},
@@ -83,7 +84,7 @@ func TestMatches(t *testing.T) {
 		{"attribute only the worker has is ignored", amd64GVisorExtraAttr, amd64GVisor, true},
 		{"attribute missing on worker fails", amd64GVisor, amd64GVisorExtraAttr, false},
 		{"nil worker fails when snapshot is stamped", nil, amd64GVisor, false},
-		{"nil version fails", &ateapipb.SandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
+		{"nil version fails", &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,8 +161,8 @@ func TestMatchesCompat(t *testing.T) {
 // of the snapshot must hold across comparisons, and the zero value must
 // require nothing.
 func TestRequirement(t *testing.T) {
-	rt := func(cpu string) *ateapipb.SandboxRuntime {
-		return &ateapipb.SandboxRuntime{
+	rt := func(cpu string) *ateapipb.ActorSandboxRuntime {
+		return &ateapipb.ActorSandboxRuntime{
 			SandboxClass: "gvisor",
 			Version: &ateapipb.VersionedSandboxCompat{
 				SchemaVersion: SchemaVersionV1,
@@ -179,7 +180,7 @@ func TestRequirement(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name   string
-		worker *ateapipb.SandboxRuntime
+		worker *ateapipb.ActorSandboxRuntime
 		want   bool
 	}{
 		{"worker superset", rt("f"), true},
@@ -191,8 +192,12 @@ func TestRequirement(t *testing.T) {
 			t.Errorf("%s: Matches() = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	status := &ateapipb.WorkerStatus{DefaultRuntime: rt("3"), RestorableRuntimes: []*ateapipb.SandboxRuntime{rt("f")}}
-	if got := req.MatchingRuntime(status); got != status.RestorableRuntimes[0] {
+	status := &ateapipb.WorkerStatus{SandboxClasses: []*ateapipb.WorkerSandboxClass{{
+		SandboxClass:       "gvisor",
+		DefaultRuntime:     &ateapipb.WorkerSandboxRuntime{Version: rt("3").GetVersion()},
+		RestorableRuntimes: []*ateapipb.WorkerSandboxRuntime{{Version: rt("f").GetVersion()}},
+	}}}
+	if got := req.MatchingRuntime(status); !proto.Equal(got, rt("f")) {
 		t.Errorf("MatchingRuntime() = %v, want the restorable superset", got)
 	}
 
@@ -205,45 +210,44 @@ func TestRequirement(t *testing.T) {
 	if none.Runtime() != nil || !none.Matches(nil) || !none.WorkerMatches(nil) {
 		t.Error("the zero Requirement must require nothing")
 	}
-	if got := none.RuntimeFor(status); got != status.DefaultRuntime {
-		t.Errorf("zero Requirement RuntimeFor() = %v, want DefaultRuntime", got)
+	if got := none.RuntimeFor(status); !proto.Equal(got, rt("3")) {
+		t.Errorf("zero Requirement RuntimeFor() = %v, want the default", got)
 	}
 }
 
 func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
-	rt := func(class, arch, hash string) *ateapipb.SandboxRuntime {
+	compat := func(arch, hash string) *ateapipb.VersionedSandboxCompat {
 		attrs := []*ateapipb.AttributeEntry{{Key: AttrArchitecture, Value: arch}}
 		if hash != "" {
 			attrs = append(attrs, &ateapipb.AttributeEntry{Key: AttrSandboxBundleHash, Value: hash})
 		}
-		return &ateapipb.SandboxRuntime{
-			SandboxClass: class,
-			Version: &ateapipb.VersionedSandboxCompat{
-				SchemaVersion: SchemaVersionV1,
-				Attributes:    attrs,
-			},
-		}
+		return &ateapipb.VersionedSandboxCompat{SchemaVersion: SchemaVersionV1, Attributes: attrs}
+	}
+	rt := func(class string, c *ateapipb.VersionedSandboxCompat) *ateapipb.ActorSandboxRuntime {
+		return &ateapipb.ActorSandboxRuntime{SandboxClass: class, Version: c}
 	}
 
-	defRT := rt("gvisor", "amd64", "v2-hash")
-	restorable1 := rt("gvisor", "amd64", "v1-hash")
-	restorable2 := rt("gvisor", "amd64", "v0-hash")
-	unmatchedRT := rt("gvisor", "arm64", "v2-hash")
+	defCompat := compat("amd64", "v2-hash")
+	restorable1 := compat("amd64", "v1-hash")
+	restorable2 := compat("amd64", "v0-hash")
+	defRT := rt("gvisor", defCompat)
+	unmatchedRT := rt("gvisor", compat("arm64", "v2-hash"))
 
-	status := &ateapipb.WorkerStatus{
-		DefaultRuntime:     defRT,
-		RestorableRuntimes: []*ateapipb.SandboxRuntime{restorable1, restorable2},
-	}
+	status := &ateapipb.WorkerStatus{SandboxClasses: []*ateapipb.WorkerSandboxClass{{
+		SandboxClass:       "gvisor",
+		DefaultRuntime:     &ateapipb.WorkerSandboxRuntime{Version: defCompat},
+		RestorableRuntimes: []*ateapipb.WorkerSandboxRuntime{{Version: restorable1}, {Version: restorable2}},
+	}}}
 
-	t.Run("nil snap matches any worker status and returns DefaultRuntime", func(t *testing.T) {
+	t.Run("nil snap matches any worker status and returns the default", func(t *testing.T) {
 		if !WorkerMatches(nil, nil) {
 			t.Errorf("WorkerMatches(nil, nil) = false, want true")
 		}
 		if !WorkerMatches(&ateapipb.WorkerStatus{}, nil) {
 			t.Errorf("WorkerMatches(empty, nil) = false, want true")
 		}
-		if got := MatchingRuntime(status, nil); got != defRT {
-			t.Errorf("MatchingRuntime(status, nil) = %v, want DefaultRuntime", got)
+		if got := MatchingRuntime(status, nil); !proto.Equal(got, defRT) {
+			t.Errorf("MatchingRuntime(status, nil) = %v, want %v", got, defRT)
 		}
 	})
 
@@ -251,17 +255,18 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 		if !WorkerMatches(status, defRT) {
 			t.Errorf("WorkerMatches(status, defRT) = false, want true")
 		}
-		if got := MatchingRuntime(status, defRT); got != defRT {
+		if got := MatchingRuntime(status, defRT); !proto.Equal(got, defRT) {
 			t.Errorf("MatchingRuntime(status, defRT) = %v, want defRT", got)
 		}
 	})
 
 	t.Run("matches RestorableRuntimes entry", func(t *testing.T) {
-		if !WorkerMatches(status, restorable2) {
+		want := rt("gvisor", restorable2)
+		if !WorkerMatches(status, want) {
 			t.Errorf("WorkerMatches(status, restorable2) = false, want true")
 		}
-		if got := MatchingRuntime(status, restorable2); got != restorable2 {
-			t.Errorf("MatchingRuntime(status, restorable2) = %v, want restorable2", got)
+		if got := MatchingRuntime(status, want); !proto.Equal(got, want) {
+			t.Errorf("MatchingRuntime(status, restorable2) = %v, want %v", got, want)
 		}
 	})
 
@@ -277,19 +282,41 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 		}
 	})
 
+	t.Run("a class the worker does not run matches nothing, whatever its compat", func(t *testing.T) {
+		snap := rt("microvm", defCompat)
+		if WorkerMatches(status, snap) {
+			t.Errorf("WorkerMatches(status, microvm snap) = true, want false")
+		}
+		if got := MatchingRuntime(status, snap); got != nil {
+			t.Errorf("MatchingRuntime(status, microvm snap) = %v, want nil", got)
+		}
+	})
+
 	t.Run("RuntimeFor is the match, else the default a cold boot runs on", func(t *testing.T) {
-		if got := RuntimeFor(status, restorable2); got != restorable2 {
-			t.Errorf("RuntimeFor(status, restorable2) = %v, want restorable2", got)
+		if got, want := RuntimeFor(status, rt("gvisor", restorable2)), rt("gvisor", restorable2); !proto.Equal(got, want) {
+			t.Errorf("RuntimeFor(status, restorable2) = %v, want %v", got, want)
 		}
-		if got := RuntimeFor(status, unmatchedRT); got != defRT {
-			t.Errorf("RuntimeFor(status, unmatchedRT) = %v, want DefaultRuntime", got)
+		if got := RuntimeFor(status, unmatchedRT); !proto.Equal(got, defRT) {
+			t.Errorf("RuntimeFor(status, unmatchedRT) = %v, want %v", got, defRT)
 		}
-		if got := RuntimeFor(status, nil); got != defRT {
-			t.Errorf("RuntimeFor(status, nil) = %v, want DefaultRuntime", got)
+		if got := RuntimeFor(status, nil); !proto.Equal(got, defRT) {
+			t.Errorf("RuntimeFor(status, nil) = %v, want %v", got, defRT)
 		}
-		// A worker that reported no runtimes runs the actor under none.
+		// A worker that reported no classes runs the actor under none.
 		if got := RuntimeFor(&ateapipb.WorkerStatus{}, unmatchedRT); got != nil {
 			t.Errorf("RuntimeFor(empty, unmatchedRT) = %v, want nil", got)
+		}
+	})
+
+	t.Run("ColdBootRuntime before registration", func(t *testing.T) {
+		if got := ColdBootRuntime(&ateapipb.WorkerStatus{}); got != nil {
+			t.Errorf("ColdBootRuntime(empty) = %v, want nil", got)
+		}
+		if got := ColdBootRuntime(nil); got != nil {
+			t.Errorf("ColdBootRuntime(nil) = %v, want nil", got)
+		}
+		if got := ColdBootRuntime(status); !proto.Equal(got, defRT) {
+			t.Errorf("ColdBootRuntime(status) = %v, want %v", got, defRT)
 		}
 	})
 }

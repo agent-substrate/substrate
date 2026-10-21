@@ -16,7 +16,8 @@ package dns
 
 import (
 	"bytes"
-	"math/rand/v2"
+	"crypto/rand"
+	"encoding/binary"
 	"net"
 	"sync"
 	"time"
@@ -110,11 +111,14 @@ func (p *pendingRequests) record(
 	clientAddr net.Addr,
 	upstreams []string,
 ) (uint16, bool) {
+	// Probe from a random starting ID so upstream transaction IDs are not predictable.
+	var buf [2]byte
+	_, _ = rand.Read(buf[:])
+	start := binary.BigEndian.Uint16(buf[:])
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Probe from a random starting ID so upstream transaction IDs are not predictable.
-	start := uint16(rand.Uint32())
 	upstreamID, ok := p.inUse.FindFirstUnsetFrom(start)
 	if !ok {
 		p.limiter.inFlight.release()

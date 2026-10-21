@@ -45,8 +45,8 @@ type FetchSnapshotRequest struct {
 	// minted for the node hosting the actor, with the audience
 	// "objectstore-plugin.ate.dev". That audience belongs to this API, so every
 	// plugin serving it verifies the same value. The token names the node it
-	// was minted for and is refused once the actor has left it. Substrate does
-	// not set the field yet, so it is currently always empty.
+	// was minted for and is refused once the actor has left it. atelet sets it
+	// on every transfer. A plugin without per-actor authorization ignores it.
 	ActorJwt string `protobuf:"bytes,2,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
 	// Full local path of the directory the files are written into. It must
 	// exist.
@@ -161,8 +161,8 @@ type UploadSnapshotRequest struct {
 	// minted for the node hosting the actor, with the audience
 	// "objectstore-plugin.ate.dev". That audience belongs to this API, so every
 	// plugin serving it verifies the same value. The token names the node it
-	// was minted for and is refused once the actor has left it. Substrate does
-	// not set the field yet, so it is currently always empty.
+	// was minted for and is refused once the actor has left it. atelet sets it
+	// on every transfer. A plugin without per-actor authorization ignores it.
 	ActorJwt string `protobuf:"bytes,2,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
 	// Full local path of the directory the files are read from.
 	LocalPath string `protobuf:"bytes,3,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`

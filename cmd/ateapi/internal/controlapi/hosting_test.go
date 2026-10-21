@@ -59,8 +59,11 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 				WorkerPod:       wa.GetWorkerPod(),
 				WorkerPodUid:    wa.GetWorkerPodUid(),
 				NodeName:        node,
-				SandboxClass:    "gvisor",
-				Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+				Status: &ateapipb.WorkerStatus{
+					State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+					Capacity:       &ateapipb.WorkerResources{Actors: 1},
+					SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+				},
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
 			}
@@ -165,11 +168,10 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		WorkerPod:       "stale-pod",
 		WorkerPodUid:    testWorkerUID("stale-pod"),
 		NodeName:        "node1",
-		SandboxClass:    "microvm",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: &ateapipb.SandboxRuntime{SandboxClass: "microvm", Version: testSandboxRuntime().GetVersion()},
+			SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "microvm", DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: testSandboxRuntime().GetVersion()}}},
 		},
 	}
 	free := &ateapipb.Worker{
@@ -179,12 +181,11 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		WorkerPod:       "free-pod",
 		WorkerPodUid:    testWorkerUID("free-pod"),
 		NodeName:        "node2",
-		SandboxClass:    "gvisor",
 		Labels:          map[string]string{"pool": "b"},
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			DefaultRuntime: testSandboxRuntime(),
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		},
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {

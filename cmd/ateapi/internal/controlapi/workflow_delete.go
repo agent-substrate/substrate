@@ -154,6 +154,19 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	conn, err := w.dialer.DialForAteletOnNode(nodeName)
+	if errors.Is(err, ErrNoAteletOnNode) {
+		gone, nodeErr := w.dialer.NodeGone(ctx, nodeName)
+		if nodeErr != nil {
+			return fmt.Errorf("while connecting to atelet on node %q: %w (and while checking the node: %w)", nodeName, err, nodeErr)
+		}
+		if gone {
+			// A deleted Node object counts as the node being gone for good. If the
+			// machine still runs, whatever atelet holds for the actor stays there.
+			slog.WarnContext(ctx, "assigned node no longer exists, skipping atelet terminate request",
+				slog.String("node", nodeName), slog.Any("actor", actorRef))
+			return nil
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("while connecting to atelet on node %q: %w", nodeName, err)
 	}
@@ -289,7 +302,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 	}
 
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
-		_, _, err := releaseWorker(ctx, w.store, latestActor)
+		_, err := releaseWorker(ctx, w.store, latestActor)
 		if err != nil {
 			return nil, err
 		}

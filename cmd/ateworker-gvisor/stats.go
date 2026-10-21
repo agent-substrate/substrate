@@ -44,10 +44,10 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // sandbox as a whole.
 //
 // gVisor runs every container of a sandbox as threads inside one host process,
-// the sentry. runsc starts that process from the root container's create and
-// from inside that container's cgroup — container.createRoot wraps the sandbox
-// and gofer spawn in cgroup.RunInCgroup — so the sentry lands in the leaf of
-// the pause container, the first one RunWorkload and RestoreWorkload create.
+// the sentry. runsc starts that process from the sandbox's create, inside the
+// sandbox's cgroup (container.createRoot wraps the sandbox spawn in
+// cgroup.RunInCgroup), so the sentry lands in the sandbox's leaf. RunWorkload
+// and RestoreWorkload create the sandbox first.
 //
 // The leaf is a direct child of the delegated scope rather than of ateworker's own
 // cgroup, because runsc resolves cgroupsPath against the parent of the cgroup
@@ -72,11 +72,9 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 //
 // What the leaf holds besides the actor's own work: the sentry's own overhead
 // (its Go heap, page tables, netstack) and the gofers. Process listings taken
-// on a live node in #161 put runsc-sandbox and both gofers — the pause
-// container's and the actor container's — in the pause cgroup. Those runs
-// predate #496, so they establish the leaf name and the fact that everything
-// lands in one leaf, not the absolute path, which #496's delegation moved under
-// the pod scope.
+// on a live node in #161 put runsc-sandbox and the gofers in the sandbox's
+// cgroup leaf. Those runs predate #496 and the rename to _sandbox, so they
+// establish only that everything lands in one leaf.
 //
 // So this measures the sandbox, not the actor's processes in isolation, which
 // is what the proto means by "the unit of measurement is the SANDBOX". Sizing
@@ -87,7 +85,7 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // accounting, which the proto already says is not reported here.
 //
 // ocispec.GVisorCgroupLeaf supplies the leaf name for both shaping and stats.
-const sandboxCgroupContainer = ocispec.PauseContainer
+const sandboxCgroupContainer = ocispec.SandboxID
 
 // GetWorkloadStats implements ateworkerpb.Worker/GetWorkloadStats.
 //

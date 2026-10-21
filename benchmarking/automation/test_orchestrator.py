@@ -67,7 +67,7 @@ class DeploySubstrateTest(unittest.TestCase):
     def test_runner_and_client_are_bootstrap_owners(self, run):
         orchestrator.deploy_substrate(["--credential-provider={}"])
         cmd = run.call_args.args[0]
-        self.assertEqual(cmd, ["hack/install-ate.sh", "--deploy-ate-system", "--credential-provider={}"])
+        self.assertEqual(cmd, ["hack/install-ate.sh", "deploy", "ate-system", "--credential-provider={}"])
         owners = run.call_args.kwargs["env"]["ATE_API_AUTHZ_BOOTSTRAP_OWNERS"].split(",")
         self.assertEqual(
             owners,
@@ -82,6 +82,11 @@ class DeploySubstrateTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"KO_DOCKER_REPO": "example"}):
             orchestrator.deploy_substrate()
         self.assertEqual(run.call_args.kwargs["env"]["KO_DOCKER_REPO"], "example")
+
+    @mock.patch("orchestrator.run_no_check")
+    def test_teardown_substrate(self, run_no_check):
+        orchestrator.teardown_substrate()
+        run_no_check.assert_called_once_with(["hack/install-ate.sh", "delete", "ate-system"])
 
 
 class DeployWorkloadsTest(unittest.TestCase):

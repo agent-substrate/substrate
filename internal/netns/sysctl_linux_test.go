@@ -32,9 +32,9 @@ import (
 // and /proc/sys is left as it was found. Remounting it read-only on the way
 // out would break every later write.
 func TestSetSysctlReportsAnUnrelatedError(t *testing.T) {
-	err := setSysctl("net/ipv4/workernet_no_such_sysctl", "0")
+	err := SetSysctls(Sysctl{Key: "net/ipv4/workernet_no_such_sysctl", Value: "0"})
 	if !errors.Is(err, unix.ENOENT) {
-		t.Fatalf("setSysctl() on a missing key: got %v, want ENOENT", err)
+		t.Fatalf("SetSysctls() on a missing key: got %v, want ENOENT", err)
 	}
 	var st unix.Statfs_t
 	if err := unix.Statfs("/proc/sys", &st); err != nil {
@@ -56,7 +56,7 @@ func TestSetSysctlSerializesTheRemount(t *testing.T) {
 	for i := range callers {
 		wg.Go(func() {
 			<-start
-			errs[i] = fake.procSys().set(fmt.Sprintf("net/ipv4/caller_%d", i), "0")
+			errs[i] = fake.procSys().set([]Sysctl{{Key: fmt.Sprintf("net/ipv4/caller_%d", i), Value: "0"}})
 		})
 	}
 	close(start)
@@ -75,6 +75,96 @@ func TestSetSysctlSerializesTheRemount(t *testing.T) {
 	}
 }
 
+// Setting multiple sysctls performs at most one read-write remount cycle.
+func TestSetSysctlsBatchesRemount(t *testing.T) {
+	fake := &fakeProcSys{readOnly: true, values: map[string]string{
+		"/proc/sys/net/ipv4/ip_unprivileged_port_start": "1024",
+		"/proc/sys/net/ipv4/conf/all/forwarding":        "1",
+		"/proc/sys/net/ipv4/conf/default/forwarding":    "1",
+		"/proc/sys/net/ipv6/conf/all/forwarding":        "1",
+		"/proc/sys/net/ipv6/conf/default/forwarding":    "1",
+	}}
+	sysctls := append([]Sysctl{
+		{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"},
+	}, forwardingSysctls...)
+	if err := fake.procSys().set(sysctls); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if fake.remountCalls != 2 {
+		t.Errorf("remount calls = %d, want 2 (one rw, one ro)", fake.remountCalls)
+	}
+	for key, want := range map[string]string{
+		"/proc/sys/net/ipv4/ip_unprivileged_port_start": "0",
+		"/proc/sys/net/ipv4/conf/all/forwarding":        "0",
+		"/proc/sys/net/ipv4/conf/default/forwarding":    "0",
+		"/proc/sys/net/ipv6/conf/all/forwarding":        "0",
+		"/proc/sys/net/ipv6/conf/default/forwarding":    "0",
+	} {
+		if fake.values[key] != want {
+			t.Errorf("%s = %q, want %q", key, fake.values[key], want)
+		}
+	}
+}
+
+func TestDisableForwardingClearsEveryFamily(t *testing.T) {
+	fake := &fakeProcSys{readOnly: true, values: map[string]string{
+		"/proc/sys/net/ipv4/conf/all/forwarding":     "1",
+		"/proc/sys/net/ipv4/conf/default/forwarding": "1",
+		"/proc/sys/net/ipv6/conf/all/forwarding":     "1",
+		"/proc/sys/net/ipv6/conf/default/forwarding": "1",
+	}}
+	if err := fake.procSys().set(forwardingSysctls); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	for key, v := range fake.values {
+		if v != "0" {
+			t.Errorf("%s = %q, want 0", key, v)
+		}
+	}
+}
+
+func TestDisableIPv4ForwardingWhenIPv6Disabled(t *testing.T) {
+	values := map[string]string{}
+	p := procSys{
+		readFile: func(path string) ([]byte, error) {
+			if strings.HasPrefix(path, "/proc/sys/net/ipv6/") {
+				return nil, &os.PathError{Op: "open", Path: path, Err: unix.ENOENT}
+			}
+			return []byte("1\n"), nil
+		},
+		writeFile: func(path string, data []byte) error {
+			if strings.HasPrefix(path, "/proc/sys/net/ipv6/") {
+				t.Errorf("wrote missing key %s", path)
+			}
+			values[path] = strings.TrimSpace(string(data))
+			return nil
+		},
+		remount: func(bool) error {
+			t.Error("remounted /proc/sys for a missing key")
+			return nil
+		},
+	}
+	if err := p.set(forwardingSysctls); err != nil {
+		t.Fatalf("set without IPv6: %v", err)
+	}
+	for _, key := range []string{"/proc/sys/net/ipv4/conf/all/forwarding", "/proc/sys/net/ipv4/conf/default/forwarding"} {
+		if values[key] != "0" {
+			t.Errorf("%s = %q, want 0", key, values[key])
+		}
+	}
+}
+
+func TestDisableForwardingReportsAMissingIPv4Key(t *testing.T) {
+	p := procSys{
+		readFile:  func(path string) ([]byte, error) { return nil, &os.PathError{Op: "open", Path: path, Err: unix.ENOENT} },
+		writeFile: func(path string, data []byte) error { return nil },
+		remount:   func(bool) error { return nil },
+	}
+	if err := p.set(forwardingSysctls); !errors.Is(err, unix.ENOENT) {
+		t.Fatalf("set with no IPv4 keys: got %v, want ENOENT", err)
+	}
+}
+
 // fakeProcSys is a read-only /proc/sys mount shared by all callers. Its
 // read-write remount is slow, so unserialized callers overlap inside it.
 type fakeProcSys struct {
@@ -83,7 +173,7 @@ type fakeProcSys struct {
 	values   map[string]string
 	// remounted counts callers inside the read-write window; maxRemounted is
 	// its peak.
-	remounted, maxRemounted int
+	remounted, maxRemounted, remountCalls int
 }
 
 func (f *fakeProcSys) procSys() procSys {
@@ -106,15 +196,15 @@ func (f *fakeProcSys) procSys() procSys {
 			return nil
 		},
 		remount: func(readOnly bool) error {
+			f.mu.Lock()
+			f.remountCalls++
 			if readOnly {
-				f.mu.Lock()
-				defer f.mu.Unlock()
 				f.readOnly = true
 				f.remounted--
+				f.mu.Unlock()
 				return nil
 			}
 			time.Sleep(time.Millisecond)
-			f.mu.Lock()
 			f.readOnly = false
 			f.remounted++
 			f.maxRemounted = max(f.maxRemounted, f.remounted)

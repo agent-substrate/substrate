@@ -19,6 +19,10 @@
 # it) matching the worker node's architecture and extracts it locally. To pin a
 # different release, add a version below and point defaultVersion at it, or
 # create another SandboxConfig and reference it from the WorkerPool.
+#
+# A bump adds a version and points defaultVersion at it. Keep the
+# previous version unless it has a known vulnerability: an actor restores its
+# memory only on the version its snapshot was taken with.
 apiVersion: ate.dev/v1alpha1
 kind: SandboxConfig
 metadata:
@@ -32,12 +36,10 @@ spec:
   # gVisor nightly 2026-10-17, the first to include google/gvisor@b79256080dec
   # (save and restore multiple filesystem checkpoint bundles). ateworker-gvisor
   # uses it to save container rootfs overlays (rootfs/) and durable-dir volumes
-  # (fs/) as separate bundles.
+  # (fs/) as separate bundles, and to run the sandbox with no root container
+  # (google/gvisor#15551).
   - name: v4
     state: Enabled
-    # The root sandbox container's image. On GCP, prefer the in-project mirror
-    # gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da.
-    pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
     assets:
       amd64:
         gvisor:

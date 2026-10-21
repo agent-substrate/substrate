@@ -42,40 +42,6 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-// IngressAuthModeEnv names the ingress router's --ingress-auth-mode the
-// suites run against: IngressAuthDeprecatedInsecure or IngressAuthStaticMTLS.
-// It has to match how the router was installed (ATE_INGRESS_AUTH_MODE for
-// ate-setup); unset means deprecated-insecure.
-const IngressAuthModeEnv = "E2E_INGRESS_AUTH_MODE"
-
-const (
-	IngressAuthDeprecatedInsecure = "deprecated-insecure"
-	IngressAuthStaticMTLS         = "static-mtls"
-)
-
-// IngressAuthMode returns the router authentication mode the suites expect.
-func IngressAuthMode() string {
-	if mode := os.Getenv(IngressAuthModeEnv); mode != "" {
-		return mode
-	}
-	return IngressAuthDeprecatedInsecure
-}
-
-// IngressAuthModeRequired reports whether IngressAuthModeEnv must be set
-// explicitly. In CI an unset mode would quietly skip the ingress
-// authentication suite, so it is an error there; REQUIRE_INGRESS_AUTH_MODE
-// makes it one locally too.
-func IngressAuthModeRequired() bool {
-	return os.Getenv("CI") == "true" || os.Getenv("REQUIRE_INGRESS_AUTH_MODE") == "true"
-}
-
-// IngressAuthModeSet reports whether IngressAuthModeEnv is set.
-func IngressAuthModeSet() bool { return os.Getenv(IngressAuthModeEnv) != "" }
-
-// IngressMTLS reports whether the router requires mTLS client certificates,
-// and so whether RouterClient dials its TLS listeners as RouterClientIdentity.
-func IngressMTLS() bool { return IngressAuthMode() == IngressAuthStaticMTLS }
-
 // The router client's identity.
 const (
 	RouterClientNamespace      = "ate-e2e-router-client"

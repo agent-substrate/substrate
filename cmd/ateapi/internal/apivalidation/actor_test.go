@@ -370,6 +370,27 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_spiffe_id"), nil, ""),
 		},
 	}, {
+		name:   "set valid actor.status.worker_assignment.sandbox_runtime",
+		oldVal: validInput(withStatus()),
+		newVal: validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.SandboxRuntime = &ateapipb.ActorSandboxRuntime{
+				SandboxClass: "gvisor",
+				Version:      &ateapipb.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: []*ateapipb.AttributeEntry{{Key: "architecture", Value: "amd64"}}},
+			}
+		}))),
+	}, {
+		name:   "invalid actor.status.worker_assignment.sandbox_runtime.sandbox_class",
+		oldVal: validInput(withStatus()),
+		newVal: validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.SandboxRuntime = &ateapipb.ActorSandboxRuntime{
+				SandboxClass: "plain",
+				Version:      &ateapipb.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: []*ateapipb.AttributeEntry{{Key: "architecture", Value: "amd64"}}},
+			}
+		}))),
+		want: field.ErrorList{
+			field.NotSupported[string](field.NewPath("status", "worker_assignment", "sandbox_runtime", "sandbox_class"), nil, nil),
+		},
+	}, {
 		name:   "clear actor.status.worker_assignment",
 		oldVal: validInput(withStatus(withWorkerAssignment())),
 		newVal: validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.WorkerAssignment = nil })),

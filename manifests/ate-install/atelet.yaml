@@ -202,6 +202,15 @@ spec:
         # on it.
         - name: ATE_STORAGE_BACKEND
           value: "gcs"
+        # On GCS each transfer runs on a token scoped to its actor, from the
+        # credential exchange the control sidecar serves on the ate-api-server
+        # Service. The plugin derives the exchange's address and certificate
+        # name from the pod's namespace, and verifies the certificate with the
+        # service DNS trust bundle mounted below. S3 never calls it.
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         envFrom:
         - configMapRef:
             name: ate-otel-config
@@ -210,6 +219,9 @@ spec:
           mountPath: /var/lib/ate
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
         # Sandbox assets are downloaded here and verified against their sha256
         # before the plugin copies them below /var/lib/ate. Only this container
         # mounts it, so atelet never sees bytes it did not pin.

@@ -156,11 +156,7 @@ spec:
   ingress:
   - ports:
     - protocol: TCP
-      port: http
-    - protocol: TCP
       port: https
-    - protocol: TCP
-      port: connect
     - protocol: TCP
       port: connect-tls
 ---

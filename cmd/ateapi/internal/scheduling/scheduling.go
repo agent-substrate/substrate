@@ -213,22 +213,19 @@ func utilization(capacity, used *ateapipb.WorkerResources) float64 {
 }
 
 func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bool {
-	if worker.GetSandboxClass() == "" {
+	// The class is the one the worker registered with WorkerService. Until
+	// that report lands the Worker has no class, and nothing is placed on it
+	// (see ServiceImpl.CreateWorker): the assignment records the runtime,
+	// and atelet requires it on Run and Restore.
+	workerClass := hardware.SandboxClass(worker.GetStatus())
+	if workerClass == "" {
 		return false
 	}
-	if constraints.SandboxClass != "" && worker.GetSandboxClass() != constraints.SandboxClass {
+	if constraints.SandboxClass != "" && workerClass != constraints.SandboxClass {
 		return false
 	}
 
 	if worker.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		return false
-	}
-
-	// The assignment records this runtime and atelet requires it on
-	// Run/Restore, so a worker that has not registered one cannot host
-	// anything yet (see ServiceImpl.CreateWorker: "Nothing is placed on it
-	// in the meantime").
-	if worker.GetStatus().GetDefaultRuntime() == nil {
 		return false
 	}
 

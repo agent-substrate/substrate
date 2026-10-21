@@ -62,7 +62,7 @@ RUN python3 -m venv /opt/automation/venv \
  && /opt/automation/venv/bin/pip install --no-cache-dir -r /opt/automation/requirements.txt
 ENV PATH=/opt/automation/venv/bin:$PATH
 
-COPY orchestrator.py util.py /opt/automation/
+COPY orchestrator.py util.py controlplane.py /opt/automation/
 COPY testtypes/ /opt/automation/testtypes/
 COPY manifests/runner-job.yaml.tmpl manifests/nighthawk-ingress-runner-job.yaml.tmpl /opt/automation/manifests/
 

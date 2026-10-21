@@ -179,7 +179,7 @@ func snapshotCacheMode(object *ateletpb.ObjectStorage, classMode cacheMode) cach
 // in dstDir or in its one checkpoint subdirectory, as the plugin's own
 // download allows; a destination that already exists, a symlink included,
 // fails rather than being followed.
-func (s *Atelet) downloadSnapshotFilesCached(ctx context.Context, snapshotURI, dstDir string, files []string, mode cacheMode) error {
+func (s *Atelet) downloadSnapshotFilesCached(ctx context.Context, actor actorRef, snapshotURI, dstDir string, files []string, mode cacheMode) error {
 	if err := resources.ValidateSnapshotFileNames(files); err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func (s *Atelet) downloadSnapshotFilesCached(ctx context.Context, snapshotURI, d
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range files {
 		g.Go(func() error {
-			if err := s.fetchSnapshotFile(gCtx, snapshotURI, fileName, filepath.Join(dstDir, fileName), mode); err != nil {
+			if err := s.fetchSnapshotFile(gCtx, actor, snapshotURI, fileName, filepath.Join(dstDir, fileName), mode); err != nil {
 				return fmt.Errorf("while downloading %s: %w", fileName, err)
 			}
 			return nil
@@ -230,9 +230,9 @@ func mkdirNoFollow(dir string) error {
 // the node makes no request to object storage at all. atelet reads the
 // manifest itself, so a link serves whatever class the files will take;
 // it is read from a scratch dir and the link dropped again.
-func (s *Atelet) fetchManifestCached(ctx context.Context, snapshotURI string, mode cacheMode) ([]byte, error) {
+func (s *Atelet) fetchManifestCached(ctx context.Context, actor actorRef, snapshotURI string, mode cacheMode) ([]byte, error) {
 	if mode == cacheModeOff || s.snapshotCache == nil {
-		return s.fetchManifest(ctx, snapshotURI)
+		return s.fetchManifest(ctx, actor, snapshotURI)
 	}
 	dir, err := s.snapshotScratch()
 	if err != nil {
@@ -240,7 +240,7 @@ func (s *Atelet) fetchManifestCached(ctx context.Context, snapshotURI string, mo
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	local := filepath.Join(dir, sandboxManifestName)
-	if err := s.fetchSnapshotFile(ctx, snapshotURI, sandboxManifestName, local, cacheModeLink); err != nil {
+	if err := s.fetchSnapshotFile(ctx, actor, snapshotURI, sandboxManifestName, local, cacheModeLink); err != nil {
 		return nil, err
 	}
 	return os.ReadFile(local)
@@ -251,7 +251,7 @@ func (s *Atelet) fetchManifestCached(ctx context.Context, snapshotURI string, mo
 // link, so local stays valid regardless of later eviction; a cacheModeCopy
 // hit is a private copy. Fetch errors pass through the cache wrapped, so
 // the plugin's code classification survives.
-func (s *Atelet) fetchSnapshotFile(ctx context.Context, snapshotURI, fileName, local string, mode cacheMode) error {
+func (s *Atelet) fetchSnapshotFile(ctx context.Context, actor actorRef, snapshotURI, fileName, local string, mode cacheMode) error {
 	// Keyed by the object's address without its query: a signed URL's
 	// query is a credential, and the key is logged and written to meta.json.
 	u, err := url.Parse(snapshotURI)
@@ -264,7 +264,7 @@ func (s *Atelet) fetchSnapshotFile(ctx context.Context, snapshotURI, fileName, l
 	}
 	key := filecache.URIKey(objectURI)
 	fetch := func(ctx context.Context, dst string) error {
-		return s.fetchSnapshotFileTo(ctx, snapshotURI, fileName, dst)
+		return s.fetchSnapshotFileTo(ctx, actor, snapshotURI, fileName, dst)
 	}
 	if mode == cacheModeCopy {
 		return s.snapshotCache.GetFileCopyTo(ctx, key, local, fetch)
@@ -292,13 +292,13 @@ func (s *Atelet) fetchSnapshotFile(ctx context.Context, snapshotURI, fileName, l
 // a scratch dir beside dst, on the cache's filesystem, and moves the file
 // into place. The plugin accepts a write path under the node state dir,
 // which is where the cache lives.
-func (s *Atelet) fetchSnapshotFileTo(ctx context.Context, snapshotURI, fileName, dst string) error {
+func (s *Atelet) fetchSnapshotFileTo(ctx context.Context, actor actorRef, snapshotURI, fileName, dst string) error {
 	scratch, err := os.MkdirTemp(filepath.Dir(dst), ".fetch-*")
 	if err != nil {
 		return fmt.Errorf("while creating a snapshot fetch dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(scratch) }()
-	if err := s.fetchSnapshotFiles(ctx, snapshotURI, scratch, []string{fileName}); err != nil {
+	if err := s.fetchSnapshotFiles(ctx, actor, snapshotURI, scratch, []string{fileName}); err != nil {
 		return err
 	}
 	return os.Rename(filepath.Join(scratch, fileName), dst)

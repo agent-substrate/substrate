@@ -81,18 +81,15 @@ func isLayerDirName(name string) bool {
 // and left in place.
 //
 // A fresh layer is ruled out before taking pinMu, which every pull takes to
-// pin, and the logging happens outside it. A missing layer that a pull has
-// pinned is still unpacking, so it is vetoed to keep the record.
+// pin, and the logging happens outside it. A missing layer still goes
+// through the pin check, since a pull that pinned it may be unpacking it.
 func (s *Store) retireLayer(hex string, cutoff time.Time) (string, retireStatus, error) {
 	if !isLayerDirName(hex) {
 		return "", retireVetoed, fmt.Errorf("not a layer dir name: %q", hex)
 	}
 	dir := filepath.Join(s.layersDir(), hex)
-	if st, mtime, err := retirable(dir, cutoff); st != retireRetired {
-		if st == retireGone && s.pinned(hex) {
-			return "", retireVetoed, nil
-		}
-		if st == retireVetoed && err == nil {
+	if st, mtime, err := retirable(dir, cutoff); st == retireVetoed {
+		if err == nil {
 			slog.Info(logMsgLayerRetireVetoed, slog.String("diffid", hex), slog.Time("last_used", mtime))
 		}
 		return "", st, err

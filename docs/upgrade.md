@@ -218,12 +218,11 @@ kubectl -n ate-system rollout status deploy/atenet-egress
 go run ./cmd/ate-setup deploy sandboxconfig --config ~/ate-upgrade/new.yaml
 ```
 
-This applies the SandboxConfig admission policy and the default SandboxConfig. It does not roll workers.
-
-<!-- TODO: Today this step overwrites `gvisor-default` in place. Once each release ships its own SandboxConfig, it adds the new one, and WorkerPools without a `configRef` switch to it, so some suspended actors may cold boot. Link the sandbox upgrade guide. -->
+This applies the SandboxConfig admission policy and the default SandboxConfig. It does not roll workers. If the release changes a sandbox version, new actors start on the new version, and actors suspended on the previous one still restore on it.
 
 - **Done:** the command exits 0.
 - **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
+- **Actors:** a suspended actor whose sandbox version the release drops resumes without its memory, keeping its files.
 
 #### 4e. The rest of the system bundle
 
@@ -276,7 +275,9 @@ go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/old.yaml
 go install ./cmd/kubectl-ate
 ```
 
-`deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. Fields the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
+`deploy sandboxconfig` removes a sandbox version new in this release, so actors suspended on it resume without their memory. `deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
+
+Fields that the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
 
 The database schema stays new; the old API server drops fields it does not know when it rewrites a record. Step 4e is not undone either: the NetworkPolicies and the bundled PostgreSQL stay as the new release left them.
 

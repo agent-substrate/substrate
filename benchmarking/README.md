@@ -28,7 +28,7 @@ scenario ladder, read [observability.md](observability.md).
 > benchmark call is denied:
 > ```bash
 > ATE_API_AUTHZ_BOOTSTRAP_OWNERS=system:serviceaccount:ate-system:ate-client,spiffe://cluster.local/ns/benchmarking/sa/default \
->   ./hack/install-ate.sh --deploy-ate-system
+>   ./hack/install-ate.sh deploy ate-system
 > ```
 > The nightly automation sets this itself; see
 > [automation/README.md](automation/README.md).
@@ -74,8 +74,6 @@ go run ./cmd/ate-setup delete benchmarks
 `ate-setup` reads these settings in addition to those in
 [docs/operator-install.md](../docs/operator-install.md#settings), through the same
 flag, environment variable, and configuration document channels.
-`hack/install-ate.sh` forwards them as `--benchmark-worker-count`,
-`--benchmark-sandbox-class`, and `--benchmark-actor-memory`.
 
 | Key                      | Environment variable          | Flag                       | Default  | Applies to                               |
 |--------------------------|-------------------------------|----------------------------|----------|------------------------------------------|
@@ -154,7 +152,7 @@ and state restoration latency when a durable directory is attached to the actor.
   * `glutton-storage`: Attaches an external CSI volume instead of a durable
     directory. `deploy_locust.sh` and `workloads/deploy.sh` deploy it only
     when `--storage-class-name` names an existing StorageClass. To run it on
-    NFS, install with `hack/install-ate.sh --setup-csi=nfs` and pass
+    NFS, install with `hack/install-ate.sh setup csi nfs` and pass
     `--storage-class-name csi-nfs-sc`, the class the e2e tests also use.
 
 #### DurDir Reported Metrics
@@ -590,6 +588,36 @@ warm-up until they have all joined at the spawn rate.
 * `CreateActor`, `ResumeActorWarmup`, `SuspendActorAsyncWarmup`: A user's
   warm-up of its actor, in the step that added the user.
 
+#### Analyzing a ResumePaused Ladder Run
+
+`stats.csv` and the other rows of `stats.jsonl` cover a whole run, so they
+blend every step of a ladder. After a ladder run the runner adds one
+`stats.jsonl` row per step, with `metric` `ladder_step_001`,
+`ladder_step_002`, and so on ([`locust/ladder_steps.py`](locust/ladder_steps.py)).
+It reads each step's start and end from the run's log and queries the
+benchmarking Prometheus over the step's steady window, from 30 s after the
+step starts to 5 s before it ends (`window_start` and `window_end`). A row
+holds the cold resume and pause rates, failures by operation
+(`failures_<name>`), client and server latency, the CPU and memory of
+ate-api-server, Postgres and fake-atelet, and Postgres's connections,
+commits and waits.
+
+The runner logs and skips a step with no end in the log and a step too short
+to leave a window after the trim. A failed query adds no step rows at all
+rather than a ladder with gaps, and leaves the run's other results as they
+are. Read a step's figures against its `target_rps`: a `resume_rps` below it
+means the step fell short of its rate.
+
+To pull the step rows out of a run's results:
+
+```bash
+RUN=<dest>/runs/<test>/run_date=<YYYY-MM-DD>/run_ts=<ts>/run_tag=<commit>
+gcloud storage cat "$RUN/stats.jsonl" | grep '"metric": "ladder_step_'
+```
+
+`<dest>` is the orchestrator's `--dest`, and its log has the full `RUN` path
+on each `Uploaded ... -> gs://...` line.
+
 ### Isolate Mode
 
 A real cold resume is limited by the node's restore capacity, which hides the
@@ -597,7 +625,7 @@ limits of ate-api-server and Postgres. Isolate mode takes the nodes out by
 installing substrate with a fake data plane:
 
 ```bash
-hack/install-ate.sh --deploy-ate-system --fake-data-plane
+hack/install-ate.sh deploy ate-system --fake-data-plane
 ./benchmarking/workloads/deploy.sh --deploy --worker-count 200 \
   --fake-atelet-env FAKE_ATELET_DELAY=500ms
 ```
@@ -636,8 +664,8 @@ Fake actors need neither. fake-atelet takes the storage settings of atelet's
 objectstore-plugin sidecar, whose writes it takes over, so its snapshot
 placeholders go to the storage the install points atelet at. The install
 refuses a cluster whose WorkerPools still have worker pods, which would
-outlive ate-controller. A normal `hack/install-ate.sh --deploy-ate-system`
-puts the real data plane back, and `--delete-ate-system` removes the fakes
+outlive ate-controller. A normal `hack/install-ate.sh deploy ate-system`
+puts the real data plane back, and `delete ate-system` removes the fakes
 either way. Never use the mode on a
 cluster that serves real actors: actors placed on fake Workers do not exist.
 

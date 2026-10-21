@@ -22,17 +22,18 @@ import (
 	"go.ate.dev/substrate/internal/sizing"
 )
 
-// PauseContainer is the name of the sandbox root container. The underscore
+// SandboxID is the runsc ID of the sandbox. runsc creates it with
+// -no-root-container, so it has no process and no rootfs. The underscore
 // keeps it outside the k8s-short-name an ActorTemplate container
 // name is drawn from, so no actor container can collide with it.
-const PauseContainer = "_pause"
+const SandboxID = "_sandbox"
 
 // GVisorOptions describes the gVisor-specific context of one actor container.
 type GVisorOptions struct {
 	ActorUID      string
 	ActorDirs     *ateworkerpb.ActorDirs
 	ContainerName string
-	// DurableVolumes are declared on the sandbox (pause) spec only.
+	// DurableVolumes are declared on the sandbox spec only.
 	DurableVolumes []string
 	// Size sizes the container's cgroup leaf. Only gVisor applies it; a micro-VM
 	// container's limits come from its own declared resources (see sizing).
@@ -51,7 +52,7 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 		spec.Annotations = make(map[string]string)
 	}
 	spec.Annotations["io.kubernetes.cri.container-name"] = o.ContainerName
-	if o.ContainerName == PauseContainer {
+	if o.ContainerName == SandboxID {
 		spec.Annotations["io.kubernetes.cri.container-type"] = "sandbox"
 		for _, v := range o.DurableVolumes {
 			spec.Annotations["dev.gvisor.spec.mount."+v+".type"] = "tmpfs"
@@ -60,7 +61,7 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 		}
 	} else {
 		spec.Annotations["io.kubernetes.cri.container-type"] = "container"
-		spec.Annotations["io.kubernetes.cri.sandbox-id"] = PauseContainer
+		spec.Annotations["io.kubernetes.cri.sandbox-id"] = SandboxID
 	}
 
 	if spec.Linux == nil {

@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net"
@@ -328,17 +327,26 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 func copyBothWays(a, b net.Conn) {
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(a, b)
+		_, _ = copyConn(a, b)
 		closeWrite(a)
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(b, a)
+		_, _ = copyConn(b, a)
 		closeWrite(b)
 		done <- struct{}{}
 	}()
 	<-done
 	<-done
+}
+
+// copyConn copies src to dst until EOF. Unlike io.Copy, it doesn't hold a 32 KiB
+// buffer per direction while the tunnel is idle.
+func copyConn(dst, src net.Conn) (int64, error) {
+	if stream, ok := src.(*h2StreamConn); ok {
+		return stream.writeTo(dst)
+	}
+	return (&streamCopy{dest: dst, src: src}).do()
 }
 
 func closeWrite(conn net.Conn) {

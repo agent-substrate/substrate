@@ -52,14 +52,14 @@
 #                  large workerCount fleets whose image pulls or scheduling
 #                  outrun the default.
 #   ateArgs        Optional. List of strings appended verbatim to
-#                  `hack/install-ate.sh --deploy-ate-system` when this
+#                  `hack/install-ate.sh deploy ate-system` when this
 #                  test's substrate is deployed (e.g. ["--atenet-dataplane=agentgateway"]).
 #                  The deploy requires --credential-provider; set it here
 #                  as one YAML string, '--credential-provider={"name":"k8s.io"}'
 #                  (no shell quoting: the args are passed without a shell),
 #                  or as ATE_CREDENTIAL_PROVIDER in .ate-dev-env.sh.
 #   isolate        Optional. Isolate mode: installs substrate with the fake
-#                  data plane (hack/install-ate.sh --fake-data-plane), which
+#                  data plane (hack/install-ate.sh deploy ate-system --fake-data-plane), which
 #                  serves the WorkerPool without worker pods: fake-atelet
 #                  takes atelet's place on every atelet node and answers each
 #                  lifecycle call after a delay, and fake-workersync honors
@@ -111,6 +111,25 @@
 # Keep `users` at or above the rate times the p99 of one user iteration in
 # seconds, or the step falls short of its rate. A resumepaused iteration is a
 # resume plus a pause, so size it by the p99 of both together.
+#
+# An optional `controlPlane:` block shapes the control plane for a capacity
+# run; pre_test applies it after the deploy. Its `apiServer:` section, which
+# is required, sizes ate-api-server:
+#   cpu            Required. CPU of each replica, set as both request and
+#                  limit (e.g. 2 or "1500m").
+#   memory         Optional. Memory request and limit of each replica.
+#   replicas       Optional.
+#   poolMaxConns   Optional. pgxpool max connections per replica, set
+#                  through ateapi's env ConfigMap.
+# An optional knob left unset keeps the installed value.
+# Its optional `postgres:` section:
+#   stats          Optional (default true). Load pg_stat_statements and add
+#                  a postgres_exporter sidecar, scraped by monitoring.yaml.
+#   args           Optional. Postgres settings as name=value (e.g.
+#                  commit_delay=100), applied in the restart stats makes.
+# The block leaves placement to the install. A capacity run sets
+# --cordon-control-plane in ateArgs, which keeps ate-api-server and Postgres
+# off the nodes that run the load, on the tainted pools that flag expects.
 #
 # ---- type: nighthawk-ingress --------------------------------------------------------
 #
@@ -662,3 +681,68 @@ tests:
     nighthawk-ingress:
       envoyCpu: 16
       tailLatencySloMs: 25
+  # ate-api-server and Postgres cold resume ceiling on the fake data plane.
+  # Each user owns one actor: its first iteration creates the actor and
+  # makes it cold, in the step that adds the user, and every later one
+  # resumes it and pauses it again. fake-atelet answers each call, restore
+  # and checkpoint alike, after 150 ms on every atelet node, so a cycle
+  # spends 300 ms in the data plane, after minting the actor's certificate
+  # on each restore as ateom does. The 200 fake Workers hold 1000 actors
+  # each, and at 10m CPU an actor books next to nothing of a Worker's CPU,
+  # which a fake Worker reports as its node's allocatable, so placement
+  # never binds on any node size. resumepaused sends the actors no
+  # requests, which the fake data plane needs.
+  - name: ateapi_cold_resume_pause_fake_2cpu
+    type: locust
+    description: "ate-api-server cold resume on the fake data plane, ate-api-server at 2 CPUs: rate ladder 100-1500 cold resumes/s"
+    targetCluster: dev
+    file: /app/tests/resumepaused.py,/app/shapes/ladder_shape.py
+    duration: 23m
+    users: 1000
+    workerCount: 200
+    actorCPU: "10m"
+    runnerCpu: "8"
+    runnerMemory: "2Gi"
+    isolate:
+      delay: 150ms
+    ateArgs:
+      - "--cordon-control-plane"
+    controlPlane:
+      apiServer:
+        replicas: 1
+        cpu: 2
+        memory: 4Gi
+        poolMaxConns: 64
+    flags:
+      - "--ladder-spawn-rate"
+      - "1000"
+      - "--ladder"
+      - "1000:3m@100,1000:3m@200,1000:3m@400,1000:3m@600,1000:3m@800,1000:3m@1000,1000:3m@1500"
+  # Smoke for the cold resume setup above: the same fake data plane and
+  # ate-api-server shape at a load far below its ceiling, to check a change
+  # end to end in minutes. 50 users, each a cycle of about 300 ms, can make
+  # some 150 cold resumes/s, so both steps reach their rate.
+  - name: ateapi_cold_resume_pause_fake_smoke
+    type: locust
+    description: "ate-api-server cold resume smoke on the fake data plane, ate-api-server at 2 CPUs: 50 actors, 20 then 50 cold resumes/s"
+    targetCluster: dev
+    file: /app/tests/resumepaused.py,/app/shapes/ladder_shape.py
+    duration: 6m
+    users: 50
+    workerCount: 2
+    actorCPU: "10m"
+    isolate:
+      delay: 150ms
+    ateArgs:
+      - "--cordon-control-plane"
+    controlPlane:
+      apiServer:
+        replicas: 1
+        cpu: 2
+        memory: 4Gi
+        poolMaxConns: 64
+    flags:
+      - "--ladder-spawn-rate"
+      - "50"
+      - "--ladder"
+      - "50:2m@20,50:2m@50"

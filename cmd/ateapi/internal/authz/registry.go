@@ -144,10 +144,6 @@ func both(aChecks []check, aErrs field.ErrorList, bChecks []check, bErrs field.E
 // rpcRule is the permission rule for one RPC.
 type rpcRule struct {
 	extract checkExtractor
-	// alwaysEnforce marks RPCs that are checked even when enforcement is
-	// disabled. AccessPolicy RPCs set it so that nobody can grant themselves
-	// access while enforcement is off and keep that grant once it is turned on.
-	alwaysEnforce bool
 	// authorizedInHandler, when set, says how the RPC's handler authorizes
 	// the caller; the interceptor passes such RPCs through unchecked.
 	authorizedInHandler string
@@ -157,10 +153,6 @@ func rule(extract checkExtractor) rpcRule {
 	return rpcRule{extract: extract}
 }
 
-func governance(extract checkExtractor) rpcRule {
-	return rpcRule{extract: extract, alwaysEnforce: true}
-}
-
 // inHandler registers an RPC whose handler authorizes the caller, as how
 // describes.
 func inHandler(how string) rpcRule {
@@ -168,8 +160,8 @@ func inHandler(how string) rpcRule {
 }
 
 // defaultRPCPermissions is the declarative registry mapping gRPC full method
-// names to their permission rules. With enforcement on, the interceptor denies
-// any RPC missing from it.
+// names to their permission rules. The interceptor denies any RPC missing
+// from it.
 var defaultRPCPermissions = map[string]rpcRule{
 	// Atespaces.
 	ateapipb.Control_CreateAtespace_FullMethodName: rule(checksOf(func(*ateapipb.CreateAtespaceRequest) ([]check, field.ErrorList) {
@@ -186,25 +178,25 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 
 	// Access policies.
-	ateapipb.Control_GetGlobalAccessPolicy_FullMethodName: governance(checksOf(func(*ateapipb.GetGlobalAccessPolicyRequest) ([]check, field.ErrorList) {
+	ateapipb.Control_GetGlobalAccessPolicy_FullMethodName: rule(checksOf(func(*ateapipb.GetGlobalAccessPolicyRequest) ([]check, field.ErrorList) {
 		return onGlobal(RelationCanGetAccessPolicy)
 	})),
-	ateapipb.Control_CreateGlobalAccessPolicy_FullMethodName: governance(checksOf(func(*ateapipb.CreateGlobalAccessPolicyRequest) ([]check, field.ErrorList) {
+	ateapipb.Control_CreateGlobalAccessPolicy_FullMethodName: rule(checksOf(func(*ateapipb.CreateGlobalAccessPolicyRequest) ([]check, field.ErrorList) {
 		return onGlobal(RelationCanCreateAccessPolicy)
 	})),
-	ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName: governance(checksOf(func(*ateapipb.UpdateGlobalAccessPolicyRequest) ([]check, field.ErrorList) {
+	ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName: rule(checksOf(func(*ateapipb.UpdateGlobalAccessPolicyRequest) ([]check, field.ErrorList) {
 		return onGlobal(RelationCanUpdateAccessPolicy)
 	})),
-	ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.GetAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
+	ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.GetAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
 		return onAtespace(RelationCanGetAccessPolicy, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
-	ateapipb.Control_CreateAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.CreateAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
+	ateapipb.Control_CreateAtespaceAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.CreateAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
 		return onAtespace(RelationCanCreateAccessPolicy, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
-	ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.UpdateAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
+	ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
 		return onAtespace(RelationCanUpdateAccessPolicy, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
-	ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.DeleteAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
+	ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
 		return onAtespace(RelationCanDeleteAccessPolicy, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
 

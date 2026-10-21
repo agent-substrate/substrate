@@ -43,6 +43,7 @@ const (
 	Glutton_BurnCPU_FullMethodName   = "/glutton.Glutton/BurnCPU"
 	Glutton_Ingest_FullMethodName    = "/glutton.Glutton/Ingest"
 	Glutton_UseCPU_FullMethodName    = "/glutton.Glutton/UseCPU"
+	Glutton_RunScript_FullMethodName = "/glutton.Glutton/RunScript"
 )
 
 // GluttonClient is the client API for Glutton service.
@@ -88,6 +89,15 @@ type GluttonClient interface {
 	// load; calling again replaces it, and num_cores=0 stops it. See
 	// UseCPURequest for the (goroutines x duty cycle) shape.
 	UseCPU(ctx context.Context, in *UseCPURequest, opts ...grpc.CallOption) (*UseCPUResponse, error)
+	// Runs a script inside the glutton as one request, so a caller can act
+	// out a whole on-sandbox activity (a build, a test run, a file churn)
+	// without a network round trip per operation. A script is a tree: a
+	// Block runs its steps in order and may loop them for a wall-clock
+	// budget; an Operation runs its requests at the same time. The request
+	// holds the connection open until the script finishes, and the response
+	// mirrors the tree with summed stats at every node; the requests' own
+	// results are not returned.
+	RunScript(ctx context.Context, in *RunScriptRequest, opts ...grpc.CallOption) (*RunScriptResponse, error)
 }
 
 type gluttonClient struct {
@@ -198,6 +208,16 @@ func (c *gluttonClient) UseCPU(ctx context.Context, in *UseCPURequest, opts ...g
 	return out, nil
 }
 
+func (c *gluttonClient) RunScript(ctx context.Context, in *RunScriptRequest, opts ...grpc.CallOption) (*RunScriptResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunScriptResponse)
+	err := c.cc.Invoke(ctx, Glutton_RunScript_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GluttonServer is the server API for Glutton service.
 // All implementations must embed UnimplementedGluttonServer
 // for forward compatibility.
@@ -241,6 +261,15 @@ type GluttonServer interface {
 	// load; calling again replaces it, and num_cores=0 stops it. See
 	// UseCPURequest for the (goroutines x duty cycle) shape.
 	UseCPU(context.Context, *UseCPURequest) (*UseCPUResponse, error)
+	// Runs a script inside the glutton as one request, so a caller can act
+	// out a whole on-sandbox activity (a build, a test run, a file churn)
+	// without a network round trip per operation. A script is a tree: a
+	// Block runs its steps in order and may loop them for a wall-clock
+	// budget; an Operation runs its requests at the same time. The request
+	// holds the connection open until the script finishes, and the response
+	// mirrors the tree with summed stats at every node; the requests' own
+	// results are not returned.
+	RunScript(context.Context, *RunScriptRequest) (*RunScriptResponse, error)
 	mustEmbedUnimplementedGluttonServer()
 }
 
@@ -280,6 +309,9 @@ func (UnimplementedGluttonServer) Ingest(context.Context, *IngestRequest) (*Inge
 }
 func (UnimplementedGluttonServer) UseCPU(context.Context, *UseCPURequest) (*UseCPUResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UseCPU not implemented")
+}
+func (UnimplementedGluttonServer) RunScript(context.Context, *RunScriptRequest) (*RunScriptResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RunScript not implemented")
 }
 func (UnimplementedGluttonServer) mustEmbedUnimplementedGluttonServer() {}
 func (UnimplementedGluttonServer) testEmbeddedByValue()                 {}
@@ -482,6 +514,24 @@ func _Glutton_UseCPU_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Glutton_RunScript_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunScriptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GluttonServer).RunScript(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Glutton_RunScript_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GluttonServer).RunScript(ctx, req.(*RunScriptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Glutton_ServiceDesc is the grpc.ServiceDesc for Glutton service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -528,6 +578,10 @@ var Glutton_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UseCPU",
 			Handler:    _Glutton_UseCPU_Handler,
+		},
+		{
+			MethodName: "RunScript",
+			Handler:    _Glutton_RunScript_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

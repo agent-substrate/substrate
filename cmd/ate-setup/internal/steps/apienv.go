@@ -158,15 +158,12 @@ func (e *Env) UpdateAPIServerEnvVars(ctx context.Context) error {
 	return e.annotateAPIServerEnvHash(ctx)
 }
 
-// sharedBootstrapOwnerWarning returns a warning when enforced authorization
-// makes the shared client ServiceAccount a bootstrap owner, and "" otherwise.
+// sharedBootstrapOwnerWarning returns a warning when the shared client
+// ServiceAccount is a bootstrap owner, and "" otherwise.
 // It is the default so demos, benchmarks and e2e work, but everyone who can
 // mint its token, including every kubectl-ate user without --token-file, is
 // then a global owner.
-func sharedBootstrapOwnerWarning(enabled bool, bootstrapOwners, namespace string) string {
-	if !enabled {
-		return ""
-	}
+func sharedBootstrapOwnerWarning(bootstrapOwners, namespace string) string {
 	shared := installdefaults.ClientPrincipal(namespace)
 	for owner := range strings.SplitSeq(bootstrapOwners, ",") {
 		if strings.TrimSpace(owner) == shared {
@@ -349,26 +346,22 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 	if err := stampAPIServerEnvHash(objs, hash); err != nil {
 		return err
 	}
-	if err := setAPIServerAuthzArgs(objs, e.Cfg.APIExperimentalEnableAuthz, e.Cfg.APIAuthzBootstrapOwners); err != nil {
+	if err := setAPIServerAuthzArgs(objs, e.Cfg.APIAuthzBootstrapOwners); err != nil {
 		return err
 	}
-	if msg := sharedBootstrapOwnerWarning(e.Cfg.APIExperimentalEnableAuthz, e.Cfg.APIAuthzBootstrapOwners, e.Namespace()); msg != "" {
+	if msg := sharedBootstrapOwnerWarning(e.Cfg.APIAuthzBootstrapOwners, e.Namespace()); msg != "" {
 		log.Warnf("%s", msg)
 	}
 	return e.Kube.Apply(ctx, objs)
 }
 
-// apiServerAuthzFlags are the ate-api-server flags setAPIServerAuthzArgs owns.
-var apiServerAuthzFlags = []string{"--experimental-enable-authz", "--authz-bootstrap-owners"}
+// apiServerAuthzFlag is the ate-api-server flag setAPIServerAuthzArgs owns.
+const apiServerAuthzFlag = "--authz-bootstrap-owners"
 
-// setAPIServerAuthzArgs sets ate-api-server's authorization flags on its
+// setAPIServerAuthzArgs sets ate-api-server's bootstrap owners flag on its
 // container in objs, replacing any the manifest already carries. A changed
 // flag changes the pod template, so it rolls the Deployment.
-//
-// The bootstrap owners are passed even with enforcement off: access policy
-// RPCs are checked either way, so without them nobody could set up policies
-// before turning enforcement on.
-func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, enabled bool, bootstrapOwners string) error {
+func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners string) error {
 	var dep *unstructured.Unstructured
 	for _, obj := range objs {
 		if obj.GetKind() == "Deployment" && obj.GetName() == "ate-api-server" {
@@ -393,15 +386,10 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, enabled bool, boot
 			return fmt.Errorf("%s: %w", kube.Describe(dep), err)
 		}
 		args = slices.DeleteFunc(args, func(arg string) bool {
-			return slices.ContainsFunc(apiServerAuthzFlags, func(flag string) bool {
-				return arg == flag || strings.HasPrefix(arg, flag+"=")
-			})
+			return arg == apiServerAuthzFlag || strings.HasPrefix(arg, apiServerAuthzFlag+"=")
 		})
-		if enabled {
-			args = append(args, "--experimental-enable-authz=true")
-		}
 		if strings.Trim(bootstrapOwners, " ,") != "" {
-			args = append(args, "--authz-bootstrap-owners="+bootstrapOwners)
+			args = append(args, apiServerAuthzFlag+"="+bootstrapOwners)
 		}
 		if err := unstructured.SetNestedStringSlice(container, args, "args"); err != nil {
 			return fmt.Errorf("%s: %w", kube.Describe(dep), err)

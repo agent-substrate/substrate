@@ -33,17 +33,16 @@ import (
 // over the application containers, which are restored one after another; the
 // container count rides along on the record so a reader can divide.
 const (
-	phasePrep          = "prep"
-	phaseEgressPrepare = "egress_prepare"
-	phaseNetSetup      = "net_setup"
-	phasePauseRootfs   = "pause_rootfs"
-	phasePauseCreate   = "pause_create"
-	phasePauseRestore  = "pause_restore"
-	phaseAppRootfs     = "app_rootfs"
-	phaseAppCreate     = "app_create"
-	phaseAppRestore    = "app_restore"
-	phaseWakeupProbe   = "wakeup_probe"
-	phaseActivate      = "activate"
+	phasePrep           = "prep"
+	phaseEgressPrepare  = "egress_prepare"
+	phaseNetSetup       = "net_setup"
+	phaseSandboxCreate  = "sandbox_create"
+	phaseSandboxRestore = "sandbox_restore"
+	phaseAppRootfs      = "app_rootfs"
+	phaseAppCreate      = "app_create"
+	phaseAppRestore     = "app_restore"
+	phaseWakeupProbe    = "wakeup_probe"
+	phaseActivate       = "activate"
 
 	phaseCheckpoint   = "checkpoint"
 	phaseFSCheckpoint = "fs_checkpoint"
@@ -57,13 +56,13 @@ const (
 const containerCountKey = "ate.actor.container.count"
 
 // restoreTiming is the elapsed time of each RestoreWorkload phase. A phase
-// left at zero never ran. Under VOLUMES and ROOTFS fidelity, pauseRestore and
+// left at zero never ran. Under VOLUMES and ROOTFS fidelity, sandboxRestore and
 // appRestore time the cold start that stands in for the restore.
 type restoreTiming struct {
-	prep, egressPrepare, netSetup          time.Duration
-	pauseRootfs, pauseCreate, pauseRestore time.Duration
-	appRootfs, appCreate, appRestore       time.Duration
-	wakeupProbe, activate, total           time.Duration
+	prep, egressPrepare, netSetup    time.Duration
+	sandboxCreate, sandboxRestore    time.Duration
+	appRootfs, appCreate, appRestore time.Duration
+	wakeupProbe, activate, total     time.Duration
 }
 
 func (t restoreTiming) phases() []phaselog.Phase {
@@ -71,9 +70,8 @@ func (t restoreTiming) phases() []phaselog.Phase {
 		{Name: phasePrep, D: t.prep},
 		{Name: phaseEgressPrepare, D: t.egressPrepare},
 		{Name: phaseNetSetup, D: t.netSetup},
-		{Name: phasePauseRootfs, D: t.pauseRootfs},
-		{Name: phasePauseCreate, D: t.pauseCreate},
-		{Name: phasePauseRestore, D: t.pauseRestore},
+		{Name: phaseSandboxCreate, D: t.sandboxCreate},
+		{Name: phaseSandboxRestore, D: t.sandboxRestore},
 		{Name: phaseAppRootfs, D: t.appRootfs},
 		{Name: phaseAppCreate, D: t.appCreate},
 		{Name: phaseAppRestore, D: t.appRestore},

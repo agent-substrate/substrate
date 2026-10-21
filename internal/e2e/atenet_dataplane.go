@@ -39,6 +39,9 @@ type AtenetDataplane interface {
 	RouteDurationSeen(context.Context, string) (bool, error)
 	ScrapeMetrics(context.Context) (string, error)
 	EgressConnectStats(before, after string) EgressConnectStats
+	// AuthenticatesIngressClients reports whether the ingress dataplane
+	// requires an allowlisted client certificate.
+	AuthenticatesIngressClients() bool
 }
 
 // EgressConnectStats holds the delta of egress CONNECT connections and requests
@@ -82,6 +85,8 @@ func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 }
 
 func (envoyAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string { return prefixes }
+
+func (envoyAtenetDataplane) AuthenticatesIngressClients() bool { return true }
 
 func (envoyAtenetDataplane) RouteDurationSeen(_ context.Context, collectorScrape string) (bool, error) {
 	return len(MissingPlatformMetrics(collectorScrape, []string{"atenet_router_route_duration"})) == 0, nil
@@ -140,6 +145,8 @@ func (agentGatewayAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int
 }
 
 func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusGatewayTimeout }
+
+func (agentGatewayAtenetDataplane) AuthenticatesIngressClients() bool { return false }
 
 func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 	return status == http.StatusForbidden && strings.Contains(body, "actor egress policy denied")

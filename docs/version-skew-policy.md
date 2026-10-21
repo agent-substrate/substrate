@@ -79,9 +79,11 @@ Between compatible releases, a CRD change only adds optional fields. The CRDs se
 
 ### SandboxConfig
 
-Each release ships its SandboxConfig under its own name and keeps the earlier ones. The upgrade adds the N+1 one, and WorkerPools without a `configRef` switch to it. That does not change the pod template, so workers do not roll.
+Each sandbox class has a default SandboxConfig, such as `gvisor-default`, that lists the sandbox versions a cluster may run. A release that changes a sandbox version adds the new one, points `defaultVersion` at it, and keeps the previous release's version unless that version has a known vulnerability. 
 
-An actor resolves its pool's SandboxConfig each time it starts. If the runtime its snapshot needs is gone, it cold boots, keeping its files and losing its memory. Rollback deletes the N+1 SandboxConfig.
+A kept version's assets must stay fetchable, so a release does not overwrite them. The upgrade applies these lists. That does not change the pod template, so workers do not roll.
+
+An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets the version its snapshot was taken with, and stays on it until it next starts without memory state. If that version is gone, it cold boots, keeping its files and losing its memory. Rollback applies the N lists again, which removes the N+1 versions.
 
 <!-- TODO: Link the SandboxConfig upgrade guide, which covers the details. -->
 

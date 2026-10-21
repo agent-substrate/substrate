@@ -106,16 +106,18 @@ type Store interface {
 // The first table shows how each RPC on an actor treats the actor's upload or
 // detach in progress, and its report due. The RPC waits for the operation to
 // end as it begins (BeginStart, BeginCheckpoint, BeginPromote, or Detach),
-// cancels it and waits for it to stop, or leaves it alone (-). Terminate
-// cancels in Forget, once the workload is gone. A canceled report is neither
-// sent nor retried, though an attempt under way finishes.
+// cancels it and waits for it to stop, or leaves it alone (-). A Checkpoint or
+// PromoteSnapshot cancels once it commits its snapshot, and Terminate cancels
+// in Forget, once the workload is gone. A canceled report is neither sent nor
+// retried, though an attempt under way finishes.
 //
 //	RPC                   upload in progress  detach in progress  report due
 //	Run, Restore          -                   waits               -
-//	Checkpoint            -                   waits               cancels
+//	deferred Checkpoint   -                   waits               cancels
+//	immediate Checkpoint  cancels             waits               cancels
 //	PromoteSnapshot       waits if the same   waits               cancels if a
-//	                      snapshot                                local snapshot
-//	                                                              is kept
+//	                      snapshot, else                          local snapshot
+//	                      cancels                                 is kept
 //	DetachActor           waits               waits               cancels unless
 //	                                                              it fails
 //	Terminate             cancels             cancels             cancels
@@ -127,7 +129,8 @@ type Store interface {
 //
 //	running               upload due          detach due          report due
 //	Run, Restore          begins              waits               waits
-//	Checkpoint            begins              waits               waits
+//	deferred Checkpoint   begins              waits               waits
+//	immediate Checkpoint  waits               waits               waits
 //	PromoteSnapshot       waits               waits               waits
 //	Terminate             waits               waits               waits
 //	upload or detach      waits               waits               begins
@@ -199,7 +202,7 @@ type Tracker struct {
 	// actors maps actorUID to the entries requeueLocked keeps in memory (see
 	// requeueLocked). requeueLocked drops any other entry, and findLocked then
 	// reads the state from the file. Read and change it through findLocked,
-	// findOrAddLocked, addLocked, dropLocked, and heldLocked.
+	// findOrAddLocked, addLocked, dropLocked, and localInUseLocked.
 	actors map[string]*actorSnapshots
 }
 
@@ -381,14 +384,14 @@ func (t *Tracker) dropLocked(actorUID string) {
 	delete(t.actors, actorUID)
 }
 
-// heldLocked reports whether a Run, Restore, Checkpoint, or PromoteSnapshot of
-// the actor is in progress. An entry with one stays in memory, so this never
-// reads the snapshot state file.
-func (t *Tracker) heldLocked(actorUID string) bool {
+// localInUseLocked reports whether a Run or Restore of the actor in progress
+// may use a superseded local snapshot (see actorSnapshots.localInUse). An
+// entry with one stays in memory, so this never reads the snapshot state file.
+func (t *Tracker) localInUseLocked(actorUID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	a := t.actors[actorUID]
-	return a != nil && a.hold != holdNone && a.hold != holdTerminate
+	return a != nil && a.localInUse()
 }
 
 // uploadDueLocked returns when the actor's background upload is due, as

@@ -213,7 +213,6 @@ spec:
         # directions scale independently.
         - "--mode=ingress"
         - "--namespace=ate-system"
-        - "--port-http=8080"
         - "--port-xds=18000"
         - "--port-extproc=50051"
         - "--extproc-address=127.0.0.1"
@@ -221,15 +220,10 @@ spec:
         - "--port-https=8443"
         - "--envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
         # CONNECT-tunneled ingress (arbitrary-port support).
-        - "--port-connect=8081"
         - "--port-connect-tls=8444"
-        # Client auth on the TLS listeners (--port-https, --port-connect-tls).
-        # A client certificate must chain to the podidentity
-        # ClusterTrustBundle, which the envoy container mounts too, and carry
-        # one of the allowed SPIFFE IDs. The default --ingress-auth-mode,
-        # deprecated-insecure, only checks a certificate a client chooses to
-        # present, and keeps the plaintext listeners open;
-        # components/router-static-mtls makes the certificate mandatory.
+        # Every client must present a certificate that chains to the
+        # podidentity ClusterTrustBundle, which the envoy container mounts
+        # too, and carries one of the allowed SPIFFE IDs.
         #
         # The allowed SPIFFE IDs are the install's choice, so this manifest
         # carries none: cmd/ate-setup appends --ingress-allowed-spiffe-ids from
@@ -332,12 +326,8 @@ spec:
             exec:
               command: ["sh", "-c", "while [ ! -f /var/run/atenet/drain-complete ]; do sleep 0.5; done"]
         ports:
-        - name: http
-          containerPort: 8080
         - name: https
           containerPort: 8443
-        - name: connect
-          containerPort: 8081
         - name: connect-tls
           containerPort: 8444
         # Filtered admin view (GET /stats/prometheus and /ready only). The
@@ -419,17 +409,9 @@ spec:
   selector:
     app: atenet-router
   ports:
-  - name: http
-    port: 80
-    targetPort: 8080
-    protocol: TCP
   - name: https
     port: 443
     targetPort: 8443
-    protocol: TCP
-  - name: connect
-    port: 8081
-    targetPort: 8081
     protocol: TCP
   - name: connect-tls
     port: 8444

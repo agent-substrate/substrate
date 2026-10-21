@@ -371,6 +371,11 @@ type AteletClient interface {
 	// atelet deletes the actor's older local snapshots, except one still being
 	// uploaded, which it deletes after that upload ends. A Checkpoint that fails
 	// before then leaves the actor's previous local snapshot in place.
+	//
+	// A Checkpoint of a snapshot already committed, as a retry's is, returns the
+	// actor's state without checkpointing the workload again; under
+	// UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+	// yet.
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
 	// Restore restores a workload from a snapshot onto a worker.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
@@ -491,6 +496,11 @@ type AteletServer interface {
 	// atelet deletes the actor's older local snapshots, except one still being
 	// uploaded, which it deletes after that upload ends. A Checkpoint that fails
 	// before then leaves the actor's previous local snapshot in place.
+	//
+	// A Checkpoint of a snapshot already committed, as a retry's is, returns the
+	// actor's state without checkpointing the workload again; under
+	// UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+	// yet.
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
 	// Restore restores a workload from a snapshot onto a worker.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)

@@ -42,6 +42,10 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
+// DefaultPort is the port the control sidecar serves the exchange on and the
+// node plugin dials by default, through the ate-api-server Service.
+const DefaultPort = 8445
+
 // ActorJWTAudience is the audience of the objectstore plugin API. atelet
 // requests it on the worker-for-actor JWT it hands to whichever node plugin is
 // installed, and every exchange serving this API requires it. A token minted
