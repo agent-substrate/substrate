@@ -42,7 +42,7 @@ flowchart LR
     end
 
     subgraph pod["atenet-router pod — pinned to envoyCpu CPUs"]
-        envoy["envoy :8080<br/>--concurrency envoyCpu"]
+        envoy["envoy :8443<br/>--concurrency envoyCpu"]
         extproc["atenet-router sidecar<br/>ext_proc routing decision"]
         envoy -->|request headers| extproc
         extproc -->|x-ate-original-dst| envoy
@@ -54,7 +54,7 @@ flowchart LR
         atunnel["atunnel :443"] --> glutton["glutton actor<br/>POST /ping :80"]
     end
 
-    svc -->|"HTTP :80<br/>ate-target-actor"| envoy
+    svc -->|"mTLS :443<br/>ate-target-actor"| envoy
     extproc -->|ResumeActor| ateapi
     envoy -->|"mTLS :443"| atunnel
 ```
