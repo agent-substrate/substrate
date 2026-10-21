@@ -734,7 +734,7 @@ func TestLogOp(t *testing.T) {
 }
 
 // A failed background detach logs a warning rather than a cancellation:
-// finishDetach logs before endOp ends the detach's context.
+// finishDetach logs before endOpLocked ends the detach's context.
 func TestBackgroundDetachFailureLogsWarning(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setErr(errors.New("boom"))
