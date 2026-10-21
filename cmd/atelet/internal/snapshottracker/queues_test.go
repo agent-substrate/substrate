@@ -73,8 +73,8 @@ func TestTrackerDetachDoesNotWaitBehindUploads(t *testing.T) {
 
 // When both an upload and a detach are due for the same actor, whichever
 // starts first holds a.op and causes the other queue's worker to skip the
-// actor. When the upload runs first, endOp requeues the detach, which then
-// prunes the now-durable snapshot without uploading again.
+// actor. When the upload runs first, requeueLocked queues the detach, which
+// then prunes the now-durable snapshot without uploading again.
 func TestTrackerSameActorUploadAndDetachDue(t *testing.T) {
 	t.Run("upload first", func(t *testing.T) {
 		store := newFakeSnapshotStore()
@@ -114,7 +114,7 @@ func TestTrackerSameActorUploadAndDetachDue(t *testing.T) {
 			t.Fatalf("state after upload = %v, want s1 both local and durable", st)
 		}
 		if got := tr.queues[opDetach].Len(); got != 1 {
-			t.Fatalf("detach queue len after upload endOp = %d, want 1", got)
+			t.Fatalf("detach queue len after the upload ended = %d, want 1", got)
 		}
 
 		// The requeued detach sees s1 durable and prunes without uploading again.
@@ -210,7 +210,7 @@ func TestTrackerUploadRunsDuringCheckpointHoldWhileDetachWaits(t *testing.T) {
 		t.Fatalf("state after opUpload = %v, want s1 both local and durable", st)
 	}
 
-	// endOp from opUpload requeues opDetach, which still waits while held.
+	// The upload's requeueLocked queues opDetach, which still waits while held.
 	processNext(t, tr, opDetach)
 	if got := uuidOf(tr.State(trackedActorUID).GetLatestLocal()); got != "s1" {
 		t.Fatalf("latest_local while still held = %q, want s1", got)
