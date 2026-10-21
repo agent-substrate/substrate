@@ -340,7 +340,7 @@ func New(root string, opts ...Option) (*Store, error) {
 		if got := strings.TrimSpace(string(b)); got != layoutVersion {
 			// Fail loudly instead of silently mixing layouts; an operator can
 			// delete the cache dir to rebuild it (it holds no unique state).
-			return nil, fmt.Errorf("image cache at %q has layout version %q, this atelet supports %q: see \"Rebuild a node's image cache\" in docs/upgrade.md", root, got, layoutVersion)
+			return nil, fmt.Errorf("image cache at %q has layout version %q and this atelet supports %q, so delete it once no actor runs on this node", root, got, layoutVersion)
 		}
 	case errors.Is(err, os.ErrNotExist):
 		if err := os.WriteFile(versionPath, []byte(layoutVersion+"\n"), 0o600); err != nil {
