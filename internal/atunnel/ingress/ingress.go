@@ -146,11 +146,25 @@ func NewServer(cfg Config) (*Server, error) {
 			}
 			return fmt.Errorf("ingress: client is not %q", cfg.AllowedClientID)
 		},
-		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"h2", "http/1.1"},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ingress: %w", err)
+	}
+	// Every other credbundle.PrepareServerTLSConfig caller is dialed by one of
+	// this codebase's own Go binaries, which negotiate TLS 1.3 fine. This one
+	// is dialed by atenet-router's Envoy data plane, which this listener
+	// can't complete a TLS 1.3 handshake with, so it keeps the TLS 1.2 floor
+	// every other site dropped.
+	tlsConfig.MinVersion = tls.VersionTLS12
+	if getConfigForClient := tlsConfig.GetConfigForClient; getConfigForClient != nil {
+		tlsConfig.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			inner, err := getConfigForClient(hello)
+			if inner != nil {
+				inner.MinVersion = tls.VersionTLS12
+			}
+			return inner, err
+		}
 	}
 	s.tlsConfig = tlsConfig
 	return s, nil

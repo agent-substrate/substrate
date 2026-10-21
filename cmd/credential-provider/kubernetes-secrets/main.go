@@ -213,7 +213,6 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 		ClientCAPath:   *clientCAFile,
 		ClientAuth:     tls.RequireAndVerifyClientCert,
 		VerifyPeer:     verifyClientSAN(*injectorIdentity),
-		MinVersion:     tls.VersionTLS13,
 	})
 	if err != nil {
 		return nil, err

@@ -101,7 +101,6 @@ func TestPrepareClientAndServerMutualHandshake(t *testing.T) {
 		ClientCAPath:   serverTrust,
 		ClientAuth:     tls.RequireAndVerifyClientCert,
 		VerifyPeer:     verifyPeerURI(testClientID),
-		MinVersion:     tls.VersionTLS13,
 	})
 	if err != nil {
 		t.Fatalf("PrepareServerTLSConfig() error = %v", err)
@@ -113,7 +112,6 @@ func TestPrepareClientAndServerMutualHandshake(t *testing.T) {
 			GetClientCertificate: ClientLoader(clientBundle),
 			TrustBundlePath:      clientTrust,
 			VerifyPeer:           verifyPeerURI(testServerID),
-			MinVersion:           tls.VersionTLS13,
 		})
 	}
 	clientCfg, err := validClient()
@@ -130,7 +128,6 @@ func TestPrepareClientAndServerMutualHandshake(t *testing.T) {
 			GetClientCertificate: ClientLoader(impostorBundle),
 			TrustBundlePath:      clientTrust,
 			VerifyPeer:           verifyPeerURI(testServerID),
-			MinVersion:           tls.VersionTLS13,
 		})
 		if err != nil {
 			t.Fatalf("PrepareClientTLSConfig() error = %v", err)
@@ -150,7 +147,6 @@ func TestPrepareClientAndServerMutualHandshake(t *testing.T) {
 			ClientCAPath:   serverTrust,
 			ClientAuth:     tls.RequireAndVerifyClientCert,
 			VerifyPeer:     verifyPeerURI(testClientID),
-			MinVersion:     tls.VersionTLS13,
 		})
 		if err != nil {
 			t.Fatalf("PrepareServerTLSConfig() error = %v", err)
@@ -174,7 +170,6 @@ func TestPrepareClientAndServerMutualHandshake(t *testing.T) {
 			GetClientCertificate: ClientLoader(writeCredBundle(t, otherClientCA.issue(t, certOpts{uris: []string{testClientID}}))),
 			TrustBundlePath:      clientTrust,
 			VerifyPeer:           verifyPeerURI(testServerID),
-			MinVersion:           tls.VersionTLS13,
 		})
 		if err != nil {
 			t.Fatalf("PrepareClientTLSConfig() error = %v", err)
@@ -203,7 +198,6 @@ func TestPrepareClientAndServerPickUpCARotation(t *testing.T) {
 		ClientCAPath:   serverTrustPath,
 		ClientAuth:     tls.RequireAndVerifyClientCert,
 		VerifyPeer:     verifyPeerURI(testClientID),
-		MinVersion:     tls.VersionTLS13,
 	})
 	if err != nil {
 		t.Fatalf("PrepareServerTLSConfig() error = %v", err)
@@ -215,7 +209,6 @@ func TestPrepareClientAndServerPickUpCARotation(t *testing.T) {
 			GetClientCertificate: ClientLoader(writeCredBundle(t, ca.issue(t, certOpts{uris: []string{testClientID}}))),
 			TrustBundlePath:      clientTrust,
 			VerifyPeer:           verifyPeerURI(testServerID),
-			MinVersion:           tls.VersionTLS13,
 		})
 		if err != nil {
 			t.Fatalf("PrepareClientTLSConfig() error = %v", err)
@@ -254,7 +247,6 @@ func TestPrepareClientTLSConfigChecksServerName(t *testing.T) {
 		GetCertificate: Loader(serverBundle),
 		ClientCAPath:   serverTrust,
 		ClientAuth:     tls.RequireAndVerifyClientCert,
-		MinVersion:     tls.VersionTLS13,
 	})
 	if err != nil {
 		t.Fatalf("PrepareServerTLSConfig() error = %v", err)
@@ -266,7 +258,6 @@ func TestPrepareClientTLSConfigChecksServerName(t *testing.T) {
 			GetClientCertificate: ClientLoader(clientBundle),
 			TrustBundlePath:      clientTrust,
 			ServerName:           name,
-			MinVersion:           tls.VersionTLS13,
 		})
 		if err != nil {
 			t.Fatalf("PrepareClientTLSConfig() error = %v", err)
