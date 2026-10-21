@@ -182,7 +182,7 @@ func (t *Tracker) waitReportQueue(delay time.Duration) bool {
 // returns how long the report queue should pause before the next report. A
 // report the control plane acknowledges or refuses is no longer due, unless a
 // background change was made while it ran. Any other failure is retried after
-// a backoff, until a commit or detach cancels it or giveUpAfter has passed
+// a backoff, until a commit cancels it or giveUpAfter has passed
 // since the report became due; a failure other than Aborted also backs off
 // the whole report queue.
 func (t *Tracker) report(actorUID string) time.Duration {
@@ -285,7 +285,7 @@ func (t *Tracker) endReport(actorUID string, sent *ateletpb.ActorSnapshotState) 
 }
 
 // retryReport schedules another attempt to send the report that became due at
-// dueSince after err, unless a commit or detach canceled it, a newer
+// dueSince after err, unless a commit canceled it, a newer
 // background change replaced it, or giveUpAfter has passed.
 func (t *Tracker) retryReport(actorUID string, dueSince time.Time, attrs []any, err error) {
 	t.lock(actorUID)

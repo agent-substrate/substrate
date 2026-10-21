@@ -40,8 +40,8 @@ const (
 	// cancels it, so a wedged object-store call can't hold it forever.
 	DefaultUploadTimeout = 2 * time.Minute
 	// DefaultUploadEstThroughput, in bytes per second of a snapshot's
-	// allocated local size, is how fast atelet expects a background upload to
-	// run by default. Each attempt's timeout allows for the snapshot to upload
+	// allocated local size, is how fast atelet expects an upload to run by
+	// default. Each attempt's timeout allows for the snapshot to upload
 	// at this rate, so a large snapshot is not cut off.
 	DefaultUploadEstThroughput = 100 << 20
 	// maxUploadTimeoutDoublings caps how many times consecutive failures of
@@ -101,7 +101,6 @@ func logOp(ctx context.Context, actorUID string, kind opKind, target SnapshotRef
 	switch {
 	case err == nil:
 		slog.InfoContext(ctx, "Snapshot operation finished", append(attrs, slog.Bool("uploaded", uploaded))...)
-	case !background:
 	case ctx.Err() != nil:
 		slog.InfoContext(ctx, "Snapshot operation canceled", append(attrs, slog.Any("err", err))...)
 	default:
@@ -136,6 +135,9 @@ type actorOp struct {
 	// done is closed once the operation has ended, and has finished any change
 	// it makes to the actor's local snapshots.
 	done chan struct{}
+	// state and err are a detach's result, set before done is closed.
+	state *ateletpb.ActorSnapshotState
+	err   error
 }
 
 // Start reads each actor's snapshot state file on this node, queues the actor
@@ -256,9 +258,9 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 				// (see holdLocked).
 				return nil
 			}
-			if finish, err := t.beginDetachLocked(t.ctx, a, true); err == nil {
+			if _, run, err := t.beginDetachLocked(t.ctx, a, true); err == nil {
 				t.instruments.recordDetachOverdue(t.ctx, now.Sub(due))
-				return func() { _, _ = finish() }
+				return run
 			}
 		}
 	case opUpload:

@@ -455,7 +455,8 @@ func TestLogOp(t *testing.T) {
 		{name: "finished", ctx: context.Background(), background: true, wantLevel: slog.LevelInfo, wantMsg: "Snapshot operation finished"},
 		{name: "background failure", ctx: context.Background(), background: true, err: errors.New("boom"), wantLevel: slog.LevelWarn, wantMsg: "Snapshot operation failed"},
 		{name: "background canceled", ctx: canceled, background: true, err: context.Canceled, wantLevel: slog.LevelInfo, wantMsg: "Snapshot operation canceled"},
-		{name: "foreground failure", ctx: context.Background(), err: errors.New("boom")},
+		{name: "foreground failure", ctx: context.Background(), err: errors.New("boom"), wantLevel: slog.LevelWarn, wantMsg: "Snapshot operation failed"},
+		{name: "foreground canceled", ctx: canceled, err: context.Canceled, wantLevel: slog.LevelInfo, wantMsg: "Snapshot operation canceled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &recordingHandler{}

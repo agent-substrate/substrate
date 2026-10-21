@@ -16,26 +16,24 @@ package snapshottracker
 
 import (
 	"context"
-	"errors"
-	"log/slog"
-	"sync"
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // beginDetachLocked begins a detach of the actor's latest local snapshot,
-// under a context derived from ctx, and returns the func that finishes it
-// once the caller releases the actor's lock. It begins nothing, and fails,
+// under a context derived from ctx, and returns its op and the func that runs
+// it once the caller releases the actor's lock. It begins nothing, and fails,
 // when no detach can make the snapshot durable (see detachTarget).
-func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, background bool) (func() (*ateletpb.ActorSnapshotState, error), error) {
+func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, background bool) (*actorOp, func(), error) {
 	target, alreadyDurable, err := a.detachTarget()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	opCtx, op := t.beginOpLocked(ctx, a, opDetach, target)
-	return func() (*ateletpb.ActorSnapshotState, error) {
-		return t.finishDetach(opCtx, a.actorUID, op, alreadyDurable, background)
+	return op, func() {
+		defer close(op.done)
+		op.state, op.err = t.finishDetach(opCtx, a.actorUID, op, alreadyDurable, background)
 	}, nil
 }
 
@@ -85,47 +83,22 @@ func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorS
 		t.unlock(actorUID)
 		return nil, apierror.Unavailable("atelet is shutting down")
 	}
-	finish, err := t.beginDetachLocked(t.ctx, a, false)
+	op, run, err := t.beginDetachLocked(t.ctx, a, false)
 	if err != nil {
 		t.foregroundMu.Unlock()
 		t.unlock(actorUID)
 		return nil, err
 	}
-	type result struct {
-		state *ateletpb.ActorSnapshotState
-		err   error
-	}
-	// mu ensures exactly one of the detach and its caller handles the result.
-	var mu sync.Mutex
-	callerLeft := false
-	done := make(chan result, 1)
-	t.workersDone.Go(func() {
-		st, err := finish()
-		mu.Lock()
-		defer mu.Unlock()
-		if callerLeft {
-			t.logDetachAfterCallerLeft(actorUID, err)
-			return
-		}
-		done <- result{st, err}
-	})
+	t.workersDone.Go(run)
 	t.foregroundMu.Unlock()
 	t.unlock(actorUID)
 
 	select {
-	case r := <-done:
-		return r.state, t.detachCallError(ctx, r.err)
+	case <-op.done:
+		return op.state, t.detachCallError(ctx, op.err)
 	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	select {
-	case r := <-done:
-		return r.state, t.detachCallError(ctx, r.err)
-	default:
-	}
-	callerLeft = true
-	return nil, ctx.Err()
 }
 
 // detachCallError returns err, or Unavailable if the tracker's shutdown ended
@@ -137,24 +110,11 @@ func (t *Tracker) detachCallError(ctx context.Context, err error) error {
 	return err
 }
 
-// logDetachAfterCallerLeft logs a failure no caller is left to see.
-func (t *Tracker) logDetachAfterCallerLeft(actorUID string, err error) {
-	if err == nil {
-		return
-	}
-	level := slog.LevelWarn
-	if errors.Is(err, context.Canceled) {
-		level = slog.LevelInfo
-	}
-	slog.Log(t.ctx, level, "Detach failed after its caller left", slog.String("actorUID", actorUID), slog.Any("err", err))
-}
-
 // finishDetach runs op, a detach of the actor's latest local snapshot: it
 // uploads the snapshot unless already durable, then deletes the actor's local
 // snapshots. background reports whether a worker runs it, rather than a Detach
 // call. Either way it makes a report of what it changed due.
 func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp, alreadyDurable, background bool) (*ateletpb.ActorSnapshotState, error) {
-	defer close(op.done)
 	uploaded := false
 	target := op.target
 	detachStart := t.clock.Now()
@@ -183,7 +143,8 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	recordDetach := err == nil
 	if recordDetach {
 		detachStart = t.clock.Now()
-		// Forget or the caller may have ended ctx as the upload finished.
+		// Forget or the tracker's shutdown may have ended ctx as the upload
+		// finished.
 		err = ctx.Err()
 	}
 	if err == nil {

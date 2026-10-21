@@ -847,8 +847,7 @@ func TestTrackerRequeuesUntilDetachIsDue(t *testing.T) {
 }
 
 // A Detach whose caller leaves mid-upload returns the caller's error, and the
-// detach runs on to finish and report. Wait covers it, and a second call waits
-// for it.
+// detach runs on to finish and report. Wait covers it.
 func TestTrackerDetachOutlivesCaller(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
@@ -880,20 +879,10 @@ func TestTrackerDetachOutlivesCaller(t *testing.T) {
 		t.Errorf("Wait while the detach runs = %v, want %v", err, context.DeadlineExceeded)
 	}
 
-	// Wait has begun, so the second call succeeds only because it finds
-	// nothing to detach, which Detach checks first.
-	second := make(chan *ateletpb.ActorSnapshotState, 1)
-	go func() {
-		st, err := tr.Detach(t.Context(), trackedActorUID)
-		if err != nil {
-			t.Errorf("second detach: %v", err)
-		}
-		second <- st
-	}()
 	store.release <- nil
 	waitClosed(t, done, "the detach its caller left")
-	if st := <-second; st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
-		t.Errorf("second detach state = %v, want s1 durable and nothing local", st)
+	if st := tr.State(trackedActorUID); st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+		t.Errorf("state = %v, want s1 durable and nothing local", st)
 	}
 	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("s1 after the detach: %v, want it deleted", err)
@@ -908,7 +897,7 @@ func TestTrackerDetachOutlivesCaller(t *testing.T) {
 
 // A detach that fails after its caller left logs the failure.
 func TestTrackerLogsDetachFailingAfterCallerLeft(t *testing.T) {
-	failures := recordLogLevels(t, "Detach failed after its caller left")
+	failures := recordLogLevels(t, "Snapshot operation failed")
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
 	tr := newIdleTestTracker(t, store)

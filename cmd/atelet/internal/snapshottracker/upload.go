@@ -81,7 +81,7 @@ func (t *Tracker) uploadSnapshot(ctx context.Context, actorUID string, target Sn
 	return uploaded, elapsed, err
 }
 
-// uploadTimeoutFor returns how long a background upload attempt of target may
+// uploadTimeoutFor returns how long an upload attempt of target may
 // run: uploadTimeout, plus the time target's local copy takes to upload at
 // uploadEstThroughput, doubled for each consecutive failure of the actor's
 // background work, up to maxUploadTimeoutDoublings times. A copy that is

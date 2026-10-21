@@ -154,18 +154,18 @@ type Tracker struct {
 	// this node before atelet detaches it: DefaultDetachDelay unless
 	// WithDetachDelay sets it.
 	detachDelay time.Duration
-	// uploadTimeout is how long one background upload attempt may run, on
+	// uploadTimeout is how long one upload attempt may run, on
 	// top of the time its snapshot takes at uploadEstThroughput (see
 	// uploadTimeoutFor), before it is canceled and retried:
 	// DefaultUploadTimeout unless WithUploadTimeout sets it. Zero or less
 	// turns the timeout off.
 	uploadTimeout time.Duration
 	// uploadEstThroughput, in bytes per second of a snapshot's allocated
-	// local size, is how fast atelet expects a background upload to run (see
+	// local size, is how fast atelet expects an upload to run (see
 	// uploadTimeoutFor): DefaultUploadEstThroughput unless
 	// WithUploadEstThroughput sets it.
 	uploadEstThroughput int64
-	// withTimeout derives the context a background upload attempt runs under:
+	// withTimeout derives the context an upload attempt runs under:
 	// context.WithTimeout, unless a test on a fake clock replaces it with one
 	// that times out on that clock.
 	withTimeout func(context.Context, time.Duration) (context.Context, context.CancelFunc)
@@ -234,7 +234,7 @@ func WithDetachDelay(d time.Duration) Option {
 	}
 }
 
-// WithUploadTimeout sets how long one background upload attempt may run, on
+// WithUploadTimeout sets how long one upload attempt may run, on
 // top of the time its snapshot takes at the estimated upload throughput (see
 // WithUploadEstThroughput), before atelet cancels and retries it. Each
 // consecutive failure doubles the next attempt's timeout, to at most 8 times
