@@ -18,12 +18,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
 )
 
 // PruneLocalCheckpoints removes every local snapshot of the actor except those
@@ -76,4 +78,27 @@ func removeLocalCheckpoint(ctx context.Context, actorUID, name string) error {
 	}
 	slog.InfoContext(ctx, "removed local checkpoint", slog.String("path", path))
 	return nil
+}
+
+// localSnapshotSize returns the disk space allocated to the files of one local
+// snapshot of the actor, nested ones included. Allocated blocks track the data
+// an upload of the snapshot sends, where apparent sizes would count a sparse
+// memory image up to the guest RAM ceiling. A missing snapshot, or a file that
+// vanishes during the walk, counts nothing. On error it returns what it
+// measured so far.
+func localSnapshotSize(actorUID, name string) (int64, error) {
+	var size int64
+	err := filepath.WalkDir(ateletpath.LocalSnapshotDir(actorUID, name), func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			var info fs.FileInfo
+			if info, err = d.Info(); err == nil {
+				size += sparsefile.AllocatedBytes(info)
+			}
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	})
+	return size, err
 }

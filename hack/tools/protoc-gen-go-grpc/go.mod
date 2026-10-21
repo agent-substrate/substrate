@@ -2,6 +2,8 @@ module go.ate.dev/substrate/hack/tools/protoc-gen-go-grpc
 
 go 1.27.0
 
+toolchain go1.27.3
+
 require (
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.6.2 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect

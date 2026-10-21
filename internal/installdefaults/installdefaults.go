@@ -81,6 +81,12 @@ func ActorJWTIssuer(namespace string) string {
 	}).String()
 }
 
+// APIServiceHost returns the in-cluster DNS name of ate-api-server's Service
+// in namespace, the name on its serving certificate.
+func APIServiceHost(namespace string) string {
+	return APIServiceName + "." + namespace + ".svc"
+}
+
 // ClientPrincipal returns the principal ID ate-api-server sees for a bearer
 // token minted from ClientServiceAccount in namespace: the Kubernetes
 // ServiceAccount username in the token's subject.

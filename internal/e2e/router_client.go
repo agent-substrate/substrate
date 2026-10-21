@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -26,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"go.ate.dev/substrate/internal/ateclient"
@@ -36,27 +38,32 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+// atenet-router's Service ports (see manifests/ate-install/atenet-router.yaml).
+// The CONNECT port is a distinct listener from the HTTPS one Get/PostJSON
+// use: the HTTPS listener never enables the CONNECT method, only the
+// connect_terminate_tls one does.
 const (
-	// routerConnectServicePort is atenet-router's Service port for
-	// CONNECT-tunneled traffic (see manifests/ate-install/atenet-router.yaml).
-	// It is a distinct listener from the plain HTTP one Get/PostJSON use:
-	// atenet-router's ingress_http_listener never enables the CONNECT method,
-	// only connect_terminate does.
-	routerConnectServicePort = 8081
+	routerHTTPSServicePort      = 443
+	routerConnectTLSServicePort = 8444
 )
 
 // RouterClient sends HTTP requests to actors through the ingress atenet-router, the
 // same way real traffic arrives (so the request is routed and, if needed, the
 // actor is resumed). It port-forwards the router Service, mirroring the
 // approach in internal/ateclient.
+//
+// The client presents the certificate the podidentity signer issued to
+// RouterClientServiceAccount, which the router allowlists.
 type RouterClient struct {
-	baseURL string
-	http    *http.Client
-	stop    func()
+	address   string
+	baseURL   string
+	http      *http.Client
+	stop      func()
+	tlsConfig *tls.Config
 
 	// config/clientset are retained to lazily open a second port-forward, to
-	// routerConnectServicePort, only if Connect is ever called -- most callers
-	// never CONNECT, so the plain HTTP one from NewRouterClient covers them.
+	// routerConnectTLSServicePort, only if Connect is ever called -- most
+	// callers never CONNECT, so the HTTPS one from NewRouterClient covers them.
 	config    *rest.Config
 	clientset kubernetes.Interface
 
@@ -68,7 +75,8 @@ type RouterClient struct {
 
 // NewRouterClient establishes a port-forward to the ingress atenet-router. Call Close
 // to tear it down.
-func NewRouterClient(ctx context.Context) (*RouterClient, error) {
+func NewRouterClient(t *testing.T, ctx context.Context) (*RouterClient, error) {
+	t.Helper()
 	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("loading kubeconfig: %w", err)
@@ -78,15 +86,26 @@ func NewRouterClient(ctx context.Context) (*RouterClient, error) {
 		return nil, fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, SystemNamespace(), ResourceName("atenet-router"), 80)
+	cert := RouterClientCertificate(t, ctx, RouterClientServiceAccount)
+	tlsConfig, err := RouterTLSConfig(ctx, &cert)
 	if err != nil {
 		return nil, err
 	}
 
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, SystemNamespace(), ResourceName("atenet-router"), routerHTTPSServicePort)
+	if err != nil {
+		return nil, err
+	}
+
+	address := fmt.Sprintf("127.0.0.1:%d", localPort)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
 	return &RouterClient{
-		baseURL:   fmt.Sprintf("http://127.0.0.1:%d", localPort),
-		http:      &http.Client{Timeout: 30 * time.Second},
+		address:   address,
+		baseURL:   "https://" + address,
+		http:      &http.Client{Transport: transport, Timeout: 30 * time.Second},
 		stop:      stop,
+		tlsConfig: tlsConfig,
 		config:    config,
 		clientset: clientset,
 	}, nil
@@ -100,31 +119,53 @@ func (c *RouterClient) Close() {
 	}
 }
 
-// BaseURL returns the local router port-forward address.
+// BaseURL returns the local router port-forward address as an https:// URL.
 func (c *RouterClient) BaseURL() string {
 	return c.baseURL
 }
 
+// Address returns the local router port-forward's host:port, for a caller that
+// has to control the protocol it speaks to the router itself.
+func (c *RouterClient) Address() string {
+	return c.address
+}
+
+// TLSConfig returns a copy of the TLS config the client dials the router
+// with.
+func (c *RouterClient) TLSConfig() *tls.Config {
+	return c.tlsConfig.Clone()
+}
+
 // Get issues GET path to actor through the router. The caller must close the body.
 func (c *RouterClient) Get(ctx context.Context, actorRef resources.ActorRef, path string) (*http.Response, error) {
-	return c.request(ctx, http.MethodGet, actorRef, path, nil)
+	return c.Do(ctx, http.MethodGet, actorRef, path, nil)
 }
 
 // PostJSON issues a POST with a JSON body to an Actor through the router. The
 // caller must close the response body.
 func (c *RouterClient) PostJSON(ctx context.Context, actorRef resources.ActorRef, path string, body []byte) (*http.Response, error) {
-	return c.request(ctx, http.MethodPost, actorRef, path, bytes.NewReader(body))
+	return c.do(ctx, http.MethodPost, actorRef, path, bytes.NewReader(body), "application/json")
 }
 
-func (c *RouterClient) request(ctx context.Context, method string, actorRef resources.ActorRef, path string, body io.Reader) (*http.Response, error) {
+// Do issues a method request for path to actorRef through the router. The
+// caller must close the response body.
+func (c *RouterClient) Do(ctx context.Context, method string, actorRef resources.ActorRef, path string, body io.Reader) (*http.Response, error) {
+	return c.do(ctx, method, actorRef, path, body, "")
+}
+
+func (c *RouterClient) do(ctx context.Context, method string, actorRef resources.ActorRef, path string, body io.Reader, contentType string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return nil, err
 	}
-	if method == http.MethodPost {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	req.Header.Set(atenet.TargetActorHeader, actorRef.String())
+	return c.http.Do(req)
+}
+
+func (c *RouterClient) DoReq(req *http.Request) (*http.Response, error) {
 	return c.http.Do(req)
 }
 
@@ -149,9 +190,14 @@ func (c *RouterClient) ConnectWithHeaders(ctx context.Context, actorRef resource
 		return nil, err
 	}
 
-	rawConn, err := (&net.Dialer{}).DialContext(ctx, "tcp", c.connectAddr)
+	tcpConn, err := (&net.Dialer{}).DialContext(ctx, "tcp", c.connectAddr)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to router's CONNECT listener: %w", err)
+	}
+	rawConn := tls.Client(tcpConn, c.tlsConfig.Clone())
+	if err := rawConn.HandshakeContext(ctx); err != nil {
+		_ = tcpConn.Close()
+		return nil, fmt.Errorf("TLS handshake with router's CONNECT listener: %w", err)
 	}
 
 	destination := net.JoinHostPort(actorRef.Name, strconv.Itoa(port))
@@ -194,7 +240,7 @@ func (c *RouterClient) ConnectWithHeaders(ctx context.Context, actorRef resource
 // in one test don't each pay for a fresh port-forward.
 func (c *RouterClient) ensureConnectPortForward(ctx context.Context) error {
 	c.connectOnce.Do(func() {
-		localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, SystemNamespace(), ResourceName("atenet-router"), routerConnectServicePort)
+		localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, SystemNamespace(), ResourceName("atenet-router"), routerConnectTLSServicePort)
 		if err != nil {
 			c.connectErr = fmt.Errorf("port-forwarding to the router's CONNECT listener: %w", err)
 			return

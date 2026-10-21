@@ -26,23 +26,16 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
 )
 
-// allocatedSize returns the bytes a file actually occupies on disk
-// (st_blocks), not its logical length. The cache's biggest artifacts are
-// sparse guest memory images, whose logical size can exceed their footprint
-// by orders of magnitude, and every byte figure the store reports is
-// compared against real disk usage (statfs watermarks, byte budgets).
-func allocatedSize(info fs.FileInfo) int64 {
-	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		return st.Blocks * 512
-	}
-	return info.Size()
-}
-
 // TotalBytes sums the allocated (on-disk) bytes of all published entries'
-// regular files. It is the GC driver's usage measure against the store's
-// byte budget.
+// regular files (see sparsefile.AllocatedBytes), not their logical lengths:
+// the cache's biggest artifacts are sparse guest memory images, and every byte
+// figure the store reports is compared against real disk usage (statfs
+// watermarks, byte budgets). It is the GC driver's usage measure against the
+// store's byte budget.
 func (s *Store) TotalBytes(ctx context.Context) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(s.entriesDir(), func(path string, d fs.DirEntry, err error) error {
@@ -66,7 +59,7 @@ func (s *Store) TotalBytes(ctx context.Context) (int64, error) {
 			}
 			return err
 		}
-		total += allocatedSize(info)
+		total += sparsefile.AllocatedBytes(info)
 		return nil
 	})
 	if err != nil {
@@ -105,7 +98,7 @@ type EvictStats struct {
 type evictCandidate struct {
 	dir    string // entry dir name (the key hash)
 	mtime  time.Time
-	size   int64 // allocated bytes (see allocatedSize), not logical length
+	size   int64 // allocated bytes (see sparsefile.AllocatedBytes), not logical length
 	linked bool  // data is a regular file some consumer still hard-links
 }
 
@@ -305,7 +298,7 @@ func (s *Store) sizeEntry(entryDir string) (size int64, linked bool, err error) 
 			}
 			return err
 		}
-		size += allocatedSize(info)
+		size += sparsefile.AllocatedBytes(info)
 		if path == dataPath || strings.HasPrefix(path, dataPath+string(filepath.Separator)) {
 			if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
 				linked = true

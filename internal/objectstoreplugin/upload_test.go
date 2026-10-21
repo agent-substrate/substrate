@@ -91,8 +91,9 @@ func TestUploadBudgetSharedAcrossSnapshots(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		gate := make(chan struct{})
 		store := &slowSnapshotStore{memObjects: newMemObjects(), release: gate}
-		// This backend has no SDK buffers. Two compression reservations fit.
-		node, err := NewNodePlugin(store, root, 128<<20)
+		// This backend has no SDK buffers. Eight small-file compression
+		// reservations (8 MiB each) fit in the 64 MiB minimum budget.
+		node, err := NewNodePlugin(store, root, 64<<20)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,8 +102,8 @@ func TestUploadBudgetSharedAcrossSnapshots(t *testing.T) {
 			go func() { _, err := node.UploadSnapshot(t.Context(), req); done <- err }()
 		}
 		synctest.Wait()
-		if got := store.active.Load(); got != 2 {
-			t.Errorf("active uploads = %d, want 2 across all requests", got)
+		if got := store.active.Load(); got != 8 {
+			t.Errorf("active uploads = %d, want 8 across all requests", got)
 		}
 		if got := store.manifests.Load(); got != 0 {
 			t.Errorf("committed %d manifests before data finished", got)
@@ -114,8 +115,8 @@ func TestUploadBudgetSharedAcrossSnapshots(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if got := store.peak.Load(); got != 2 {
-			t.Errorf("peak uploads = %d, want 2", got)
+		if got := store.peak.Load(); got != 8 {
+			t.Errorf("peak uploads = %d, want 8", got)
 		}
 		if got := len(store.keys()); got != snapshots*(filesPerSnapshot+1) {
 			t.Fatalf("uploaded %d objects", got)
@@ -170,7 +171,7 @@ func TestUploadFailureDoesNotCommitManifest(t *testing.T) {
 func TestUploadCanceledWaiterReturnsCanceled(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "src")
-	files := snapshotUploadFiles(t, dir, 1)
+	files := snapshotUploadFiles(t, dir, 8)
 	synctest.Test(t, func(t *testing.T) {
 		gate := make(chan struct{})
 		store := &slowSnapshotStore{memObjects: newMemObjects(), release: gate}

@@ -51,6 +51,11 @@ service WorkerSupport {
   // Control.GetActorEgressPolicy. An error is the control plane's, passed
   // through as it was given.
   rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (GetActorEgressPolicyResponse) {}
+
+  // ReportActorCrashed reports that the sandbox of the actor this worker
+  // hosts died on its own, for atelet to forward to the control plane's
+  // WorkerService, which this mirrors.
+  rpc ReportActorCrashed(ReportActorCrashedRequest) returns (ReportActorCrashedResponse) {}
 }
 
 message RegisterWorkerRequest {
@@ -60,26 +65,22 @@ message RegisterWorkerRequest {
   // +k8s:required
   WorkerResources capacity = 1;
 
-  // Runtime that new and cold-booted actors start under.
-  // Snapshots matching default_runtime can also warm-boot on this worker.
-  // atelet converts it to the control plane's SandboxRuntime when forwarding.
+  // The sandbox classes this worker runs and the compatibility versions it
+  // runs them under. atelet converts it to the control plane's
+  // WorkerSandboxClass when forwarding.
   //
   // +k8s:required
-  SandboxRuntime default_runtime = 2;
-
-  // Additional runtimes (excluding default_runtime) that this worker can
-  // restore snapshots from right now.
-  //
-  // +k8s:optional
-  // +k8s:maxItems=32
-  // +k8s:listType=atomic
-  repeated SandboxRuntime restorable_runtimes = 3;
+  // +k8s:minItems=1
+  // +k8s:maxItems=1 # keep in sync with WorkerPoolSpec.sandboxClasses
+  // +k8s:listType=map
+  // +k8s:listMapKey=sandbox_class
+  repeated WorkerSandboxClass sandbox_classes = 2;
 }
 
-// SandboxRuntime describes a sandbox runtime and its compatibility identity as
-// reported by a worker. It mirrors the control plane's SandboxRuntime and is
+// WorkerSandboxClass is one sandbox class a worker runs, with the runtimes
+// it runs it under. It mirrors the control plane's WorkerSandboxClass and is
 // validated by the same rules.
-message SandboxRuntime {
+message WorkerSandboxClass {
   // e.g. "gvisor", "microvm"
   //
   // +k8s:required
@@ -87,20 +88,52 @@ message SandboxRuntime {
   // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
-  // Primary compatibility version stamped onto an actor's snapshot when a
-  // checkpoint is taken on this runtime. Snapshots matching `version`
-  // can warm-boot on this runtime.
-  // TODO: Add support for additional compatibility versions.
+  // Runtime new and cold-booted actors of this class start under. Snapshots
+  // matching its version can also warm-boot on this worker.
+  //
+  // +k8s:required
+  WorkerSandboxRuntime default_runtime = 2;
+
+  // Additional runtimes of this class (excluding default_runtime) that this
+  // worker can restore snapshots from right now.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated WorkerSandboxRuntime restorable_runtimes = 3;
+}
+
+// WorkerSandboxRuntime is one runtime a worker runs for the class of its
+// WorkerSandboxClass entry. It mirrors the control plane's
+// WorkerSandboxRuntime and is validated by the same rules.
+message WorkerSandboxRuntime {
+  // Compatibility version stamped onto an actor's snapshot when a checkpoint
+  // is taken on this runtime. Snapshots matching it can warm-boot on this
+  // runtime.
+  //
+  // +k8s:required
+  VersionedSandboxCompat version = 1;
+}
+
+// ActorSandboxRuntime is the runtime an actor runs under, as named on Run and
+// Restore. It mirrors the control plane's ActorSandboxRuntime and is validated by
+// the same rules.
+message ActorSandboxRuntime {
+  // e.g. "gvisor", "microvm"
+  //
+  // +k8s:required
+  // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
+  string sandbox_class = 1;
+
+  // Compatibility version of the runtime.
   //
   // +k8s:required
   VersionedSandboxCompat version = 2;
-
-  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
-  // once workers report one.
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
-// key-value compatibility attributes for a SandboxRuntime.
+// key-value compatibility attributes of a sandbox runtime.
 message VersionedSandboxCompat {
   // Compatibility schema version (e.g. "v1") defining which runtime and
   // hardware attributes are recorded and how they are computed.
@@ -146,10 +179,20 @@ message AttributeEntry {
 // WorkerResources is what a worker can supply. It mirrors the control plane's
 // WorkerResources and is validated by the same rules.
 message WorkerResources {
-  // Resources are matched by name against actors' resources for placement.
+  // cpu_millicores is CPU in millicores (1000 = one core). Compared against
+  // actors' resource limits for placement.
   //
   // +k8s:optional
-  Resources resources = 1;
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. Compared against actors' resource
+  // limits for placement.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 
   // A count of Actors. Workers can use this to limit the number of Actors
   // that can be placed on them, constraining costs not captured in the
@@ -157,33 +200,31 @@ message WorkerResources {
   //
   // +k8s:optional
   // +k8s:minimum=1
-  int32 actors = 2;
+  int32 actors = 3;
 }
 
-message Resources {
-  // limits is the maximum amount of compute resources allowed. Only "cpu"
-  // and "memory" are supported, each at most once, and each quantity must be
-  // greater than zero; the cpu limit must be less than 1000 cores.
+// ResourceRequirements are the compute resources a workload may use.
+message ResourceRequirements {
+  // limits is the maximum amount of compute resources allowed.
   //
   // +k8s:optional
-  // +k8s:maxItems=2
-  // +k8s:listType=map
-  // +k8s:listMapKey=name
-  repeated Limits limits = 1;
+  Resources limits = 1;
 }
 
-// +k8s:customValidation # names, quantity parse/positivity, cpu bound
-message Limits {
-  // +k8s:required
-  // +k8s:maxLength=16 # the Limits hook restricts values to cpu/memory
-  string name = 1;
-
-  // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
-  // "2Gi").
+// Resources is an amount of each compute resource.
+message Resources {
+  // cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
   //
-  // +k8s:required
-  // +k8s:maxLength=32 # the Limits hook requires a parseable quantity
-  string quantity = 2;
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. 0 means none.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 }
 
 message RegisterWorkerResponse {
@@ -211,6 +252,31 @@ message RequestActorSuspendRequest {
 }
 
 message RequestActorSuspendResponse {
+}
+
+message ReportActorCrashedRequest {
+  // The actor the calling worker is hosting, as for RequestActorSuspend.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 3;
+
+  // What the worker saw, e.g. how the sandbox exited.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096
+  string message = 4;
+}
+
+message ReportActorCrashedResponse {
 }
 
 message GetActorEgressPolicyRequest {
@@ -283,25 +349,25 @@ message MintActorCertificateRequest {
   //
   // +k8s:required
   // +k8s:format=k8s-short-name
-  string actor_atespace = 3;
+  string actor_atespace = 1;
 
   // +k8s:required
   // +k8s:format=k8s-short-name
-  string actor_name = 4;
+  string actor_name = 2;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
-  string actor_uid = 5;
+  string actor_uid = 3;
 
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
   //
   // +k8s:required
   // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
-  bytes certificate_signing_request = 1;
+  bytes certificate_signing_request = 4;
 }
 
 message MintActorCertificateResponse {
@@ -313,6 +379,10 @@ message MintActorCertificateResponse {
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
+//
+// atelet runs at most one Run, Restore, Checkpoint, PromoteSnapshot,
+// DetachActor, or Terminate of an actor at a time. A call waits for the one in
+// progress, up to the call's deadline.
 service Atelet {
   // Run tells atelet to create a new containerized workload from scratch on a
   // worker.
@@ -324,6 +394,11 @@ service Atelet {
   // atelet deletes the actor's older local snapshots, except one still being
   // uploaded, which it deletes after that upload ends. A Checkpoint that fails
   // before then leaves the actor's previous local snapshot in place.
+  //
+  // A Checkpoint of a snapshot already committed, as a retry's is, returns the
+  // actor's state without checkpointing the workload again; under
+  // UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+  // yet.
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
 
   // Restore restores a workload from a snapshot onto a worker.
@@ -348,12 +423,9 @@ service Atelet {
   // report a DetachActor call, whose caller reads the state from the response.
   // Waits for an operation already in progress on the actor, such as an
   // upload or a detach. Does nothing when atelet holds no local snapshot for
-  // the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-  // actor is in progress or the actor runs on this node, and
+  // the actor. Returns ABORTED when the actor runs on this node, and
   // FAILED_PRECONDITION when atelet cannot make the latest local snapshot
   // durable, such as when it has no `snapshot.object`.
-  //
-  // TODO: Temporarily, atelet returns UNIMPLEMENTED.
   rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
@@ -433,13 +505,6 @@ message RunRequest {
   // +k8s:required
   WorkloadSpec spec = 7;
 
-  // The sandbox binaries to use for booting this actor from scratch. atelet
-  // fetches the relevant assets and records them with the actor's on-node state
-  // so a later Checkpoint can pin the same version into the snapshot manifest.
-  //
-  // +k8s:required
-  SandboxAssets sandbox_assets = 8;
-
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
@@ -447,26 +512,18 @@ message RunRequest {
 
   // The actor's declared size, from the ActorTemplate's resource limits. atelet
   // passes these through to the sandbox so it is sized to the actor (not the
-  // whole host or worker pod). Zero means "unset": keep the runtime default.
+  // whole host or worker pod). A zero limit keeps the runtime default.
   //
   // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
-
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 11; // Memory limit in bytes.
+  ResourceRequirements resources = 10;
 
   // The runtime the assigned worker runs this actor under, from
-  // WorkerAssignment.sandbox_runtime.
+  // WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+  // through its advertised-runtime index and records the runtime for the
+  // actor so a later Checkpoint pins the snapshot to it.
   //
-  // TODO: atelet still runs with sandbox_assets; a follow-up resolves the
-  // SandboxConfig version from this field, makes it required, and removes
-  // sandbox_assets.
-  //
-  // +k8s:optional
-  SandboxRuntime sandbox_runtime = 12;
+  // +k8s:required
+  ActorSandboxRuntime sandbox_runtime = 12;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -478,64 +535,6 @@ message EgressGateway {
   // +k8s:maxLength=261 # a bracketed or 253-character host, ':' and a 5-digit port
   // +k8s:customValidation # host:port shape
   string address = 1;
-}
-
-// AssetFile is one content-addressed file atelet fetches for a sandbox runtime
-// (e.g. the gVisor release tarball).
-message AssetFile {
-  // URL to download the asset from. atelet fetches every URL through the
-  // node's object-store plugin, and reads a gs:// URL anonymously only when
-  // the plugin cannot serve it.
-  // Masked in logged requests, since a signed URL carries its credential in
-  // the query.
-  //
-  // +k8s:required
-  // +k8s:maxLength=2048 # matches the SandboxConfig asset url's bound
-  string url = 1 [ debug_redact = true ];
-
-  // Lower-case hex SHA256; names the cached file and verifies its integrity.
-  //
-  // +k8s:required
-  // +k8s:maxLength=64
-  // +k8s:customValidation # 64 hex characters
-  string sha256 = 2;
-}
-
-// ArchAssets is the set of assets for a single architecture, keyed by asset
-// name (a wrapper message because proto map values cannot themselves be maps).
-message ArchAssets {
-  // +k8s:required
-  // +k8s:maxProperties=16
-  // +k8s:eachKey=+k8s:maxLength=64
-  map<string, AssetFile> files = 1; // asset name -> file
-}
-
-// SandboxAssets is the generic, backend-agnostic description of the sandbox
-// an actor runs in: a sandbox class, the pause image holding its namespaces,
-// and binaries keyed first by architecture (GOARCH) and then by asset name.
-// atelet's backend code interprets the asset names (gVisor expects "gvisor",
-// the release tarball).
-message SandboxAssets {
-  // +k8s:required
-  // +k8s:maxLength=63 # guardrail; the class names are a few characters
-  // +k8s:customValidation # gvisor or microvm
-  string sandbox_class = 1; // e.g. "gvisor"
-
-  // +k8s:required
-  // +k8s:maxProperties=8 # one entry per architecture
-  // +k8s:eachKey=+k8s:maxLength=16
-  map<string, ArchAssets> assets = 2; // arch -> {name -> file}
-
-  // pause_image is the image for the sandbox's root container. Like the
-  // binaries above it is sandbox configuration, not workload configuration,
-  // and atelet pins it into the snapshot manifest so a restore rebuilds the
-  // sandbox from the same image. Empty for sandboxes without a pause
-  // container (microvm).
-  //
-  // +k8s:optional
-  // +k8s:maxLength=512
-  // +k8s:customValidation # must be a well-formed image reference, pinned by digest
-  string pause_image = 3;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -563,12 +562,12 @@ message ExternalVolumeSource {
   // sends volumes that finished provisioning.
   //
   // +k8s:required
-  // +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+  // +k8s:maxLength=256 # matches ExternalVolumeStatus.storage_volume_id's bound
   // +k8s:customValidation # no control characters
   string storage_volume_id = 1;
 
   // +k8s:optional
-  // +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+  // +k8s:maxLength=253 # matches ExternalVolumeStatus.volume_type's bound
   // +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
   string volume_type = 2;
 
@@ -653,9 +652,7 @@ message TrustBundleDataSource {
   // +k8s:listType=set
   // +k8s:eachVal=+k8s:minLength=1
   // +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
-  repeated string names = 3;
-  reserved 2;
-  reserved "name";
+  repeated string names = 2;
 }
 
 // SystemInfoDataSource selects exactly one projection to place in the
@@ -767,11 +764,11 @@ message Container {
   // +k8s:optional
   SecurityContext security_context = 8;
 
-  // resources are the cgroup limits for this container, resolved by
-  // ate-api-server from the ActorTemplate. Unset means no limits.
+  // resources are the cgroup limits for this container, from the
+  // ActorTemplate. Unset means no limits.
   //
   // +k8s:optional
-  ResourceLimits resources = 9;
+  ResourceRequirements resources = 9;
 }
 
 // SecurityContext holds security settings for a container's process.
@@ -794,23 +791,6 @@ message Capabilities {
   // +k8s:listType=set
   // +k8s:customValidation # capability grammar
   repeated string drop = 2;
-}
-
-// ResourceLimits are the cgroup limits for one container. Scalars rather than a
-// map so each resource.Quantity is parsed exactly once, in ate-api-server.
-message ResourceLimits {
-  // memory_bytes is the memory limit in bytes. 0 means unset.
-  //
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 1;
-
-  // cpu_millis is the CPU limit in milli-cores (1000 = one core). 0 means unset.
-  //
-  // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_millis = 2;
 }
 
 message EnvVar {
@@ -885,6 +865,28 @@ message ObjectStorage {
   // +k8s:maxLength=2048
   // +k8s:customValidation # a parseable snapshot URI
   string snapshot_uri = 1;
+
+  // How the snapshot at snapshot_uri may be consumed, as the control plane
+  // knows it. Read on Restore, where it decides whether atelet may serve the
+  // snapshot's files from its node-local cache; meaningless where atelet
+  // writes to the snapshot.
+  //
+  // +k8s:optional
+  // +k8s:maximum=2 # keep this in sync with the SnapshotSharing enum
+  SnapshotSharing sharing = 2;
+}
+
+// SnapshotSharing is how a snapshot in object storage may be consumed, as
+// known by the control plane. atelet never infers it from the URI.
+enum SnapshotSharing {
+  // Not stated: treated as PRIVATE.
+  SNAPSHOT_SHARING_UNSPECIFIED = 0;
+  // Read by one actor and replaced by its next suspend. Never cached.
+  SNAPSHOT_SHARING_PRIVATE = 1;
+  // Immutable once published and read by many actors, such as a tag's
+  // snapshot borrowed at creation. atelet may serve its files from the
+  // node-local snapshot cache.
+  SNAPSHOT_SHARING_SHARED = 2;
 }
 
 // Snapshot identifies one snapshot of an actor, and where its durable copy
@@ -1121,7 +1123,7 @@ message RestoreRequest {
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  optional EgressGateway egress_gateway = 13;
+  optional EgressGateway egress_gateway = 9;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For
   // gVisor and micro-VM VOLUMES restores the sandbox is (re)sized to these;
@@ -1129,29 +1131,16 @@ message RestoreRequest {
   // means "unset": keep the runtime default.
   //
   // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
-
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 15; // Memory limit in bytes.
-
-  // The sandbox binaries and pause image to restore with, resolved from the
-  // assigned worker pool's SandboxConfig.
-  //
-  // +k8s:required
-  SandboxAssets sandbox_assets = 16;
+  ResourceRequirements resources = 10;
 
   // The runtime the assigned worker restores this actor under, from
-  // WorkerAssignment.sandbox_runtime.
+  // WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+  // through its advertised-runtime index and records the runtime for the
+  // actor so the next Checkpoint pins the snapshot to what ran this
+  // activation, not what the restored snapshot was taken under.
   //
-  // TODO: atelet still restores with sandbox_assets; a follow-up resolves the
-  // SandboxConfig version from this field, makes it required, and removes
-  // sandbox_assets.
-  //
-  // +k8s:optional
-  SandboxRuntime sandbox_runtime = 17;
+  // +k8s:required
+  ActorSandboxRuntime sandbox_runtime = 12;
 }
 
 message RestoreResponse {

@@ -133,9 +133,12 @@ func mountImageVolume(mountpoint string, layers []string) error {
 		if err := unix.Mount(fsDir, mountpoint, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 			return fmt.Errorf("while binding %q: %w", fsDir, err)
 		}
-		// MS_BIND and MS_RDONLY cannot be combined; a second call applies read-only.
-		if err := unix.Mount("", mountpoint, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY, ""); err != nil {
-			return fmt.Errorf("while remounting %q read-only: %w", mountpoint, err)
+		// A bind can't be created read-only, so set it after, on every mount the
+		// rbind brought along. Also private, otherwise a mount made under fsDir
+		// later would propagate in writable.
+		attr := &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY, Propagation: unix.MS_PRIVATE}
+		if err := unix.MountSetattr(unix.AT_FDCWD, mountpoint, unix.AT_RECURSIVE, attr); err != nil {
+			return fmt.Errorf("while making %q read-only: %w", mountpoint, err)
 		}
 		return nil
 	}

@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -25,6 +26,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -43,7 +45,7 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 			StorageLocation:   "gs://my-bucket/snapshots",
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
-		Resources: resources.CPUMemory(1000, 512<<20),
+		Resources: &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 	}
 	for _, m := range mutations {
 		m(template)
@@ -79,6 +81,72 @@ func TestCreateActorTemplate(t *testing.T) {
 	}
 }
 
+// TestCreateActorTemplate_RequiresSnapshotLocation pins that create rejects,
+// with FailedPrecondition, a template whose actors would have no snapshot
+// location: neither an honored storageLocation nor --snapshot-location.
+func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
+	tests := []struct {
+		name                    string
+		gates                   []string
+		optOut                  bool
+		clusterSnapshotLocation string
+		location                string
+		wantCode                codes.Code
+	}{{
+		name:                    "gate off, cluster location set",
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		location:                "gs://my-bucket/snapshots",
+		wantCode:                codes.OK,
+	}, {
+		name:     "gate off, no cluster location",
+		location: "gs://my-bucket/snapshots",
+		wantCode: codes.FailedPrecondition,
+	}, {
+		name:     "gate on, location set, no cluster location",
+		gates:    []string{"PerTemplateSnapshotLocation"},
+		location: "gs://my-bucket/snapshots",
+		wantCode: codes.OK,
+	}, {
+		name:                    "gate on, no location, cluster location set",
+		gates:                   []string{"PerTemplateSnapshotLocation"},
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		wantCode:                codes.OK,
+	}, {
+		name:                    "gate on, opted out, no location, cluster location set",
+		gates:                   []string{"PerTemplateSnapshotLocation"},
+		optOut:                  true,
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		wantCode:                codes.OK,
+	}, {
+		name:     "gate on, no location, no cluster location",
+		gates:    []string{"PerTemplateSnapshotLocation"},
+		wantCode: codes.FailedPrecondition,
+	}}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, tt.gates...)
+			persistence := newTestPersistence(t)
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
+			s := &RPCService{impl: impl}
+			ctx := context.Background()
+			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+				t.Fatalf("CreateAtespace failed: %v", err)
+			}
+			if tt.optOut {
+				ctx = preview.ContextWithOptOut(ctx)
+			}
+			req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "ns1", Name: fmt.Sprintf("tmpl-%d", i)}
+				tmpl.SnapshotConfig.StorageLocation = tt.location
+			})}
+			if _, err := s.CreateActorTemplate(ctx, req); apierror.Code(err) != tt.wantCode {
+				t.Errorf("CreateActorTemplate error = %v, want code %v", err, tt.wantCode)
+			}
+		})
+	}
+}
+
 // TestCreateActorTemplateIgnoresServerOwnedFields pins the create contract:
 // status on the request is dropped and new templates start with an empty
 // status. The store persists whatever the handler hands it, so the handler is
@@ -97,7 +165,7 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 		tmpl.Metadata.Version = 42
 		tmpl.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"pool": "default"}}
 		tmpl.Containers = []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
-		tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}}
+		tmpl.Resources = &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)}
 		// Server-owned status a client must not be able to set.
 		tmpl.Status = &ateapipb.ActorTemplateStatus{
 			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
@@ -123,6 +191,33 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	}
 	if got := created.GetMetadata().GetUid(); got == "" || got == in.GetMetadata().GetUid() {
 		t.Errorf("created uid = %q, want a fresh server-assigned uid", got)
+	}
+}
+
+// TestCreateActorTemplateDefaultsOmittedSnapshotConfig pins that
+// snapshot_config is optional: create fills an omitted one with every default.
+func TestCreateActorTemplateDefaultsOmittedSnapshotConfig(t *testing.T) {
+	persistence := newTestPersistence(t)
+	impl := newServiceImpl(persistence, nil)
+	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+	s := &RPCService{impl: impl}
+	ctx := context.Background()
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+
+	created, err := s.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+		tmpl.SnapshotConfig = nil
+	})})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	want := &ateapipb.SnapshotConfig{
+		PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+	}
+	if diff := cmp.Diff(want, created.GetSnapshotConfig(), protocmp.Transform()); diff != "" {
+		t.Errorf("CreateActorTemplate snapshot_config mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -181,12 +276,12 @@ func TestDeleteActorTemplate(t *testing.T) {
 			tagURI := mustReservedTagSnapshotURI(t, tag)
 			objects.PutSnapshot(t, tagURI, "manifest.json")
 			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
-			// The handler must request AnyState to clean up an active golden actor.
+			// The handler must clean up an active golden actor.
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			})
 			if tt.actorDeleted {
-				if _, err := workflow.DeleteActor(ctx, goldenRef, true, store.DeletePreconditions{}); err != nil {
+				if _, err := workflow.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}); err != nil {
 					t.Fatal(err)
 				}
 			}

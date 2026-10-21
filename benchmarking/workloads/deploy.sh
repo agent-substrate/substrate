@@ -40,7 +40,7 @@ SWEPERF_TEMPLATE_DIR="${MANIFEST_DIR}/sweperf/generated"
 # matching locust tests) are not deployed by default. The glutton-storage
 # template is added when a StorageClass is set, because it needs a CSI driver
 # that not every cluster has.
-read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
+read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full ate-env}"
 
 # template_manifest prints the manifest path for ActorTemplate NAME.
 template_manifest() {
@@ -73,6 +73,9 @@ WORKER_MEMORY=""
 # The StorageClass for the glutton-storage external volume. Empty means the
 # template is not deployed.
 STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-}"
+# The image for the ate-env benchmark ActorTemplate. Defaults to the pinned
+# release guest image; set ATE_ENV_IMAGE to override with a custom build.
+ATE_ENV_IMAGE="${ATE_ENV_IMAGE:-us-docker.pkg.dev/gke-substrate-release/benchmark/ate-env-guest@sha256:1d38934ef1dac71fcb1f1286de734e06ab2e19747279bccbd37bfe69e0d5bc72}"
 # The address to which an instrumented actor container sends its telemetry.
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
@@ -150,6 +153,40 @@ run_kubectl_ate() {
   "${KUBECTL_ATE_BIN}" "$@"
 }
 
+# cpu_millicores converts a Kubernetes cpu quantity like 250m or 1.5 to
+# millicores, which is what ActorTemplates take
+cpu_millicores() {
+  local q="$1"
+  if [[ "${q}" =~ ^([0-9]+)m$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "${q}" =~ ^([0-9]+)(\.([0-9]{1,3}))?$ ]]; then
+    local frac="${BASH_REMATCH[3]}000"
+    echo $((10#${BASH_REMATCH[1]} * 1000 + 10#${frac:0:3}))
+  else
+    echo "Error: --actor-cpu ${q} is not a cpu quantity like 250m or 1.5" >&2
+    return 1
+  fi
+}
+
+# memory_bytes converts a memory quantity like 256Mi or 1Gi to bytes, which is
+# what ActorTemplates take
+memory_bytes() {
+  local q="$1"
+  if [[ "${q}" =~ ^([0-9]+)(Ki|Mi|Gi|Ti)?$ ]]; then
+    local shift=0
+    case "${BASH_REMATCH[2]}" in
+      Ki) shift=10 ;;
+      Mi) shift=20 ;;
+      Gi) shift=30 ;;
+      Ti) shift=40 ;;
+    esac
+    echo $((10#${BASH_REMATCH[1]} << shift))
+  else
+    echo "Error: --actor-memory ${q} is not a memory quantity like 256Mi or 1Gi" >&2
+    return 1
+  fi
+}
+
 substitute() {
   local manifest="$1"
   local worker_resources=""
@@ -162,8 +199,10 @@ substitute() {
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
-      -e "s|\${ACTOR_CPU}|${ACTOR_CPU}|g" \
+      -e "s|\${ACTOR_MEMORY_BYTES}|${ACTOR_MEMORY_BYTES}|g" \
+      -e "s|\${ACTOR_CPU_MILLICORES}|${ACTOR_CPU_MILLICORES}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
+      -e "s|\${ATE_ENV_IMAGE}|${ATE_ENV_IMAGE:-}|g" \
       -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
       "${manifest}"
 }
@@ -271,6 +310,8 @@ deploy() {
     echo "Error: --fake-atelet-env needs substrate installed with --fake-data-plane" >&2
     exit 1
   fi
+  ACTOR_CPU_MILLICORES="$(cpu_millicores "${ACTOR_CPU}")"
+  ACTOR_MEMORY_BYTES="$(memory_bytes "${ACTOR_MEMORY}")"
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
@@ -438,6 +479,11 @@ fi
 
 if [[ "${action}" == "deploy" && -z "${STORAGE_CLASS_NAME}" && " ${TEMPLATES[*]} " == *" glutton-storage "* ]]; then
   echo "Error: the glutton-storage template needs --storage-class-name" >&2
+  exit 1
+fi
+
+if [[ "${action}" == "deploy" && -z "${ATE_ENV_IMAGE:-}" && " ${TEMPLATES[*]} " == *" ate-env "* ]]; then
+  echo "Error: the ate-env template needs ATE_ENV_IMAGE" >&2
   exit 1
 fi
 

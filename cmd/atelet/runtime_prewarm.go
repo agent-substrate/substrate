@@ -21,19 +21,14 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"sync"
 	"time"
 
 	"k8s.io/client-go/util/workqueue"
-
-	"go.ate.dev/substrate/internal/imagecache"
 )
 
 // defaultPrewarmAttemptTimeout bounds one prewarm attempt. The queue is
 // drained by one worker, so an attempt that never returned would block
-// every other runtime's prewarm. The asset downloads are bounded by the
-// asset cache's own fetch timeout; this covers the pause image pull beside
-// them.
+// every other runtime's prewarm.
 const defaultPrewarmAttemptTimeout = 10 * time.Minute
 
 // prewarmMaxRetries bounds how often one failed prewarm is retried before
@@ -60,7 +55,7 @@ type prewarmItem struct {
 }
 
 // runtimePrewarmer fetches the default runtime of each worker on this node
-// into the asset and image caches before any actor asks for it, so the
+// into the asset cache before any actor asks for it, so the
 // fetch inside the first Run/Restore on the node is a cache hit instead of
 // a download+extract on the critical path. The worker sandbox syncer hands
 // it each default runtime a worker advertises, once the worker's file says
@@ -76,14 +71,12 @@ type prewarmItem struct {
 // without fetching, retrying, or recreating anything.
 //
 // Prewarming is purely a latency optimization: every failure is logged and
-// left to the on-demand fetch in ensureSandboxAssets and the pull inside
-// prepareOCIBundles, which remain the correctness path. Only default
-// runtimes are prewarmed; the first restore of another version a worker
-// advertises pays its download.
+// left to the on-demand fetch in ensureSandboxAssets, which remains the
+// correctness path. Only default runtimes are prewarmed; the first restore of
+// another version a worker advertises pays its download.
 type runtimePrewarmer struct {
 	index  *runtimeIndex
 	assets sandboxAssetFetcher
-	images *imagecache.Store
 	// queue carries items. It dedupes while an item waits, and it
 	// rate-limits retries after failures. A single worker drains it, which
 	// also serializes downloads so concurrent prewarms never compete for
@@ -100,11 +93,10 @@ type runtimePrewarmer struct {
 	onFinished func(item prewarmItem, err error)
 }
 
-func newRuntimePrewarmer(index *runtimeIndex, assets sandboxAssetFetcher, images *imagecache.Store) *runtimePrewarmer {
+func newRuntimePrewarmer(index *runtimeIndex, assets sandboxAssetFetcher) *runtimePrewarmer {
 	return &runtimePrewarmer{
 		index:          index,
 		assets:         assets,
-		images:         images,
 		attemptTimeout: defaultPrewarmAttemptTimeout,
 		// Downloads fail on the scale of network timeouts, not API conflicts,
 		// so back off in seconds and cap in minutes rather than the
@@ -183,11 +175,10 @@ func (p *runtimePrewarmer) process(ctx context.Context, item prewarmItem) {
 }
 
 // prewarm fetches the runtime's assets into the asset cache, linked into
-// the item's directory, and its pause image into the image cache, the two
-// side by side. Racing an on-demand ensureSandboxAssets for the same assets
-// is safe: the asset cache runs one download per asset and serves every
-// caller from it, and the image cache collapses concurrent pulls of one
-// digest. A directory the syncer already filled costs a stat per asset.
+// the item's directory. Racing an on-demand ensureSandboxAssets for the same
+// assets is safe: the asset cache runs one download per asset and serves
+// every caller from it. A directory the syncer already filled costs a stat
+// per asset.
 //
 // Nothing here creates a directory: the staging goes into the item's
 // directory as it is, so a directory removed before or during the work, by
@@ -204,20 +195,7 @@ func (p *runtimePrewarmer) prewarm(ctx context.Context, item prewarmItem, rt *in
 		return err
 	}
 
-	var assetErr, imageErr error
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		_, assetErr = p.assets.stageSandboxAssets(ctx, rt.rec, item.dir)
-	})
-	if rt.rec.PauseImage != "" {
-		wg.Go(func() {
-			if _, err := p.images.EnsureImage(ctx, rt.rec.PauseImage); err != nil {
-				imageErr = fmt.Errorf("while prewarming pause image %q: %w", rt.rec.PauseImage, err)
-			}
-		})
-	}
-	wg.Wait()
-	if err := errors.Join(assetErr, imageErr); err != nil {
+	if _, err := p.assets.stageSandboxAssets(ctx, rt.rec, item.dir); err != nil {
 		if gone, gerr := dirGone(item.dir); gerr == nil && gone {
 			slog.DebugContext(ctx, "Sandbox runtime prewarm superseded while staging", slog.String("runtime_hash", item.hash), slog.String("dir", item.dir))
 			return nil
@@ -229,7 +207,6 @@ func (p *runtimePrewarmer) prewarm(ctx context.Context, item prewarmItem, rt *in
 		slog.String("config", rt.config),
 		slog.String("version", rt.version),
 		slog.Int("assets", len(rt.rec.Assets)),
-		slog.String("pause_image", rt.rec.PauseImage),
 		slog.String("dir", item.dir),
 		slog.Duration("duration", time.Since(t)))
 	return nil

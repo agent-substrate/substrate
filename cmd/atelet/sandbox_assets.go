@@ -33,7 +33,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -42,9 +41,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/objectstorage"
 	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc/codes"
@@ -79,19 +76,14 @@ func (e assetEntry) displayURL() string {
 }
 
 // sandboxAssetsRecord is the sandbox runtime an actor is running, projected onto
-// the local node's architecture: the sandbox class and pause image plus the
-// asset set keyed by asset name (gVisor uses a single "gvisor" release-tarball
-// asset).
+// the local node's architecture: the sandbox class plus the asset set keyed by
+// asset name (gVisor uses a single "gvisor" release-tarball asset).
 // It is both the per-actor on-node record (written at Run/Restore, read at
 // Checkpoint) and the snapshot manifest (written at Checkpoint, read at
 // Restore).
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
-	// PauseImage is the root sandbox container's image. It is recorded here
-	// rather than taken from the request at Restore so a snapshot is rebuilt
-	// with the same sandbox it was captured from. Only gVisor has one.
-	PauseImage string `json:"pauseImage,omitempty"`
 	// Actor identity makes a flat snapshot self-identifying if control-plane
 	// persistence is unavailable.
 	Atespace              string `json:"atespace,omitempty"`
@@ -114,40 +106,6 @@ type sandboxAssetsRecord struct {
 	// is knowable from the manifest alone. Empty in the on-node record written at
 	// Run/Restore.
 	Fidelity string `json:"fidelity,omitempty"`
-}
-
-// recordFromRequest projects a request's per-architecture SandboxAssets onto the
-// local node's architecture.
-func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error) {
-	if sa == nil {
-		return nil, fmt.Errorf("missing sandbox_assets")
-	}
-	arch := runtime.GOARCH
-	archAssets := sa.GetAssets()[arch]
-	if archAssets == nil || len(archAssets.GetFiles()) == 0 {
-		return nil, fmt.Errorf("sandbox_assets has no assets for architecture %q", arch)
-	}
-	if err := checkPauseImage(sa.GetSandboxClass(), sa.GetPauseImage()); err != nil {
-		return nil, fmt.Errorf("invalid sandbox_assets: %w", err)
-	}
-	rec := &sandboxAssetsRecord{
-		SandboxClass: sa.GetSandboxClass(),
-		PauseImage:   sa.GetPauseImage(),
-		Assets:       make(map[string]assetEntry, len(archAssets.GetFiles())),
-	}
-	for name, f := range archAssets.GetFiles() {
-		rec.Assets[name] = assetEntry{URL: f.GetUrl(), SHA256: f.GetSha256()}
-	}
-	return rec, nil
-}
-
-// checkPauseImage requires a pause image for gVisor, the only sandbox class
-// that runs a pause container.
-func checkPauseImage(sandboxClass, pauseImage string) error {
-	if sandboxClass == string(v1alpha1.SandboxClassGvisor) && pauseImage == "" {
-		return fmt.Errorf("gvisor sandbox has no pauseImage")
-	}
-	return nil
 }
 
 // ensureSandboxAssets stages every asset in the record under dstDir, named
@@ -702,9 +660,6 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	rec := &sandboxAssetsRecord{}
 	if err := json.Unmarshal(data, rec); err != nil {
 		return nil, fmt.Errorf("while parsing sandbox record/manifest: %w", err)
-	}
-	if err := checkPauseImage(rec.SandboxClass, rec.PauseImage); err != nil {
-		return nil, fmt.Errorf("invalid sandbox record/manifest: %w", err)
 	}
 	if err := validateSnapshotFiles(rec.SnapshotFiles); err != nil {
 		return nil, fmt.Errorf("sandbox record/manifest has invalid snapshotFiles: %w", err)

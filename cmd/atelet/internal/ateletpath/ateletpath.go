@@ -55,11 +55,30 @@ var (
 	// runtime registered before a restart resolves the moment atelet serves
 	// again.
 	SandboxRuntimeIndexFile = filepath.Join(nodepath.BasePath, "sandbox-runtime-index.json")
+
+	// SnapshotCacheDir is the node-local cache of shared snapshot files, the
+	// snapshots many actors are created from (see
+	// cmd/atelet/internal/filecache). It lives under BasePath because cache
+	// hits are served as hard links into the per-actor restore dirs under
+	// SnapshotsDir, and link(2) requires both ends on one mounted filesystem,
+	// the same mount, not merely the same disk. With SnapshotsDir on its own
+	// mount, hits are served as copies instead.
+	SnapshotCacheDir = filepath.Join(nodepath.BasePath, "snapshot-cache")
 )
 
 func ActorPath(actorUID string) string {
 	return filepath.Join(
 		nodepath.ActorsDir,
+		actorUID,
+	)
+}
+
+// ActorSnapshotPath is the actor's snapshot staging directory, which may be on
+// a different filesystem from ActorPath. Checkpoints rename files between its
+// subdirectories, so they must stay on one filesystem.
+func ActorSnapshotPath(actorUID string) string {
+	return filepath.Join(
+		nodepath.SnapshotsDir,
 		actorUID,
 	)
 }
@@ -123,14 +142,14 @@ func OCIBundlePath(actorUID, containerName string) string {
 
 func CheckpointStateDir(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
+		ActorSnapshotPath(actorUID),
 		"checkpoint-state",
 	)
 }
 
 func LocalCheckpointsDir(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
+		ActorSnapshotPath(actorUID),
 		"local-checkpoint",
 	)
 }
@@ -202,7 +221,7 @@ func SystemInfoVolumeRoot(actorUID, volumeName string) string {
 // yet been loaded.
 func RestoreStateDir(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
+		ActorSnapshotPath(actorUID),
 		"restore-state",
 	)
 }

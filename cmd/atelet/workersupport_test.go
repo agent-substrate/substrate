@@ -114,40 +114,52 @@ func (s *fakeWorkerService) MintWorkerActorCertificate(_ context.Context, in *at
 }
 
 func TestRegisterWorker(t *testing.T) {
-	reqRuntime := func(hash string) *ateletpb.SandboxRuntime {
-		return &ateletpb.SandboxRuntime{
-			SandboxClass: "gvisor",
-			Version: &ateletpb.VersionedSandboxCompat{
-				SchemaVersion: "v1",
-				Attributes: []*ateletpb.AttributeEntry{
-					{Key: "architecture", Value: "amd64"},
-					{Key: "sandbox_bundle_hash", Value: hash},
-				},
+	reqCompat := func(hash string) *ateletpb.VersionedSandboxCompat {
+		return &ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateletpb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+				{Key: "sandbox_bundle_hash", Value: hash},
 			},
 		}
 	}
-	wantRuntime := func(hash string) *ateapipb.SandboxRuntime {
-		return &ateapipb.SandboxRuntime{
-			SandboxClass: "gvisor",
-			Version: &ateapipb.VersionedSandboxCompat{
-				SchemaVersion: "v1",
-				Attributes: []*ateapipb.AttributeEntry{
-					{Key: "architecture", Value: "amd64"},
-					{Key: "sandbox_bundle_hash", Value: hash},
-				},
+	wantCompat := func(hash string) *ateapipb.VersionedSandboxCompat {
+		return &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+				{Key: "sandbox_bundle_hash", Value: hash},
 			},
 		}
 	}
-	reqDefault, wantDefault := reqRuntime("9988"), wantRuntime("9988")
-	forwarded := func(capacity *ateapipb.WorkerResources, restorable ...*ateapipb.SandboxRuntime) []*ateapipb.RegisterWorkerRequest {
+	reqDefault, wantDefault := reqCompat("9988"), wantCompat("9988")
+	// reqClasses is the worker's one class, gvisor, with the default and
+	// the given restorable runtimes.
+	reqClasses := func(restorable ...*ateletpb.VersionedSandboxCompat) []*ateletpb.WorkerSandboxClass {
+		c := &ateletpb.WorkerSandboxClass{
+			SandboxClass:   "gvisor",
+			DefaultRuntime: &ateletpb.WorkerSandboxRuntime{Version: reqDefault},
+		}
+		for _, r := range restorable {
+			c.RestorableRuntimes = append(c.RestorableRuntimes, &ateletpb.WorkerSandboxRuntime{Version: r})
+		}
+		return []*ateletpb.WorkerSandboxClass{c}
+	}
+	forwarded := func(capacity *ateapipb.WorkerResources, restorable ...*ateapipb.VersionedSandboxCompat) []*ateapipb.RegisterWorkerRequest {
 		// The Worker is named after the worker pod UID, taken from the
-		// certificate rather than the request; capacity and runtimes come
-		// from what the worker reported.
+		// certificate rather than the request; capacity and sandbox classes
+		// come from what the worker reported.
+		c := &ateapipb.WorkerSandboxClass{
+			SandboxClass:   "gvisor",
+			DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: wantDefault},
+		}
+		for _, r := range restorable {
+			c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapipb.WorkerSandboxRuntime{Version: r})
+		}
 		return []*ateapipb.RegisterWorkerRequest{{
-			Worker:             &ateapipb.ObjectRef{Name: "pod-a"},
-			Capacity:           capacity,
-			DefaultRuntime:     wantDefault,
-			RestorableRuntimes: restorable,
+			Worker:         &ateapipb.ObjectRef{Name: "pod-a"},
+			Capacity:       capacity,
+			SandboxClasses: []*ateapipb.WorkerSandboxClass{c},
 		}}
 	}
 
@@ -163,50 +175,64 @@ func TestRegisterWorker(t *testing.T) {
 	}{{
 		name: "records what the worker says",
 		req: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{
-				Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
-			}},
-			DefaultRuntime: reqDefault,
+			Capacity:       &ateletpb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
+			SandboxClasses: reqClasses(),
 		},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, Resources: resources.CPUMemory(2000, 4294967296)}),
+		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4294967296}),
 	}, {
 		name: "forwards restorable runtimes",
 		req: &ateletpb.RegisterWorkerRequest{
-			Capacity:           &ateletpb.WorkerResources{Actors: 1},
-			DefaultRuntime:     reqDefault,
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{reqRuntime("d547")},
+			Capacity:       &ateletpb.WorkerResources{Actors: 1},
+			SandboxClasses: reqClasses(reqCompat("d547")),
 		},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}, wantRuntime("d547")),
+		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}, wantCompat("d547")),
 	}, {
 		name:          "omits undetermined compute",
-		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, DefaultRuntime: reqDefault},
+		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, SandboxClasses: reqClasses()},
 		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}),
 	}, {
-		name:          "forwards empty resources",
-		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{}}, DefaultRuntime: reqDefault},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Resources: &ateapipb.Resources{}}),
+		name:          "forwards empty capacity",
+		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{}, SandboxClasses: reqClasses()},
+		wantForwarded: forwarded(&ateapipb.WorkerResources{}),
 	}, {
 		name: "rejects invalid capacity without forwarding",
 		req: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{
-				Limits: []*ateletpb.Limits{{Name: "gpu", Quantity: "1"}},
-			}},
-			DefaultRuntime: reqDefault,
+			Capacity:       &ateletpb.WorkerResources{CpuMillicores: -1},
+			SandboxClasses: reqClasses(),
 		},
 		wantCode: codes.InvalidArgument,
 	}, {
 		name:     "rejects missing capacity without forwarding",
-		req:      &ateletpb.RegisterWorkerRequest{DefaultRuntime: reqDefault},
+		req:      &ateletpb.RegisterWorkerRequest{SandboxClasses: reqClasses()},
 		wantCode: codes.InvalidArgument,
 	}, {
-		name:     "rejects missing default runtime without forwarding",
+		name:     "rejects missing sandbox classes without forwarding",
 		req:      &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		wantCode: codes.InvalidArgument,
+	}, {
+		name: "rejects missing default runtime without forwarding",
+		req: &ateletpb.RegisterWorkerRequest{
+			Capacity:       &ateletpb.WorkerResources{Actors: 1},
+			SandboxClasses: []*ateletpb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+		},
+		wantCode: codes.InvalidArgument,
+	}, {
+		// A worker runs one class until WorkerPoolSpec.sandboxClasses
+		// allows more.
+		name: "rejects two sandbox classes without forwarding",
+		req: &ateletpb.RegisterWorkerRequest{
+			Capacity: &ateletpb.WorkerResources{Actors: 1},
+			SandboxClasses: []*ateletpb.WorkerSandboxClass{
+				{SandboxClass: "gvisor", DefaultRuntime: &ateletpb.WorkerSandboxRuntime{Version: reqDefault}},
+				{SandboxClass: "microvm", DefaultRuntime: &ateletpb.WorkerSandboxRuntime{Version: reqDefault}},
+			},
+		},
 		wantCode: codes.InvalidArgument,
 	}, {
 		// A worker may report only what its certificate proves it is.
 		name:            "requires a certificate",
 		unauthenticated: true,
-		req:             &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, DefaultRuntime: reqDefault},
+		req:             &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, SandboxClasses: reqClasses()},
 		wantCode:        codes.Unauthenticated,
 	}, {
 		// The Worker record may not exist yet. The error must reach the
@@ -214,7 +240,7 @@ func TestRegisterWorker(t *testing.T) {
 		// leaves the Worker with no capacity forever.
 		name:       "surfaces the control plane's rejection",
 		serviceErr: errors.New("no such worker"),
-		req:        &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, DefaultRuntime: reqDefault},
+		req:        &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, SandboxClasses: reqClasses()},
 		wantCode:   codes.Unknown,
 	}}
 	for _, tt := range tests {
@@ -240,8 +266,17 @@ func TestRegisterWorker(t *testing.T) {
 type fakeSuspendService struct {
 	ateapipb.WorkerServiceClient
 
-	got []*ateapipb.RequestActorSuspendRequest
-	err error
+	got        []*ateapipb.RequestActorSuspendRequest
+	gotCrashed []*ateapipb.ReportActorCrashedRequest
+	err        error
+}
+
+func (s *fakeSuspendService) ReportActorCrashed(_ context.Context, in *ateapipb.ReportActorCrashedRequest, _ ...grpc.CallOption) (*ateapipb.ReportActorCrashedResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.gotCrashed = append(s.gotCrashed, in)
+	return &ateapipb.ReportActorCrashedResponse{}, nil
 }
 
 func (s *fakeSuspendService) RequestActorSuspend(_ context.Context, in *ateapipb.RequestActorSuspendRequest, _ ...grpc.CallOption) (*ateapipb.RequestActorSuspendResponse, error) {
@@ -470,5 +505,46 @@ func TestGetActorEgressPolicy(t *testing.T) {
 				t.Errorf("returned policy mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestReportActorCrashedNamesTheCallingWorker(t *testing.T) {
+	workers := &fakeSuspendService{}
+	svc := &workerSupportServer{workers: workers}
+
+	if _, err := svc.ReportActorCrashed(workerContext(t, "pod-a"), &ateletpb.ReportActorCrashedRequest{
+		ActorAtespace: "team-a",
+		ActorName:     "actor-1",
+		ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
+		Message:       "cloud-hypervisor exited",
+	}); err != nil {
+		t.Fatalf("ReportActorCrashed() failed: %v", err)
+	}
+	want := []*ateapipb.ReportActorCrashedRequest{{
+		Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid: "01234567-89ab-cdef-0123-456789abcdef",
+		Message:  "cloud-hypervisor exited",
+	}}
+	if diff := cmp.Diff(want, workers.gotCrashed, protocmp.Transform()); diff != "" {
+		t.Errorf("forwarded request mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestReportActorCrashedRequiresACertificate(t *testing.T) {
+	workers := &fakeSuspendService{}
+	svc := &workerSupportServer{workers: workers}
+
+	_, err := svc.ReportActorCrashed(context.Background(), &ateletpb.ReportActorCrashedRequest{
+		ActorAtespace: "team-a",
+		ActorName:     "actor-1",
+		ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
+		Message:       "cloud-hypervisor exited",
+	})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("unauthenticated report returned %v, want Unauthenticated", err)
+	}
+	if len(workers.gotCrashed) != 0 {
+		t.Errorf("unauthenticated report was still forwarded: %v", workers.gotCrashed)
 	}
 }

@@ -32,6 +32,7 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/nodepath"
 )
 
@@ -40,10 +41,10 @@ import (
 // they mount inside it are visible to atelet.
 const workerHostDir = nodepath.BasePath
 
-// csiHostpathControllerService fronts the hostpath driver's socat sidecar,
-// which bridges the TCP endpoint atelet dials to the driver's unix socket. The
-// CSIDriverConfig applied later names this Service in both its
-// controllerEndpoint and its TLS server name.
+// csiHostpathControllerService fronts the hostpath driver's Envoy sidecar,
+// which terminates mTLS on the TCP endpoint ateapi dials and forwards to the
+// driver's unix socket. The CSIDriverConfig applied later names this Service
+// in both its controllerEndpoint and its TLS server name.
 const csiHostpathControllerService = `
 apiVersion: v1
 kind: Service
@@ -203,8 +204,8 @@ func (e *Env) setupCSIHostpath(ctx context.Context) error {
 	log.Infof("Using Kind node: %s", node)
 	cleanupKindWorkerDir(node)
 
-	// Before the driver, not after: atelet talks to the controller over TCP,
-	// the socat sidecar bridges that to the driver's unix socket, and
+	// Before the driver, not after: ateapi talks to the controller over TCP,
+	// the Envoy sidecar bridges that to the driver's unix socket, and
 	// servicednssigner issues the sidecar's serving certificate from the
 	// Service. A sidecar that starts before the Service exists has no
 	// certificate to be issued against and never becomes ready.
@@ -292,6 +293,184 @@ spec:
 	return e.Kube.RolloutRestart(ctx, e.Namespace(), "atelet", time.Now())
 }
 
+// csiNFSControllerService fronts the Envoy sidecar csiNFSControllerPatch adds to the NFS controller pod.
+const csiNFSControllerService = `
+apiVersion: v1
+kind: Service
+metadata:
+  name: csi-nfs-controller
+  namespace: kube-system
+spec:
+  selector:
+    app: csi-nfs-controller
+  ports:
+  - port: 50052
+    targetPort: 10000
+    name: grpc
+`
+
+const csiNFSEnvoyConfigMapName = "csi-nfs-envoy-config"
+
+// csiNFSEnvoyConfigMap renders the NFS controller's Envoy config: an mTLS listener accepting only apiServerSPIFFEID, proxied to the driver's unix socket.
+func csiNFSEnvoyConfigMap(apiServerSPIFFEID string) string {
+	return strings.ReplaceAll(csiNFSEnvoyConfigMapTemplate, "{{API_SERVER_SPIFFE_ID}}", apiServerSPIFFEID)
+}
+
+const csiNFSEnvoyConfigMapTemplate = `
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ` + csiNFSEnvoyConfigMapName + `
+  namespace: kube-system
+data:
+  envoy.yaml: |
+    node:
+      id: csi-nfs-envoy
+      cluster: csi-nfs-envoy
+    static_resources:
+      listeners:
+      - name: csi_tls_listener
+        address:
+          socket_address: { address: 0.0.0.0, port_value: 10000 }
+        filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                alpn_protocols:
+                - h2
+                tls_certificate_sds_secret_configs:
+                - name: servicedns_serving_cert
+                  sds_config:
+                    resource_api_version: V3
+                    path_config_source:
+                      path: /etc/envoy/sds-servicedns-cert.yaml
+                combined_validation_context:
+                  default_validation_context:
+                    match_typed_subject_alt_names:
+                    - san_type: URI
+                      matcher:
+                        exact: "{{API_SERVER_SPIFFE_ID}}"
+                  validation_context_sds_secret_config:
+                    name: podidentity_validation_context
+                    sds_config:
+                      resource_api_version: V3
+                      path_config_source:
+                        path: /etc/envoy/sds-podidentity-validation.yaml
+          filters:
+          - name: envoy.filters.network.tcp_proxy
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+              stat_prefix: csi_proxy
+              cluster: csi_unix_socket
+      clusters:
+      - name: csi_unix_socket
+        connect_timeout: 0.25s
+        type: STATIC
+        load_assignment:
+          cluster_name: csi_unix_socket
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  pipe:
+                    path: /csi/csi.sock
+  sds-servicedns-cert.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: servicedns_serving_cert
+      tls_certificate:
+        certificate_chain: { filename: /run/servicedns/credential-bundle.pem }
+        private_key: { filename: /run/servicedns/credential-bundle.pem }
+        watched_directory: { path: /run/servicedns }
+  sds-podidentity-validation.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: podidentity_validation_context
+      validation_context:
+        trusted_ca: { filename: /run/podidentity-ca/trust-bundle.pem }
+        watched_directory: { path: /run/podidentity-ca }
+`
+
+// csiNFSControllerPatch adds the Envoy TLS proxy to the upstream csi-nfs-controller Deployment and removes the socat sidecar earlier installs added.
+const csiNFSControllerPatch = `
+spec:
+  template:
+    spec:
+      containers:
+      - $patch: delete
+        name: socat
+      - name: envoy
+        image: envoyproxy/envoy:v1.34-latest
+        command:
+        - /usr/local/bin/envoy
+        args:
+        - -c
+        - /etc/envoy/envoy.yaml
+        readinessProbe:
+          tcpSocket:
+            port: 10000
+          periodSeconds: 5
+        securityContext:
+          # Root because the driver creates csi.sock mode 0755; nothing else is needed.
+          runAsUser: 0
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - mountPath: /etc/envoy
+          name: envoy-config
+          readOnly: true
+        - mountPath: /csi
+          name: socket-dir
+        - mountPath: /run/servicedns
+          name: servicedns-certs
+          readOnly: true
+        - mountPath: /run/podidentity-ca
+          name: podidentity-ca
+          readOnly: true
+      volumes:
+      - name: envoy-config
+        configMap:
+          name: ` + csiNFSEnvoyConfigMapName + `
+      - name: servicedns-certs
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      - name: podidentity-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+`
+
+// csiNFSDriverConfig registers the NFS driver; its serverName is the one DNS name servicednssigner issues, <service>.<namespace>.svc.
+const csiNFSDriverConfig = `
+apiVersion: ate.dev/v1alpha1
+kind: CSIDriverConfig
+metadata:
+  name: nfs.csi.k8s.io
+spec:
+  driverName: nfs.csi.k8s.io
+  controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
+  nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
+  tls:
+    enabled: true
+    usePodIdentity: true
+    serverName: csi-nfs-controller.kube-system.svc
+`
+
 func (e *Env) setupCSINFS(ctx context.Context) error {
 	log.Step("setup_csi_nfs")
 
@@ -303,6 +482,15 @@ func (e *Env) setupCSINFS(ctx context.Context) error {
 
 	log.Infof("Deploying the NFS server...")
 	if err := e.Kube.ApplyPath(ctx, e.Cfg.Path("hack", "csi", "nfs-server.yaml")); err != nil {
+		return err
+	}
+
+	// Before the driver: servicednssigner only issues the sidecar's certificate once a Service selects its pod.
+	log.Infof("Exposing the CSI NFS controller over a TLS Service...")
+	if err := e.applyInline(ctx, csiNFSControllerService); err != nil {
+		return err
+	}
+	if err := e.applyInline(ctx, csiNFSEnvoyConfigMap(installdefaults.APIServerSPIFFEID(e.Namespace()))); err != nil {
 		return err
 	}
 
@@ -344,48 +532,14 @@ spec:
 		return fmt.Errorf("while patching the csi-nfs-node DaemonSet: %w", err)
 	}
 
-	log.Infof("Patching the CSI NFS controller Deployment...")
-	const controllerPatch = `
-spec:
-  template:
-    spec:
-      containers:
-      - name: socat
-        image: docker.io/alpine/socat:1.7.4.3-r0
-        args:
-        - tcp-listen:10000,fork,reuseaddr
-        - unix-connect:/csi/csi.sock
-        securityContext:
-          privileged: true
-        volumeMounts:
-        - mountPath: /csi
-          name: socket-dir
-`
-	controllerPatchJSON, err := yaml.YAMLToJSON([]byte(controllerPatch))
+	log.Infof("Patching the CSI NFS controller Deployment with the Envoy TLS proxy...")
+	controllerPatchJSON, err := yaml.YAMLToJSON([]byte(csiNFSControllerPatch))
 	if err != nil {
 		return fmt.Errorf("while converting csi-nfs-controller patch to JSON: %w", err)
 	}
 	if _, err := e.Kube.Typed.AppsV1().Deployments("kube-system").Patch(
 		ctx, "csi-nfs-controller", types.StrategicMergePatchType, controllerPatchJSON, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("while patching the csi-nfs-controller Deployment: %w", err)
-	}
-
-	log.Infof("Exposing the CSI NFS controller over a Service...")
-	if err := e.applyInline(ctx, `
-apiVersion: v1
-kind: Service
-metadata:
-  name: csi-nfs-controller
-  namespace: kube-system
-spec:
-  selector:
-    app: csi-nfs-controller
-  ports:
-  - port: 50052
-    targetPort: 10000
-    name: grpc
-`); err != nil {
-		return err
 	}
 
 	// The driver resolves the server's DNS name at provisioning time, so the
@@ -407,16 +561,7 @@ spec:
 	}
 
 	log.Infof("Creating the nfs.csi.k8s.io CSIDriverConfig...")
-	if err := e.applyInline(ctx, `
-apiVersion: ate.dev/v1alpha1
-kind: CSIDriverConfig
-metadata:
-  name: nfs.csi.k8s.io
-spec:
-  driverName: nfs.csi.k8s.io
-  controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
-  nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
-`); err != nil {
+	if err := e.applyInline(ctx, csiNFSDriverConfig); err != nil {
 		return err
 	}
 

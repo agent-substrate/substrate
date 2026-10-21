@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM
@@ -201,9 +203,20 @@ func TestBuildVMConfigConsole(t *testing.T) {
 // does not know with InvalidContainerId — which aborts the whole graceful
 // shutdown, so a stale id here silently costs the guest its clean exit.
 func TestWorkloadIDs(t *testing.T) {
-	ctrs := []actorContainer{{name: "counter"}, {name: "sidecar"}}
+	dirs := &ateworkerpb.ActorDirs{OciBundleDir: t.TempDir()}
+	var containers []*ateworkerpb.Container
+	for _, name := range []string{"counter", "w"} {
+		if err := os.MkdirAll(filepath.Join(ociBundlePath(dirs, name), "rootfs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		containers = append(containers, &ateworkerpb.Container{Name: name, ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}})
+	}
+	ctrs, err := (&AteWorkerService{}).buildActorContainers("uid", dirs, containers)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := workloadIDs(ctrs)
-	if want := []string{"counter", "sidecar"}; !slices.Equal(got, want) {
+	if want := []string{"c_counter", "c_w"}; !slices.Equal(got, want) {
 		t.Errorf("workloadIDs() = %v, want %v", got, want)
 	}
 }

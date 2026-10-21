@@ -13,9 +13,9 @@
 // limitations under the License.
 
 // Package actorscope derives the object-storage prefixes an actor's transfers
-// may touch from the actor record, with the access each needs. It is the
-// cloud-neutral half of the credential exchange. A provider turns the grants
-// into a scoped credential, for GCS a Credential Access Boundary.
+// may touch from the actor record, with the access each needs. It knows no
+// storage provider: a provider's credential exchange turns the grants into
+// whatever scoped credential its storage supports.
 package actorscope
 
 import (

@@ -295,9 +295,12 @@ func TestTrackerDoesNotReportWhenNothingChanged(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		snap SnapshotRef
+		// cancels is set when snap is newer than the upload's snapshot, so
+		// CommitDurable cancels the upload and waits for it to stop.
+		cancels bool
 	}{
-		{"newer durable snapshot", committedRef("s2", 2, time.Time{})},
-		{"same generation already durable", committedRef("s1", 1, time.Time{})},
+		{"newer durable snapshot", committedRef("s2", 2, time.Time{}), true},
+		{"same generation already durable", committedRef("s1", 1, time.Time{}), false},
 	} {
 		t.Run("upload overtaken by "+tc.name, func(t *testing.T) {
 			store := newFakeSnapshotStore()
@@ -311,7 +314,9 @@ func TestTrackerDoesNotReportWhenNothingChanged(t *testing.T) {
 			durable.UploadTime = durable.CommitTime.Add(time.Second)
 			tr.CommitDurable(trackedActorUID, durable)
 
-			store.release <- nil
+			if !tc.cancels {
+				store.release <- nil
+			}
 			waitClosed(t, done, "the upload of s1")
 			if reportDue(tr) || tr.reporting.queue.Len() != 0 {
 				t.Errorf("report due = %v, queued = %d after an overtaken upload, want neither", reportDue(tr), tr.reporting.queue.Len())
@@ -911,6 +916,19 @@ func TestTrackerCancelsReportOnForegroundCall(t *testing.T) {
 			},
 		},
 		{
+			name: "CommittedCheckpointState with local snapshot",
+			call: func(_ *testing.T, tr *Tracker) {
+				tr.CommittedCheckpointState(trackedActorUID)
+			},
+		},
+		{
+			name:            "CommittedCheckpointState when already detached",
+			alreadyDetached: true,
+			call: func(_ *testing.T, tr *Tracker) {
+				tr.CommittedCheckpointState(trackedActorUID)
+			},
+		},
+		{
 			name: "Detach with local snapshot",
 			call: func(t *testing.T, tr *Tracker) {
 				if _, err := tr.Detach(t.Context(), trackedActorUID); err != nil {
@@ -1112,10 +1130,11 @@ func TestTrackerReportStaysDueAtShutdown(t *testing.T) {
 	}
 }
 
-// A report waits while a Run, Restore, Checkpoint, or PromoteSnapshot holds
-// the actor, since the control plane holds the actor's lease throughout that
-// call and would refuse the report with Aborted. Once the hold ends without a
-// commit canceling the report, the report is queued.
+// A report waits while a Run, Restore, Checkpoint, PromoteSnapshot, or
+// Terminate holds the actor, since the control plane holds the actor's lease
+// throughout that call and would refuse the report with Aborted. Once the hold
+// ends without a commit canceling the report, or a Terminate forgetting the
+// actor, the report is queued.
 func TestTrackerDefersReportDuringHold(t *testing.T) {
 	holds := []struct {
 		name  string
@@ -1134,7 +1153,17 @@ func TestTrackerDefersReportDuringHold(t *testing.T) {
 		{
 			name: "BeginCheckpoint",
 			begin: func(t *testing.T, tr *Tracker) func() {
-				end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, committedRef("s2", 2, tr.clock.Now()).Snapshot)
+				_, end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, committedRef("s2", 2, tr.clock.Now()).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+				if err != nil {
+					t.Fatalf("BeginCheckpoint: %v", err)
+				}
+				return end
+			},
+		},
+		{
+			name: "BeginCheckpoint immediate",
+			begin: func(t *testing.T, tr *Tracker) func() {
+				_, end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, committedRef("s2", 2, tr.clock.Now()).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
 				if err != nil {
 					t.Fatalf("BeginCheckpoint: %v", err)
 				}
@@ -1151,6 +1180,13 @@ func TestTrackerDefersReportDuringHold(t *testing.T) {
 					t.Fatalf("BeginPromote: %v", err)
 				}
 				return end
+			},
+		},
+		{
+			// A Terminate that fails before Forget.
+			name: "BeginTerminate",
+			begin: func(t *testing.T, tr *Tracker) func() {
+				return tr.BeginTerminate(trackedActorUID)
 			},
 		},
 	}
@@ -1224,7 +1260,7 @@ func TestTrackerDefersReportDuringHold(t *testing.T) {
 		uploadNow(t, tr, store, nil)
 
 		s2 := committedRef("s2", 2, tr.clock.Now())
-		end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s2.Snapshot)
+		_, end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s2.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 		if err != nil {
 			t.Fatalf("BeginCheckpoint: %v", err)
 		}

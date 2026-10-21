@@ -41,6 +41,11 @@ type Gate string
 const (
 	// GateExternalVolumes controls whether external volumes are supported.
 	GateExternalVolumes Gate = "ExternalVolumes"
+
+	// GatePerTemplateSnapshotLocation controls whether an ActorTemplate's
+	// snapshotConfig.storage_location is honored. When disabled, snapshots
+	// are stored under ate-api-server's --snapshot-location.
+	GatePerTemplateSnapshotLocation Gate = "PerTemplateSnapshotLocation"
 )
 
 // All is the pseudo-gate name that enables every known gate.
@@ -50,6 +55,7 @@ const All = "ALL"
 // default and enabled via the --preview flag.
 var realKnownGates = []Gate{
 	GateExternalVolumes,
+	GatePerTemplateSnapshotLocation,
 }
 
 var globalKnownGates []Gate           // all known gates

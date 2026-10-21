@@ -166,8 +166,9 @@ func restoreSnapshotKind(directLocal bool, rec *sandboxAssetsRecord) string {
 	return ateattr.SnapshotKindLatest
 }
 
-// checkpointSnapshotKind classifies which snapshot a checkpoint writes: a pause
-// writes the node-local one, and a suspend writes a durable latest snapshot.
+// checkpointSnapshotKind classifies which snapshot a checkpoint writes: an
+// asynchronous suspend writes the node-local one, and a synchronous suspend
+// writes a durable latest snapshot.
 func checkpointSnapshotKind(req *ateletpb.CheckpointRequest) string {
 	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_DEFERRED {
 		return ateattr.SnapshotKindLocal

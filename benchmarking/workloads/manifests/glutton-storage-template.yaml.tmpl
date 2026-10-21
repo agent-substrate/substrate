@@ -24,9 +24,10 @@ workerSelector:
     workload: benchmark-worker
 volumes:
 - name: external-storage
-  externalVolumeTemplate:
-    capacity: 1Gi
-    storageClassName: ${STORAGE_CLASS_NAME}
+  external:
+    template:
+      capacityBytes: 1073741824 # 1Gi
+      storageClassName: ${STORAGE_CLASS_NAME}
 containers:
 - name: glutton-storage
   image: ko://go.ate.dev/substrate/cmd/benchmarking/glutton
@@ -52,10 +53,8 @@ containers:
       port: 80
 resources:
   limits:
-  - name: cpu
-    quantity: "${ACTOR_CPU}"
-  - name: memory
-    quantity: "${ACTOR_MEMORY}"
+    cpuMillicores: "${ACTOR_CPU_MILLICORES}"
+    memoryBytes: "${ACTOR_MEMORY_BYTES}"
 snapshotConfig:
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton-storage/

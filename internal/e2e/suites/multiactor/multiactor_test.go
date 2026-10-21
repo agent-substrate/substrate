@@ -67,7 +67,7 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 			pods[names[0]], pods[names[1]])
 	}
 
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}

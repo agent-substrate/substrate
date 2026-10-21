@@ -37,6 +37,7 @@ const (
 	WorkerSupport_RegisterWorker_FullMethodName       = "/atelet.WorkerSupport/RegisterWorker"
 	WorkerSupport_RequestActorSuspend_FullMethodName  = "/atelet.WorkerSupport/RequestActorSuspend"
 	WorkerSupport_GetActorEgressPolicy_FullMethodName = "/atelet.WorkerSupport/GetActorEgressPolicy"
+	WorkerSupport_ReportActorCrashed_FullMethodName   = "/atelet.WorkerSupport/ReportActorCrashed"
 )
 
 // WorkerSupportClient is the client API for WorkerSupport service.
@@ -71,6 +72,10 @@ type WorkerSupportClient interface {
 	// Control.GetActorEgressPolicy. An error is the control plane's, passed
 	// through as it was given.
 	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*GetActorEgressPolicyResponse, error)
+	// ReportActorCrashed reports that the sandbox of the actor this worker
+	// hosts died on its own, for atelet to forward to the control plane's
+	// WorkerService, which this mirrors.
+	ReportActorCrashed(ctx context.Context, in *ReportActorCrashedRequest, opts ...grpc.CallOption) (*ReportActorCrashedResponse, error)
 }
 
 type workerSupportClient struct {
@@ -121,6 +126,16 @@ func (c *workerSupportClient) GetActorEgressPolicy(ctx context.Context, in *GetA
 	return out, nil
 }
 
+func (c *workerSupportClient) ReportActorCrashed(ctx context.Context, in *ReportActorCrashedRequest, opts ...grpc.CallOption) (*ReportActorCrashedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportActorCrashedResponse)
+	err := c.cc.Invoke(ctx, WorkerSupport_ReportActorCrashed_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerSupportServer is the server API for WorkerSupport service.
 // All implementations must embed UnimplementedWorkerSupportServer
 // for forward compatibility.
@@ -153,6 +168,10 @@ type WorkerSupportServer interface {
 	// Control.GetActorEgressPolicy. An error is the control plane's, passed
 	// through as it was given.
 	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*GetActorEgressPolicyResponse, error)
+	// ReportActorCrashed reports that the sandbox of the actor this worker
+	// hosts died on its own, for atelet to forward to the control plane's
+	// WorkerService, which this mirrors.
+	ReportActorCrashed(context.Context, *ReportActorCrashedRequest) (*ReportActorCrashedResponse, error)
 	mustEmbedUnimplementedWorkerSupportServer()
 }
 
@@ -174,6 +193,9 @@ func (UnimplementedWorkerSupportServer) RequestActorSuspend(context.Context, *Re
 }
 func (UnimplementedWorkerSupportServer) GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*GetActorEgressPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActorEgressPolicy not implemented")
+}
+func (UnimplementedWorkerSupportServer) ReportActorCrashed(context.Context, *ReportActorCrashedRequest) (*ReportActorCrashedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportActorCrashed not implemented")
 }
 func (UnimplementedWorkerSupportServer) mustEmbedUnimplementedWorkerSupportServer() {}
 func (UnimplementedWorkerSupportServer) testEmbeddedByValue()                       {}
@@ -268,6 +290,24 @@ func _WorkerSupport_GetActorEgressPolicy_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerSupport_ReportActorCrashed_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportActorCrashedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerSupportServer).ReportActorCrashed(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerSupport_ReportActorCrashed_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerSupportServer).ReportActorCrashed(ctx, req.(*ReportActorCrashedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerSupport_ServiceDesc is the grpc.ServiceDesc for WorkerSupport service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -291,6 +331,10 @@ var WorkerSupport_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "GetActorEgressPolicy",
 			Handler:    _WorkerSupport_GetActorEgressPolicy_Handler,
 		},
+		{
+			MethodName: "ReportActorCrashed",
+			Handler:    _WorkerSupport_ReportActorCrashed_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "atelet.proto",
@@ -313,6 +357,10 @@ const (
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
+//
+// atelet runs at most one Run, Restore, Checkpoint, PromoteSnapshot,
+// DetachActor, or Terminate of an actor at a time. A call waits for the one in
+// progress, up to the call's deadline.
 type AteletClient interface {
 	// Run tells atelet to create a new containerized workload from scratch on a
 	// worker.
@@ -323,6 +371,11 @@ type AteletClient interface {
 	// atelet deletes the actor's older local snapshots, except one still being
 	// uploaded, which it deletes after that upload ends. A Checkpoint that fails
 	// before then leaves the actor's previous local snapshot in place.
+	//
+	// A Checkpoint of a snapshot already committed, as a retry's is, returns the
+	// actor's state without checkpointing the workload again; under
+	// UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+	// yet.
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
 	// Restore restores a workload from a snapshot onto a worker.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
@@ -344,12 +397,9 @@ type AteletClient interface {
 	// report a DetachActor call, whose caller reads the state from the response.
 	// Waits for an operation already in progress on the actor, such as an
 	// upload or a detach. Does nothing when atelet holds no local snapshot for
-	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-	// actor is in progress or the actor runs on this node, and
+	// the actor. Returns ABORTED when the actor runs on this node, and
 	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
 	// durable, such as when it has no `snapshot.object`.
-	//
-	// TODO: Temporarily, atelet returns UNIMPLEMENTED.
 	DetachActor(ctx context.Context, in *DetachActorRequest, opts ...grpc.CallOption) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
@@ -432,6 +482,10 @@ func (c *ateletClient) Terminate(ctx context.Context, in *TerminateRequest, opts
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
+//
+// atelet runs at most one Run, Restore, Checkpoint, PromoteSnapshot,
+// DetachActor, or Terminate of an actor at a time. A call waits for the one in
+// progress, up to the call's deadline.
 type AteletServer interface {
 	// Run tells atelet to create a new containerized workload from scratch on a
 	// worker.
@@ -442,6 +496,11 @@ type AteletServer interface {
 	// atelet deletes the actor's older local snapshots, except one still being
 	// uploaded, which it deletes after that upload ends. A Checkpoint that fails
 	// before then leaves the actor's previous local snapshot in place.
+	//
+	// A Checkpoint of a snapshot already committed, as a retry's is, returns the
+	// actor's state without checkpointing the workload again; under
+	// UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+	// yet.
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
 	// Restore restores a workload from a snapshot onto a worker.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
@@ -463,12 +522,9 @@ type AteletServer interface {
 	// report a DetachActor call, whose caller reads the state from the response.
 	// Waits for an operation already in progress on the actor, such as an
 	// upload or a detach. Does nothing when atelet holds no local snapshot for
-	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-	// actor is in progress or the actor runs on this node, and
+	// the actor. Returns ABORTED when the actor runs on this node, and
 	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
 	// durable, such as when it has no `snapshot.object`.
-	//
-	// TODO: Temporarily, atelet returns UNIMPLEMENTED.
 	DetachActor(context.Context, *DetachActorRequest) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.

@@ -180,6 +180,8 @@ patches:
                   matchLabels:
                     podcert.ate.dev/canarying: live
                 path: trust-bundle.pem
+  # Agentgateway does not authenticate ingress clients yet, so it still serves
+  # the plaintext ports the Envoy router dropped.
   - target:
       version: v1
       kind: Service
@@ -193,3 +195,34 @@ patches:
           port: 15020
           targetPort: stats
           protocol: TCP
+      - op: add
+        path: /spec/ports/-
+        value:
+          name: http
+          port: 80
+          targetPort: 8080
+          protocol: TCP
+      - op: add
+        path: /spec/ports/-
+        value:
+          name: connect
+          port: 8081
+          targetPort: 8081
+          protocol: TCP
+  - target:
+      group: networking.k8s.io
+      version: v1
+      kind: NetworkPolicy
+      name: atenet-router
+      namespace: ate-system
+    patch: |-
+      - op: add
+        path: /spec/ingress/0/ports/-
+        value:
+          protocol: TCP
+          port: http
+      - op: add
+        path: /spec/ingress/0/ports/-
+        value:
+          protocol: TCP
+          port: connect

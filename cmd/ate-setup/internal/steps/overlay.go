@@ -48,11 +48,6 @@ const cordonControlPlaneComponent = installDir + "/components/cordon-control-pla
 // over the atelet and ate-controller applies under --fake-data-plane.
 const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
 
-// routerStaticMTLSComponent is the kustomize component that switches the
-// ingress router to --ingress-auth-mode=static-mtls, layered over every
-// control plane apply under --ingress-auth-mode=static-mtls.
-const routerStaticMTLSComponent = installDir + "/components/router-static-mtls"
-
 // components lists the kustomize components every control plane apply is
 // composed with. Each patch targets its workloads by name, and kustomize leaves
 // a stream alone when nothing in it matches, so composing a manifest that
@@ -61,9 +56,6 @@ func (e *Env) components() []string {
 	var components []string
 	if e.Cfg.FakeDataPlane {
 		components = append(components, e.Cfg.Path(fakeDataPlaneComponent))
-	}
-	if e.Cfg.IngressAuthMode == config.IngressAuthStaticMTLS {
-		components = append(components, e.Cfg.Path(routerStaticMTLSComponent))
 	}
 	if e.Cfg.CordonControlPlane {
 		components = append(components, e.Cfg.Path(cordonControlPlaneComponent))
@@ -151,6 +143,10 @@ func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	if e.Cfg.Router != config.RouterAgentgateway {
+		manifest, err = e.patchAtenetRouterAllowedSPIFFEIDs(manifest)
+		if err != nil {
+			return nil, err
+		}
 		imageReference, err := e.dockerfileImage(ctx, envoyDataplaneImage, envoyDataplaneDockefile)
 		if err != nil {
 			return nil, err
@@ -167,6 +163,10 @@ func (e *Env) renderAtenetRouterManifest(ctx context.Context) ([]byte, error) {
 		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-router"))
 	}
 	manifest, err := e.render(e.Cfg.Manifest("atenet-router.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	manifest, err = e.patchAtenetRouterAllowedSPIFFEIDs(manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -241,10 +241,29 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 	return e.ResolveManifestBytes(ctx, rendered)
 }
 
-// patchAtenetEgressEnvoyConcurrency uses a kustomize JSON6902 patch to append
-// --concurrency <concurrency> to the envoy container's args in the
-// atenet-egress Deployment.
+// patchAtenetEgressEnvoyConcurrency appends --concurrency <concurrency> to the
+// envoy container's args in the atenet-egress Deployment.
 func patchAtenetEgressEnvoyConcurrency(raw []byte, concurrency int) ([]byte, error) {
+	return appendContainerArgs(raw, "atenet-egress", "envoy", "--concurrency", strconv.Itoa(concurrency))
+}
+
+// patchAtenetRouterAllowedSPIFFEIDs appends --ingress-allowed-spiffe-ids to the
+// atenet-router container's args in the Envoy router Deployment. The base
+// manifest carries no allowlist, because which clients may reach actors is the
+// install's to decide.
+func (e *Env) patchAtenetRouterAllowedSPIFFEIDs(raw []byte) ([]byte, error) {
+	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
+		return nil, err
+	}
+	return appendContainerArgs(raw, "atenet-router", "atenet-router",
+		"--ingress-allowed-spiffe-ids="+strings.Join(e.Cfg.IngressAllowedSPIFFEIDs, ","))
+}
+
+// appendContainerArgs uses a kustomize JSON6902 patch to append args to the
+// first container of the named Deployment in ate-system. The patch first
+// tests that the first container is the one named, so a reordered manifest
+// fails the render instead of patching the wrong container.
+func appendContainerArgs(raw []byte, deployment, container string, args ...string) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "ate-setup-kustomize-")
 	if err != nil {
 		return nil, fmt.Errorf("while creating a scratch kustomization: %w", err)
@@ -254,7 +273,8 @@ func patchAtenetEgressEnvoyConcurrency(raw []byte, concurrency int) ([]byte, err
 	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), raw, 0o600); err != nil {
 		return nil, fmt.Errorf("while staging a manifest for kustomize: %w", err)
 	}
-	kustomization := fmt.Sprintf(`apiVersion: kustomize.config.k8s.io/v1beta1
+	var kustomization strings.Builder
+	fmt.Fprintf(&kustomization, `apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - manifest.yaml
@@ -263,20 +283,20 @@ patches:
       group: apps
       version: v1
       kind: Deployment
-      name: atenet-egress
+      name: %s
       namespace: ate-system
     patch: |-
       - op: test
         path: /spec/template/spec/containers/0/name
-        value: envoy
-      - op: add
-        path: /spec/template/spec/containers/0/args/-
-        value: --concurrency
-      - op: add
+        value: %q
+`, deployment, container)
+	for _, arg := range args {
+		fmt.Fprintf(&kustomization, `      - op: add
         path: /spec/template/spec/containers/0/args/-
         value: %q
-`, strconv.Itoa(concurrency))
-	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(kustomization), 0o600); err != nil {
+`, arg)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(kustomization.String()), 0o600); err != nil {
 		return nil, fmt.Errorf("while writing a scratch kustomization: %w", err)
 	}
 	return kustomize.Build(dir)

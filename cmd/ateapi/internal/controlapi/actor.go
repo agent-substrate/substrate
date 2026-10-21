@@ -96,7 +96,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
 		// support cloning from a tag that has external volumes.
 		for _, volume := range template.GetVolumes() {
-			if volume.GetExternalVolumeTemplate() != nil {
+			if volume.GetExternal().GetTemplate() != nil {
 				// TODO: Permit cloning after CSI volume snapshots are supported.
 				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates with external volumes")
 			}
@@ -114,7 +114,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	name := inActor.GetMetadata().GetName()
 
 	// Volume creation is completed asynchronously after the actor is recorded.
-	var initVols []*ateapipb.ExternalVolume
+	var initVols []*ateapipb.ExternalVolumeStatus
 	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
 		return nil, err
 	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
@@ -131,7 +131,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	outActor := proto.CloneOf(inActor)
 	outActor.Status = &ateapipb.ActorStatus{
 		State:           ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		ExternalVolumes: initVols,
+		ExternalVolumes: externalVolumesStatus(initVols),
 	}
 	if sourceTag != nil {
 		// The Actor starts out borrowing the tag's snapshot rather than
@@ -305,18 +305,11 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 				return apierror.FailedPrecondition(
 					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
 			}
-			// A paused actor resumes from its node-local snapshot, uploaded or
-			// not, which was captured from the old template's sandbox. The
-			// snapshot stays local until atelet detaches it from the node.
-			if latestSnapshotIsLocal(oldVal.GetStatus()) {
-				return apierror.FailedPrecondition(
-					"actor must hold no node-local snapshot to change its actor template: wait for its snapshot to be uploaded and detached from the node, or revert it")
-			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
 				return err
 			}
-			if err := validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
+			if err := s.validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
 				return err
 			}
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
@@ -397,8 +390,10 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 // already owns. This is needed to not leak snapshots when the actor is deleted:
 // Deleting an actor collects everything under its external snapshot prefix. If
 // the location prefix ever changes, we risk leaking the snapshots under the old prefix.
-func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
-	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+func (s *ServiceImpl) validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
+	snap := latestSnapshot(actor.GetStatus(), func(snapshot *ateapipb.Snapshot) bool {
+		return snapshot.GetDurableSnapshot().GetObject().GetSnapshotUri() != ""
+	})
 	currentSnapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if currentSnapshotURI == "" {
 		return nil
@@ -413,7 +408,10 @@ func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateap
 	}
 	// Compared as prefixes, so a newLocation spelled with and without a
 	// trailing slash counts as the same.
-	newLocation := newTemplate.GetSnapshotConfig().GetStorageLocation()
+	newLocation, err := resolveSnapshotLocation(s.clusterSnapshotLocation, newTemplate)
+	if err != nil {
+		return err
+	}
 	// Generate what the new snapshot prefix would look like for this actor.
 	nextSnapshotLocationPrefix, err := currentURI.Owner().Prefix(newLocation)
 	if err != nil {
@@ -434,7 +432,7 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
 	// actor, so failures before the load carry none. No pool pair, even when
-	// any_state deletes an actor that still holds a worker.
+	// the deleted actor still held a worker.
 	defer func() {
 		var attrs []attribute.KeyValue
 		if deleted != nil {
@@ -448,7 +446,7 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, req.GetAnyState(), toDeletePreconditions(req.GetOptions()))
+	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, toDeletePreconditions(req.GetOptions()))
 	if err != nil {
 		return nil, err
 	}
@@ -501,6 +499,21 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 	}
 	setSpanActorAttributes(ctx, actor)
 	return &ateapipb.SuspendActorResponse{Actor: actor}, nil
+}
+
+// CrashActorReportedByWorker crashes a RUNNING actor whose sandbox died, on
+// behalf of the worker hosting it. The caller authorizes the worker.
+func (s *RPCService) CrashActorReportedByWorker(ctx context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapipb.Actor, error) {
+	setSpanActorRefAttributes(ctx, actorRef)
+	actor, err := s.actorWorkflow.CrashActorReportedByWorker(ctx, actorRef, actorUID, workerName, message)
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		}
+		return nil, err
+	}
+	setSpanActorAttributes(ctx, actor)
+	return actor, nil
 }
 
 func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorRequest) (*ateapipb.RevertActorResponse, error) {

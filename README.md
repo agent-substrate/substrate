@@ -119,10 +119,10 @@ To quickly set up the complete environment:
 hack/create-kind-cluster.sh
 
 # install ate, PostgreSQL, rustfs
-hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
 
 # install counter demo
-hack/install-ate-kind.sh --deploy-demo-counter
+hack/install-ate-kind.sh deploy demo-counter
 
 # install kubectl-ate
 go install ./cmd/kubectl-ate
@@ -177,7 +177,7 @@ curl -X POST \
 
 4. Deploy the Agent Substrate system to your cluster:
    ```bash
-   ./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+   go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}'
    ```
 
    `--credential-provider` is required. `{"name":"k8s.io"}` also deploys the
@@ -193,7 +193,7 @@ curl -X POST \
 
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash
-   ./hack/install-ate.sh --deploy-demo-counter
+   go run ./cmd/ate-setup deploy demo demo-counter
    ```
 
 #### Custom Setup and Deployment
@@ -207,13 +207,14 @@ go run ./tools/setup-gcp create bucket
 To run the PostgreSQL store backend on Cloud SQL — with IAM database
 authentication and no passwords — see [tools/setup-gcp/cloud-sql.md](tools/setup-gcp/cloud-sql.md).
 
-Similarly, you can deploy or cleanup specific Agent Substrate components using the installation script. See `./hack/install-ate.sh --help` for all options.
+Similarly, you can deploy or cleanup specific Agent Substrate components using
+the installation script. See `go run ./cmd/ate-setup` for all options.
 ```bash
 # Re-deploy only ate-apiserver of the ATE system
-./hack/install-ate.sh --deploy-ate-apiserver
+go run ./cmd/ate-setup deploy apiserver
 
 # Delete everything (core system and all demos)
-./hack/install-ate.sh --delete-all
+go run ./cmd/ate-setup delete all
 ```
 
 #### Tearing down resources (GCP)
@@ -243,7 +244,6 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 3. **[Claude Code Multiplex](demos/claude-code-multiplex/README.md)**: Demonstrates oversubscribing physical hardware by multiplexing multiple Claude Code agents onto a limited pool of workers.
 4. **[Multi-Template](demos/multi-template/README.md)**: Two `ActorTemplate`s running different binaries share one `WorkerPool`, even though the templates live in different atespaces.
 5. **[Request Parking](demos/parking/README.md)**: An oversubscribed pool where the router holds inbound requests until a worker frees up, instead of returning `503`.
-6. **[Autoscaled WorkerPool](demos/autoscaled-workerpool/README.md)**: Scales a `WorkerPool` on its assigned-worker count with an HPA fed by prometheus-adapter.
 
 ### Documentation & Guides
 * [Architecture](docs/architecture.md): How the control plane, node supervisor, and networking stack fit together.
@@ -256,7 +256,9 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Egress Traffic](docs/egress-traffic.md): Which protocols an Actor may reach the outside world with and which are blocked.
 * [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
+* [Sandbox Asset Cache](docs/sandbox-asset-cache.md): How a node caches the sandbox binaries actors run on, decides which runtimes it needs, and evicts to a budget.
 * [Upgrade Runbook](docs/upgrade.md): Upgrade a running install to a newer supported release, and roll back if needed.
+* [Node Storage](docs/node-storage.md): How to give snapshot I/O its own disk.
 * [Security Guide](docs/security.md): Security overview, security principles, and threat modeling.
 * [Roadmap](docs/roadmap.md): Current limitations and what is planned next.
 * [Benchmarking Guide](benchmarking/README.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.

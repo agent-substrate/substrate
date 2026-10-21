@@ -50,14 +50,14 @@ func newCkptFixture(t *testing.T, sandboxPID string) ckptFixture {
 			CheckpointDir: t.TempDir(),
 		},
 	}
-	f.leaf = filepath.Join(f.root, ocispec.GVisorCgroupLeaf(testActorUID, ocispec.PauseContainer))
+	f.leaf = filepath.Join(f.root, ocispec.GVisorCgroupLeaf(testActorUID, ocispec.SandboxID))
 	mustMkdir(t, f.leaf)
 	mustWrite(t, filepath.Join(f.leaf, "cgroup.procs"), "100\n"+sandboxPID+"\n")
 	mustWrite(t, filepath.Join(f.leaf, "memory.max"), "805306368\n")
 	mustWrite(t, filepath.Join(f.leaf, "cpu.max"), "200000 100000\n")
 
 	if sandboxPID != "" {
-		pidFile := pidFilePath(f.actorDirs, ocispec.PauseContainer)
+		pidFile := pidFilePath(f.actorDirs, ocispec.SandboxID)
 		mustMkdir(t, filepath.Dir(pidFile))
 		mustWrite(t, pidFile, sandboxPID+"\n")
 	}
@@ -69,7 +69,7 @@ func newCkptFixture(t *testing.T, sandboxPID string) ckptFixture {
 			return err
 		}
 		// Emulate cgroup2 migration out of the sibling checkpoint cgroup so rmdir
-		// succeeds once the sentry moves back into its pause leaf.
+		// succeeds once the sentry moves back into its sandbox leaf.
 		ckptDir := checkpointCgroupDir(f.root, testActorUID)
 		if dir != ckptDir {
 			_ = os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
@@ -125,7 +125,7 @@ func TestIsolateCheckpointCacheMovesOnlyTheSentry(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 	if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "101" {
-		t.Errorf("pause leaf cgroup.procs after restore = %q, want 101", got)
+		t.Errorf("sandbox leaf cgroup.procs after restore = %q, want 101", got)
 	}
 	if err := c.remove(); err != nil {
 		t.Fatalf("remove: %v", err)
@@ -136,25 +136,25 @@ func TestIsolateCheckpointCacheWithoutPIDFile(t *testing.T) {
 	f := newCkptFixture(t, "")
 
 	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID); err == nil {
-		t.Fatal("isolateCheckpointCache succeeded with no pause pid file")
+		t.Fatal("isolateCheckpointCache succeeded with no sandbox pid file")
 	}
 	if _, err := os.Stat(checkpointCgroupDir(f.root, testActorUID)); !os.IsNotExist(err) {
 		t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
 	}
 }
 
-func TestIsolateCheckpointCacheRejectsPIDOutsidePauseLeaf(t *testing.T) {
+func TestIsolateCheckpointCacheRejectsPIDOutsideSandboxLeaf(t *testing.T) {
 	f := newCkptFixture(t, "101")
 	mustWrite(t, filepath.Join(f.leaf, "cgroup.procs"), "100\n")
 
 	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID); err == nil {
-		t.Fatal("isolateCheckpointCache succeeded with the pid outside the pause leaf")
+		t.Fatal("isolateCheckpointCache succeeded with the pid outside the sandbox leaf")
 	}
 	if _, err := os.Stat(checkpointCgroupDir(f.root, testActorUID)); !os.IsNotExist(err) {
 		t.Errorf("checkpoint cgroup created for a reused pid: stat err = %v", err)
 	}
 	if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "100\n" {
-		t.Errorf("pause leaf cgroup.procs = %q, want unchanged \"100\\n\"", got)
+		t.Errorf("sandbox leaf cgroup.procs = %q, want unchanged \"100\\n\"", got)
 	}
 }
 
@@ -185,14 +185,14 @@ func TestCheckpointCgroupRestoreSkipsExitedSentry(t *testing.T) {
 	}
 
 	// If the sentry exited (no longer in ckpt cgroup.procs) and its PID was
-	// recycled elsewhere, restore must not move it into the pause leaf.
+	// recycled elsewhere, restore must not move it into the sandbox leaf.
 	mustWrite(t, filepath.Join(c.dir, "cgroup.procs"), "")
 	mustWrite(t, filepath.Join(f.leaf, "cgroup.procs"), "100\n")
 	if err := c.restore(); err != nil {
 		t.Fatalf("restore with exited sentry: %v", err)
 	}
 	if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "100\n" {
-		t.Errorf("pause leaf cgroup.procs = %q, want unchanged \"100\\n\"", got)
+		t.Errorf("sandbox leaf cgroup.procs = %q, want unchanged \"100\\n\"", got)
 	}
 
 	// If the sentry exits between cgroupHasPID and movePID (ESRCH), restore returns nil.
@@ -296,7 +296,7 @@ func TestCheckpointIsolated(t *testing.T) {
 			t.Error("terminate called after successful cgroup rollback")
 		}
 		if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "101" {
-			t.Errorf("pause leaf cgroup.procs = %q, want 101", got)
+			t.Errorf("sandbox leaf cgroup.procs = %q, want 101", got)
 		}
 		if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
 			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
@@ -332,7 +332,7 @@ func TestCheckpointIsolated(t *testing.T) {
 		}
 	})
 
-	t.Run("terminates workload if checkpoint fails and the pause leaf is gone", func(t *testing.T) {
+	t.Run("terminates workload if checkpoint fails and the sandbox leaf is gone", func(t *testing.T) {
 		f := newCkptFixture(t, "101")
 		ckptDir := checkpointCgroupDir(f.root, testActorUID)
 		var terminated bool
@@ -356,14 +356,14 @@ func TestCheckpointIsolated(t *testing.T) {
 			t.Fatal("checkpointIsolated succeeded on checkpoint error")
 		}
 		if !terminated {
-			t.Error("terminate was not called with the pause leaf gone; sentry would stay in unlimited cgroup")
+			t.Error("terminate was not called with the sandbox leaf gone; sentry would stay in unlimited cgroup")
 		}
 		if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
 			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
 		}
 	})
 
-	t.Run("moves the sentry back into its pause leaf when terminate leaves it running", func(t *testing.T) {
+	t.Run("moves the sentry back into its sandbox leaf when terminate leaves it running", func(t *testing.T) {
 		f := newCkptFixture(t, "101")
 		ckptDir := checkpointCgroupDir(f.root, testActorUID)
 
@@ -380,7 +380,7 @@ func TestCheckpointIsolated(t *testing.T) {
 			t.Fatalf("checkpointIsolated: %v", err)
 		}
 		if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "101" {
-			t.Errorf("pause leaf cgroup.procs = %q, want the live sentry 101 back under its memory.max", got)
+			t.Errorf("sandbox leaf cgroup.procs = %q, want the live sentry 101 back under its memory.max", got)
 		}
 		if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
 			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
@@ -397,7 +397,7 @@ func TestRemoveStaleCheckpointCgroups(t *testing.T) {
 	// A non-empty directory stands in for a cgroup that still has processes:
 	// rmdir fails on both.
 	mustWrite(t, filepath.Join(busy, "cgroup.procs"), strconv.Itoa(42))
-	leaf := filepath.Join(root, ocispec.GVisorCgroupLeaf(testActorUID, ocispec.PauseContainer))
+	leaf := filepath.Join(root, ocispec.GVisorCgroupLeaf(testActorUID, ocispec.SandboxID))
 	mustMkdir(t, leaf)
 
 	removeStaleCheckpointCgroups(context.Background(), root)
@@ -409,7 +409,7 @@ func TestRemoveStaleCheckpointCgroups(t *testing.T) {
 		t.Errorf("busy checkpoint cgroup removed: %v", err)
 	}
 	if _, err := os.Stat(leaf); err != nil {
-		t.Errorf("pause leaf removed: %v", err)
+		t.Errorf("sandbox leaf removed: %v", err)
 	}
 }
 
@@ -459,6 +459,72 @@ func TestDropStagedRestoreFiles(t *testing.T) {
 	case <-evicted:
 		t.Fatal("dropped files were also evicted")
 	default:
+	}
+}
+
+// TestDropSharedRestoreFilesAfterEviction pins the case of a restore dir
+// whose files are hard links into atelet's snapshot cache: unlinking them at
+// once would free nothing, since the cache's link keeps the inode and its
+// pages charged to the actor's cgroup, so the files are evicted from the page
+// cache after the restore's page loading, as a preserved dir is, and only
+// then unlinked.
+func TestDropSharedRestoreFilesAfterEviction(t *testing.T) {
+	restoreDir := newRestoreDir(t)
+	cache := filepath.Join(t.TempDir(), "cache")
+	mustMkdir(t, cache)
+	for _, name := range []string{"checkpoint.img", "pages.img"} {
+		if err := os.Link(filepath.Join(restoreDir, name), filepath.Join(cache, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evicted := captureEviction(t)
+	restoreDone := make(chan struct{})
+
+	dropActorCheckpointCacheAsync(context.Background(), testActorUID, restoreDir, false, func(ctx context.Context) error {
+		select {
+		case <-restoreDone:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	// Nothing happens while the restore still loads pages from the files.
+	select {
+	case <-evicted:
+		t.Fatal("evicted before the restore wait completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	for _, name := range []string{"checkpoint.img", "pages.img", "fs/pages.img"} {
+		if _, err := os.Stat(filepath.Join(restoreDir, name)); err != nil {
+			t.Fatalf("%s unlinked before the restore wait completed: %v", name, err)
+		}
+	}
+
+	close(restoreDone)
+	select {
+	case targets := <-evicted:
+		if len(targets) != 3 {
+			t.Errorf("evicted %d files, want the 3 data files", len(targets))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("eviction never ran after the restore wait completed")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for _, name := range []string{"checkpoint.img", "pages.img", "fs/pages.img"} {
+		for {
+			if _, err := os.Stat(filepath.Join(restoreDir, name)); os.IsNotExist(err) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s still exists after eviction", name)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	for _, name := range []string{"checkpoint.img", "pages.img"} {
+		if _, err := os.Stat(filepath.Join(cache, name)); err != nil {
+			t.Errorf("the cache's link to %s went with the restore dir's: %v", name, err)
+		}
 	}
 }
 

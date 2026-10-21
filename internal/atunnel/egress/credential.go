@@ -28,6 +28,8 @@ import (
 
 	"go.ate.dev/substrate/internal/ateletdial"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // BrokerCertificateSource owns atunnel's actor private key and obtains the
@@ -101,14 +103,37 @@ func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, err
 	}, nil
 }
 
+// mintAttempts bounds the retries of a mint whose broker connection came back
+// Unavailable: a node under a restore wave can refuse or drop the fresh connection, and
+// a failed mint fails the restore that needs the certificate.
+const mintAttempts = 4
+
 // MintWorkerCertificate requests and installs a fresh certificate for the source's existing
-// actor key. It returns the new expiry for renewal scheduling.
+// actor key. It returns the new expiry for renewal scheduling. A mint that fails with
+// Unavailable is retried a few times with a short back-off; every other error is final.
 func (s *BrokerCertificateSource) MintWorkerCertificate(ctx context.Context) (time.Time, error) {
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, s.privateKey)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("egress: create actor CSR: %w", err)
 	}
+	for attempt := 1; ; attempt++ {
+		expiresAt, err := s.mintOnce(ctx, csr)
+		if err == nil {
+			return expiresAt, nil
+		}
+		if attempt >= mintAttempts || status.Code(err) != codes.Unavailable {
+			return time.Time{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return time.Time{}, err
+		case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+		}
+	}
+}
 
+// mintOnce is one connection to the credential broker and one mint over it.
+func (s *BrokerCertificateSource) mintOnce(ctx context.Context, csr []byte) (time.Time, error) {
 	// TODO(identity): We should not be re-establishing a gRPC connection for
 	// every mint request.  Do it once at atunnel startup.
 

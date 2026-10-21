@@ -82,6 +82,11 @@ func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapipb.Reque
 	return Validate_RequestActorSuspendRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateReportActorCrashedRequest(ctx context.Context, req *ateapipb.ReportActorCrashedRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_ReportActorCrashedRequest(ctx, op, nil, req, nil)
+}
+
 func ValidateMarkWorkerAvailableRequest(ctx context.Context, req *ateapipb.MarkWorkerAvailableRequest) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}
@@ -121,11 +126,11 @@ func ValidateWorkerUpdate(ctx context.Context, fldPath *field.Path, newVal, oldV
 	return errs
 }
 
-func ValidateCustom_Worker_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_ActorSandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
-func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_WorkerSandboxClass_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
 

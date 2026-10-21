@@ -304,8 +304,24 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 		})
 		return err
 	}
-	// TODO(#2570): also check ReportActorSnapshotState once it is served. Until
-	// then every caller gets UNIMPLEMENTED, before anything authenticates it.
+	// This handler also validates the request before authenticating the
+	// caller, so the request must be valid.
+	mintWorkerJWT := func(ctx context.Context, api *ateclient.Client) error {
+		_, err := api.WorkerService().MintWorkerActorJwt(ctx, &ateapipb.MintWorkerActorJwtRequest{
+			Actor:     f.actor,
+			ActorUid:  "00000000-0000-4000-8000-000000000000",
+			Audiences: []string{"authz-e2e"},
+		})
+		return err
+	}
+	reportSnapshotState := func(ctx context.Context, api *ateclient.Client) error {
+		_, err := api.WorkerService().ReportActorSnapshotState(ctx, &ateapipb.ReportActorSnapshotStateRequest{
+			Actor:    f.actor,
+			ActorUid: "00000000-0000-4000-8000-000000000000",
+			State:    &ateapipb.ActorSnapshotState{},
+		})
+		return err
+	}
 
 	expectAll(t, ctx, []call{
 		{"RegisterWorker", f.bootstrap, registerWorker, rejected},
@@ -314,5 +330,9 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 		{"RequestActorSuspend", ateletToken, requestSuspend, rejected},
 		{"MintWorkerActorCertificate", f.bootstrap, mintWorkerCert, rejected},
 		{"MintWorkerActorCertificate", ateletToken, mintWorkerCert, rejected},
+		{"MintWorkerActorJwt", f.bootstrap, mintWorkerJWT, rejected},
+		{"MintWorkerActorJwt", ateletToken, mintWorkerJWT, rejected},
+		{"ReportActorSnapshotState", f.bootstrap, reportSnapshotState, rejected},
+		{"ReportActorSnapshotState", ateletToken, reportSnapshotState, rejected},
 	})
 }

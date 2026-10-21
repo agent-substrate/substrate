@@ -48,7 +48,7 @@ jobs:
       with:
         fetch-depth: 0
     - name: Setup Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
     # Unconditional: a released migration becoming permanent is exactly what
@@ -191,6 +191,10 @@ jobs:
       # --preview, so tests of a disabled gate skip themselves (see
       # internal/e2e/preview.go).
       ATE_PREVIEW: ${{ matrix.preview == 'on' && 'ALL' || '' }}
+      # The suites' router client (internal/e2e/ingressauth.go). Only e2e
+      # installs allowlist it, so the suites can reach actors through the
+      # router's mTLS listeners.
+      ATE_INGRESS_ALLOWED_SPIFFE_IDS: spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client
       # Appended to the lane and artifact names: e2e-gvisor runs without
       # preview features, e2e-gvisor-preview with them.
       LANE_SUFFIX: ${{ matrix.preview == 'on' && '-preview' || '' }}
@@ -207,7 +211,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
     - name: Setup Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
         # Use the e2e cache below instead. setup-go's cache key is shared with
@@ -266,14 +270,27 @@ jobs:
       # gateway. ATE_PREVIEW above selects the preview features.
       env:
         ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
-      run: hack/install-ate-kind.sh --deploy-ate-system
+        NO_DEV_ENV: "true"
+        KO_DOCKER_REPO: "localhost:5001"
+        ATE_INSTALL_KIND: "true"
+        BUCKET_NAME: "ate-snapshot"
+        KIND_CLUSTER_NAME: "kind"
+        KUBECTL_CONTEXT: "kind-kind"
+      run: go run ./cmd/ate-setup deploy ate-system
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
         sudo modprobe nfs || true
         sudo modprobe nfsd || true
     - name: Install CSI NFS driver
-      run: hack/install-ate-kind.sh --setup-csi=nfs
+      env:
+        NO_DEV_ENV: "true"
+        KO_DOCKER_REPO: "localhost:5001"
+        ATE_INSTALL_KIND: "true"
+        BUCKET_NAME: "ate-snapshot"
+        KIND_CLUSTER_NAME: "kind"
+        KUBECTL_CONTEXT: "kind-kind"
+      run: go run ./cmd/ate-setup setup csi nfs
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and deploys the
       # counter-microvm demo onto the control plane installed above. The demo
@@ -282,15 +299,29 @@ jobs:
         ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       run: hack/run-microvm-demo-kind.sh
     - name: Deploy gVisor counter demo
-      run: hack/install-ate-kind.sh --deploy-demo-counter
+      env:
+        NO_DEV_ENV: "true"
+        KO_DOCKER_REPO: "localhost:5001"
+        ATE_INSTALL_KIND: "true"
+        BUCKET_NAME: "ate-snapshot"
+        KIND_CLUSTER_NAME: "kind"
+        KUBECTL_CONTEXT: "kind-kind"
+      run: go run ./cmd/ate-setup deploy demo counter
     - name: Deploy egress demos
       # TestActorEgress in the networking suite builds its Actor from the egress
       # ActorTemplate for the class under test, so both fixtures have to exist
       # before their respective lane runs. The demo's actors trust the CA the
       # gateway mints its leaves from.
+      env:
+        NO_DEV_ENV: "true"
+        KO_DOCKER_REPO: "localhost:5001"
+        ATE_INSTALL_KIND: "true"
+        BUCKET_NAME: "ate-snapshot"
+        KIND_CLUSTER_NAME: "kind"
+        KUBECTL_CONTEXT: "kind-kind"
       run: |
-        hack/install-ate-kind.sh --deploy-demo-egress
-        hack/install-ate-kind.sh --deploy-demo-egress-microvm
+        go run ./cmd/ate-setup deploy demo egress
+        go run ./cmd/ate-setup deploy demo egress-microvm
     - name: Trust local TLS origins in egress gateway
       run: hack/setup-e2e-egress-tls-kind.sh
     # scale the idle sandbox class's demo pools to zero so each lane has the node

@@ -404,7 +404,7 @@ func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 func TestApplyReportedSnapshotState(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
-	w := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, nil, "", nil, nil)
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, nil)
 	tmpl, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 		Metadata:       &ateapipb.ResourceMetadata{Atespace: reportAtespace, Name: "tmpl"},
 		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},

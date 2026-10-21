@@ -118,13 +118,13 @@ func (t *Tracker) cancelReportLocked(a *actorSnapshots) {
 }
 
 // queueReportLocked queues the actor's report, if one is due. While a Run,
-// Restore, Checkpoint, or PromoteSnapshot holds the actor, it defers the
-// report until the hold ends.
+// Restore, Checkpoint, PromoteSnapshot, or Terminate holds the actor, it
+// defers the report until the hold ends.
 func (t *Tracker) queueReportLocked(a *actorSnapshots) {
 	if t.reporting.reporter == nil || !a.reportDue() {
 		return
 	}
-	if a.holds > 0 {
+	if a.hold != holdNone {
 		a.reportDeferred = true
 		return
 	}
@@ -243,7 +243,7 @@ func jitteredReportDelay(d time.Duration) time.Duration {
 
 // beginReport returns the actor, the state to report for it, and when the
 // report became due, or false when no report is due or a Run, Restore,
-// Checkpoint, or PromoteSnapshot of the actor is in progress.
+// Checkpoint, PromoteSnapshot, or Terminate of the actor is in progress.
 func (t *Tracker) beginReport(actorUID string) (resources.ActorRef, *ateletpb.ActorSnapshotState, time.Time, bool) {
 	if !t.locks.Lock(t.ctx, actorUID) {
 		// atelet is shutting down.
@@ -255,9 +255,10 @@ func (t *Tracker) beginReport(actorUID string) (resources.ActorRef, *ateletpb.Ac
 		t.reporting.retries.Forget(actorUID)
 		return resources.ActorRef{}, nil, time.Time{}, false
 	}
-	if a.holds > 0 {
-		// A Run, Restore, Checkpoint, or PromoteSnapshot of the actor is in
-		// progress, and queues the report when it ends (see holdLocked).
+	if a.hold != holdNone {
+		// A Run, Restore, Checkpoint, PromoteSnapshot, or Terminate of the
+		// actor is in progress, and queues the report when it ends (see
+		// holdLocked).
 		a.reportDeferred = true
 		return resources.ActorRef{}, nil, time.Time{}, false
 	}

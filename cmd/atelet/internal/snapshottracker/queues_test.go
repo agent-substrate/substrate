@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // Uploads and detaches have queues and workers of their own, so a due detach
@@ -173,17 +174,17 @@ func TestTrackerSameActorUploadAndDetachDue(t *testing.T) {
 	})
 }
 
-// A Checkpoint hold (a.holds > 0) keeps opDetach from pruning local snapshots
-// underneath the checkpoint, while opUpload still runs in the background. When
-// the hold ends, opDetach prunes the now-durable snapshot without uploading
-// again.
+// A Checkpoint hold (a.hold != holdNone) keeps opDetach from pruning local
+// snapshots underneath the checkpoint, while opUpload still runs in the
+// background. When the hold ends, opDetach prunes the now-durable snapshot
+// without uploading again.
 func TestTrackerUploadRunsDuringCheckpointHoldWhileDetachWaits(t *testing.T) {
 	store := newFakeSnapshotStore()
 	tr := newIdleTestTracker(t, store)
 	t0 := tr.clock.Now()
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
 
-	endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s2", 2, time.Time{}).Snapshot)
+	_, endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s2", 2, time.Time{}).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 	if err != nil {
 		t.Fatalf("BeginCheckpoint: %v", err)
 	}

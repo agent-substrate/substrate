@@ -48,18 +48,17 @@ func TestRestoreTimingPhases(t *testing.T) {
 	t.Parallel()
 
 	timing := restoreTiming{
-		prep:          10 * time.Millisecond,
-		egressPrepare: 120 * time.Millisecond,
-		netSetup:      30 * time.Millisecond,
-		pauseRootfs:   5 * time.Millisecond,
-		pauseCreate:   200 * time.Millisecond,
-		pauseRestore:  900 * time.Millisecond,
-		appRootfs:     15 * time.Millisecond,
-		appCreate:     50 * time.Millisecond,
-		appRestore:    400 * time.Millisecond,
-		wakeupProbe:   250 * time.Millisecond,
-		activate:      2 * time.Millisecond,
-		total:         2 * time.Second,
+		prep:           10 * time.Millisecond,
+		egressPrepare:  120 * time.Millisecond,
+		netSetup:       30 * time.Millisecond,
+		sandboxCreate:  200 * time.Millisecond,
+		sandboxRestore: 900 * time.Millisecond,
+		appRootfs:      15 * time.Millisecond,
+		appCreate:      50 * time.Millisecond,
+		appRestore:     400 * time.Millisecond,
+		wakeupProbe:    250 * time.Millisecond,
+		activate:       2 * time.Millisecond,
+		total:          2 * time.Second,
 	}
 	attrs := phaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
 		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, phaselog.RestoreDurationKey, nil, timing.phases())
@@ -75,19 +74,18 @@ func TestRestoreTimingPhases(t *testing.T) {
 
 	rec := renderPhaseRecord(t, attrs)
 	for k, want := range map[string]float64{
-		"ateworker.actor.restore.duration.prep":           0.01,
-		"ateworker.actor.restore.duration.egress_prepare": 0.12,
-		"ateworker.actor.restore.duration.net_setup":      0.03,
-		"ateworker.actor.restore.duration.pause_rootfs":   0.005,
-		"ateworker.actor.restore.duration.pause_create":   0.2,
-		"ateworker.actor.restore.duration.pause_restore":  0.9,
-		"ateworker.actor.restore.duration.app_rootfs":     0.015,
-		"ateworker.actor.restore.duration.app_create":     0.05,
-		"ateworker.actor.restore.duration.app_restore":    0.4,
-		"ateworker.actor.restore.duration.wakeup_probe":   0.25,
-		"ateworker.actor.restore.duration.activate":       0.002,
-		"ateworker.actor.restore.duration.total":          2,
-		"ate.actor.container.count":                       2,
+		"ateworker.actor.restore.duration.prep":            0.01,
+		"ateworker.actor.restore.duration.egress_prepare":  0.12,
+		"ateworker.actor.restore.duration.net_setup":       0.03,
+		"ateworker.actor.restore.duration.sandbox_create":  0.2,
+		"ateworker.actor.restore.duration.sandbox_restore": 0.9,
+		"ateworker.actor.restore.duration.app_rootfs":      0.015,
+		"ateworker.actor.restore.duration.app_create":      0.05,
+		"ateworker.actor.restore.duration.app_restore":     0.4,
+		"ateworker.actor.restore.duration.wakeup_probe":    0.25,
+		"ateworker.actor.restore.duration.activate":        0.002,
+		"ateworker.actor.restore.duration.total":           2,
+		"ate.actor.container.count":                        2,
 	} {
 		got, ok := rec[k].(float64)
 		if !ok {

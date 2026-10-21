@@ -125,12 +125,12 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
-			SandboxClass:    "microvm",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
 			Status: &ateapipb.WorkerStatus{
-				State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity:  &ateapipb.WorkerResources{Actors: 1},
-				Allocated: &ateapipb.WorkerResources{Actors: 1},
+				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity:       &ateapipb.WorkerResources{Actors: 1},
+				Allocated:      &ateapipb.WorkerResources{Actors: 1},
+				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "microvm"}},
 			},
 		},
 		{
@@ -138,21 +138,23 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "other",
 			WorkerPod:       "pod-2",
-			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"ate.dev/worker-pool": "other"},
-			Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE},
+			Status: &ateapipb.WorkerStatus{
+				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+			},
 		},
 		{
 			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-3", CreateTime: timestamppb.New(now.Add(-72 * time.Hour))},
 			WorkerNamespace: "ns-2",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-3",
-			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
 			Status: &ateapipb.WorkerStatus{
-				State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity:  &ateapipb.WorkerResources{Actors: 1},
-				Allocated: &ateapipb.WorkerResources{Actors: 1},
+				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity:       &ateapipb.WorkerResources{Actors: 1},
+				Allocated:      &ateapipb.WorkerResources{Actors: 1},
+				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 			},
 		},
 	}
@@ -161,10 +163,10 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 		"space-b": {actorOn("space-b", "actor-b", "worker-3")},
 	}}
 
-	header := "NAME       POOL      STATE                 ACTORS   CPU   MEMORY   POD          AGE\n"
-	row1 := "worker-1   counter   WORKER_STATE_ACTIVE   1/1      -     -        ns-1/pod-1   5m\n"
-	row2 := "worker-2   other     WORKER_STATE_ACTIVE   0/0      -     -        ns-1/pod-2   3h\n"
-	row3 := "worker-3   counter   WORKER_STATE_ACTIVE   1/1      -     -        ns-2/pod-3   3d\n"
+	header := "NAME       POOL      STATE                 ACTORS   CPU(MILLICORES)   MEMORY   POD          AGE\n"
+	row1 := "worker-1   counter   WORKER_STATE_ACTIVE   1/1      -                 -        ns-1/pod-1   5m\n"
+	row2 := "worker-2   other     WORKER_STATE_ACTIVE   0/0      -                 -        ns-1/pod-2   3h\n"
+	row3 := "worker-3   counter   WORKER_STATE_ACTIVE   1/1      -                 -        ns-2/pod-3   3d\n"
 
 	tests := []struct {
 		name         string
@@ -178,7 +180,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 		{name: "namespace", namespace: "ns-1", expected: header + row1 + row2},
 		{name: "atespace", atespace: "space-a", expected: header + row1},
 		// With no matching rows the tabwriter sizes columns to the header alone.
-		{name: "atespace excludes free workers", atespace: "no-such-space", expected: "NAME   POOL   STATE   ACTORS   CPU   MEMORY   POD   AGE\n"},
+		{name: "atespace excludes free workers", atespace: "no-such-space", expected: "NAME   POOL   STATE   ACTORS   CPU(MILLICORES)   MEMORY   POD   AGE\n"},
 		{name: "selector", selector: "ate.dev/worker-pool=counter", expected: header + row1 + row3},
 		{name: "sandbox class", sandboxClass: "microvm", expected: header + row1},
 		{name: "sandbox class gvisor", sandboxClass: "gvisor", expected: header + row2 + row3},
@@ -230,13 +232,9 @@ func TestGetWorkersRunner_GetByName(t *testing.T) {
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
 			Status: &ateapipb.WorkerStatus{
-				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity: &ateapipb.WorkerResources{Actors: 4, Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-					{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"},
-				}}},
-				Allocated: &ateapipb.WorkerResources{Actors: 1, Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-					{Name: "cpu", Quantity: "500m"}, {Name: "memory", Quantity: "1Gi"},
-				}}},
+				State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity:  &ateapipb.WorkerResources{Actors: 4, CpuMillicores: 2000, MemoryBytes: 4 << 30},
+				Allocated: &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 1 << 30},
 			},
 		},
 		"worker-2": {
@@ -259,9 +257,9 @@ func TestGetWorkersRunner_GetByName(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := "NAME       POOL      STATE                   ACTORS   CPU      MEMORY    POD          AGE\n" +
-		"worker-1   counter   WORKER_STATE_ACTIVE     1/4      500m/2   1Gi/4Gi   ns-1/pod-1   5m\n" +
-		"worker-2   counter   WORKER_STATE_DRAINING   0/0      -        -         ns-1/pod-2   3d\n"
+	expected := "NAME       POOL      STATE                   ACTORS   CPU(MILLICORES)   MEMORY    POD          AGE\n" +
+		"worker-1   counter   WORKER_STATE_ACTIVE     1/4      500/2000          1Gi/4Gi   ns-1/pod-1   5m\n" +
+		"worker-2   counter   WORKER_STATE_DRAINING   0/0      -                 -         ns-1/pod-2   3d\n"
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}
@@ -331,16 +329,21 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			WorkerNamespace: "ate-demo-counter",
 			WorkerPool:      "counter",
 			WorkerPod:       "counter-worker-pool-7b9f8-x123",
-			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
+			Status: &ateapipb.WorkerStatus{
+				Capacity:       &ateapipb.WorkerResources{Actors: 1},
+				Allocated:      &ateapipb.WorkerResources{Actors: 1},
+				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+			},
 		},
 		{
 			WorkerNamespace: "ate-demo-counter",
 			WorkerPool:      "counter",
 			WorkerPod:       "counter-worker-pool-7b9f8-y456",
-			SandboxClass:    "microvm",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
+			Status: &ateapipb.WorkerStatus{
+				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "microvm"}},
+			},
 		},
 	}
 
@@ -404,7 +407,9 @@ func TestTopWorkersRunner_FilterNamespace(t *testing.T) {
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			SandboxClass:    "gvisor",
+			Status: &ateapipb.WorkerStatus{
+				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+			},
 		},
 		{
 			WorkerNamespace: "ns-2",
@@ -441,8 +446,11 @@ func TestTopWorkersRunner_FilterAtespace(t *testing.T) {
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			SandboxClass:    "microvm",
-			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
+			Status: &ateapipb.WorkerStatus{
+				Capacity:       &ateapipb.WorkerResources{Actors: 1},
+				Allocated:      &ateapipb.WorkerResources{Actors: 1},
+				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "microvm"}},
+			},
 		},
 		{
 			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-2"},
@@ -484,8 +492,10 @@ func TestTopWorkersRunner_FilterSelector(t *testing.T) {
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
-			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
+			Status: &ateapipb.WorkerStatus{
+				SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+			},
 		},
 		{
 			WorkerNamespace: "ns-1",

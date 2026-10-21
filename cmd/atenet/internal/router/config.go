@@ -63,49 +63,21 @@ func (m Mode) ServesIngress() bool { return m == ModeIngress }
 // ServesEgress reports whether this mode answers egress CONNECTs.
 func (m Mode) ServesEgress() bool { return m == ModeEgress }
 
-// IngressAuthMode selects how the ingress dataplane authenticates and
-// authorizes the clients that connect to it.
-type IngressAuthMode string
-
-const (
-	// IngressAuthDeprecatedInsecure serves the plaintext ingress listeners,
-	// which accept every client and let any of them reach any actor,
-	// alongside the TLS listeners, which authenticate clients exactly as in
-	// IngressAuthStaticMTLS. It exists so clients can move to mTLS one at a
-	// time, and will be removed once they have.
-	IngressAuthDeprecatedInsecure IngressAuthMode = "deprecated-insecure"
-	// IngressAuthStaticMTLS requires every client to present a certificate
-	// that chains to the configured client CA bundle and carries one of the
-	// allowed SPIFFE IDs as a URI SAN. Envoy enforces both during the TLS
-	// handshake, so only the TLS listeners may be enabled.
-	IngressAuthStaticMTLS IngressAuthMode = "static-mtls"
-)
-
 // ingressAuthConfig holds the client authentication settings for the ingress
-// dataplane's listeners.
+// dataplane's listeners. Every client must present a certificate that chains
+// to ClientCAFile and carries one of AllowedSPIFFEIDs as a URI SAN. Envoy
+// enforces both during the TLS handshake.
 type ingressAuthConfig struct {
-	// Mode is the authentication mode. Empty means
-	// IngressAuthDeprecatedInsecure.
-	Mode IngressAuthMode
 	// ClientCAFile is the PEM bundle of CAs allowed to sign client
 	// certificates. Envoy reads it, so it must be mounted in the Envoy
-	// container at the same path. Required whenever a TLS listener is
-	// enabled.
+	// container at the same path.
 	ClientCAFile string
 	// AllowedSPIFFEIDs is the exact set of SPIFFE IDs allowed to connect to
-	// actors through the TLS listeners. Required whenever a TLS listener is
-	// enabled.
+	// actors.
 	//
 	// Entries are complete SPIFFE IDs, like
 	// `spiffe://mytrustdomain.com/foo/bar/baz`.
 	AllowedSPIFFEIDs []string
-}
-
-func (c ingressAuthConfig) mode() IngressAuthMode {
-	if c.Mode == "" {
-		return IngressAuthDeprecatedInsecure
-	}
-	return c.Mode
 }
 
 // authConfig holds the router's mTLS settings for dialing ateapi.
@@ -150,7 +122,6 @@ type routerConfig struct {
 	RouterServiceName string
 	Kubeconfig        string
 	AteapiAddr        string
-	HttpPort          int
 	XdsPort           int
 	ExtprocPort       int
 	ExtprocAddr       string
@@ -158,12 +129,10 @@ type routerConfig struct {
 	StatusAddr        string
 	HealthInterval    time.Duration
 	HttpsPort         int
-	// ConnectPlainTextPort and ConnectTLSPort are the plaintext and TLS
-	// listener ports for CONNECT-tunneled traffic. Non-positive disables the
-	// corresponding listener.
-	ConnectPlainTextPort int
-	ConnectTLSPort       int
-	EnvoyCertPath        string
+	// ConnectTLSPort is the listener port for CONNECT-tunneled traffic.
+	// Non-positive disables the listener.
+	ConnectTLSPort int
+	EnvoyCertPath  string
 
 	// UpstreamCredentialBundlePath is the router's podidentity credential bundle
 	// (cert+key) presented as the client cert when dialing the actor's atunnel
@@ -340,60 +309,25 @@ func (c routerConfig) validate() error {
 	return nil
 }
 
-// tlsIngressEnabled reports whether the Envoy dataplane builds at least one
-// TLS ingress listener.
-func (c routerConfig) tlsIngressEnabled() bool {
-	return c.EnvoyCertPath != "" && (c.HttpsPort > 0 || c.ConnectTLSPort > 0)
-}
-
-// validateIngressAuth rejects a configuration that would leave a TLS listener
-// without client authentication, a static-mtls configuration that would leave
-// any path to an actor unauthenticated, and one the dataplane cannot enforce.
+// validateIngressAuth rejects an Envoy ingress configuration with no TLS
+// listener, or one whose clients cannot be authenticated. Agentgateway's
+// listeners come from its static configuration, so the router has none to
+// check.
 func (c routerConfig) validateIngressAuth() error {
-	mode := c.IngressAuth.mode()
-	switch mode {
-	case IngressAuthDeprecatedInsecure, IngressAuthStaticMTLS:
-	default:
-		return fmt.Errorf("--ingress-auth-mode must be %q or %q, got %q", IngressAuthDeprecatedInsecure, IngressAuthStaticMTLS, c.IngressAuth.Mode)
-	}
-	// The egress gateway never builds the ingress listeners.
-	if !c.Mode.ServesIngress() {
+	if !c.Mode.ServesIngress() || c.atenetRouter() != atenetRouterEnvoy {
 		return nil
 	}
-	if mode == IngressAuthDeprecatedInsecure {
-		// Agentgateway's listeners come from its static configuration, so
-		// the router has none to authenticate.
-		if c.atenetRouter() != atenetRouterEnvoy || !c.tlsIngressEnabled() {
-			return nil
-		}
-		return c.validateIngressClientAuth()
-	}
-	if c.atenetRouter() != atenetRouterEnvoy {
-		return fmt.Errorf("--ingress-auth-mode=%s requires --atenet-dataplane=%s: the %s dataplane is configured statically, not by the router", IngressAuthStaticMTLS, atenetRouterEnvoy, c.atenetRouter())
-	}
-	if c.HttpPort > 0 {
-		return fmt.Errorf("--ingress-auth-mode=%s requires --port-http=0: the plaintext listener cannot authenticate clients", IngressAuthStaticMTLS)
-	}
-	if c.ConnectPlainTextPort > 0 {
-		return fmt.Errorf("--ingress-auth-mode=%s requires --port-connect=0: the plaintext listener cannot authenticate clients", IngressAuthStaticMTLS)
-	}
 	if c.EnvoyCertPath == "" {
-		return fmt.Errorf("--ingress-auth-mode=%s requires --envoy-cert-path: without a serving certificate there is no TLS listener", IngressAuthStaticMTLS)
+		return fmt.Errorf("--envoy-cert-path is required: without a serving certificate there is no TLS listener")
 	}
 	if c.HttpsPort <= 0 && c.ConnectTLSPort <= 0 {
-		return fmt.Errorf("--ingress-auth-mode=%s requires --port-https or --port-connect-tls: there is no TLS listener", IngressAuthStaticMTLS)
+		return fmt.Errorf("--port-https or --port-connect-tls is required: there is no TLS listener")
 	}
-	return c.validateIngressClientAuth()
-}
-
-// validateIngressClientAuth checks the settings the TLS listeners authenticate
-// clients with.
-func (c routerConfig) validateIngressClientAuth() error {
 	if c.IngressAuth.ClientCAFile == "" {
-		return fmt.Errorf("TLS ingress listeners (--port-https, --port-connect-tls) require --ingress-client-ca-file")
+		return fmt.Errorf("--ingress-client-ca-file is required")
 	}
 	if len(c.IngressAuth.AllowedSPIFFEIDs) == 0 {
-		return fmt.Errorf("TLS ingress listeners (--port-https, --port-connect-tls) require at least one --ingress-allowed-spiffe-ids entry")
+		return fmt.Errorf("at least one --ingress-allowed-spiffe-ids entry is required")
 	}
 	for _, id := range c.IngressAuth.AllowedSPIFFEIDs {
 		if _, err := spiffeid.FromString(id); err != nil {

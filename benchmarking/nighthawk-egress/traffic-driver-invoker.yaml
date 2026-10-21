@@ -14,7 +14,9 @@
 
 # In-cluster Envoy proxy that listens for plaintext HTTP/1.1 and HTTP/2
 # (h2c/gRPC) on :19980, injects `ate-target-actor: nighthawk/tester` on every
-# request, and forwards upstream to atenet-router.ate-system.svc.cluster.local:80.
+# request, and forwards upstream over mTLS to
+# atenet-router.ate-system.svc.cluster.local:443 using a SPIFFE client
+# certificate issued by podidentity.podcert.ate.dev/identity.
 #
 # TODO(yanavlasov): this is a temporary workaround for nighthawk's cli's inability
 # to add headers when invoking traffic driver gRPC service. So this Envoy adds the
@@ -26,6 +28,11 @@ metadata:
   namespace: nighthawk
 data:
   envoy.yaml: |
+    # SDS requires a node id and cluster.
+    node:
+      id: traffic-driver-invoker
+      cluster: traffic-driver-invoker
+
     static_resources:
       listeners:
       - name: listener_http_19980
@@ -76,6 +83,30 @@ data:
             use_downstream_protocol_config:
               http_protocol_options: {}
               http2_protocol_options: {}
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            sni: atenet-router.ate-system.svc
+            common_tls_context:
+              tls_certificate_sds_secret_configs:
+              - name: podidentity_client_cert
+                sds_config:
+                  resource_api_version: V3
+                  path_config_source:
+                    path: /etc/envoy/sds-podidentity-cert.yaml
+              combined_validation_context:
+                default_validation_context:
+                  match_typed_subject_alt_names:
+                  - san_type: DNS
+                    matcher:
+                      exact: atenet-router.ate-system.svc
+                validation_context_sds_secret_config:
+                  name: servicedns_validation_context
+                  sds_config:
+                    resource_api_version: V3
+                    path_config_source:
+                      path: /etc/envoy/sds-servicedns-validation.yaml
         load_assignment:
           cluster_name: atenet_router
           endpoints:
@@ -84,7 +115,22 @@ data:
                 address:
                   socket_address:
                     address: atenet-router.ate-system.svc.cluster.local
-                    port_value: 80
+                    port_value: 443
+  sds-podidentity-cert.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: podidentity_client_cert
+      tls_certificate:
+        certificate_chain: { filename: /run/podidentity.podcert.ate.dev/credential-bundle.pem }
+        private_key: { filename: /run/podidentity.podcert.ate.dev/credential-bundle.pem }
+        watched_directory: { path: /run/podidentity.podcert.ate.dev }
+  sds-servicedns-validation.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: servicedns_validation_context
+      validation_context:
+        trusted_ca: { filename: /run/servicedns.podcert.ate.dev/trust-bundle.pem }
+        watched_directory: { path: /run/servicedns.podcert.ate.dev }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -107,6 +153,7 @@ spec:
         runAsUser: 65532
         runAsGroup: 65532
         runAsNonRoot: true
+        fsGroup: 65532
       containers:
       - name: envoy
         # Same envoyproxy/envoy digest as cmd/dataplane/envoy/Dockerfile.
@@ -136,10 +183,32 @@ spec:
         - name: config
           mountPath: /etc/envoy
           readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
       volumes:
       - name: config
         configMap:
           name: traffic-driver-invoker
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
 ---
 apiVersion: v1
 kind: Service

@@ -467,8 +467,8 @@ func TestActorMetricAttributes(t *testing.T) {
 		assertAttrs(t, got, want)
 	})
 
-	// releaseWorker gives an empty class when the worker record is gone.
-	// CreateWorker can also store one. Empty is not a permitted value.
+	// The class is empty when the actor's worker assignment is already clear or
+	// carries no sandbox runtime. Empty is not a permitted value.
 	t.Run("empty sandbox class is normalized to unknown", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "", OperationResume))
 		want := map[attribute.Key]any{

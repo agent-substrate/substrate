@@ -125,18 +125,16 @@ func (s *workerSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.
 	}
 	if _, err := s.workers.RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{
 		// Workers are global-scoped and named by their pod UID.
-		Worker:             &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		Capacity:           toWorkerResources(req.GetCapacity()),
-		DefaultRuntime:     toAteAPISandboxRuntime(req.GetDefaultRuntime()),
-		RestorableRuntimes: toAteAPISandboxRuntimes(req.GetRestorableRuntimes()),
+		Worker:         &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
+		Capacity:       toWorkerResources(req.GetCapacity()),
+		SandboxClasses: toAteAPISandboxClasses(req.GetSandboxClasses()),
 	}); err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, "Registered worker capacity and sandbox runtimes",
+	slog.InfoContext(ctx, "Registered worker capacity and sandbox classes",
 		slog.String("pod_uid", workerIdentity.PodUID),
 		slog.Any("capacity", req.GetCapacity()),
-		slog.Any("default_runtime", req.GetDefaultRuntime()),
-		slog.Any("restorable_runtimes", req.GetRestorableRuntimes()))
+		slog.Any("sandbox_classes", req.GetSandboxClasses()))
 	return &ateletpb.RegisterWorkerResponse{}, nil
 }
 
@@ -146,39 +144,59 @@ func toWorkerResources(in *ateletpb.WorkerResources) *ateapipb.WorkerResources {
 	if in == nil {
 		return nil
 	}
-	out := &ateapipb.WorkerResources{Actors: in.GetActors()}
-	if r := in.GetResources(); r != nil {
-		out.Resources = &ateapipb.Resources{}
-		for _, l := range r.GetLimits() {
-			out.Resources.Limits = append(out.Resources.Limits, &ateapipb.Limits{Name: l.GetName(), Quantity: l.GetQuantity()})
-		}
+	return &ateapipb.WorkerResources{
+		CpuMillicores: in.GetCpuMillicores(),
+		MemoryBytes:   in.GetMemoryBytes(),
+		Actors:        in.GetActors(),
+	}
+}
+
+// toAteAPISandboxClasses converts atelet's WorkerSandboxClass list to the
+// control plane's, which it mirrors field for field.
+func toAteAPISandboxClasses(in []*ateletpb.WorkerSandboxClass) []*ateapipb.WorkerSandboxClass {
+	if in == nil {
+		return nil
+	}
+	out := make([]*ateapipb.WorkerSandboxClass, 0, len(in))
+	for _, c := range in {
+		out = append(out, &ateapipb.WorkerSandboxClass{
+			SandboxClass:       c.GetSandboxClass(),
+			DefaultRuntime:     toAteAPISandboxRuntime(c.GetDefaultRuntime()),
+			RestorableRuntimes: toAteAPISandboxRuntimes(c.GetRestorableRuntimes()),
+		})
 	}
 	return out
 }
 
-// toAteAPISandboxRuntime converts atelet's SandboxRuntime to the control
+// toAteAPISandboxRuntime converts atelet's WorkerSandboxRuntime to the control
 // plane's, which it mirrors field for field.
-func toAteAPISandboxRuntime(in *ateletpb.SandboxRuntime) *ateapipb.SandboxRuntime {
+func toAteAPISandboxRuntime(in *ateletpb.WorkerSandboxRuntime) *ateapipb.WorkerSandboxRuntime {
 	if in == nil {
 		return nil
 	}
-	out := &ateapipb.SandboxRuntime{SandboxClass: in.GetSandboxClass()}
-	if v := in.GetVersion(); v != nil {
-		out.Version = &ateapipb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
-		for _, a := range v.GetAttributes() {
-			out.Version.Attributes = append(out.Version.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
-		}
+	return &ateapipb.WorkerSandboxRuntime{Version: toAteAPICompat(in.GetVersion())}
+}
+
+func toAteAPISandboxRuntimes(in []*ateletpb.WorkerSandboxRuntime) []*ateapipb.WorkerSandboxRuntime {
+	if in == nil {
+		return nil
+	}
+	out := make([]*ateapipb.WorkerSandboxRuntime, 0, len(in))
+	for _, rt := range in {
+		out = append(out, toAteAPISandboxRuntime(rt))
 	}
 	return out
 }
 
-func toAteAPISandboxRuntimes(in []*ateletpb.SandboxRuntime) []*ateapipb.SandboxRuntime {
+// toAteAPICompat converts atelet's VersionedSandboxCompat to the control
+// plane's, which it mirrors field for field.
+func toAteAPICompat(in *ateletpb.VersionedSandboxCompat) *ateapipb.VersionedSandboxCompat {
 	if in == nil {
 		return nil
 	}
-	out := make([]*ateapipb.SandboxRuntime, 0, len(in))
-	for _, r := range in {
-		out = append(out, toAteAPISandboxRuntime(r))
+	out := &ateapipb.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
+	for _, a := range in.GetAttributes() {
+		out.Attributes = append(out.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
 	}
 	return out
 }
@@ -268,4 +286,33 @@ func (s *workerSupportServer) GetActorEgressPolicy(
 		slog.String("actor_name", req.GetActorName()))
 
 	return &ateletpb.GetActorEgressPolicyResponse{EgressPolicy: toAteletEgressPolicy(policy)}, nil
+}
+
+// ReportActorCrashed forwards a worker's report that the sandbox of an actor
+// it hosts died on its own. Authorized like RequestActorSuspend.
+func (s *workerSupportServer) ReportActorCrashed(ctx context.Context, req *ateletpb.ReportActorCrashedRequest) (*ateletpb.ReportActorCrashedResponse, error) {
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if errs := apivalidation.ValidateReportActorCrashedRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
+	}
+	if _, err := s.workers.ReportActorCrashed(ctx, &ateapipb.ReportActorCrashedRequest{
+		Worker: &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
+		Actor: &ateapipb.ObjectRef{
+			Atespace: req.GetActorAtespace(),
+			Name:     req.GetActorName(),
+		},
+		ActorUid: req.GetActorUid(),
+		Message:  req.GetMessage(),
+	}); err != nil {
+		return nil, err
+	}
+	slog.InfoContext(ctx, "Forwarded an actor crash report",
+		slog.String("pod_uid", workerIdentity.PodUID),
+		slog.String("actor_atespace", req.GetActorAtespace()),
+		slog.String("actor_name", req.GetActorName()),
+		slog.String("actor_uid", req.GetActorUid()))
+	return &ateletpb.ReportActorCrashedResponse{}, nil
 }

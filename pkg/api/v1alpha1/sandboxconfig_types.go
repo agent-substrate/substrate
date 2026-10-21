@@ -96,8 +96,8 @@ const (
 	SandboxVersionStateDisabled SandboxVersionState = "Disabled"
 )
 
-// SandboxVersionConfig is one version of a SandboxConfig: the exact pause image
-// and asset set a sandbox boots with.
+// SandboxVersionConfig is one version of a SandboxConfig: the asset set a
+// sandbox boots with.
 type SandboxVersionConfig struct {
 	// name identifies this version within its SandboxConfig. It is a DNS label
 	// (lower-case alphanumerics and '-').
@@ -114,28 +114,6 @@ type SandboxVersionConfig struct {
 	// +optional
 	// +kubebuilder:default=Enabled
 	State *SandboxVersionState `json:"state,omitempty"`
-
-	// TODO: drop PauseImage once gVisor can run without a pause container:
-	// https://github.com/google/gvisor/pull/13981
-
-	// pauseImage is the container image used as the root sandbox container.
-	// It holds the sandbox's namespaces and runs no workload code, so it is an
-	// implementation detail of the sandbox rather than something actor authors
-	// choose. Required for gvisor; not allowed for microvm, which runs no pause
-	// container. It is captured in the snapshot manifest alongside the sandbox
-	// binaries, so a restore always re-creates the sandbox from the same image
-	// the snapshot was taken with.
-	//
-	// Typically, set it to [1] for on-gcp, and [2] for off-gcp
-	//
-	//   - [1] gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da
-	//   - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
-	//
-	// +optional
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=512
-	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must include a digest"
-	PauseImage string `json:"pauseImage,omitempty"`
 
 	// assets is the set of files atelet fetches for this runtime, keyed first by
 	// architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
@@ -154,7 +132,6 @@ type SandboxVersionConfig struct {
 //
 // +kubebuilder:validation:XValidation:rule="self.versions.exists(v, v.name == self.defaultVersion)",message="defaultVersion must name an entry in versions"
 // +kubebuilder:validation:XValidation:rule="!self.versions.exists(v, v.name == self.defaultVersion && has(v.state) && v.state == 'Disabled')",message="the version named by defaultVersion must not be Disabled"
-// +kubebuilder:validation:XValidation:rule="self.sandboxClass == 'gvisor' ? self.versions.all(v, has(v.pauseImage) && size(v.pauseImage) > 0) : self.versions.all(v, !has(v.pauseImage) || size(v.pauseImage) == 0)",message="pauseImage is required on every version for gvisor and not allowed for other sandbox classes"
 type SandboxConfigSpec struct {
 	// sandboxClass is the sandbox runtime family this config applies to. A
 	// WorkerPool only uses SandboxConfigs whose sandboxClass matches the entry

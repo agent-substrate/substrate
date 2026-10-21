@@ -31,10 +31,8 @@ containers:
 # Sandbox size: the 1 GiB stress allocation plus headroom.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 1536Mi
+    cpuMillicores: 1000
+    memoryBytes: 1610612736 # 1536Mi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/usermem/

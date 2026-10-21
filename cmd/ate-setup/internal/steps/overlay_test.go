@@ -16,6 +16,7 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -461,6 +462,11 @@ func TestRenderCordonControlPlane(t *testing.T) {
 			want: []string{"ate-api-server"},
 		},
 		{
+			name: "idp server file",
+			path: func(e *Env) string { return e.idpServerManifestPath() },
+			want: []string{"ate-idp-server"},
+		},
+		{
 			name: "podcert file",
 			path: func(e *Env) string { return e.Cfg.Manifest("pod-certificate-controller.yaml") },
 			want: []string{"podcertificate-controller"},
@@ -775,71 +781,62 @@ func TestRenderFakeDataPlane(t *testing.T) {
 	}
 }
 
-// Under --ingress-auth-mode=static-mtls both paths that deliver the router
-// -- the system bundle and the lone router redeploy -- have to carry the
-// static-mtls flags, alone or alongside the cordon component. Whether the
-// router accepts those flags is pinned on the router side, by
-// TestRouterIngressAuthManifestsAreValid.
-func TestRenderRouterStaticMTLS(t *testing.T) {
-	root := repoRoot(t)
+// Both paths that deliver the Envoy router pass it the install's allowlist,
+// whatever the overlay, and refuse to render without one.
+func TestRenderRouterAllowedSPIFFEIDs(t *testing.T) {
+	const a, b = "spiffe://cluster.local/ns/a/sa/a", "spiffe://cluster.local/ns/b/sa/b"
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+	resolver := images.NewPrebuilt(src, func(context.Context, string) (string, error) {
+		return "sha256:2222222222222222222222222222222222222222222222222222222222222222", nil
+	})
 	for _, tc := range []struct {
 		name   string
 		cfg    config.Config
-		path   func(e *Env) string
-		cordon bool
+		render func(e *Env) ([]byte, error)
 	}{
 		{
-			name: "base bundle",
-			cfg:  config.Config{Router: config.RouterEnvoy},
-			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			name:   "base bundle",
+			cfg:    config.Config{},
+			render: func(e *Env) ([]byte, error) { return e.renderSystemManifests(t.Context()) },
 		},
 		{
-			name: "kind bundle",
-			cfg:  config.Config{Router: config.RouterEnvoy, Kind: true},
-			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			name:   "kind bundle",
+			cfg:    config.Config{Kind: true},
+			render: func(e *Env) ([]byte, error) { return e.renderSystemManifests(t.Context()) },
 		},
 		{
-			name: "router file",
-			cfg:  config.Config{Router: config.RouterEnvoy},
-			path: func(e *Env) string { return e.Cfg.Manifest("atenet-router.yaml") },
-		},
-		{
-			name:   "kind bundle with cordon",
-			cfg:    config.Config{Router: config.RouterEnvoy, Kind: true},
-			path:   func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
-			cordon: true,
+			name:   "router file",
+			cfg:    config.Config{},
+			render: func(e *Env) ([]byte, error) { return e.renderAtenetRouterManifest(t.Context()) },
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := tc.cfg
-			cfg.Root = root
-			cfg.IngressAuthMode = config.IngressAuthStaticMTLS
-			cfg.CordonControlPlane = tc.cordon
-			e := &Env{Cfg: &cfg}
-
-			rendered, err := e.render(tc.path(e))
+			cfg.Root = repoRoot(t)
+			cfg.Router = config.RouterEnvoy
+			cfg.Images = src
+			cfg.IngressAllowedSPIFFEIDs = []string{a, b}
+			rendered, err := tc.render(&Env{Cfg: &cfg, resolver: resolver})
 			if err != nil {
 				t.Fatalf("render: %v", err)
 			}
-			args := routerArgs(t, rendered)
-			if !slices.Contains(args, "--ingress-auth-mode=static-mtls") {
-				t.Errorf("atenet-router args %v do not select static-mtls", args)
-			}
-			if tc.cordon {
-				if pinned, _ := pinnedWorkloads(t, rendered); pinned["atenet-router"] != "ate-control-plane" {
-					t.Errorf("composing both components dropped the cordon pinning (pinned: %v)", pinned)
+			var got []string
+			for _, arg := range routerArgs(t, rendered) {
+				if strings.HasPrefix(arg, "--ingress-allowed-spiffe-ids") {
+					got = append(got, arg)
 				}
 			}
-			t.Run("deprecated-insecure leaves the router alone", func(t *testing.T) {
-				e := &Env{Cfg: &config.Config{Root: root, Router: config.RouterEnvoy, IngressAuthMode: config.IngressAuthDeprecatedInsecure}}
-				rendered, err := e.render(e.Cfg.Manifest("atenet-router.yaml"))
-				if err != nil {
-					t.Fatalf("render: %v", err)
-				}
-				for _, arg := range routerArgs(t, rendered) {
-					if strings.HasPrefix(arg, "--ingress-auth-mode") {
-						t.Errorf("deprecated-insecure render sets %s", arg)
-					}
+			if want := []string{"--ingress-allowed-spiffe-ids=" + a + "," + b}; !slices.Equal(got, want) {
+				t.Errorf("atenet-router allowlist args = %q, want %q", got, want)
+			}
+
+			t.Run("without IDs", func(t *testing.T) {
+				cfg := cfg
+				cfg.IngressAllowedSPIFFEIDs = nil
+				_, err := tc.render(&Env{Cfg: &cfg, resolver: resolver})
+				var required *config.RequiredError
+				if !errors.As(err, &required) {
+					t.Fatalf("render error = %v, want a RequiredError", err)
 				}
 			})
 		})
@@ -1156,7 +1153,8 @@ func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
 	var looked []string
 	e := &Env{
-		Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterEnvoy, Images: src},
+		Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterEnvoy, Images: src,
+			IngressAllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/a/sa/a"}},
 		resolver: images.NewPrebuilt(src, func(_ context.Context, ref string) (string, error) {
 			looked = append(looked, ref)
 			return digest, nil

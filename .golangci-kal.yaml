@@ -83,7 +83,7 @@ linters:
       - path: 'pkg/api/v1alpha1/sandboxconfig_types\.go'
         text: '^(optionalfields|requiredfields): .*\bSandboxConfigSpec\.SandboxClass\b'
       - path: 'pkg/api/v1alpha1/sandboxconfig_types\.go'
-        text: '^(nomaps|optionalfields): .*\bSandboxVersionConfig\.(Assets|PauseImage)\b'
+        text: '^(nomaps|optionalfields): .*\bSandboxVersionConfig\.Assets\b'
       - path: 'pkg/api/v1alpha1/sandboxconfig_types\.go'
         text: '^(nonpointerstructs|requiredfields): .*\bSandboxConfig\.Spec\b'
       - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'

@@ -85,9 +85,9 @@ if [[ "${action}" == "deploy" ]]; then
   echo "Deploying traffic-driver-invoker from ${INVOKER_MANIFEST}..."
   "${kubectl_cmd[@]}" apply -f "${INVOKER_MANIFEST}"
   echo "Waiting for deployment/nighthawk-server in ate-system to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
-  "${kubectl_cmd[@]}" -n ate-system rollout status deployment/nighthawk-server --timeout="${WAIT_TIMEOUT_SECS}s"
+  "${kubectl_cmd[@]}" -n nighthawk rollout status deployment/nighthawk-server --timeout="${WAIT_TIMEOUT_SECS}s"
   echo "Waiting for deployment/traffic-driver-invoker in ate-system to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
-  "${kubectl_cmd[@]}" -n ate-system rollout status deployment/traffic-driver-invoker --timeout="${WAIT_TIMEOUT_SECS}s"
+  "${kubectl_cmd[@]}" -n nighthawk rollout status deployment/traffic-driver-invoker --timeout="${WAIT_TIMEOUT_SECS}s"
 elif [[ "${action}" == "delete" ]]; then
   echo "Deleting Nighthawk server and traffic-driver-invoker..."
   "${kubectl_cmd[@]}" delete --ignore-not-found -f "${INVOKER_MANIFEST}" -f "${SERVER_MANIFEST}"

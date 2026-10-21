@@ -296,7 +296,7 @@ func (s *workerSandboxSyncer) workerPoolHandler() cache.ResourceEventHandler {
 		UpdateFunc: func(oldObj, newObj any) {
 			oldPool, oldOK := oldObj.(*v1alpha1.WorkerPool)
 			newPool, newOK := newObj.(*v1alpha1.WorkerPool)
-			if oldOK && newOK && poolConfigName(oldPool) != poolConfigName(newPool) {
+			if oldOK && newOK && oldPool.ResolvedSandboxConfig() != newPool.ResolvedSandboxConfig() {
 				s.enqueuePool(newPool, s.maxJitter)
 			}
 		},
@@ -312,7 +312,7 @@ func (s *workerSandboxSyncer) sandboxConfigHandler() cache.ResourceEventHandler 
 			return
 		}
 		for _, pool := range pools {
-			if poolConfigName(pool) == cfg.Name {
+			if pool.ResolvedSandboxConfig() == cfg.Name {
 				s.enqueuePool(pool, s.maxJitter)
 			}
 		}
@@ -369,10 +369,7 @@ func (s *workerSandboxSyncer) registerAhead(pool *v1alpha1.WorkerPool) {
 	if err != nil {
 		return
 	}
-	hashed, err := hashVersions(context.Background(), plan)
-	if err != nil {
-		return
-	}
+	hashed := hashVersions(plan)
 	if err := s.index.registerRuntimes(plan.config, hashed); err != nil {
 		// The syncs write it again, and report it if it keeps failing.
 		slog.Warn("Could not index a changed pool's runtimes ahead of its sync", slog.String("pool", pool.Name), slog.Any("err", err))

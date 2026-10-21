@@ -18,7 +18,7 @@ the router capacity benchmark — see
 4. `docker build && docker push` builds the runner image for each test type
    in use, tagged with the commit hash: `${KO_DOCKER_REPO}/locust-test:<commit>`
    and/or `${KO_DOCKER_REPO}/nighthawk-ingress-test:<commit>`.
-5. `hack/install-ate.sh --deploy-ate-system` (with `ATE_CREDENTIAL_PROVIDER`
+5. `hack/install-ate.sh deploy ate-system` (with `ATE_CREDENTIAL_PROVIDER`
    in `.ate-dev-env.sh`, or `--credential-provider` in the test's
    `ateArgs`) + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
@@ -144,7 +144,7 @@ principal://iam.googleapis.com/projects/<PROJECT_NUMBER>/locations/global/worklo
 
 - `roles/container.admin` on the test cluster's project — required to manage
   cluster-scoped resources (CRDs, ClusterRoles, ClusterRoleBindings,
-  Namespaces) that `hack/install-ate.sh --deploy-ate-system` creates.
+  Namespaces) that `hack/install-ate.sh deploy ate-system` creates.
   `container.developer` is not enough — it intentionally omits the
   `container.clusterRoles.*` and `container.customResourceDefinitions.*`
   permissions.

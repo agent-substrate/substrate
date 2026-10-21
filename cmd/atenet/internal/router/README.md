@@ -25,22 +25,22 @@ Router has several responsibilities:
   dataplane container's `preStop` hook. See `drain.go` and `envoydrain.go`.
 * Authenticates actor identity on egress: on every CONNECT, the egress
   gateway's ext_proc handler re-verifies the actor's client certificate against
-  the actor-identity CA, reads the `ActorIdentity` X.509 extension out of it,
-  and checks the certified UID against the ATE API.
+  the actor-identity CA, reads the actor from its SPIFFE URI SAN, and checks
+  with the ATE API that the actor exists and is running.
 * Authorizes egress against the actor's `EgressPolicy`: every request the
-  gateway can read is decided on its `Host` and the address the actor dialed,
-  rules in order, first match wins; what it cannot read is decided by address
-  at the CONNECT. An actor with no policy gets no tunnel. See
+  gateway can read is decided on its `Host` and the port the actor dialed,
+  the most specific rule winning; TLS it does not terminate is decided by SNI
+  at the ClientHello. An actor with no policy gets no tunnel. See
   [egress legs](#egress-legs).
 * Serves arbitrary-port ingress: a client reaches a port on the actor other
   than its default (80) by sending an HTTP CONNECT to
-  `<actor-dns>:<port>` on `--port-connect`/`--port-connect-tls`, rather than
+  `<actor-dns>:<port>` on `--port-connect-tls`, rather than
   naming the port some other way. Envoy terminates the CONNECT and reinjects
   the tunneled bytes into an internal listener that runs the same ext_proc
   path as ordinary traffic, so each request inside a long-lived tunnel still
   resumes the actor and re-routes independently if it moves workers. Only
   HTTP(S) traffic over the tunnel is supported today -- see `xds.go`'s
-  `connect_terminate`/`main_internal` listeners and
+  `connect_terminate_tls`/`main_internal` listeners and
   `ingress.Handler.HandleRequestHeaders`.
 
 ## packages
@@ -95,13 +95,12 @@ the request legs match `ports` against it; a dataplane that does not share it
 gets no port enforcement.
 
 The CONNECT leg decides per connection: it refuses an actor without a policy
-with rules, and for the rest computes hash of the policy SNI's rules for the
-destination port, stores policy in the thread local store using hash as the
-key and hands the inner listener the port the actor dialed, as
-`envoy.upstream.dynamic_port` and the hash of the policy' as
-`dev.ate.policy.egress.hash`. At the ClientHello the egress-policy module
-reads the hash, and fetches egress policy from the thrad local store,
-applies SNI rules and picks the chain: `egress_tls_mitm` under an `https`
+with rules. For the rest it hashes the policy's SNI rules for the destination
+port, stores them in the thread-local store under that hash, and hands the
+inner listener the port the actor dialed, as `envoy.upstream.dynamic_port`,
+and the hash, as `dev.ate.policy.egress.hash`. At the ClientHello the
+egress-policy module reads the hash, fetches the rules from the thread-local
+store, and picks the chain: `egress_tls_mitm` under an `https`
 rule, `egress_passthrough` under a `tls_passthrough` rule, and `denied`, which
 matches no chain and closes the connection, when neither covers the SNI. The
 passthrough chain resolves the SNI and relays the bytes to it on the dialed
@@ -111,9 +110,10 @@ port; the address the actor dialed plays no part (see
 Identity on the request legs is `dev.ate.actor.identity`, the actor's SPIFFE
 ID that the outer chain set from the verified peer certificate and shares with
 the inner listener. Envoy builds every inner connection from the filter state
-of the tunnel that created its pool, so `mitm_internal` keeps one pool per
-downstream connection, which on the HTTP/1 egress listener is one per tunnel:
-no tunnel inherits another's identity, authority or rules. Nothing inside the
+of the tunnel that created its pool, so `mitm_internal` keys its pools on the
+identity, the CONNECT authority and the policy hash: tunnels share a pool only
+when all three match, and no tunnel inherits another's identity, authority or
+rules. Nothing inside the
 tunnel can write any of this; a callout without an identity is refused.
 
 Policies are read through a per-actor cache (`--egress-policy-cache-ttl`, 10s
@@ -122,24 +122,30 @@ create, update or delete is visible to new requests within one TTL, and a
 deleted policy becomes a deny. Every policy denial answers a fixed
 `egress denied` body; the reason is in the sidecar's log.
 
-Credential injection (`replace_headers`) runs on the MITM leg: a header the
-request carries is replaced with the credential from the provider, and a
+Credential injection (`replace_headers`) runs on both request legs: a header
+the request carries is replaced with the credential from the provider, and a
 request without it is forwarded unchanged. See
 `docs/egress-credential-injection.md`.
 
 ## adding a dataplane attribute
 
 The filter-state objects and request attributes a proxy carries alongside
-a request are declared once, in `extproc/attributes.go`.
+a request are declared once, in `extproc/attributes.go`. The exception is the
+keys only the router's generated Envoy config reads, which stay in `xds.go`.
 
 | key | direction | purpose |
 | --- | --- | --- |
-| `dev.ate.actor.name` | ingress | carries the actor name across CONNECT re-entry |
-| `dev.ate.actor.atespace` | ingress | carries the atespace across CONNECT re-entry |
+| `dev.ate.target.actor` | ingress | carries the actor routing target across CONNECT re-entry |
 | `dev.ate.connect.authority` | ingress, egress | carries the outer CONNECT authority across re-entry: target-port selection on ingress, the dialed port the request legs match `ports` against on egress |
 | `dev.ate.actor.identity` | egress | carries the authenticated actor identity to the policy ext_proc, the logs and additional ext_proc services |
-| `dev.ate.egress:dial` | egress | dynamic metadata: a request leg's answer, `name` or `address`, which picks the route |
+| `dev.ate.policy.egress` | egress | dynamic metadata: the CONNECT leg's SNI rules for the dialed port, which the egress-policy module stores by hash |
+| `dev.ate.policy.egress.hash` | egress | filter state: the hash the inner listener looks those SNI rules up by |
+| `dev.ate.egress:dialed_port` | egress | dynamic metadata: the CONNECT leg's answer, the port the passthrough chain dials the resolved SNI on |
+| `dev.ate.egress:dial` | egress | dynamic metadata: a request leg's answer, `name`, which picks the route |
+| `dev.ate.egress:host` | egress | dynamic metadata: the name the request was decided on, which the forward proxy dials on the port the actor dialed |
+| `dev.ate.egress.filter_chain` | egress | filter state: the egress-policy module's verdict, which selects the inner filter chain |
 | `dev.ate.extproc.direction` | egress | selects the egress handler for dataplanes without Envoy filter chains |
+| `dev.ate.tunnel.{key,worker,actor,port}` | ingress | filter state: the routing decision carried into `actor_connect` (declared in `xds.go`) |
 
 ### name it
 
@@ -198,12 +204,9 @@ its own static configuration because ingress and egress scale independently.
 
 ## Ingress client authentication and authorization
 
-The ingress router is migrating to require clients to present a SPIFFE certificate.
-* With `--ingress-auth-mode=static-mtls`, the ingress router no longer offers any
-  plaintext listeners, and all clients *must* present a SPIFFE certificate.
-* With `--ingress-auth-mode=deprecated-insecure`, the ingress router offers both
-  plaintext and secure listeners.  If a client presents a SPIFFE certificate, it
-  must be valid.
+The Envoy ingress router serves only TLS listeners, and every client must
+present a SPIFFE certificate. The agentgateway dataplane does not authenticate
+clients yet.
 
 Configure the CA that is used to validate client certificates with the
 `--ingress-client-ca-file` flag, which points at a PEM file containing root
@@ -214,6 +217,55 @@ against a static allowlist.  Any ID on the allowlist may use the ingress router
 to contact any actor.  Richer authorization policies may be added post-GA.  Use
 the `--ingress-allowed-spiffe-ids` flag to set the allowlist (comma-separated
 list).
+
+### Common setups
+
+The default install sets `--ingress-client-ca-file` to the trust bundle of
+substrate's pod identity signer, `podidentity.podcert.ate.dev/identity`. That
+signer issues certificates with the SPIFFE ID
+`spiffe://cluster.local/ns/<namespace>/sa/<serviceaccount>`.
+
+The router's serving certificate comes from the
+`servicedns.podcert.ate.dev/identity` signer. Clients verify it against that
+signer's ClusterTrustBundle, with server name
+`atenet-router.ate-system.svc`.
+
+**Custom CA.** An installer can point `--ingress-client-ca-file` at a CA of
+their own choosing. Clients then get certificates from that CA however the
+installer provides them, and the allowlist holds the SPIFFE IDs it issues.
+
+**Client in the cluster, pod identity CA.** Mount a client certificate with a
+`podCertificate` projected volume, and the router's serving CA with a
+`clusterTrustBundle` projected volume:
+
+```yaml
+volumes:
+- name: router-client
+  projected:
+    sources:
+    - podCertificate:
+        signerName: podidentity.podcert.ate.dev/identity
+        keyType: ECDSAP256
+        credentialBundlePath: credential-bundle.pem
+    - clusterTrustBundle:
+        signerName: servicedns.podcert.ate.dev/identity
+        labelSelector:
+          matchLabels:
+            podcert.ate.dev/canarying: live
+        path: router-ca.pem
+```
+
+Add the pod's SPIFFE ID to `--ingress-allowed-spiffe-ids`.
+
+**Client outside the cluster, pod identity CA.** A demo on your machine can
+follow the e2e tests in `internal/e2e/ingressauth.go`. It creates a
+PodCertificateRequest for the podidentity signer that names a pod, node and
+ServiceAccount that don't exist. kube-apiserver checks those only for requests
+from a kubelet, and the signer issues the SPIFFE ID of the named namespace and
+ServiceAccount. The client keeps the private key, reads the chain from the
+request's status, and reads the servicedns ClusterTrustBundle to verify the
+router. Creating PodCertificateRequests needs RBAC for that resource in the
+namespace.
 
 ## status page
 

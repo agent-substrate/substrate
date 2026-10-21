@@ -38,7 +38,6 @@ import (
 	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
-	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -85,17 +84,15 @@ var (
 )
 
 type testContext struct {
-	service             *controlapi.RPCService
-	client              ateapipb.ControlClient
-	noOptInClient       ateapipb.ControlClient // never sends preview.Header
-	k8sClient           kubernetes.Interface
-	substrateClient     versioned.Interface
-	persistence         store.Interface
-	workerCache         *workercache.Cache
-	fakeAtelet          *FakeAteletServer
-	cleanup             func()
-	workerPoolLister    listersv1alpha1.WorkerPoolLister
-	sandboxConfigLister listersv1alpha1.SandboxConfigLister
+	service         *controlapi.RPCService
+	client          ateapipb.ControlClient
+	noOptInClient   ateapipb.ControlClient // never sends preview.Header
+	k8sClient       kubernetes.Interface
+	substrateClient versioned.Interface
+	persistence     store.Interface
+	workerCache     *workercache.Cache
+	fakeAtelet      *FakeAteletServer
+	cleanup         func()
 	// ateletIndexer is the index DialForAteletOnNode looks up atelets in.
 	// setupAteletOnNode waits on it so a test never dials a node whose atelet the
 	// informer has not seen yet.
@@ -164,8 +161,6 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 	scLister := scFactory.Storage().V1().StorageClasses().Lister()
 
 	substrateInformerFactory := externalversions.NewSharedInformerFactory(substrateClient, 0)
-	workerPoolLister := substrateInformerFactory.Api().V1alpha1().WorkerPools().Lister()
-	sandboxConfigLister := substrateInformerFactory.Api().V1alpha1().SandboxConfigs().Lister()
 	csiDriverConfigLister := substrateInformerFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -241,8 +236,6 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 	service := controlapi.NewRPCService(
 		persistence,
 		wc,
-		workerPoolLister,
-		sandboxConfigLister,
 		csiDriverConfigLister,
 		scLister,
 		dialer,
@@ -253,6 +246,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		testActorJWTIssuer,
 		actorJWTAuthorityPool,
 		actorCAPool,
+		testStorageLocation,
 	)
 
 	// 5. Start REAL gRPC Server for ATE API
@@ -331,20 +325,18 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 	}
 
 	return &testContext{
-		service:             service,
-		client:              client,
-		noOptInClient:       ateapipb.NewControlClient(noOptInConn),
-		k8sClient:           k8sClient,
-		substrateClient:     substrateClient,
-		persistence:         persistence,
-		workerCache:         wc,
-		fakeAtelet:          fakeAtelet,
-		cleanup:             cleanup,
-		workerPoolLister:    workerPoolLister,
-		sandboxConfigLister: sandboxConfigLister,
-		ateletIndexer:       ateletInformer.GetIndexer(),
-		metricReader:        metricReader,
-		objectStore:         objectStore,
+		service:         service,
+		client:          client,
+		noOptInClient:   ateapipb.NewControlClient(noOptInConn),
+		k8sClient:       k8sClient,
+		substrateClient: substrateClient,
+		persistence:     persistence,
+		workerCache:     wc,
+		fakeAtelet:      fakeAtelet,
+		cleanup:         cleanup,
+		ateletIndexer:   ateletInformer.GetIndexer(),
+		metricReader:    metricReader,
+		objectStore:     objectStore,
 	}
 }
 
@@ -472,10 +464,6 @@ func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes
 func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns string, containers []*ateapipb.Container, volumes []*ateapipb.Volume) *ateapipb.ActorTemplate {
 	t.Helper()
 
-	// Sandbox binaries live on the (cluster-scoped) SandboxConfig the
-	// actor's WorkerPool resolves. Create the gvisor-default SandboxConfig so
-	// a boot-from-spec Run can resolve its assets.
-	ensureDefaultGvisorSandboxConfig(t, tc)
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
 
 	created, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{
@@ -492,7 +480,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			WorkerSelector: &ateapipb.Selector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
 			},
-			Resources: resources.CPUMemory(1000, 512<<20),
+			Resources: &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 		},
 	})
 	if err != nil {
@@ -605,53 +593,6 @@ func tagSnapshotURI(tag *ateapipb.Tag) string {
 	return tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
 }
 
-// testPauseImage is the pause image the default test SandboxConfig carries;
-// it is what a resolved WorkloadSpec's sandbox assets should name.
-const testPauseImage = "pause@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-// ensureDefaultGvisorSandboxConfig creates the cluster-scoped "gvisor-default"
-// SandboxConfig (idempotently) and waits for it to appear in the lister.
-func ensureDefaultGvisorSandboxConfig(t *testing.T, tc *testContext) {
-	t.Helper()
-	ensureGvisorSandboxConfig(t, tc, "gvisor-default")
-}
-
-// ensureGvisorSandboxConfig creates a cluster-scoped gvisor SandboxConfig
-// (idempotently) and waits for it to appear in the lister.
-func ensureGvisorSandboxConfig(t *testing.T, tc *testContext, name string) {
-	t.Helper()
-	sc := &atev1alpha1.SandboxConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass:   atev1alpha1.SandboxClassGvisor,
-			DefaultVersion: "v1",
-			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: testPauseImage,
-				Assets: map[string]map[string]atev1alpha1.AssetFile{
-					"amd64": {"gvisor": {
-						URL:    "gs://gvisor/releases/nightly/2026-10-10/x86_64/gvisor.tar.zstd",
-						SHA256: "4ae7fab988c3647d2a835d6c3c70c6a99021c562db97827592562b6c51c3e88c",
-					}},
-					"arm64": {"gvisor": {
-						URL:    "gs://gvisor/releases/nightly/2026-10-10/aarch64/gvisor.tar.zstd",
-						SHA256: "aaf414f06eea7960238e43165c691f0a36cefc0593fb141e011e96211c7b6f57",
-					}},
-				},
-			}},
-		},
-	}
-	if _, err := tc.substrateClient.ApiV1alpha1().SandboxConfigs().Create(context.Background(), sc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("failed to create SandboxConfig %s: %v", name, err)
-	}
-	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		_, err := tc.sandboxConfigLister.Get(name)
-		return err == nil, nil
-	}); err != nil {
-		t.Fatalf("SandboxConfig %s not synced into lister: %v", name, err)
-	}
-}
-
 func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, labels map[string]string) {
 	t.Helper()
 	wp := &atev1alpha1.WorkerPool{
@@ -666,35 +607,8 @@ func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, lab
 			SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}},
 		},
 	}
-	created, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{})
-	if err != nil {
+	if _, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("failed to create WorkerPool: %v", err)
-	}
-	// The status the controller would write once it confirmed the pool's
-	// SandboxConfig: resume resolves the sandbox assets through it. Status is
-	// a subresource, so it takes its own write.
-	created.Status.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClassStatus{{
-		Name:      atev1alpha1.SandboxClassGvisor,
-		ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "gvisor-default"},
-	}}
-	if _, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).UpdateStatus(context.Background(), created, metav1.UpdateOptions{}); err != nil {
-		t.Fatalf("failed to update WorkerPool status: %v", err)
-	}
-
-	waitForWorkerPoolInInformer(t, tc, ns, name)
-}
-
-// waitForWorkerPoolInInformer blocks until the pool the test just created,
-// with its resolved SandboxConfig, is visible to the scheduler and the resume
-// workflow, which read it through an informer rather than the API.
-func waitForWorkerPoolInInformer(t *testing.T, tc *testContext, ns, name string) {
-	t.Helper()
-	err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		pool, err := tc.workerPoolLister.WorkerPools(ns).Get(name)
-		return err == nil && pool.ResolvedSandboxConfig() != "", nil
-	})
-	if err != nil {
-		t.Fatalf("failed to wait for WorkerPool %s/%s in informer: %v", ns, name, err)
 	}
 }
 
@@ -702,7 +616,6 @@ func waitForWorkerPoolInInformer(t *testing.T, tc *testContext, ns, name string)
 // testAtespace with the given worker selector and no golden snapshot.
 func createTemplateWithSelector(t *testing.T, tc *testContext, name string, selector *ateapipb.Selector) *ateapipb.ActorTemplate {
 	t.Helper()
-	ensureDefaultGvisorSandboxConfig(t, tc)
 	created, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
 			Metadata: &ateapipb.ResourceMetadata{
@@ -716,7 +629,7 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 				{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}},
 			},
 			WorkerSelector: selector,
-			Resources:      resources.CPUMemory(1000, 512<<20),
+			Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 		},
 	})
 	if err != nil {
@@ -765,11 +678,8 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 		t.Fatalf("failed to update worker pod status: %v", err)
 	}
 
-	// The WorkerPool supplies the fields the syncer copies off it. Read it from
-	// the lister the service itself uses, so a pool the informer has not caught
-	// up on fails here rather than producing a Worker the scheduler will not
-	// match.
-	pool, err := tc.workerPoolLister.WorkerPools(ns).Get(poolName)
+	// The WorkerPool supplies the fields the syncer copies off it.
+	pool, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Get(context.Background(), poolName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("failed to get WorkerPool %s/%s: %v", ns, poolName, err)
 	}
@@ -783,7 +693,6 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			WorkerPodUid:    string(createdPod.UID),
 			Ips:             []string{"127.0.0.1"},
 			NodeName:        nodeName,
-			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			// Capacity is not settable here: a Worker gets it from its own
 			// worker's report, which the reportWorkerCapacity below stands in

@@ -71,10 +71,16 @@ func classifyOverdueBand(overdue time.Duration) overdueBand {
 	}
 }
 
-// opDurationBuckets cover background uploads and detaches: deleting local
-// snapshots or uploading a small volumes snapshot takes milliseconds, while
-// uploading a multi-GiB memory snapshot runs for tens of seconds.
-var opDurationBuckets = []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60}
+// uploadDurationBuckets cover background uploads: uploading a small volumes
+// snapshot takes milliseconds, uploading a multi-GiB memory snapshot runs for
+// tens of seconds, and an upload of a large snapshot can run for minutes
+// before its timeout, which is at least --snapshot-upload-timeout.
+var uploadDurationBuckets = []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600}
+
+// detachDurationBuckets cover deleting an actor's local snapshots during a
+// background detach, which takes milliseconds to seconds. The upload a detach
+// runs first is recorded on the upload histogram.
+var detachDurationBuckets = []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60}
 
 // overdueBuckets cover how late background work starts: within 100ms of its
 // due time while a worker is free, and up to an hour late while every worker
@@ -103,7 +109,7 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 		uploadDurationMetric,
 		metric.WithUnit("s"),
 		metric.WithDescription("Duration of one background upload of a local snapshot to object storage on atelet."),
-		metric.WithExplicitBucketBoundaries(opDurationBuckets...),
+		metric.WithExplicitBucketBoundaries(uploadDurationBuckets...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create %s histogram: %w", uploadDurationMetric, err)
@@ -112,7 +118,7 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 		detachDurationMetric,
 		metric.WithUnit("s"),
 		metric.WithDescription("Duration of deleting an actor's local snapshots during a background detach on atelet, excluding any snapshot upload."),
-		metric.WithExplicitBucketBoundaries(opDurationBuckets...),
+		metric.WithExplicitBucketBoundaries(detachDurationBuckets...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create %s histogram: %w", detachDurationMetric, err)
@@ -243,10 +249,11 @@ func outcomeAttrs(ctx context.Context, target SnapshotRef, err error) []attribut
 	return attrs
 }
 
-// errorType returns the error.type of a failed upload or detach: Canceled
-// once ctx has ended, as when Terminate or an atelet shutdown cancels the
-// operation, and otherwise the code an apierror or a plugin's gRPC status
-// carries, or Internal.
+// errorType returns the error.type of a failed upload or detach: Canceled or
+// DeadlineExceeded once ctx has ended (when Terminate, an atelet shutdown, a
+// newer durable snapshot, or the background upload timeout ends it), and
+// otherwise the code an apierror or a plugin's gRPC status carries, or
+// Internal.
 func errorType(ctx context.Context, err error) string {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return status.FromContextError(ctxErr).Code().String()

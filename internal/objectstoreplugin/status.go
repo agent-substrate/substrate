@@ -29,6 +29,11 @@ import (
 // toStatus maps a plugin error to a gRPC status, keeping NotFound
 // distinguishable so callers can probe for a snapshot.
 func toStatus(err error) error {
+	// A status from the credential source, such as the exchange's refusal, or
+	// a refusal this plugin already classified, reaches atelet as it is.
+	if st, ok := status.FromError(err); ok {
+		return st.Err()
+	}
 	switch {
 	case errors.Is(err, objectstorage.ErrObjectNotFound):
 		return status.Error(codes.NotFound, err.Error())

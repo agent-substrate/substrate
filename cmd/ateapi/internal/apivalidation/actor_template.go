@@ -18,10 +18,10 @@ import (
 	"context"
 	"fmt"
 
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -83,16 +83,13 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 
 // ValidateCustom_ActorTemplate_Resources requires both a cpu and a memory
 // limit, which the scheduler books against worker capacity.
-func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Resources) field.ErrorList {
-	set := sets.New[string]()
-	for _, l := range value.GetLimits() {
-		set.Insert(l.GetName())
-	}
+func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ResourceRequirements) field.ErrorList {
 	var errs field.ErrorList
-	for _, name := range []string{resources.ResourceCPU, resources.ResourceMemory} {
-		if !set.Has(name) {
-			errs = append(errs, field.Required(fldPath.Child("limits"), "must set a "+name+" limit"))
-		}
+	if value.GetLimits().GetCpuMillicores() == 0 {
+		errs = append(errs, field.Required(fldPath.Child("limits", "cpu_millicores"), ""))
+	}
+	if value.GetLimits().GetMemoryBytes() == 0 {
+		errs = append(errs, field.Required(fldPath.Child("limits", "memory_bytes"), ""))
 	}
 	return errs
 }
@@ -166,17 +163,20 @@ func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fl
 	return resources.ValidatePinnedImage(fldPath, *value)
 }
 
-func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if _, err := resource.ParseQuantity(*value); err != nil {
-		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
-	}
-	return nil
-}
-
 // ValidateCustom_SnapshotConfig_StorageLocation ensures an
 // ActorTemplate's snapshotConfig.location is a well-formed
 // URI with a bucket, so a bad location fails fast.
-func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+//
+// The field is ignored while the PerTemplateSnapshotLocation gate is off, so a
+// declarative ifDisabled=forbidden would reject the templates that set it
+// on servers without the gate. Instead, with the gate on, a request that
+// did not opt in to preview features is forbidden from setting it.
+func ValidateCustom_SnapshotConfig_StorageLocation(ctx context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) && preview.IsOptedOut(ctx) {
+		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf(
+			"requires a client that opts in to preview features (kubectl ate --preview, or the %s header) while the %s preview gate is enabled",
+			preview.Header, preview.GatePerTemplateSnapshotLocation))}
+	}
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
 	}

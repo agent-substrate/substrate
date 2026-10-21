@@ -8,7 +8,7 @@ The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, whil
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed (`./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`).
+- A k8s cluster with Agent Substrate installed.
 - `ko` installed for building images.
 - A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
 
@@ -52,7 +52,7 @@ On a cluster that already has the micro-VM deps (`hack/install-microvm-deps.sh`)
 deploy directly instead:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter-microvm
+go run ./cmd/ate-setup deploy demo counter-microvm
 ```
 </details>
 
@@ -276,7 +276,7 @@ To remove the counter demo resources from your cluster, run:
 <summary>Delete from MicroVM</summary>
 
 ```bash
-./hack/install-ate.sh --delete-demo-counter
+go run ./cmd/ate-setup delete demo counter-microvm
 ```
 </details>
 
@@ -284,7 +284,7 @@ To remove the counter demo resources from your cluster, run:
 <summary>Delete from GVisor</summary>
 
 ```bash
-./hack/install-ate.sh --delete-demo-counter-microvm
+go run ./cmd/ate-setup delete demo counter
 ```
 </details>
 

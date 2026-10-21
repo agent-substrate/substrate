@@ -1,31 +1,18 @@
 # Substrate Threat Model
 
-[Michael Taufen](mailto:mtaufen@google.com), [Vikas Kumar](mailto:skvikas@google.com), [Oleg Mitrofanov](mailto:gooleg@google.com)
-
-Last updated: Jun 25, 2026
+Last updated: Oct 14, 2026
 
 
 # Overview
 
-Substrate is an early, fast moving product. It is full of debate and subject to change, including major architectural changes. It also has little to no security hardening at this time. Therefore, this threat model is focused on how to achieve security with respect to the general problem Substrate is trying to solve: Fast orchestration of a stateful AI agents. The threat model uses Substrate's current implementation and roadmap as a reference point, but focuses on threats that emerge from this overall class of system, rather than threats specific to the current implementation.
+Agent Substrate orchestrates stateful AI agents at high scale and density on Kubernetes, multiplexing untrusted, mutually hostile actors across a shared pool of worker Pods while maintaining sub-second cold-start and snapshot resume latency. Because actors execute untrusted code and migrate across physical infrastructure, Substrate enforces VM-grade sandboxing (`gVisor` and `Cloud Hypervisor` microVMs), per-actor cryptographic identity (`SPIFFE` X.509 certificates and JWTs), zero ambient credentials inside sandboxes, default-deny networking with authenticated ingress and egress proxies, and relationship-based access control (`OpenFGA`).
 
-# Intended Outcome
+This threat model catalogs the security threats inherent to high-density stateful agent orchestration and defines the mitigating invariants and suggested mechanisms required to neutralize each threat. See the [Security Guide](security.md) for the high-level security architecture, principles, and implementation status.
 
-* The suggestions from this threat model should be added to Substrate's official roadmap after review and agreement with the community.   
-* Security review SKILLs for AI-assisted security review should be extracted from this threat model and used for continuous review on the upstream [agent-substrate/substrate](https://github.com/agent-substrate/substrate) repository.
+# Scope
 
-# Goals
-
-* Identify threats relevant to any system trying to achieve the same goal, with roughly the same basic building blocks as Substrate (Kubernetes, containers, sandboxes, snapshots, and lightweight "actors" dynamically scheduled to reusable "worker" Pods).   
-* Identify general "mitigating invariants" which, if implemented, eliminate or significantly decrease the severity of the threat.  
-* Suggest *possible* implementation approaches, which may change if Substrate changes.  
-* Prioritize the threats, so that resources can be spent of reducing the biggest risks first.
-
-# Non-Goals
-
-* This threat model does not attempt to predict Substrate's future architectural decisions.  
-* This threat model does not demand any particular approach to mitigation.  
-* While shown in diagrams for reference, this threat model does not focus on AI frameworks that may be used on top of Substrate. 
+* While shown in diagrams for reference, this threat model does not cover application-layer agent frameworks or harnesses running inside Substrate actors.
+* This threat model does not cover vulnerabilities contained entirely within the underlying cloud provider, host Linux kernel, Kubernetes control plane, or upstream sandbox runtimes (`gVisor`, `Cloud Hypervisor`).
 
 # Architecture of Substrate
 
@@ -33,28 +20,33 @@ Substrate is an early, fast moving product. It is full of debate and subject to 
 
 # Key Components
 
-* **ate-api-server:** Actor creation and scheduling and credential issuance.  
-* **atelet:** Per-node daemon, performs snapshot/resume.  
-* **ateworker:** Per-worker Pod sidecar, running inside the worker Pod. It sets up "interior" sandboxes in the worker Pod and manages sandbox lifecycle, including image pulls. It currently uses gvisor but Substrate will support multiple microvm solutions.  
-* **Worker:** Preprovisioned Pods that actors get scheduled to.  
-* **Actor:** The core compute primitive, gets scheduled to/from worker via Run for cold start and Resume for snapshot resume.  
-* **Actor Network:** `ateworker` creates a private point-to-point veth network for the active Actor inside a worker Pod. The Actor is not served directly from the worker Pod's port 80; ingress enters through `atunnel`'s authenticated listeners: mTLS `CONNECT` on port 8443, which the router uses by default, and HTTPS on port 443.
-* **Actor Routing:** Requests sent to `atenet-router` identify the target Actor with `ate-target-actor: <atespace>/<actor>`. Host and authority values are application metadata and do not select the Actor.
-* **atenet-router:** Substrate runs Envoy with an `ext_proc` external processor to handle Actor ingress. With `--ingress-auth-mode=static-mtls`, Envoy accepts connections only on its TLS listeners and only from clients presenting a certificate that chains to the configured client CA bundle and carries one of a static list of SPIFFE IDs; any listed client may reach any Actor. The default, `deprecated-insecure`, rejects a TLS client whose certificate fails those checks but accepts one that presents none, and also serves plaintext listeners that accept any client. The ext_proc reads and validates `ate-target-actor`, calls the Substrate API to resume the Actor and obtain its current worker assignment, and selects that worker as a dynamic backend. It overwrites the routing header before forwarding. The router then connects with mTLS to `atunnel` and accepts it only with the SPIFFE ID of the assigned worker pod's namespace and ServiceAccount, so another pod running as that ServiceAccount in that namespace can still pose as the worker; `atunnel` validates the router identity and authorizes the header against the Actor currently assigned to that worker.
-* **Object Storage:** Used to store actor snapshots.  
-* **Filesystem support:** Container local filesystem is saved in snapshots, future integrations likely to include networked storage.  
-* **Substrate Database:** PostgreSQL. On GCP, PostgreSQL may be Cloud SQL reached through the Cloud SQL Auth Proxy sidecar (see [tools/setup-gcp/cloud-sql.md](../tools/setup-gcp/cloud-sql.md)); that path adds two egress flows from ate-api-server: HTTPS to `sqladmin.googleapis.com:443` and the proxy tunnel to the instance IP on port 3307, both authenticated via IAM and encrypted.  
-* **Kubernetes:** The underlying infrastructure that Substrate runs on is expected to be Kubernetes.
+* **ate-api-server:** Control plane server managing actor lifecycle, scheduling, OpenFGA authorization, and credential issuance.
+* **ate-controller:** Kubernetes controller managing worker pool deployments and network policies.
+* **podcertcontroller:** Kubernetes controller issuing short-lived mTLS certificates for pod identity, service DNS, and database access.
+* **atelet:** Per-node supervisor daemon coordinating sandbox lifecycle, checkpoint/restore, and node-attested credentials.
+* **ateworker:** Per-worker Pod runtime daemon managing interior sandboxes (`gVisor` or `Cloud Hypervisor` microVMs).
+* **Worker:** Pre-provisioned Pods that host active actors.
+* **Actor:** The core stateful compute primitive, grouped into atespaces and scheduled onto workers via Run or Resume.
+* **Actor Network:** Private per-actor network namespace and point-to-point veth link behind `atunnel`'s authenticated listener on port 443.
+* **Actor Routing:** Ingress requests identify the target actor via `ate-target-actor: <atespace>/<actor>`.
+* **atenet-router:** Envoy ingress proxy with an `ext_proc` processor that authenticates callers over mTLS, resolves worker assignments, and routes to `atunnel`.
+* **atenet-egress:** Multi-tenant Envoy egress forward proxy that enforces declarative egress policies and injects credentials.
+* **Object Storage:** Stores partitioned actor snapshots, accessed through the out-of-process `objectstore-plugin`.
+* **Filesystem Support:** Container rootfs overlays and working directories captured in snapshots and wiped on actor teardown.
+* **Substrate Database:** PostgreSQL (or Cloud SQL on GCP), accessed over TLS by `ate-api-server`.
+* **Kubernetes:** The underlying cluster infrastructure providing node isolation and network policies.
 
 # Threats and Mitigations
 
 **Table Schema:**
 
-* **Priority:** Critical, High, Medium, Low  
-* **Threats:** Expected risks in a naïve implementation of Substrate.  
-* **Mitigating Invariants:** High level properties which, if true, mitigate the threat.  
-* **Suggested Concrete Mitigations:** Specific options for implementing the mitigating invariants, based on current understanding of Substrate.  
-* **Notes:** Additional relevant information.
+* **Priority:** Critical, High, Medium, Low
+* **Threats:** Expected risks in a naïve implementation of Substrate.
+* **Mitigating Invariants:** High-level properties which, if true, mitigate the threat.
+* **Suggested Concrete Mitigations:** Specific options and architectural mechanisms for implementing the mitigating invariants.
+* **Notes:** Contextual notes, edge cases, and design considerations.
+
+Implementation status is intentionally not tracked in this table. High-level principle status is maintained in the [Security Guide](security.md), while threat-by-threat mitigation quality is dynamically evaluated against the codebase by automated security review agents in CI (see `.agents/skills/security-status-report/`). Recording static status claims in this reference catalog would risk biasing automated evaluators away from independently verifying the code.
 
 ## Attacks from External Networks
 

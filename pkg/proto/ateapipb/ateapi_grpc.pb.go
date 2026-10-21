@@ -100,8 +100,8 @@ type ControlClient interface {
 	// snapshot, can be reverted. A suspended actor without a node-local snapshot
 	// is already at its durable snapshot, so there is nothing to revert.
 	RevertActor(ctx context.Context, in *RevertActorRequest, opts ...grpc.CallOption) (*RevertActorResponse, error)
-	// Delete an actor. Only suspended or crashed actors can be deleted unless
-	// any_state is set.
+	// Delete an actor. A running actor's workload is terminated, its volumes
+	// detached, and its worker released before the record is removed.
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
@@ -665,8 +665,8 @@ type ControlServer interface {
 	// snapshot, can be reverted. A suspended actor without a node-local snapshot
 	// is already at its durable snapshot, so there is nothing to revert.
 	RevertActor(context.Context, *RevertActorRequest) (*RevertActorResponse, error)
-	// Delete an actor. Only suspended or crashed actors can be deleted unless
-	// any_state is set.
+	// Delete an actor. A running actor's workload is terminated, its volumes
+	// detached, and its worker released before the record is removed.
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error)
@@ -1892,6 +1892,7 @@ const (
 	WorkerService_MintWorkerActorJwt_FullMethodName         = "/ateapi.WorkerService/MintWorkerActorJwt"
 	WorkerService_RequestActorSuspend_FullMethodName        = "/ateapi.WorkerService/RequestActorSuspend"
 	WorkerService_ReportActorSnapshotState_FullMethodName   = "/ateapi.WorkerService/ReportActorSnapshotState"
+	WorkerService_ReportActorCrashed_FullMethodName         = "/ateapi.WorkerService/ReportActorCrashed"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -1969,6 +1970,17 @@ type WorkerServiceClient interface {
 	// node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
 	// conflicts with the record; don't retry.
 	ReportActorSnapshotState(ctx context.Context, in *ReportActorSnapshotStateRequest, opts ...grpc.CallOption) (*ReportActorSnapshotStateResponse, error)
+	// ReportActorCrashed tells the control plane that the sandbox of an Actor
+	// the calling Worker hosts died on its own. Nothing else notices: the
+	// control plane only learns of a dead sandbox when an operation on the Actor
+	// fails.
+	//
+	// A RUNNING Actor is moved to ACTOR_STATE_CRASHED and its Worker is
+	// released. An Actor in any other state is left alone and the report is
+	// refused as FailedPrecondition: an operation in flight owns the Actor and
+	// fails on its own if the sandbox is gone. Authorized like
+	// RequestActorSuspend.
+	ReportActorCrashed(ctx context.Context, in *ReportActorCrashedRequest, opts ...grpc.CallOption) (*ReportActorCrashedResponse, error)
 }
 
 type workerServiceClient struct {
@@ -2023,6 +2035,16 @@ func (c *workerServiceClient) ReportActorSnapshotState(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReportActorSnapshotStateResponse)
 	err := c.cc.Invoke(ctx, WorkerService_ReportActorSnapshotState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ReportActorCrashed(ctx context.Context, in *ReportActorCrashedRequest, opts ...grpc.CallOption) (*ReportActorCrashedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportActorCrashedResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ReportActorCrashed_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2104,6 +2126,17 @@ type WorkerServiceServer interface {
 	// node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
 	// conflicts with the record; don't retry.
 	ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error)
+	// ReportActorCrashed tells the control plane that the sandbox of an Actor
+	// the calling Worker hosts died on its own. Nothing else notices: the
+	// control plane only learns of a dead sandbox when an operation on the Actor
+	// fails.
+	//
+	// A RUNNING Actor is moved to ACTOR_STATE_CRASHED and its Worker is
+	// released. An Actor in any other state is left alone and the report is
+	// refused as FailedPrecondition: an operation in flight owns the Actor and
+	// fails on its own if the sandbox is gone. Authorized like
+	// RequestActorSuspend.
+	ReportActorCrashed(context.Context, *ReportActorCrashedRequest) (*ReportActorCrashedResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -2128,6 +2161,9 @@ func (UnimplementedWorkerServiceServer) RequestActorSuspend(context.Context, *Re
 }
 func (UnimplementedWorkerServiceServer) ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportActorSnapshotState not implemented")
+}
+func (UnimplementedWorkerServiceServer) ReportActorCrashed(context.Context, *ReportActorCrashedRequest) (*ReportActorCrashedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportActorCrashed not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -2240,6 +2276,24 @@ func _WorkerService_ReportActorSnapshotState_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ReportActorCrashed_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportActorCrashedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ReportActorCrashed(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ReportActorCrashed_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ReportActorCrashed(ctx, req.(*ReportActorCrashedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2266,6 +2320,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportActorSnapshotState",
 			Handler:    _WorkerService_ReportActorSnapshotState_Handler,
+		},
+		{
+			MethodName: "ReportActorCrashed",
+			Handler:    _WorkerService_ReportActorCrashed_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

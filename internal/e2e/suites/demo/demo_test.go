@@ -24,8 +24,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.ate.dev/substrate/internal/ateclient"
-	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/preview"
@@ -36,9 +34,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 )
 
 const demoAtespace = "demo"
@@ -74,12 +69,12 @@ func TestActorLifecycle(t *testing.T) {
 			f:    suspendActor,
 		},
 		{
-			name: "DeleteActorAnyState",
-			f:    deleteActorAnyState,
+			name: "DeleteRunningActor",
+			f:    deleteRunningActor,
 		},
 		{
-			name: "DeletePausedActorAnyState",
-			f:    deletePausedActorAnyState,
+			name: "DeletePausedActor",
+			f:    deletePausedActor,
 		},
 		{
 			name: "RevertResumeActor",
@@ -154,8 +149,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get assigned Worker %s: %v", assignment.GetWorker().GetName(), err)
 	}
-	if diff := cmp.Diff(worker.GetStatus().GetDefaultRuntime(), assignment.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Fatalf("worker_assignment.sandbox_runtime mismatch (-worker default_runtime +assignment):\n%s", diff)
+	if diff := cmp.Diff(hardware.ColdBootRuntime(worker.GetStatus()), assignment.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("worker_assignment.sandbox_runtime mismatch (-worker default runtime +assignment):\n%s", diff)
 	}
 	if !hardware.Matches(assignment.GetSandboxRuntime(), goldenStamp) {
 		t.Fatalf("assigned runtime %v cannot restore the golden stamp %v", assignment.GetSandboxRuntime(), goldenStamp)
@@ -185,6 +180,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if diff := cmp.Diff(assignment.GetSandboxRuntime(), snapshotStamp, protocmp.Transform()); diff != "" {
 		t.Fatalf("suspended snapshot stamp mismatch (-assignment +snapshot):\n%s", diff)
 	}
+	assertSnapshotUnderLocation(t, snapshotURI, wantSnapshotLocation(t, at))
 	// The tag is given its own copy of the snapshot the suspend just wrote, so
 	// it survives the Actor being suspended again or deleted.
 	tagToUpdate, err := clients.SubstrateAPI.CreateTag(ctx, &ateapipb.CreateTagRequest{
@@ -206,6 +202,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if diff := cmp.Diff(snapshotStamp, tagToUpdate.GetStatus().GetSnapshot().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
 		t.Fatalf("tag snapshot stamp mismatch (-actor snapshot +tag):\n%s", diff)
 	}
+	assertSnapshotUnderLocation(t, tagSnapshotURI(tagToUpdate), wantSnapshotLocation(t, at))
 	listed, err := clients.SubstrateAPI.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: demoAtespace})
 	if err != nil {
 		t.Fatalf("failed to list Tags: %v", err)
@@ -397,7 +394,7 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 	}
 }
 
-func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
+func TestDeleteRunningActorWithExternalVolume(t *testing.T) {
 	e2e.RequirePreview(t, preview.GateExternalVolumes)
 	t.Parallel()
 	ctx := context.Background()
@@ -409,7 +406,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
 
-	actorName := "anystate-delete-extvol-" + nsObj.Name
+	actorName := "delete-running-extvol-" + nsObj.Name
 
 	t.Logf("Creating Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
@@ -435,22 +432,21 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get actor: %v", err)
 	}
-	if len(actor.GetStatus().GetExternalVolumes()) == 0 {
+	if len(actor.GetStatus().GetExternalVolumes().GetVolumes()) == 0 {
 		t.Fatalf("expected actor to have volumes, got 0")
 	}
-	for _, vol := range actor.GetStatus().GetExternalVolumes() {
+	for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
 		if vol.StorageVolumeId == "" {
 			t.Fatalf("expected volume %q to be provisioned, got no storage volume ID", vol.Name)
 		}
 	}
 
-	// Delete the running actor with any-state
-	t.Logf("Deleting running Actor %q with any-state...", actorName)
+	// Delete the running actor
+	t.Logf("Deleting running Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
-		AnyState: true,
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
-		t.Fatalf("failed to delete Actor with any-state: %v", err)
+		t.Fatalf("failed to delete Actor: %v", err)
 	}
 
 	// Verify deletion in store
@@ -545,8 +541,7 @@ func TestExternalVolume_NodeMigration(t *testing.T) {
 	// Clean up by deleting the actor
 	t.Logf("Deleting Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
-		AnyState: true,
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to delete Actor: %v", err)
 	}
@@ -613,8 +608,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	t.Logf("Successfully created Actor: %s", createResp.GetMetadata().GetName())
 	defer func() {
 		clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-			AnyState: true,
+			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 		})
 	}()
 
@@ -784,7 +778,7 @@ func hasLocalSnapshot(status *ateapipb.ActorStatus) bool {
 	return localSnapshot(status) != nil
 }
 
-func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clients, at *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
+func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clients, at *ateapipb.ActorTemplate) *ateapipb.ActorSandboxRuntime {
 	t.Helper()
 	current, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: e2e.TemplateRef(at)})
 	if err != nil {
@@ -805,13 +799,48 @@ func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clien
 	return stamp
 }
 
-func runtimeAttribute(rt *ateapipb.SandboxRuntime, key string) string {
+func runtimeAttribute(rt *ateapipb.ActorSandboxRuntime, key string) string {
 	for _, attr := range rt.GetVersion().GetAttributes() {
 		if attr.GetKey() == key {
 			return attr.GetValue()
 		}
 	}
 	return ""
+}
+
+// wantSnapshotLocation is where ate-api-server stores tmpl's snapshots: the
+// template's storageLocation with the PerTemplateSnapshotLocation preview gate,
+// otherwise $SNAPSHOT_LOCATION, the --snapshot-location ate-setup installs it
+// with.
+func wantSnapshotLocation(t *testing.T, tmpl *ateapipb.ActorTemplate) string {
+	t.Helper()
+	if location := tmpl.GetSnapshotConfig().GetStorageLocation(); location != "" && preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+		return location
+	}
+	env, err := e2e.CheckEnv("SNAPSHOT_LOCATION")
+	if err != nil {
+		t.Fatalf("CheckEnv failed: %v", err)
+	}
+	return env["SNAPSHOT_LOCATION"]
+}
+
+// assertSnapshotUnderLocation fails t unless snapshotURI is stored under
+// location. It compares owner prefixes, so location may be spelled with or
+// without a trailing slash.
+func assertSnapshotUnderLocation(t *testing.T, snapshotURI, location string) {
+	t.Helper()
+	uri, err := resources.ParseSnapshotURI(snapshotURI)
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI(%q): %v", snapshotURI, err)
+	}
+	want, err := uri.Owner().Prefix(location)
+	if err != nil {
+		t.Fatalf("snapshot owner prefix under %q: %v", location, err)
+	}
+	if got := uri.OwnerPrefix(); got != want {
+		t.Errorf("snapshot %q is stored under %q, want %q (PerTemplateSnapshotLocation preview gate enabled: %t)",
+			snapshotURI, got, want, preview.IsEnabled(preview.GatePerTemplateSnapshotLocation))
+	}
 }
 
 func tagSnapshotURI(tag *ateapipb.Tag) string {
@@ -1069,7 +1098,7 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef, AnyState: true})
+		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef})
 	})
 
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
@@ -1180,36 +1209,17 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	}
 	validateCounterResponse(t, resp, "after revert from paused", 2, 2)
 
-	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef, AnyState: true}); err != nil {
+	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to delete Actor: %v", err)
 	}
 	return nil
 }
 
-func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
-	actorName := "anystate-delete-actor-" + nsObj.Name
+func deleteRunningActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
+	actorName := "delete-running-actor-" + nsObj.Name
 
-	// 1. Creating an actor
+	// 1. Creating and resuming the actor
 	t.Logf("Creating Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
-		ActorTemplate: e2e.TemplateRef(at),
-	}}); err != nil {
-		t.Fatalf("failed to create Actor: %v", err)
-	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-
-	// Verify that any-state delete on a SUSPENDED actor succeeds
-	t.Logf("Attempting any-state delete on suspended Actor %q (should succeed)...", actorName)
-	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
-		AnyState: true,
-	}); err != nil {
-		t.Fatalf("expected any-state delete on suspended actor to succeed, got %v", err)
-	}
-
-	// 2. Re-creating and Resuming the actor
-	t.Logf("Re-creating Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
 		ActorTemplate: e2e.TemplateRef(at),
@@ -1226,39 +1236,29 @@ func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients
 	}
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
-	// 3. Call the actor to ensure workload is actively serving on worker
+	// 2. Call the actor to ensure workload is actively serving on worker
 	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
 	validateCounterResponse(t, resp, "after creation", 1, 1)
 
-	// 4. Attempt standard DeleteActor without any-state on running actor (should fail with FailedPrecondition)
-	t.Logf("Attempting standard delete on running Actor %q (should fail)...", actorName)
+	// 3. Delete the running actor
+	t.Logf("Deleting running Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
-		AnyState: false,
-	}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition when standard deleting running actor, got %v", err)
-	}
-
-	// 5. Delete the running actor with any-state
-	t.Logf("Deleting running Actor %q with any-state...", actorName)
-	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
-		AnyState: true,
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
-		t.Fatalf("failed to delete Actor with any-state: %v", err)
+		t.Fatalf("failed to delete Actor: %v", err)
 	}
 
-	// 6. Verify deletion in store
+	// 4. Verify deletion in store
 	if _, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("expected actor %q to be NotFound after delete, got err: %v", actorName, err)
 	}
 
-	// 7. Verify actor name can be immediately reused
+	// 5. Verify actor name can be immediately reused
 	t.Logf("Re-creating Actor %q to verify name reuse...", actorName)
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
@@ -1276,8 +1276,8 @@ func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients
 	return nil
 }
 
-func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
-	actorName := "anystate-delete-paused-actor-" + nsObj.Name
+func deletePausedActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
+	actorName := "delete-paused-actor-" + nsObj.Name
 
 	// 1. Creating an actor
 	t.Logf("Creating Actor %q...", actorName)
@@ -1308,13 +1308,12 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 	}
 	waitForActorPaused(ctx, t, clients, actorName)
 
-	// 4. Delete the paused actor with any-state
-	t.Logf("Deleting paused Actor %q with any-state...", actorName)
+	// 4. Delete the paused actor
+	t.Logf("Deleting paused Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
-		AnyState: true,
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
-		t.Fatalf("failed to delete Actor with any-state: %v", err)
+		t.Fatalf("failed to delete Actor: %v", err)
 	}
 
 	// 5. Verify deletion in store
@@ -1394,10 +1393,10 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 		if !hasExtVol {
 			at.Volumes = append(at.Volumes, &ateapipb.Volume{
 				Name: "external-data",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
-					Capacity:         "1Gi",
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
+					CapacityBytes:    1 << 30,
 					StorageClassName: scName,
-				},
+				}},
 			})
 		}
 	}
@@ -1506,79 +1505,15 @@ func callActorPath(t *testing.T, actorRef resources.ActorRef, method, path strin
 
 func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path string) (string, error) {
 	t.Helper()
-	clients := e2e.GetClients()
-
-	svc, err := clients.K8s.CoreV1().Services(e2e.SystemNamespace()).Get(context.Background(), e2e.ResourceName("atenet-router"), metav1.GetOptions{})
+	router, err := e2e.NewRouterClient(t, context.Background())
 	if err != nil {
-		return "", fmt.Errorf("failed to get atenet-router service: %w", err)
+		return "", fmt.Errorf("connecting to atenet-router: %w", err)
 	}
+	defer router.Close()
 
-	selector := labels.SelectorFromSet(svc.Spec.Selector).String()
-	pods, err := clients.K8s.CoreV1().Pods(e2e.SystemNamespace()).List(context.Background(), metav1.ListOptions{LabelSelector: selector})
-	if err != nil {
-		return "", fmt.Errorf("failed to list atenet-router pods: %w", err)
-	}
-	if len(pods.Items) == 0 {
-		return "", fmt.Errorf("no atenet-router pods found")
-	}
-	targetPod := pods.Items[0]
-
-	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
-	if err != nil {
-		return "", fmt.Errorf("failed to load kubeconfig: %w", err)
-	}
-
-	reqConfig := clients.K8s.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Namespace(targetPod.Namespace).
-		Name(targetPod.Name).
-		SubResource("portforward")
-
-	transport, upgrader, err := spdy.RoundTripperFor(config)
-	if err != nil {
-		return "", fmt.Errorf("failed to create SPDY transport: %w", err)
-	}
-
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, reqConfig.URL())
-
-	stopCh := make(chan struct{})
-	readyCh := make(chan struct{})
-	defer close(stopCh)
-
-	fw, err := portforward.New(dialer, []string{"0:8080"}, stopCh, readyCh, io.Discard, io.Discard)
-	if err != nil {
-		return "", fmt.Errorf("failed to create port forwarder: %w", err)
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		if err := fw.ForwardPorts(); err != nil {
-			errCh <- err
-		}
-	}()
-
-	select {
-	case <-readyCh:
-	case err := <-errCh:
-		return "", fmt.Errorf("port forwarding failed: %w", err)
-	case <-time.After(10 * time.Second):
-		return "", fmt.Errorf("timeout waiting for port-forward")
-	}
-
-	forwardedPorts, err := fw.GetPorts()
-	if err != nil || len(forwardedPorts) == 0 {
-		return "", fmt.Errorf("failed to get forwarded ports: %w", err)
-	}
-	localPort := forwardedPorts[0].Local
-
-	reqHttp, err := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", localPort, path), nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	reqHttp.Header.Set(atenet.TargetActorHeader, actorRef.String())
-
-	httpClient := &http.Client{Timeout: 15 * time.Second}
-	resp, err := httpClient.Do(reqHttp)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	resp, err := router.Do(ctx, method, actorRef, path, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to do request: %w", err)
 	}
@@ -1729,6 +1664,83 @@ func TestWorkerPodDeletion(t *testing.T) {
 	t.Errorf("worker for pod %s/%s was not cleaned up within 30s. Current workers: %v", podNamespace, podName, lastWorkers)
 }
 
+// A sandbox that dies on its own is reported by the worker: the actor goes
+// CRASHED without any operation on it failing, its worker is freed, and it can
+// be reverted and resumed.
+func TestSandboxCrashIsReported(t *testing.T) {
+	t.Parallel()
+	nsObj := e2e.CreateNamespace(t)
+	ctx := context.Background()
+	clients := e2e.GetClients()
+
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+	if err != nil {
+		t.Fatalf("failed to initialize ActorTemplate: %v", err)
+	}
+
+	actorName := "sandbox-crash-actor-" + nsObj.Name
+	actorRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef})
+	})
+
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
+	}}); err != nil {
+		t.Fatalf("failed to create Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("failed to resume Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("failed to get Actor: %v", err)
+	}
+	assignment := actor.GetStatus().GetWorkerAssignment()
+	if assignment.GetWorkerPod() == "" || assignment.GetWorkerNamespace() == "" {
+		t.Fatalf("running actor has no pod recorded: %v", assignment)
+	}
+
+	e2e.KillActorSandbox(ctx, t, clients, assignment.GetWorkerNamespace(), assignment.GetWorkerPod(), actor.GetMetadata().GetUid())
+	waitForActorStateWithTimeout(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_CRASHED, 2*time.Minute)
+
+	crashed, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("failed to get crashed Actor: %v", err)
+	}
+	if msg := crashed.GetStatus().GetCrash().GetMessage(); !strings.Contains(msg, "exited") {
+		t.Errorf("crash message = %q, want the worker's report of the sandbox exiting", msg)
+	}
+	if crashed.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("worker assignment survived the crash: %v", crashed.GetStatus().GetWorkerAssignment())
+	}
+	// the worker pod survives, unlike TestRevertCrashedActor
+	if _, err := clients.K8s.CoreV1().Pods(assignment.GetWorkerNamespace()).Get(ctx, assignment.GetWorkerPod(), metav1.GetOptions{}); err != nil {
+		t.Errorf("worker pod %s/%s is gone: %v", assignment.GetWorkerNamespace(), assignment.GetWorkerPod(), err)
+	}
+
+	reverted, err := clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("RevertActor from CRASHED: %v", err)
+	}
+	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Fatalf("state after revert = %v, want SUSPENDED", got)
+	}
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("failed to resume the reverted Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	if _, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName}); err != nil {
+		t.Fatalf("failed to call the reverted Actor: %v", err)
+	}
+}
+
 func TestRevertCrashedActor(t *testing.T) {
 	t.Parallel()
 	nsObj := e2e.CreateNamespace(t)
@@ -1745,7 +1757,7 @@ func TestRevertCrashedActor(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef, AnyState: true})
+		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef})
 	})
 
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{

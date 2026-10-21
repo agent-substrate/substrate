@@ -44,7 +44,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
 			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			Resources:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
+			Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
 			// Server-owned status on the request is ignored.
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
@@ -64,7 +64,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 			PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		},
-		Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
+		Resources: &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
 		Status:    &ateapipb.ActorTemplateStatus{},
 	}
 	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
@@ -76,7 +76,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
 			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			Resources:      resources.CPUMemory(1000, 512<<20),
+			Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 		},
 	})
 	assertGrpcError(t, err, codes.AlreadyExists, "ActorTemplate "+testAtespace+"/tmpl-a already exists")
@@ -208,7 +208,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	}
 	assertSnapshotPresent(t, tc, uri)
 	for _, actor := range []*ateapipb.Actor{early, late} {
-		if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: resources.ActorRefFromActor(actor).ToObjectRef(), AnyState: true}); err != nil {
+		if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: resources.ActorRefFromActor(actor).ToObjectRef()}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -237,7 +237,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 		},
 		Containers:     []*ateapipb.Container{{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}}},
 		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}},
-		Resources:      resources.CPUMemory(1000, 512<<20),
+		Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +314,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if err := assertNoGolden(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil {
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}); err != nil {
@@ -406,11 +406,60 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 						VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
 					}},
 					Volumes: []*ateapipb.Volume{{
-						Name:                   "data",
-						ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", Capacity: "1Gi"},
+						Name:     "data",
+						External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 1 << 30}},
 					}},
-					Resources:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
+					Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
 					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+				},
+			})
+			if status.Code(err) != tt.wantCode {
+				t.Fatalf("CreateActorTemplate error = %v, want %v", err, tt.wantCode)
+			}
+		})
+	}
+}
+
+// TestCreateActorTemplate_PerTemplateSnapshotLocationPreview pins how
+// snapshotConfig.storageLocation combines the PerTemplateSnapshotLocation gate
+// with the client's preview opt-in. With the gate off the field is ignored,
+// so any client may set it. With the gate on, only a client that opts in may
+// set it; a template that leaves it empty uses the server's
+// --snapshot-location.
+func TestCreateActorTemplate_PerTemplateSnapshotLocationPreview(t *testing.T) {
+	ns := namespaceForTest("ns-template-storage-location-preview")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	for i, tt := range []struct {
+		name     string
+		gates    []string
+		optIn    bool
+		location string
+		wantCode codes.Code
+	}{
+		{name: "gate off, no opt-in, location set", optIn: false, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
+		{name: "gate off, opt-in, location set", optIn: true, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
+		{name: "gate on, no opt-in, location set", gates: []string{"PerTemplateSnapshotLocation"}, optIn: false, location: "gs://my-bucket/snapshots", wantCode: codes.InvalidArgument},
+		{name: "gate on, no opt-in, no location", gates: []string{"PerTemplateSnapshotLocation"}, optIn: false, wantCode: codes.OK},
+		{name: "gate on, opt-in, location set", gates: []string{"PerTemplateSnapshotLocation"}, optIn: true, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
+		{name: "gate on, opt-in, no location", gates: []string{"PerTemplateSnapshotLocation"}, optIn: true, wantCode: codes.OK},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, tt.gates...)
+			ctx := context.Background()
+			if tt.optIn {
+				ctx = metadata.AppendToOutgoingContext(ctx, preview.Header, "true")
+			}
+			_, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+				ActorTemplate: &ateapipb.ActorTemplate{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("tmpl-loc-%d", i)},
+					Containers: []*ateapipb.Container{{
+						Name:  "main",
+						Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+					}},
+					Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
+					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: tt.location},
 				},
 			})
 			if status.Code(err) != tt.wantCode {

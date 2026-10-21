@@ -278,8 +278,7 @@ func (e *Env) EnsureAteSystemNamespace(ctx context.Context) error {
 	return e.Kube.WaitNamespaceActive(ctx, ns, NamespaceTimeout)
 }
 
-// RequireKind fails a step that only makes sense on a local Kind cluster. The
-// Kind-only demos, which live outside this package, use it too.
+// RequireKind fails a step that only makes sense on a local Kind cluster.
 func (e *Env) RequireKind(what string) error {
 	if !e.Cfg.Kind {
 		return fmt.Errorf("%s is only supported for Kind installations; re-run with --kind", what)

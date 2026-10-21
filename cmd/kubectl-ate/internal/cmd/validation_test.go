@@ -199,6 +199,18 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			wantUsageLine: "kubectl-ate create actor <actor-name> [flags]",
 		},
 		{
+			name:          "update actor with nothing",
+			args:          []string{"update", "actor"},
+			wantErrorLine: "Error: missing required argument <actor-name> and required flag -a/--atespace",
+			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
+		},
+		{
+			name:          "update actor missing -a",
+			args:          []string{"update", "actor", "my-actor", "--template", "counter"},
+			wantErrorLine: "Error: missing required flag -a/--atespace",
+			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
+		},
+		{
 			name:          "delete actor with nothing",
 			args:          []string{"delete", "actor"},
 			wantErrorLine: "Error: missing required argument <actor-name> and required flag -a/--atespace",
@@ -397,6 +409,24 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			args:          []string{"logs", "actor", "my-actor", "-a", "space-1", "--source=bogus"},
 			wantErrorLine: `Error: invalid --source "bogus"`,
 			wantUsageLine: "kubectl-ate logs actor <actor-name> [flags]",
+		},
+		{
+			name:          "update actor without --template or --worker-selector",
+			args:          []string{"update", "actor", "my-actor", "-a", "space-1"},
+			wantErrorLine: "Error: at least one of --template or --worker-selector is required",
+			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
+		},
+		{
+			name:          "update actor with malformed --template",
+			args:          []string{"update", "actor", "my-actor", "-a", "space-1", "--template", "a/b/c"},
+			wantErrorLine: `Error: malformed reference "a/b/c" (expected <name> or <atespace>/<name>)`,
+			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
+		},
+		{
+			name:          "update actor with invalid --worker-selector",
+			args:          []string{"update", "actor", "my-actor", "-a", "space-1", "--worker-selector", "===bad"},
+			wantErrorLine: `Error: invalid worker selector "===bad"`,
+			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
 		},
 		{
 			name:          "create tag with invalid --scope",

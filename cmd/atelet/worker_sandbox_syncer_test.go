@@ -394,11 +394,7 @@ func TestWorkerSandboxSyncerRegistersAheadOfJitter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		hashed, err := hashVersions(context.Background(), plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, v := range hashed {
+		for _, v := range hashVersions(plan) {
 			if _, ok := s.index.lookup(v.hash); !ok {
 				t.Errorf("runtime %s (%s) does not resolve before the jittered sync", v.name, v.hash)
 			}
@@ -424,7 +420,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 	deleting := workerPod("pod-a", "pool")
 	deleting.DeletionTimestamp = &metav1.Time{Time: time.Now()}
 	stale := wantVersions()
-	stale.DefaultRuntime = wantRuntime("v0")
+	stale.SandboxClasses[0].DefaultRuntime = sandboxruntimes.Runtime{Version: wantRuntime("v0")}
 
 	tests := []struct {
 		name string
@@ -535,7 +531,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 			},
 		},
 		priorRetries: syncMaxRetries,
-		want:         &sandboxruntimes.File{DefaultRuntime: wantRuntime("v2")},
+		want:         gvisorFile(wantRuntime("v2")),
 		wantDir:      true,
 		wantRetries:  syncMaxRetries + 1,
 	}, {

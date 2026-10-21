@@ -23,10 +23,12 @@ import (
 	"sync"
 	"testing"
 
+	ateenvv1alpha "go.ate.dev/substrate/internal/proto/ateenv/v1alpha"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/proto/glutton"
 	"go.ate.dev/substrate/internal/proto/grpcechopb"
+	"go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
 	"go.ate.dev/substrate/internal/protoredact"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
@@ -39,55 +41,34 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// TestRedactedRecursesIntoRealMapFields walks real messages whose maps hold
-// messages (atelet sandbox assets) and strings (ateapi selectors): map values
-// are visited without panicking, labeled fields in them are masked, and
-// non-sensitive content is left intact.
-func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
+// TestRedactedSkipsUnlabeledScalarMaps pins the reachability short-circuit on
+// a real message: a map<string, string> has no field that could carry
+// debug_redact, so redact skips it instead of descending into values that are
+// not messages (which would panic), while a labeled field elsewhere in the
+// same message is still masked and the original is left alone.
+func TestRedactedSkipsUnlabeledScalarMaps(t *testing.T) {
 	run := &ateletpb.RunRequest{
-		SandboxAssets: &ateletpb.SandboxAssets{
-			SandboxClass: "gvisor",
-			Assets: map[string]*ateletpb.ArchAssets{
-				"amd64": {Files: map[string]*ateletpb.AssetFile{
-					"runsc": {Url: "https://assets.example/runsc", Sha256: "abc123"},
-				}},
-			},
+		Spec: &ateletpb.WorkloadSpec{
+			Volumes: []*ateletpb.Volume{{
+				Name:     "data",
+				External: &ateletpb.ExternalVolumeSource{VolumeContext: map[string]string{"fsType": "ext4"}},
+			}},
+			Containers: []*ateletpb.Container{{
+				Name: "main",
+				Env:  []*ateletpb.EnvVar{{Name: "API_KEY", Value: "sk-secret"}},
+			}},
 		},
-		Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
-			Name: "main",
-			Env:  []*ateletpb.EnvVar{{Name: "API_KEY", Value: "sk-secret"}},
-		}}},
 	}
 	redacted, _ := protoredact.Redacted(run)
 	got := redacted.(*ateletpb.RunRequest)
 	if v := got.GetSpec().GetContainers()[0].GetEnv()[0].GetValue(); v != protoredact.Placeholder {
 		t.Fatalf("env value = %q, want placeholder", v)
 	}
-	// Inside the map value, the labeled url is masked and the sha256 is kept.
-	file := got.GetSandboxAssets().GetAssets()["amd64"].GetFiles()["runsc"]
-	if u := file.GetUrl(); u != protoredact.Placeholder {
-		t.Fatalf("asset url in a map value = %q, want placeholder", u)
-	}
-	if sum := file.GetSha256(); sum != "abc123" {
-		t.Fatalf("map-of-message content was altered: sha256 = %q", sum)
+	if fsType := got.GetSpec().GetVolumes()[0].GetExternal().GetVolumeContext()["fsType"]; fsType != "ext4" {
+		t.Fatalf("scalar map was altered: fsType = %q", fsType)
 	}
 	if run.GetSpec().GetContainers()[0].GetEnv()[0].GetValue() != "sk-secret" {
 		t.Fatal("original mutated")
-	}
-
-	tpl := &ateapipb.ActorTemplate{
-		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"workload": "agent"}},
-		Containers: []*ateapipb.Container{{
-			Name: "c", Env: []*ateapipb.EnvVar{{Name: "TOKEN", Value: "t0p"}},
-		}},
-	}
-	redactedTpl, _ := protoredact.Redacted(tpl)
-	gotTpl := redactedTpl.(*ateapipb.ActorTemplate)
-	if gotTpl.GetWorkerSelector().GetMatchLabels()["workload"] != "agent" {
-		t.Fatal("string map was altered")
-	}
-	if gotTpl.GetContainers()[0].GetEnv()[0].GetValue() != protoredact.Placeholder {
-		t.Fatal("EnvVar.value not masked")
 	}
 }
 
@@ -379,12 +360,14 @@ func TestNeedsRedactionIsSafeUnderConcurrentFirstUse(t *testing.T) {
 // the .proto files on disk.
 var ourProtoFiles = []protoreflect.FileDescriptor{
 	ateapipb.File_ateapi_proto,
+	ateenvv1alpha.File_guest_proto,
 	ateletpb.File_atelet_proto,
 	ateworkerpb.File_ateworker_proto,
 	ateconfigpb.File_apiconfig_proto,
 	credproviderpb.File_credprovider_proto,
 	glutton.File_glutton_proto,
 	grpcechopb.File_grpcecho_proto,
+	objectstoreexchangepb.File_exchange_proto,
 	objectstorev1.File_objectstore_proto,
 }
 
@@ -417,16 +400,17 @@ func isDebugRedact(fd protoreflect.FieldDescriptor) bool {
 // change is reviewed as a deliberate decision about what the logs may show.
 func TestDebugRedactFieldsArePinned(t *testing.T) {
 	want := map[string]bool{
-		"ateapi.EnvVar.value":                            true,
-		"ateapi.MintActorJwtResponse.actor_jwt":          true,
-		"ateapi.MintWorkerActorJwtResponse.actor_jwt":    true,
-		"atelet.AssetFile.url":                           true,
-		"atelet.EnvVar.value":                            true,
-		"ateworker.ContainerSpec.env":                    true,
-		"credprovider.FetchSecretResponse.opaque_bytes":  true,
-		"objectstore.v1.FetchAssetRequest.asset_uri":     true,
-		"objectstore.v1.FetchSnapshotRequest.actor_jwt":  true,
-		"objectstore.v1.UploadSnapshotRequest.actor_jwt": true,
+		"ateapi.EnvVar.value":                                       true,
+		"ateapi.MintActorJwtResponse.actor_jwt":                     true,
+		"ateapi.MintWorkerActorJwtResponse.actor_jwt":               true,
+		"atelet.EnvVar.value":                                       true,
+		"ateworker.ContainerSpec.env":                               true,
+		"credprovider.FetchSecretResponse.opaque_bytes":             true,
+		"objectstore.v1.FetchAssetRequest.asset_uri":                true,
+		"objectstore.v1.FetchSnapshotRequest.actor_jwt":             true,
+		"objectstore.v1.UploadSnapshotRequest.actor_jwt":            true,
+		"objectstoreexchange.ExchangeActorJwtRequest.actor_jwt":     true,
+		"objectstoreexchange.ExchangeActorJwtResponse.access_token": true,
 	}
 	got := map[string]bool{}
 	forEachField(func(fd protoreflect.FieldDescriptor) {

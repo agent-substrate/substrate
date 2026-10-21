@@ -35,24 +35,26 @@ const (
 // certificates from ateletauthtest carry.
 var testAteletSPIFFEID = installdefaults.SPIFFEID(installdefaults.SystemNamespace, installdefaults.AteletServiceAccount)
 
-// fakeSuspender stands in for the Control service. What it records is the
-// point of most of the suspend tests: whether the request reached the suspend
-// at all.
-type fakeSuspender struct {
+// fakeControl stands in for the Control service. What it records is the
+// point of most of the tests: whether the request reached the operation at
+// all.
+type fakeControl struct {
 	calls []*ateapipb.SuspendActorRequest
 	resp  *ateapipb.SuspendActorResponse
 	err   error
 
-	reports   []appliedReport
-	reportErr error
+	reports    []appliedReport
+	reportErr  error
+	crashCalls []crashCall
+	crashResp  *ateapipb.Actor
 }
 
-func (f *fakeSuspender) SuspendActor(_ context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
+func (f *fakeControl) SuspendActor(_ context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
 	f.calls = append(f.calls, req)
 	return f.resp, f.err
 }
 
-func (f *fakeSuspender) ApplyActorSnapshotState(_ context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error {
+func (f *fakeControl) ApplyActorSnapshotState(_ context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error {
 	f.reports = append(f.reports, appliedReport{actorRef: actorRef, actorUID: actorUID, node: node, state: state})
 	return f.reportErr
 }
@@ -65,6 +67,17 @@ type appliedReport struct {
 	state    *ateapipb.ActorSnapshotState
 }
 
+// crashCall is one CrashActorReportedByWorker call.
+type crashCall struct {
+	ActorRef                      resources.ActorRef
+	ActorUID, WorkerName, Message string
+}
+
+func (f *fakeControl) CrashActorReportedByWorker(_ context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapipb.Actor, error) {
+	f.crashCalls = append(f.crashCalls, crashCall{actorRef, actorUID, workerName, message})
+	return f.crashResp, f.err
+}
+
 // seedReportedWorker registers a Worker on nodeName that has already reported
 // capacity and its default runtime: identity from the pod, the way the syncer
 // writes it, plus the result of an earlier registration. A Worker that has
@@ -72,15 +85,14 @@ type appliedReport struct {
 // this seeds.
 func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capacity *ateapipb.WorkerResources) *ateapipb.Worker {
 	t.Helper()
-	return seedWorker(t, st, testWorkerName, nodeName, testDefaultRuntime.GetSandboxClass(), &ateapipb.WorkerStatus{
-		State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity, DefaultRuntime: testDefaultRuntime,
+	return seedWorker(t, st, testWorkerName, nodeName, &ateapipb.WorkerStatus{
+		State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity, SandboxClasses: testSandboxClasses,
 	})
 }
 
-// seedWorker registers a Worker named name, of sandbox class class, on
-// nodeName, with status already recorded. name doubles as the pod UID, so it
-// must be UUID-shaped. class "" is a Worker recorded without one.
-func seedWorker(t *testing.T, st store.Interface, name, nodeName, class string, status *ateapipb.WorkerStatus) *ateapipb.Worker {
+// seedWorker registers a Worker named name on nodeName, with status already
+// recorded. name doubles as the pod UID, so it must be UUID-shaped.
+func seedWorker(t *testing.T, st store.Interface, name, nodeName string, status *ateapipb.WorkerStatus) *ateapipb.Worker {
 	t.Helper()
 	created, err := st.CreateWorker(context.Background(), &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: name},
@@ -90,7 +102,6 @@ func seedWorker(t *testing.T, st store.Interface, name, nodeName, class string, 
 		WorkerPodUid:    name,
 		NodeName:        nodeName,
 		Ips:             []string{"10.1.2.3"},
-		SandboxClass:    class,
 		Status:          status,
 	})
 	if err != nil {

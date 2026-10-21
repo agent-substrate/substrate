@@ -161,9 +161,9 @@ type actorSnapshotsRecord struct {
 	//
 	// It is not updated, but the actor is queued again, when a worker pulls
 	// the actor out of the workqueue and:
-	//   - A Run, Restore, Checkpoint, or PromoteSnapshot of the actor is in
-	//     progress (BeginStart, BeginCheckpoint, or BeginPromote). Its end
-	//     queues the actor again.
+	//   - A Run, Restore, Checkpoint, PromoteSnapshot, or Terminate of the
+	//     actor is in progress (BeginStart, BeginCheckpoint, BeginPromote, or
+	//     BeginTerminate). Its end queues the actor again.
 	//   - Another operation on the actor, such as a Detach call, is in
 	//     progress. Its end queues the actor again.
 	//   - The detach is not due yet. The worker queues the actor again for
@@ -172,12 +172,37 @@ type actorSnapshotsRecord struct {
 	// atelet never detaches a snapshot that no detach can make durable (see
 	// detachTarget).
 	DetachAt time.Time `json:"detachAt,omitzero"`
+	// Started is set when a Run or Restore of the actor begins on this node
+	// (markStarted), and cleared when a Checkpoint commits a snapshot
+	// (CommitLocal or CommitDurable). While it is unset, the actor's
+	// directories and volumes are still that Checkpoint's to clean up.
+	Started bool `json:"started,omitempty"`
 	// ReportDueSince is when the latest background change atelet owes a
 	// report of (a new LatestDurable, or local snapshots cleared by a
 	// detach) finished. Zero once no report is due: the control plane
 	// acknowledged or refused it, a commit or Detach call returned the
 	// state, or atelet gave up after reportQueue.giveUpAfter.
 	ReportDueSince time.Time `json:"reportDueSince,omitzero"`
+}
+
+// holdKind is the kind of RPC in progress on an actor, or holdNone. Callers
+// serialize lifecycle RPCs per actor, so at most one RPC holds an actor at
+// once; a retried immediate Checkpoint promotes inside its checkpoint hold.
+type holdKind int
+
+const (
+	holdNone       holdKind = iota
+	holdStart               // Run or Restore
+	holdCheckpoint          // Checkpoint under UPLOAD_MODE_DEFERRED
+	holdDurable             // Checkpoint under UPLOAD_MODE_IMMEDIATE, or PromoteSnapshot
+	holdTerminate           // Terminate
+)
+
+// blocksUploads reports whether no background upload of the actor starts while
+// an RPC of kind k holds it: one that makes a snapshot durable, which would
+// only cancel the upload, or Terminate, which forgets the actor.
+func (k holdKind) blocksUploads() bool {
+	return k == holdDurable || k == holdTerminate
 }
 
 // actorSnapshots is what atelet tracks of one actor's snapshots on this node.
@@ -193,20 +218,13 @@ type actorSnapshots struct {
 	// A background worker or an RPC call such as Detach runs it; an actor has
 	// at most one. The entry stays in memory while op is set.
 	op *actorOp
-	// holds counts the Runs, Restores, Checkpoints, and PromoteSnapshots of
-	// the actor in progress on this node. While it is nonzero, atelet does not
-	// detach the actor or report its state, and the entry stays in memory.
-	holds int
-	// inFlight holds the snapshots of Checkpoints and PromoteSnapshots of the
-	// actor currently in progress on this node. newest includes them, so an
-	// older generation cannot start while a newer one is in flight.
-	inFlight []*SnapshotRef
-	// promotes counts the PromoteSnapshots of the actor in progress on this
-	// node. While it is nonzero, atelet does not start a background upload of
-	// the actor.
-	promotes int
+	// hold records the Run, Restore, Checkpoint, PromoteSnapshot, or Terminate
+	// of the actor in progress on this node. While set, atelet does not detach
+	// the actor or report its state (nor start a background upload when
+	// hold.blocksUploads), and the entry stays in memory.
+	hold holdKind
 	// reportDeferred is set when a report of the actor's state is held back
-	// while holds is nonzero, so holdLocked queues it once holds reaches zero.
+	// while hold is set, so holdLocked queues it once the RPC ends.
 	reportDeferred bool
 	// retryAt holds the actor's next background upload or detach back after
 	// one failed. The entry stays in memory while retryAt is set.
@@ -218,6 +236,25 @@ type actorSnapshots struct {
 	// entry because writing the file failed. The entry stays in memory while
 	// unsaved is set.
 	unsaved bool
+}
+
+// checkpointCommitted reports whether a Checkpoint of snap has committed it
+// already: LatestLocal or LatestDurable is snap. It fails with
+// FailedPrecondition when one of them has snap's UUID but a different
+// generation, fidelity, or URI: the control plane named one snapshot two
+// ways, so refuse rather than guess which is right.
+func (a *actorSnapshots) checkpointCommitted(snap *ateletpb.Snapshot) (bool, error) {
+	for _, r := range []*SnapshotRef{a.LatestLocal, a.LatestDurable} {
+		if r == nil || r.uuid() != snap.GetSnapshotUuid() {
+			continue
+		}
+		if r.generation() != snap.GetGeneration() || r.Snapshot.GetFidelity() != snap.GetFidelity() || r.uri() != snap.GetObject().GetSnapshotUri() {
+			return false, apierror.FailedPrecondition("snapshot %s is committed as generation %d with fidelity %s at %q, but requested as generation %d with fidelity %s at %q",
+				r.uuid(), r.generation(), r.Snapshot.GetFidelity(), r.uri(), snap.GetGeneration(), snap.GetFidelity(), snap.GetObject().GetSnapshotUri())
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // localNeeded reports whether CommitLocal should record snap as LatestLocal:
@@ -375,6 +412,24 @@ func (a *actorSnapshots) runningUpload() *SnapshotRef {
 	return &a.op.target
 }
 
+// supersededUpload returns the upload in progress when a snapshot newer than
+// the one it uploads is durable, or nil.
+func (a *actorSnapshots) supersededUpload() *actorOp {
+	up := a.runningUpload()
+	if up == nil || a.LatestDurable == nil || up.generation() >= a.LatestDurable.generation() {
+		return nil
+	}
+	return a.op
+}
+
+// localInUse reports whether a Run or Restore of the actor in progress may use
+// a superseded local snapshot. A Restore may read any local snapshot in place;
+// a Checkpoint or PromoteSnapshot only reads LatestLocal, which is not
+// superseded until the new snapshot is committed, and a Terminate reads none.
+func (a *actorSnapshots) localInUse() bool {
+	return a.hold == holdStart
+}
+
 // runningDetach returns the snapshot an opDetach goroutine is currently
 // detaching, or nil.
 func (a *actorSnapshots) runningDetach() *SnapshotRef {
@@ -393,8 +448,7 @@ func (a *actorSnapshots) opTarget() *SnapshotRef {
 }
 
 // newest returns the actor's snapshot with the highest generation, or nil
-// when atelet holds no snapshot for the actor. It includes snapshots whose
-// Checkpoint or PromoteSnapshot is in flight.
+// when atelet holds no snapshot for the actor.
 func (a *actorSnapshots) newest() *SnapshotRef {
 	var newest *SnapshotRef
 	consider := func(r *SnapshotRef) {
@@ -406,9 +460,6 @@ func (a *actorSnapshots) newest() *SnapshotRef {
 	consider(a.Uploading)
 	consider(a.LatestDurable)
 	consider(a.opTarget())
-	for _, r := range a.inFlight {
-		consider(r)
-	}
 	return newest
 }
 
@@ -473,13 +524,15 @@ func (a *actorSnapshots) clearLatestLocal() {
 	a.DetachAt = time.Time{}
 }
 
-// markStarted unschedules the actor's detach as a Run or Restore of the actor
-// begins on this node: atelet does not detach the actor again until its next
-// checkpoint schedules a detach. It reports whether a detach was scheduled.
+// markStarted records that a Run or Restore of the actor begins on this node:
+// it sets Started and unschedules the actor's detach, so atelet does not
+// detach the actor again until its next checkpoint schedules a detach. It
+// reports whether either changed.
 func (a *actorSnapshots) markStarted() bool {
-	if a.DetachAt.IsZero() {
+	if a.Started && a.DetachAt.IsZero() {
 		return false
 	}
+	a.Started = true
 	a.DetachAt = time.Time{}
 	return true
 }
@@ -487,8 +540,8 @@ func (a *actorSnapshots) markStarted() bool {
 // detachScheduled reports whether a detach of the actor is scheduled: atelet
 // holds a local snapshot of the actor, and no Run or Restore of the actor has
 // begun since that snapshot was committed. A scheduled detach runs once it is
-// due (see detachDue) and no Run, Restore, Checkpoint, or PromoteSnapshot of
-// the actor is in progress.
+// due (see detachDue) and no Run, Restore, Checkpoint, PromoteSnapshot, or
+// Terminate of the actor is in progress.
 func (a *actorSnapshots) detachScheduled() bool {
 	return a.LatestLocal != nil && !a.DetachAt.IsZero()
 }

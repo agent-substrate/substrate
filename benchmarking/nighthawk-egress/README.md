@@ -36,15 +36,19 @@ variable when deploying ATE.
 1. **Cluster with Agent Substrate deployed**:
    - **Existing cluster** (with `.ate-dev-env.sh` configured):
      ```bash
-     hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+     hack/install-ate.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
      ```
    - **Local `kind` cluster**:
      ```bash
-     hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"enabled":false}'
+     hack/install-ate-kind.sh deploy ate-system --credential-provider='{"enabled":false}'
      ```
    - To set the `atenet-egress` Envoy worker thread count (`--concurrency`), set `E2E_ATE_ENVOY_CONCURRENCY` when deploying:
      ```bash
-     E2E_ATE_ENVOY_CONCURRENCY=1 hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"enabled":false}'
+     E2E_ATE_ENVOY_CONCURRENCY=1 hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}' --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/nighthawk/sa/default
+     ```
+   - Provision CA bundle which includes cluster's trust bundle, so that egress gateway can trust nighhawk's test server cert, run:
+     ```bash
+     hack/setup-e2e-egress-tls-kind.sh
      ```
 2. **`kubectl-ate` installed in `PATH`**:
    ```bash
@@ -79,7 +83,7 @@ kubectl -n ate-system port-forward svc/traffic-driver-invoker 19980:19980
 Run `nighthawk_client` against the port-forwarded `traffic-driver-invoker` endpoint (`grpc://127.0.0.1:19980`), which routes the gRPC request to `nighthawk_service` inside the `nighthawk/tester` actor:
 
 ```bash
-docker run --rm --network=host --entrypoint /usr/local/bin/nighthawk_client envoyproxy/nighthawk-dev:latest --nighthawk-service grpc://127.0.0.1:19980 --rps 1000 --concurrency 1 --protocol http1 --duration 60  http://nighthawk-server.ate-system.svc.cluster.local:80
+docker run --rm --network=host --entrypoint /usr/local/bin/nighthawk_client envoyproxy/nighthawk-dev:latest --nighthawk-service grpc://127.0.0.1:19980 --rps 1000 --concurrency 1 --protocol http1 --duration 60  http://nighthawk-server.ate-system.svc:80
 ```
 
 See [Nighthawk CLI help](https://github.com/envoyproxy/nighthawk#using-the-nighthawk-client-cli) for all command line options.
@@ -88,9 +92,9 @@ See [Nighthawk CLI help](https://github.com/envoyproxy/nighthawk#using-the-night
 
 | Egress Mode | Target URL | Port |
 |---|---|---|
-| Plaintext HTTP | `http://nighthawk-server.ate-system.svc.cluster.local:80` | `80` |
-| HTTPS (TLS MITM) | `https://nighthawk-server.ate-system.svc.cluster.local:443` | `443` |
-| TLS Passthrough | `https://nighthawk-server.ate-system.svc.cluster.local:8443` | `8443` |
+| Plaintext HTTP | `http://nighthawk-server.ate-system.svc:80` | `80` |
+| HTTPS (TLS MITM) | `https://nighthawk-server.ate-system.svc:443` | `443` |
+| TLS Passthrough | `https://nighthawk-server.ate-system.svc:8443` | `8443` |
 
 ## Cleanup
 

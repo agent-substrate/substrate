@@ -105,7 +105,11 @@ func TestValidateActorJWTIssuer(t *testing.T) {
 		{issuer: "", wantErr: true},
 		{issuer: "http://idp.example.com", wantErr: true},
 		{issuer: "https://idp.ate-system.svc"},
-		{issuer: "https://idp.example.com/prod", wantErr: true},
+		{issuer: "https://idp.example.com/prod"},
+		{issuer: "https:///prod", wantErr: true},
+		{issuer: "https://user@idp.example.com", wantErr: true},
+		{issuer: "https://idp.example.com?env=prod", wantErr: true},
+		{issuer: "https://idp.example.com#prod", wantErr: true},
 	} {
 		err := validateActorJWTIssuer(tt.issuer)
 		if gotErr := err != nil; gotErr != tt.wantErr {
@@ -125,6 +129,20 @@ func TestLoadFlagsFromEnvActorJWTIssuer(t *testing.T) {
 	}
 	if *actorJWTIssuer != "https://idp.example.com" {
 		t.Errorf("--actor-jwt-issuer = %q, want %q", *actorJWTIssuer, "https://idp.example.com")
+	}
+}
+
+func TestLoadFlagsFromEnvSnapshotLocation(t *testing.T) {
+	old := *snapshotLocation
+	t.Cleanup(func() { *snapshotLocation = old })
+	*snapshotLocation = "@env"
+	t.Setenv("ATE_API_SNAPSHOT_LOCATION", "gs://ate-snapshots/prefix/")
+
+	if err := loadFlagsFromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if *snapshotLocation != "gs://ate-snapshots/prefix/" {
+		t.Errorf("--snapshot-location = %q, want %q", *snapshotLocation, "gs://ate-snapshots/prefix/")
 	}
 }
 

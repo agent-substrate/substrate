@@ -15,7 +15,6 @@
 package resources
 
 import (
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/netip"
@@ -36,7 +35,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -210,25 +208,12 @@ func ValidateSandboxAssetsDir(actorUID, dir string, fldPath *field.Path) field.E
 	return nil
 }
 
-// ValidateAssetHash ensures a sandbox asset's SHA-256 hash is exactly 64 hex
-// characters before it becomes the asset's cache key, so a malformed hash is
-// rejected as the request's fault rather than failing deep inside the cache.
-func ValidateAssetHash(sha256Hash string) error {
-	if len(sha256Hash) != 64 {
-		return fmt.Errorf("invalid asset sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
-	}
-	// Same decoder atelet's digest comparison uses.
-	if _, err := hex.DecodeString(sha256Hash); err != nil {
-		return fmt.Errorf("invalid asset sha256 hash %q: must be hex", sha256Hash)
-	}
-	return nil
-}
-
-// ValidateSnapshotLocation ensures an ActorTemplate's snapshotConfig.location
-// is a well-formed URI with a bucket, so a bad location fails fast instead of
-// deep inside an object-storage call. It deliberately does not restrict the
-// scheme: the storage layer only uses the host (bucket) and path, and which
-// schemes are acceptable is a storage-backend policy, not a per-RPC one.
+// ValidateSnapshotLocation ensures an ActorTemplate's
+// snapshotConfig.storageLocation is a well-formed URI with a bucket, so a bad
+// location fails fast instead of deep inside an object-storage call. It
+// deliberately does not restrict the scheme: the storage layer only uses the
+// host (bucket) and path, and which schemes are acceptable is a
+// storage-backend policy, not a per-RPC one.
 //
 // This validates the base that many snapshots share, not any one snapshot's
 // URI; SnapshotURI is the type for the latter, and it applies this check when
@@ -311,45 +296,6 @@ func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
 		}
 	}
 	return nil
-}
-
-// cpuLimitMax bounds cpu limits. The wire carries ceil(cores × 1000)
-// millicores and caps it at 999999 (strictly below 1000 cores), so a limit
-// above 999.999 cores rounds up out of range.
-var cpuLimitMax = resource.MustParse("999.999")
-
-// memoryLimitMax bounds memory limits at what the wire's int64 byte count
-// holds; resource.Quantity.Value wraps silently past it.
-var memoryLimitMax = resource.MustParse("9223372036854775807")
-
-// ValidateLimit validates one resource limit entry at fldPath: only cpu and
-// memory are supported, the quantity must be greater than zero, and it must
-// fit the scalars the control plane converts it to (cpuLimitMax and
-// memoryLimitMax). The bounds compare Quantities rather than the converted
-// integers, which wrap for very large values. An empty quantity is left to
-// the required tag.
-func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
-	if name != ResourceCPU && name != ResourceMemory {
-		return field.ErrorList{field.NotSupported(fldPath.Child("name"), name, []string{ResourceCPU, ResourceMemory})}
-	}
-	if quantity == "" {
-		return nil
-	}
-	q, err := resource.ParseQuantity(quantity)
-	if err != nil {
-		return field.ErrorList{field.Invalid(fldPath.Child("quantity"), quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
-	}
-	var errs field.ErrorList
-	if q.Sign() <= 0 {
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "must be greater than zero"))
-	}
-	switch {
-	case name == ResourceCPU && q.Cmp(cpuLimitMax) > 0:
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be at most 999.999 cores"))
-	case name == ResourceMemory && q.Cmp(memoryLimitMax) > 0:
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "memory limit must be at most 9223372036854775807 bytes"))
-	}
-	return errs
 }
 
 // ValidatePinnedImage requires a well-formed OCI image reference pinned by

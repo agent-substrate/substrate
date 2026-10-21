@@ -37,7 +37,7 @@ The generated notes list each pull request as `<title> by @author in <link>`. Wr
 | `multi actor worker support` | `Run more than one actor on a worker` |
 | `Fix #1234` | `Fix the kind install on arm64 hosts` |
 
-For a breaking change, describe the upgrade step in the pull request's "Breaking change" section. The release manager uses it to write the note.
+For a breaking change, describe the upgrade step in the pull request description and add the `breaking-change` label. The release manager uses it to write the note.
 
 ## Cut a release
 

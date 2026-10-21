@@ -1,10 +1,5 @@
 [
   {
-    "rule": "delete-request-shape",
-    "subject": "ateapi.Control.DeleteActor",
-    "message": "request field \"any_state\" is not allowed - want only \"actor\" ateapi.ObjectRef and optional \"options\" ateapi.DeleteOptions"
-  },
-  {
     "rule": "documented",
     "subject": "ateapi.Actor",
     "message": "message has no doc comment"
@@ -37,11 +32,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.ActorTemplate.containers",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorTemplate.snapshot_config",
     "message": "field has no doc comment"
   },
   {
@@ -151,11 +141,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ExternalVolume",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.GetActorRequest",
     "message": "message has no doc comment"
   },
@@ -203,16 +188,6 @@
     "rule": "documented",
     "subject": "ateapi.GoldenSnapshotStatus",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Limits",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Limits.name",
-    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -267,11 +242,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.ListWorkersResponse",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Resources",
     "message": "message has no doc comment"
   },
   {
@@ -341,11 +311,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Volume.external_volume_template",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Volume.system_info",
     "message": "field has no doc comment"
   },
@@ -383,10 +348,5 @@
     "rule": "documented",
     "subject": "ateapi.WorkerStatus.state",
     "message": "field has no doc comment"
-  },
-  {
-    "rule": "resource-metadata",
-    "subject": "ateapi.ActorAssignment",
-    "message": "\"metadata\" field is number 6, want 1"
   }
 ]

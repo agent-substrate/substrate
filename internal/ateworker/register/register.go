@@ -35,13 +35,11 @@ import (
 	"go.ate.dev/substrate/internal/ateletdial"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/sandboxruntimes"
 	"go.ate.dev/substrate/internal/workercapacity"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -67,17 +65,15 @@ func FromFiles(actors int) *ateletpb.WorkerResources {
 
 func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 	return &ateletpb.WorkerResources{
-		Actors: int32(actors),
-		Resources: cpuMemory(
-			readLimit(filepath.Join(dir, workercapacity.CPULimitFile)),
-			readLimit(filepath.Join(dir, workercapacity.MemoryLimitFile)),
-		),
+		CpuMillicores: readLimit(filepath.Join(dir, workercapacity.CPULimitFile)),
+		MemoryBytes:   readLimit(filepath.Join(dir, workercapacity.MemoryLimitFile)),
+		Actors:        int32(actors),
 	}
 }
 
-// buildRuntime converts the compatibility attributes atelet wrote for one
-// SandboxConfig version into a SandboxRuntime of sandboxClass.
-func buildRuntime(sandboxClass string, attrs sandboxruntimes.Attributes) *ateletpb.SandboxRuntime {
+// buildCompat converts the compatibility attributes atelet wrote for one
+// SandboxConfig version into a VersionedSandboxCompat.
+func buildCompat(attrs sandboxruntimes.Attributes) *ateletpb.VersionedSandboxCompat {
 	entries := make([]*ateletpb.AttributeEntry, 0, len(attrs))
 	for _, k := range slices.Sorted(maps.Keys(attrs)) {
 		entries = append(entries, &ateletpb.AttributeEntry{
@@ -85,42 +81,42 @@ func buildRuntime(sandboxClass string, attrs sandboxruntimes.Attributes) *atelet
 			Value: attrs[k],
 		})
 	}
-	return &ateletpb.SandboxRuntime{
-		SandboxClass: sandboxClass,
-		Version: &ateletpb.VersionedSandboxCompat{
-			SchemaVersion: hardware.SchemaVersionV1,
-			Attributes:    entries,
-		},
+	return &ateletpb.VersionedSandboxCompat{
+		SchemaVersion: hardware.SchemaVersionV1,
+		Attributes:    entries,
 	}
 }
 
-// buildRequest builds the RegisterWorkerRequest for capacity and the runtimes
-// in f under sandboxClass.
-func buildRequest(capacity *ateletpb.WorkerResources, sandboxClass string, f *sandboxruntimes.File) *ateletpb.RegisterWorkerRequest {
-	req := &ateletpb.RegisterWorkerRequest{
+// buildRuntime converts one runtime of the sandbox runtimes file into a
+// WorkerSandboxRuntime.
+func buildRuntime(rt sandboxruntimes.Runtime) *ateletpb.WorkerSandboxRuntime {
+	return &ateletpb.WorkerSandboxRuntime{Version: buildCompat(rt.Version)}
+}
+
+// buildRequest builds the RegisterWorkerRequest for capacity and one class
+// of the sandbox runtimes file: the one this worker implements.
+func buildRequest(capacity *ateletpb.WorkerResources, class *sandboxruntimes.Class) *ateletpb.RegisterWorkerRequest {
+	c := &ateletpb.WorkerSandboxClass{
+		SandboxClass:   class.SandboxClass,
+		DefaultRuntime: buildRuntime(class.DefaultRuntime),
+	}
+	for _, rt := range class.RestorableRuntimes {
+		c.RestorableRuntimes = append(c.RestorableRuntimes, buildRuntime(rt))
+	}
+	return &ateletpb.RegisterWorkerRequest{
 		Capacity:       capacity,
-		DefaultRuntime: buildRuntime(sandboxClass, f.DefaultRuntime),
+		SandboxClasses: []*ateletpb.WorkerSandboxClass{c},
 	}
-	for _, attrs := range f.RestorableRuntimes {
-		req.RestorableRuntimes = append(req.RestorableRuntimes, buildRuntime(sandboxClass, attrs))
-	}
-	return req
 }
 
-// cpuMemory is the Resources for those two dimensions. A zero dimension is
-// left out, which the control plane reads as none of it; nil when both are.
-func cpuMemory(cpuMilli, memoryBytes int64) *ateletpb.Resources {
-	var limits []*ateletpb.Limits
-	if cpuMilli != 0 {
-		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceCPU, Quantity: resource.NewMilliQuantity(cpuMilli, resource.DecimalSI).String()})
+// classOf returns f's entry for class, or nil when the file has none.
+func classOf(f *sandboxruntimes.File, class string) *sandboxruntimes.Class {
+	for i := range f.SandboxClasses {
+		if f.SandboxClasses[i].SandboxClass == class {
+			return &f.SandboxClasses[i]
+		}
 	}
-	if memoryBytes != 0 {
-		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceMemory, Quantity: resource.NewQuantity(memoryBytes, resource.BinarySI).String()})
-	}
-	if len(limits) == 0 {
-		return nil
-	}
-	return &ateletpb.Resources{Limits: limits}
+	return nil
 }
 
 func readLimit(path string) int64 {
@@ -267,11 +263,17 @@ func (r *reconciler) sync(ctx context.Context) (retry bool) {
 		slog.WarnContext(ctx, "Ignoring an unreadable sandbox runtimes file", slog.String("path", r.cfg.RuntimesFile), slog.Any("err", err))
 		return false
 	}
-	if len(desired.DefaultRuntime) == 0 {
+	class := classOf(desired, r.cfg.SandboxClass)
+	if class == nil {
+		slog.WarnContext(ctx, "Ignoring a sandbox runtimes file without this worker's sandbox class",
+			slog.String("path", r.cfg.RuntimesFile), slog.String("sandbox_class", r.cfg.SandboxClass))
+		return false
+	}
+	if len(class.DefaultRuntime.Version) == 0 {
 		slog.WarnContext(ctx, "Ignoring a sandbox runtimes file with no default runtime", slog.String("path", r.cfg.RuntimesFile))
 		return false
 	}
-	req := buildRequest(r.capacity, r.cfg.SandboxClass, desired)
+	req := buildRequest(r.capacity, class)
 	if proto.Equal(req, r.registered) {
 		return false
 	}
@@ -284,10 +286,9 @@ func (r *reconciler) sync(ctx context.Context) (retry bool) {
 		return true
 	}
 	r.registered = req
-	slog.InfoContext(ctx, "Registered worker capacity and sandbox runtimes",
+	slog.InfoContext(ctx, "Registered worker capacity and sandbox classes",
 		slog.Any("capacity", req.GetCapacity()),
-		slog.Any("default_runtime", req.GetDefaultRuntime()),
-		slog.Any("restorable_runtimes", req.GetRestorableRuntimes()))
+		slog.Any("sandbox_classes", req.GetSandboxClasses()))
 	return false
 }
 

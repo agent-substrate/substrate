@@ -88,8 +88,8 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 // builds its snapshot.
 func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.ParkedRequestConfig, traceRootSamplingPercent float64) (*XdsServer, error) {
 	xdsSrv := NewXdsServer(s.cfg.XdsPort)
-	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
-	xdsSrv.SetConnectPorts(s.cfg.ConnectPlainTextPort, s.cfg.ConnectTLSPort)
+	xdsSrv.SetConfig(s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
+	xdsSrv.SetConnectTLSPort(s.cfg.ConnectTLSPort)
 	setOtlpCollector(ctx, xdsSrv, s.cfg.OtlpCollectorAddress)
 	xdsSrv.SetTraceRootSamplingPercent(traceRootSamplingPercent)
 
@@ -102,27 +102,16 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 	}
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
-	// validateIngressAuth guarantees the client auth settings whenever a TLS
-	// listener is enabled, so every TLS listener validates any certificate a
-	// client presents. Only static-mtls also refuses a client that presents
-	// none; deprecated-insecure lets it through, as the plaintext listeners do.
-	if s.cfg.tlsIngressEnabled() {
-		// Envoy is what reads the bundle, but it would only surface a bad
-		// one as a listener that never warms. Parse it here so the router
-		// fails startup instead.
-		if _, err := credbundle.ParsePool(s.cfg.IngressAuth.ClientCAFile); err != nil {
-			return nil, fmt.Errorf("loading --ingress-client-ca-file: %w", err)
-		}
-		require := s.cfg.IngressAuth.mode() == IngressAuthStaticMTLS
-		xdsSrv.SetDownstreamClientAuth(s.cfg.IngressAuth.ClientCAFile, s.cfg.IngressAuth.AllowedSPIFFEIDs, require)
-		slog.InfoContext(ctx, "TLS ingress listeners validate client certificates",
-			slog.Bool("client_cert_required", require),
-			slog.String("client_ca_file", s.cfg.IngressAuth.ClientCAFile),
-			slog.Any("allowed_spiffe_ids", s.cfg.IngressAuth.AllowedSPIFFEIDs))
+	// Envoy is what reads the bundle, but it would only surface a bad one as
+	// a listener that never warms. Parse it here so the router fails startup
+	// instead.
+	if _, err := credbundle.ParsePool(s.cfg.IngressAuth.ClientCAFile); err != nil {
+		return nil, fmt.Errorf("loading --ingress-client-ca-file: %w", err)
 	}
-	if s.cfg.IngressAuth.mode() == IngressAuthDeprecatedInsecure {
-		slog.WarnContext(ctx, "Ingress client authentication is optional: any client that presents no certificate, or uses a plaintext listener, can reach any actor. Set --ingress-auth-mode=static-mtls to require mTLS")
-	}
+	xdsSrv.SetDownstreamClientAuth(s.cfg.IngressAuth.ClientCAFile, s.cfg.IngressAuth.AllowedSPIFFEIDs)
+	slog.InfoContext(ctx, "TLS ingress listeners require client certificates",
+		slog.String("client_ca_file", s.cfg.IngressAuth.ClientCAFile),
+		slog.Any("allowed_spiffe_ids", s.cfg.IngressAuth.AllowedSPIFFEIDs))
 	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath)
 	xdsSrv.SetUpstreamConnect(s.cfg.UpstreamConnect)
 

@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/client-go/util/workqueue"
+	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
 )
 
@@ -46,10 +47,11 @@ const trackedActorUID = "actor-uid-1"
 func useTempNodeDirs(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
-	origActors := nodepath.ActorsDir
+	origActors, origSnapshots := nodepath.ActorsDir, nodepath.SnapshotsDir
 	nodepath.ActorsDir = filepath.Join(root, "actors")
+	nodepath.SnapshotsDir = filepath.Join(root, "snapshots")
 	t.Cleanup(func() {
-		nodepath.ActorsDir = origActors
+		nodepath.ActorsDir, nodepath.SnapshotsDir = origActors, origSnapshots
 	})
 }
 
@@ -107,8 +109,12 @@ func uuidOf(r *ateletpb.SnapshotReport) string {
 const (
 	testUploadDelay   = time.Hour
 	testDetachDelay   = 4 * time.Hour
+	testUploadTimeout = 45 * time.Minute
 	testRetryDelay    = 30 * time.Minute
 	testMaxRetryDelay = 2 * time.Hour
+	// testUploadEstThroughput lets a test's local copy of a few MiB add whole
+	// seconds to its upload timeout.
+	testUploadEstThroughput = 1 << 20
 )
 
 // fakeSnapshotStore is a Store that records its calls. A call for a URI it
@@ -116,19 +122,31 @@ const (
 type fakeSnapshotStore struct {
 	// started receives each call's snapshot uuid as the call starts.
 	started chan string
+	// canceled receives each call's snapshot uuid once its ctx ends while
+	// ignoreCancel is set.
+	canceled chan string
 	// release ends a blocked call with the error it receives.
 	release chan error
 
-	mu       sync.Mutex
-	calls    []string
-	actors   map[string]resources.ActorRef
-	uploaded map[string]bool
-	blocking bool
-	err      error
+	mu           sync.Mutex
+	calls        []string
+	actors       map[string]resources.ActorRef
+	uploaded     map[string]bool
+	blocking     bool
+	ignoreCancel bool
+	err          error
+	// deadline is the deadline of the latest call's context: zero if it has
+	// none.
+	deadline time.Time
 }
 
 func newFakeSnapshotStore() *fakeSnapshotStore {
-	return &fakeSnapshotStore{started: make(chan string, 100), release: make(chan error), actors: map[string]resources.ActorRef{}}
+	return &fakeSnapshotStore{
+		started:  make(chan string, 100),
+		canceled: make(chan string, 100),
+		release:  make(chan error),
+		actors:   map[string]resources.ActorRef{},
+	}
 }
 
 // setBlocking makes later calls wait for release, or their context.
@@ -136,6 +154,14 @@ func (f *fakeSnapshotStore) setBlocking(blocking bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.blocking = blocking
+}
+
+// setIgnoreCancel makes blocked calls wait for release even after their
+// context ends, sending their snapshot uuid on canceled first.
+func (f *fakeSnapshotStore) setIgnoreCancel(ignore bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ignoreCancel = ignore
 }
 
 // setErr makes later calls fail with err, or succeed when it is nil.
@@ -158,18 +184,31 @@ func (f *fakeSnapshotStore) actorOf(uuid string) resources.ActorRef {
 	return f.actors[uuid]
 }
 
+// lastDeadline returns the deadline of the latest call's context: zero if it
+// has none.
+func (f *fakeSnapshotStore) lastDeadline() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deadline
+}
+
 func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, ref SnapshotRef) (bool, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, ref.uuid())
 	f.actors[ref.uuid()] = ref.Actor
-	blocking, err := f.blocking, f.err
+	f.deadline, _ = ctx.Deadline()
+	blocking, ignoreCancel, err := f.blocking, f.ignoreCancel, f.err
 	f.mu.Unlock()
 	f.started <- ref.uuid()
 	if blocking {
 		select {
 		case err = <-f.release:
 		case <-ctx.Done():
-			return false, ctx.Err()
+			if !ignoreCancel {
+				return false, ctx.Err()
+			}
+			f.canceled <- ref.uuid()
+			err = <-f.release
 		}
 	}
 	if err != nil {
@@ -189,13 +228,16 @@ func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, r
 
 // newStoreTracker returns a tracker over store on a fake clock, with the test
 // delays and opts, whose workers have not started: background work starts only
-// once a test advances the clock to when it is due (see stepTo). Its workers
-// stop once the test ends, before the node directories are restored.
+// once a test advances the clock to when it is due (see stepTo), and an upload
+// attempt times out once a test advances the clock past its deadline. Its
+// workers stop once the test ends, before the node directories are restored.
 func newStoreTracker(t *testing.T, store Store, opts ...Option) *Tracker {
 	t.Helper()
-	opts = append([]Option{WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay)}, opts...)
-	tr := New(t.Context(), store, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)), opts...)
+	opts = append([]Option{WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay), WithUploadTimeout(testUploadTimeout), WithUploadEstThroughput(testUploadEstThroughput)}, opts...)
+	clk := clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0))
+	tr := New(t.Context(), store, clk, opts...)
 	tr.retries = workqueue.NewTypedItemExponentialFailureRateLimiter[string](testRetryDelay, testMaxRetryDelay)
+	tr.withTimeout = fakeClockTimeout(clk)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -204,6 +246,66 @@ func newStoreTracker(t *testing.T, store Store, opts ...Option) *Tracker {
 		}
 	})
 	return tr
+}
+
+// fakeClockTimeout returns a context.WithTimeout that times out on clk: its
+// contexts end with context.DeadlineExceeded once clk reaches their deadline,
+// which Deadline reports in clk's time. Like context.WithTimeout's, its cancel
+// stops the timer before returning, so an upload that has ended leaves no
+// waiter on clk for tests that count them.
+func fakeClockTimeout(clk clock.Clock) func(context.Context, time.Duration) (context.Context, context.CancelFunc) {
+	return func(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+		c := &clockTimerCtx{Context: parent, deadline: clk.Now().Add(d), done: make(chan struct{})}
+		if err := parent.Err(); err != nil {
+			c.finish(err)
+			return c, func() {}
+		}
+		timer := clk.NewTimer(d)
+		go func() {
+			select {
+			case <-parent.Done():
+				timer.Stop()
+				c.finish(parent.Err())
+			case <-timer.C():
+				c.finish(context.DeadlineExceeded)
+			case <-c.done:
+			}
+		}()
+		return c, func() {
+			timer.Stop()
+			c.finish(context.Canceled)
+		}
+	}
+}
+
+// clockTimerCtx is a context fakeClockTimeout returns.
+type clockTimerCtx struct {
+	context.Context
+	deadline time.Time
+	done     chan struct{}
+
+	mu  sync.Mutex
+	err error
+}
+
+func (c *clockTimerCtx) Deadline() (time.Time, bool) { return c.deadline, true }
+func (c *clockTimerCtx) Done() <-chan struct{}       { return c.done }
+
+func (c *clockTimerCtx) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+// finish ends c with err, unless it has ended already.
+func (c *clockTimerCtx) finish(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return
+	}
+	c.err = err
+	close(c.done)
 }
 
 // newIdleTestTracker returns a tracker like newStoreTracker's, on fresh node
@@ -241,6 +343,20 @@ func waitStarted(t *testing.T, store *fakeSnapshotStore) string {
 		return uuid
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for an upload to start")
+		return ""
+	}
+}
+
+// waitCanceled waits for the next blocked store call with ignoreCancel set to
+// see its context canceled, and returns the uuid of the snapshot it was
+// uploading.
+func waitCanceled(t *testing.T, store *fakeSnapshotStore) string {
+	t.Helper()
+	select {
+	case uuid := <-store.canceled:
+		return uuid
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for an upload to be canceled")
 		return ""
 	}
 }
@@ -673,14 +789,16 @@ func TestTrackerCheckGeneration(t *testing.T) {
 	}
 	checkBegin := func(t *testing.T, tr *Tracker, r SnapshotRef, wantCode codes.Code) {
 		t.Helper()
-		end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, r.Snapshot)
-		if err == nil {
-			end()
+		for _, mode := range []ateletpb.UploadMode{ateletpb.UploadMode_UPLOAD_MODE_DEFERRED, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE} {
+			_, end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, r.Snapshot, mode)
+			if err == nil {
+				end()
+			}
+			if got := apierror.Code(err); got != wantCode {
+				t.Errorf("BeginCheckpoint(%v, %v) code = %v, want %v", r.Snapshot, mode, got, wantCode)
+			}
 		}
-		if got := apierror.Code(err); got != wantCode {
-			t.Errorf("BeginCheckpoint(%v) code = %v, want %v", r.Snapshot, got, wantCode)
-		}
-		_, end, err = tr.BeginPromote(t.Context(), trackedActorUID, r)
+		_, end, err := tr.BeginPromote(t.Context(), trackedActorUID, r)
 		if err == nil {
 			end()
 		}
@@ -733,32 +851,6 @@ func TestTrackerCheckGeneration(t *testing.T) {
 	checkBegin(t, tr, ref("s2", 4), codes.Aborted)
 	checkBegin(t, tr, ref("s3", 6), codes.OK)
 
-	// While a Checkpoint or PromoteSnapshot holds an uncommitted snapshot at
-	// generation 8, it is newest until end() runs.
-	endCp, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, snap("s4", 8))
-	if err != nil {
-		t.Fatalf("BeginCheckpoint(s4@8): %v", err)
-	}
-	checkBegin(t, tr, ref("s3", 6), codes.Aborted)
-	checkBegin(t, tr, ref("between", 7), codes.Aborted)
-	checkBegin(t, tr, ref("other", 8), codes.Aborted)
-	checkBegin(t, tr, ref("s4", 8), codes.OK)
-	checkBegin(t, tr, ref("s5", 9), codes.OK)
-	endCp()
-	// Ending without committing drops the in-flight generation, so s3@6 is newest again.
-	checkBegin(t, tr, ref("s3", 6), codes.OK)
-	checkBegin(t, tr, ref("between", 7), codes.OK)
-
-	_, endPromote, err := tr.BeginPromote(t.Context(), trackedActorUID, ref("s4", 8))
-	if err != nil {
-		t.Fatalf("BeginPromote(s4@8): %v", err)
-	}
-	checkBegin(t, tr, ref("between", 7), codes.Aborted)
-	checkBegin(t, tr, ref("other", 8), codes.Aborted)
-	checkBegin(t, tr, ref("s4", 8), codes.OK)
-	endPromote()
-	checkBegin(t, tr, ref("between", 7), codes.OK)
-
 	// If durable has a higher generation than local, durable is newest.
 	a := &actorSnapshots{
 		actorUID: trackedActorUID,
@@ -800,6 +892,148 @@ func TestTrackerCheckGeneration(t *testing.T) {
 	if got := apierror.Code(a.checkGeneration(snap("uploading", 7))); got != codes.OK {
 		t.Errorf("checkGeneration(uploading@7) code = %v, want OK", got)
 	}
+}
+
+// BeginCheckpoint reports whether its snapshot is committed already, as
+// LatestLocal or LatestDurable, and refuses a snapshot committed under the
+// same UUID but named differently.
+func TestTrackerBeginCheckpointReportsCommitted(t *testing.T) {
+	s1 := testRef("s1", 1, time.Time{})
+	commitLocal := func(tr *Tracker) { tr.CommitLocal(trackedActorUID, s1) }
+	commitDurable := func(tr *Tracker) { tr.CommitDurable(trackedActorUID, s1) }
+	renamed := func(rename func(*ateletpb.Snapshot)) *ateletpb.Snapshot {
+		snap := proto.CloneOf(s1.Snapshot)
+		rename(snap)
+		return snap
+	}
+	for _, tc := range []struct {
+		name          string
+		commit        func(*Tracker)
+		snap          *ateletpb.Snapshot
+		wantCommitted bool
+		wantCode      codes.Code
+	}{
+		{name: "not committed", snap: s1.Snapshot},
+		{name: "committed locally", commit: commitLocal, snap: s1.Snapshot, wantCommitted: true},
+		{name: "durable only", commit: commitDurable, snap: s1.Snapshot, wantCommitted: true},
+		{
+			name:     "committed with another generation",
+			commit:   commitDurable,
+			snap:     renamed(func(s *ateletpb.Snapshot) { s.Generation = 2 }),
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "committed with another fidelity",
+			commit:   commitDurable,
+			snap:     renamed(func(s *ateletpb.Snapshot) { s.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES }),
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "committed with another uri",
+			commit:   commitDurable,
+			snap:     renamed(func(s *ateletpb.Snapshot) { s.Object.SnapshotUri += "-other" }),
+			wantCode: codes.FailedPrecondition,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useActorDir(t)
+			tr := newTracker(t)
+			if tc.commit != nil {
+				tc.commit(tr)
+			}
+			committed, end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, tc.snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+			if err == nil {
+				end()
+			}
+			if committed != tc.wantCommitted || apierror.Code(err) != tc.wantCode {
+				t.Errorf("BeginCheckpoint = (%v, %v), want committed = %v with code %v", committed, err, tc.wantCommitted, tc.wantCode)
+			}
+		})
+	}
+}
+
+// NotStartedSince holds for a committed snapshot, local or durable only, until
+// a Run or Restore of the actor begins, and a fresh tracker reads the same
+// from the state file.
+func TestTrackerNotStartedSince(t *testing.T) {
+	type step func(*testing.T, *Tracker)
+	s1 := testRef("s1", 1, time.Time{})
+	s2 := testRef("s2", 2, time.Time{})
+	commitLocal := func(r SnapshotRef) step {
+		return func(_ *testing.T, tr *Tracker) { tr.CommitLocal(trackedActorUID, r) }
+	}
+	commitDurable := func(r SnapshotRef) step {
+		return func(_ *testing.T, tr *Tracker) { tr.CommitDurable(trackedActorUID, r) }
+	}
+	start := func(t *testing.T, tr *Tracker) {
+		end, err := tr.BeginStart(t.Context(), trackedActorUID)
+		if err != nil {
+			t.Fatalf("BeginStart: %v", err)
+		}
+		end()
+	}
+	for _, tc := range []struct {
+		name  string
+		steps []step
+		snap  *ateletpb.Snapshot
+		want  bool
+	}{
+		{name: "not committed", snap: s1.Snapshot},
+		{name: "committed locally", steps: []step{commitLocal(s1)}, snap: s1.Snapshot, want: true},
+		{name: "another snapshot", steps: []step{commitLocal(s1)}, snap: testRef("other", 1, time.Time{}).Snapshot},
+		{name: "durable only", steps: []step{commitDurable(s1)}, snap: s1.Snapshot, want: true},
+		{name: "started since a local commit", steps: []step{commitLocal(s1), start}, snap: s1.Snapshot},
+		{name: "started since a durable commit", steps: []step{commitDurable(s1), start}, snap: s1.Snapshot},
+		{name: "committed locally since a start", steps: []step{commitLocal(s1), start, commitLocal(s2)}, snap: s2.Snapshot, want: true},
+		{name: "committed durably since a start", steps: []step{commitLocal(s1), start, commitDurable(s2)}, snap: s2.Snapshot, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useActorDir(t)
+			tr := newTracker(t)
+			for _, run := range tc.steps {
+				run(t, tr)
+			}
+			if got := tr.NotStartedSince(trackedActorUID, tc.snap); got != tc.want {
+				t.Errorf("NotStartedSince = %v, want %v", got, tc.want)
+			}
+			if got := newTracker(t).NotStartedSince(trackedActorUID, tc.snap); got != tc.want {
+				t.Errorf("NotStartedSince on a fresh tracker = %v, want %v from the state file", got, tc.want)
+			}
+		})
+	}
+}
+
+// When a retried immediate Checkpoint promotes inside its checkpoint hold,
+// ending the promote restores the checkpoint hold so detaches stay blocked
+// until the checkpoint ends.
+func TestTrackerPromoteInsideCheckpointKeepsHold(t *testing.T) {
+	store := newFakeSnapshotStore()
+	tr := newIdleTestTracker(t, store)
+	s1 := testRef("s1", 1, tr.clock.Now())
+	tr.CommitLocal(trackedActorUID, s1)
+
+	_, endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, s1.Snapshot, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+	if err != nil {
+		t.Fatalf("BeginCheckpoint: %v", err)
+	}
+	_, endPromote, err := tr.BeginPromote(t.Context(), trackedActorUID, s1)
+	if err != nil {
+		t.Fatalf("BeginPromote: %v", err)
+	}
+	tr.CommitPromoted(trackedActorUID, s1)
+	endPromote()
+
+	stepTo(tr, detachDueOf(tr, trackedActorUID))
+	if run := tr.beginDueWork(trackedActorUID, opDetach); run != nil {
+		t.Error("a due detach began after the inner endPromote, want it held off while the Checkpoint holds the actor")
+		run()
+	}
+	endCheckpoint()
+	run := tr.beginDueWork(trackedActorUID, opDetach)
+	if run == nil {
+		t.Fatal("no detach began after endCheckpoint, want the due detach")
+	}
+	run()
 }
 
 // CommitLocal and CommitDurable skip older generations, and an older

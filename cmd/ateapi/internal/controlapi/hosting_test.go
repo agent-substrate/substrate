@@ -59,8 +59,11 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 				WorkerPod:       wa.GetWorkerPod(),
 				WorkerPodUid:    wa.GetWorkerPodUid(),
 				NodeName:        node,
-				SandboxClass:    "gvisor",
-				Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+				Status: &ateapipb.WorkerStatus{
+					State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+					Capacity:       &ateapipb.WorkerResources{Actors: 1},
+					SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+				},
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
 			}
@@ -165,8 +168,11 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		WorkerPod:       "stale-pod",
 		WorkerPodUid:    testWorkerUID("stale-pod"),
 		NodeName:        "node1",
-		SandboxClass:    "microvm",
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+		Status: &ateapipb.WorkerStatus{
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:       &ateapipb.WorkerResources{Actors: 1},
+			SandboxClasses: []*ateapipb.WorkerSandboxClass{{SandboxClass: "microvm", DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: testSandboxRuntime().GetVersion()}}},
+		},
 	}
 	free := &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("free-pod")},
@@ -175,9 +181,12 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		WorkerPod:       "free-pod",
 		WorkerPodUid:    testWorkerUID("free-pod"),
 		NodeName:        "node2",
-		SandboxClass:    "gvisor",
 		Labels:          map[string]string{"pool": "b"},
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+		Status: &ateapipb.WorkerStatus{
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:       &ateapipb.WorkerResources{Actors: 1},
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
+		},
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {
 		if _, err := persistence.CreateWorker(ctx, w); err != nil {

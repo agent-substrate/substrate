@@ -26,12 +26,13 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 )
 
-// RegisterWorker records a Worker's reported capacity and sandbox runtimes in
+// RegisterWorker records a Worker's reported capacity and sandbox classes in
 // one write. As with MintCert, the caller must be an atelet running on the
 // Worker's node.
 func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorkerRequest) (*ateapipb.RegisterWorkerResponse, error) {
@@ -44,12 +45,13 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 		return nil, resources.ToAPIError(errs)
 	}
 	reported := req.GetCapacity()
-	defaultRuntime := req.GetDefaultRuntime()
-	restorable := req.GetRestorableRuntimes()
+	classes := req.GetSandboxClasses()
 	name := req.GetWorker().GetName()
-	sortAttributes(defaultRuntime)
-	for _, rt := range restorable {
-		sortAttributes(rt)
+	for _, c := range classes {
+		sortAttributes(c.GetDefaultRuntime().GetVersion())
+		for _, rt := range c.GetRestorableRuntimes() {
+			sortAttributes(rt.GetVersion())
+		}
 	}
 
 	// Use authoritative state to authorize the write.
@@ -69,14 +71,12 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 			slog.String("caller_pod", caller.PodName))
 		return nil, apierror.NotFound("Worker %s not found", name)
 	}
-	if err := validateRuntimeClasses(worker.GetSandboxClass(), req); err != nil {
+	status := worker.GetStatus()
+	if err := validateSandboxClasses(hardware.SandboxClass(status), classes); err != nil {
 		return nil, err
 	}
 
-	status := worker.GetStatus()
-	if proto.Equal(status.GetCapacity(), reported) &&
-		proto.Equal(status.GetDefaultRuntime(), defaultRuntime) &&
-		sameRuntimes(status.GetRestorableRuntimes(), restorable) {
+	if proto.Equal(status.GetCapacity(), reported) && sameClasses(status.GetSandboxClasses(), classes) {
 		return &ateapipb.RegisterWorkerResponse{Worker: worker}, nil
 	}
 
@@ -85,8 +85,7 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 		// dimension or runtime this report leaves out is one it no longer
 		// supplies.
 		toUpdate.Status.Capacity = reported
-		toUpdate.Status.DefaultRuntime = defaultRuntime
-		toUpdate.Status.RestorableRuntimes = restorable
+		toUpdate.Status.SandboxClasses = classes
 		return nil
 	})
 	switch {
@@ -98,48 +97,44 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 	default:
 		return nil, fmt.Errorf("while recording capacity for worker %s: %w", name, err)
 	}
-	slog.InfoContext(ctx, "Worker registered its capacity and sandbox runtimes",
+	slog.InfoContext(ctx, "Worker registered its capacity and sandbox classes",
 		slog.String("worker", name),
 		slog.String("was", worker.GetStatus().GetCapacity().String()),
 		slog.String("now", updated.GetStatus().GetCapacity().String()),
-		slog.String("default_runtime", updated.GetStatus().GetDefaultRuntime().String()),
-		slog.Int("restorable_runtimes", len(updated.GetStatus().GetRestorableRuntimes())))
+		slog.String("sandbox_classes", fmt.Sprint(updated.GetStatus().GetSandboxClasses())))
 	return &ateapipb.RegisterWorkerResponse{Worker: updated}, nil
 }
 
-// validateRuntimeClasses rejects a runtime of a class other than the Worker's
-// own. The class is fixed when the pool creates the Worker and names the
-// sandbox its worker runs, so a runtime of another class contradicts the
-// recorded Worker state. A Worker recorded without a class has nothing for a
-// report to contradict.
-func validateRuntimeClasses(class string, req *ateapipb.RegisterWorkerRequest) error {
-	if class == "" {
+// validateSandboxClasses rejects an entry of a class other than the one
+// already recorded on the Worker. A worker pod runs one sandbox class for its
+// lifetime, fixed by its first registration, so a later report of another
+// class contradicts the recorded state. A Worker that has not registered yet
+// has nothing for a report to contradict.
+func validateSandboxClasses(recorded string, classes []*ateapipb.WorkerSandboxClass) error {
+	if recorded == "" {
 		return nil
 	}
-	if got := req.GetDefaultRuntime().GetSandboxClass(); got != class {
-		return apierror.FailedPrecondition("default_runtime.sandbox_class %q does not match Worker's sandbox_class %q", got, class)
-	}
-	for i, rt := range req.GetRestorableRuntimes() {
-		if got := rt.GetSandboxClass(); got != class {
-			return apierror.FailedPrecondition("restorable_runtimes[%d].sandbox_class %q does not match Worker's sandbox_class %q", i, got, class)
+	for i, c := range classes {
+		if got := c.GetSandboxClass(); got != recorded {
+			return apierror.FailedPrecondition("sandbox_classes[%d].sandbox_class %q does not match Worker's recorded sandbox_class %q", i, got, recorded)
 		}
 	}
 	return nil
 }
 
-// sameRuntimes reports whether two runtime lists are identical entry for
-// entry, in order. A report is compared as sent, so a Worker that reorders its
-// runtimes between reports is recorded again.
-func sameRuntimes(a, b []*ateapipb.SandboxRuntime) bool {
-	return slices.EqualFunc(a, b, func(x, y *ateapipb.SandboxRuntime) bool { return proto.Equal(x, y) })
+// sameClasses reports whether two class lists are identical entry for entry,
+// in order, restorable runtimes included. A report is compared as sent, so a
+// Worker that reorders its runtimes between reports is recorded again.
+func sameClasses(a, b []*ateapipb.WorkerSandboxClass) bool {
+	return slices.EqualFunc(a, b, func(x, y *ateapipb.WorkerSandboxClass) bool { return proto.Equal(x, y) })
 }
 
 // sortAttributes orders a runtime's compatibility attributes by key, in place.
 // Attribute order carries no meaning, but proto equality is order-sensitive, so
 // a report is canonicalized before it is compared with what is stored: the same
 // attributes in another order are the same runtime and write nothing.
-func sortAttributes(rt *ateapipb.SandboxRuntime) {
-	slices.SortFunc(rt.GetVersion().GetAttributes(), func(a, b *ateapipb.AttributeEntry) int {
+func sortAttributes(compat *ateapipb.VersionedSandboxCompat) {
+	slices.SortFunc(compat.GetAttributes(), func(a, b *ateapipb.AttributeEntry) int {
 		return cmp.Compare(a.GetKey(), b.GetKey())
 	})
 }

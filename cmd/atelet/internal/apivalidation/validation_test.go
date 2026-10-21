@@ -27,23 +27,6 @@ import (
 
 const testDigestImage = "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-const testSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-func validSandboxAssets(mutate ...func(*ateletpb.SandboxAssets)) *ateletpb.SandboxAssets {
-	a := &ateletpb.SandboxAssets{
-		SandboxClass: "gvisor",
-		PauseImage:   testDigestImage,
-		Assets: map[string]*ateletpb.ArchAssets{
-			"amd64": {Files: map[string]*ateletpb.AssetFile{"gvisor": {Url: "gs://bucket/gvisor.tar.zstd", Sha256: testSHA256}}},
-			"arm64": {Files: map[string]*ateletpb.AssetFile{"gvisor": {Url: "gs://bucket/gvisor.tar.zstd", Sha256: testSHA256}}},
-		},
-	}
-	for _, m := range mutate {
-		m(a)
-	}
-	return a
-}
-
 // createOp is for tests of nested messages, which have no request wrapper.
 var createOp = operation.Operation{Type: operation.Create}
 
@@ -52,26 +35,29 @@ func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) 
 	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)
 }
 
-// runtimeWithAttributes returns a valid gVisor runtime carrying n attributes
-// with distinct keys.
-func runtimeWithAttributes(n int) *ateletpb.SandboxRuntime {
+// compatWithAttributes returns a valid v1 compatibility identity carrying n
+// attributes with distinct keys.
+func compatWithAttributes(n int) *ateletpb.VersionedSandboxCompat {
 	attrs := make([]*ateletpb.AttributeEntry, n)
 	for i := range attrs {
 		attrs[i] = &ateletpb.AttributeEntry{Key: fmt.Sprintf("k%d", i), Value: "v"}
 	}
-	return &ateletpb.SandboxRuntime{
-		SandboxClass: "gvisor",
-		Version:      &ateletpb.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: attrs},
-	}
+	return &ateletpb.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: attrs}
 }
 
-// sandboxRuntimes returns n runtimes built by mk.
-func sandboxRuntimes(n int, mk func() *ateletpb.SandboxRuntime) []*ateletpb.SandboxRuntime {
-	rts := make([]*ateletpb.SandboxRuntime, n)
-	for i := range rts {
-		rts[i] = mk()
+// runtimeWithAttributes returns a valid gVisor runtime carrying n attributes
+// with distinct keys.
+func runtimeWithAttributes(n int) *ateletpb.ActorSandboxRuntime {
+	return &ateletpb.ActorSandboxRuntime{SandboxClass: "gvisor", Version: compatWithAttributes(n)}
+}
+
+// sandboxCompats returns n compatibility identities built by mk.
+func sandboxCompats(n int, mk func() *ateletpb.VersionedSandboxCompat) []*ateletpb.VersionedSandboxCompat {
+	compats := make([]*ateletpb.VersionedSandboxCompat, n)
+	for i := range compats {
+		compats[i] = mk()
 	}
-	return rts
+	return compats
 }
 
 func TestValidateRequestActorSuspendRequest(t *testing.T) {
@@ -247,9 +233,8 @@ func TestValidateRunRequest(t *testing.T) {
 			ActorTemplateAtespace: "team-a",
 			ActorTemplateName:     "tmpl-1",
 			Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker", Image: testDigestImage}}},
-			SandboxAssets:         validSandboxAssets(),
-			CpuMilli:              500,
-			MemoryBytes:           1 << 30,
+			SandboxRuntime:        runtimeWithAttributes(1),
+			Resources:             &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: 500, MemoryBytes: 1 << 30}},
 		}
 		for _, m := range mutate {
 			m(r)
@@ -320,14 +305,6 @@ func TestValidateRunRequest(t *testing.T) {
 		obj:  valid(func(r *ateletpb.RunRequest) { r.Spec = nil }),
 		want: field.ErrorList{field.Required(field.NewPath("spec"), "")},
 	}, {
-		name: "missing sandbox_assets",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.SandboxAssets = nil }),
-		want: field.ErrorList{field.Required(field.NewPath("sandbox_assets"), "")},
-	}, {
-		name: "sandbox asset errors surface at the sandbox_assets path",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.SandboxAssets.PauseImage = "registry.k8s.io/pause:3.10.2" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("sandbox_assets", "pause_image"), nil, "")},
-	}, {
 		name: "invalid container name: path escape",
 		obj: valid(func(r *ateletpb.RunRequest) {
 			r.Spec.Containers[0].Name = "../escape"
@@ -371,35 +348,40 @@ func TestValidateRunRequest(t *testing.T) {
 			field.Invalid(field.NewPath("egress_gateway", "address"), nil, ""),
 		},
 	}, {
-		name: "negative cpu_milli",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.CpuMilli = -1 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("minimum")},
+		name: "negative cpu_millicores",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.Resources = &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: -1}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "cpu_milli at the bound",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.CpuMilli = 999999 }),
+		name: "cpu_millicores at the bound",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.Resources = &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: 999999}}
+		}),
 	}, {
-		name: "cpu_milli over the bound",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.CpuMilli = 1000000 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("maximum")},
+		name: "cpu_millicores over the bound",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.Resources = &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: 1000000}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "negative memory_bytes",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.MemoryBytes = -1 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("memory_bytes"), nil, "").WithOrigin("minimum")},
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.Resources = &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: -1}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "memory_bytes"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "unset sizes are allowed",
 		obj: valid(func(r *ateletpb.RunRequest) {
-			r.CpuMilli = 0
-			r.MemoryBytes = 0
+			r.Resources = nil
 		}),
 	}, {
-		name: "valid sandbox_runtime",
-		obj: valid(func(r *ateletpb.RunRequest) {
-			r.SandboxRuntime = runtimeWithAttributes(1)
-		}),
+		name: "missing sandbox_runtime",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.SandboxRuntime = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("sandbox_runtime"), "")},
 	}, {
 		name: "sandbox_runtime errors surface at their path",
 		obj: valid(func(r *ateletpb.RunRequest) {
-			r.SandboxRuntime = runtimeWithAttributes(1)
 			r.SandboxRuntime.SandboxClass = "kata"
 		}),
 		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_runtime", "sandbox_class"), nil, nil)},
@@ -407,101 +389,6 @@ func TestValidateRunRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateRunRequest(context.Background(), tt.obj), tt.want)
-		})
-	}
-}
-
-// TestValidateSandboxAssets covers SandboxAssets and the asset files it holds.
-func TestValidateSandboxAssets(t *testing.T) {
-	file := func(url, sha string) *ateletpb.ArchAssets {
-		return &ateletpb.ArchAssets{Files: map[string]*ateletpb.AssetFile{"gvisor": {Url: url, Sha256: sha}}}
-	}
-	amd64 := field.NewPath("assets").Key("amd64")
-	amd64File := amd64.Child("files").Key("gvisor")
-
-	tests := []struct {
-		name string
-		obj  *ateletpb.SandboxAssets
-		want field.ErrorList
-	}{{
-		name: "valid gvisor",
-		obj:  validSandboxAssets(),
-	}, {
-		name: "valid microvm",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "microvm" }),
-	}, {
-		name: "missing sandbox_class",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("sandbox_class"), "")},
-	}, {
-		name: "unknown sandbox_class",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "kvm" }),
-		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_class"), nil, nil)},
-	}, {
-		name: "sandbox_class is case-sensitive",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "GVISOR" }),
-		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_class"), nil, nil)},
-	}, {
-		name: "sandbox_class too long",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = strings.Repeat("g", 64) }),
-		want: field.ErrorList{
-			field.TooLong(field.NewPath("sandbox_class"), nil, 63).WithOrigin("maxLength"),
-			field.NotSupported[string](field.NewPath("sandbox_class"), nil, nil),
-		},
-	}, {
-		name: "valid: no pause_image (microvm has no pause container)",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.PauseImage = "" }),
-	}, {
-		name: "pause_image not pinned by digest",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.PauseImage = "registry.k8s.io/pause:3.10.2" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("pause_image"), nil, "")},
-	}, {
-		name: "missing assets",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets = nil }),
-		want: field.ErrorList{field.Required(field.NewPath("assets"), "")},
-	}, {
-		name: "too many architectures",
-		obj: validSandboxAssets(func(a *ateletpb.SandboxAssets) {
-			for _, arch := range []string{"386", "arm", "loong64", "mips64", "ppc64le", "riscv64", "s390x"} {
-				a.Assets[arch] = file("gs://bucket/gvisor.tar.zstd", testSHA256)
-			}
-		}),
-		want: field.ErrorList{field.TooMany(field.NewPath("assets"), 9, 8).WithOrigin("maxProperties")},
-	}, {
-		name: "architecture with no files",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets["amd64"] = &ateletpb.ArchAssets{} }),
-		want: field.ErrorList{field.Required(amd64.Child("files"), "")},
-	}, {
-		name: "missing url",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets["amd64"] = file("", testSHA256) }),
-		want: field.ErrorList{field.Required(amd64File.Child("url"), "")},
-	}, {
-		name: "missing sha256",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets["amd64"] = file("gs://bucket/gvisor.tar.zstd", "") }),
-		want: field.ErrorList{field.Required(amd64File.Child("sha256"), "")},
-	}, {
-		name: "sha256 too short",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets["amd64"] = file("gs://bucket/gvisor.tar.zstd", "deadbeef") }),
-		want: field.ErrorList{field.Invalid(amd64File.Child("sha256"), nil, "")},
-	}, {
-		name: "sha256 too long",
-		obj: validSandboxAssets(func(a *ateletpb.SandboxAssets) {
-			a.Assets["amd64"] = file("gs://bucket/gvisor.tar.zstd", testSHA256+"0")
-		}),
-		want: field.ErrorList{
-			field.TooLong(amd64File.Child("sha256"), nil, 64).WithOrigin("maxLength"),
-			field.Invalid(amd64File.Child("sha256"), nil, ""),
-		},
-	}, {
-		name: "sha256 with a path escape",
-		obj: validSandboxAssets(func(a *ateletpb.SandboxAssets) {
-			a.Assets["amd64"] = file("gs://bucket/gvisor.tar.zstd", "../"+testSHA256[3:])
-		}),
-		want: field.ErrorList{field.Invalid(amd64File.Child("sha256"), nil, "")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, Validate_SandboxAssets(context.Background(), createOp, nil, tt.obj, nil), tt.want)
 		})
 	}
 }
@@ -593,7 +480,7 @@ func TestValidateCheckpointRequest(t *testing.T) {
 	}, {
 		name: "spec errors surface at the spec's path",
 		obj: valid(func(r *ateletpb.CheckpointRequest) {
-			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "_pause", Image: testDigestImage}}}
+			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "_sandbox", Image: testDigestImage}}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
@@ -697,7 +584,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				Object:       &ateletpb.ObjectStorage{SnapshotUri: snapshotURI},
 			},
-			SandboxAssets: validSandboxAssets(),
+			SandboxRuntime: runtimeWithAttributes(1),
 		}
 		for _, m := range mutate {
 			m(r)
@@ -724,8 +611,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}, {
 		name: "valid size and egress",
 		obj: valid(func(r *ateletpb.RestoreRequest) {
-			r.CpuMilli = 999999
-			r.MemoryBytes = 1 << 30
+			r.Resources = &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: 999999, MemoryBytes: 1 << 30}}
 			r.EgressGateway = &ateletpb.EgressGateway{Address: "10.0.0.1:15001"}
 		}),
 	}, {
@@ -769,7 +655,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}, {
 		name: "spec errors surface at the spec's path",
 		obj: valid(func(r *ateletpb.RestoreRequest) {
-			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "_pause", Image: testDigestImage}}}
+			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "_sandbox", Image: testDigestImage}}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
@@ -816,40 +702,34 @@ func TestValidateRestoreRequest(t *testing.T) {
 			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 		}),
 	}, {
-		name: "negative cpu_milli",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.CpuMilli = -1 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("minimum")},
+		name: "negative cpu_millicores",
+		obj: valid(func(r *ateletpb.RestoreRequest) {
+			r.Resources = &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: -1}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "cpu_milli too large",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.CpuMilli = 1000000 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("maximum")},
+		name: "cpu_millicores too large",
+		obj: valid(func(r *ateletpb.RestoreRequest) {
+			r.Resources = &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: 1000000}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "negative memory_bytes",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.MemoryBytes = -1 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("memory_bytes"), nil, "").WithOrigin("minimum")},
+		obj: valid(func(r *ateletpb.RestoreRequest) {
+			r.Resources = &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: -1}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "memory_bytes"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "empty egress gateway address",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.EgressGateway = &ateletpb.EgressGateway{} }),
 		want: field.ErrorList{field.Required(field.NewPath("egress_gateway", "address"), "")},
 	}, {
-		name: "missing sandbox_assets",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.SandboxAssets = nil }),
-		want: field.ErrorList{field.Required(field.NewPath("sandbox_assets"), "")},
-	}, {
-		name: "sandbox_assets errors surface at their path",
-		obj: valid(func(r *ateletpb.RestoreRequest) {
-			r.SandboxAssets = validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "kata" })
-		}),
-		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_assets", "sandbox_class"), nil, nil)},
-	}, {
-		name: "valid sandbox_runtime",
-		obj: valid(func(r *ateletpb.RestoreRequest) {
-			r.SandboxRuntime = runtimeWithAttributes(1)
-		}),
+		name: "missing sandbox_runtime",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.SandboxRuntime = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("sandbox_runtime"), "")},
 	}, {
 		name: "sandbox_runtime errors surface at their path",
 		obj: valid(func(r *ateletpb.RestoreRequest) {
-			r.SandboxRuntime = runtimeWithAttributes(1)
 			r.SandboxRuntime.SandboxClass = "kata"
 		}),
 		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_runtime", "sandbox_class"), nil, nil)},
@@ -1062,7 +942,7 @@ func TestValidateTerminateRequest(t *testing.T) {
 	}, {
 		name: "spec errors surface at the spec's path",
 		obj: valid(func(r *ateletpb.TerminateRequest) {
-			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "_pause", Image: testDigestImage}}}
+			r.Spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "_sandbox", Image: testDigestImage}}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
@@ -1135,26 +1015,58 @@ func TestValidateDetachActorRequest(t *testing.T) {
 }
 
 func TestValidateRegisterWorkerRequest(t *testing.T) {
-	testRuntime := func() *ateletpb.SandboxRuntime {
-		return &ateletpb.SandboxRuntime{
-			SandboxClass: "gvisor",
-			Version: &ateletpb.VersionedSandboxCompat{
-				SchemaVersion: "v1",
-				Attributes: []*ateletpb.AttributeEntry{
-					{Key: "architecture", Value: "amd64"},
-				},
+	testCompat := func() *ateletpb.VersionedSandboxCompat {
+		return &ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateletpb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
 			},
 		}
 	}
-	withLimits := func(limits ...*ateletpb.Limits) *ateletpb.RegisterWorkerRequest {
+	// testRuntime wraps compat as one of the worker's runtimes.
+	testRuntime := func(compat *ateletpb.VersionedSandboxCompat) *ateletpb.WorkerSandboxRuntime {
+		return &ateletpb.WorkerSandboxRuntime{Version: compat}
+	}
+	testClass := func() *ateletpb.WorkerSandboxClass {
+		return &ateletpb.WorkerSandboxClass{SandboxClass: "gvisor", DefaultRuntime: testRuntime(testCompat())}
+	}
+	// withClass returns a request reporting c as its only sandbox class.
+	withClass := func(c *ateletpb.WorkerSandboxClass) *ateletpb.RegisterWorkerRequest {
 		return &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{Resources: &ateletpb.Resources{Limits: limits}},
-			DefaultRuntime: testRuntime(),
+			Capacity:       &ateletpb.WorkerResources{},
+			SandboxClasses: []*ateletpb.WorkerSandboxClass{c},
 		}
 	}
-	limitsPath := field.NewPath("capacity", "resources", "limits")
-	defaultRuntimePath := field.NewPath("default_runtime")
-	restorablePath := field.NewPath("restorable_runtimes")
+	// withDefaultRuntime returns a request whose gVisor class cold-boots
+	// under compat.
+	withDefaultRuntime := func(compat *ateletpb.VersionedSandboxCompat) *ateletpb.RegisterWorkerRequest {
+		return withClass(&ateletpb.WorkerSandboxClass{SandboxClass: "gvisor", DefaultRuntime: testRuntime(compat)})
+	}
+	// withRestorable returns a request whose gVisor class can also restore
+	// compats.
+	withRestorable := func(compats ...*ateletpb.VersionedSandboxCompat) *ateletpb.RegisterWorkerRequest {
+		c := testClass()
+		for _, compat := range compats {
+			var rt *ateletpb.WorkerSandboxRuntime
+			if compat != nil {
+				rt = testRuntime(compat)
+			}
+			c.RestorableRuntimes = append(c.RestorableRuntimes, rt)
+		}
+		return withClass(c)
+	}
+	withCapacity := func(capacity *ateletpb.WorkerResources) *ateletpb.RegisterWorkerRequest {
+		return &ateletpb.RegisterWorkerRequest{
+			Capacity:       capacity,
+			SandboxClasses: []*ateletpb.WorkerSandboxClass{testClass()},
+		}
+	}
+	capacityPath := field.NewPath("capacity")
+	classesPath := field.NewPath("sandbox_classes")
+	classPath := classesPath.Index(0)
+	defaultRuntimePath := classPath.Child("default_runtime")
+	defaultVersionPath := defaultRuntimePath.Child("version")
+	restorablePath := classPath.Child("restorable_runtimes")
 
 	tests := []struct {
 		name string
@@ -1162,277 +1074,159 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		want field.ErrorList
 	}{{
 		name: "valid",
-		obj:  &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{}, DefaultRuntime: testRuntime()},
+		obj:  withClass(testClass()),
 	}, {
 		name: "valid with restorable runtimes",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:           &ateletpb.WorkerResources{},
-			DefaultRuntime:     testRuntime(),
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{testRuntime()},
-		},
+		obj:  withRestorable(testCompat()),
 	}, {
 		name: "missing capacity",
-		obj:  &ateletpb.RegisterWorkerRequest{DefaultRuntime: testRuntime()},
+		obj:  withCapacity(nil),
 		want: field.ErrorList{field.Required(field.NewPath("capacity"), "")},
 	}, {
-		name: "missing default_runtime",
+		name: "missing sandbox_classes",
 		obj:  &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{}},
+		want: field.ErrorList{field.Required(classesPath, "")},
+	}, {
+		name: "empty sandbox_classes",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity:       &ateletpb.WorkerResources{},
+			SandboxClasses: []*ateletpb.WorkerSandboxClass{},
+		},
+		want: field.ErrorList{field.Required(classesPath, "")},
+	}, {
+		name: "too many sandbox_classes",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity: &ateletpb.WorkerResources{},
+			SandboxClasses: []*ateletpb.WorkerSandboxClass{
+				testClass(),
+				{SandboxClass: "microvm", DefaultRuntime: testRuntime(testCompat())},
+			},
+		},
+		want: field.ErrorList{field.TooMany(classesPath, 2, 1).WithOrigin("maxItems")},
+	}, {
+		name: "missing sandbox_classes.sandbox_class",
+		obj:  withClass(&ateletpb.WorkerSandboxClass{DefaultRuntime: testRuntime(testCompat())}),
+		want: field.ErrorList{field.Required(classPath.Child("sandbox_class"), "")},
+	}, {
+		name: "sandbox_classes.sandbox_class too long",
+		obj:  withClass(&ateletpb.WorkerSandboxClass{SandboxClass: strings.Repeat("c", 64), DefaultRuntime: testRuntime(testCompat())}),
+		want: field.ErrorList{
+			field.TooLong(classPath.Child("sandbox_class"), "", 63).WithOrigin("maxLength"),
+			field.NotSupported[string](classPath.Child("sandbox_class"), nil, nil),
+		},
+	}, {
+		name: "unsupported sandbox_classes.sandbox_class",
+		obj:  withClass(&ateletpb.WorkerSandboxClass{SandboxClass: "kata", DefaultRuntime: testRuntime(testCompat())}),
+		want: field.ErrorList{field.NotSupported[string](classPath.Child("sandbox_class"), nil, nil)},
+	}, {
+		name: "missing sandbox_classes.default_runtime",
+		obj:  withClass(&ateletpb.WorkerSandboxClass{SandboxClass: "gvisor"}),
 		want: field.ErrorList{field.Required(defaultRuntimePath, "")},
 	}, {
-		name: "missing default_runtime.sandbox_class",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				Version: testRuntime().Version,
-			},
-		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("sandbox_class"), "")},
-	}, {
-		name: "default_runtime.sandbox_class too long",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass: strings.Repeat("c", 64),
-				Version:      testRuntime().Version,
-			},
-		},
-		want: field.ErrorList{
-			field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength"),
-			field.NotSupported[string](defaultRuntimePath.Child("sandbox_class"), nil, nil),
-		},
-	}, {
-		name: "unsupported default_runtime.sandbox_class",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass: "kata",
-				Version:      testRuntime().Version,
-			},
-		},
-		want: field.ErrorList{field.NotSupported[string](defaultRuntimePath.Child("sandbox_class"), nil, nil)},
-	}, {
 		name: "missing default_runtime.version",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{SandboxClass: "gvisor"},
-		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version"), "")},
+		obj:  withClass(&ateletpb.WorkerSandboxClass{SandboxClass: "gvisor", DefaultRuntime: &ateletpb.WorkerSandboxRuntime{}}),
+		want: field.ErrorList{field.Required(defaultVersionPath, "")},
 	}, {
-		name: "missing default_runtime.version.schema_version",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass: "gvisor",
-				Version: &ateletpb.VersionedSandboxCompat{
-					Attributes: []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
-				},
-			},
-		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "schema_version"), "")},
+		name: "missing default_runtime.schema_version",
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			Attributes: []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+		}),
+		want: field.ErrorList{field.Required(defaultVersionPath.Child("schema_version"), "")},
 	}, {
-		name: "default_runtime.version.schema_version too long",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass: "gvisor",
-				Version: &ateletpb.VersionedSandboxCompat{
-					SchemaVersion: strings.Repeat("v", 65),
-					Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
-				},
-			},
-		},
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("version", "schema_version"), "", 64).WithOrigin("maxLength")},
+		name: "default_runtime.schema_version too long",
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			SchemaVersion: strings.Repeat("v", 65),
+			Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+		}),
+		want: field.ErrorList{field.TooLong(defaultVersionPath.Child("schema_version"), "", 64).WithOrigin("maxLength")},
 	}, {
-		name: "missing default_runtime.version.attributes",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass: "gvisor",
-				Version:      &ateletpb.VersionedSandboxCompat{SchemaVersion: "v1"},
-			},
-		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "attributes"), "")},
+		name: "missing default_runtime.attributes",
+		obj:  withDefaultRuntime(&ateletpb.VersionedSandboxCompat{SchemaVersion: "v1"}),
+		want: field.ErrorList{field.Required(defaultVersionPath.Child("attributes"), "")},
 	}, {
 		name: "duplicate attribute key",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass: "gvisor",
-				Version: &ateletpb.VersionedSandboxCompat{
-					SchemaVersion: "v1",
-					Attributes: []*ateletpb.AttributeEntry{
-						{Key: "architecture", Value: "amd64"},
-						{Key: "architecture", Value: "arm64"},
-					},
-				},
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateletpb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+				{Key: "architecture", Value: "arm64"},
 			},
-		},
-		want: field.ErrorList{field.Duplicate(defaultRuntimePath.Child("version", "attributes").Index(1), nil)},
+		}),
+		want: field.ErrorList{field.Duplicate(defaultVersionPath.Child("attributes").Index(1), nil)},
 	}, {
 		name: "missing attribute key",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass: "gvisor",
-				Version: &ateletpb.VersionedSandboxCompat{
-					SchemaVersion: "v1",
-					Attributes:    []*ateletpb.AttributeEntry{{Value: "v"}},
-				},
-			},
-		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "attributes").Index(0).Child("key"), "")},
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes:    []*ateletpb.AttributeEntry{{Value: "v"}},
+		}),
+		want: field.ErrorList{field.Required(defaultVersionPath.Child("attributes").Index(0).Child("key"), "")},
 	}, {
 		name: "attribute key too long",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass: "gvisor",
-				Version: &ateletpb.VersionedSandboxCompat{
-					SchemaVersion: "v1",
-					Attributes:    []*ateletpb.AttributeEntry{{Key: strings.Repeat("k", 129), Value: "v"}},
-				},
-			},
-		},
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("version", "attributes").Index(0).Child("key"), "", 128).WithOrigin("maxLength")},
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes:    []*ateletpb.AttributeEntry{{Key: strings.Repeat("k", 129), Value: "v"}},
+		}),
+		want: field.ErrorList{field.TooLong(defaultVersionPath.Child("attributes").Index(0).Child("key"), "", 128).WithOrigin("maxLength")},
 	}, {
 		name: "missing attribute value",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass: "gvisor",
-				Version: &ateletpb.VersionedSandboxCompat{
-					SchemaVersion: "v1",
-					Attributes:    []*ateletpb.AttributeEntry{{Key: "k"}},
-				},
-			},
-		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "attributes").Index(0).Child("value"), "")},
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes:    []*ateletpb.AttributeEntry{{Key: "k"}},
+		}),
+		want: field.ErrorList{field.Required(defaultVersionPath.Child("attributes").Index(0).Child("value"), "")},
 	}, {
 		name: "attribute value too long",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass: "gvisor",
-				Version: &ateletpb.VersionedSandboxCompat{
-					SchemaVersion: "v1",
-					Attributes:    []*ateletpb.AttributeEntry{{Key: "k", Value: strings.Repeat("v", 257)}},
-				},
-			},
-		},
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("version", "attributes").Index(0).Child("value"), "", 256).WithOrigin("maxLength")},
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes:    []*ateletpb.AttributeEntry{{Key: "k", Value: strings.Repeat("v", 257)}},
+		}),
+		want: field.ErrorList{field.TooLong(defaultVersionPath.Child("attributes").Index(0).Child("value"), "", 256).WithOrigin("maxLength")},
 	}, {
 		name: "attributes at the bound",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{},
-			DefaultRuntime: runtimeWithAttributes(32),
-		},
+		obj:  withDefaultRuntime(compatWithAttributes(32)),
 	}, {
 		name: "too many attributes",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{},
-			DefaultRuntime: runtimeWithAttributes(33),
-		},
-		want: field.ErrorList{field.TooMany(defaultRuntimePath.Child("version", "attributes"), 33, 32).WithOrigin("maxItems")},
+		obj:  withDefaultRuntime(compatWithAttributes(33)),
+		want: field.ErrorList{field.TooMany(defaultVersionPath.Child("attributes"), 33, 32).WithOrigin("maxItems")},
 	}, {
 		name: "nil restorable_runtimes entry",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:           &ateletpb.WorkerResources{},
-			DefaultRuntime:     testRuntime(),
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{nil},
-		},
+		obj:  withRestorable(nil),
 		want: field.ErrorList{field.Required(restorablePath.Index(0), "")},
 	}, {
 		name: "invalid restorable_runtimes entry",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:           &ateletpb.WorkerResources{},
-			DefaultRuntime:     testRuntime(),
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{{SandboxClass: "gvisor"}},
-		},
-		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("version"), "")},
-	}, {
-		name: "unsupported restorable_runtimes sandbox_class",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{},
-			DefaultRuntime: testRuntime(),
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{{
-				SandboxClass: "GVISOR",
-				Version:      testRuntime().Version,
-			}},
-		},
-		want: field.ErrorList{field.NotSupported[string](restorablePath.Index(0).Child("sandbox_class"), nil, nil)},
+		obj: withRestorable(&ateletpb.VersionedSandboxCompat{
+			Attributes: []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+		}),
+		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("version", "schema_version"), "")},
 	}, {
 		name: "restorable_runtimes at the bound",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:           &ateletpb.WorkerResources{},
-			DefaultRuntime:     testRuntime(),
-			RestorableRuntimes: sandboxRuntimes(32, testRuntime),
-		},
+		obj:  withRestorable(sandboxCompats(32, testCompat)...),
 	}, {
 		name: "too many restorable_runtimes",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:           &ateletpb.WorkerResources{},
-			DefaultRuntime:     testRuntime(),
-			RestorableRuntimes: sandboxRuntimes(33, testRuntime),
-		},
+		obj:  withRestorable(sandboxCompats(33, testCompat)...),
 		want: field.ErrorList{field.TooMany(restorablePath, 33, 32).WithOrigin("maxItems")},
 	}, {
 		name: "full capacity",
 		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{
-				Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "4"}, {Name: "memory", Quantity: "8Gi"}},
-			}},
-			DefaultRuntime: testRuntime(),
+			Capacity:       &ateletpb.WorkerResources{Actors: 4, CpuMillicores: 4000, MemoryBytes: 8 << 30},
+			SandboxClasses: []*ateletpb.WorkerSandboxClass{testClass()},
 		},
 	}, {
 		name: "negative actors",
-		obj:  &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: -1}, DefaultRuntime: testRuntime()},
+		obj:  withCapacity(&ateletpb.WorkerResources{Actors: -1}),
 		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "unsupported resource name",
-		obj:  withLimits(&ateletpb.Limits{Name: "gpu", Quantity: "1"}),
-		want: field.ErrorList{field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil)},
+		name: "negative cpu_millicores",
+		obj:  withCapacity(&ateletpb.WorkerResources{CpuMillicores: -1}),
+		want: field.ErrorList{field.Invalid(capacityPath.Child("cpu_millicores"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "missing resource name",
-		obj:  withLimits(&ateletpb.Limits{Quantity: "1"}),
-		want: field.ErrorList{
-			field.Required(limitsPath.Index(0).Child("name"), ""),
-			field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil),
-		},
+		name: "cpu_millicores above the cap",
+		obj:  withCapacity(&ateletpb.WorkerResources{CpuMillicores: 1000000}),
+		want: field.ErrorList{field.Invalid(capacityPath.Child("cpu_millicores"), nil, "").WithOrigin("maximum")},
 	}, {
-		name: "resource name too long",
-		obj:  withLimits(&ateletpb.Limits{Name: strings.Repeat("x", 17), Quantity: "1"}),
-		want: field.ErrorList{
-			field.TooLong(limitsPath.Index(0).Child("name"), nil, 16).WithOrigin("maxLength"),
-			field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil),
-		},
-	}, {
-		name: "quantity too long",
-		obj:  withLimits(&ateletpb.Limits{Name: "memory", Quantity: "1." + strings.Repeat("0", 31)}),
-		want: field.ErrorList{field.TooLong(limitsPath.Index(0).Child("quantity"), nil, 32).WithOrigin("maxLength")},
-	}, {
-		name: "duplicate resource name",
-		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "1"}, &ateletpb.Limits{Name: "cpu", Quantity: "2"}),
-		want: field.ErrorList{field.Duplicate(limitsPath.Index(1), nil)},
-	}, {
-		name: "missing quantity",
-		obj:  withLimits(&ateletpb.Limits{Name: "cpu"}),
-		want: field.ErrorList{field.Required(limitsPath.Index(0).Child("quantity"), "")},
-	}, {
-		name: "malformed quantity",
-		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "not-a-quantity"}),
-		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
-	}, {
-		name: "too many limits",
-		obj: withLimits(
-			&ateletpb.Limits{Name: "cpu", Quantity: "1"},
-			&ateletpb.Limits{Name: "memory", Quantity: "1Gi"},
-			&ateletpb.Limits{Name: "cpu", Quantity: "2"},
-		),
-		want: field.ErrorList{field.TooMany(limitsPath, 3, 2).WithOrigin("maxItems")},
-	}, {
-		name: "nil limit entry",
-		obj:  withLimits(nil),
-		want: field.ErrorList{field.Required(limitsPath.Index(0), "")},
+		name: "negative memory_bytes",
+		obj:  withCapacity(&ateletpb.WorkerResources{MemoryBytes: -1}),
+		want: field.ErrorList{field.Invalid(capacityPath.Child("memory_bytes"), nil, "").WithOrigin("minimum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1510,9 +1304,9 @@ func TestValidateWorkloadSpec(t *testing.T) {
 	}, {
 		name: "container errors surface at the container's path",
 		obj: valid(func(s *ateletpb.WorkloadSpec) {
-			s.Containers[0].Resources = &ateletpb.ResourceLimits{CpuMillis: -1}
+			s.Containers[0].Resources = &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: -1}}
 		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "cpu_millis"), nil, "").WithOrigin("minimum")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "mount references a declared volume",
 		obj: valid(func(s *ateletpb.WorkloadSpec) {
@@ -1824,7 +1618,7 @@ func TestValidateContainer(t *testing.T) {
 			c.SecurityContext = &ateletpb.SecurityContext{Capabilities: &ateletpb.Capabilities{Add: add, Drop: drop}}
 		})
 	}
-	limits := func(r *ateletpb.ResourceLimits) *ateletpb.Container {
+	limits := func(r *ateletpb.ResourceRequirements) *ateletpb.Container {
 		return valid(func(c *ateletpb.Container) { c.Resources = r })
 	}
 
@@ -1984,28 +1778,28 @@ func TestValidateContainer(t *testing.T) {
 			want: field.ErrorList{field.Duplicate(capsPath.Child("add").Index(1), nil)},
 		},
 
-		// ResourceLimits.
+		// Resources.
 		{
 			name: "valid limits",
-			obj:  limits(&ateletpb.ResourceLimits{MemoryBytes: 1 << 30, CpuMillis: 500}),
+			obj:  limits(&ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 1 << 30, CpuMillicores: 500}}),
 		}, {
 			name: "limits: zero means unset",
-			obj:  limits(&ateletpb.ResourceLimits{}),
+			obj:  limits(&ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{}}),
 		}, {
 			name: "limits: negative memory_bytes",
-			obj:  limits(&ateletpb.ResourceLimits{MemoryBytes: -1}),
-			want: field.ErrorList{field.Invalid(field.NewPath("resources", "memory_bytes"), nil, "").WithOrigin("minimum")},
+			obj:  limits(&ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: -1}}),
+			want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "memory_bytes"), nil, "").WithOrigin("minimum")},
 		}, {
 			name: "limits: negative cpu_millis",
-			obj:  limits(&ateletpb.ResourceLimits{CpuMillis: -1}),
-			want: field.ErrorList{field.Invalid(field.NewPath("resources", "cpu_millis"), nil, "").WithOrigin("minimum")},
+			obj:  limits(&ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: -1}}),
+			want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("minimum")},
 		}, {
 			name: "limits: cpu_millis at the cap",
-			obj:  limits(&ateletpb.ResourceLimits{CpuMillis: 999999}),
+			obj:  limits(&ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: 999999}}),
 		}, {
 			name: "limits: cpu_millis above the cap",
-			obj:  limits(&ateletpb.ResourceLimits{CpuMillis: 1000000}),
-			want: field.ErrorList{field.Invalid(field.NewPath("resources", "cpu_millis"), nil, "").WithOrigin("maximum")},
+			obj:  limits(&ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: 1000000}}),
+			want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("maximum")},
 		},
 	}
 	for _, tt := range tests {

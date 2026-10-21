@@ -15,6 +15,8 @@
 package controlapi
 
 import (
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -58,21 +60,14 @@ func findLatestDurableSnapshot(status *ateapipb.ActorStatus, storageStatus ateap
 	})
 }
 
-// findLatestLocalSnapshot returns the highest-generation Snapshot on status
-// that holds a completed local checkpoint (Locality != ""), or nil if none
-// exists.
+// findLatestLocalSnapshot returns the highest-generation snapshot with a local copy.
 func findLatestLocalSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 	return latestSnapshot(status, func(snap *ateapipb.Snapshot) bool {
 		return snap.GetLocality() != ""
 	})
 }
 
-// latestSnapshotIsLocal reports whether the snapshot at the actor's latest
-// generation is node-local: the shape a pause leaves behind, which atelet's
-// upload of the snapshot doesn't change. A paused actor is SUSPENDED with this
-// shape, and resumes only on the node named by Locality. A RUNNING actor
-// resumed from pause keeps the local snapshot too, so callers that need "at
-// rest" check the state as well.
+// latestSnapshotIsLocal reports whether the latest generation has a local copy.
 func latestSnapshotIsLocal(status *ateapipb.ActorStatus) bool {
 	return snapshotAtLatestGeneration(status).GetLocality() != ""
 }
@@ -148,4 +143,26 @@ func tagDurableSnapshotURI(tag *ateapipb.Tag, storageStatus ateapipb.SnapshotSto
 		return ""
 	}
 	return st.GetObject().GetSnapshotUri()
+}
+
+// resolveSnapshotLocation returns the base object-storage URI actorTemplate's
+// snapshots are stored under: its snapshotConfig.storage_location when the
+// PerTemplateSnapshotLocation preview gate is enabled and the field is set,
+// otherwise snapshotLocation, ate-api-server's cluster-wide
+// --snapshot-location. It fails with FailedPrecondition when neither is set.
+//
+// It reads the process-wide gate rather than preview.IsEnabledFor, so a
+// request's preview opt-out cannot move where an actor's snapshots live.
+func resolveSnapshotLocation(snapshotLocation string, actorTemplate *ateapipb.ActorTemplate) (string, error) {
+	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+		if location := actorTemplate.GetSnapshotConfig().GetStorageLocation(); location != "" {
+			return location, nil
+		}
+	}
+	if snapshotLocation != "" {
+		return snapshotLocation, nil
+	}
+	return "", apierror.FailedPrecondition(
+		"actor template %s/%s has no snapshot storage location: set snapshotConfig.storageLocation, or set ate-api-server's --snapshot-location",
+		actorTemplate.GetMetadata().GetAtespace(), actorTemplate.GetMetadata().GetName())
 }

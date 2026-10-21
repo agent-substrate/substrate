@@ -57,7 +57,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("create test ActorTemplate: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()))
+	return NewActorWorkflow(st, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()))
 }
 
 // newFinalizeWorkflow builds an ActorWorkflow over persistence with an

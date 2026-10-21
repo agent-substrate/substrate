@@ -79,7 +79,6 @@ import (
 
 const (
 	NodeID               = "substrate-envoy-node"
-	IngressHTTPListener  = "ingress_http_listener"
 	IngressHTTPSListener = "ingress_https_listener"
 	RouteName            = "substrate_routes"
 	ClusterName          = "ate-cluster"
@@ -223,7 +222,6 @@ type XdsServer struct {
 	xdsPort      int
 	extprocPort  int
 	extprocAddr  string
-	ingressPort  int
 	snapshot     cachev3.SnapshotCache
 	srv          serverv3.Server
 	versionCount int64
@@ -231,10 +229,9 @@ type XdsServer struct {
 
 	mu sync.Mutex
 
-	httpsPort            int
-	connectPlainTextPort int
-	connectTLSPort       int
-	certPath             string
+	httpsPort      int
+	connectTLSPort int
+	certPath       string
 
 	// Upstream (actor-facing) mTLS. When upstreamCredentialBundlePath is set, the
 	// ORIGINAL_DST actor cluster dials the actor's in-worker atunnel ingress
@@ -245,14 +242,11 @@ type XdsServer struct {
 	// upstreamConnect: see SetUpstreamConnect.
 	upstreamConnect bool
 
-	// Downstream (client-facing) mTLS. When downstreamClientCAPath is set,
-	// every TLS ingress listener requests a client certificate and rejects
-	// one that does not chain to it or carry one of
-	// downstreamAllowedSPIFFEIDs as a URI SAN. downstreamRequireClientCert
-	// also rejects a client that presents no certificate.
-	downstreamClientCAPath      string
-	downstreamAllowedSPIFFEIDs  []string
-	downstreamRequireClientCert bool
+	// Downstream (client-facing) mTLS. Every TLS ingress listener requires a
+	// client certificate that chains to downstreamClientCAPath and carries
+	// one of downstreamAllowedSPIFFEIDs as a URI SAN.
+	downstreamClientCAPath     string
+	downstreamAllowedSPIFFEIDs []string
 
 	otlpHost string
 	otlpPort uint32
@@ -288,26 +282,24 @@ func NewXdsServer(xdsPort int) *XdsServer {
 		versionEpoch:          strconv.FormatInt(time.Now().Unix(), 10) + "-" + rand.Text()[:8],
 		extprocPort:           50051, // matches default extproc port
 		extprocAddr:           "127.0.0.1",
-		ingressPort:           8080,
 		extProcMessageTimeout: defaultExtProcMessageTimeout,
 		extProcMaxRequests:    defaultExtProcMaxRequests,
 		routeTimeout:          defaultRouteTimeout,
 	}
 }
 
-func (x *XdsServer) SetConfig(ingressPort int, extprocPort int, extprocAddr string) {
+func (x *XdsServer) SetConfig(extprocPort int, extprocAddr string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	x.ingressPort = ingressPort
 	x.extprocPort = extprocPort
 	x.extprocAddr = extprocAddr
 }
 
-// TODO: More extensible config setting that doesn't require another lock op
-func (x *XdsServer) SetConnectPorts(connectPlainTextPort int, connectTLSPort int) {
+// SetConnectTLSPort sets the port of the TLS listener for CONNECT-tunneled
+// traffic. Non-positive disables it.
+func (x *XdsServer) SetConnectTLSPort(connectTLSPort int) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	x.connectPlainTextPort = connectPlainTextPort
 	x.connectTLSPort = connectTLSPort
 }
 
@@ -379,19 +371,16 @@ func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 	x.certPath = certPath
 }
 
-// SetDownstreamClientAuth makes every TLS ingress listener request a client
-// certificate and accept only one signed by a CA in caPath whose URI SAN
-// exactly matches one of allowedSPIFFEIDs. With require, a client that
-// presents no certificate is rejected too; without it, such a client is let
-// through unauthenticated. Envoy enforces this during the handshake, so a
-// rejected client never reaches ext_proc. It does not touch the plaintext
-// listeners (see routerConfig.validateIngressAuth).
-func (x *XdsServer) SetDownstreamClientAuth(caPath string, allowedSPIFFEIDs []string, require bool) {
+// SetDownstreamClientAuth makes every TLS ingress listener require a client
+// certificate signed by a CA in caPath whose URI SAN exactly matches one of
+// allowedSPIFFEIDs. Envoy enforces this during the handshake, so a rejected
+// client never reaches ext_proc. UpdateSnapshot fails if a TLS listener is
+// enabled without it.
+func (x *XdsServer) SetDownstreamClientAuth(caPath string, allowedSPIFFEIDs []string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.downstreamClientCAPath = caPath
 	x.downstreamAllowedSPIFFEIDs = allowedSPIFFEIDs
-	x.downstreamRequireClientCert = require
 }
 
 // otlpDefaultPort is the OTLP/gRPC default port, used when the collector
@@ -520,12 +509,16 @@ func (x *XdsServer) UpdateSnapshot() error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 
+	httpsEnabled := x.httpsPort > 0 && x.certPath != ""
+	// The main_internal cluster and listener only exist to serve the CONNECT
+	// listener.
+	connectEnabled := x.connectTLSPort > 0 && x.certPath != ""
+	if (httpsEnabled || connectEnabled) && (x.downstreamClientCAPath == "" || len(x.downstreamAllowedSPIFFEIDs) == 0) {
+		return fmt.Errorf("TLS ingress listeners need client authentication: call SetDownstreamClientAuth")
+	}
+
 	x.versionCount++
 	ver := x.versionEpoch + "-" + strconv.FormatInt(x.versionCount, 10)
-
-	// connectEnabled is true when either CONNECT listener (plaintext or TLS) is
-	// configured; the main_internal cluster/listener only exist to serve them.
-	connectEnabled := x.connectPlainTextPort > 0 || x.connectTLSPort > 0
 
 	// Clusters
 	clusters := []types.Resource{
@@ -554,31 +547,21 @@ func (x *XdsServer) UpdateSnapshot() error {
 
 	// Listeners
 	var listeners []types.Resource
-	if x.ingressPort > 0 {
-		listeners = append(listeners, x.buildListener())
-	}
 	if x.upstreamConnect {
 		listeners = append(listeners, buildActorConnectListener())
 	}
 	if connectEnabled {
 		listeners = append(listeners, x.buildMainInternalListener())
 	}
-	if x.connectPlainTextPort > 0 {
-		listeners = append(listeners, x.buildConnectTerminateListener())
-	}
 	var secrets []types.Resource
-	needsCert := x.certPath != "" && (x.httpsPort > 0 || x.connectTLSPort > 0)
-	if x.httpsPort > 0 && x.certPath != "" {
+	if httpsEnabled {
 		listeners = append(listeners, x.buildHttpsListener())
 	}
-	if x.connectTLSPort > 0 && x.certPath != "" {
+	if connectEnabled {
 		listeners = append(listeners, x.buildConnectTerminateTLSListener())
 	}
-	if needsCert {
-		secrets = append(secrets, x.buildTlsSecret())
-		if x.downstreamClientCAPath != "" {
-			secrets = append(secrets, x.buildIngressClientTrustSecret())
-		}
+	if httpsEnabled || connectEnabled {
+		secrets = append(secrets, x.buildTlsSecret(), x.buildIngressClientTrustSecret())
 	}
 	// Mirrors buildUpstreamTransportSocket's gating: the actor-facing socket
 	// exists only when the credential bundle is configured, and it references
@@ -1355,8 +1338,8 @@ func buildConnectRoutes() *routev3.RouteConfiguration {
 	}
 }
 
-// buildHcm builds the HTTP ext_proc-fronted HCM shared by the ingress_http,
-// ingress_https, and main_internal listeners. captureActorRouting preserves
+// buildHcm builds the HTTP ext_proc-fronted HCM shared by the ingress_https and
+// main_internal listeners. captureActorRouting preserves
 // the actor routing header across CONNECT re-entry.
 func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb.Any {
 	extProcConfig := newAny(&extprocv3filter.ExternalProcessor{
@@ -1500,37 +1483,6 @@ func dualStackAdditionalAddresses(port int) []*listenerv3.AdditionalAddress {
 	}
 }
 
-func (x *XdsServer) buildListener() *listenerv3.Listener {
-	hcm := x.buildHcm("ingress_http", true)
-
-	return &listenerv3.Listener{
-		Name: IngressHTTPListener,
-		Address: &corev3.Address{
-			Address: &corev3.Address_SocketAddress{
-				SocketAddress: &corev3.SocketAddress{
-					Address: WildcardIP,
-					PortSpecifier: &corev3.SocketAddress_PortValue{
-						PortValue: uint32(x.ingressPort),
-					},
-				},
-			},
-		},
-		AdditionalAddresses: dualStackAdditionalAddresses(x.ingressPort),
-		FilterChains: []*listenerv3.FilterChain{
-			{
-				Filters: []*listenerv3.Filter{
-					{
-						Name: "envoy.filters.network.http_connection_manager",
-						ConfigType: &listenerv3.Filter_TypedConfig{
-							TypedConfig: hcm,
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
 // buildDownstreamTlsTransportSocket returns the downstream TLS transport
 // socket shared by every TLS-terminating listener: it serves the SDS-fetched
 // certificate at HTTPSCertSecretName (see buildTlsSecret), which UpdateSnapshot
@@ -1538,13 +1490,23 @@ func (x *XdsServer) buildListener() *listenerv3.Listener {
 // alpnProtocols, when non-empty, is offered during the handshake; empty
 // advertises nothing, leaving clients on HTTP/1.1.
 //
-// With client authentication configured (see SetDownstreamClientAuth) the
-// socket also requests, and optionally requires, a client certificate, which
-// Envoy validates whenever one is presented. As on the upstream side, the CA
-// bundle arrives over SDS so it tracks ClusterTrustBundle rotation, while the
-// SPIFFE ID matchers stay inline in the default context.
+// The socket requires a client certificate that chains to the CA bundle and
+// carries one of the allowed SPIFFE IDs (see SetDownstreamClientAuth). As on
+// the upstream side, the CA bundle arrives over SDS so it tracks
+// ClusterTrustBundle rotation, while the SPIFFE ID matchers stay inline in
+// the default context.
 func (x *XdsServer) buildDownstreamTlsTransportSocket(alpnProtocols []string) *corev3.TransportSocket {
+	sanMatchers := make([]*tlsv3.SubjectAltNameMatcher, 0, len(x.downstreamAllowedSPIFFEIDs))
+	for _, id := range x.downstreamAllowedSPIFFEIDs {
+		sanMatchers = append(sanMatchers, &tlsv3.SubjectAltNameMatcher{
+			SanType: tlsv3.SubjectAltNameMatcher_URI,
+			Matcher: &matcherv3.StringMatcher{
+				MatchPattern: &matcherv3.StringMatcher_Exact{Exact: id},
+			},
+		})
+	}
 	tlsConfig := &tlsv3.DownstreamTlsContext{
+		RequireClientCertificate: wrapperspb.Bool(true),
 		CommonTlsContext: &tlsv3.CommonTlsContext{
 			AlpnProtocols: alpnProtocols,
 			TlsCertificateSdsSecretConfigs: []*tlsv3.SdsSecretConfig{
@@ -1553,30 +1515,18 @@ func (x *XdsServer) buildDownstreamTlsTransportSocket(alpnProtocols []string) *c
 					SdsConfig: adsConfigSource(),
 				},
 			},
-		},
-	}
-	if x.downstreamClientCAPath != "" {
-		tlsConfig.RequireClientCertificate = wrapperspb.Bool(x.downstreamRequireClientCert)
-		sanMatchers := make([]*tlsv3.SubjectAltNameMatcher, 0, len(x.downstreamAllowedSPIFFEIDs))
-		for _, id := range x.downstreamAllowedSPIFFEIDs {
-			sanMatchers = append(sanMatchers, &tlsv3.SubjectAltNameMatcher{
-				SanType: tlsv3.SubjectAltNameMatcher_URI,
-				Matcher: &matcherv3.StringMatcher{
-					MatchPattern: &matcherv3.StringMatcher_Exact{Exact: id},
-				},
-			})
-		}
-		tlsConfig.CommonTlsContext.ValidationContextType = &tlsv3.CommonTlsContext_CombinedValidationContext{
-			CombinedValidationContext: &tlsv3.CommonTlsContext_CombinedCertificateValidationContext{
-				DefaultValidationContext: &tlsv3.CertificateValidationContext{
-					MatchTypedSubjectAltNames: sanMatchers,
-				},
-				ValidationContextSdsSecretConfig: &tlsv3.SdsSecretConfig{
-					Name:      IngressClientTrustSecretName,
-					SdsConfig: adsConfigSource(),
+			ValidationContextType: &tlsv3.CommonTlsContext_CombinedValidationContext{
+				CombinedValidationContext: &tlsv3.CommonTlsContext_CombinedCertificateValidationContext{
+					DefaultValidationContext: &tlsv3.CertificateValidationContext{
+						MatchTypedSubjectAltNames: sanMatchers,
+					},
+					ValidationContextSdsSecretConfig: &tlsv3.SdsSecretConfig{
+						Name:      IngressClientTrustSecretName,
+						SdsConfig: adsConfigSource(),
+					},
 				},
 			},
-		}
+		},
 	}
 	tlsConfigAny := newAny(tlsConfig)
 	return &corev3.TransportSocket{
@@ -1626,40 +1576,9 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 	}
 }
 
-func (x *XdsServer) buildConnectTerminateListener() *listenerv3.Listener {
-	hcm := x.buildConnectTerminateHCM("connect_terminate")
-
-	return &listenerv3.Listener{
-		Name: "connect_terminate",
-		Address: &corev3.Address{
-			Address: &corev3.Address_SocketAddress{
-				SocketAddress: &corev3.SocketAddress{
-					Address: WildcardIP,
-					PortSpecifier: &corev3.SocketAddress_PortValue{
-						PortValue: uint32(x.connectPlainTextPort),
-					},
-				},
-			},
-		},
-		AdditionalAddresses: dualStackAdditionalAddresses(x.connectPlainTextPort),
-		FilterChains: []*listenerv3.FilterChain{
-			{
-				Filters: []*listenerv3.Filter{
-					{
-						Name: "envoy.filters.network.http_connection_manager",
-						ConfigType: &listenerv3.Filter_TypedConfig{
-							TypedConfig: hcm,
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-// buildConnectTerminateTLSListener is buildConnectTerminateListener's TLS
-// twin: same CONNECT-terminating HCM, but downstream TLS-wrapped like
-// buildHttpsListener, sharing the same SDS-fetched certificate.
+// buildConnectTerminateTLSListener terminates CONNECT tunnels from clients.
+// It is downstream TLS-wrapped like buildHttpsListener, sharing the same
+// SDS-fetched certificate.
 func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 	hcm := x.buildConnectTerminateHCM("connect_terminate_tls")
 

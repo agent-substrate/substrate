@@ -14,11 +14,17 @@ The actor never holds the secret. It sends the header with a placeholder
 value, which the gateway discards, so it cannot read, snapshot, or exfiltrate
 the secret, nor choose the value that leaves the cluster.
 
+The gateway can also inject an **actor JWT** in place of a stored secret: a
+token that ateapi mints for the actor making the request, which an upstream
+that trusts Substrate's issuer can verify. See [Actor JWTs](#actor-jwts).
+
 
 ## When you need this
 
 Actors call APIs that need bearer tokens or API keys, and those secrets must
-stay out of the actor's filesystem, environment, and snapshots.
+stay out of the actor's filesystem, environment, and snapshots. Other APIs
+need to know which actor is calling and accept a signed token that says so;
+for those, inject an actor JWT.
 
 Injection is supported on HTTP and HTTPS requests allowed by an `http` or
 `https` rule with credential replacement effects. For HTTPS, the actor must
@@ -32,11 +38,13 @@ flowchart LR
     gateway["Egress gateway<br/>applies the EgressPolicy"]
     provider["Credential provider"]
     store[("Secret store")]
+    ateapi["ateapi"]
     upstream["Upstream API"]
 
     actor -->|"HTTPS request,<br/>placeholder header"| gateway
-    gateway -->|"fetch credential<br/>for this actor"| provider
+    gateway -->|"credentialUri:<br/>fetch credential<br/>for this actor"| provider
     provider -->|"authorize, then read"| store
+    gateway -->|"actorJwt:<br/>mint a JWT<br/>for this actor"| ateapi
     gateway -->|"request with<br/>the credential"| upstream
 ```
 
@@ -54,6 +62,10 @@ flowchart LR
    reads secrets at rest.
 4. The gateway replaces the placeholder with the credential and sends the
    request on to the origin over a new TLS connection.
+
+For an actor JWT, steps 2 and 3 go to ateapi instead of a credential provider:
+the gateway asks ateapi to mint a token for the actor, or reuses one it minted
+earlier.
 
 The reference k8s secret provider, `cmd/credential-provider/kubernetes-secrets`, resolves
 Kubernetes Secrets and is the one [For cluster admins](#for-cluster-admins)
@@ -104,6 +116,44 @@ interpret. A URI the provider refuses denies the request with 403.
   `secretmanager.googleapis.com`) — see its
   [README](../internal/plugins/gcp-secret-manager/README.md#credential-uris).
 
+### Actor JWTs
+
+An entry can set `actorJwt` in place of `credentialUri`. The gateway then puts
+the prefix and a JWT that ateapi minted for the actor into the header. No
+credential provider is involved, so this works on a gateway installed with
+`--credential-provider='{"enabled":false}'`.
+
+```yaml
+rules:
+- https:
+    hostnames: ["api.example.com"]
+    effects:
+      replaceHeaders:
+      - header: Authorization
+        prefix: "Bearer "
+        actorJwt:
+          audiences: ["https://api.example.com"]
+          expirationSeconds: 900
+```
+
+* `audiences` become the token's `aud` claim: 1 to 16 distinct values, each
+  up to 512 characters. Use the value the upstream checks the audience
+  against.
+* `expirationSeconds` is the token's lifetime, from 300 to 3600 seconds, with
+  no default.
+* An entry sets exactly one of `credentialUri` and `actorJwt`.
+
+The token's `sub` is `actor/<atespace>/<actor-name>`, and its `iss` is the
+issuer the install gave ateapi (`ACTOR_JWT_ISSUER`). It also names the actor's
+atespace, name, and UID. ateapi signs it with the install's actor JWT signing
+key, which `kubectl ate admin` rotates (see the
+[kubectl-ate README](../cmd/kubectl-ate/README.md)).
+
+The gateway reuses a token for the same actor, audiences, and lifetime until a
+third of its lifetime is left, so the upstream always gets a token with at
+least that much time remaining: 300 seconds for the 900-second lifetime above.
+Concurrent requests that need the same token share one mint.
+
 ## What the gateway does
 
 | Situation | Outcome |
@@ -115,6 +165,10 @@ interpret. A URI the provider refuses denies the request with 403.
 | Provider unreachable or timed out | **503**, fail closed but retryable |
 | Provider returns an empty credential, or one containing control characters | **503**, fail closed |
 | URI names a provider class this gateway does not serve; unusable header name; unparseable URI | **500** (Envoy) or **403** (agentgateway), fail closed |
+| Request decided by an `http` or `https` rule, carries the header of an `actorJwt` entry, mint succeeds | Header value replaced with the prefix and the actor's JWT, with or without a provider |
+| `actorJwt` entry, the actor no longer exists | **403**, fail closed |
+| `actorJwt` entry, ateapi unreachable or timed out | **503**, fail closed but retryable |
+| `actorJwt` entry, any other mint failure | **500** (Envoy) or **403** (agentgateway), fail closed |
 
 A request that does not carry the header skips injection. On an HTTP or HTTPS
 request that carries it, any failure to produce the credential, including
@@ -207,7 +261,8 @@ kubectl apply -f manifests/egress-credential-injection/sample-secret.yaml
 **3. The actors.** Actors can now add `replaceHeaders` effects to their
 `https` rules, as described under [The policy](#the-policy). Each such actor
 also needs the projected egress trust bundle to do TLS through the gateway at
-all — see [egress-trust-bundle.md](egress-trust-bundle.md).
+all — see [egress-trust-bundle.md](egress-trust-bundle.md). Actor JWT entries
+need no provider; ateapi signs them with a key that every install creates.
 
 ### Verify
 
@@ -235,6 +290,11 @@ long-lived gRPC channel to the provider. If the provider's Service was deleted
 and recreated, the channel can sit in connect backoff for up to a couple of
 minutes before re-resolving; injection fails closed with 503 (deliberately
 retryable) until it reconnects.
+
+**Actor JWTs follow the actor's name.** The gateway caches tokens by actor
+name. An actor that is deleted and recreated under the same name can get its
+predecessor's token until that token's refresh point, up to two thirds of its
+lifetime, and that token's UID claim names the old actor.
 
 **Scope of the reference provider's RBAC.** The sample deployment grants read
 on Secrets cluster-wide so the policy may name any namespace; a production

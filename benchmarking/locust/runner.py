@@ -54,6 +54,7 @@ from cluster_facts import (
 from common.boomer_config import build_config_json
 from server_telemetry import extract_and_record_server_telemetry
 from phase_breakdown import append_phase_breakdown
+from ladder_steps import append_ladder_steps
 
 # Path inside the locust image to the boomer-worker binary baked in by
 # benchmarking/locust/Dockerfile.
@@ -657,6 +658,19 @@ def main() -> None:
             )
         except Exception as e:
             tee(logs, f"Warning: Failed to harvest server telemetry: {e}")
+
+        # Per-step rows for a ladder run, from the same Prometheus. Placed
+        # after the server telemetry, whose wait lets the last step's samples
+        # be scraped.
+        try:
+            n = append_ladder_steps(
+                jsonl_path, logs_path, args.prometheus_url, data_ts,
+                args.tag, args.name, logs,
+            )
+            if n:
+                tee(logs, f"Appended {n} ladder step rows to {jsonl_path}")
+        except Exception as e:
+            tee(logs, f"Warning: Failed to summarize ladder steps: {e}")
 
         # The phase breakdown is additive too. It reads the node logs now,
         # while the pods still exist: the orchestrator deletes them as soon

@@ -186,18 +186,23 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	defer func() { err = done(err) }()
 
 	if actor.GetStatus().GetAssignedNode() != "" {
+		forgetNode := false
 		if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
-			// A failed terminate leaves the actor REVERTING with its
-			// assignment, so the next revert terminates it again. If the
-			// worker's pod goes away, worker deletion crashes the actor, and
-			// the next revert needs no live worker.
-			return err
+			if !canDetachWithoutAtelet(ctx, actor, err) {
+				return err
+			}
+			forgetNode = true
 		}
 		if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
 			return err
 		}
+		if forgetNode {
+			if _, err := w.recordDetach(ctx, actorRef, actor, actor.GetStatus().GetAssignedNode(), nil); err != nil {
+				return err
+			}
+		}
 		if actor.GetStatus().GetWorkerAssignment() != nil {
-			if _, _, err := releaseWorker(ctx, w.store, actor); err != nil {
+			if _, err := releaseWorker(ctx, w.store, actor); err != nil {
 				return fmt.Errorf("while releasing worker: %w", err)
 			}
 		}
@@ -206,11 +211,8 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	return w.releaseAssignmentWithoutBacklink(ctx, actor)
 }
 
-// ensureInProgressSnapshotDiscarded deletes the objects of every PENDING
-// durable snapshot on the actor: the one a suspend was partway through writing
-// when the actor was reverted, and any earlier pause's whose upload was never
-// recorded. The revert keeps none of them. atelet's upload of them has already
-// been canceled when ensureWorkerDiscarded terminated the actor.
+// ensureInProgressSnapshotDiscarded removes pending uploads of the discarded execution.
+// The actor keeps its latest completed durable snapshot.
 func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, actor *ateapipb.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "DiscardInProgressSnapshot")
 	defer func() { err = done(err) }()

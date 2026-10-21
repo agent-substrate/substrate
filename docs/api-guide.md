@@ -100,19 +100,19 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). The pool decides the sandbox class, so this is also how a template pins one: if your cluster has pools of more than one sandbox class and the workload needs a particular class, make sure the selector points only at pools of that class. An actor booting with no snapshot and no selector may land on any class, and keeps it from its first checkpoint on. |
-| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
-| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
-| `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpu` and `memory` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
+| `snapshotConfig` | `SnapshotConfig` | Optional; omitted fields take their defaults. The base object-storage location snapshots are written under (a preview field, ignored without the `PerTemplateSnapshotLocation` gate), the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `external` CSI volume source (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
+| `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpuMillicores` and `memoryBytes` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
-The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary and `pauseImage`, or a micro-VM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-compute-foundation) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the worker's active `SandboxRuntime` is stamped onto the actor's assignment and snapshots so subsequent resumes prefer runtime-compatible workers.
+The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-compute-foundation) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the runtime it runs under is stamped onto the actor's assignment and snapshots (`sandboxRuntime`: the sandbox class and the runtime's compatibility version) so subsequent resumes prefer runtime-compatible workers.
 
 ### Sandbox Right-Sizing (`resources`)
 
 Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size is a property of the template, baked into snapshots, so it lives on the immutable `ActorTemplate`. Both are required. Declared limits do two things:
 
 1. **Size the sandbox.** The limits are supplied to the sandbox over the actor RPCs (control plane → atelet → ateworker):
-   - **gVisor (`ateworker-gvisor`)** — applied to the container OCI spec: `limits.cpu` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memory` sets the cgroup v2 memory limit (`memory.max`) and bounds the virtual total memory the sandbox reports (so JVM/Go do not over-allocate from host RAM).
-   - **Micro-VM (`ateworker-microvm`)** — `limits.cpu` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memory` sets guest RAM, reserving a small configurable margin (default 256 MiB, `--vmm-mem-reserve-mib`) for the VMM and virtiofsd so the pod cgroup does not OOM.
+   - **gVisor (`ateworker-gvisor`)** — applied to the container OCI spec: `limits.cpuMillicores` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memoryBytes` sets the cgroup v2 memory limit (`memory.max`) and bounds the virtual total memory the sandbox reports (so JVM/Go do not over-allocate from host RAM).
+   - **Micro-VM (`ateworker-microvm`)** — `limits.cpuMillicores` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memoryBytes` sets guest RAM, reserving a small configurable margin (default 256 MiB, `--vmm-mem-reserve-mib`) for the VMM and virtiofsd so the pod cgroup does not OOM.
 2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits.
 
 `requests` are not consulted today (an actor occupies its whole worker). Because the size is baked into snapshots, a **micro-VM MEMORY-fidelity restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
@@ -276,7 +276,7 @@ A container that exceeds its memory limit is OOM-killed on its own; the actor's 
 
 Per-container limits are micro-VM only today. gVisor applies cgroup limits at the sandbox level: one sentry backs every container in the actor, so a per-container cgroup is created and then stays empty ([google/gvisor#190](https://github.com/google/gvisor/issues/190)). On a gVisor worker the per-container limits are accepted but not enforced; only the sandbox-level size applies.
 
-These limits subdivide the sandbox that [`resources`](#sandbox-right-sizing-resources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A micro-VM guest's memory is `resources.limits.memory` minus the VMM reserve, and its vCPU count is `resources.limits.cpu` rounded up to whole cores. A container limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
+These limits subdivide the sandbox that [`resources`](#sandbox-right-sizing-resources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A micro-VM guest's memory is `resources.limits.memoryBytes` minus the VMM reserve, and its vCPU count is `resources.limits.cpuMillicores` rounded up to whole cores. A container limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
 
 Each limit is validated on its own at apply, but the sum across the actor's containers is only checked when the actor first runs, against the real guest size. A template whose limits do not fit is accepted by the API server and fails on its first actor.
 
@@ -325,10 +325,8 @@ workerSelector:
 # The actor's size, booked against worker capacity.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 1Gi
+    cpuMillicores: 1000
+    memoryBytes: 1073741824 # 1Gi
 snapshotConfig:
   storageLocation: gs://my-bucket/secret-agent
 ```
@@ -341,6 +339,13 @@ snapshotConfig:
 <location>/atespaces/<atespace>/actors/<actor uid>/snapshots/<snapshot name>
 <location>/atespaces/<atespace>/tags/<tag uid>
 ```
+
+> [!NOTE]
+> Snapshots are stored under ate-api-server's cluster-wide `--snapshot-location`. `snapshotConfig.storageLocation` is an optional preview field: with the `PerTemplateSnapshotLocation` preview gate (`--preview=PerTemplateSnapshotLocation`), a template that sets it stores its snapshots there instead. Without the gate, the field is ignored. `<location>` above is whichever of the two applies.
+>
+> With the gate enabled, only a client that opts in to preview features (`kubectl ate --preview`, or the `Ate-Preview-Allowed: true` header) may set `storageLocation`. `CreateActorTemplate` fails with `FailedPrecondition` when the template leaves it empty and ate-api-server has no `--snapshot-location`.
+>
+> Changing the flag or toggling the gate moves `<location>` for every template it affects. Snapshots already taken stay where they are and can still be resumed from. An actor's next suspend writes under the new location and releases its previous snapshot from the old one. Until then, the actor cannot change its `actor_template` (see `UpdateActor` below), and deleting it collects its prefix under the old location. If that release fails, the previous snapshot's objects stay under the old location, and deleting the actor later does not collect them.
 
 The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot under `gs://my-bucket/secret-agent/atespaces/team-a/tags/<tag uid>`.
 
@@ -366,20 +371,12 @@ a `Snapshot` with the following fields:
   `SNAPSHOT_OWNER_TAG`).
 - `fidelity`: The state layers the snapshot holds (`SNAPSHOT_FIDELITY_VOLUMES`,
   `SNAPSHOT_FIDELITY_ROOTFS`, or `SNAPSHOT_FIDELITY_MEMORY`).
-- `actorTemplateUid`: The UID of the `ActorTemplate` whose sandbox the guest
-  state was captured from. This is not always the template the actor points at
-  now: an actor may be repointed while `SUSPENDED`, while the snapshot on disk
-  still came from the old one. A resume that finds the two disagree restores the
-  durable data only and boots the guest fresh, because memory captured under one
-  sandbox image cannot be resumed under another.
-- `locality`: The node that holds the snapshot's local files. It is set when a
-  pause completes and cleared once those files are deleted from the node (when
-  atelet detaches the actor in the background, the actor is next paused or
-  suspended, or it is reverted). A resume restores from the files without
-  deleting them, so an actor resumed from pause still reports where they are. A
-  paused actor is an `ACTOR_STATE_SUSPENDED` actor whose latest snapshot has
-  `locality`; it is pinned to that node (`status.assignedNode`) until atelet
-  detaches it or it is reverted.
+- `actorTemplateUid`: The UID of the `ActorTemplate` used to capture this snapshot.
+  An actor can change templates while `SUSPENDED`. A resume checks the snapshot
+  it restores. A snapshot captured under a replaced template restores volume
+  data and boots fresh.
+- `locality`: The node holding the snapshot's local files. For attachment rules,
+  see `ActorStatus.assigned_node` in the [API schema](../pkg/proto/ateapipb/ateapi.proto).
 - `durableSnapshot`: The copy in object storage, with its URI in
   `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
   written and `COMPLETED` once it can be restored from. A pause records the copy
@@ -387,10 +384,11 @@ a `Snapshot` with the following fields:
   has one, and the tag can seed actors only once it is `COMPLETED`.
 - `sandboxRuntime`: The sandbox runtime and hardware compatibility attributes the
   guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
-  when the checkpoint is taken. A resume that restores memory or rootfs state
-  (`SNAPSHOT_FIDELITY_MEMORY` or `SNAPSHOT_FIDELITY_ROOTFS`) first schedules onto
-  an eligible worker whose `defaultRuntime` or `restorableRuntimes` is compatible
-  with `sandboxRuntime` (same sandbox class, same schema version, and every
+  when the checkpoint is taken. A resume that restores memory state
+  (`SNAPSHOT_FIDELITY_MEMORY`) first schedules onto
+  an eligible worker whose `status.sandboxClasses` entry for the snapshot's
+  `sandboxClass` has a `defaultRuntime` or `restorableRuntimes` entry whose
+  `version` is compatible with `sandboxRuntime.version` (same schema version, and every
   attribute recorded on the snapshot present on the worker with the same
   value, except `cpu_features`, whose hexadecimal bitmask on the snapshot must be
   a bitwise subset of the worker's; attributes only the worker reports are
@@ -398,17 +396,20 @@ a `Snapshot` with the following fields:
   capacity:
   - A durable snapshot — the actor's own, a `sourceTag` clone, or the
     template's golden snapshot a new actor starts from — falls back to any eligible
-    worker and downgrades the restore to `SNAPSHOT_FIDELITY_VOLUMES`, preserving
-    the snapshot's volume data while booting the guest fresh under the new
-    worker's `defaultRuntime`.
-  - A local pause checkpoint (with `locality`) is not relaxed; the resume
-    returns `RESOURCE_EXHAUSTED` and the actor stays paused on its node until a
-    compatible worker there has room, or until atelet detaches it. A detach
-    uploads the checkpoint, deletes the local files, and lifts the node pin,
-    after which the next resume may fall back like a durable snapshot.
+    worker and downgrades the restore to `SNAPSHOT_FIDELITY_ROOTFS`, preserving
+    the snapshot's rootfs and volume data while booting the guest fresh under the
+    `defaultRuntime` of that class on the new worker.
+  - A local checkpoint first tries compatible workers on its attached node.
+    If that fails, `ResumeActor` checks capacity without the node and runtime
+    restrictions. When that capacity exists, it detaches the checkpoint and
+    retries placement. Detach uploads it if needed, deletes the local files,
+    and releases the binding. The retry prefers compatible workers before
+    using the durable fallback above. A detach error leaves the actor attached.
 
-  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_VOLUMES` imposes
-  no runtime placement constraint.
+  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
+  `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime placement constraint. Because a
+  `ROOTFS` restore reuses the container's rootfs upper layer over the template's
+  image, pools selected by an `ActorTemplate` must share a CPU architecture.
 
 An `ActorTemplate` references its golden tag with the `ObjectRef` in
 `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned
@@ -433,7 +434,7 @@ One consequence worth planning for: **a published snapshot is read from the ates
 
 ## 3. SandboxConfig: The Sandbox Itself
 
-`SandboxConfig` is a **cluster-scoped** resource that decouples the sandbox — its binaries (the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) and the `pauseImage` that holds the sandbox's namespaces — from the workload definition in the `ActorTemplate`. A `WorkerPool`'s `sandboxClasses` entry resolves its `SandboxConfig` (either by explicit `configRef` or via the class default), and `atelet` provisions each worker pod with the enabled versions of that config, using `defaultVersion` for cold boots and keeping other enabled versions in `restorableRuntimes` so existing snapshots can still restore across upgrades.
+`SandboxConfig` is a **cluster-scoped** resource that decouples the sandbox binaries (the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) from the workload definition in the `ActorTemplate`. A `WorkerPool`'s `sandboxClasses` entry resolves its `SandboxConfig` (either by explicit `configRef` or via the class default), and `atelet` provisions each worker pod with the enabled versions of that config, using `defaultVersion` for cold boots and keeping other enabled versions in `restorableRuntimes` so existing snapshots can still restore across upgrades.
 
 ### Specification (`SandboxConfigSpec`)
 
@@ -449,7 +450,6 @@ Each entry of `versions` (`SandboxVersionConfig`):
 | :--- | :--- | :--- |
 | `name` | `string` | **Required.** Identifies the version within the config. A DNS label (lower-case alphanumerics and `-`, at most 63 characters). |
 | `state` | `string` | Optional. `Enabled` (default) or `Disabled`. The version named by `defaultVersion` cannot be `Disabled`. |
-| `pauseImage` | `string` | **Required for `gvisor`; not allowed for `microvm`**, which runs no pause container. The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must include a digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
 | `assets` | `map[arch]map[name]AssetFile` | Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair; `url` is at most 2048 bytes. A `ValidatingAdmissionPolicy` enforces each class's required assets on every version. atelet holds no storage credentials: it fetches every URL through the node's object-store plugin (`AssetProvider`), with the plugin's credentials. Which schemes work depends on the plugin; the in-tree one serves only its storage backend's scheme, `gs://` on GCS and `s3://` on S3, as `<bucket>/<object>`, and rejects other schemes without reading them. A `gs://` URL the plugin cannot serve (it has no such object, rejects the URL, does not implement `AssetProvider`, is unreachable, or fails with an error it does not recognize, such as GCS refusing its credentials for a public bucket) is then read anonymously, which serves public buckets such as `gs://gvisor`; any other refusal by the plugin is final. The plugin returns an object only if its content matches `sha256`, and refuses any URL under a snapshot location (an `ActorTemplate`'s `snapshotConfig.location` followed by `/atespaces/`), so assets may share the snapshot bucket but must not be stored there. atelet verifies the sha256 again before using an asset. Its logs and errors show an asset URL as `scheme://host/path`. |
 
 A cluster-wide gVisor `SandboxConfig` (`gvisor-default`, annotated as the class default) is installed with the platform, so gVisor `WorkerPool`s use it automatically without any extra setup.
@@ -493,7 +493,6 @@ spec:
   versions:
   - name: v4
     state: Enabled
-    pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
     assets:
       amd64:
         gvisor:
@@ -541,7 +540,8 @@ its Golden tag and any unfinished Golden actor.
 
 Golden capture follows `preferredFidelity`. MEMORY preserves processes and memory;
 VOLUMES preserves startup data in mounted volumes and starts new processes on
-restore. ROOTFS preserves a micro-VM's filesystem and also starts new processes.
+restore. ROOTFS preserves the sandbox's root filesystem writes and also starts new
+processes.
 
 `CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field.
 
@@ -580,7 +580,7 @@ The node can cut the 30 minutes short. GKE node upgrades and cluster autoscaler 
 ## 5. Best Practices
 *   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. When golden snapshots are enabled, this initialization can be captured in the Golden Snapshot. Actors that cold-boot run initialization again.
 *   **Placement:** The `WorkerPool` decides the sandbox class (`sandboxClasses[].name`), so use the template's `workerSelector` to target the pools whose class your workload needs — pool selection is by label match, not by namespace or RBAC. Without a selector an actor may land on any pool.
-*   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root.
+*   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root. Suspended actors can be repointed to the new template via `UpdateActor` (`kubectl ate update actor --template`).
 *   **Eviction:** Give every actor a `SIGTERM` handler that does not exit, and have the actor suspended within 30 minutes of it. See [Eviction](#eviction).
 
 ---
@@ -596,13 +596,16 @@ Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
     *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.snapshots` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
+    *   `actor.worker_selector`: (Optional) Per-actor `WorkerSelector` merged with the template's `worker_selector` at resume time (actor keys override template keys).
 *   **Response:** the initialized `Actor`.
 
 #### `UpdateActor`
-Replaces the mutable fields of an existing actor with the ones in the request.
+Replaces the mutable fields of an existing actor with the ones in the request (`kubectl ate update actor`).
 *   **Request:** `UpdateActorRequest`
     *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
-    *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same `snapshotConfig.storageLocation`.
+    *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same location: its `snapshotConfig.storageLocation` with the `PerTemplateSnapshotLocation` preview gate, otherwise ate-api-server's `--snapshot-location` (see [Snapshot Storage Layout](#snapshot-storage-layout)).
+    *   `worker_selector` may be updated or cleared (`nil`) in any state; the updated selector takes effect on the next `ResumeActor`.
+    *   A paused actor is initially pinned to its node (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). `ResumeActor` first looks for a worker there matching the template and actor selectors. If none is available but a worker satisfies the remaining constraints without node or runtime restrictions, resume detaches the checkpoint and retries placement. If no eligible worker has room, it returns `RESOURCE_EXHAUSTED`.
 *   **Response:** the updated `Actor`.
 *   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `FAILED_PRECONDITION` if a change to `actor_template` breaks one of the rules above; `ABORTED` if either guard no longer matches the stored resource.
 
@@ -648,11 +651,10 @@ Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE
 *   External volumes are not reverted. Their contents are never part of a snapshot, so a reverted actor comes back with its memory and root filesystem rewound but its volumes exactly as the discarded execution left them.
 
 #### `DeleteActor`
-Removes an actor from the registry and cleans up associated resources.
+Removes an actor in any state from the registry and cleans up associated resources, terminating active workloads, detaching volumes, and releasing worker allocations.
 *   **Request:** `DeleteActorRequest`
     *   `actor`: `ObjectRef` of the actor to delete.
     *   `options`: (Optional) `DeleteOptions`. `uid` and `version` are preconditions checked against the actor as the caller last read it: a mismatch returns `ABORTED`, an omitted guard is skipped. They are checked before the workflow starts, so a guarded delete that fails part-way leaves the actor `ACTOR_STATE_DELETING` at a higher version. Retry it with the `uid` guard alone, or re-read first.
-    *   `any_state`: (Optional) If `true`, allows deleting the actor from any state (e.g. `RUNNING`), terminating active workloads, detaching volumes, and releasing worker allocations. By default (`false`), only actors in `ACTOR_STATE_SUSPENDED` (paused ones included) or `ACTOR_STATE_CRASHED` (or already `ACTOR_STATE_DELETING`) can be deleted.
 *   **Response:** the deleted `Actor`, as it was immediately before removal.
 *   Deleting an actor also deletes the external snapshot it owns, along with one an interrupted suspend left behind. Snapshots it only borrows from a tag are left alone, and its tags are unaffected — they hold their own copies.
 
@@ -670,34 +672,32 @@ Query the physical resource pool.
 
 ## 7. Advanced: Actor Identity Credentials
 
-Workloads can exchange their ephemeral Kubernetes credentials for stable **Actor Identity** credentials that persist even as the process migrates between different physical workers. This is distinct from the `actorMetadata` data source described under [SystemInfo Volumes](#systeminfo-volumes), which only tells an actor its own identity fields (name, atespace, uid).
+ate-api-server mints credentials that identify an actor to services outside Substrate. They name the logical actor, so they stay the same as the actor moves between workers. This is distinct from the `actorMetadata` data source described under [SystemInfo Volumes](#systeminfo-volumes), which only tells an actor its own identity fields (name, atespace, uid).
 
-### Service: `ateapi.ActorIdentity`
-*   **`MintJWT`:** Generates an OIDC-compatible JWT identifying the Substrate Actor.
-*   **`MintCert`:** Signs a Certificate Signing Request (CSR) to provide an mTLS identity for the actor.
+Both RPCs are on `ateapi.Control`. Only the egress gateway may call them; see [authorization.md](authorization.md). It calls `MintActorJwt` when an egress policy injects an actor JWT into a request.
 
-Both RPCs identify the actor the same way the rest of the API does, by `atespace` and `actor_name`.
+### `MintActorJwt`
 
-#### Who may call `MintCert` and `MintJWT`
+*   **Request:** `actor`, the actor's atespace and name; `audiences`, one to 16 values for the token's `aud`; and `expiration_seconds`, the lifetime, from 300 to 3600. The actor must exist, but it doesn't need to be running.
+*   **Response:** `actor_jwt`, the signed token, and `expire_time`, which equals its `exp` claim.
 
-`MintCert` and `MintJWT` are not callable by actors directly. They must be called over mTLS with a
-Pod Certificate, and the broker only signs a CSR when all of the following hold:
+The token's header carries `typ: JWT`, the algorithm of the pool's active signing key (ES256 or RS256), and that key's ID as `kid`. Its claims are:
 
-1.  The client certificate identifies the **`atelet`** service account
-    (`spiffe://cluster.local/ns/ate-system/sa/atelet`) and carries a Pod Identity
-    extension, which pins the calling atelet to a node.
-2.  The requested actor is **currently running**, per the actor database.
-3.  The worker Pod hosting that actor is on the **same node** as the calling
-    atelet, and is still assigned to that actor.
+*   `iss`: ate-api-server's `--actor-jwt-issuer`. ate-setup sets it from the `actorJWT.issuer` setting, which defaults to `https://idp.<namespace>.svc`.
+*   `sub`: `actor/<atespace>/<name>`.
+*   `aud`: the requested audiences, always a JSON array.
+*   `exp`, `nbf`, `iat`: Unix seconds. `nbf` is five minutes before `iat`, to allow for clock skew.
+*   `jti`: a random token ID.
+*   `actor.ate.dev`: an object with the actor's `atespace`, `actorName`, and `actorUID`.
 
-An atelet is therefore confined to minting credentials for the actors it is
-actually hosting. Callers that fail any of these checks receive
-`PERMISSION_DENIED` with no detail, so the RPC cannot be used to discover
-whether an actor exists or where it is running. An actor that exists but is
-suspended, paused, or crashed yields `FAILED_PRECONDITION`.
+Relying parties find the signing keys through OpenID Connect Discovery at `<iss>/.well-known/openid-configuration`, which ate-idp-server serves in every install.
 
-The minted leaf certificate carries the SPIFFE URI
-`spiffe://substrate-actor.local/atespace/${atespace}/actor/${actor_name}`.
+### `MintActorCertificate`
+
+*   **Request:** `actor`; `actor_uid`, which must match the actor's current UID, so that a deleted and recreated actor isn't mistaken for the old one (`ABORTED` otherwise); and `certificate_signing_request`, a DER-encoded CSR. The signer checks the CSR's signature and uses only its public key.
+*   **Response:** `actor_certificates`, DER certificates with the leaf first, followed by any intermediates.
+
+The caller must connect with a client certificate; a bearer token is not enough. The leaf is valid for one hour, allows client and server authentication, carries the SPIFFE URI `spiffe://substrate-actor.local/actor/<atespace>/<name>`, and has the `ActorIdentity` X.509 extension with the actor's atespace, name, and UID.
 
 ---
 
@@ -706,7 +706,7 @@ The minted leaf certificate carries the SPIFFE URI
 Agent Substrate is designed to be the foundational execution layer for any agentic framework.
 
 ### Agent Development Kit (ADK)
-Substrate provides native support for ADK-compatible identities. Workloads can use the `ActorIdentity` service to mint JWTs that align with ADK's security model, ensuring seamless integration with ADK-managed tools and memory.
+An ADK agent running as an actor can have the egress gateway attach an actor JWT ([section 7](#7-advanced-actor-identity-credentials)) to its outbound requests, so the tools and services it calls can tell which actor is calling.
 
 ### LangChain
 Substrate is an ideal runtime for stateful LangChain agents. By defining a LangChain agent as an `ActorTemplate`, you can preserve the agent's internal "thought process" and conversation history in memory across hibernations, while sandboxing its tool execution for security.

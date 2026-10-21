@@ -709,9 +709,6 @@ func TestDefaultRPCPermissions_CoversEveryServedRPC(t *testing.T) {
 		if (r.extract == nil) == (r.authorizedInHandler == "") {
 			t.Errorf("%s: want exactly one of a check extractor or authorizedInHandler", fullMethod)
 		}
-		if r.authorizedInHandler != "" && r.alwaysEnforce {
-			t.Errorf("%s: authorizedInHandler and alwaysEnforce are exclusive", fullMethod)
-		}
 	}
 	for fullMethod := range defaultRPCPermissions {
 		if !served[fullMethod] {

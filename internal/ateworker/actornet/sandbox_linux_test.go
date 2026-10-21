@@ -25,10 +25,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/nftables"
 	"github.com/vishvananda/netlink"
 	"go.ate.dev/substrate/internal/nodepath"
 
@@ -402,5 +404,216 @@ func TestSessionCloseReportsAWaitItCouldNotFinish(t *testing.T) {
 	}
 	if _, err := netns.GetFromName(nodepath.ActorNetNSName("close-deadline")); err == nil {
 		t.Error("the namespace survived a Close whose wait timed out")
+	}
+}
+
+// Both sandbox shapes turn forwarding off and drop at the forward hook, whatever
+// the node's own setting is.
+func TestSandboxNamespacesDoNotForward(t *testing.T) {
+	roottest.Require(t, "creates network namespaces")
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		uid  string
+		veth bool
+	}{
+		{"veth", "cccccccc-0000-0000-0000-00000000000c", true},
+		{"tap", "dddddddd-0000-0000-0000-00000000000d", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: tc.uid, Veth: tc.veth, EgressPort: testEgressPort})
+			if err != nil {
+				t.Fatalf("SetupSandboxNetwork: %v", err)
+			}
+			t.Cleanup(func() { CleanupSandboxNetwork(n) })
+
+			for _, ns := range []netns.Handle{n.RuntimeNetNS, n.GatewayNetNS} {
+				if err := netns.Do(ctx, ns, func(context.Context) error {
+					for _, key := range []string{
+						"net/ipv4/conf/all/forwarding",
+						"net/ipv4/conf/default/forwarding",
+					} {
+						b, err := os.ReadFile("/proc/sys/" + key)
+						if err != nil {
+							return err
+						}
+						if got := strings.TrimSpace(string(b)); got != "0" {
+							t.Errorf("%s = %s in the sandbox namespace, want 0", key, got)
+						}
+					}
+					return nil
+				}); err != nil {
+					t.Fatalf("reading forwarding sysctls: %v", err)
+				}
+			}
+
+			c, err := nftables.New(nftables.WithNetNSFd(int(n.GatewayNetNS)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			chains, err := c.ListChains()
+			if err != nil {
+				t.Fatal(err)
+			}
+			dropping := map[nftables.TableFamily]bool{}
+			var foundDisallowedEgress bool
+			for _, ch := range chains {
+				if ch.Hooknum != nil && *ch.Hooknum == *nftables.ChainHookForward &&
+					ch.Policy != nil && *ch.Policy == nftables.ChainPolicyDrop {
+					dropping[ch.Table.Family] = true
+				}
+				if ch.Table.Family == nftables.TableFamilyIPv4 && ch.Name == "disallowed-egress" {
+					foundDisallowedEgress = true
+					rules, err := c.GetRules(ch.Table, ch)
+					if err != nil {
+						t.Fatalf("getting disallowed-egress rules: %v", err)
+					}
+					if len(rules) != 3 {
+						t.Errorf("disallowed-egress has %d rules, want 3", len(rules))
+					}
+				}
+			}
+			for _, family := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6} {
+				if !dropping[family] {
+					t.Errorf("no forward-hook chain with a drop policy for family %v", family)
+				}
+			}
+			if !foundDisallowedEgress {
+				t.Error("no disallowed-egress chain found in IPv4 table")
+			}
+		})
+	}
+}
+
+// Adds a second link to the gateway namespace and checks that actor UDP is not
+// routed onto it, even after the test turns forwarding back on. Deleting the
+// forward chain at the end confirms the probe would see a routed packet.
+func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
+	roottest.Require(t, "creates network namespaces")
+	ctx := context.Background()
+
+	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{
+		ActorUID: "eeeeeeee-0000-0000-0000-00000000000e", Veth: true, EgressPort: testEgressPort,
+	})
+	if err != nil {
+		t.Fatalf("SetupSandboxNetwork: %v", err)
+	}
+	t.Cleanup(func() { CleanupSandboxNetwork(n) })
+
+	// Delete disallowed-egress so its prerouting reject does not shadow the
+	// forwarding sysctl and forward chain checks below.
+	table := &nftables.Table{Family: nftables.TableFamilyIPv4, Name: "worker-actor"}
+	c, err := nftables.New(nftables.WithNetNSFd(int(n.GatewayNetNS)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	disallowedEgress := &nftables.Chain{Table: table, Name: "disallowed-egress"}
+	c.FlushChain(disallowedEgress)
+	c.DelChain(disallowedEgress)
+	if err := c.Flush(); err != nil {
+		_ = c.CloseLasting()
+		t.Fatalf("removing disallowed-egress chain: %v", err)
+	}
+	_ = c.CloseLasting()
+
+	probeNSName := fmt.Sprintf("actornet-forward-probe-%d", os.Getpid())
+	probeNS, err := netns.CreateNamed(probeNSName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		probeNS.Close()
+		_ = netns.RemoveNamed(probeNSName)
+	})
+
+	gwAddr, probeAddr := MustParseAddr("10.99.0.1/30"), MustParseAddr("10.99.0.2/30")
+	if err := netns.Do(ctx, n.GatewayNetNS, func(context.Context) error {
+		if err := netlink.LinkAdd(&netlink.Veth{
+			LinkAttrs: netlink.LinkAttrs{Name: "stray0"}, PeerName: "stray1",
+			PeerNamespace: netlink.NsFd(int(probeNS)),
+		}); err != nil {
+			return err
+		}
+		l, err := netlink.LinkByName("stray0")
+		if err != nil {
+			return err
+		}
+		if err := netlink.AddrReplace(l, gwAddr); err != nil {
+			return err
+		}
+		return netlink.LinkSetUp(l)
+	}); err != nil {
+		t.Fatalf("adding the stray link: %v", err)
+	}
+
+	var probe net.PacketConn
+	if err := netns.Do(ctx, probeNS, func(context.Context) error {
+		l, err := netlink.LinkByName("stray1")
+		if err != nil {
+			return err
+		}
+		if err := netlink.AddrReplace(l, probeAddr); err != nil {
+			return err
+		}
+		if err := netlink.LinkSetUp(l); err != nil {
+			return err
+		}
+		// A return route, so reverse-path filtering in the probe can't hide a forward.
+		if err := netlink.RouteReplace(&netlink.Route{
+			LinkIndex: l.Attrs().Index, Dst: MustParseAddr(ActorVethSubnet).IPNet, Gw: gwAddr.IP,
+		}); err != nil {
+			return err
+		}
+		probe, err = net.ListenPacket("udp4", "10.99.0.2:9999")
+		return err
+	}); err != nil {
+		t.Fatalf("setting up the probe: %v", err)
+	}
+	t.Cleanup(func() { probe.Close() })
+
+	arrives := func(wait time.Duration) bool {
+		t.Helper()
+		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+			c, err := net.Dial("udp4", "10.99.0.2:9999")
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+			_, err = c.Write([]byte("routed"))
+			return err
+		}); err != nil {
+			t.Fatalf("sending from the actor: %v", err)
+		}
+		_ = probe.SetReadDeadline(time.Now().Add(wait))
+		buf := make([]byte, 16)
+		_, _, err := probe.ReadFrom(buf)
+		return err == nil
+	}
+
+	if arrives(200 * time.Millisecond) {
+		t.Fatal("the gateway namespace routed actor traffic as set up")
+	}
+
+	if err := netns.Do(ctx, n.GatewayNetNS, func(context.Context) error {
+		return os.WriteFile("/proc/sys/net/ipv4/conf/all/forwarding", []byte("1\n"), 0o644)
+	}); err != nil {
+		t.Fatalf("re-enabling forwarding: %v", err)
+	}
+	if arrives(200 * time.Millisecond) {
+		t.Fatal("the gateway namespace routed actor traffic once forwarding was re-enabled; the forward chain is not dropping")
+	}
+
+	c, err = nftables.New(nftables.WithNetNSFd(int(n.GatewayNetNS)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.CloseLasting() }()
+	c.DelChain(&nftables.Chain{Name: "forward", Table: table})
+	if err := c.Flush(); err != nil {
+		t.Fatalf("removing the forward chain: %v", err)
+	}
+	if !arrives(5 * time.Second) {
+		t.Fatal("the probe saw nothing even with forwarding on and no forward chain; this test cannot detect routing")
 	}
 }

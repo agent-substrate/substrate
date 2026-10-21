@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"sigs.k8s.io/yaml"
 )
@@ -55,7 +57,7 @@ func sortActors(actors []*ateapipb.Actor) {
 	})
 }
 
-// actorTemplateDisplay renders the template an actor was created from, in
+// actorTemplateDisplay renders the template an actor references, in
 // "<atespace>/<name>" form.
 func actorTemplateDisplay(a *ateapipb.Actor) string {
 	ref := a.GetActorTemplate()
@@ -122,30 +124,23 @@ func workerActorsColumn(worker *ateapipb.Worker) string {
 	return fmt.Sprintf("%d/%d", worker.GetStatus().GetAllocated().GetActors(), worker.GetStatus().GetCapacity().GetActors())
 }
 
-// resourceLimit returns the quantity of the named limit (e.g. "cpu",
-// "memory"), or "" if it isn't set.
-func resourceLimit(res *ateapipb.Resources, name string) string {
-	for _, limit := range res.GetLimits() {
-		if limit.GetName() == name {
-			return limit.GetQuantity()
-		}
-	}
-	return ""
-}
-
-// workerResourceColumn renders a Worker's named resource limit as
-// allocated/capacity (e.g. "500m/2"). "-" if the Worker has no capacity
-// limit for that resource, since there is then nothing to compare against.
-func workerResourceColumn(worker *ateapipb.Worker, name string) string {
-	capacity := resourceLimit(worker.GetStatus().GetCapacity().GetResources(), name)
-	if capacity == "" {
+// workerResourceColumn renders one resource of a Worker as allocated/capacity
+// (e.g. "500/2000"). "-" if the Worker has no capacity for it, since there is
+// then nothing to compare against.
+func workerResourceColumn(allocated, capacity int64, format func(int64) string) string {
+	if capacity == 0 {
 		return "-"
 	}
-	allocated := resourceLimit(worker.GetStatus().GetAllocated().GetResources(), name)
-	if allocated == "" {
-		allocated = "0"
-	}
-	return allocated + "/" + capacity
+	return format(allocated) + "/" + format(capacity)
+}
+
+// formatBytes renders bytes with binary suffixes, e.g. 2<<30 as "2Gi"
+func formatBytes(n int64) string {
+	return resource.NewQuantity(n, resource.BinarySI).String()
+}
+
+func formatInt(n int64) string {
+	return strconv.FormatInt(n, 10)
 }
 
 // PrintWorkersTo prints a slice of workers to the provided writer.
@@ -156,7 +151,7 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 		return printProto(out, &ateapipb.ListWorkersResponse{Workers: workers}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tPOOL\tSTATE\tACTORS\tCPU\tMEMORY\tPOD\tAGE")
+		fmt.Fprintln(w, "NAME\tPOOL\tSTATE\tACTORS\tCPU(MILLICORES)\tMEMORY\tPOD\tAGE")
 		for _, worker := range workers {
 			name := worker.GetMetadata().GetName()
 			pool := worker.GetWorkerPool()
@@ -165,7 +160,10 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 			age := formatAge(worker.GetMetadata().GetCreateTime())
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				name, pool, state, workerActorsColumn(worker),
-				workerResourceColumn(worker, "cpu"), workerResourceColumn(worker, "memory"),
+				workerResourceColumn(worker.GetStatus().GetAllocated().GetCpuMillicores(),
+					worker.GetStatus().GetCapacity().GetCpuMillicores(), formatInt),
+				workerResourceColumn(worker.GetStatus().GetAllocated().GetMemoryBytes(),
+					worker.GetStatus().GetCapacity().GetMemoryBytes(), formatBytes),
 				pod, age)
 		}
 		return w.Flush()

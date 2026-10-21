@@ -19,6 +19,7 @@ Patch releases add no API fields, public or internal, and no schema migrations.
 ## Components
 
 * `ate-api-server`: serves the public API, calls `atelet`, talks to the database.
+* `ate-idp-server`: publishes the keys that verify actor JWTs. It shares only the actor JWT key pool with `ate-api-server`, and is upgraded with it.
 * `ate-controller`: renders WorkerPools into Deployments, registers workers with `ate-api-server`.
 * `atelet`: one pod per node (DaemonSet), drives the `ateworker` processes on its node.
 * Workers: the pods of a WorkerPool, running `ateworker` and the actors.
@@ -78,9 +79,11 @@ Between compatible releases, a CRD change only adds optional fields. The CRDs se
 
 ### SandboxConfig
 
-Each release ships its SandboxConfig under its own name and keeps the earlier ones. The upgrade adds the N+1 one, and WorkerPools without a `configRef` switch to it. That does not change the pod template, so workers do not roll.
+Each sandbox class has a default SandboxConfig, such as `gvisor-default`, that lists the sandbox versions a cluster may run. A release that changes a sandbox version adds the new one, points `defaultVersion` at it, and keeps the previous release's version unless that version has a known vulnerability. 
 
-An actor resolves its pool's SandboxConfig each time it starts. If the runtime its snapshot needs is gone, it cold boots, keeping its files and losing its memory. Rollback deletes the N+1 SandboxConfig.
+A kept version's assets must stay fetchable, so a release does not overwrite them. The upgrade applies these lists. That does not change the pod template, so workers do not roll.
+
+An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets the version its snapshot was taken with, and stays on it until it next starts without memory state. If that version is gone, it cold boots, keeping its files and losing its memory. Rollback applies the N lists again, which removes the N+1 versions.
 
 <!-- TODO: Link the SandboxConfig upgrade guide, which covers the details. -->
 
@@ -115,7 +118,7 @@ To move from N to N+1, in this order, waiting for each step to finish:
 1. `podcertificate-controller`.
 2. `atelet`, node by node.
 3. Every WorkerPool's `spec.workerImage`, which rolls its workers.
-4. `ate-api-server`. The first N+1 replica migrates the schema.
+4. `ate-api-server` and `ate-idp-server`. The first N+1 `ate-api-server` replica migrates the schema.
 5. The CRDs, then `ate-controller`.
 6. `atenet`.
 7. The SandboxConfig admission policy and the default SandboxConfig.

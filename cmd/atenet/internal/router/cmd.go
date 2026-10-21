@@ -60,8 +60,6 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.StringVar(&cfg.RouterServiceName, "router-service-name", installdefaults.RouterServiceName, "Service name of this atenet-router in the operations namespace. Override when the deployment renames the Service.")
 	fs.StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	fs.StringVar(&cfg.AteapiAddr, "ateapi-address", "k8s:///api.ate-system.svc:443", "gRPC dial target for the cluster ateapi Control instance.")
-	fs.IntVar(&cfg.HttpPort, "port-http", 8080, "TCP port for workload traffic entering through the Envoy Router")
-	fs.IntVar(&cfg.ConnectPlainTextPort, "port-connect", 8081, "TCP port for CONNECT-tunneled traffic entering through the router dataplane")
 	fs.IntVar(&cfg.ConnectTLSPort, "port-connect-tls", 8444, "TCP port for CONNECT-tunneled traffic entering through the router dataplane over TLS. --port-https also defaults to 8443, and both listeners are commonly enabled at once, so --port-connect-tls defaults to a different port (8444) rather than colliding with it")
 	fs.IntVar(&cfg.XdsPort, "port-xds", 18000, "TCP port listening for the xDS dynamic Envoy connections")
 	fs.IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the External Processing (ext_proc) server the dataplane calls")
@@ -73,14 +71,8 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file.")
 
 	// Flags for client authentication and authorization in ingress mode.
-	fs.StringVar(&cfg.IngressAuth.ClientCAFile, "ingress-client-ca-file", "", "PEM bundle of the CAs allowed to sign ingress client certificates. Envoy reads the file, so it must be mounted at this path in the Envoy container as well. Required whenever a TLS ingress listener is enabled")
-	fs.StringSliceVar(&cfg.IngressAuth.AllowedSPIFFEIDs, "ingress-allowed-spiffe-ids", nil, "SPIFFE IDs (exact match) allowed to connect to actors through the ingress dataplane. Comma-separated or repeated. Required whenever a TLS ingress listener is enabled")
-	fs.StringVar(
-		(*string)(&cfg.IngressAuth.Mode),
-		"ingress-auth-mode",
-		string(IngressAuthDeprecatedInsecure),
-		"Ingress authentication and authorization mode.  `deprecated-insecure` (both http and https served, client certificates optional on https) or `static-mtls` (only https served, client certificates required).",
-	)
+	fs.StringVar(&cfg.IngressAuth.ClientCAFile, "ingress-client-ca-file", "", "PEM bundle of the CAs allowed to sign ingress client certificates. Envoy reads the file, so it must be mounted at this path in the Envoy container as well. Required for the Envoy ingress dataplane")
+	fs.StringSliceVar(&cfg.IngressAuth.AllowedSPIFFEIDs, "ingress-allowed-spiffe-ids", nil, "SPIFFE IDs (exact match) allowed to connect to actors through the ingress dataplane. Comma-separated or repeated. Required for the Envoy ingress dataplane")
 
 	fs.StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80) and needs --upstream-connect=false.")
 	fs.StringVar(&cfg.UpstreamTrustBundlePath, "upstream-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to validate the actor's atunnel ingress server certificate.")

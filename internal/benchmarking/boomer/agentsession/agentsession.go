@@ -23,6 +23,11 @@
 // Per-step timings land in locust stats as Step_<name>. The first request
 // after each suspend is additionally recorded as WakeFirstTouch — in
 // implicit resume mode that row IS the parking wake latency distribution.
+// TimeToWake is the whole wake, from the first ResumeActor attempt to that
+// first request, including the time a session spent retrying while the
+// fleet had no room for its actor (--agentsession-resume-retry-budget).
+// --agentsession-phase-in staggers session starts so a fleet spawned in one
+// ramp does not reach every later step in a single wave.
 package agentsession
 
 import (
@@ -39,6 +44,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,7 +65,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -80,7 +85,24 @@ const (
 	// maxConsecutiveStepFailures is how many ReplaceIfPersistent failures in
 	// a row a session tolerates before its actor is deleted and recreated.
 	maxConsecutiveStepFailures = 3
+
+	// defaultResumeRetryBudget is how long a step keeps retrying a wake the
+	// fleet had no room for when --agentsession-resume-retry-budget is unset;
+	// a budget of 0 gives the wake one attempt.
+	defaultResumeRetryBudget = 60 * time.Second
+	// The backoff between wake retries, the same window as glutton's spawn
+	// path: short enough that a slot freed by another session's suspend is
+	// taken within a second. Each wait is lengthened by up to this fraction
+	// of itself, so sessions that hit a full fleet in the same instant
+	// drift apart over their attempts instead of retrying in step.
+	wakeRetryInitialBackoff = 50 * time.Millisecond
+	wakeRetryMaxBackoff     = time.Second
+	wakeRetryJitterFraction = 0.1
 )
+
+// errStopping is startUser's answer once shutdown has begun: the sweep has
+// passed, so no session may start.
+var errStopping = errors.New("agentsession: shutting down, no session started")
 
 // burnRate is the per-goroutine sha256 iteration rate BurnCPU reports.
 // BurnCPU runs for a fixed wall-clock duration, so Step_* latency stays flat
@@ -116,15 +138,30 @@ type knobs struct {
 	// SnapshotSteps is a comma-separated list of 1-based step numbers
 	// after which the actor is hibernated; "" hibernates after every step.
 	SnapshotSteps string `json:"agentsession_snapshot_steps"`
+	// PhaseIn spreads session starts: each VU waits a uniform random share
+	// of it before creating its actor, so a fleet does not move through the
+	// script in lockstep waves; 0 starts every session at once.
+	PhaseIn dynconfig.Seconds `json:"agentsession_phase_in"`
+	// ResumeRetryBudget bounds how long a step keeps retrying a wake the
+	// fleet had no room for before it gives up on the step; 0 gives the
+	// wake one attempt. Unset, it is defaultResumeRetryBudget.
+	ResumeRetryBudget dynconfig.Seconds `json:"agentsession_resume_retry_budget"`
 }
 
 var knobsCodec = dynconfig.Typed[knobs]{
+	Defaults: knobs{ResumeRetryBudget: dynconfig.Seconds(defaultResumeRetryBudget)},
 	Validate: func(k knobs) error {
 		if err := k.Lifecycle.Validate(); err != nil {
 			return err
 		}
 		if k.ThinkScale < 0 {
 			return fmt.Errorf("agentsession_think_scale cannot be negative: %f", k.ThinkScale)
+		}
+		if k.PhaseIn < 0 {
+			return fmt.Errorf("agentsession_phase_in cannot be negative: %v", k.PhaseIn)
+		}
+		if k.ResumeRetryBudget < 0 {
+			return fmt.Errorf("agentsession_resume_retry_budget cannot be negative: %v", k.ResumeRetryBudget)
 		}
 		if steps, err := parseSnapshotSteps(k.SnapshotSteps); err != nil {
 			return err
@@ -190,6 +227,19 @@ func makeIngestBuf(steps []Step) []byte {
 type runtime struct {
 	cfg   *userclass.Config
 	users sync.Map // goroutineID -> *sessionUser
+	// phasedIn holds the goroutines that have served their phase-in wait,
+	// so a start that failed and is retried does not wait a second time.
+	phasedIn sync.Map // goroutineID -> struct{}
+	// stopping is set by shutdown. A VU that comes out of its phase-in
+	// wait after that starts no session, and one whose start finishes
+	// after that cleans up its own, since the sweep has passed.
+	stopping atomic.Bool
+	// starting counts the starts past their phase-in wait that iterate has
+	// not yet stored or cleaned up, so shutdown can wait for them: main
+	// exits when it returns. startMu orders setting stopping against
+	// joining the count, so no start slips in between the two.
+	startMu  sync.Mutex
+	starting sync.WaitGroup
 
 	// loaded is what the knobs currently select, resolved by loadScript when
 	// a session starts and re-resolved when the knobs name something else or
@@ -322,23 +372,10 @@ func (r *runtime) checkTemplateMemory(ctx context.Context, script *Script) error
 }
 
 // memoryLimit reads the template's memory limit in bytes. found is false
-// when the template sets none; a limit that does not parse is an error.
+// when the template sets none.
 func memoryLimit(tmpl *ateapipb.ActorTemplate) (limit int64, found bool, err error) {
-	for _, l := range tmpl.GetResources().GetLimits() {
-		if l.GetName() != "memory" {
-			continue
-		}
-		q, err := resource.ParseQuantity(l.GetQuantity())
-		if err != nil {
-			return 0, true, fmt.Errorf("memory limit %q: %w", l.GetQuantity(), err)
-		}
-		n, ok := q.AsInt64()
-		if !ok {
-			return 0, true, fmt.Errorf("memory limit %q is not a whole byte count", l.GetQuantity())
-		}
-		return n, true, nil
-	}
-	return 0, false, nil
+	limit = tmpl.GetResources().GetLimits().GetMemoryBytes()
+	return limit, limit != 0, nil
 }
 
 // think returns the suspended "LLM thinking" gap before step s, which is the
@@ -351,6 +388,32 @@ func (r *runtime) think(s Step) time.Duration {
 	}
 	jitter := 0.8 + 0.4*mathrand.Float64()
 	return time.Duration(float64(s.Think) * scale * jitter)
+}
+
+// phaseIn makes a VU that has no session yet wait its share of
+// --agentsession-phase-in before it starts one. Locust spawns the fleet in
+// one ramp and every session begins at step 1, so without it the sessions
+// reach each later step together, in a wave the spawn ramp alone spreads
+// over seconds: with a step that dwells for longer than that, the wave
+// asks every worker for more slots at once than it has. The wait is drawn
+// once per VU; a start that fails and is retried does not wait again.
+func (r *runtime) phaseIn(gid int64) {
+	if _, done := r.phasedIn.LoadOrStore(gid, struct{}{}); done {
+		return
+	}
+	if d := r.phaseInDelay(); d > 0 {
+		time.Sleep(d)
+	}
+}
+
+// phaseInDelay draws one VU's wait: uniform in [0, --agentsession-phase-in),
+// or none when the window is unset.
+func (r *runtime) phaseInDelay() time.Duration {
+	window := dynconfig.Get[knobs](r.cfg.Dyn).PhaseIn.Duration()
+	if window <= 0 {
+		return 0
+	}
+	return time.Duration(mathrand.Int64N(int64(window)))
 }
 
 // iterate is the boomer task function: one scripted step per call. The VU's
@@ -368,7 +431,10 @@ func (r *runtime) iterate() {
 			time.Sleep(2 * time.Second)
 			return
 		}
-		u, err := r.startUser(context.Background(), loaded)
+		u, err := r.startUser(context.Background(), gid, loaded)
+		if errors.Is(err, errStopping) {
+			return
+		}
 		if err != nil {
 			slog.Warn("agentsession start failed; goroutine will retry next iter",
 				slog.String("err", err.Error()))
@@ -376,6 +442,21 @@ func (r *runtime) iterate() {
 			return
 		}
 		val, _ = r.users.LoadOrStore(gid, u)
+		stopping := r.stopping.Load()
+		if stopping {
+			// shutdown ran while the session started, and its sweep may
+			// or may not have seen the entry. Deleting the entry claims
+			// the cleanup, on either side, so the actor is suspended and
+			// deleted exactly once and does not outlive the run.
+			if _, ok := r.users.LoadAndDelete(gid); ok {
+				u.suspendAndDelete(context.Background())
+			}
+		}
+		// The start is complete, cleanup included; shutdown may return.
+		r.starting.Done()
+		if stopping {
+			return
+		}
 	}
 	u := val.(*sessionUser)
 
@@ -403,8 +484,14 @@ func (r *runtime) iterate() {
 
 // startUser creates the session's actor, waits for its sandbox to serve,
 // then suspends it so the first scripted step begins — like every later
-// step — with a wake from suspension.
-func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*sessionUser, error) {
+// step — with a wake from suspension. The VU's phase-in wait comes after
+// the preflight checks, so a refusal that a redeploy fixes a minute into
+// the run does not leave every VU whose wait elapsed meanwhile starting
+// together once the check clears. It returns errStopping when shutdown
+// began during the wait. A start that gets past the wait is counted in
+// starting until iterate has stored or cleaned up the session; a start
+// that fails leaves the count itself.
+func (r *runtime) startUser(ctx context.Context, gid int64, loaded *loadedScript) (*sessionUser, error) {
 	if err := r.checkTemplateMemory(ctx, loaded.Script); err != nil {
 		return nil, err
 	}
@@ -412,6 +499,26 @@ func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*session
 	if err := checkSnapshotSteps(dyn, loaded.Script); err != nil {
 		return nil, err
 	}
+	r.phaseIn(gid)
+	r.startMu.Lock()
+	if r.stopping.Load() {
+		r.startMu.Unlock()
+		return nil, errStopping
+	}
+	r.starting.Add(1)
+	r.startMu.Unlock()
+	u, err := r.createSession(ctx, dyn, loaded)
+	if err != nil {
+		r.starting.Done()
+		return nil, err
+	}
+	return u, nil
+}
+
+// createSession is the part of a start that touches the cluster: it creates
+// the actor, waits for it to serve, and parks it unless the session stays
+// resident.
+func (r *runtime) createSession(ctx context.Context, dyn knobs, loaded *loadedScript) (*sessionUser, error) {
 	u := &sessionUser{
 		cfg:       r.cfg,
 		actorName: "agent-" + uuid.NewString(),
@@ -468,15 +575,29 @@ func checkSnapshotSteps(dyn knobs, script *Script) error {
 const shutdownConcurrency = 64
 
 // shutdown suspends and deletes every session's actor, shutdownConcurrency
-// at a time, until done or ctx expires.
+// at a time, until done or ctx expires. It first marks the runtime as
+// stopping, so a VU that is still waiting out its phase-in starts no
+// session once it wakes, and one whose start finishes during the sweep
+// cleans up its own session (see iterate). After the sweep it waits for
+// those in-flight starts, within the same ctx, since main exits once it
+// returns.
 func (r *runtime) shutdown(ctx context.Context) {
+	r.startMu.Lock()
+	r.stopping.Store(true)
+	r.startMu.Unlock()
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, shutdownConcurrency)
-	r.users.Range(func(_, val any) bool {
+	r.users.Range(func(key, val any) bool {
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			return false
+		}
+		// Deleting the entry claims its cleanup; a VU that stored its
+		// session during the sweep claims its own the same way.
+		if _, ok := r.users.LoadAndDelete(key); !ok {
+			<-sem
+			return true
 		}
 		wg.Add(1)
 		go func(u *sessionUser) {
@@ -487,6 +608,16 @@ func (r *runtime) shutdown(ctx context.Context) {
 		return true
 	})
 	wg.Wait()
+
+	started := make(chan struct{})
+	go func() {
+		r.starting.Wait()
+		close(started)
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+	}
 }
 
 // sessionUser is one coding-agent session: a single actor plus its progress
@@ -624,22 +755,42 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 
 	dyn := dynconfig.Get[knobs](u.cfg.Dyn)
 	wasParked := !u.awake && dyn.LifecycleMode != dynconfig.LifecycleModeNone
+	// A parked actor's wake, from the first attempt to the ping that finds it
+	// serving, is one TimeToWake sample. A fleet with no room for the actor
+	// is retried within the budget, so the wait for a slot lands in that row
+	// as latency instead of vanishing into failed rows and a skipped step.
+	wakeStart := time.Now()
+	deadline := wakeStart.Add(dyn.ResumeRetryBudget.Duration())
 	if wasParked && dyn.ResumeMode == dynconfig.ResumeModeExplicit {
-		if err := u.resume(ctx); err != nil {
+		if err := retryWhileFull(ctx, deadline, func() error { return u.resume(ctx) }); err != nil {
 			u.noteFailure(err)
+			u.recordTimeToWake(wakeStart, err)
+			if isCapacityError(err) {
+				slog.Warn("agent session found no room within the retry budget",
+					slog.String("actor", u.actorName),
+					slog.String("step", step.Name),
+					slog.Duration("waited", time.Since(wakeStart)),
+					slog.String("err", err.Error()))
+			}
 			return false
 		}
 	}
 
-	wakeStart := time.Now()
-	if err := u.execOp(ctx, ping()); err != nil {
+	var err error
+	if wasParked {
+		err = retryWhileFull(ctx, deadline, func() error { return u.wakePing(ctx) })
+	} else {
+		err = u.execOp(ctx, ping())
+	}
+	if err != nil {
 		u.noteFailure(err)
 		if wasParked {
-			bmetrics.RecordFailure("http", "WakeFirstTouch", agentSessionUserClass, time.Since(wakeStart), err.Error())
+			u.recordTimeToWake(wakeStart, err)
 		}
 		slog.Warn("agent session wake failed",
 			slog.String("actor", u.actorName),
 			slog.String("step", step.Name),
+			slog.Duration("waited", time.Since(wakeStart)),
 			slog.String("err", err.Error()))
 		if wasParked || u.shouldHibernateAfterStep(dyn) {
 			u.hibernate(ctx)
@@ -648,7 +799,7 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 	}
 	u.awake = true
 	if wasParked {
-		bmetrics.RecordSuccess("http", "WakeFirstTouch", agentSessionUserClass, time.Since(wakeStart), 0)
+		u.recordTimeToWake(wakeStart, nil)
 	}
 
 	metricName := "Step_" + step.Name
@@ -675,6 +826,71 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 		u.hibernate(ctx)
 	}
 	return true
+}
+
+// wakePing sends the ping that measures a parked actor's wake, recorded as
+// a WakeFirstTouch sample of its own: in explicit resume mode the round trip
+// after ResumeActor returned, in implicit mode the parked request itself.
+func (u *sessionUser) wakePing(ctx context.Context) error {
+	start := time.Now()
+	if err := u.execOp(ctx, ping()); err != nil {
+		bmetrics.RecordFailure("http", "WakeFirstTouch", agentSessionUserClass, time.Since(start), err.Error())
+		return err
+	}
+	bmetrics.RecordSuccess("http", "WakeFirstTouch", agentSessionUserClass, time.Since(start), 0)
+	return nil
+}
+
+// recordTimeToWake books one step's wake as a TimeToWake sample: the time
+// from the first ResumeActor attempt (in implicit mode, the first wake ping)
+// to the ping that found the actor serving, retries included.
+func (u *sessionUser) recordTimeToWake(start time.Time, err error) {
+	if err != nil {
+		bmetrics.RecordFailure("summary", "TimeToWake", agentSessionUserClass, time.Since(start), err.Error())
+		return
+	}
+	bmetrics.RecordSuccess("summary", "TimeToWake", agentSessionUserClass, time.Since(start), 0)
+}
+
+// retryWhileFull runs call and, while it fails with a capacity error and
+// the next attempt would still land before deadline, waits with exponential
+// backoff and runs it again. Each attempt records its own sample inside
+// call, as glutton's spawn path does. Any other error returns at once.
+func retryWhileFull(ctx context.Context, deadline time.Time, call func() error) error {
+	delay := wakeRetryInitialBackoff
+	for {
+		err := call()
+		if err == nil || !isCapacityError(err) {
+			return err
+		}
+		wait := delay + time.Duration(mathrand.Float64()*wakeRetryJitterFraction*float64(delay))
+		if time.Now().Add(wait).After(deadline) {
+			return err
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return err
+		}
+		delay = min(delay*2, wakeRetryMaxBackoff)
+	}
+}
+
+// isCapacityError reports whether err says the fleet or the control plane
+// had no room for the actor just now: ateapi's ResourceExhausted ("no
+// worker has room for the actor") or Unavailable, or the router's 503, 504
+// and 429 faces of them. The actor itself is fine, and the next try may find
+// a slot another session's suspend has freed.
+func isCapacityError(err error) bool {
+	var he *httpError
+	if errors.As(err, &he) {
+		return classifyHTTP(he.status) == boomerutil.RetryLater
+	}
+	switch status.Code(err) {
+	case codes.ResourceExhausted, codes.Unavailable:
+		return true
+	}
+	return false
 }
 
 // execOp performs one scripted op as a glutton RPC through the router.
@@ -860,7 +1076,11 @@ func (u *sessionUser) resume(ctx context.Context) error {
 		if boomerutil.IsCrashed(err) {
 			bmetrics.RecordFailure("actor", "CrashCount", agentSessionUserClass, 0, "actor entered ACTOR_STATE_CRASHED")
 		}
-		slog.Error("ResumeActor failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
+		// A full fleet is retried by the caller and reported once when the
+		// budget runs out; a line per attempt would flood the log.
+		if !isCapacityError(err) {
+			slog.Error("ResumeActor failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
+		}
 	}
 	return err
 }
@@ -906,7 +1126,7 @@ func (u *sessionUser) suspendAndDelete(ctx context.Context) {
 	_, _ = u.cfg.APIStub.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{Actor: u.ref()})
 	cancel()
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{Actor: u.ref(), AnyState: true}, grpc.Trailer(tr))
+		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
 		return err
 	})
 	bmetrics.UpdateUsers(agentSessionUserClass, -1)

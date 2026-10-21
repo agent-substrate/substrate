@@ -16,10 +16,13 @@ package snapshottracker
 
 import (
 	"context"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 )
 
 func writeSnapshotDir(t *testing.T, dir, prefix string) {
@@ -30,6 +33,54 @@ func writeSnapshotDir(t *testing.T, dir, prefix string) {
 	}
 	if err := os.WriteFile(filepath.Join(p, "memory.img"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// writeDenseFile writes n bytes of incompressible data to path, so all of them
+// are allocated on disk.
+func writeDenseFile(t *testing.T, path string, n int) {
+	t.Helper()
+	data := make([]byte, n)
+	_, _ = rand.NewChaCha8([32]byte{}).Read(data)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// localSnapshotSize counts the disk space allocated to every file of a local
+// snapshot, nested ones included, so a sparse image counts only its data, and
+// a missing snapshot counts nothing.
+func TestLocalSnapshotSize(t *testing.T) {
+	useTempNodeDirs(t)
+	if got, err := localSnapshotSize(trackedActorUID, "s1"); got != 0 || err != nil {
+		t.Fatalf("localSnapshotSize of a missing snapshot = %d, %v; want 0, nil", got, err)
+	}
+
+	dir := ateletpath.LocalSnapshotDir(trackedActorUID, "s1")
+	const dense = 96 << 10
+	writeDenseFile(t, filepath.Join(dir, "pages.img"), 64<<10)
+	writeDenseFile(t, filepath.Join(dir, "fs", "multitar.img"), 32<<10)
+	// A sparse image as large as a guest's RAM, with no data in it.
+	sparse, err := os.Create(filepath.Join(dir, "memory.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sparse.Truncate(1 << 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := sparse.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := localSnapshotSize(trackedActorUID, "s1")
+	if err != nil {
+		t.Fatalf("localSnapshotSize: %v", err)
+	}
+	if got < dense || got > 2*dense {
+		t.Errorf("localSnapshotSize = %d, want about %d, the dense files' size: the sparse image's holes must not count", got, dense)
 	}
 }
 

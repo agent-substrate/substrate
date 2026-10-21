@@ -23,14 +23,15 @@ import (
 // kindDefaults are the values a Kind install fills in for settings nothing
 // else supplied. applyKindDefaultsResolved writes them onto Config.
 var kindDefaults = map[string]string{
-	"context":             "kind-kind",
-	"ko.dockerRepo":       "localhost:5001",
-	"storage.bucketName":  "ate-snapshots",
-	"ko.defaultPlatforms": "linux/" + runtimeGOARCH(),
+	"context":                  "kind-kind",
+	"ko.dockerRepo":            "localhost:5001",
+	"storage.bucketName":       "ate-snapshots",
+	"storage.snapshotLocation": "gs://ate-snapshots/",
+	"ko.defaultPlatforms":      "linux/" + runtimeGOARCH(),
 }
 
 // The report has to show the values the install uses. A Kind install fills in
-// four settings that nothing else supplied, and they reach Config without
+// settings that nothing else supplied, and they reach Config without
 // reaching Resolved -- so the report says "" (from default) for a value the
 // install is about to use.
 func TestKindDefaultsReachTheReport(t *testing.T) {
@@ -96,7 +97,7 @@ func TestKindInstallRecordsWhatItUsed(t *testing.T) {
 // A replayed Kind record has to resolve to the install it recorded. It does,
 // but not because the record carries the values: the record holds only
 // kindCluster.enabled, and replaying it re-enters the same default block,
-// which derives the four values again.
+// which derives the values again.
 //
 // That makes the round-trip hold only while the defaults stay put. A record
 // is meant to pin an install against a later release that ships different
@@ -129,6 +130,7 @@ func TestKindRecordReplaysToTheSameInstall(t *testing.T) {
 		{"KODockerRepo", replayed.KODockerRepo, cfg.KODockerRepo},
 		{"KODefaultPlatforms", replayed.KODefaultPlatforms, cfg.KODefaultPlatforms},
 		{"BucketName", replayed.BucketName, cfg.BucketName},
+		{"SnapshotLocation", replayed.SnapshotLocation, cfg.SnapshotLocation},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("replaying the record gives %s = %q, the run it recorded used %q",

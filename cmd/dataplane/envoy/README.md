@@ -1,6 +1,6 @@
 # Envoy Dataplane Image
 
-This directory contains the build definition and custom extensions for the Envoy dataplane container image (`envoy-dataplane`) used by Agent Substrate's `atenet-egress` gateway.
+This directory contains the build definition and custom extensions for the Envoy dataplane container image (`envoy-dataplane`) used by Agent Substrate's `atenet-router` and `atenet-egress` gateways.
 
 ## Directory Contents
 
@@ -19,7 +19,7 @@ cmd/dataplane/envoy/
 
 ## Building and Deployment
 
-During a build from source, `ate-setup` builds the image from this directory via `docker buildx`, pushes it to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the egress manifest (`manifests/ate-install/atenet-egress.yaml`).
+During a build from source, `ate-setup` builds the image from this directory via `docker buildx`, pushes it to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the router and egress manifests (`manifests/ate-install/atenet-router.yaml`, `manifests/ate-install/atenet-egress.yaml`).
 
 A pre-built install (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing and pins `REPO/envoy-dataplane:TAG` instead, so a release publishes it with the other images:
 

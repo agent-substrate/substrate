@@ -258,6 +258,8 @@ func TestUploadDurationSkipsNonUploadingPaths(t *testing.T) {
 func TestErrorType(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	defer cancelExpired()
 	for _, tc := range []struct {
 		name string
 		ctx  context.Context
@@ -269,6 +271,12 @@ func TestErrorType(t *testing.T) {
 			ctx:  canceled,
 			err:  fmt.Errorf("while uploading snapshot files: %w", status.Error(codes.Canceled, "context canceled")),
 			want: codes.Canceled,
+		},
+		{
+			name: "deadline exceeded",
+			ctx:  expired,
+			err:  context.DeadlineExceeded,
+			want: codes.DeadlineExceeded,
 		},
 		{
 			name: "apierror",
@@ -413,20 +421,29 @@ func TestDetachDurationOutcomes(t *testing.T) {
 	t.Run("canceled", func(t *testing.T) {
 		inst, reader := newTestInstruments(t)
 		store := newFakeSnapshotStore()
+		store.setBlocking(true)
+		store.setIgnoreCancel(true)
 		useActorDir(t)
 		tr := newStoreTracker(t, store, WithInstruments(inst))
-		ref := testRef("s1", 1, tr.clock.Now())
-		tr.CommitDurable(trackedActorUID, ref)
-		tr.CommitLocal(trackedActorUID, ref)
+		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
 		stepTo(tr, detachDueOf(tr, trackedActorUID))
 		run := tr.beginDueWork(trackedActorUID, opDetach)
 		if run == nil {
 			t.Fatal("beginDueWork returned nil, want due detach")
 		}
-		if err := tr.Forget(trackedActorUID); err != nil {
-			t.Fatalf("Forget: %v", err)
-		}
-		run()
+		go run()
+		waitStarted(t, store)
+		// Forget cancels the detach as its upload finishes, and waits for it
+		// to end.
+		forgetDone := make(chan error, 1)
+		go func() { forgetDone <- tr.Forget(trackedActorUID) }()
+		waitCanceled(t, store)
+		store.release <- nil
+		returnsPromptly(t, "Forget", func() {
+			if err := <-forgetDone; err != nil {
+				t.Errorf("Forget: %v", err)
+			}
+		})
 		if got, want := errorTypesOf(t, reader, detachDurationMetric), []string{codes.Canceled.String()}; !slices.Equal(got, want) {
 			t.Errorf("error types = %v, want %v", got, want)
 		}
@@ -785,5 +802,28 @@ func TestUndurableActorsInstrumentsMultipleActors(t *testing.T) {
 		age:     (testUploadDelay + 45*time.Second).Seconds(),
 	}); got != want {
 		t.Errorf("after dropping the oldest actor: %+v, want %+v", got, want)
+	}
+}
+
+// A background upload that times out records error.type DeadlineExceeded and
+// the timeout duration.
+func TestUploadDurationTimeoutRecordsDeadlineExceeded(t *testing.T) {
+	inst, reader := newTestInstruments(t)
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	useActorDir(t)
+	tr := newStoreTracker(t, store, WithInstruments(inst))
+	tr.Start()
+
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+	done := startUpload(t, tr, store)
+	stepTo(tr, tr.clock.Now().Add(testUploadTimeout))
+	waitClosed(t, done, "the timed-out upload")
+
+	if got, want := recordedErrorTypes(t, reader), []string{codes.DeadlineExceeded.String()}; !slices.Equal(got, want) {
+		t.Errorf("recorded error.type = %v, want %v", got, want)
+	}
+	if hist := histogramOf(t, reader, uploadDurationMetric); len(hist.DataPoints) != 1 || hist.DataPoints[0].Sum != testUploadTimeout.Seconds() {
+		t.Errorf("upload histogram = %+v, want one upload of %v", hist.DataPoints, testUploadTimeout)
 	}
 }

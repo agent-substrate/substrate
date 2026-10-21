@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -445,7 +446,7 @@ func TestMergeOnDemandDeltaPreservesRestoreSource(t *testing.T) {
 		}
 	})
 
-	t.Run("preserveRestoreSource=false moves expendable base into checkpointDir", func(t *testing.T) {
+	t.Run("preserveRestoreSource=false merges expendable base in place and links into checkpointDir", func(t *testing.T) {
 		restoreDir := t.TempDir()
 		checkpointDir := t.TempDir()
 		basePath := filepath.Join(restoreDir, "memory-ranges")
@@ -458,8 +459,16 @@ func TestMergeOnDemandDeltaPreservesRestoreSource(t *testing.T) {
 			t.Fatalf("mergeOnDemandDelta: %v", err)
 		}
 
-		if _, err := os.Stat(basePath); !os.IsNotExist(err) {
-			t.Errorf("expendable base memory-ranges still in restoreDir (stat err = %v), want moved", err)
+		bi, err := os.Stat(basePath)
+		if err != nil {
+			t.Fatalf("stat base memory-ranges in restoreDir: %v", err)
+		}
+		di, err := os.Stat(deltaPath)
+		if err != nil {
+			t.Fatalf("stat merged memory-ranges in checkpointDir: %v", err)
+		}
+		if !os.SameFile(bi, di) {
+			t.Errorf("expected basePath and deltaPath to share an inode after in-place merge")
 		}
 		gotMerged, err := os.ReadFile(deltaPath)
 		if err != nil {
@@ -488,6 +497,54 @@ func TestNewReseedNonce(t *testing.T) {
 	if bytes.Equal(a, b) {
 		t.Fatal("two nonces are identical; reseed would not make clones diverge")
 	}
+}
+
+type fakeReseeder func(ctx context.Context, data []byte) error
+
+func (f fakeReseeder) ReseedRandomDev(ctx context.Context, data []byte) error {
+	return f(ctx, data)
+}
+
+func TestReseedGuestCRNG(t *testing.T) {
+	t.Run("sends a fresh nonce once, bounded by reseedTimeout", func(t *testing.T) {
+		var calls int
+		var gotNonce []byte
+		var gotDeadline time.Time
+		start := time.Now()
+		err := reseedGuestCRNG(t.Context(), fakeReseeder(func(ctx context.Context, data []byte) error {
+			calls++
+			gotNonce = append([]byte(nil), data...)
+			gotDeadline, _ = ctx.Deadline()
+			return nil
+		}))
+		if err != nil {
+			t.Fatalf("reseedGuestCRNG: %v", err)
+		}
+		if calls != 1 {
+			t.Errorf("calls = %d, want 1", calls)
+		}
+		if len(gotNonce) != 32 {
+			t.Errorf("nonce length = %d, want 32", len(gotNonce))
+		}
+		if gotDeadline.IsZero() || gotDeadline.Before(start.Add(reseedTimeout)) || gotDeadline.After(time.Now().Add(reseedTimeout)) {
+			t.Errorf("call deadline = %v, want about %v after the call started at %v", gotDeadline, reseedTimeout, start)
+		}
+	})
+
+	t.Run("returns the agent's error without retrying", func(t *testing.T) {
+		wantErr := errors.New("agent busy")
+		var calls int
+		err := reseedGuestCRNG(t.Context(), fakeReseeder(func(context.Context, []byte) error {
+			calls++
+			return wantErr
+		}))
+		if !errors.Is(err, wantErr) {
+			t.Errorf("reseedGuestCRNG error = %v, want %v", err, wantErr)
+		}
+		if calls != 1 {
+			t.Errorf("calls = %d, want 1", calls)
+		}
+	})
 }
 
 func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {

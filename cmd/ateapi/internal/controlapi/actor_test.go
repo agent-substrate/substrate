@@ -33,6 +33,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/substratex509"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -273,7 +274,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 			}},
 			Volumes:        tmpl.volumes,
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			Resources:      resources.CPUMemory(1000, 512<<20),
+			Resources:      &ateapipb.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 		}); err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
 		}
@@ -360,9 +361,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Fatalf("UpdateActor repointing a running actor = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
-	// Repointing a paused actor is rejected, even once atelet has uploaded its
-	// snapshot: it resumes from the node-local copy, captured under the old
-	// template.
+	// Repointing a paused actor is allowed while suspended, even when it holds
+	// a node-local snapshot.
 	for _, name := range []string{"paused-actor", "uploaded-paused-actor"} {
 		paused := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
@@ -382,12 +382,15 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 			s.LastAssignedGeneration = 1
 			s.Snapshots = []*ateapipb.Snapshot{snap}
 		})
-		_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		repointedPaused, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
 			Metadata:      paused.GetMetadata(),
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
 		}})
-		if got := apierror.Code(err); got != codes.FailedPrecondition {
-			t.Fatalf("UpdateActor repointing %s = %v, want FailedPrecondition (err: %v)", name, got, err)
+		if err != nil {
+			t.Fatalf("UpdateActor repointing %s failed: %v", name, err)
+		}
+		if got, want := repointedPaused.GetActorTemplate().GetName(), "tmpl-b"; got != want {
+			t.Errorf("%s actor_template.name = %q, want %q", name, got, want)
 		}
 	}
 
@@ -411,7 +414,9 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 // a template storing snapshots under the same location, so deleting the actor
 // still collects everything it wrote. Stored data the check cannot parse is a
 // server fault: the error carries no status, which ServerUnaryInterceptor
-// answers with INTERNAL.
+// answers with INTERNAL. With the PerTemplateSnapshotLocation preview gate off,
+// every template resolves to --snapshot-location, so template locations
+// cannot block a repoint.
 func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
@@ -460,11 +465,21 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		template  string
-		snapshot  func(*testing.T, *ateapipb.Actor) string
-		repointTo string
-		wantCode  codes.Code
+		name     string
+		template string
+		snapshot func(*testing.T, *ateapipb.Actor) string
+		// pending leaves the snapshot's upload PENDING, as a pause does.
+		pending bool
+		// lastAssignedGen overrides status.LastAssignedGeneration when > 0
+		// (e.g. after a reverted pause or crashed suspend pruned a higher
+		// pending generation).
+		lastAssignedGen int32
+		repointTo       string
+		// gateOff disables the PerTemplateSnapshotLocation preview gate, so
+		// every template resolves to clusterSnapshotLocation.
+		gateOff                 bool
+		clusterSnapshotLocation string
+		wantCode                codes.Code
 	}{
 		{
 			name:      "no external snapshot moves freely",
@@ -494,6 +509,30 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			wantCode:  codes.FailedPrecondition,
 		},
 		{
+			name:      "pending owned upload moves to the same location",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			pending:   true,
+			repointTo: "same-location-slash",
+			wantCode:  codes.OK,
+		},
+		{
+			name:      "pending owned upload cannot move to another location",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			pending:   true,
+			repointTo: "different-location",
+			wantCode:  codes.FailedPrecondition,
+		},
+		{
+			name:            "owned snapshot after reverted later generation cannot move to another location",
+			template:        "same-location",
+			snapshot:        snapshotOwnedByActor,
+			lastAssignedGen: 2,
+			repointTo:       "different-location",
+			wantCode:        codes.FailedPrecondition,
+		},
+		{
 			name:      "snapshot location repoint is checked even when old template is gone",
 			template:  "gone",
 			snapshot:  snapshotOwnedByActor,
@@ -514,10 +553,41 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			repointTo: "corrupt",
 			wantCode:  codes.Internal,
 		},
+		{
+			name:                    "gate off: owned snapshot moves between template locations, which are ignored",
+			template:                "same-location",
+			snapshot:                snapshotOwnedByActor,
+			repointTo:               "different-location",
+			gateOff:                 true,
+			clusterSnapshotLocation: sameLocation,
+			wantCode:                codes.OK,
+		},
+		{
+			name:                    "gate off: an invalid template location is ignored",
+			template:                "same-location",
+			snapshot:                snapshotOwnedByActor,
+			repointTo:               "corrupt",
+			gateOff:                 true,
+			clusterSnapshotLocation: sameLocation,
+			wantCode:                codes.OK,
+		},
+		{
+			name:      "gate off without --snapshot-location has no location to check",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			repointTo: "different-location",
+			gateOff:   true,
+			wantCode:  codes.FailedPrecondition,
+		},
 	}
-	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.gateOff {
+				preview.InitForTest(t)
+			}
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
+			svc := &RPCService{impl: impl}
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("actor-%d", i)},
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.template},
@@ -525,10 +595,17 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			})
 			if tt.snapshot != nil {
 				uri := tt.snapshot(t, actor)
+				storageStatus := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				if tt.pending {
+					storageStatus = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+				}
 				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 					s.LastAssignedGeneration = 1
+					if tt.lastAssignedGen > 0 {
+						s.LastAssignedGeneration = tt.lastAssignedGen
+					}
 					s.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot", uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot", uri, storageStatus),
 					}
 				})
 			}

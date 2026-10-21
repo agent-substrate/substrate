@@ -61,6 +61,7 @@ func seedAPIActor(t *testing.T, ctx context.Context, persistence store.Interface
 				WorkerPod:       "worker-pod-1",
 				WorkerPodUid:    apiWorkerName,
 				WorkerPodIps:    []string{"10.1.2.3"},
+				SandboxRuntime:  &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 	}
@@ -147,8 +148,9 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 
 // The Actor's state when its pod vanished decides what the release does: one
 // that had already suspended saved its state cleanly and stays resumable, while
-// anything still in flight crashes and is counted. An Actor already counted as
-// crashed is released again without being counted twice.
+// anything still in flight crashes and is counted. An Actor being deleted stays
+// DELETING so it can never be resumed. An Actor already counted as crashed is
+// released again without being counted twice.
 func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -161,7 +163,7 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 		{name: "resuming becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationResume, wantMetric: true},
 		{name: "suspending becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationSuspend, wantMetric: true},
 		{name: "reverting becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_REVERTING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationRevert, wantMetric: true},
-		{name: "deleting becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_DELETING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationDelete, wantMetric: true},
+		{name: "deleting stays deleting", start: ateapipb.ActorState_ACTOR_STATE_DELETING, wantState: ateapipb.ActorState_ACTOR_STATE_DELETING, wantMetric: false},
 		{name: "suspended stays suspended", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantMetric: false},
 		{name: "crashed is not counted twice", start: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantMetric: false},
 	}

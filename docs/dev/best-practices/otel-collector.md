@@ -426,6 +426,9 @@ that defaults to it, so you should not normally need either:
 `ate-controller`'s `--otel-exporter-otlp-endpoint`, which it also propagates to
 the worker pods it creates, and `atenet-router`'s
 `--otlp-collector-address`, which is what its Envoy is given over xDS.
+`ateworker` uses the propagated endpoint only when its node's `atelet` serves no
+OTLP relay. It exports through the relay whenever `atelet` has a collector,
+and exports nothing when it has neither.
 
 Rather than editing the base manifests, prefer a kustomize overlay that
 replaces the `ate-otel-config` ConfigMap — see
@@ -438,7 +441,8 @@ lists instead of the base file, for a worked example.
 lifecycle records and the ateworkers' usage samples, through
 `serverboot.InitLogging`. `OTEL_LOGS_EXPORTER=otlp` sends them over OTLP
 instead of stdout, and `otlp,console` to both; only the kind overlay sets it, to
-`otlp,console`. See
+`otlp,console`, together with `ATE_WORKER_OTEL_LOGS_EXPORTER` for the
+ateworkers. See
 [the same records over OTLP](../../observability.md#the-same-records-over-otlp).
 
 Everything else is stdout. `serverboot.InitLogger` writes structured JSON there,

@@ -55,6 +55,13 @@ func TestSchedule(t *testing.T) {
 			constraints: Constraints{},
 		},
 		{
+			name: "worker with no default runtime is never scheduled",
+			fleet: fleet{
+				worker("w-unregistered", "gvisor", "node-a", tierTwo, withRuntimes(nil)),
+			},
+			constraints: Constraints{},
+		},
+		{
 			name: "template selector filters",
 			fleet: fleet{
 				worker("w-1", "gvisor", "node-a", tierTwo),
@@ -289,22 +296,6 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-known",
 		},
 		{
-			name: "prefers worker with known resource utilization over malformed allocated quantities",
-			fleet: fleet{
-				worker("w-malformed", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
-					func(w *ateapipb.Worker) {
-						w.Status.Allocated = &ateapipb.WorkerResources{
-							Actors:    1,
-							Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: resources.ResourceCPU, Quantity: "not-a-quantity"}}},
-						}
-					}),
-				worker("w-known", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
-					assignedFor("demo", "b", resources.CPUMemory(1000, 2<<30))),
-			},
-			constraints: Constraints{},
-			wantPod:     "w-known",
-		},
-		{
 			name: "breaks utilization ties using remaining actor slots",
 			fleet: fleet{
 				// Both workers are at 50% actor-slot utilization (1/2 vs 4/8) and
@@ -475,6 +466,12 @@ func TestApplies(t *testing.T) {
 			want:        false,
 		},
 		{
+			name:        "skips worker with no sandbox classes",
+			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(nil)),
+			constraints: Constraints{},
+			want:        false,
+		},
+		{
 			name:        "matches required runtime via default runtime",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
 			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
@@ -511,12 +508,17 @@ func (f fleet) Workers() ([]*ateapipb.Worker, error) { return f, nil }
 
 func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateapipb.Worker)) *ateapipb.Worker {
 	w := &ateapipb.Worker{
-		WorkerPod:    pod,
-		SandboxClass: class,
-		NodeName:     node,
-		Labels:       lbls,
+		WorkerPod: pod,
+		NodeName:  node,
+		Labels:    lbls,
 		// A stored Worker always carries a ceiling; CreateWorker reifies one.
-		Status: &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+		Status: &ateapipb.WorkerStatus{
+			State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity: &ateapipb.WorkerResources{Actors: 1},
+		},
+	}
+	if class != "" {
+		withRuntimes(sandboxRuntime(class, "amd64"))(w)
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -524,12 +526,12 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 	return w
 }
 
-func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.SandboxRuntime {
+func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.ActorSandboxRuntime {
 	attrs := []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}}
 	if len(bundleHash) > 0 && bundleHash[0] != "" {
 		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "sandbox_bundle_hash", Value: bundleHash[0]})
 	}
-	return &ateapipb.SandboxRuntime{
+	return &ateapipb.ActorSandboxRuntime{
 		SandboxClass: class,
 		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -538,10 +540,24 @@ func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.SandboxR
 	}
 }
 
-func withRuntimes(def *ateapipb.SandboxRuntime, restorable ...*ateapipb.SandboxRuntime) func(*ateapipb.Worker) {
+// sandboxClass is the WorkerSandboxClass entry of def's class, with def as
+// its default runtime and restorable as the others.
+func sandboxClass(def *ateapipb.ActorSandboxRuntime, restorable ...*ateapipb.ActorSandboxRuntime) *ateapipb.WorkerSandboxClass {
+	c := &ateapipb.WorkerSandboxClass{SandboxClass: def.GetSandboxClass(), DefaultRuntime: &ateapipb.WorkerSandboxRuntime{Version: def.GetVersion()}}
+	for _, r := range restorable {
+		c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapipb.WorkerSandboxRuntime{Version: r.GetVersion()})
+	}
+	return c
+}
+
+// withRuntimes gives the worker one sandbox class, def's. A nil def leaves
+// the worker as before it registered: no class at all.
+func withRuntimes(def *ateapipb.ActorSandboxRuntime, restorable ...*ateapipb.ActorSandboxRuntime) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
-		w.Status.DefaultRuntime = def
-		w.Status.RestorableRuntimes = restorable
+		w.Status.SandboxClasses = nil
+		if def != nil {
+			w.Status.SandboxClasses = []*ateapipb.WorkerSandboxClass{sandboxClass(def, restorable...)}
+		}
 	}
 }
 
@@ -564,12 +580,8 @@ func assignedFor(atespace, name string, took *ateapipb.Resources) func(*ateapipb
 		if w.Status == nil {
 			w.Status = &ateapipb.WorkerStatus{}
 		}
-		allocated, err := resources.AddToAllocated(w.Status.Allocated,
+		w.Status.Allocated = resources.AddToAllocated(w.Status.Allocated,
 			&ateapipb.ActorAssignment{ActorUid: atespace + "/" + name, Resources: took}, +1)
-		if err != nil {
-			panic(err)
-		}
-		w.Status.Allocated = allocated
 	}
 }
 
@@ -590,7 +602,8 @@ func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
 		if w.Status.Capacity == nil {
 			w.Status.Capacity = &ateapipb.WorkerResources{}
 		}
-		w.Status.Capacity.Resources = resources.CPUMemory(cpuMilli, memBytes)
+		w.Status.Capacity.CpuMillicores = cpuMilli
+		w.Status.Capacity.MemoryBytes = memBytes
 	}
 }
 
@@ -668,19 +681,5 @@ func TestSchedulePowerOfTwoChoicesShiftedSecondSample(t *testing.T) {
 	}
 	if got.GetWorkerPod() != "w-2" {
 		t.Fatalf("Schedule() = %q, want %q", got.GetWorkerPod(), "w-2")
-	}
-}
-
-func TestScheduleMalformedLimitsIsNotNoCapacity(t *testing.T) {
-	f := fleet{worker("w-1", "gvisor", "node-a", nil)}
-	constraints := Constraints{
-		Limits: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: resources.ResourceCPU, Quantity: "not-a-quantity"}}},
-	}
-	_, err := New(f, WithIntn(firstIntn)).Schedule(context.Background(), constraints)
-	if err == nil {
-		t.Fatal("Schedule() error = nil, want a parse error")
-	}
-	if errors.Is(err, ErrNoCapacity) {
-		t.Fatalf("Schedule() error = %v, want an error other than ErrNoCapacity", err)
 	}
 }

@@ -49,6 +49,17 @@ class TestBoomerConfig(unittest.TestCase):
             parsed["agentsession_snapshot_steps"], "3,10,20,30,40,50,61"
         )
 
+    def test_build_config_json_phase_in_and_retry_budget(self):
+        raw = boomer_config.build_config_json([
+            "--agentsession-phase-in",
+            "300",
+            "--agentsession-resume-retry-budget",
+            "0",
+        ])
+        parsed = json.loads(raw)
+        self.assertEqual(parsed["agentsession_phase_in"], 300.0)
+        self.assertEqual(parsed["agentsession_resume_retry_budget"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

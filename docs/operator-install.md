@@ -277,7 +277,6 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `actorJWT.algorithm`                         | `ACTOR_JWT_ALGORITHM`                           | `--actor-jwt-algorithm`                            | `ES256`               | (global)                                 |
 | `actorJWT.issuer`                            | `ACTOR_JWT_ISSUER`                              | `--actor-jwt-issuer`                               | —                     | (global)                                 |
 | `ateapi.authz.bootstrapOwners`               | `ATE_API_AUTHZ_BOOTSTRAP_OWNERS`                | `--ateapi-authz-bootstrap-owners`                  | `system:serviceaccount:<namespace>:ate-client` | (global)                                 |
-| `ateapi.authz.enabled`                       | `ATE_API_EXPERIMENTAL_ENABLE_AUTHZ`             | `--ateapi-experimental-enable-authz`               | `true`                | (global)                                 |
 | `ateapi.expectedJWTIssuer`                   | `EXPECTED_JWT_ISSUER`                           | `--ateapi-expected-jwt-issuer`                     | —                     | (global)                                 |
 | `ateapi.logLevel`                            | `ATE_API_LOG_LEVEL`                             | `--ateapi-log-level`                               | —                     | (global)                                 |
 | `ateapi.postgres.cloudsql.gsa`               | `ATE_API_POSTGRES_CLOUDSQL_GSA`                 | `--ateapi-postgres-cloudsql-gsa`                   | —                     | (global)                                 |
@@ -306,7 +305,7 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `gcp.projectID`                              | `PROJECT_ID`                                    | `--gcp-project-id`                                 | —                     | (global)                                 |
 | `images.repo`                                | `ATE_IMAGE_REPO`                                | `--image-repo`                                     | —                     | (global)                                 |
 | `images.tag`                                 | `ATE_IMAGE_TAG`                                 | `--image-tag`                                      | —                     | (global)                                 |
-| `ingressAuthMode`                            | `ATE_INGRESS_AUTH_MODE`                         | `--ingress-auth-mode`                              | `deprecated-insecure` | (global)                                 |
+| `ingressAllowedSPIFFEIDs`                    | `ATE_INGRESS_ALLOWED_SPIFFE_IDS`                | `--ingress-allowed-spiffe-ids`                     | —                     | (global)                                 |
 | `kindCluster.enabled`                        | `ATE_INSTALL_KIND`                              | `--kind`                                           | `false`               | (global)                                 |
 | `kindCluster.name`                           | `KIND_CLUSTER_NAME`                             | `--kind-cluster-name`                              | `kind`                | (global)                                 |
 | `ko.defaultPlatforms`                        | `KO_DEFAULTPLATFORMS`                           | `--ko-default-platforms`                           | —                     | (global)                                 |
@@ -319,6 +318,31 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `record.dir`                                 | `ATE_RECORD_DIR`                                | `--record-dir`                                     | —                     | (global)                                 |
 | `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |
 | `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |
+| `storage.snapshotLocation`                   | `SNAPSHOT_LOCATION`                             | `--snapshot-location`                              | —                     | (global)                                 |
+
+## Snapshot storage
+
+ate-api-server stores every actor and tag snapshot under a cluster-wide
+`--snapshot-location`, an object-storage URI such as `gs://BUCKET/PREFIX/`.
+Set it with `SNAPSHOT_LOCATION` (or ate-setup's `--snapshot-location`). It has
+no default, and ate-setup fails before deploying without it unless the
+`PerTemplateSnapshotLocation` preview gate is enabled. If you deploy ate-api-server
+some other way, pass the flag yourself; without the gate, the server refuses to
+start without it.
+
+With `--kind`, ate-setup defaults `storage.snapshotLocation` to
+`gs://<storage.bucketName>/` (`gs://ate-snapshots/`, the bucket the in-cluster
+rustfs creates) and ignores an ambient `SNAPSHOT_LOCATION`. On GKE, ate-setup
+does not create the bucket or grant access to it: run
+`go run ./tools/setup-gcp create bucket` and
+`go run ./tools/setup-gcp create iam` first, or `bootstrap` for both (see
+[tools/setup-gcp](../tools/setup-gcp/README.md)).
+
+With the `PerTemplateSnapshotLocation` preview gate, an ActorTemplate may set
+`snapshotConfig.storageLocation` to store its snapshots elsewhere; templates
+that leave it empty use `--snapshot-location`. Without the gate,
+ate-api-server ignores `snapshotConfig.storageLocation`. See
+[Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
 
 ## Secrets
 

@@ -48,45 +48,57 @@ func pluginCallError(op, snapshotURI string, err error) error {
 	return status.Errorf(code, "object-store plugin %s of %s failed (%s)", op, redactURLString(snapshotURI), code)
 }
 
-// fetchSnapshotFiles downloads the named snapshot files into dstDir.
-func (s *Atelet) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDir string, files []string) error {
+// fetchSnapshotFiles downloads the named snapshot files into dstDir, with the
+// JWT the plugin authorizes the transfer for actor with.
+func (s *Atelet) fetchSnapshotFiles(ctx context.Context, actor actorRef, snapshotURI, dstDir string, files []string) error {
 	if len(files) == 0 {
 		return nil
 	}
-	_, err := s.objectStorePlugin.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
+	// A mint failure is shaped like a plugin failure and mapped the same way.
+	jwt, err := s.workerActorJWT(ctx, actor)
+	if err != nil {
+		return pluginsocket.CallError(err)
+	}
+	_, err = s.objectStorePlugin.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
 		SnapshotUri: snapshotURI,
 		WritePath:   dstDir,
 		Files:       files,
+		ActorJwt:    jwt,
 	})
 	return pluginsocket.CallError(pluginCallError("fetch", snapshotURI, err))
 }
 
 // uploadSnapshotFiles uploads the named files in srcDir to the snapshot,
 // passing opts to the plugin call. It returns the plugin's code without its
-// message, and leaves the Unavailable mapping to the caller: an upload that can
-// be retried reports it through pluginsocket.CallError, one that cannot
-// does not.
-func (s *Atelet) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcDir string, files []string, opts ...grpc.CallOption) error {
+// message, or the mint's, and leaves the Unavailable mapping to the caller:
+// an upload that can be retried reports it through pluginsocket.CallError,
+// one that cannot does not.
+func (s *Atelet) uploadSnapshotFiles(ctx context.Context, actor actorRef, snapshotURI, srcDir string, files []string, opts ...grpc.CallOption) error {
 	if len(files) == 0 {
 		return nil
 	}
-	_, err := s.objectStorePlugin.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
+	jwt, err := s.workerActorJWT(ctx, actor)
+	if err != nil {
+		return err
+	}
+	_, err = s.objectStorePlugin.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
 		SnapshotUri: snapshotURI,
 		LocalPath:   srcDir,
 		Files:       files,
+		ActorJwt:    jwt,
 	}, opts...)
 	return pluginCallError("upload", snapshotURI, err)
 }
 
 // fetchManifest returns a snapshot's manifest. The returned error is the
 // plugin's gRPC status, so a missing manifest reports codes.NotFound.
-func (s *Atelet) fetchManifest(ctx context.Context, snapshotURI string) ([]byte, error) {
+func (s *Atelet) fetchManifest(ctx context.Context, actor actorRef, snapshotURI string) ([]byte, error) {
 	dir, err := s.snapshotScratch()
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	if err := s.fetchSnapshotFiles(ctx, snapshotURI, dir, []string{sandboxManifestName}); err != nil {
+	if err := s.fetchSnapshotFiles(ctx, actor, snapshotURI, dir, []string{sandboxManifestName}); err != nil {
 		return nil, err
 	}
 	return os.ReadFile(filepath.Join(dir, sandboxManifestName))
@@ -94,7 +106,7 @@ func (s *Atelet) fetchManifest(ctx context.Context, snapshotURI string) ([]byte,
 
 // uploadManifest uploads manifest as the snapshot's manifest, as
 // uploadSnapshotFiles does.
-func (s *Atelet) uploadManifest(ctx context.Context, snapshotURI string, manifest []byte, opts ...grpc.CallOption) error {
+func (s *Atelet) uploadManifest(ctx context.Context, actor actorRef, snapshotURI string, manifest []byte, opts ...grpc.CallOption) error {
 	dir, err := s.snapshotScratch()
 	if err != nil {
 		return err
@@ -103,7 +115,7 @@ func (s *Atelet) uploadManifest(ctx context.Context, snapshotURI string, manifes
 	if err := os.WriteFile(filepath.Join(dir, sandboxManifestName), manifest, 0o600); err != nil {
 		return fmt.Errorf("while staging snapshot manifest: %w", err)
 	}
-	return s.uploadSnapshotFiles(ctx, snapshotURI, dir, []string{sandboxManifestName}, opts...)
+	return s.uploadSnapshotFiles(ctx, actor, snapshotURI, dir, []string{sandboxManifestName}, opts...)
 }
 
 // snapshotScratch creates a fresh directory for one manifest transfer. The

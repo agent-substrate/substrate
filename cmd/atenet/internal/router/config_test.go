@@ -126,7 +126,13 @@ func TestRouterConfigValidate(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.cfg.validate()
+			// TestRouterConfigValidateIngressAuth covers the ingress
+			// listener settings, so every row here gets valid ones.
+			cfg := tc.cfg
+			cfg.HttpsPort = 8443
+			cfg.EnvoyCertPath = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+			cfg.IngressAuth = validIngressAuthConfig()
+			err := cfg.validate()
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("expected valid, got %v", err)
@@ -140,20 +146,23 @@ func TestRouterConfigValidate(t *testing.T) {
 	}
 }
 
-// staticMTLSConfig returns a valid static-mtls ingress configuration for
+func validIngressAuthConfig() ingressAuthConfig {
+	return ingressAuthConfig{
+		ClientCAFile:     "/run/podidentity.podcert.ate.dev/trust-bundle.pem",
+		AllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/demo/sa/client"},
+	}
+}
+
+// validIngressConfig returns a valid ingress configuration for
 // TestRouterConfigValidateIngressAuth to break one field at a time.
-func staticMTLSConfig() routerConfig {
+func validIngressConfig() routerConfig {
 	return routerConfig{
 		Mode:           ModeIngress,
 		ParkedRequest:  ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax},
 		HttpsPort:      8443,
 		ConnectTLSPort: 8444,
 		EnvoyCertPath:  "/run/servicedns.podcert.ate.dev/credential-bundle.pem",
-		IngressAuth: ingressAuthConfig{
-			Mode:             IngressAuthStaticMTLS,
-			ClientCAFile:     "/run/podidentity.podcert.ate.dev/trust-bundle.pem",
-			AllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/demo/sa/client"},
-		},
+		IngressAuth:    validIngressAuthConfig(),
 	}
 }
 
@@ -164,121 +173,37 @@ func TestRouterConfigValidateIngressAuth(t *testing.T) {
 		wantErr string // substring; empty means valid
 	}{
 		{
-			name:   "static-mtls with only TLS listeners accepted",
+			name:   "both TLS listeners accepted",
 			mutate: func(*routerConfig) {},
 		},
 		{
-			name:   "static-mtls with only the HTTPS listener accepted",
+			name:   "only the HTTPS listener accepted",
 			mutate: func(c *routerConfig) { c.ConnectTLSPort = 0 },
 		},
 		{
-			name:   "static-mtls with only the CONNECT-TLS listener accepted",
+			name:   "only the CONNECT-TLS listener accepted",
 			mutate: func(c *routerConfig) { c.HttpsPort = 0 },
-		},
-		{
-			name:    "unknown mode rejected",
-			mutate:  func(c *routerConfig) { c.IngressAuth.Mode = "mtls" },
-			wantErr: "--ingress-auth-mode must be",
-		},
-		{
-			name:    "old insecure mode name rejected",
-			mutate:  func(c *routerConfig) { c.IngressAuth.Mode = "insecure" },
-			wantErr: "--ingress-auth-mode must be",
 		},
 		{
 			name: "egress-only instance ignores the ingress settings",
 			mutate: func(c *routerConfig) {
 				c.Mode = ModeEgress
-				c.HttpPort = 8080
-				c.IngressAuth.ClientCAFile = ""
-				c.IngressAuth.AllowedSPIFFEIDs = nil
-			},
-		},
-		{
-			name: "deprecated-insecure accepts plaintext listeners alongside mTLS ones",
-			mutate: func(c *routerConfig) {
-				c.IngressAuth.Mode = IngressAuthDeprecatedInsecure
-				c.HttpPort = 8080
-				c.ConnectPlainTextPort = 8081
-			},
-		},
-		{
-			name: "empty mode means deprecated-insecure",
-			mutate: func(c *routerConfig) {
-				c.IngressAuth.Mode = ""
-				c.HttpPort = 8080
-			},
-		},
-		{
-			name: "deprecated-insecure with only plaintext listeners needs no client auth",
-			mutate: func(c *routerConfig) {
-				c.IngressAuth = ingressAuthConfig{Mode: IngressAuthDeprecatedInsecure, AllowedSPIFFEIDs: []string{"not a spiffe id"}}
-				c.HttpPort = 8080
-				c.HttpsPort = 0
-				c.ConnectTLSPort = 0
-			},
-		},
-		{
-			name: "deprecated-insecure without a serving cert needs no client auth",
-			mutate: func(c *routerConfig) {
-				c.IngressAuth = ingressAuthConfig{Mode: IngressAuthDeprecatedInsecure}
-				c.HttpPort = 8080
 				c.EnvoyCertPath = ""
+				c.IngressAuth = ingressAuthConfig{}
 			},
 		},
 		{
-			name: "deprecated-insecure on agentgateway needs no client auth",
+			name: "agentgateway ignores the ingress settings",
 			mutate: func(c *routerConfig) {
-				c.IngressAuth = ingressAuthConfig{Mode: IngressAuthDeprecatedInsecure}
 				c.AtenetRouter = string(atenetRouterAgentgateway)
-				c.HttpPort = 8080
+				c.EnvoyCertPath = ""
+				c.IngressAuth = ingressAuthConfig{}
 			},
-		},
-		{
-			name: "deprecated-insecure TLS listener without client CA rejected",
-			mutate: func(c *routerConfig) {
-				c.IngressAuth.Mode = IngressAuthDeprecatedInsecure
-				c.IngressAuth.ClientCAFile = ""
-				c.HttpPort = 8080
-			},
-			wantErr: "require --ingress-client-ca-file",
-		},
-		{
-			name: "deprecated-insecure TLS listener without allowlist rejected",
-			mutate: func(c *routerConfig) {
-				c.IngressAuth.Mode = IngressAuthDeprecatedInsecure
-				c.IngressAuth.AllowedSPIFFEIDs = nil
-				c.HttpPort = 8080
-			},
-			wantErr: "require at least one --ingress-allowed-spiffe-ids",
-		},
-		{
-			name: "deprecated-insecure non-SPIFFE ID rejected",
-			mutate: func(c *routerConfig) {
-				c.IngressAuth.Mode = IngressAuthDeprecatedInsecure
-				c.IngressAuth.AllowedSPIFFEIDs = []string{"https://cluster.local/ns/demo/sa/client"}
-			},
-			wantErr: "is not a valid SPIFFE ID",
-		},
-		{
-			name:    "agentgateway rejected",
-			mutate:  func(c *routerConfig) { c.AtenetRouter = string(atenetRouterAgentgateway) },
-			wantErr: "requires --atenet-dataplane=envoy",
-		},
-		{
-			name:    "plaintext HTTP listener rejected",
-			mutate:  func(c *routerConfig) { c.HttpPort = 8080 },
-			wantErr: "requires --port-http=0",
-		},
-		{
-			name:    "plaintext CONNECT listener rejected",
-			mutate:  func(c *routerConfig) { c.ConnectPlainTextPort = 8081 },
-			wantErr: "requires --port-connect=0",
 		},
 		{
 			name:    "missing serving cert rejected",
 			mutate:  func(c *routerConfig) { c.EnvoyCertPath = "" },
-			wantErr: "requires --envoy-cert-path",
+			wantErr: "--envoy-cert-path is required",
 		},
 		{
 			name: "no TLS listener rejected",
@@ -286,17 +211,17 @@ func TestRouterConfigValidateIngressAuth(t *testing.T) {
 				c.HttpsPort = 0
 				c.ConnectTLSPort = 0
 			},
-			wantErr: "requires --port-https or --port-connect-tls",
+			wantErr: "--port-https or --port-connect-tls is required",
 		},
 		{
 			name:    "missing client CA rejected",
 			mutate:  func(c *routerConfig) { c.IngressAuth.ClientCAFile = "" },
-			wantErr: "require --ingress-client-ca-file",
+			wantErr: "--ingress-client-ca-file is required",
 		},
 		{
 			name:    "empty allowlist rejected",
 			mutate:  func(c *routerConfig) { c.IngressAuth.AllowedSPIFFEIDs = nil },
-			wantErr: "require at least one --ingress-allowed-spiffe-ids",
+			wantErr: "at least one --ingress-allowed-spiffe-ids entry is required",
 		},
 		{
 			name: "non-SPIFFE ID rejected",
@@ -315,7 +240,7 @@ func TestRouterConfigValidateIngressAuth(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := staticMTLSConfig()
+			cfg := validIngressConfig()
 			tc.mutate(&cfg)
 			err := cfg.validate()
 			if tc.wantErr == "" {

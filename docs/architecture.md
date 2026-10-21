@@ -97,8 +97,6 @@ started to tackle yet, but which we know will need to be solved eventually.
   * Peer to peer state sharing: Relying on data locality presents a risk of
     data loss.  We probably need some form of state-sharing to protect against
     that, which needs to be balanced with saving state to a "permanent" store.
-  * Control plane authn/z: We will need to ensure that the control plane is secure, and that only
-    authorized users and agents can interact with it.
   * Identity and policy: We know that agents' needs for identity are very
     different than traditional workload identity and end-user credentials.
   * There are certainly more that we haven't thought of yet!
@@ -317,6 +315,10 @@ manage actor lifecycles.
   * **Workflow Engine**: Orchestrates the multi-step Resume/Suspend sequences
     (lock acquisition, storage download, sandbox restore).
 
+  * **Authentication & Authorization**: [Authenticates](authentication.md)
+    every RPC and [authorizes](authorization.md) it per atespace with an
+    embedded OpenFGA model.
+
 ### Node Supervisor (`atelet` + `ateworker`)
 
 The node-level subsystem manages the physical execution of sandboxes and the movement of snapshots.
@@ -329,9 +331,11 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
   * **Storage Mover**: External snapshots move through an *object-store plugin*, a sidecar that serves the `objectstore.v1` gRPC API over a Unix socket in its pod. `atelet`'s sidecar (`NodeProvider`) uploads and fetches a snapshot's files; `ate-api-server`'s sidecar (`ControlProvider`) copies and deletes whole snapshots. Neither main process talks to object storage for snapshots. The in-tree plugin, `cmd/objectstore-plugin`, backs the API with GCS or S3; `ATE_STORAGE_BACKEND` on the sidecar (unset or `gcs`, or `s3` with the `AWS_*` variables) selects which, see `manifests/ate-install/atelet.yaml`, `ate-api-server.yaml`, and the kind overlay for an S3 example. The same `atelet` sidecar serves `AssetProvider`, which fetches every sandbox asset; `atelet` reads a `gs://` asset anonymously only when the plugin cannot serve it, which covers public buckets such as `gs://gvisor`. The plugin stages each download where `atelet` cannot read it, and copies it into `atelet`'s cache only if its sha256 matches; it refuses any URL under a snapshot location. `atelet` verifies the sha256 again and has no object storage credentials or settings of its own.
 
+  * **Sandbox Asset Cache**: `atelet` keeps one node-local, content-addressed cache of the sandbox binaries every actor runs on and gives each actor hard links into it, prewarms each local worker's default runtime and keeps it linked under the worker's directory, and evicts to a byte budget without taking anything an actor or a worker still uses. See the [Sandbox Asset Cache](sandbox-asset-cache.md) page.
+
 ### Sandbox Classes
 
-A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from the cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image. They come at runtime from the cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default). Each snapshot records the sandbox runtime it was taken on, and a memory restore runs on a worker that still offers that runtime, so restores stay reproducible across runtime upgrades.
 
   * **gVisor** (`ateworker-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree. `DurableDir` volumes and each container's rootfs overlay are saved as separate filesystem checkpoint bundles (`fs/` and `rootfs/`). A `MEMORY` snapshot splits them out of the process checkpoint; `VOLUMES` and `ROOTFS` snapshots save only the bundles they need with `runsc fscheckpoint`, without memory, and restore them on a cold boot.
 
@@ -508,7 +512,7 @@ tags cannot be deleted until they are.
 
 An actor in `ACTOR_STATE_RUNNING` or `ACTOR_STATE_CRASHED`, or a paused actor (`ACTOR_STATE_SUSPENDED` with a node-local latest snapshot), can be reverted back to `ACTOR_STATE_SUSPENDED` at its durable snapshot via `RevertActor`. Reverting terminates any active sandbox, discards any local pause checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
 
-By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
+An actor in any state (such as `ACTOR_STATE_RUNNING`) can be deleted from the Control Plane. The workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
 
 After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage collected.
 
@@ -543,12 +547,20 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     security context even as they migrate across physical nodes or code
     versions.
 
-  * **Request Authorization**: The system currently performs **Identity-Aware
-    Routing** by extracting and validating the `ate-target-actor` header at
-    the gateway. This ensures requests are only
-    routed to recognized, registered actors.
-    Pluggable, granular authorization policies are planned for future
-    milestones.
+  * **API Authorization**: Every `ate-api-server` RPC is authorized. Users
+    and automation get owner, editor, or viewer roles on the global scope or
+    on an atespace through AccessPolicy (`kubectl ate access-policy`), and
+    Substrate's components hold fixed system roles bound to their pod
+    certificates. The atespace is the finest boundary today. See
+    [authorization.md](authorization.md) for the roles, the check behind each
+    RPC, and known gaps.
+
+  * **Ingress Authentication and Routing**: The gateway routes each request to
+    the actor its `ate-target-actor` header names, and only to recognized,
+    registered actors. It accepts only mTLS clients whose SPIFFE ID is on a
+    static allowlist; any listed client may reach any actor, as per-actor
+    ingress authorization is not yet supported. The agentgateway dataplane
+    does not authenticate clients yet.
 
   * **Network Policy**: Agent Substrate leverages standard Kubernetes
     NetworkPolicy for connectivity control. Policies can be applied at the

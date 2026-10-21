@@ -33,7 +33,9 @@ const (
 	// zstd state. Include the writer's frame and the producer's pending frame
 	// even when there is only one worker.
 	parallelWorkerMemory int64 = (parZstdQueue*3 + 2) * parZstdChunk
-	// A serial encoder has a 4 MiB window, history, blocks, and a copy buffer.
+	// A part's encoder (parZstd inline, workers == 1) holds an input chunk, its
+	// output frame, the encoder's history for that chunk, and a copy buffer: about
+	// 26 MiB with 8 MiB chunks (BenchmarkWriteSparsePart/part=64MiB).
 	serialWorkerMemory int64 = 32 << 20
 	sparseUploadMemory       = serialWorkerMemory + partWriterChunk
 )
@@ -74,6 +76,13 @@ func NewUploader(client ObjectStorage, capacity int64) (*Uploader, error) {
 }
 
 // uploadBufferMemory includes buffers retained while the compressor is running.
+// WithClient returns an Uploader that sends through client and shares u's
+// memory budget, for a transfer that runs with its own credentials. client
+// must be the same kind of backend as u's, since the budget was sized for it.
+func (u *Uploader) WithClient(client ObjectStorage) *Uploader {
+	return &Uploader{client: client, budget: u.budget}
+}
+
 func uploadBufferMemory(client ObjectStorage) int64 {
 	switch client.(type) {
 	case *s3Client:
@@ -95,37 +104,69 @@ type uploadPlan struct {
 }
 
 func (u *Uploader) plan(content io.Reader) (uploadPlan, error) {
+	plan, _, _, err := u.planStream(content)
+	return plan, err
+}
+
+func (u *Uploader) planStream(content io.Reader) (uploadPlan, int64, io.Reader, error) {
 	buffers := uploadBufferMemory(u.client)
 	workers := min(int64(runtime.GOMAXPROCS(0)), (u.budget.capacity-buffers)/parallelWorkerMemory)
+	workerMemory := parallelWorkerMemory
 	parts := 1
+	streamMax := int64(-1)
 	if f, ok := content.(*os.File); ok {
 		info, err := f.Stat()
 		if err != nil {
-			return uploadPlan{}, err
+			return uploadPlan{}, 0, nil, err
 		}
 		position, err := f.Seek(0, io.SeekCurrent)
 		if err != nil {
-			return uploadPlan{}, err
+			return uploadPlan{}, 0, nil, err
 		}
-		_, populated, err := sparseExtents(f, info.Size())
+		exts, populated, err := sparseExtents(f, info.Size())
 		_, seekErr := f.Seek(position, io.SeekStart)
 		if err != nil {
-			return uploadPlan{}, err
+			return uploadPlan{}, 0, nil, err
 		}
 		if seekErr != nil {
-			return uploadPlan{}, seekErr
+			return uploadPlan{}, 0, nil, seekErr
 		}
 		// Holes never enter the compressor or range uploads.
 		workers = min(workers, populated/parZstdChunk+1)
 		parts = min(sparsePartCount(populated), int(u.budget.capacity/sparseUploadMemory))
+		if _, ok := u.client.(sparseFilePutter); ok && parts >= 2 {
+			// PutSparseFile splits a file into parts whenever it has two or
+			// more (see errSparseTooSmall), so the streaming fallback never
+			// runs: reserve only what the parts hold.
+			return uploadPlan{workers: int(workers), parts: parts, memory: int64(parts) * sparseUploadMemory}, -1, content, nil
+		}
+		streamMax = sparseEncodedBound(populated, len(exts))
+		buffers = streamBufferMemory(u.client, streamMax)
+		workerMemory = parZstdWorkerMemory(parZstdChunkSize(populated))
+		content = &sparseFile{File: f, size: info.Size(), exts: exts, populated: populated}
 	}
-	memory := buffers + workers*parallelWorkerMemory
-	if _, ok := u.client.(sparseFilePutter); ok {
-		// The range-parallel path and streaming fallback are alternatives,
-		// so reserve the larger requirement rather than adding both.
-		memory = max(memory, int64(parts)*sparseUploadMemory)
+	memory := buffers + workers*workerMemory
+	return uploadPlan{workers: int(workers), parts: parts, memory: memory}, streamMax, content, nil
+}
+
+// sparseEncodedBound bounds the size of the sparse-extent stream for a file
+// whose populated bytes lie in the given number of extents: zstd's worst-case
+// expansion plus the format's header, per-extent frames, and per-chunk zstd
+// frame headers.
+func sparseEncodedBound(populated int64, extents int) int64 {
+	return populated + populated/128 + int64(extents)*16 + (populated/parZstdChunk+1)*64 + 64
+}
+
+// streamBufferMemory is the backend buffering for a streamed object of at
+// most size bytes. GCS sends an object smaller than uploadCompositeMin in one
+// request: PutObject allocates singleUploadChunkSize(size) for the lookahead
+// and putSingle sets the same ChunkSize on the writer, never allocating the
+// composite parts.
+func streamBufferMemory(client ObjectStorage, size int64) int64 {
+	if _, ok := client.(*gcsClient); ok && size < uploadCompositeMin {
+		return 2 * singleUploadChunkSize(size)
 	}
-	return uploadPlan{workers: int(workers), parts: parts, memory: memory}, nil
+	return uploadBufferMemory(client)
 }
 
 // SendFile compresses and uploads an already-open snapshot file. The caller keeps
@@ -147,6 +188,15 @@ func (u *Uploader) Send(ctx context.Context, url string, content io.Reader) erro
 		return err
 	}
 	memory := uploadBufferMemory(u.client)
+	if f, ok := content.(*os.File); ok {
+		// A manifest is a few KiB: size its reservation by the file rather
+		// than by the largest object the backend could buffer.
+		if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
+			size := info.Size()
+			memory = streamBufferMemory(u.client, size)
+			content = boundedReader{Reader: content, max: size}
+		}
+	}
 	if err := u.budget.reserved.Acquire(ctx, memory); err != nil {
 		return err
 	}

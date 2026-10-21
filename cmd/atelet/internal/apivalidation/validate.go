@@ -28,6 +28,11 @@ func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateletpb.Reque
 	return Validate_RequestActorSuspendRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateReportActorCrashedRequest runs the generated validation for req.
+func ValidateReportActorCrashedRequest(ctx context.Context, req *ateletpb.ReportActorCrashedRequest) field.ErrorList {
+	return Validate_ReportActorCrashedRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateGetActorEgressPolicyRequest runs the generated validation for
 // req.
 func ValidateGetActorEgressPolicyRequest(ctx context.Context, req *ateletpb.GetActorEgressPolicyRequest) field.ErrorList {
@@ -74,34 +79,16 @@ func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWo
 	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
-// ValidateCustom_Limits validates one limit with resources.ValidateLimit, the
-// rule the control plane applies to its own Limits. Presence and uniqueness
-// of names are enforced by tags.
-func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.Limits) field.ErrorList {
-	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
-}
-
 func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateHostPort(fldPath, *value)
 }
 
-func ValidateCustom_SandboxAssets_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_ActorSandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
-func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_WorkerSandboxClass_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateSandboxClass(fldPath, *value)
-}
-
-func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidatePinnedImage(fldPath, *value)
-}
-
-func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if err := resources.ValidateAssetHash(*value); err != nil {
-		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
-	}
-	return nil
 }
 
 func ValidateCustom_ObjectStorage_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

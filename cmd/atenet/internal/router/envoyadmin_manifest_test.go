@@ -38,7 +38,7 @@ var envoyAdminManifests = []struct {
 	path, configMap, deployment, requiredPath string
 }{
 	{routerManifestPath, "atenet-router-envoy-config", "atenet-router", "/stats/prometheus"}, // PodMonitoring
-	{egressManifests[0], "atenet-egress", "atenet-egress", "/ready"},                         // kubelet probes
+	{egressManifest, "atenet-egress", "atenet-egress", "/ready"},                             // kubelet probes
 }
 
 type socketAddress struct {

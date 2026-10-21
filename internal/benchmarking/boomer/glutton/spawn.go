@@ -483,7 +483,6 @@ func (r *spawnRuntime) deleteActor(ctx context.Context, name string) error {
 				Atespace: r.cfg.Atespace,
 				Name:     name,
 			},
-			AnyState: true,
 		}, grpc.Trailer(tr))
 		return err
 	})

@@ -29,6 +29,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/child"
 )
 
 // RestoredNet identifies one fd-backed network device in a snapshot and the
@@ -59,7 +61,7 @@ type LaunchVMMOptions struct {
 // LaunchVMM starts a cloud-hypervisor process with only an api-socket (no VM)
 // and waits until it answers. Use Client.RestoreWithNetFDs to then restore a
 // snapshot that has fd-backed net devices. The caller owns cmd.
-func LaunchVMM(ctx context.Context, o LaunchVMMOptions) (*exec.Cmd, *Client, error) {
+func LaunchVMM(ctx context.Context, o LaunchVMMOptions) (*child.Process, *Client, error) {
 	if o.APISocket == "" {
 		return nil, nil, fmt.Errorf("LaunchVMMOptions.APISocket is required")
 	}
@@ -74,16 +76,16 @@ func LaunchVMM(ctx context.Context, o LaunchVMMOptions) (*exec.Cmd, *Client, err
 	cmd.Stdout = o.Stdout
 	cmd.Stderr = o.Stderr
 	cmd.SysProcAttr = o.SysProcAttr
-	if err := cmd.Start(); err != nil {
+	proc, err := child.Start(cmd)
+	if err != nil {
 		return nil, nil, fmt.Errorf("while starting cloud-hypervisor: %w", err)
 	}
 	client := NewClient(o.APISocket)
 	if _, err := client.WaitReady(ctx, 15*time.Second); err != nil {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		proc.Stop()
 		return nil, nil, fmt.Errorf("while waiting for VMM api-socket: %w", err)
 	}
-	return cmd, client, nil
+	return proc, client, nil
 }
 
 // RestoreWithNetFDs issues vm.restore for a snapshot dir, passing fresh tap FDs

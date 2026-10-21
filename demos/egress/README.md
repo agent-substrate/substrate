@@ -105,7 +105,7 @@ rejects that option with agentgateway rather than silently omitting it.
 ## Deploy the demo fixture
 
 ```bash
-./hack/install-ate.sh --deploy-demo-egress
+go run ./cmd/ate-setup deploy demo egress
 ```
 
 The install applies the worker pool, creates the `ate-demo-egress` atespace and
@@ -253,5 +253,5 @@ from the cluster, works for a manual run.
 
 ```bash
 ./demos/egress/test-egress.sh --cleanup
-./hack/install-ate.sh --delete-demo-egress
+go run ./cmd/ate-setup delete demo egress
 ```

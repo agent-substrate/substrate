@@ -28,7 +28,7 @@ scenario ladder, read [observability.md](observability.md).
 > benchmark call is denied:
 > ```bash
 > ATE_API_AUTHZ_BOOTSTRAP_OWNERS=system:serviceaccount:ate-system:ate-client,spiffe://cluster.local/ns/benchmarking/sa/default \
->   ./hack/install-ate.sh --deploy-ate-system
+>   ./hack/install-ate.sh deploy ate-system
 > ```
 > The nightly automation sets this itself; see
 > [automation/README.md](automation/README.md).
@@ -62,8 +62,8 @@ The same operations are also reachable from the top-level installer for
 convenience:
 
 ```bash
-./hack/install-ate.sh --deploy-benchmarks
-./hack/install-ate.sh --delete-benchmarks
+go run ./cmd/ate-setup deploy benchmarks
+go run ./cmd/ate-setup delete benchmarks
 ```
 
 `--skip-build` and `--worker-memory` are only available when invoking
@@ -74,8 +74,6 @@ convenience:
 `ate-setup` reads these settings in addition to those in
 [docs/operator-install.md](../docs/operator-install.md#settings), through the same
 flag, environment variable, and configuration document channels.
-`hack/install-ate.sh` forwards them as `--benchmark-worker-count`,
-`--benchmark-sandbox-class`, and `--benchmark-actor-memory`.
 
 | Key                      | Environment variable          | Flag                       | Default  | Applies to                               |
 |--------------------------|-------------------------------|----------------------------|----------|------------------------------------------|
@@ -154,7 +152,7 @@ and state restoration latency when a durable directory is attached to the actor.
   * `glutton-storage`: Attaches an external CSI volume instead of a durable
     directory. `deploy_locust.sh` and `workloads/deploy.sh` deploy it only
     when `--storage-class-name` names an existing StorageClass. To run it on
-    NFS, install with `hack/install-ate.sh --setup-csi=nfs` and pass
+    NFS, install with `hack/install-ate.sh setup csi nfs` and pass
     `--storage-class-name csi-nfs-sc`, the class the e2e tests also use.
 
 #### DurDir Reported Metrics
@@ -270,6 +268,37 @@ nothing. Durations are in milliseconds.
   are canceled: interrupted tasks log no task record, and startup failures logged after it
   belong to the teardown, not the run.
 
+### ate-env Benchmark
+
+The `ate-env` benchmark (`--user-class ate_env`) exercises the
+[`ate-env-guest`](https://github.com/agent-substrate/env/tree/main/cmd/ate-env-guest)
+sandbox image from `agent-substrate/env`. `workloads/deploy.sh` deploys and
+deletes the `ate-env` `ActorTemplate` by default using the pinned release guest
+image (see
+[`workloads/manifests/ate-env-template.yaml.tmpl`](workloads/manifests/ate-env-template.yaml.tmpl)
+to override the guest image with a custom build). It follows `glutton`'s
+wake/hold/hibernate lifecycle, but replaces synthetic HTTP `/ping` calls with a
+real `"hello world"` process execution inside the guest (`StartProcess(["echo",
+"hello world"])` + `StreamProcessOutput(follow: true)`) over gRPC directly
+through `atenet-router` (`1 dns:///` gRPC channel per VU).
+
+#### ate-env Configuration Knobs
+
+Reuses `glutton`'s runtime and startup knobs:
+`--min-wait-time`, `--max-wait-time`, `--min-live-time`, `--max-live-time`,
+`--max-pings-per-wake`, `--lifecycle-mode` (`suspend` | `pause` | `none`),
+`--trace-probability`, and `--actors-per-user`.
+
+#### ate-env Reported Metrics
+
+* `CreateAtespace`, `CreateActor`, `ResumeActorFirstResume`, `ResumeActor`,
+  `SuspendActor`, `SuspendActorAsync`, `DeleteActor`: Control-plane lifecycle
+  RPC latencies.
+* `AteEnvExec`: Combined end-to-end latency of `"hello world"` (`StartProcess` +
+  `StreamProcessOutput` to exit with `exit_code == 0` and
+  `stdout == "hello world\n"`).
+* `CrashCount`: Actors that entered `ACTOR_STATE_CRASHED` during resume.
+
 ### Agent-Session Benchmark
 
 The agent-session benchmark (`--user-class agentsession`) emulates a fleet of
@@ -348,6 +377,20 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
 * `--agentsession-snapshot-steps` — comma-separated 1-based step numbers after
   which the actor is hibernated (for example, `3,10,20,30,40,50,61`); between
   all other steps the actor stays resident.
+* `--agentsession-phase-in` — seconds over which session starts are spread:
+  each user waits a uniform random share of it before creating its actor
+  (default 0, every session starts at once). Locust's ramp spreads the fleet
+  over seconds and every session begins at step 1, so without it the
+  sessions reach each later step together; a step that dwells longer than
+  the ramp then asks every worker for more slots at once than it has. Set
+  it to a few think gaps for density runs.
+* `--agentsession-resume-retry-budget` — seconds a step keeps retrying a
+  wake the fleet had no room for (ResumeActor `ResourceExhausted` or
+  `Unavailable`, router 503/504/429) with 50ms-to-1s backoff before giving
+  the step up until its next think gap (default 60; `0` gives the wake one
+  attempt). Each attempt is its own
+  `ResumeActor` or `WakeFirstTouch` sample; the whole wait lands in
+  `TimeToWake`.
 
 #### Writing an agent-session script
 
@@ -445,6 +488,15 @@ To go back to a built-in variant, redeploy without the flag.
 * `WakeFirstTouch`: latency of a dedicated ping sent before each step's ops —
   in implicit mode that ping is what triggers the parked wake, so this row
   **is** the user-visible wake latency, unpolluted by the step's own work.
+* `TimeToWake`: the whole wake of a parked actor, from the first
+  `ResumeActor` attempt (in implicit mode, the first wake ping) to the ping
+  that found the actor serving, including every retry while the fleet had no
+  room. In implicit mode a first-attempt wake is the `WakeFirstTouch` sample;
+  in explicit mode it is `WakeFirstTouch` plus `ResumeActor`. A failed row is
+  a wake that failed: a step given up after
+  `--agentsession-resume-retry-budget`, or one that failed at once with an
+  error that is not a capacity error, such as a crashed actor or a router
+  404 or 500.
 * `Step_<name>` (e.g. `Step_06_first_build`): wall time of that step's ops,
   think gap excluded.
 * `SuspendActor` / `ResumeActor` / `CreateActor` / `DeleteActor`: control-plane
@@ -536,6 +588,36 @@ warm-up until they have all joined at the spawn rate.
 * `CreateActor`, `ResumeActorWarmup`, `SuspendActorAsyncWarmup`: A user's
   warm-up of its actor, in the step that added the user.
 
+#### Analyzing a ResumePaused Ladder Run
+
+`stats.csv` and the other rows of `stats.jsonl` cover a whole run, so they
+blend every step of a ladder. After a ladder run the runner adds one
+`stats.jsonl` row per step, with `metric` `ladder_step_001`,
+`ladder_step_002`, and so on ([`locust/ladder_steps.py`](locust/ladder_steps.py)).
+It reads each step's start and end from the run's log and queries the
+benchmarking Prometheus over the step's steady window, from 30 s after the
+step starts to 5 s before it ends (`window_start` and `window_end`). A row
+holds the cold resume and pause rates, failures by operation
+(`failures_<name>`), client and server latency, the CPU and memory of
+ate-api-server, Postgres and fake-atelet, and Postgres's connections,
+commits and waits.
+
+The runner logs and skips a step with no end in the log and a step too short
+to leave a window after the trim. A failed query adds no step rows at all
+rather than a ladder with gaps, and leaves the run's other results as they
+are. Read a step's figures against its `target_rps`: a `resume_rps` below it
+means the step fell short of its rate.
+
+To pull the step rows out of a run's results:
+
+```bash
+RUN=<dest>/runs/<test>/run_date=<YYYY-MM-DD>/run_ts=<ts>/run_tag=<commit>
+gcloud storage cat "$RUN/stats.jsonl" | grep '"metric": "ladder_step_'
+```
+
+`<dest>` is the orchestrator's `--dest`, and its log has the full `RUN` path
+on each `Uploaded ... -> gs://...` line.
+
 ### Isolate Mode
 
 A real cold resume is limited by the node's restore capacity, which hides the
@@ -543,7 +625,7 @@ limits of ate-api-server and Postgres. Isolate mode takes the nodes out by
 installing substrate with a fake data plane:
 
 ```bash
-hack/install-ate.sh --deploy-ate-system --fake-data-plane
+hack/install-ate.sh deploy ate-system --fake-data-plane
 ./benchmarking/workloads/deploy.sh --deploy --worker-count 200 \
   --fake-atelet-env FAKE_ATELET_DELAY=500ms
 ```
@@ -582,8 +664,8 @@ Fake actors need neither. fake-atelet takes the storage settings of atelet's
 objectstore-plugin sidecar, whose writes it takes over, so its snapshot
 placeholders go to the storage the install points atelet at. The install
 refuses a cluster whose WorkerPools still have worker pods, which would
-outlive ate-controller. A normal `hack/install-ate.sh --deploy-ate-system`
-puts the real data plane back, and `--delete-ate-system` removes the fakes
+outlive ate-controller. A normal `hack/install-ate.sh deploy ate-system`
+puts the real data plane back, and `delete ate-system` removes the fakes
 either way. Never use the mode on a
 cluster that serves real actors: actors placed on fake Workers do not exist.
 

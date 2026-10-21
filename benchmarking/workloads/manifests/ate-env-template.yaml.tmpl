@@ -1,0 +1,49 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the ate-env
+# benchmark workload, created through the ate API by workloads/deploy.sh.
+metadata:
+  atespace: benchmark-workloads
+  name: ate-env
+workerSelector:
+  matchLabels:
+    workload: benchmark-worker
+containers:
+- name: guest
+  # The guest image is built from the agent-substrate/env repo
+  # https://github.com/agent-substrate/env/tree/1c08a7a578afd896373511a83beb242aec1425c0/cmd/ate-env-guest
+  # (2026-10-14, which pins base bash:5.3@sha256:61962062d969cb46dfc2bad061d36342406fa485f64f246aa7e95693ca07df1f
+  # in .ko.yaml):
+  #
+  #   KO_DOCKER_REPO="gcr.io/<PROJECT_ID>/ate-env-guest" ko build --bare --platform=linux/amd64 ./cmd/ate-env-guest
+  #
+  # Substituted by benchmarking/workloads/deploy.sh (which defaults ATE_ENV_IMAGE
+  # to us-docker.pkg.dev/gke-substrate-release/benchmark/ate-env-guest@sha256:1d38934ef1dac71fcb1f1286de734e06ab2e19747279bccbd37bfe69e0d5bc72;
+  # set ATE_ENV_IMAGE to override with a custom digest).
+  image: "${ATE_ENV_IMAGE}"
+  command:
+  - "/ko-app/ate-env-guest"
+  - "--listen=:80"
+  wakeupProbe:
+    httpGet:
+      path: /readyz
+      port: 80
+resources:
+  limits:
+    cpuMillicores: "${ACTOR_CPU_MILLICORES}"
+    memoryBytes: "${ACTOR_MEMORY_BYTES}"
+snapshotConfig:
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
+  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/ate-env/

@@ -76,16 +76,19 @@ func mustMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metri
 
 // worker builds an ACTIVE worker holding allocated of capacity actor slots.
 func worker(namespace, pool, class string, allocated, capacity int32) *ateapipb.Worker {
-	return &ateapipb.Worker{
+	w := &ateapipb.Worker{
 		WorkerNamespace: namespace,
 		WorkerPool:      pool,
-		SandboxClass:    class,
 		Status: &ateapipb.WorkerStatus{
 			State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			Capacity:  &ateapipb.WorkerResources{Actors: capacity},
 			Allocated: &ateapipb.WorkerResources{Actors: allocated},
 		},
 	}
+	if class != "" {
+		w.Status.SandboxClasses = []*ateapipb.WorkerSandboxClass{{SandboxClass: class}}
+	}
+	return w
 }
 
 type series struct{ namespace, pool, state, class string }
@@ -245,7 +248,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				WorkerNamespace: "ate-workers",
 				WorkerPool:      "pool-a",
-				SandboxRuntime:  &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+				SandboxRuntime:  &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 	}
@@ -445,11 +448,11 @@ func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
 	}
 }
 
-// TestWorkerCountEmptyClassWorker covers the workers that CreateWorker accepted
-// with no sandbox class. They report as unknown, not as an empty-string class,
-// and not as capacity of the pool they name: the scheduler puts no actor on
-// them, thus the pool's own series stays at 0 and an idle==0 alert on it still
-// fires.
+// TestWorkerCountEmptyClassWorker covers the workers that have not yet
+// reported default_runtime via RegisterWorker. They report as unknown, not as
+// an empty-string class, and not as capacity of the pool they name: the
+// scheduler puts no actor on them, thus the pool's own series stays at 0 and
+// an idle==0 alert on it still fires.
 func TestWorkerCountEmptyClassWorker(t *testing.T) {
 	const (
 		gvisor  = string(atev1alpha1.SandboxClassGvisor)
