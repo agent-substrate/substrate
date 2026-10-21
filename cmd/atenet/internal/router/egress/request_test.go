@@ -66,7 +66,7 @@ func cleartextInjectionPolicy(pattern string) *ateapipb.EgressPolicy {
 // policyHandler builds a Handler for an actor whose policy is policy (nil
 // means none) with the cache disabled, so each callout sees the mock as is.
 func policyHandler(policy *ateapipb.EgressPolicy) *Handler {
-	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, nil, "")
+	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, nil, "", false)
 }
 
 // testSNI is the server name the test actor's TLS connection presented, on
@@ -420,7 +420,7 @@ func TestRequestLegPolicyLookup(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(tc.client, nil, 0, nil, "")
+			h := New(tc.client, nil, 0, nil, "", false)
 			_, err := h.HandleRequestHeaders(context.Background(), requestMetadata("api.example.com"))
 			wantStatus(t, err, tc.want)
 		})
@@ -446,7 +446,7 @@ func TestConnectLegRequiresAPolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(tc.client, ca.roots(), DefaultPolicyCacheTTL, nil, "")
+			h := New(tc.client, ca.roots(), DefaultPolicyCacheTTL, nil, "", false)
 			res, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
 			if tc.want == 0 {
 				wantAllowed(t, res, err)
@@ -503,7 +503,7 @@ func TestDenialBodyIsUniform(t *testing.T) {
 // A caller that gives up mid-fetch is neither a denial nor an outage.
 func TestCanceledCallerIsNotAPolicyFailure(t *testing.T) {
 	client := &egressMockClient{policy: allowAllPolicy(), policyGate: make(chan struct{})}
-	h := New(client, nil, 0, nil, "")
+	h := New(client, nil, 0, nil, "", false)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -521,4 +521,40 @@ func TestCanceledCallerIsNotAPolicyFailure(t *testing.T) {
 	err := <-done
 	close(client.policyGate)
 	wantStatus(t, err, envoy_type.StatusCode_RequestTimeout)
+}
+
+// With external authorization the request legs answer the dial for any request
+// from an identified actor, without fetching its policy or injecting
+// credentials. Identity and the dataplane's own limits still apply.
+func TestRequestLegWithExternalAuthorization(t *testing.T) {
+	for _, leg := range []string{extproc.EgressCleartextFilterChainName, extproc.EgressTLSMITMFilterChainName} {
+		t.Run(leg, func(t *testing.T) {
+			// The policy allows neither the host nor the SNI, and would inject a
+			// credential through a provider the handler does not have.
+			client := &egressMockClient{actor: runningActor(), policy: credentialInjectionPolicySample("other.example")}
+			h := New(client, nil, 0, nil, "", true)
+
+			res, err := h.HandleRequestHeaders(context.Background(), innerMetadata(leg, "GET", "api.example.com:8080", nil))
+			wantDial(t, res, err, extproc.EgressDialName)
+			if got := hostOf(res); got != "api.example.com" {
+				t.Errorf("host = %q, want %q", got, "api.example.com")
+			}
+			if got := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders(); len(got) != 0 {
+				t.Errorf("set headers = %v, want none", got)
+			}
+			if got := client.policyCalls.Load(); got != 0 {
+				t.Errorf("GetActorEgressPolicy called %d times, want 0", got)
+			}
+
+			md := innerMetadata(leg, "GET", "api.example.com", map[string]string{extproc.ActorIdentityFilterStateAttribute: ""})
+			_, err = h.HandleRequestHeaders(context.Background(), md)
+			wantStatus(t, err, envoy_type.StatusCode_Forbidden)
+
+			md = innerMetadata(leg, "GET", "api.example.com", nil)
+			md.Headers["connection"] = "Upgrade"
+			md.Headers["upgrade"] = "websocket"
+			_, err = h.HandleRequestHeaders(context.Background(), md)
+			wantStatus(t, err, envoy_type.StatusCode_Forbidden)
+		})
+	}
 }

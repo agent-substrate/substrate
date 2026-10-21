@@ -154,6 +154,11 @@ type routerConfig struct {
 	// EgressPolicy, and so how long a policy change takes to bite. 0 disables
 	// the cache.
 	EgressPolicyCacheTTL time.Duration
+	// EgressExternalAuthorization leaves the egress policy to an external
+	// ext_proc filter after this one. The handler still authenticates the
+	// actor and answers the dial, but returns no SNI rules, evaluates no http
+	// or https rules, and injects no credentials.
+	EgressExternalAuthorization bool
 
 	// CredentialProvider configures egress credential injection on the MITM leg.
 	// Only the egress gateway sets it, and only when injection is enabled: an
@@ -295,6 +300,9 @@ func (c routerConfig) validate() error {
 	}
 	if c.EgressPolicyCacheTTL < 0 {
 		return fmt.Errorf("--egress-policy-cache-ttl must not be negative, got %s (0 disables the cache)", c.EgressPolicyCacheTTL)
+	}
+	if c.EgressExternalAuthorization && c.CredentialProvider.Address != "" {
+		return fmt.Errorf("--egress-external-authorization skips credential injection, so it cannot be combined with --credential-provider-address")
 	}
 	if c.DrainDelay < 0 {
 		return fmt.Errorf("--drain-delay must not be negative, got %s", c.DrainDelay)

@@ -267,24 +267,25 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 			IAMAuth:     r.String("ateapi.postgres.cloudsql.iamAuth"),
 			IPType:      r.String("ateapi.postgres.cloudsql.ipType"),
 		},
-		RolloutTimeout:                 rolloutTimeout,
-		rolloutTimeoutSet:              r.Supplied("rolloutTimeout"),
-		PodcertWorkersPerSigner:        podcertWorkers,
-		EnvoyConcurrency:               envoyConcurrency,
-		ClusterSize:                    r.String("clusterSize"),
-		CordonControlPlane:             r.Bool("cordonControlPlane"),
-		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
-		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
-		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
-		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
-		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
-		OtlpEndpoint:                   r.String("otlpEndpoint"),
-		APILogLevel:                    r.String("ateapi.logLevel"),
-		BenchmarkActorMemory:           r.String("benchmark.actorMemory"),
-		PreviewGates:                   splitList(r.String("preview")),
-		kubeconfigEnv:                  kubeconfigEnv,
-		shellEnv:                       env,
-		resolved:                       r,
+		RolloutTimeout:                       rolloutTimeout,
+		rolloutTimeoutSet:                    r.Supplied("rolloutTimeout"),
+		PodcertWorkersPerSigner:              podcertWorkers,
+		EnvoyConcurrency:                     envoyConcurrency,
+		ClusterSize:                          r.String("clusterSize"),
+		CordonControlPlane:                   r.Bool("cordonControlPlane"),
+		FakeDataPlane:                        r.Bool("fakeDataPlane.enabled"),
+		IngressAllowedSPIFFEIDs:              splitList(r.String("ingressAllowedSPIFFEIDs")),
+		AdditionalEgressExtprocService:       r.String("atenet.egress.additionalExtprocService"),
+		AdditionalEgressExtprocAuthoritative: r.Bool("atenet.egress.additionalExtprocAuthoritative"),
+		CredentialProviderJSON:               r.String("atenet.egress.credentialProvider"),
+		AnthropicAPIKey:                      r.String("demo.anthropicAPIKey"),
+		OtlpEndpoint:                         r.String("otlpEndpoint"),
+		APILogLevel:                          r.String("ateapi.logLevel"),
+		BenchmarkActorMemory:                 r.String("benchmark.actorMemory"),
+		PreviewGates:                         splitList(r.String("preview")),
+		kubeconfigEnv:                        kubeconfigEnv,
+		shellEnv:                             env,
+		resolved:                             r,
 	}
 
 	if err := validateResolved(cfg, r); err != nil {
@@ -446,6 +447,13 @@ func validateResolved(cfg *Config, r *Resolved) error {
 				Why: "an additional ext_proc filter requires dataplane " + RouterEnvoy}
 		}
 	}
+	if cfg.AdditionalEgressExtprocAuthoritative {
+		authoritative, _ := r.Value("atenet.egress.additionalExtprocAuthoritative")
+		if cfg.AdditionalEgressExtprocService == "" {
+			return fmt.Errorf("%s requires atenet.egress.additionalExtprocService (from %s)",
+				authoritative.Setting.Key, authoritative.From.Describe(authoritative.Setting))
+		}
+	}
 	// A gate the components do not know makes each of them refuse to start, so
 	// catch it here rather than as a failed rollout.
 	if err := preview.Verify(cfg.PreviewGates...); err != nil {
@@ -456,12 +464,18 @@ func validateResolved(cfg *Config, r *Resolved) error {
 	// configuration rather than part-way through a deploy. Whether one is
 	// required at all is the deploy's question, not this one's.
 	if cfg.CredentialProviderJSON != "" {
-		if _, err := cfg.CredentialProvider(); err != nil {
+		parsed, err := cfg.CredentialProvider()
+		provider, _ := r.Value("atenet.egress.credentialProvider")
+		if err != nil {
 			// The parser's own message says which part is wrong and what to
 			// write instead; only the channel is added. Replacing it with the
 			// generic "must be <usage>" would drop the reason.
-			provider, _ := r.Value("atenet.egress.credentialProvider")
 			return fmt.Errorf("%w (from %s)", err, provider.From.Describe(provider.Setting))
+		}
+		if parsed.Enabled() && cfg.AdditionalEgressExtprocAuthoritative {
+			authoritative, _ := r.Value("atenet.egress.additionalExtprocAuthoritative")
+			return &ConflictError{A: authoritative, B: provider,
+				Why: "an authoritative ext_proc filter replaces credential injection; set the provider to {\"enabled\":false}"}
 		}
 	}
 	// ate-api-server exits without a bootstrap owner, so catch it before

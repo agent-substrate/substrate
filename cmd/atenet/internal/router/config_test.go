@@ -123,6 +123,15 @@ func TestRouterConfigValidate(t *testing.T) {
 			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainDelay: -time.Second},
 			wantErr: "--drain-delay must not be negative",
 		},
+		{
+			name: "egress external authorization accepted",
+			cfg:  routerConfig{Mode: ModeEgress, EgressExternalAuthorization: true},
+		},
+		{
+			name:    "egress external authorization with a credential provider rejected",
+			cfg:     routerConfig{Mode: ModeEgress, EgressExternalAuthorization: true, CredentialProvider: credentialProviderConfig{Address: "secrets.ate-system.svc:50051"}},
+			wantErr: "cannot be combined with --credential-provider-address",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

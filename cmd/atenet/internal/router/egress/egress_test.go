@@ -166,7 +166,7 @@ func xfccHeaderDER(chain ...[]byte) string {
 // egressHandler builds a Handler with an allow-everything policy, so the
 // identity tests are about identity alone.
 func egressHandler(roots *x509.CertPool, actor *ateapipb.Actor, err error) *Handler {
-	return New(&egressMockClient{actor: actor, err: err, policy: allowAllPolicy()}, roots, DefaultPolicyCacheTTL, nil, "")
+	return New(&egressMockClient{actor: actor, err: err, policy: allowAllPolicy()}, roots, DefaultPolicyCacheTTL, nil, "", false)
 }
 
 // egressMockClient is the slice of ateapi the egress handler talks to.
@@ -408,7 +408,7 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(&egressMockClient{actor: runningActor(), policy: tc.policy}, ca.roots(), 0, nil, "")
+			h := New(&egressMockClient{actor: runningActor(), policy: tc.policy}, ca.roots(), 0, nil, "", false)
 			md := egressMetadata(xfccHeader(leaf))
 			md.Host = "93.184.216.34:443"
 			if tc.dialed != "" {
@@ -467,7 +467,7 @@ func TestConnectLegWithoutRequestLegs(t *testing.T) {
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
 	certificate := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw}))
 
-	h := New(&egressMockClient{actor: runningActor(), policy: httpPolicy("api.example.com")}, ca.roots(), 0, nil, "")
+	h := New(&egressMockClient{actor: runningActor(), policy: httpPolicy("api.example.com")}, ca.roots(), 0, nil, "", false)
 	res, err := h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))
 	if err != nil {
 		t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
@@ -475,8 +475,37 @@ func TestConnectLegWithoutRequestLegs(t *testing.T) {
 	if got := dialedPortOf(res); got != "80" {
 		t.Errorf("dialed port = %q, want %q", got, "80")
 	}
-	h = New(&egressMockClient{actor: runningActor()}, ca.roots(), 0, nil, "")
+	h = New(&egressMockClient{actor: runningActor()}, ca.roots(), 0, nil, "", false)
 	_, err = h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))
+	wantStatus(t, err, envoy_type.StatusCode_Forbidden)
+}
+
+// With external authorization the CONNECT leg opens the tunnel for an
+// authenticated actor without a policy, and writes no SNI rules: the external
+// processor writes them.
+func TestConnectLegWithExternalAuthorization(t *testing.T) {
+	ca := newTestCA(t, "actor-identity-ca")
+	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
+	certificate := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw}))
+
+	client := &egressMockClient{actor: runningActor()}
+	h := New(client, ca.roots(), 0, nil, "", true)
+	res, err := h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
+	}
+	if got := dialedPortOf(res); got != "80" {
+		t.Errorf("dialed port = %q, want %q", got, "80")
+	}
+	if _, ok := res.DynamicMetadata.GetFields()[extproc.EgressPolicyMetadataNamespace]; ok {
+		t.Errorf("CONNECT wrote %s, want it left to the external processor", extproc.EgressPolicyMetadataNamespace)
+	}
+	if got := client.policyCalls.Load(); got != 0 {
+		t.Errorf("GetActorEgressPolicy called %d times, want 0", got)
+	}
+
+	// Authentication still applies.
+	_, err = h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata("not a certificate"))
 	wantStatus(t, err, envoy_type.StatusCode_Forbidden)
 }
 

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strings"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 
@@ -65,6 +66,9 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 		slog.WarnContext(ctx, "egress denied: request names no destination a rule could allow",
 			slog.Any("actor", ref), slog.String("leg", leg), slog.Any("err", err))
 		return extproc.Result{}, extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
+	}
+	if h.externalAuthorization {
+		return allowDial(dest, nil), nil
 	}
 	policy, err := h.lookupPolicy(ctx, leg, ref)
 	if err != nil {
@@ -110,6 +114,11 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
 		slog.DebugContext(ctx, "egress allowed", append(attrs(decision), slog.Int("injectedHeaders", len(injected)))...)
 	}
+	return allowDial(dest, injected), nil
+}
+
+// allowDial lets the request through to dest, setting the injected headers.
+func allowDial(dest egresspolicy.Destination, injected []*corev3.HeaderValueOption) extproc.Result {
 	res := allow()
 	// ext_proc only honors the clear when the response also carries a header
 	// mutation, on the assumption that nothing else can move a route, so an
@@ -120,7 +129,7 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 		extproc.EgressDialKey:     extproc.EgressDialName,
 		extproc.EgressDialHostKey: dialHost(dest),
 	})
-	return res, nil
+	return res
 }
 
 // dialHost is the name dest was decided on, for Envoy's forward proxy to dial

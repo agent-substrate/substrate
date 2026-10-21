@@ -217,6 +217,9 @@ type Config struct {
 
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
+	// AdditionalEgressExtprocAuthoritative makes that filter replace the
+	// EgressPolicy: it writes the SNI rules and decides every request.
+	AdditionalEgressExtprocAuthoritative bool
 
 	// CredentialProviderJSON is the --credential-provider value; see
 	// CredentialProvider for its schema.
@@ -490,6 +493,10 @@ func (c *Config) ScriptEnv() []string {
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService
+	}
+	delete(merged, "ATE_ADDITIONAL_EGRESS_EXTPROC_AUTHORITATIVE")
+	if c.AdditionalEgressExtprocAuthoritative {
+		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_AUTHORITATIVE"] = "true"
 	}
 	if c.CredentialProviderJSON != "" {
 		merged["ATE_CREDENTIAL_PROVIDER"] = c.CredentialProviderJSON

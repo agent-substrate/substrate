@@ -247,7 +247,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				slog.String("provider_name", s.cfg.CredentialProvider.Name))
 		}
 
-		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName)
+		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName, s.cfg.EgressExternalAuthorization)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 

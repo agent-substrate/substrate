@@ -234,6 +234,7 @@ data:
                       untyped:
                       - dev.ate.egress
                       - dev.ate.policy.egress
+              #ATE_EGRESS_CONNECT_EXTPROC_FILTER -- see the mitm_listener comment below.
               - name: envoy.filters.http.dynamic_modules
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
@@ -299,6 +300,14 @@ data:
       # marker sits below the policy filter, so that processor sees only
       # requests the policy allowed, including any headers the policy added; a
       # request the policy denies never reaches it.
+      #
+      # With --experimental-additional-egress-extproc-authoritative the policy
+      # sidecar runs with --egress-external-authorization: it still
+      # authenticates the actor and answers the dial, but ignores the
+      # EgressPolicy. The external processor then also replaces the
+      # #ATE_EGRESS_CONNECT_EXTPROC_FILTER marker on the CONNECT chain, where
+      # it writes the SNI rules to dev.ate.policy.egress, and on the HTTP
+      # chains it decides every request and sees the response headers.
       #
       # The passthrough chain is a tcp_proxy, so it has no HTTP filters of its
       # own, and it decides nothing: the module already matched the SNI to a
