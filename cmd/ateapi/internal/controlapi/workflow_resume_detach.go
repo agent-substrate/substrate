@@ -73,6 +73,10 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 		if errors.Is(err, ErrNoAteletOnNode) && latestLocalNotDurable(actor) {
 			gone, nodeErr := w.dialer.NodeGone(ctx, node)
 			if nodeErr != nil {
+				// The caller went away or the lease was lost: report that.
+				if ctx.Err() != nil {
+					return nil, fmt.Errorf("while checking node %q: %w: %w", node, nodeErr, ctx.Err())
+				}
 				return nil, apierror.Unavailable("while getting atelet conn for node %q: %w (and while checking the node: %w)", node, err, nodeErr)
 			}
 			if gone {

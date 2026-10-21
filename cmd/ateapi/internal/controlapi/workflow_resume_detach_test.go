@@ -123,9 +123,10 @@ func TestDetachFromFullNode(t *testing.T) {
 		cancel    bool
 		noIPs     bool
 		// nodeGone deletes node's Node object. nodeLookupErr fails every
-		// Node read.
-		nodeGone      bool
-		nodeLookupErr error
+		// Node read, and cancelOnNodeLookup cancels the step during one.
+		nodeGone           bool
+		nodeLookupErr      error
+		cancelOnNodeLookup bool
 		// before updates the actor after it was read and before the step
 		// runs, and during while atelet detaches it.
 		before, during func(*ateapipb.Actor)
@@ -272,6 +273,9 @@ func TestDetachFromFullNode(t *testing.T) {
 		wantCrashed: true,
 		wantCode:    codes.FailedPrecondition,
 	}, {
+		// A SUSPENDED actor never carries a crash record, so this state is
+		// synthetic. It checks that resume crashes only when the latest
+		// snapshot is not durable.
 		name:      "node gone, crash recorded, upload completed: Unavailable, actor stays on its node",
 		node:      "node-3",
 		otherNode: true,
@@ -289,6 +293,13 @@ func TestDetachFromFullNode(t *testing.T) {
 		nodeLookupErr: errors.New("connection refused"),
 		wantCode:      codes.Unavailable,
 		wantErrText:   "while checking the node",
+	}, {
+		name:               "workflow canceled during the node lookup: actor stays on its node",
+		node:               "node-3",
+		otherNode:          true,
+		nodeGone:           true,
+		cancelOnNodeLookup: true,
+		wantCode:           codes.Canceled,
 	}, {
 		name:      "atelet refuses: Aborted, actor stays on its node",
 		node:      "node-1",
@@ -356,7 +367,14 @@ func TestDetachFromFullNode(t *testing.T) {
 			if !tt.nodeGone {
 				nodes = append(nodes, tt.node)
 			}
-			WithNodeGetter(nodeGetter(tt.nodeLookupErr, nodes...))(w.dialer)
+			getNode := nodeGetter(tt.nodeLookupErr, nodes...)
+			if tt.cancelOnNodeLookup {
+				getNode = func(ctx context.Context, _ string) error {
+					cancel()
+					return ctx.Err()
+				}
+			}
+			WithNodeGetter(getNode)(w.dialer)
 			if tt.detachState != nil {
 				atelet.detachState = tt.detachState(snap)
 			}
