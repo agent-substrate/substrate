@@ -288,7 +288,7 @@ through `atenet-router` (`1 dns:///` gRPC channel per VU).
 
 Reuses `glutton`'s runtime and startup knobs:
 `--min-wait-time`, `--max-wait-time`, `--min-live-time`, `--max-live-time`,
-`--max-pings-per-wake`, `--lifecycle-mode` (`suspend` | `pause` | `none`),
+`--max-pings-per-wake`, `--lifecycle-mode` (`sync` | `async` | `none`),
 `--trace-probability`, and `--actors-per-user`.
 
 #### ate-env Reported Metrics
@@ -373,9 +373,9 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
   gap gets ±20% jitter so sessions don't move in lockstep.
 * `--resume-mode implicit|explicit` — implicit (default) lets the parked
   first request wake the actor; explicit issues ResumeActor before traffic.
-* `--lifecycle-mode suspend|pause|none` — synchronous suspend (`suspend`,
-  default, uploads the snapshot before returning), asynchronous suspend
-  (`pause`, uploads the snapshot in the background), or `none` to keep actors
+* `--lifecycle-mode sync|async|none` — synchronous suspend (`sync`,
+  uploads the snapshot before returning), asynchronous suspend (`async`,
+  default, uploads the snapshot in the background), or `none` to keep actors
   resident in memory between steps without hibernating.
 * `--agentsession-snapshot-steps` — comma-separated 1-based step numbers after
   which the actor is hibernated (for example, `3,10,20,30,40,50,61`); between

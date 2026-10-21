@@ -375,7 +375,7 @@ func TestRouterGRPCTarget(t *testing.T) {
 func TestAteEnvIterate_SuspendMode(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	srv := &fakeProcessServer{}
-	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 
 	rt.iterate()
 
@@ -424,7 +424,7 @@ func TestAteEnvIterate_SuspendMode(t *testing.T) {
 func TestAteEnvIterate_PauseMode(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	srv := &fakeProcessServer{}
-	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModePause)
+	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeAsync)
 
 	rt.iterate()
 
@@ -455,8 +455,8 @@ func TestAteEnvIterate_NoneMode(t *testing.T) {
 
 	rt.shutdown(context.Background())
 	afterShutdown := ctrl.recordedCalls()
-	if len(afterShutdown) < 2 || afterShutdown[len(afterShutdown)-2] != "SuspendActor" || afterShutdown[len(afterShutdown)-1] != "DeleteActor" {
-		t.Errorf("shutdown in none mode must end with [SuspendActor, DeleteActor], got %v", afterShutdown)
+	if len(afterShutdown) < 2 || afterShutdown[len(afterShutdown)-2] != "SuspendActor(async)" || afterShutdown[len(afterShutdown)-1] != "DeleteActor" {
+		t.Errorf("shutdown in none mode must end with [SuspendActor(async), DeleteActor], got %v", afterShutdown)
 	}
 }
 
@@ -475,7 +475,7 @@ func TestAteEnvExec_MetadataPropagation(t *testing.T) {
 	srv := &fakeProcessServer{
 		stdoutChunks: []string{"hello ", "world\n"},
 	}
-	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 	rt.cfg.Tracer = tp.Tracer("test-sampled")
 
 	rt.iterate()
@@ -564,7 +564,7 @@ func TestAteEnvExec_ValidationFailures(t *testing.T) {
 			ctrl := &fakeControlClient{}
 			srv := &fakeProcessServer{}
 			tt.setupSrv(srv)
-			rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+			rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 
 			actor := &ateEnvActor{
 				cfg:           rt.cfg,
@@ -595,7 +595,7 @@ func TestAteEnvExec_ValidationFailures(t *testing.T) {
 func TestAteEnvExec_Timeout(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	srv := &fakeProcessServer{blockStream: true}
-	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 
 	actor := &ateEnvActor{
 		cfg:           rt.cfg,
@@ -614,7 +614,7 @@ func TestAteEnvIterate_RetriesStrandedHibernate(t *testing.T) {
 		suspendErrs: []error{status.Error(codes.Unavailable, "ate-api-server restarting")},
 	}
 	srv := &fakeProcessServer{}
-	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 
 	rt.iterate() // resume, exec, suspend -> suspend fails
 	before := ctrl.recordedCalls()
@@ -636,7 +636,7 @@ func TestAteEnvIterate_ReplacesActorOnTerminalResumeFailure(t *testing.T) {
 		resumeErrs: []error{status.Error(codes.FailedPrecondition, "AssignWorker prerequisite not met")},
 	}
 	srv := &fakeProcessServer{}
-	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 
 	rt.iterate()
 
@@ -654,7 +654,7 @@ func TestAteEnvIterate_ReplacesActorOnRepeatedExecFailures(t *testing.T) {
 	srv := &fakeProcessServer{
 		startErr: status.Error(codes.Unavailable, "guest wedged"),
 	}
-	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 
 	for i := 0; i < maxConsecutiveFailures; i++ {
 		rt.iterate()
@@ -677,9 +677,9 @@ func TestAteEnvIterate_CountsAtMostOneExecFailurePerWake(t *testing.T) {
 	srv := &fakeProcessServer{
 		startErr: status.Error(codes.Unavailable, "transient router blip"),
 	}
-	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 	rt.cfg.Dyn = dynconfig.Static(ateEnvKnobs{
-		Lifecycle:       dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
+		Lifecycle:       dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSync},
 		MinLive:         dynconfig.Seconds(5 * time.Second),
 		MaxLive:         dynconfig.Seconds(5 * time.Second),
 		MaxPingsPerWake: maxConsecutiveFailures,
@@ -704,7 +704,7 @@ func TestAteEnvIterate_DoesNotReplaceOnResourceExhaustedExecFailure(t *testing.T
 	srv := &fakeProcessServer{
 		startErr: status.Error(codes.ResourceExhausted, "rate limit exceeded"),
 	}
-	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, _ := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 
 	for i := 0; i < maxConsecutiveFailures+1; i++ {
 		rt.iterate()
@@ -722,7 +722,7 @@ func TestAteEnvIterate_DoesNotReplaceOnResourceExhaustedExecFailure(t *testing.T
 func TestAteEnvShutdown_PauseModeRunningActor(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	srv := &fakeProcessServer{}
-	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModePause)
+	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeAsync)
 
 	u := &ateEnvUser{
 		routerConn: fix.closerTracker,
@@ -749,7 +749,7 @@ func TestAteEnvShutdown_PauseModeRunningActor(t *testing.T) {
 func TestAteEnvShutdown_StoppedActor(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	srv := &fakeProcessServer{}
-	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 
 	u := &ateEnvUser{
 		routerConn: fix.closerTracker,
@@ -776,9 +776,9 @@ func TestAteEnvShutdown_StoppedActor(t *testing.T) {
 func TestAteEnvShutdown_WaitsForInFlightIterate(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	srv := &fakeProcessServer{}
-	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 	rt.cfg.Dyn = dynconfig.Static(ateEnvKnobs{
-		Lifecycle:       dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
+		Lifecycle:       dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSync},
 		WaitTime:        dynconfig.WaitTime{MinWait: dynconfig.Seconds(5 * time.Second), MaxWait: dynconfig.Seconds(5 * time.Second)},
 		MinLive:         dynconfig.Seconds(5 * time.Second),
 		MaxLive:         dynconfig.Seconds(5 * time.Second),
@@ -831,7 +831,7 @@ func TestAteEnvShutdown_WaitsForInFlightIterate(t *testing.T) {
 func TestAteEnvShutdown_RespectsContextCancellation(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	srv := &fakeProcessServer{blockStream: true}
-	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSuspend)
+	rt, fix := newTestRuntime(t, ctrl, srv, dynconfig.LifecycleModeSync)
 
 	iterDone := make(chan struct{})
 	go func() {

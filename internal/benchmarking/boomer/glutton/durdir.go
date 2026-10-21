@@ -229,10 +229,10 @@ func (u *durDirUser) suspend(ctx context.Context) {
 }
 
 func (u *durDirUser) hibernate(ctx context.Context, dynCfg durDirKnobs) {
-	if dynCfg.LifecycleMode == dynconfig.LifecycleModePause {
-		u.pause(ctx)
-	} else {
+	if dynCfg.LifecycleMode == dynconfig.LifecycleModeSync {
 		u.suspend(ctx)
+	} else {
+		u.pause(ctx)
 	}
 }
 
@@ -240,15 +240,15 @@ func (u *durDirUser) hibernate(ctx context.Context, dynCfg durDirKnobs) {
 // The hibernate call is unmetered (teardown precondition, not benchmark latency),
 // while the delete is metered so true leaks still surface in failures.csv.
 func (u *durDirUser) hibernateAndDelete(ctx context.Context, dynCfg durDirKnobs) {
-	if dynCfg.LifecycleMode == dynconfig.LifecycleModePause {
+	if dynCfg.LifecycleMode == dynconfig.LifecycleModeSync {
 		_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 			Actor:   u.ref(),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 		})
 	} else {
 		_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 			Actor:   u.ref(),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		})
 	}
 	u.delete(ctx)

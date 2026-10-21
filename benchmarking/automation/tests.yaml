@@ -149,6 +149,8 @@ tests:
     users: 1
     workerCount: 1
     flags:
+      - "--lifecycle-mode"
+      - "sync"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"
@@ -163,7 +165,7 @@ tests:
     workerCount: 1
     flags:
       - "--lifecycle-mode"
-      - "pause"
+      - "async"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"
@@ -191,6 +193,8 @@ tests:
     workerCount: 1
     actorMemory: "1536Mi"
     flags:
+      - "--lifecycle-mode"
+      - "sync"
       - "--mem-target"
       - "1Gi"
       - "--mem-churn"
@@ -212,7 +216,7 @@ tests:
     actorMemory: "1536Mi"
     flags:
       - "--lifecycle-mode"
-      - "pause"
+      - "async"
       - "--mem-target"
       - "1Gi"
       - "--mem-churn"
@@ -254,6 +258,8 @@ tests:
     workerCount: 1
     actorMemory: "2560Mi"
     flags:
+      - "--lifecycle-mode"
+      - "sync"
       - "--mem-target"
       - "2Gi"
       - "--mem-churn"
@@ -275,7 +281,7 @@ tests:
     actorMemory: "2560Mi"
     flags:
       - "--lifecycle-mode"
-      - "pause"
+      - "async"
       - "--mem-target"
       - "2Gi"
       - "--mem-churn"
@@ -316,6 +322,8 @@ tests:
     users: 5
     workerCount: 5
     flags:
+      - "--lifecycle-mode"
+      - "sync"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"
@@ -330,7 +338,7 @@ tests:
     workerCount: 5
     flags:
       - "--lifecycle-mode"
-      - "pause"
+      - "async"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"
@@ -344,6 +352,8 @@ tests:
     users: 10
     workerCount: 10
     flags:
+      - "--lifecycle-mode"
+      - "sync"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"
@@ -358,7 +368,7 @@ tests:
     workerCount: 10
     flags:
       - "--lifecycle-mode"
-      - "pause"
+      - "async"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"
@@ -456,6 +466,8 @@ tests:
     flags:
       - "--durdir-template"
       - "glutton-durdir-data"
+      - "--lifecycle-mode"
+      - "sync"
       - "--resume-mode"
       - "explicit"
       - "--durdir-file-size-bytes"
@@ -476,7 +488,7 @@ tests:
       - "--durdir-template"
       - "glutton-durdir-data"
       - "--lifecycle-mode"
-      - "pause"
+      - "async"
       - "--resume-mode"
       - "explicit"
       - "--durdir-file-size-bytes"
@@ -496,6 +508,8 @@ tests:
     flags:
       - "--durdir-template"
       - "glutton-durdir-full"
+      - "--lifecycle-mode"
+      - "sync"
       - "--resume-mode"
       - "explicit"
       - "--durdir-file-size-bytes"
@@ -516,7 +530,7 @@ tests:
       - "--durdir-template"
       - "glutton-durdir-full"
       - "--lifecycle-mode"
-      - "pause"
+      - "async"
       - "--resume-mode"
       - "explicit"
       - "--durdir-file-size-bytes"
@@ -597,6 +611,8 @@ tests:
     flags:
       - "--durdir-template"
       - "glutton-durdir-data"
+      - "--lifecycle-mode"
+      - "sync"
       - "--resume-mode"
       - "explicit"
       - "--durdir-read-mode"
@@ -619,7 +635,7 @@ tests:
       - "--durdir-template"
       - "glutton-durdir-data"
       - "--lifecycle-mode"
-      - "pause"
+      - "async"
       - "--resume-mode"
       - "explicit"
       - "--durdir-read-mode"

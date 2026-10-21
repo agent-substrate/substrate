@@ -28,7 +28,7 @@ func TestKnobsCodec(t *testing.T) {
 		t.Fatalf("fresh holder = %+v, want the defaults with a %v retry budget", got, defaultResumeRetryBudget)
 	}
 	if _, _, err := h.Apply([]byte(`{
-		"resume_mode": "explicit", "lifecycle_mode": "pause",
+		"resume_mode": "explicit", "lifecycle_mode": "async",
 		"agentsession_script": "coding-session",
 		"agentsession_script_file": "/etc/agentsession/script.yaml",
 		"agentsession_think_scale": 0.5,
@@ -39,7 +39,7 @@ func TestKnobsCodec(t *testing.T) {
 		t.Fatalf("Apply(valid): %v", err)
 	}
 	want := knobs{
-		Lifecycle:         dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModePause},
+		Lifecycle:         dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModeAsync},
 		Script:            "coding-session",
 		ScriptFile:        "/etc/agentsession/script.yaml",
 		ThinkScale:        0.5,

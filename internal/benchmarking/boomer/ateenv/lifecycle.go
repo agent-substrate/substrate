@@ -420,10 +420,10 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 		u := val.(*ateEnvUser)
 		for _, a := range u.snapshotActors() {
 			if a.isRunning() {
-				if dynconfig.Get[ateEnvKnobs](r.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
-					_ = a.pause(ctx)
-				} else {
+				if dynconfig.Get[ateEnvKnobs](r.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModeSync {
 					_ = a.suspend(ctx)
+				} else {
+					_ = a.pause(ctx)
 				}
 			}
 			a.delete(ctx)
@@ -655,10 +655,10 @@ func (u *ateEnvActor) hibernate(ctx context.Context) error {
 	switch dynconfig.Get[ateEnvKnobs](u.cfg.Dyn).LifecycleMode {
 	case dynconfig.LifecycleModeNone:
 		return nil
-	case dynconfig.LifecycleModePause:
-		return u.pause(ctx)
-	default:
+	case dynconfig.LifecycleModeSync:
 		return u.suspend(ctx)
+	default:
+		return u.pause(ctx)
 	}
 }
 

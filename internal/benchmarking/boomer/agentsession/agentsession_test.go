@@ -819,8 +819,8 @@ func TestRunStep_RetriesStrandedHibernate(t *testing.T) {
 	}
 }
 
-// A step ends with an async SuspendActor in pause LifecycleMode and a sync
-// one in suspend LifecycleMode.
+// A step ends with an async SuspendActor in async LifecycleMode and a sync
+// one in sync LifecycleMode.
 func TestRunStep_HibernateMode(t *testing.T) {
 	ref := &ateapipb.ObjectRef{Atespace: "benchmark", Name: "agent-test"}
 	for _, tt := range []struct {
@@ -829,16 +829,24 @@ func TestRunStep_HibernateMode(t *testing.T) {
 		want          *ateapipb.SuspendActorRequest
 	}{
 		{
-			name:          "pause",
-			lifecycleMode: dynconfig.LifecycleModePause,
+			name:          "default",
+			lifecycleMode: "",
 			want: &ateapipb.SuspendActorRequest{
 				Actor:   ref,
 				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 			},
 		},
 		{
-			name:          "suspend",
-			lifecycleMode: dynconfig.LifecycleModeSuspend,
+			name:          "async",
+			lifecycleMode: dynconfig.LifecycleModeAsync,
+			want: &ateapipb.SuspendActorRequest{
+				Actor:   ref,
+				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			},
+		},
+		{
+			name:          "sync",
+			lifecycleMode: dynconfig.LifecycleModeSync,
 			want: &ateapipb.SuspendActorRequest{
 				Actor:   ref,
 				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
@@ -1340,7 +1348,7 @@ func TestSnapshotSteps(t *testing.T) {
 	ctl := &fakeControlClient{templateMemory: 1 << 30}
 	u := newTestUser(t, &fake.Server{}, ctl, knobs{
 		Lifecycle: dynconfig.Lifecycle{
-			LifecycleMode: dynconfig.LifecycleModePause,
+			LifecycleMode: dynconfig.LifecycleModeAsync,
 			ResumeMode:    dynconfig.ResumeModeExplicit,
 		},
 		SnapshotSteps: "2,4",
@@ -1391,7 +1399,7 @@ func TestSnapshotSteps(t *testing.T) {
 	// A step number beyond len(loaded.Steps) is rejected before CreateActor.
 	badCtl := &fakeControlClient{templateMemory: 1 << 30}
 	badUser := newTestUser(t, &fake.Server{}, badCtl, knobs{
-		Lifecycle:     dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
+		Lifecycle:     dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeAsync},
 		SnapshotSteps: "2,99",
 	})
 	badRT := &runtime{cfg: badUser.cfg}

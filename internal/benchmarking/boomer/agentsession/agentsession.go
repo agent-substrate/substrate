@@ -1085,10 +1085,11 @@ func (u *sessionUser) resume(ctx context.Context) error {
 	return err
 }
 
-// hibernate suspends the actor at the end of a step, asynchronously in pause
-// LifecycleMode. In LifecycleModeNone the actor stays resident and hibernate
-// is a no-op. A failure leaves hibernatePending set so the next step
-// re-drives it instead of waking a stranded actor.
+// hibernate suspends the actor at the end of a step, asynchronously by default
+// (async LifecycleMode) and synchronously in sync LifecycleMode. In
+// LifecycleModeNone the actor stays resident and hibernate is a no-op. A
+// failure leaves hibernatePending set so the next step re-drives it instead of
+// waking a stranded actor.
 func (u *sessionUser) hibernate(ctx context.Context) {
 	mode := dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode
 	if mode == dynconfig.LifecycleModeNone {
@@ -1096,14 +1097,14 @@ func (u *sessionUser) hibernate(ctx context.Context) {
 		return
 	}
 	var err error
-	if mode == dynconfig.LifecycleModePause {
-		err = u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
-			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: u.ref(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}, grpc.Trailer(tr))
+	if mode == dynconfig.LifecycleModeSync {
+		err = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
+			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: u.ref(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}, grpc.Trailer(tr))
 			return err
 		})
 	} else {
-		err = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
-			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: u.ref(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}, grpc.Trailer(tr))
+		err = u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
+			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: u.ref(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}, grpc.Trailer(tr))
 			return err
 		})
 	}

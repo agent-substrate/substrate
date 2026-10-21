@@ -97,8 +97,8 @@ func init() {
 // --lifecycle-mode flag (common/lifecycle_mode.py).
 type knobs struct {
 	dynconfig.WaitTime
-	// Lifecycle picks how each cycle ends: lifecycle_mode "suspend" (or
-	// empty) sends a synchronous SuspendActor, "pause" an asynchronous one.
+	// Lifecycle picks how each cycle ends: lifecycle_mode "async" (or
+	// empty) sends an asynchronous SuspendActor, "sync" a synchronous one.
 	// "none" and resume_mode "implicit" are refused, since every sweperf
 	// cycle ends in a suspend and resumes with ResumeActor.
 	dynconfig.Lifecycle
@@ -616,13 +616,13 @@ func (u *sweperfUser) resume(ctx context.Context) (time.Duration, bool) {
 }
 
 // suspend snapshots the actor and puts it to sleep, ending a cycle. It reports
-// whether the suspend succeeded, like resume. In pause lifecycle mode the
-// suspend is asynchronous and recorded as SuspendActorAsync, as in the other
-// user classes.
+// whether the suspend succeeded, like resume. By default (async lifecycle mode)
+// the suspend is asynchronous and recorded as SuspendActorAsync; in sync
+// lifecycle mode it is synchronous and recorded as SuspendActor.
 func (u *sweperfUser) suspend(ctx context.Context) bool {
-	name, mode := "SuspendActor", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
-	if dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
-		name, mode = "SuspendActorAsync", ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
+	name, mode := "SuspendActorAsync", ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
+	if dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModeSync {
+		name, mode = "SuspendActor", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
 	}
 	err := u.tracedCall(ctx, name, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{

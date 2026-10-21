@@ -35,7 +35,7 @@ func TestGluttonIterate_SuspendMode(t *testing.T) {
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSync},
 		}),
 	})
 
@@ -63,7 +63,7 @@ func TestGluttonIterate_PauseMode(t *testing.T) {
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeAsync},
 		}),
 	})
 
@@ -104,8 +104,8 @@ func TestGluttonIterate_NoneMode(t *testing.T) {
 
 	rt.shutdown(context.Background())
 	afterShutdown := fakeCtrl.recordedCalls()
-	if len(afterShutdown) < 2 || afterShutdown[len(afterShutdown)-2] != "SuspendActor" || afterShutdown[len(afterShutdown)-1] != "DeleteActor" {
-		t.Errorf("shutdown in none mode must end with [SuspendActor, DeleteActor], got %v", afterShutdown)
+	if len(afterShutdown) < 2 || afterShutdown[len(afterShutdown)-2] != "SuspendActor(async)" || afterShutdown[len(afterShutdown)-1] != "DeleteActor" {
+		t.Errorf("shutdown in none mode must end with [SuspendActor(async), DeleteActor], got %v", afterShutdown)
 	}
 }
 
@@ -116,7 +116,7 @@ func TestGluttonShutdown_PauseModeRunningActor(t *testing.T) {
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeAsync},
 		}),
 	})
 
@@ -143,7 +143,7 @@ func TestGluttonShutdown_StoppedActorOnlyDeleted(t *testing.T) {
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSync},
 		}),
 	})
 
@@ -172,7 +172,7 @@ func newReplacementRuntime(t *testing.T, resumeErrs ...error) (*taskRuntime, *fa
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSync},
 		}),
 	})
 	return &taskRuntime{cfg: cfg}, fakeCtrl
@@ -260,7 +260,7 @@ func TestGluttonIterate_RetriesStrandedHibernate(t *testing.T) {
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSync},
 		}),
 	})
 	rt := &taskRuntime{cfg: cfg}

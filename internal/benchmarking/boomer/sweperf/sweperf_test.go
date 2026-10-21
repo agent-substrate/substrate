@@ -407,8 +407,8 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 	suspendReqs := fakeCtrl.suspendReqs
 	fakeCtrl.mu.Unlock()
 	for _, req := range suspendReqs {
-		if got := req.GetOptions().GetMode(); got != ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
-			t.Errorf("suspend mode = %v, want %v", got, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+		if got := req.GetOptions().GetMode(); got != ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+			t.Errorf("suspend mode = %v, want %v", got, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS)
 		}
 	}
 
@@ -428,9 +428,9 @@ func TestSuspendLifecycleMode(t *testing.T) {
 		want       ateapipb.DurabilityMode
 		wantMetric string
 	}{
-		{"", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, "SuspendActor"},
-		{dynconfig.LifecycleModeSuspend, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, "SuspendActor"},
-		{dynconfig.LifecycleModePause, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
+		{"", ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
+		{dynconfig.LifecycleModeSync, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, "SuspendActor"},
+		{dynconfig.LifecycleModeAsync, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
 	} {
 		t.Run("mode="+tt.mode, func(t *testing.T) {
 			cfg, _, fakeCtrl := newTestConfig(t, http.NotFoundHandler())

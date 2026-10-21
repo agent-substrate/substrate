@@ -240,16 +240,16 @@ func Uniform(lo, hi time.Duration) time.Duration {
 // Resume and lifecycle modes. Explicit issues a ResumeActor RPC before
 // sending traffic; implicit issues no wake request at all: the actor stays
 // suspended until a request reaches the atenet router, which wakes it
-// while the request is parked. Suspend runs a synchronous SuspendActor
-// (uploads the snapshot before returning); pause runs an asynchronous
+// while the request is parked. Sync runs a synchronous SuspendActor
+// (uploads the snapshot before returning); async runs an asynchronous
 // SuspendActor (uploads the snapshot in the background).
 const (
 	ResumeModeExplicit = "explicit"
 	ResumeModeImplicit = "implicit"
 
-	LifecycleModeSuspend = "suspend"
-	LifecycleModePause   = "pause"
-	LifecycleModeNone    = "none"
+	LifecycleModeSync  = "sync"
+	LifecycleModeAsync = "async"
+	LifecycleModeNone  = "none"
 )
 
 // Lifecycle is how a class takes its actors off a worker and brings them
@@ -263,8 +263,8 @@ func (l Lifecycle) Validate() error {
 	if l.ResumeMode != "" && l.ResumeMode != ResumeModeExplicit && l.ResumeMode != ResumeModeImplicit {
 		return fmt.Errorf("invalid resume_mode %q: must be %q or %q", l.ResumeMode, ResumeModeExplicit, ResumeModeImplicit)
 	}
-	if l.LifecycleMode != "" && l.LifecycleMode != LifecycleModeSuspend && l.LifecycleMode != LifecycleModePause && l.LifecycleMode != LifecycleModeNone {
-		return fmt.Errorf("invalid lifecycle_mode %q: must be %q, %q, or %q", l.LifecycleMode, LifecycleModeSuspend, LifecycleModePause, LifecycleModeNone)
+	if l.LifecycleMode != "" && l.LifecycleMode != LifecycleModeSync && l.LifecycleMode != LifecycleModeAsync && l.LifecycleMode != LifecycleModeNone {
+		return fmt.Errorf("invalid lifecycle_mode %q: must be %q, %q, or %q", l.LifecycleMode, LifecycleModeSync, LifecycleModeAsync, LifecycleModeNone)
 	}
 	return nil
 }

@@ -41,14 +41,14 @@ func TestClassCodecs(t *testing.T) {
 			valid: `{
 				"min_wait_time": 0.1, "max_wait_time": 0.5,
 				"min_live_time": 9, "max_live_time": 14,
-				"resume_mode": "explicit", "lifecycle_mode": "pause",
+				"resume_mode": "explicit", "lifecycle_mode": "async",
 				"mem_target": "2Gi", "mem_churn": "512Mi", "mem_read": "all",
 				"cpu_cores": 2, "cpu_duty_cycle": 0.1,
 				"max_pings_per_wake": 3
 			}`,
 			want: gluttonKnobs{
 				WaitTime:        window,
-				Lifecycle:       dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModePause},
+				Lifecycle:       dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModeAsync},
 				MinLive:         dynconfig.Seconds(9 * time.Second),
 				MaxLive:         dynconfig.Seconds(14 * time.Second),
 				MemTarget:       "2Gi",
@@ -81,14 +81,14 @@ func TestClassCodecs(t *testing.T) {
 			initial: durDirKnobs{},
 			valid: `{
 				"min_wait_time": 0.1, "max_wait_time": 0.5,
-				"resume_mode": "implicit", "lifecycle_mode": "suspend",
+				"resume_mode": "implicit", "lifecycle_mode": "sync",
 				"durdir_file_size_bytes": 1048576,
 				"durdir_read_mode": "digest",
 				"durdir_template": "glutton-durdir-data"
 			}`,
 			want: durDirKnobs{
 				WaitTime:  window,
-				Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeImplicit, LifecycleMode: dynconfig.LifecycleModeSuspend},
+				Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeImplicit, LifecycleMode: dynconfig.LifecycleModeSync},
 				FileSize:  1048576,
 				ReadMode:  readModeDigest,
 				Template:  "glutton-durdir-data",
