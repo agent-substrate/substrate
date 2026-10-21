@@ -387,8 +387,8 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef)
 	}
-	constraints := schedulingConstraints(actor, actorTemplate)
-	if !w.appliesWithFallback(worker, constraints, canRelaxRuntime(actor, constraints)) {
+	_, constraints := resumeConstraints(actor, actorTemplate)
+	if _, ok := firstMatch(constraints, worker); !ok {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		// If that worker's pool is no longer eligible (e.g. the actor's
 		// worker_selector was updated after the failed attempt), release it back
@@ -405,41 +405,54 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	return worker, nil
 }
 
-// admittedResources is what an assignment books against its worker, or nil
-// when the actor declared no limits and so reserves nothing.
-func admittedResources(constraints scheduling.Constraints) *ateapipb.Resources {
-	return constraints.Limits
-}
-
-// workerHoldingStaleClaim recovers a claim written before the Actor update.
-// It releases the claim if the Worker is no longer eligible.
-func (w *ActorWorkflow) workerHoldingStaleClaim(ctx context.Context, actor *ateapipb.Actor, constraints scheduling.Constraints, relaxable bool) (*ateapipb.Worker, error) {
+// workerFromPreviousAttempt recovers a claim written before the Actor update.
+// It returns the Worker with the first of constraints it matches, and
+// releases the claim if it matches none.
+func (w *ActorWorkflow) workerFromPreviousAttempt(ctx context.Context, actor *ateapipb.Actor, constraints []scheduling.Constraints) (*ateapipb.Worker, scheduling.Constraints, error) {
 	actorUID := actor.GetMetadata().GetUid()
 	workerName, err := w.store.FindWorkerHostingActor(ctx, actorUID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil
+			return nil, scheduling.Constraints{}, nil
 		}
-		return nil, fmt.Errorf("while looking for a worker already hosting actor %q: %w", actorUID, err)
+		return nil, scheduling.Constraints{}, fmt.Errorf("while looking for a worker already hosting actor %q: %w", actorUID, err)
 	}
 	worker, err := w.store.GetWorker(ctx, workerName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil // the worker went away with its claim
+			return nil, scheduling.Constraints{}, nil // the worker went away with its claim
 		}
-		return nil, fmt.Errorf("while reading worker %q holding a stale claim: %w", workerName, err)
+		return nil, scheduling.Constraints{}, fmt.Errorf("while reading worker %q holding a stale claim: %w", workerName, err)
 	}
 
-	// The Actor's allocation makes HasRoom unsuitable for an existing claim.
-	if worker.GetNodeName() != "" && w.appliesWithFallback(worker, constraints, relaxable) {
-		return worker, nil
+	if worker.GetNodeName() != "" {
+		if c, ok := firstMatch(constraints, worker); ok {
+			return worker, c, nil
+		}
 	}
 
 	_, err = w.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
 	if err != nil {
-		return nil, fmt.Errorf("while releasing stale claim on worker %q: %w", workerName, err)
+		return nil, scheduling.Constraints{}, fmt.Errorf("while releasing stale claim on worker %q: %w", workerName, err)
 	}
-	return nil, nil
+	return nil, scheduling.Constraints{}, nil
+}
+
+// scheduleFirst returns a worker with room for limits under the first of
+// constraints that has one, and those constraints. It returns
+// scheduling.ErrNoCapacity when none has.
+func (w *ActorWorkflow) scheduleFirst(ctx context.Context, constraints []scheduling.Constraints, limits *ateapipb.Resources) (*ateapipb.Worker, scheduling.Constraints, error) {
+	for _, c := range constraints {
+		worker, err := w.scheduler.Schedule(ctx, c, limits)
+		if errors.Is(err, scheduling.ErrNoCapacity) {
+			continue
+		}
+		if err != nil {
+			return nil, scheduling.Constraints{}, err
+		}
+		return worker, c, nil
+	}
+	return nil, scheduling.Constraints{}, scheduling.ErrNoCapacity
 }
 
 // schedulerRecordable excludes the two errors the assignment loop retries
@@ -471,21 +484,16 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		}
 	}()
 
-	constraints := schedulingConstraints(actor, actorTemplate)
-	snapRuntime := constraints.RequiredRuntime
-	class = constraints.SandboxClass
-	relaxable := canRelaxRuntime(actor, constraints)
+	limits := actorTemplate.GetResources().GetLimits()
+	class = snapshotSandboxClass(actor)
+	snapRuntime, constraints := resumeConstraints(actor, actorTemplate)
 
-	assignedWorker, err := w.workerHoldingStaleClaim(ctx, actor, constraints, relaxable)
+	assignedWorker, picked, err := w.workerFromPreviousAttempt(ctx, actor, constraints)
 	if err != nil {
 		return nil, nil, err
 	}
 	if assignedWorker == nil {
-		pickedWorker, err := w.scheduler.Schedule(ctx, constraints)
-		if errors.Is(err, scheduling.ErrNoCapacity) && relaxable {
-			constraints.RequiredRuntime = hardware.Requirement{}
-			pickedWorker, err = w.scheduler.Schedule(ctx, constraints)
-		}
+		pickedWorker, c, err := w.scheduleFirst(ctx, constraints, limits)
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
 				outcome = ateattr.SchedulerOutcomeNoCapacity
@@ -493,13 +501,9 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			}
 			return nil, nil, err
 		}
-
 		assignedWorker = pickedWorker
+		picked = c
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
-	} else if relaxable && !snapRuntime.WorkerMatches(assignedWorker.GetStatus()) {
-		// The stale claim only passed the relaxed check, so bind under it:
-		// admit asks the same question again under the row lock.
-		constraints.RequiredRuntime = hardware.Requirement{}
 	}
 
 	if assignedWorker.GetNodeName() == "" {
@@ -513,7 +517,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		},
 		ActorUid: actor.GetMetadata().GetUid(),
 		// Record what this claim reserves so release returns the same amount.
-		Resources: admittedResources(constraints),
+		Resources: limits,
 	}
 
 	// The candidate came from a watch-fed cache, so it may already be full or no
@@ -523,7 +527,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// The bind evaluates the fresh row; record the assignment from the same view.
 	bound := assignedWorker
 	admit := func(fresh *ateapipb.Worker) error {
-		if !w.scheduler.Applies(fresh, constraints) || !w.scheduler.HasRoom(fresh, constraints) {
+		if !picked.Matches(fresh) || !scheduling.HasRoom(fresh, limits) {
 			return errWorkerFilledUp
 		}
 		bound = fresh
@@ -618,23 +622,53 @@ func toAteletSandboxRuntime(in *ateapipb.ActorSandboxRuntime) *ateletpb.ActorSan
 	return out
 }
 
-func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) scheduling.Constraints {
-	snap := snapshotToResume(actor.GetStatus())
-	var requiredNodes []string
+// resumeConstraints returns the runtime of the snapshot the resume restores
+// with its memory state, and the constraints a resume accepts, best first.
+// Assignment schedules against them in order, and a worker that already holds
+// the actor must still match one:
+//  1. The sandbox class of the snapshot the actor restores from, the
+//     template's and the actor's worker selectors, the actor's AssignedNode
+//     when set, and the snapshot runtime. The resume keeps the snapshot's
+//     memory state.
+//  2. The same without the snapshot runtime. The resume restores without
+//     memory state.
+//
+// Without a snapshot runtime only 2 applies.
+func resumeConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) (hardware.Requirement, []scheduling.Constraints) {
+	snapRuntime := hardware.NewRequirement(requiredSnapshotRuntime(snapshotToResume(actor.GetStatus()), tmpl))
+	base := actorConstraints(actor, tmpl)
+	// A suspended Actor with a local snapshot stays pinned to its node until
+	// atelet detaches it. When the node is full, ResumeActor detaches it.
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
-		requiredNodes = []string{node}
+		base = base.WithNode(node)
 	}
-	c := scheduling.Constraints{
-		SandboxClass:    snap.GetSandboxRuntime().GetSandboxClass(),
-		RequiredRuntime: hardware.NewRequirement(requiredSnapshotRuntime(snap, tmpl)),
-		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
-		RequiredNodes:   requiredNodes,
-		Limits:          tmpl.GetResources().GetLimits(),
+	if snapRuntime.Runtime() != nil {
+		return snapRuntime, []scheduling.Constraints{base.WithRuntime(snapRuntime), base}
 	}
+	return snapRuntime, []scheduling.Constraints{base}
+}
+
+// actorConstraints returns the requirements every placement of actor shares:
+// the sandbox class of the snapshot it restores from, and its template's and
+// its own worker selectors.
+func actorConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) scheduling.Constraints {
+	var tmplSel labels.Selector
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
-		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
+		tmplSel = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
 	}
-	return c
+	return scheduling.Constraints{}.
+		WithSandboxClass(snapshotSandboxClass(actor)).
+		WithWorkerSelectors(tmplSel, labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())))
+}
+
+// firstMatch returns the first of constraints that worker matches.
+func firstMatch(constraints []scheduling.Constraints, worker *ateapipb.Worker) (scheduling.Constraints, bool) {
+	for _, c := range constraints {
+		if c.Matches(worker) {
+			return c, true
+		}
+	}
+	return scheduling.Constraints{}, false
 }
 
 // snapshotToResume returns the snapshot ResumeActor restores from: the latest
@@ -662,35 +696,6 @@ func requiredSnapshotRuntime(snap *ateapipb.Snapshot, tmpl *ateapipb.ActorTempla
 		return nil
 	}
 	return snap.GetSandboxRuntime()
-}
-
-// canRelaxRuntime reports whether scheduling may drop its runtime requirement.
-func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
-	if constraints.RequiredRuntime.Runtime() == nil {
-		return false
-	}
-	status := actor.GetStatus()
-	// A pinned actor detaches first, so a compatible worker elsewhere can keep
-	// its memory state.
-	if status.GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && status.GetAssignedNode() != "" {
-		return false
-	}
-	snap := snapshotToResume(status)
-	if snap.GetLocality() == "" {
-		return true
-	}
-	return snap.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-}
-
-// appliesWithFallback reports whether worker satisfies constraints, or — when
-// relaxable — satisfies constraints with RequiredRuntime relaxed.
-func (w *ActorWorkflow) appliesWithFallback(worker *ateapipb.Worker, constraints scheduling.Constraints, relaxable bool) bool {
-	relaxed := constraints
-	relaxed.RequiredRuntime = hardware.Requirement{}
-	if !w.scheduler.Applies(worker, relaxed) {
-		return false
-	}
-	return relaxable || constraints.RequiredRuntime.WorkerMatches(worker.GetStatus())
 }
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the

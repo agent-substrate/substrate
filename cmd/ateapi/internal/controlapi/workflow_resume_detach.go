@@ -24,7 +24,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
-	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -53,10 +52,8 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 	if actor, err = w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), node); err != nil {
 		return nil, err
 	}
-	constraints := schedulingConstraints(actor, actorTemplate)
-	constraints.RequiredNodes = nil
-	constraints.RequiredRuntime = hardware.Requirement{}
-	if _, err := w.scheduler.Schedule(ctx, constraints); err != nil {
+	limits := actorTemplate.GetResources().GetLimits()
+	if _, err := w.scheduler.Schedule(ctx, actorConstraints(actor, actorTemplate), limits); err != nil {
 		if errors.Is(err, scheduling.ErrNoCapacity) {
 			return nil, assignErr
 		}

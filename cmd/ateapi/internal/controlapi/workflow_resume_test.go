@@ -2071,10 +2071,11 @@ func TestEnsureVolumesCreated(t *testing.T) {
 	}
 }
 
-// filledUpScheduler hands out workers in order and refuses room on the ones
-// named in full. It stands in for a stale worker cache: Schedule offers a
-// worker that looked free, and the admit callback that BindActorToWorker runs
-// under the Worker's row lock then refuses it with errWorkerFilledUp.
+// filledUpScheduler hands out workers in order. It stands in for a stale
+// worker cache: Schedule offers a worker that looked free, and the store holds
+// the ones named in full at their actor ceiling, so the admit callback that
+// BindActorToWorker runs under the Worker's row lock refuses them with
+// errWorkerFilledUp.
 type filledUpScheduler struct {
 	workers []*ateapipb.Worker
 	full    map[string]bool
@@ -2088,7 +2089,7 @@ type filledUpScheduler struct {
 
 // Schedule repeats the last worker, so a test that offers no free one keeps
 // returning a full worker until the backoff ends.
-func (s *filledUpScheduler) Schedule(context.Context, scheduling.Constraints) (*ateapipb.Worker, error) {
+func (s *filledUpScheduler) Schedule(context.Context, scheduling.Constraints, *ateapipb.Resources) (*ateapipb.Worker, error) {
 	i := min(s.calls, len(s.workers)-1)
 	s.calls++
 	if s.onSchedule != nil {
@@ -2098,12 +2099,6 @@ func (s *filledUpScheduler) Schedule(context.Context, scheduling.Constraints) (*
 		return nil, s.err
 	}
 	return s.workers[i], nil
-}
-
-func (s *filledUpScheduler) Applies(*ateapipb.Worker, scheduling.Constraints) bool { return true }
-
-func (s *filledUpScheduler) HasRoom(worker *ateapipb.Worker, _ scheduling.Constraints) bool {
-	return !s.full[worker.GetWorkerPod()]
 }
 
 // contentionStore is the smallest store that an assignment attempt needs. The
@@ -2242,6 +2237,10 @@ func newContendedWorkflow(t *testing.T, sched *filledUpScheduler) (*ActorWorkflo
 	}
 	byName := make(map[string]*ateapipb.Worker, len(sched.workers))
 	for _, worker := range sched.workers {
+		if sched.full[worker.GetWorkerPod()] {
+			worker = proto.CloneOf(worker)
+			worker.Status.Allocated = &ateapipb.WorkerResources{Actors: worker.GetStatus().GetCapacity().GetActors()}
+		}
 		byName[worker.GetMetadata().GetName()] = worker
 	}
 	instruments, reader := newAssignmentReader(t)
@@ -2616,16 +2615,17 @@ func assertAssignedRuntime(t *testing.T, actor *ateapipb.Actor, want *ateapipb.A
 }
 
 // relaxingTestScheduler stands in for a fleet where no runtime-compatible
-// worker has room: a strict Schedule reports no capacity and a relaxed one
-// returns relaxedWorker, as the scheduler's cache would. Applies and HasRoom
-// are the real ones.
+// worker has room: constraints that reject an arm64 copy of relaxedWorker,
+// the strict ones for an amd64 snapshot, get no capacity, and the relaxed ones
+// get relaxedWorker, as the scheduler's cache would.
 type relaxingTestScheduler struct {
-	scheduling.Scheduler
 	relaxedWorker *ateapipb.Worker
 }
 
-func (s *relaxingTestScheduler) Schedule(_ context.Context, c scheduling.Constraints) (*ateapipb.Worker, error) {
-	if c.RequiredRuntime.Runtime() != nil {
+func (s *relaxingTestScheduler) Schedule(_ context.Context, c scheduling.Constraints, _ *ateapipb.Resources) (*ateapipb.Worker, error) {
+	incompatible := proto.CloneOf(s.relaxedWorker)
+	incompatible.Status.SandboxClasses = workerSandboxClasses(testRuntime("arm64", ""))
+	if !c.Matches(incompatible) {
 		return nil, scheduling.ErrNoCapacity
 	}
 	return s.relaxedWorker, nil
@@ -2716,11 +2716,11 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		}
 	})
 
-	t.Run("does not relax runtime constraint for local pause snapshot", func(t *testing.T) {
+	t.Run("local pause snapshot does not leave its node for an incompatible worker", func(t *testing.T) {
 		ctx := context.Background()
 		st := newTestPersistence(t)
-		seedRuntimeWorker(t, ctx, st, "node1-incompatible", "node-1", arm64RT)
-		// A suspended actor with a local snapshot on node-1.
+		seedRuntimeWorker(t, ctx, st, "node2-incompatible", "node-2", arm64RT)
+		// A suspended actor pinned to node-1 by a local snapshot.
 		local := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1")
 		local.SandboxRuntime = amd64RT
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "node-1", local)
@@ -2754,7 +2754,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		worker := seedRuntimeWorker(t, ctx, st, "amd-pod", "node-amd", newDefaultRT, oldRestorableRT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
-		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: worker}}
+		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{relaxedWorker: worker}}
 		stored, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapipb.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
@@ -2774,7 +2774,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		stale.Status.SandboxClasses = workerSandboxClasses(newDefaultRT, oldRestorableRT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
-		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: stale}}
+		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{relaxedWorker: stale}}
 		stored, bound, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapipb.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
@@ -3164,134 +3164,95 @@ func TestResume_ChecksMountedVolumesBeforeAttach(t *testing.T) {
 	}
 }
 
-// TestCanRelaxRuntime pins when a resume may drop its runtime constraint: only
-// when it has one, and never while a local pause checkpoint pins the actor.
-func TestCanRelaxRuntime(t *testing.T) {
+// TestResumeConstraints pins the constraints a resume accepts. The fallback
+// drops only the runtime. Each row maps a worker to the index of the first
+// constraints it matches. A worker missing from the map matches none.
+func TestResumeConstraints(t *testing.T) {
 	rt := testSandboxRuntime()
+	armRT := testRuntime("arm64", "")
+	microvmRT := testRuntime("amd64", "")
+	microvmRT.SandboxClass = "microvm"
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-	suspended := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-	resuming := ateapipb.ActorState_ACTOR_STATE_RESUMING
 
-	durable := func(gen int32) *ateapipb.Snapshot {
-		return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "snap", "gs://bucket/snap", completed)
+	durable := func(gen int32, runtime *ateapipb.ActorSandboxRuntime) *ateapipb.Snapshot {
+		s := newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "snap", "gs://bucket/snap", completed)
+		s.SandboxRuntime = runtime
+		return s
 	}
 	local := func(gen int32) *ateapipb.Snapshot {
-		return newPausedSnapshot(t, gen, memory, "", "local", "node-1")
+		s := newPausedSnapshot(t, gen, memory, "", "local", "node-1")
+		s.SandboxRuntime = rt
+		return s
 	}
-	localDurable := func(gen int32, storageStatus ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
-		snap := local(gen)
-		snap.GetDurableSnapshot().Status = storageStatus
-		return snap
+
+	// The template selects pool=a and the actor tier=1.
+	tmpl := &ateapipb.ActorTemplate{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"pool": "a"}}}
+	worker := func(node string, runtime *ateapipb.ActorSandboxRuntime, lbls map[string]string) *ateapipb.Worker {
+		return &ateapipb.Worker{
+			NodeName: node,
+			Labels:   lbls,
+			Status: &ateapipb.WorkerStatus{
+				State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				SandboxClasses: workerSandboxClasses(runtime),
+			},
+		}
 	}
-	localNoDurable := func(gen int32) *ateapipb.Snapshot {
-		snap := local(gen)
-		snap.DurableSnapshot = nil
-		return snap
+	selected := map[string]string{"pool": "a", "tier": "1"}
+	workers := map[string]*ateapipb.Worker{
+		"compatible":                      worker("node-1", rt, selected),
+		"other-runtime":                   worker("node-1", armRT, selected),
+		"other-runtime-node":              worker("node-2", armRT, selected),
+		"other-class":                     worker("node-1", microvmRT, selected),
+		"other-runtime-no-template-label": worker("node-1", armRT, map[string]string{"tier": "1"}),
+		"other-runtime-no-actor-label":    worker("node-1", armRT, map[string]string{"pool": "a"}),
 	}
+	fallback := map[string]int{"compatible": 0, "other-runtime": 1, "other-runtime-node": 1}
 
 	tests := []struct {
 		name      string
-		state     ateapipb.ActorState
 		node      string
 		snapshots []*ateapipb.Snapshot
-		required  *ateapipb.ActorSandboxRuntime
-		want      bool
+		want      map[string]int
 	}{
 		{
-			name:      "nothing to relax without a runtime constraint",
-			state:     suspended,
-			snapshots: []*ateapipb.Snapshot{durable(1)},
+			name:      "nothing to relax without a runtime or class requirement",
+			snapshots: []*ateapipb.Snapshot{durable(1, nil)},
+			want:      map[string]int{"compatible": 0, "other-runtime": 0, "other-runtime-node": 0, "other-class": 0},
 		},
 		{
 			name:      "durable snapshot may fall back",
-			state:     suspended,
-			snapshots: []*ateapipb.Snapshot{durable(1)},
-			required:  rt,
-			want:      true,
+			snapshots: []*ateapipb.Snapshot{durable(1, rt)},
+			want:      fallback,
 		},
 		{
-			name:      "local checkpoint stays pinned",
-			state:     suspended,
+			name:      "local checkpoint falls back on its node",
 			node:      "node-1",
 			snapshots: []*ateapipb.Snapshot{local(1)},
-			required:  rt,
-		},
-		{
-			name:      "local checkpoint stays pinned beside a durable snapshot",
-			state:     suspended,
-			node:      "node-1",
-			snapshots: []*ateapipb.Snapshot{durable(1), local(2)},
-			required:  rt,
-		},
-		{
-			name:      "uploaded checkpoint detaches before relaxing a pinned actor",
-			state:     suspended,
-			node:      "node-1",
-			snapshots: []*ateapipb.Snapshot{localDurable(2, completed)},
-			required:  rt,
-		},
-		{
-			name:      "unbound uploaded checkpoint may fall back",
-			state:     suspended,
-			snapshots: []*ateapipb.Snapshot{localDurable(2, completed)},
-			required:  rt,
-			want:      true,
-		},
-		{
-			name:      "resuming uploaded checkpoint keeps its relaxed assignment",
-			state:     resuming,
-			node:      "node-1",
-			snapshots: []*ateapipb.Snapshot{localDurable(2, completed)},
-			required:  rt,
-			want:      true,
-		},
-		{
-			name:      "resuming pending checkpoint cannot relax",
-			state:     resuming,
-			node:      "node-1",
-			snapshots: []*ateapipb.Snapshot{localDurable(2, pending)},
-			required:  rt,
-		},
-		{
-			name:      "resuming checkpoint without a durable copy cannot relax",
-			state:     resuming,
-			node:      "node-1",
-			snapshots: []*ateapipb.Snapshot{localNoDurable(2)},
-			required:  rt,
-		},
-		{
-			name:      "older durable copy cannot authorize a resuming checkpoint",
-			state:     resuming,
-			node:      "node-1",
-			snapshots: []*ateapipb.Snapshot{durable(1), localNoDurable(2)},
-			required:  rt,
-		},
-		{
-			name:      "pinned actor detaches before relaxing a newer durable snapshot",
-			state:     suspended,
-			node:      "node-1",
-			snapshots: []*ateapipb.Snapshot{local(1), durable(2)},
-			required:  rt,
-		},
-		{
-			name:      "newer durable snapshot may fall back beside an older pending checkpoint",
-			state:     suspended,
-			snapshots: []*ateapipb.Snapshot{localDurable(1, pending), durable(2)},
-			required:  rt,
-			want:      true,
+			want:      map[string]int{"compatible": 0, "other-runtime": 1},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{
-				State:        tc.state,
-				AssignedNode: tc.node,
-				Snapshots:    tc.snapshots,
-			}}
-			if got := canRelaxRuntime(actor, scheduling.Constraints{RequiredRuntime: hardware.NewRequirement(tc.required)}); got != tc.want {
-				t.Errorf("canRelaxRuntime = %v, want %v", got, tc.want)
+			actor := &ateapipb.Actor{
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}},
+				Status: &ateapipb.ActorStatus{
+					AssignedNode: tc.node,
+					Snapshots:    tc.snapshots,
+				},
+			}
+			_, constraints := resumeConstraints(actor, tmpl)
+			got := map[string]int{}
+			for name, w := range workers {
+				for i, c := range constraints {
+					if c.Matches(w) {
+						got[name] = i
+						break
+					}
+				}
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("first matching constraints by worker mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

@@ -4521,37 +4521,40 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 	rtB.Version.Attributes[1].Value = "hash-b"
 
 	for _, tt := range []struct {
-		name           string
-		compatibleNode bool
-		failDetach     bool
-		wantWorker     string
-		wantNode       string
-		wantRuntime    *ateapipb.ActorSandboxRuntime
-		wantFidelity   ateletpb.SnapshotFidelity
+		name         string
+		fullNode     bool
+		failDetach   bool
+		wantWorker   string
+		wantNode     string
+		wantRuntime  *ateapipb.ActorSandboxRuntime
+		wantFidelity ateletpb.SnapshotFidelity
+		wantDetach   bool
 	}{
 		{
-			name:           "compatible worker on another node preserves memory",
-			compatibleNode: true,
-			wantWorker:     "worker-2",
-			wantNode:       "node2",
-			wantRuntime:    rtA,
-			wantFidelity:   ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		},
-		{
-			name:         "no compatible worker falls back after detach",
+			name:         "incompatible worker on its node wins over a compatible one elsewhere",
 			wantWorker:   "worker-1",
 			wantNode:     "node1",
 			wantRuntime:  rtB,
 			wantFidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 		},
 		{
-			name:           "unreachable node uses the uploaded checkpoint",
-			compatibleNode: true,
-			failDetach:     true,
-			wantWorker:     "worker-2",
-			wantNode:       "node2",
-			wantRuntime:    rtA,
-			wantFidelity:   ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			name:         "full node detaches to a compatible worker",
+			fullNode:     true,
+			wantWorker:   "worker-2",
+			wantNode:     "node2",
+			wantRuntime:  rtA,
+			wantFidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			wantDetach:   true,
+		},
+		{
+			name:         "unreachable full node uses the uploaded checkpoint",
+			fullNode:     true,
+			failDetach:   true,
+			wantWorker:   "worker-2",
+			wantNode:     "node2",
+			wantRuntime:  rtA,
+			wantFidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			wantDetach:   true,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -4600,11 +4603,22 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 				t.Fatalf("ApplyActorSnapshotState(upload): %v", err)
 			}
 			reportWorkerRuntime(t, tc, workerPod, rtB)
-			if tt.compatibleNode {
-				other := createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
-				reportWorkerRuntime(t, tc, other, rtA)
-				setupAteletOnNode(t, tc, "atelet-node2", "node2")
+			if tt.fullNode {
+				// Another actor takes node1's only worker.
+				squatter := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-squatter"}
+				if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+					Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: squatter.GetName()},
+					ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+				}}); err != nil {
+					t.Fatalf("CreateActor(squatter): %v", err)
+				}
+				if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: squatter}); err != nil {
+					t.Fatalf("ResumeActor(squatter): %v", err)
+				}
 			}
+			other := createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+			reportWorkerRuntime(t, tc, other, rtA)
+			setupAteletOnNode(t, tc, "atelet-node2", "node2")
 			if tt.failDetach {
 				tc.fakeAtelet.Lock.Lock()
 				tc.fakeAtelet.FailDetach = status.Error(codes.Unavailable, "node unavailable")
@@ -4625,10 +4639,10 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 			tc.fakeAtelet.Lock.Lock()
 			detached := tc.fakeAtelet.DetachCalled
 			tc.fakeAtelet.Lock.Unlock()
-			if !detached {
-				t.Error("resume did not detach the incompatible local checkpoint")
+			if detached != tt.wantDetach {
+				t.Errorf("DetachCalled = %v, want %v", detached, tt.wantDetach)
 			}
-			if snap := localSnapshot(resumed.GetActor().GetStatus()); snap != nil {
+			if snap := localSnapshot(resumed.GetActor().GetStatus()); tt.wantDetach && snap != nil {
 				t.Errorf("local snapshot after detach = %v, want none", snap)
 			}
 
@@ -4719,8 +4733,22 @@ func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
 	}
 	waitForWorkerAvailable(t, tc, workerPod)
 
-	// The pending checkpoint still needs upload before runtime fallback.
+	// Another actor takes node1's only worker, and node2 has room. The pending
+	// checkpoint still needs upload before the resume can leave node1.
 	reportWorkerRuntime(t, tc, workerPod, rtB)
+	squatter := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-squatter"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: squatter.GetName()},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor(squatter) failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: squatter}); err != nil {
+		t.Fatalf("ResumeActor(squatter) failed: %v", err)
+	}
+	other := createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+	reportWorkerRuntime(t, tc, other, rtA)
+	setupAteletOnNode(t, tc, "atelet-node2", "node2")
 	tc.fakeAtelet.Reset()
 	tc.fakeAtelet.FailDetach = status.Error(codes.Unavailable, "checkpoint upload unavailable")
 
@@ -4827,7 +4855,7 @@ func TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot(t *testing.
 	}
 	reportWorkerRuntime(t, tc, workerPod, rtB)
 
-	// Interrupt restore after detach and worker assignment.
+	// Interrupt restore after worker assignment.
 	tc.fakeAtelet.Lock.Lock()
 	tc.fakeAtelet.FailRestore = status.Error(codes.Unavailable, "restore reply lost")
 	tc.fakeAtelet.Lock.Unlock()
