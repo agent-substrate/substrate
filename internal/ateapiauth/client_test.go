@@ -41,15 +41,26 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+// testServerName is the DNS name test server certificates carry, and the
+// ServerName every DialOptions call in this file expects on them.
+const testServerName = "test-server"
+
 func TestDialOptionsRequiresCAFile(t *testing.T) {
-	_, err := DialOptions(ClientConfig{ClientCredBundle: "bundle.pem"})
+	_, err := DialOptions(ClientConfig{ClientCredBundle: "bundle.pem", ServerName: testServerName})
 	if err == nil {
 		t.Fatalf("DialOptions() error = nil, want error")
 	}
 }
 
 func TestDialOptionsRequiresClientCredential(t *testing.T) {
-	_, err := DialOptions(ClientConfig{K8sClient: fake.NewSimpleClientset(), CAFile: "ca.pem"})
+	_, err := DialOptions(ClientConfig{K8sClient: fake.NewSimpleClientset(), CAFile: "ca.pem", ServerName: testServerName})
+	if err == nil {
+		t.Fatalf("DialOptions() error = nil, want error")
+	}
+}
+
+func TestDialOptionsRequiresServerName(t *testing.T) {
+	_, err := DialOptions(ClientConfig{CAFile: "ca.pem", ClientCredBundle: "bundle.pem"})
 	if err == nil {
 		t.Fatalf("DialOptions() error = nil, want error")
 	}
@@ -92,6 +103,7 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 		opts, err := DialOptions(ClientConfig{
 			K8sClient:        fake.NewSimpleClientset(),
 			CAFile:           caFile,
+			ServerName:       testServerName,
 			ClientCredBundle: clientBundle,
 		})
 		if err != nil {
@@ -145,6 +157,7 @@ func TestDialOptionsReloadsCAFile(t *testing.T) {
 	opts, err := DialOptions(ClientConfig{
 		K8sClient:        fake.NewSimpleClientset(),
 		CAFile:           caFile,
+		ServerName:       testServerName,
 		ClientCredBundle: clientBundle,
 	})
 	if err != nil {
@@ -263,6 +276,7 @@ func (ca *testCA) issueServerCert(t *testing.T) tls.Certificate {
 		Subject:      pkix.Name{CommonName: "test-server"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
+		DNSNames:     []string{testServerName},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
