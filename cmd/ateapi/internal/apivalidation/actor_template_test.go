@@ -161,6 +161,46 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("volume_mounts").Index(0).Child("name"), "ghost-vol", "")},
 	}, {
+		"declared volume not mounted by any container",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "data", DurableDir: &ateapi.DurableDirVolumeSource{}}}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "volumes").Index(0), "data", "")},
+	}, {
+		"mounted volume does not hide an unmounted volume",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{
+				{Name: "data", DurableDir: &ateapi.DurableDirVolumeSource{}},
+				{Name: "info", SystemInfo: &ateapi.SystemInfoVolumeSource{}},
+			}
+			tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: "/var/data"}}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "volumes").Index(1), "info", "")},
+	}, {
+		"volumes mounted across containers and shared between them",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{
+				{Name: "data", DurableDir: &ateapi.DurableDirVolumeSource{}},
+				{Name: "info", SystemInfo: &ateapi.SystemInfoVolumeSource{}},
+			}
+			tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: "/var/data"}}
+			tmpl.Containers = append(tmpl.Containers, &ateapi.Container{
+				Name:  "sidecar",
+				Image: tmpl.Containers[0].Image,
+				VolumeMounts: []*ateapi.VolumeMount{
+					{Name: "data", MountPath: "/var/data"},
+					{Name: "info", MountPath: "/var/info"},
+				},
+			})
+		})},
+		nil,
+	}, {
+		"unnamed volume is rejected by its required name rule",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{DurableDir: &ateapi.DurableDirVolumeSource{}}}
+		})},
+		field.ErrorList{field.Required(field.NewPath("actor_template", "volumes").Index(0).Child("name"), "")},
+	}, {
 		"missing snapshot_config is allowed",
 		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 			tmpl.SnapshotConfig = nil
@@ -241,6 +281,7 @@ func TestValidateCreateActorTemplateRequest_PreviewRestricted(t *testing.T) {
 	setPreviewForTest(t, "ALL")
 	req := &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 		tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 10 << 30, StorageClassName: "fast-ssd"}}}}
+		tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: "/var/data"}}
 	})}
 
 	t.Run("allowed", func(t *testing.T) {
