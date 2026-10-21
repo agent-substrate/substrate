@@ -438,23 +438,6 @@ func (w *ActorWorkflow) workerFromPreviousAttempt(ctx context.Context, actor *at
 	return nil, scheduling.Constraints{}, nil
 }
 
-// scheduleFirst returns a worker with room for limits under the first of
-// constraints that has one, and those constraints. It returns
-// scheduling.ErrNoCapacity when none has.
-func (w *ActorWorkflow) scheduleFirst(ctx context.Context, constraints []scheduling.Constraints, limits *ateapipb.Resources) (*ateapipb.Worker, scheduling.Constraints, error) {
-	for _, c := range constraints {
-		worker, err := w.scheduler.Schedule(ctx, c, limits)
-		if errors.Is(err, scheduling.ErrNoCapacity) {
-			continue
-		}
-		if err != nil {
-			return nil, scheduling.Constraints{}, err
-		}
-		return worker, c, nil
-	}
-	return nil, scheduling.Constraints{}, scheduling.ErrNoCapacity
-}
-
 // schedulerRecordable excludes the two errors the assignment loop retries
 // transparently. Counting a retried attempt would inflate the error rate and
 // double-count the eventual success; ensureWorkerAssigned records a loop that
@@ -488,22 +471,30 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	class = snapshotSandboxClass(actor)
 	snapRuntime, constraints := resumeConstraintsBestFirst(actor, actorTemplate)
 
+	// picked is the constraints assignedWorker was chosen under. The bind
+	// checks the fresh Worker row against the same ones.
 	assignedWorker, picked, err := w.workerFromPreviousAttempt(ctx, actor, constraints)
 	if err != nil {
 		return nil, nil, err
 	}
 	if assignedWorker == nil {
-		pickedWorker, c, err := w.scheduleFirst(ctx, constraints, limits)
-		if err != nil {
+		// Take a worker with room under the best constraints that have one.
+		for _, c := range constraints {
+			assignedWorker, err = w.scheduler.Schedule(ctx, c, limits)
 			if errors.Is(err, scheduling.ErrNoCapacity) {
-				outcome = ateattr.SchedulerOutcomeNoCapacity
-				return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
+				continue
 			}
-			return nil, nil, err
+			if err != nil {
+				return nil, nil, err
+			}
+			picked = c
+			break
 		}
-		assignedWorker = pickedWorker
-		picked = c
-		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
+		if assignedWorker == nil {
+			outcome = ateattr.SchedulerOutcomeNoCapacity
+			return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
+		}
+		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", assignedWorker.String()))
 	}
 
 	if assignedWorker.GetNodeName() == "" {
