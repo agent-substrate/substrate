@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -206,6 +207,54 @@ func TestSetupBundleRootfs_ImplicitDirMetadataRepair(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(bundle, "upper", "secret")); err != nil {
 		t.Errorf("repair did not copy up into the bundle upper: %v", err)
+	}
+}
+
+// overlayfs takes the merged root's attributes from the bundle's private upper,
+// which the bundle creates 0700 root:root. The composed "/" must instead show
+// the top-most layer's root, or no user but root can resolve any path. Needs
+// root.
+func TestSetupBundleRootfs_RootTakesTopLayerRoot(t *testing.T) {
+	roottest.Require(t, "mount/unmount, chown")
+	base, top := t.TempDir(), t.TempDir()
+	writeLayer(t, base, map[string]string{"a.txt": "a"}, nil)
+	writeLayer(t, top, map[string]string{"b.txt": "b"}, nil)
+	baseRoot := filepath.Join(base, layerFSDirName)
+	topRoot := filepath.Join(top, layerFSDirName)
+	if err := os.Chmod(baseRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(topRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(topRoot, 1234, 5678); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := t.TempDir()
+	if err := WriteSpec(bundle, &OverlaySpec{Layers: []string{base, top}}); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	if err := SetupBundleRootfs(bundle); err != nil {
+		t.Fatalf("SetupBundleRootfs: %v", err)
+	}
+	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+
+	fi, err := os.Stat(filepath.Join(bundle, "rootfs"))
+	if err != nil {
+		t.Fatalf("stat merged root: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o755 {
+		t.Errorf("merged root mode = %o, want 755 from the top layer", got)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != 1234 || st.Gid != 5678 {
+		t.Errorf("merged root owner = %+v, want 1234:5678 from the top layer", fi.Sys())
+	}
+	for dir, want := range map[string]os.FileMode{baseRoot: 0o700, topRoot: 0o755} {
+		if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != want {
+			t.Errorf("shared layer root %s was modified: %v %v", dir, fi, err)
+		}
 	}
 }
 

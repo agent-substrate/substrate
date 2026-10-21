@@ -53,6 +53,33 @@ type dirFixup struct {
 	HasOwner bool
 }
 
+// dirFixupOf captures fi's mode and owner as a fixup for path.
+func dirFixupOf(path string, fi os.FileInfo) dirFixup {
+	f := dirFixup{
+		Path: path,
+		Mode: fi.Mode().Perm() | fi.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky),
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		f.UID, f.GID, f.HasOwner = int(st.Uid), int(st.Gid), true
+	}
+	return f
+}
+
+// seedUpperRoot gives the bundle's upper directory the root attributes of
+// topLayer. overlayfs takes the merged root's attributes from the upper, which
+// the bundle creates private (0700 root:root), so without this the workload's
+// "/" is root-only and no other user can resolve any path.
+func seedUpperRoot(upper, topLayer string) error {
+	fi, err := os.Stat(filepath.Join(topLayer, layerFSDirName))
+	if err != nil {
+		return fmt.Errorf("while reading root of layer %q: %w", topLayer, err)
+	}
+	if err := applyDirFixups(upper, []dirFixup{dirFixupOf(".", fi)}); err != nil {
+		return fmt.Errorf("while seeding upper root from layer %q: %w", topLayer, err)
+	}
+	return nil
+}
+
 // resolveImplicitDirFixups computes the repairs needed for an image whose
 // (bottom-first) layer chain is layers: for every directory whose merged
 // attributes would come from a layer that only created it implicitly, find
@@ -122,14 +149,7 @@ func resolveImplicitDirFixups(layers []string) ([]dirFixup, error) {
 			if !ok {
 				continue
 			}
-			f := dirFixup{
-				Path: p,
-				Mode: fi.Mode().Perm() | fi.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky),
-			}
-			if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-				f.UID, f.GID, f.HasOwner = int(st.Uid), int(st.Gid), true
-			}
-			fixups = append(fixups, f)
+			fixups = append(fixups, dirFixupOf(p, fi))
 			break
 		}
 	}

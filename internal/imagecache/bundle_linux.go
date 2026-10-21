@@ -76,6 +76,9 @@ func SetupBundleRootfs(bundlePath string) error {
 		return createExtraDirs(rootfs, spec.ExtraDirs)
 	}
 
+	if err := seedUpperRoot(upper, spec.Layers[len(spec.Layers)-1]); err != nil {
+		return err
+	}
 	if err := mountOverlay(rootfs, overlayLowerDirs(spec.Layers), upper, work); err != nil {
 		return fmt.Errorf("while mounting overlay rootfs at %q: %w", rootfs, err)
 	}
