@@ -905,6 +905,137 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	}
 }
 
+// seedTagBorrower stores a suspended actor running on the tag's external
+// snapshot rather than one of its own, which is what CreateActor leaves behind
+// for an actor cloned from a tag.
+func seedTagBorrower(t *testing.T, ctx context.Context, persistence store.Interface, tag *ateapi.Tag, name string) *ateapi.Actor {
+	t.Helper()
+	atespace := tag.GetMetadata().GetAtespace()
+	return storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: atespace, Name: name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: atespace, Name: "sub-tmpl"},
+		SourceTag:     resources.TagRefFromTag(tag).ToObjectRef(),
+		Status: &ateapi.ActorStatus{
+			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+			LastAssignedGeneration: 1,
+			Snapshots:              []*ateapi.Snapshot{proto.CloneOf(tag.GetStatus().GetSnapshot())},
+		},
+	})
+}
+
+// TestDeleteTag_RefusesWhileBorrowed verifies the delete is refused while an
+// actor is still running on the tag's snapshot, leaving both the row and the
+// objects alone, and goes through once that actor holds a snapshot of its own.
+func TestDeleteTag_RefusesWhileBorrowed(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+	source, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(source), "v1"))
+	if err != nil {
+		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	uri := mustReservedTagSnapshotURI(t, tag)
+	borrower := seedTagBorrower(t, ctx, persistence, tag, "clone-1")
+
+	_, err = w.DeleteTag(ctx, tagRef, store.DeletePreconditions{})
+	if got, want := apierror.Code(err), codes.FailedPrecondition; got != want {
+		t.Fatalf("DeleteTag = %v (code %v), want %v", err, got, want)
+	}
+	refused, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetTag after the refusal: %v", err)
+	}
+	// Not marked for deletion, so more clones can be made from it.
+	if got := refused.GetMetadata().GetDeleteTime(); got != nil {
+		t.Errorf("delete_time after the refusal = %v, want unset", got)
+	}
+	if got := objects.Snapshot(t, uri); len(got) == 0 {
+		t.Error("the refused delete collected the tag's external snapshot anyway")
+	}
+
+	// The borrower takes a snapshot of its own that is only on its node. Until
+	// it is uploaded, losing the node or a revert returns the borrower to the
+	// tag's snapshot.
+	own := mustActorSnapshotURI(t, template, borrower, "clone-1-snapshot")
+	local := newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), own.Name(), own.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	local.Locality = "node-1"
+	borrower = mustUpdateActorStatus(t, ctx, persistence, borrower, func(s *ateapi.ActorStatus) {
+		s.LastAssignedGeneration = 2
+		s.Snapshots = append(s.Snapshots, local)
+	})
+	_, err = w.DeleteTag(ctx, tagRef, store.DeletePreconditions{})
+	if got, want := apierror.Code(err), codes.FailedPrecondition; got != want {
+		t.Fatalf("DeleteTag while the borrower's own snapshot is not uploaded = %v (code %v), want %v", err, got, want)
+	}
+
+	// The upload of its own snapshot ends the borrow, though the tag's entry
+	// stays in status.snapshots until the next suspend or revert prunes it.
+	mustUpdateActorStatus(t, ctx, persistence, borrower, func(s *ateapi.ActorStatus) {
+		s.Snapshots[1].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	})
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteTag once the borrow ended: %v", err)
+	}
+	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTag after the delete = %v, want ErrNotFound", err)
+	}
+}
+
+// TestDeleteTag_ResumesDeletingTag verifies that a delete which died after
+// marking the tag for deletion is finished by a retry, and that no Actor can
+// borrow the tag in between.
+func TestDeleteTag_ResumesDeletingTag(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+	source, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(source), "v1"))
+	if err != nil {
+		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	uri := mustReservedTagSnapshotURI(t, tag)
+
+	// The first attempt dies between marking the tag and collecting it.
+	objects.OnDelete = func(string, string) error { return errObjectStore }
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !isObjectStoreErr(err) {
+		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
+	}
+	objects.OnDelete = nil
+	deleting, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetTag after the failed delete: %v", err)
+	}
+	if deleting.GetMetadata().GetDeleteTime() == nil {
+		t.Fatal("delete_time after the failed delete is unset, want set")
+	}
+
+	if _, err := persistence.CreateActor(ctx, &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Atespace: tagRef.Atespace, Name: "clone-1"},
+		Status: &ateapi.ActorStatus{
+			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+			LastAssignedGeneration: 1,
+			Snapshots:              []*ateapi.Snapshot{proto.CloneOf(tag.GetStatus().GetSnapshot())},
+		},
+	}); !errors.Is(err, store.ErrTagNotReady) {
+		t.Fatalf("CreateActor borrowing the tag marked for deletion = %v, want ErrTagNotReady", err)
+	}
+
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteTag retry: %v", err)
+	}
+	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTag after the retry = %v, want ErrNotFound", err)
+	}
+	if got := objects.Snapshot(t, uri); len(got) != 0 {
+		t.Errorf("objects left after the retry = %v, want none", got)
+	}
+}
+
 // TestDeleteTag_ReleasesPendingSnapshot verifies that deleting a tag whose
 // create never finished collects what that create stranded. The pending row
 // names the prefix the copy was writing into, and it is the only handle left on

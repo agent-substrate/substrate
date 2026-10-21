@@ -111,7 +111,8 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (
 // it first would leak.
 //
 // The workflow is built in 3 phases:
-//  1. Load the tag (which names the snapshot to collect).
+//  1. Mark the tag for deletion. The store refuses this while an Actor is
+//     borrowing the tag's snapshot, and refuses any new borrow after it.
 //  2. Release that snapshot, tolerating a previous attempt partly collected.
 //  3. Finalize: drop the row.
 //
@@ -119,13 +120,9 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (
 // delete run again rediscovers the work from it and resumes over whatever is
 // left.
 //
-// The tag stays resolvable while its snapshot is being collected, so a
-// CreateActor racing this delete can seed an Actor from content that is going
-// away. That race is accepted for now.
-//
-// Note that this destroys the external snapshot: an Actor created from the tag
-// and never suspended is still borrowing it and becomes unrecoverable. Do not
-// delete a tag while clones of it exist.
+// The delete is refused with FailedPrecondition while at least one Actor is
+// still borrowing the tag's snapshot: releasing it would leave that Actor
+// unrecoverable.
 func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapi.Tag, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	// Serializes against a create of the same tag, whose copy would otherwise
@@ -166,6 +163,9 @@ func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef r
 		return alreadyDeleting, nil
 	}
 	if err != nil {
+		if errors.Is(err, store.ErrTagBorrowed) {
+			return nil, apierror.FailedPrecondition("Tag %s cannot be deleted because its snapshot is still in use by at least one Actor created from it", tagRef)
+		}
 		if errors.Is(err, store.ErrUIDConflict) {
 			return nil, apierror.Aborted("Tag %s does not have uid %s", tagRef, precondition.UID)
 		}

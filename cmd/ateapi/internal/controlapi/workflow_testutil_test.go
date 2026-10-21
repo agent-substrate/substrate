@@ -125,6 +125,28 @@ func mustTagSnapshotURI(t *testing.T, template *ateapi.ActorTemplate, atespace, 
 	return uri
 }
 
+// mustSeedReadyTag stores a tag with a COMPLETED snapshot in atespace and
+// returns the URI of that snapshot under template's storage location. An Actor
+// can only borrow a COMPLETED tag snapshot.
+func mustSeedReadyTag(t *testing.T, ctx context.Context, persistence store.Interface, template *ateapi.ActorTemplate, atespace, name string) resources.SnapshotURI {
+	t.Helper()
+	reserved := storetest.MustCreateTag(t, ctx, persistence, &ateapi.Tag{
+		Metadata:    &ateapi.ResourceMetadata{Atespace: atespace, Name: name},
+		Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
+		SourceActor: &ateapi.ObjectRef{Atespace: atespace, Name: "tag-source"},
+		Status:      &ateapi.TagStatus{ActorTemplateUid: template.GetMetadata().GetUid()},
+	})
+	// The snapshot's prefix is keyed on the UID the store assigned.
+	uri := mustTagSnapshotURI(t, template, atespace, reserved.GetMetadata().GetUid())
+	if _, err := persistence.UpdateTag(ctx, resources.TagRefFromTag(reserved), store.PreconditionFrom(reserved), func(toUpdate *ateapi.Tag) error {
+		toUpdate.Status.Snapshot = newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", uri.Name(), uri.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		return nil
+	}); err != nil {
+		t.Fatalf("recording the snapshot of tag %s/%s: %v", atespace, name, err)
+	}
+	return uri
+}
+
 // mustUpdateActorStatus mutates a stored actor's status. Tests reach for it to
 // record snapshot URIs: an actor's prefix is keyed on the UID the store
 // assigns, so its URIs cannot be written until the row exists.

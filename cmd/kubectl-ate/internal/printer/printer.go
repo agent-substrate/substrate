@@ -366,10 +366,13 @@ func durableSnapshotStorage(snapshot *ateapi.Snapshot) *ateapi.SnapshotStorage {
 	return nil
 }
 
-// tagState reports whether a tag is usable. A tag is Pending until
-// the copy of its own snapshot lands; until then it names nothing an Actor can
-// be created from, and deleting it collects whatever the create stranded.
+// tagState reports whether a tag is usable. A tag is Pending until the copy of
+// its own snapshot finishes, and Deleting once a delete has started. Actors can
+// only be created from a Ready tag.
 func tagState(tag *ateapi.Tag) string {
+	if tag.GetMetadata().GetDeleteTime() != nil {
+		return "Deleting"
+	}
 	if durableSnapshotStorage(tag.GetStatus().GetSnapshot()) == nil {
 		return "Pending"
 	}

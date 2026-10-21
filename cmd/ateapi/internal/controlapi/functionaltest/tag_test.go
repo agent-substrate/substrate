@@ -25,6 +25,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -56,22 +57,36 @@ func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...f
 	if err != nil {
 		t.Fatalf("recording the actor's external snapshot: %v", err)
 	}
-	uri, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, resources.NewSnapshotName())
-	if err != nil {
-		t.Fatalf("NewTagSnapshotURI: %v", err)
-	}
 	tag := &ateapi.Tag{
 		Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 		Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapi.TagStatus{
-			Snapshot: newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, durableSnapshot(actor.GetStatus()).GetFidelity(), "", uri.Name(), uri.String()),
+			Snapshot: newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, durableSnapshot(actor.GetStatus()).GetFidelity(), "", "", ""),
 		},
 	}
 	for _, opt := range opts {
 		opt(tag)
 	}
-	return storetest.MustCreateTag(t, ctx, tc.persistence, tag)
+	// The tag's snapshot sits under its own prefix, keyed on the UID the store
+	// assigns, so it can only be recorded once the row exists.
+	snapshot := tag.Status.Snapshot
+	tag.Status.Snapshot = nil
+	reserved := storetest.MustCreateTag(t, ctx, tc.persistence, tag)
+	uri, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, reserved.GetMetadata().GetUid())
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI: %v", err)
+	}
+	snapshot.Uuid = uri.Name()
+	snapshot.DurableSnapshot.Object.SnapshotUri = uri.String()
+	stored, err := tc.persistence.UpdateTag(ctx, resources.TagRefFromTag(reserved), store.PreconditionFrom(reserved), func(toUpdate *ateapi.Tag) error {
+		toUpdate.Status.Snapshot = snapshot
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("recording the tag's external snapshot: %v", err)
+	}
+	return stored
 }
 
 // TestCreateTag_ReusedTagName tests that a tag does not move
@@ -230,6 +245,14 @@ func suspendActorForTest(t *testing.T, tc *testContext, workerName, name string)
 	}}); err != nil {
 		t.Fatalf("CreateActor(%s) failed: %v", name, err)
 	}
+	return runAndSuspendActorForTest(t, tc, workerName, name)
+}
+
+// runAndSuspendActorForTest resumes an existing actor on workerName and
+// suspends it, returning the URI of the external snapshot the suspend wrote.
+func runAndSuspendActorForTest(t *testing.T, tc *testContext, workerName, name string) string {
+	t.Helper()
+	ctx := context.Background()
 	// Successive actors share the one worker, and scheduling reads the worker
 	// cache: the preceding suspend released the worker in the store, but the
 	// cache only learns of it on its next watch poll.
@@ -251,6 +274,166 @@ func suspendActorForTest(t *testing.T, tc *testContext, workerName, name string)
 		t.Fatalf("SuspendActor(%s) wrote no external snapshot: %v", name, suspended)
 	}
 	return uri
+}
+
+// TestDeleteTag_RefusedWhileCloneBorrowsSnapshot walks the whole loop over the
+// wire: a tag cannot be deleted while an actor cloned from it is still running
+// on the tag's snapshot, and can be once that clone has suspended into one of
+// its own and resumed off that one.
+//
+//  1. Tag actor-a's snapshot and create clone-1 from the tag.
+//  2. DeleteTag fails, leaving the tag and its snapshot in place.
+//  3. Run and suspend clone-1, then resume it off its own snapshot.
+//  4. DeleteTag succeeds and leaves clone-1's own snapshot in place.
+func TestDeleteTag_RefusedWhileCloneBorrowsSnapshot(t *testing.T) {
+	ns := namespaceForTest("ns-delete-tag-borrowed")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	suspendActorForTest(t, tc, workerName, "actor-a")
+
+	const tagName = "v1"
+	tagRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: tagName}
+	tag, err := tc.client.CreateTag(ctx, &ateapi.CreateTagRequest{
+		Tag: &ateapi.Tag{
+			Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: tagName},
+			Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
+			SourceActor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor-a"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTag failed: %v", err)
+	}
+	tagSnapshotURI := tagSnapshotURI(tag)
+
+	if _, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "clone-1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     tagRef,
+	}}); err != nil {
+		t.Fatalf("CreateActor(clone-1) from tag %s failed: %v", tagName, err)
+	}
+
+	_, err = tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef})
+	if got, want := status.Code(err), codes.FailedPrecondition; got != want {
+		t.Fatalf("DeleteTag while clone-1 borrows its snapshot = %v (code %v), want %v", err, got, want)
+	}
+	if _, err := tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: tagRef}); err != nil {
+		t.Fatalf("GetTag after the refusal: %v", err)
+	}
+	if got := snapshotObjectNames(t, tc, tagSnapshotURI); len(got) == 0 {
+		t.Error("the refused delete collected the tag's external snapshot anyway")
+	}
+
+	// The clone's first suspend writes a snapshot of its own, which is what
+	// ends the borrow and frees the tag.
+	cloneSnapshotURI := runAndSuspendActorForTest(t, tc, workerName, "clone-1")
+	if cloneSnapshotURI == tagSnapshotURI {
+		t.Fatalf("clone-1 suspended back into the tag's snapshot %s", cloneSnapshotURI)
+	}
+
+	// Resume actor: check that the tag can be deleted, while the actor is up,
+	// since the actor no longer borrows the tag's snapshot.
+	waitForWorkerAvailable(t, tc, workerName)
+	resumed, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "clone-1"}})
+	if err != nil {
+		t.Fatalf("ResumeActor(clone-1) failed: %v", err)
+	}
+	if got := durableSnapshotURI(resumed.GetActor().GetStatus()); got != cloneSnapshotURI {
+		t.Fatalf("clone-1 resumed holding snapshot %q, want its own %q", got, cloneSnapshotURI)
+	}
+	if got, want := resumed.GetActor().GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_RUNNING; got != want {
+		t.Fatalf("clone-1 state after the resume = %v, want %v", got, want)
+	}
+
+	if _, err := tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil {
+		t.Fatalf("DeleteTag once the borrow ended: %v", err)
+	}
+	if _, err := tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: tagRef}); status.Code(err) != codes.NotFound {
+		t.Errorf("GetTag after the delete = %v, want NotFound", err)
+	}
+	if got := snapshotObjectNames(t, tc, cloneSnapshotURI); len(got) == 0 {
+		t.Error("deleting the tag collected the clone's own external snapshot")
+	}
+}
+
+// TestDeleteTag_RefusedWhileGoldenCloneBorrowsSnapshot is the same loop for an
+// actor created with no source tag, which starts out on the template's golden
+// snapshot.
+//
+//  1. Create actor-a, which inherits the golden tag's snapshot.
+//  2. DeleteTag(golden) and DeleteActorTemplate both fail, leaving the
+//     template, the golden tag, and its snapshot in place.
+//  3. Run and suspend actor-a, then resume it off its own snapshot.
+//  4. DeleteActorTemplate succeeds, collecting the golden tag and its snapshot
+//     and leaving actor-a's own snapshot in place.
+func TestDeleteTag_RefusedWhileGoldenCloneBorrowsSnapshot(t *testing.T) {
+	ns := namespaceForTest("ns-delete-golden-tag-borrowed")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+	template := createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	templateRef := resources.ActorTemplateRefFromActorTemplate(template).ToObjectRef()
+	goldenRef := template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
+
+	created, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "actor-a"},
+		ActorTemplate: templateRef,
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor(actor-a) failed: %v", err)
+	}
+	goldenURI := goldenSnapshotURI(t, tc, template)
+	if got := durableSnapshotURI(created.GetStatus()); got != goldenURI {
+		t.Fatalf("actor-a was created holding snapshot %q, want the template's golden %q", got, goldenURI)
+	}
+
+	_, err = tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: goldenRef})
+	if got, want := status.Code(err), codes.FailedPrecondition; got != want {
+		t.Fatalf("DeleteTag(golden) while actor-a borrows its snapshot = %v (code %v), want %v", err, got, want)
+	}
+	// Deleting the template is the way a golden tag is normally collected, so
+	// the borrow has to hold that back too, leaving both resources in place.
+	_, err = tc.client.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: templateRef})
+	if got, want := status.Code(err), codes.FailedPrecondition; got != want {
+		t.Fatalf("DeleteActorTemplate while actor-a borrows the golden snapshot = %v (code %v), want %v", err, got, want)
+	}
+	if _, err := tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: templateRef}); err != nil {
+		t.Fatalf("GetActorTemplate after the refusal: %v", err)
+	}
+	if _, err := tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: goldenRef}); err != nil {
+		t.Fatalf("GetTag(golden) after the refusal: %v", err)
+	}
+	assertSnapshotPresent(t, tc, goldenURI)
+
+	// The first suspend writes a snapshot under the actor's own prefix and the
+	// resume restores that one, so the golden tag is free from the suspend on.
+	ownSnapshotURI := runAndSuspendActorForTest(t, tc, workerName, "actor-a")
+	assertSnapshotOwnedByActor(t, created, ownSnapshotURI)
+	waitForWorkerAvailable(t, tc, workerName)
+	resumed, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor-a"}})
+	if err != nil {
+		t.Fatalf("ResumeActor(actor-a) failed: %v", err)
+	}
+	if got := durableSnapshotURI(resumed.GetActor().GetStatus()); got != ownSnapshotURI {
+		t.Fatalf("actor-a resumed holding snapshot %q, want its own %q", got, ownSnapshotURI)
+	}
+
+	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: templateRef}); err != nil {
+		t.Fatalf("DeleteActorTemplate once the borrow ended: %v", err)
+	}
+	if _, err := tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: goldenRef}); status.Code(err) != codes.NotFound {
+		t.Errorf("GetTag(golden) after the delete = %v, want NotFound", err)
+	}
+	assertSnapshotCollected(t, tc, goldenURI)
+	if got := snapshotObjectNames(t, tc, ownSnapshotURI); len(got) == 0 {
+		t.Error("deleting the template collected the actor's own external snapshot")
+	}
 }
 
 // TestUpdateTag_Preconditions verifies the required version and uid

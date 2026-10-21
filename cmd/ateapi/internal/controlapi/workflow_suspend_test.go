@@ -577,7 +577,7 @@ func TestSuspendActor_Finalized_ReleasesReplacedSnapshot(t *testing.T) {
 			previous := mustActorSnapshotURI(t, template, actor, "old")
 			prevType := ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR
 			if tt.tagOwnedSnapshot {
-				previous = mustTagSnapshotURI(t, template, "team-a", "v1-snapshot")
+				previous = mustSeedReadyTag(t, ctx, persistence, template, "team-a", "v1")
 				prevType = ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG
 			}
 			fresh := mustActorSnapshotURI(t, template, actor, snapshotName)

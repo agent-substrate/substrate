@@ -280,7 +280,14 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err != nil {
 		return nil, fmt.Errorf("marshaling tag: %w", err)
 	}
-	commandTag, err := p.pool.Exec(ctx, `
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning tag update: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	// UPDATE holds the row lock that a new borrow waits on. See updateTagBorrow.
+	commandTag, err := tx.Exec(ctx, `
 			UPDATE tags
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
@@ -294,6 +301,21 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if commandTag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("updating tag %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
 	}
+
+	// Only allow a tag to be marked for deletion if there are no actors borrowing
+	// its snapshot.
+	if markForDeletion && oldMeta.GetDeleteTime() == nil {
+		var borrowed bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tag_borrows WHERE tag_uid = $1)`, currentUID).Scan(&borrowed); err != nil {
+			return nil, fmt.Errorf("checking the borrows of tag %s/%s: %w", atespace, name, err)
+		}
+		if borrowed {
+			return nil, store.ErrTagBorrowed
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing tag update: %w", err)
+	}
 	return dbTag, nil
 }
 
@@ -301,16 +323,35 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `
-		DELETE FROM tags
-		WHERE atespace = $1 AND name = $2
-		  AND ($3::text = '' OR uid = $3::text)
-		  AND ($4::bigint = 0 OR version = $4::bigint)
-		RETURNING proto`, atespace, name, precondition.UID, precondition.Version).Scan(&protoBytes)
+		DELETE FROM tags AS t
+		WHERE t.atespace = $1 AND t.name = $2
+		  AND ($3::text = '' OR t.uid = $3::text)
+		  AND ($4::bigint = 0 OR t.version = $4::bigint)
+		  AND NOT EXISTS (SELECT 1 FROM tag_borrows AS b WHERE b.tag_uid = t.uid)
+		RETURNING t.proto`, atespace, name, precondition.UID, precondition.Version).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
+		// Nothing matched: there is no such tag, the precondition no longer
+		// holds, or an Actor borrows the tag.
 		var uid string
 		var version int64
-		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM tags WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
-		return nil, mapDeleteError(err, uid, version, precondition)
+		var borrowed bool
+		err := p.pool.QueryRow(ctx, `
+			SELECT t.uid, t.version, EXISTS (SELECT 1 FROM tag_borrows AS b WHERE b.tag_uid = t.uid)
+			FROM tags AS t
+			WHERE t.atespace = $1 AND t.name = $2`, atespace, name).Scan(&uid, &version, &borrowed)
+		if err != nil {
+			return nil, mapDeleteError(err, uid, version, precondition)
+		}
+		// A precondition that no longer holds is reported first, as for a tag
+		// nothing borrows.
+		if err := precondition.Check(&ateapi.ResourceMetadata{Uid: uid, Version: version}); err != nil {
+			return nil, err
+		}
+		if borrowed {
+			return nil, store.ErrTagBorrowed
+		}
+		// The row matches the guards now, so it changed between the two statements.
+		return nil, store.ErrVersionConflict
 	}
 	if err != nil {
 		return nil, fmt.Errorf("deleting tag %s/%s: %w", atespace, name, err)
