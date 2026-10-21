@@ -1093,8 +1093,8 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		durable.UploadTime = time.Now()
 		state = s.snapshots.CommitDurable(actorUID, durable)
 		// The snapshot is durable now, so the local copy only saves a
-		// download: failing to keep it must not fail the checkpoint. The prune
-		// below deletes a partial copy.
+		// download: failing to keep it must not fail the checkpoint.
+		// resetActorDirs cleans up checkpointDir if the move fails.
 		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
 			slog.WarnContext(ctx, "Failed to keep a local copy of the uploaded snapshot", slog.Any("actor", actorRef), slog.Any("err", err))
 		} else {
@@ -1228,14 +1228,22 @@ func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Checkpoi
 	if err != nil {
 		return err
 	}
-	if err := root.MkdirAll(localDir, 0o700); err != nil {
-		return fmt.Errorf("while creating local checkpoint directory: %w", err)
+
+	// Stage the files worker reported and the snapshot manifest inside
+	// checkpointDir before renaming the directory into local-checkpoint/, so a
+	// failure leaves nothing under local-checkpoint/ and resetActorDirs cleans
+	// checkpointDir up.
+	stageDir := filepath.Join(checkpointDir, ".staged")
+	if err := root.RemoveAll(stageDir); err != nil {
+		return fmt.Errorf("while clearing local checkpoint staging directory: %w", err)
+	}
+	if err := root.MkdirAll(stageDir, 0o700); err != nil {
+		return fmt.Errorf("while creating local checkpoint staging directory: %w", err)
 	}
 
-	// Move exactly the files worker reported.
 	for _, fileName := range rec.SnapshotFiles {
 		src := filepath.Join(checkpointDir, fileName)
-		dst := filepath.Join(localDir, fileName)
+		dst := filepath.Join(stageDir, fileName)
 		info, err := root.Lstat(src)
 		if err != nil {
 			return fmt.Errorf("while inspecting checkpoint file %s: %w", fileName, err)
@@ -1258,8 +1266,15 @@ func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Checkpoi
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
 	}
-	if err := root.WriteFile(filepath.Join(localDir, sandboxManifestName), manifest, 0o600); err != nil {
+	if err := root.WriteFile(filepath.Join(stageDir, sandboxManifestName), manifest, 0o600); err != nil {
 		return fmt.Errorf("while writing snapshot manifest: %w", err)
+	}
+
+	if err := root.MkdirAll(filepath.Dir(localDir), 0o700); err != nil {
+		return fmt.Errorf("while creating local checkpoint directory: %w", err)
+	}
+	if err := root.Rename(stageDir, localDir); err != nil {
+		return fmt.Errorf("failed to move %s to %s: %w", stageDir, localDir, err)
 	}
 
 	return nil

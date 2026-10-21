@@ -1580,10 +1580,11 @@ func TestTerminateWaitsForInFlightRPC(t *testing.T) {
 // restored from it.
 func TestFailedCheckpointKeepsLocalSnapshot(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		snap string
-		mode ateletpb.UploadMode
-		fail func(t *testing.T, a *pluginActor)
+		name          string
+		snap          string
+		mode          ateletpb.UploadMode
+		fail          func(t *testing.T, a *pluginActor)
+		wantNoNewSnap bool
 	}{
 		{
 			name: "suspend upload fails",
@@ -1604,6 +1605,22 @@ func TestFailedCheckpointKeepsLocalSnapshot(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "missing snapshot file",
+			snap: "pause-snap-2",
+			mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
+			fail: func(t *testing.T, a *pluginActor) {
+				var once sync.Once
+				a.worker.onCheckpoint = func() {
+					once.Do(func() {
+						if err := os.Remove(filepath.Join(ateletpath.CheckpointStateDir(pluginActorUID), "checkpoint.img")); err != nil {
+							t.Error(err)
+						}
+					})
+				}
+			},
+			wantNoNewSnap: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := runPluginActor(t)
@@ -1616,6 +1633,11 @@ func TestFailedCheckpointKeepsLocalSnapshot(t *testing.T) {
 			if _, err := a.checkpoint(t, a.snapshot(tc.snap, 2), tc.mode); err == nil {
 				t.Fatal("Checkpoint succeeded, want it to fail")
 			}
+			if tc.wantNoNewSnap {
+				if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, tc.snap)); !os.IsNotExist(err) {
+					t.Errorf("failed move created local snapshot %q: stat = %v, want not exist", tc.snap, err)
+				}
+			}
 			if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1")); err != nil {
 				t.Errorf("pause snapshot after the failed checkpoint: stat = %v, want it kept", err)
 			}
@@ -1623,6 +1645,9 @@ func TestFailedCheckpointKeepsLocalSnapshot(t *testing.T) {
 				t.Errorf("latest_local = %q, want pause-snap-1", got)
 			}
 			a.restoreLocal(t, "pause-snap-1", 1)
+			if entries, err := os.ReadDir(ateletpath.CheckpointStateDir(pluginActorUID)); err != nil || len(entries) != 0 {
+				t.Errorf("checkpoint-state after restore: entries = %v, err = %v, want empty", entries, err)
+			}
 		})
 	}
 }
