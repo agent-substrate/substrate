@@ -191,8 +191,8 @@ func snapshotSharing(owner ateapi.SnapshotOwner) ateletpb.SnapshotSharing {
 	return ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE
 }
 
-// validateExpectedSnapshot checks the held checkpoint and the local-first
-// restore source, not last_assigned_generation: revert can discard generations.
+// validateExpectedSnapshot checks the held checkpoint and snapshotToResume,
+// not last_assigned_generation: revert can discard generations.
 // Call only with an actor read under the lifecycle lease, including refreshes
 // after assignment conflicts, before doing further workload work.
 func validateExpectedSnapshot(actor *ateapi.Actor, expected *ateapi.ExpectedSnapshot) error {
@@ -222,11 +222,9 @@ func validateExpectedSnapshot(actor *ateapi.Actor, expected *ateapi.ExpectedSnap
 	default:
 		return apierror.FailedPrecondition("expected snapshot has no completed durable checkpoint")
 	}
-	// Restore uses a local checkpoint whenever one exists, even if a newer
-	// durable snapshot is held. A condition must describe what will be restored.
-	if local := findLatestLocalSnapshot(actor.GetStatus()); local != nil &&
-		(local.GetUuid() != expected.GetSnapshotUuid() || local.GetGeneration() != expected.GetGeneration()) {
-		return apierror.FailedPrecondition("actor's local restore source %q generation %d does not match expected snapshot %q generation %d", local.GetUuid(), local.GetGeneration(), expected.GetSnapshotUuid(), expected.GetGeneration())
+	if source := snapshotToResume(actor.GetStatus()); source == nil ||
+		source.GetUuid() != expected.GetSnapshotUuid() || source.GetGeneration() != expected.GetGeneration() {
+		return apierror.FailedPrecondition("actor's restore source %q generation %d does not match expected snapshot %q generation %d", source.GetUuid(), source.GetGeneration(), expected.GetSnapshotUuid(), expected.GetGeneration())
 	}
 	return nil
 }
