@@ -262,7 +262,8 @@ The sandbox — gVisor or micro-VM — remains the isolation boundary; capabilit
 
 Each `volumeMounts` entry accepts `subPath` (`sub_path` in protobuf) and
 `readOnly` (`read_only`). The caller chooses a concrete sub-path; placeholders
-such as `${SESSION_ID}` are not expanded. Empty `subPath` selects the volume
+such as `${SESSION_ID}` are not expanded (see `sharedVolumeSubPaths` below for a
+per-actor directory). Empty `subPath` selects the volume
 root. Otherwise it must be a clean relative Unix path of at most 16 segments,
 with no empty, `.` or `..` segment and no NUL. Symlinks in the selected path are
 rejected by the workers.
@@ -288,6 +289,37 @@ volume or another mount's permissions. Image and system-info sources remain
 read-only even when `readOnly` is false. Leaving both fields unset preserves
 the existing root mount behavior. CSI publish/unpublish and the whole-volume
 resource are unchanged.
+
+An actor can root its view of an `external.sharedVolume` at its own directory
+with `sharedVolumeSubPaths` (`shared_volume_sub_paths`), keyed by template
+volume name and set at `CreateActor`. Every mount of that volume resolves its
+`subPath` beneath the actor's directory, so one template serves a directory per
+actor:
+
+```yaml
+# ActorTemplate
+volumes:
+  - name: session
+    external: {sharedVolume: {}}
+volumeMounts:
+  - name: session
+    mountPath: /workspace
+  - name: session
+    mountPath: /history
+    subPath: history
+    readOnly: true
+---
+# Actor
+sharedVolumeBindings: {session: ctx-42}
+sharedVolumeSubPaths: {session: tenant-a/session-1}
+# /workspace -> tenant-a/session-1, /history -> tenant-a/session-1/history
+```
+
+The directory follows the `subPath` rules, as does its join with each mount's
+`subPath`, and only the final directory is created, so `tenant-a` must exist.
+Volumes without an entry keep the template's `subPath`, and the golden actor
+ignores the field. `kubectl ate create actor --volume-sub-path session=tenant-a/session-1`
+sets it.
 
 Currently, gVisor rejects non-empty sub-paths on `durableDir` volumes: its
 shared in-sandbox tmpfs cannot expose a selected subdirectory through the

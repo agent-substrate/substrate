@@ -149,7 +149,7 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 				Name:      mount.GetName(),
 				MountPath: mount.GetMountPath(),
 				ReadOnly:  mount.GetReadOnly(),
-				SubPath:   mount.GetSubPath(),
+				SubPath:   actorMountSubPath(mount, actor, actorTemplate),
 			})
 		}
 		workloadSpec.Containers = append(workloadSpec.Containers, ateletCtr)
@@ -204,6 +204,23 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapi
 		}
 	}
 	return nil
+}
+
+// actorMountSubPath resolves a mount's sub_path beneath the actor's root for
+// that shared volume, if the actor set one.
+func actorMountSubPath(mount *ateapipb.VolumeMount, actor *ateapipb.Actor, template *ateapipb.ActorTemplate) string {
+	root := actor.GetSharedVolumeSubPaths()[mount.GetName()]
+	if root == "" || isGoldenActor(actor, template) {
+		return mount.GetSubPath()
+	}
+	return joinSubPath(root, mount.GetSubPath())
+}
+
+func joinSubPath(root, sub string) string {
+	if sub == "" {
+		return root
+	}
+	return root + "/" + sub
 }
 
 func isVolumeMounted(volumeName string, template *ateapipb.ActorTemplate) bool {

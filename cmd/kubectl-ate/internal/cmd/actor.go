@@ -48,6 +48,7 @@ var (
 	createActorTemplateFlag  string
 	createActorTagFlag       string
 	createActorVolumeFlag    map[string]string
+	createActorSubPathFlag   map[string]string
 	deleteActorAtespaceFlag  string
 	deleteActorAnyStateFlag  bool
 	resumeActorAtespaceFlag  string
@@ -119,7 +120,7 @@ var createActorCmd = &cobra.Command{
 	Short: "Create an actor",
 	Args:  exactlyOneArg("<actor-name>", "atespace", "template"),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag, createActorVolumeFlag)
+		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag, createActorVolumeFlag, createActorSubPathFlag)
 		if err != nil {
 			return wrapUsageError(err)
 		}
@@ -249,7 +250,7 @@ func buildSuspendActorRequest(actorRef resources.ActorRef, mode ateapipb.Durabil
 	}
 }
 
-func buildCreateActorRequest(actorName, atespace, template, tag string, volumes map[string]string) (*ateapipb.CreateActorRequest, error) {
+func buildCreateActorRequest(actorName, atespace, template, tag string, volumes, subPaths map[string]string) (*ateapipb.CreateActorRequest, error) {
 	templateRef, err := parseAtespacedName(template, atespace)
 	if err != nil {
 		return nil, err
@@ -263,6 +264,9 @@ func buildCreateActorRequest(actorName, atespace, template, tag string, volumes 
 	}
 	if len(volumes) > 0 {
 		actor.SharedVolumeBindings = volumes
+	}
+	if len(subPaths) > 0 {
+		actor.SharedVolumeSubPaths = subPaths
 	}
 
 	if tag != "" {
@@ -749,6 +753,7 @@ func init() {
 	createActorCmd.Flags().StringVarP(&createActorAtespaceFlag, "atespace", "a", "", "atespace to create the actor in")
 	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (see --atespace)")
 	createActorCmd.Flags().StringToStringVar(&createActorVolumeFlag, "volume", nil, "bind an unnamed external.sharedVolume in the template to a SharedVolume, as <volume-name>=<shared-volume-name>; repeatable")
+	createActorCmd.Flags().StringToStringVar(&createActorSubPathFlag, "volume-sub-path", nil, "root every mount of an external.sharedVolume in the template at a directory inside it, as <volume-name>=<dir>; repeatable")
 	createCmd.AddCommand(createActorCmd)
 
 	deleteActorCmd.Flags().StringVarP(&deleteActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")

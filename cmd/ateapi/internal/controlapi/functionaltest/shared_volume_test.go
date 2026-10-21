@@ -497,3 +497,39 @@ func TestCreateActor_SharedVolumeBindings(t *testing.T) {
 		t.Errorf("refs mismatch (-want +got):\n%s", diff)
 	}
 }
+
+func TestCreateActor_SharedVolumeSubPaths(t *testing.T) {
+	ns := namespaceForTest("ns-extvol-subpaths")
+	tc, _ := setupSharedVolumeTest(t, ns)
+	defer tc.cleanup()
+
+	createSharedVolume(t, tc, "ctx-42", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL)
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapipb.Volume{{Name: "work", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{}}}},
+		[]*ateapipb.VolumeMount{{Name: "work", MountPath: "/mnt/work"}})
+	ctx := context.Background()
+	create := func(name string, subPaths map[string]string) error {
+		_, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+			Metadata:             &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			ActorTemplate:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			SharedVolumeBindings: map[string]string{"work": "ctx-42"},
+			SharedVolumeSubPaths: subPaths,
+		}})
+		return err
+	}
+
+	assertGrpcErrorRegex(t, create("stray", map[string]string{"other": "tenant-a"}), codes.InvalidArgument, `shared_volume_sub_paths\["other"\]`)
+	assertGrpcErrorRegex(t, create("escape", map[string]string{"work": "tenant-a/.."}), codes.InvalidArgument, `shared_volume_sub_paths\["work"\]`)
+
+	want := map[string]string{"work": "tenant-a/session-1"}
+	if err := create("rooted", want); err != nil {
+		t.Fatalf("CreateActor(rooted) failed: %v", err)
+	}
+	actor, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "rooted"}})
+	if err != nil {
+		t.Fatalf("GetActor(rooted) failed: %v", err)
+	}
+	if diff := cmp.Diff(want, actor.GetSharedVolumeSubPaths()); diff != "" {
+		t.Errorf("shared_volume_sub_paths mismatch (-want +got):\n%s", diff)
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/volumepath"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -61,6 +62,9 @@ func resolveSharedVolumeRefs(ctx context.Context, st sharedVolumeRefStore, actor
 			return nil, apierror.InvalidArgument("shared_volume_bindings[%q] does not name an unnamed external.shared_volume in the template", slot)
 		}
 	}
+	if err := validateSharedVolumeSubPaths(actor.GetSharedVolumeSubPaths(), template); err != nil {
+		return nil, err
+	}
 
 	var mounts []*ateapipb.ExternalVolume
 	for _, vol := range template.GetVolumes() {
@@ -81,6 +85,36 @@ func resolveSharedVolumeRefs(ctx context.Context, st sharedVolumeRefStore, actor
 		mounts = append(mounts, sharedVolumeMount(vol.GetName(), volume))
 	}
 	return mounts, nil
+}
+
+// validateSharedVolumeSubPaths checks each actor root names a shared volume in
+// the template and stays a valid sub_path once joined with every mount of it.
+func validateSharedVolumeSubPaths(subPaths map[string]string, template *ateapipb.ActorTemplate) error {
+	shared := make(map[string]bool)
+	for _, vol := range template.GetVolumes() {
+		if vol.GetExternal().GetSharedVolume() != nil {
+			shared[vol.GetName()] = true
+		}
+	}
+	for slot, root := range subPaths {
+		if !shared[slot] {
+			return apierror.InvalidArgument("shared_volume_sub_paths[%q] does not name an external.shared_volume in the template", slot)
+		}
+		if err := volumepath.ValidateProjected(root); err != nil {
+			return apierror.InvalidArgument("shared_volume_sub_paths[%q]: %v", slot, err)
+		}
+		for _, ctr := range template.GetContainers() {
+			for _, mount := range ctr.GetVolumeMounts() {
+				if mount.GetName() != slot {
+					continue
+				}
+				if err := volumepath.ValidateProjected(joinSubPath(root, mount.GetSubPath())); err != nil {
+					return apierror.InvalidArgument("shared_volume_sub_paths[%q] joined with the sub_path of mount %q: %v", slot, mount.GetMountPath(), err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func getReadySharedVolume(ctx context.Context, st sharedVolumeRefStore, volumeRef resources.SharedVolumeRef) (*ateapipb.SharedVolume, error) {

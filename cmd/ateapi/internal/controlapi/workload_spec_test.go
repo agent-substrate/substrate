@@ -739,3 +739,67 @@ func TestWorkloadSpecBorrowedVolume(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkloadSpecSharedVolumeSubPaths(t *testing.T) {
+	template := &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "space-abc", Name: "tmpl1", Uid: "tmpl1-uid"},
+		Volumes: []*ateapipb.Volume{
+			{Name: "session", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{}}},
+			{Name: "skills", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{Name: "shared"}}},
+		},
+		Containers: []*ateapipb.Container{{
+			Name: "main",
+			VolumeMounts: []*ateapipb.VolumeMount{
+				{Name: "session", MountPath: "/workspace"},
+				{Name: "session", MountPath: "/history", SubPath: "history", ReadOnly: true},
+				{Name: "skills", MountPath: "/skills", SubPath: "skills", ReadOnly: true},
+			},
+		}},
+	}
+	sessionVol := &ateapipb.ExternalVolume{Name: "session", SharedVolumeName: "shared", StorageVolumeId: "disk-shared", VolumeType: "nfs.csi.k8s.io"}
+	skillsVol := &ateapipb.ExternalVolume{Name: "skills", SharedVolumeName: "shared", StorageVolumeId: "disk-shared", VolumeType: "nfs.csi.k8s.io"}
+
+	tests := []struct {
+		name  string
+		actor *ateapipb.Actor
+		want  []*ateletpb.VolumeMount
+	}{
+		{
+			name: "actor root prefixes every mount of its volume",
+			actor: &ateapipb.Actor{
+				Metadata:             &ateapipb.ResourceMetadata{Atespace: "space-abc", Name: "session-1"},
+				SharedVolumeBindings: map[string]string{"session": "shared"},
+				SharedVolumeSubPaths: map[string]string{"session": "tenant-a/session-1"},
+				Status:               &ateapipb.ActorStatus{ExternalVolumes: []*ateapipb.ExternalVolume{sessionVol, skillsVol}},
+			},
+			want: []*ateletpb.VolumeMount{
+				{Name: "session", MountPath: "/workspace", SubPath: "tenant-a/session-1"},
+				{Name: "session", MountPath: "/history", SubPath: "tenant-a/session-1/history", ReadOnly: true},
+				{Name: "skills", MountPath: "/skills", SubPath: "skills", ReadOnly: true},
+			},
+		},
+		{
+			name: "golden actor ignores the root",
+			actor: &ateapipb.Actor{
+				Metadata:             &ateapipb.ResourceMetadata{Atespace: "space-abc", Name: "tmpl1-uid"},
+				SharedVolumeSubPaths: map[string]string{"session": "tenant-a/session-1"},
+			},
+			want: []*ateletpb.VolumeMount{
+				{Name: "session", MountPath: "/workspace"},
+				{Name: "session", MountPath: "/history", SubPath: "history", ReadOnly: true},
+				{Name: "skills", MountPath: "/skills", SubPath: "skills", ReadOnly: true},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := workloadSpecFromActorTemplate(template, tc.actor, nil)
+			if err != nil {
+				t.Fatalf("workloadSpecFromActorTemplate: %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got.GetContainers()[0].GetVolumeMounts(), protocmp.Transform()); diff != "" {
+				t.Errorf("mounts mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}

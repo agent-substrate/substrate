@@ -49,6 +49,7 @@ func TestBuildCreateActorRequest(t *testing.T) {
 		templateRef string
 		tag         string
 		volumes     map[string]string
+		subPaths    map[string]string
 		want        *ateapipb.Actor
 		wantErr     bool
 	}{
@@ -98,13 +99,23 @@ func TestBuildCreateActorRequest(t *testing.T) {
 				SharedVolumeBindings: map[string]string{"shared": "ctx-42"},
 			},
 		},
+		{
+			name:        "volume sub paths",
+			templateRef: "counter",
+			subPaths:    map[string]string{"shared": "tenant-a/session-1"},
+			want: &ateapipb.Actor{
+				Metadata:             &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate:        &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
+				SharedVolumeSubPaths: map[string]string{"shared": "tenant-a/session-1"},
+			},
+		},
 		{name: "malformed template ref", templateRef: "a/b/c", wantErr: true},
 		{name: "malformed tag", templateRef: "counter", tag: "a/b/c", wantErr: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.tag, test.volumes)
+			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.tag, test.volumes, test.subPaths)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("buildCreateActorRequest error = %v, wantErr %t", err, test.wantErr)
 			}

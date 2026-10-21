@@ -291,3 +291,53 @@ func (d *recordingSharedVolumeDeleter) DeleteSharedVolume(_ context.Context, vol
 	d.deleted = append(d.deleted, volumeRef.String())
 	return nil, nil
 }
+
+func TestValidateSharedVolumeSubPaths(t *testing.T) {
+	template := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{Name: "session", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{}}},
+			{Name: "skills", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{Name: "shared"}}},
+			{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+		},
+		Containers: []*ateapipb.Container{{
+			Name: "main",
+			VolumeMounts: []*ateapipb.VolumeMount{
+				{Name: "session", MountPath: "/workspace"},
+				{Name: "session", MountPath: "/history", SubPath: "a/b/c/d/e/f/g/h"},
+				{Name: "skills", MountPath: "/skills", SubPath: "skills"},
+			},
+		}},
+	}
+	tests := []struct {
+		name     string
+		subPaths map[string]string
+		wantErr  string
+	}{
+		{name: "none"},
+		{name: "unnamed ref", subPaths: map[string]string{"session": "tenant-a/session-1"}},
+		{name: "named ref", subPaths: map[string]string{"skills": "global"}},
+		{name: "not a shared volume", subPaths: map[string]string{"scratch": "x"}, wantErr: "does not name an external.shared_volume"},
+		{name: "unknown volume", subPaths: map[string]string{"missing": "x"}, wantErr: "does not name an external.shared_volume"},
+		{name: "empty", subPaths: map[string]string{"session": ""}, wantErr: "must not be empty"},
+		{name: "escapes the volume", subPaths: map[string]string{"session": "tenant-a/../other"}, wantErr: `".."`},
+		{name: "absolute", subPaths: map[string]string{"session": "/tenant-a"}, wantErr: "no leading"},
+		{name: "too deep once joined", subPaths: map[string]string{"session": "1/2/3/4/5/6/7/8/9"}, wantErr: "joined with the sub_path of mount \"/history\""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSharedVolumeSubPaths(tc.subPaths, template)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateSharedVolumeSubPaths: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("validateSharedVolumeSubPaths error = %v, want containing %q", err, tc.wantErr)
+			}
+			if got := apierror.Code(err); got != codes.InvalidArgument {
+				t.Errorf("code = %v, want InvalidArgument", got)
+			}
+		})
+	}
+}

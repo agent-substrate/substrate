@@ -367,6 +367,45 @@ func Validate_Actor(
 		errs = append(errs, fn(fldPath.Child("shared_volume_bindings"), obj.SharedVolumeBindings, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.Actor.SharedVolumeSubPaths
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj map[string]string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.Immutable(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 32).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj, validate.ShortName); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Actor) map[string]string {
+				return oldObj.SharedVolumeSubPaths
+			})
+		errs = append(errs, fn(fldPath.Child("shared_volume_sub_paths"), obj.SharedVolumeSubPaths, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

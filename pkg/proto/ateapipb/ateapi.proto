@@ -610,6 +610,17 @@ message Actor {
   // +k8s:eachVal=+k8s:format=k8s-short-name
   // +k8s:immutable
   map<string, string> shared_volume_bindings = 8;
+
+  // shared_volume_sub_paths roots this actor's view of an external.shared_volume
+  // in the template, by volume name, at a directory inside the SharedVolume.
+  // Every mount of that volume resolves its sub_path beneath this directory.
+  // Values follow the VolumeMount.sub_path rule. Set at creation.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:format=k8s-short-name
+  // +k8s:immutable
+  map<string, string> shared_volume_sub_paths = 9;
 }
 
 // EgressPolicy is an egress policy resource nested under an Actor. An Actor has
