@@ -79,8 +79,7 @@ const deniedBody = "egress denied"
 type Handler struct {
 	apiClient ateapipb.ControlClient
 	// loadActorIdentityRoots yields the actor-identity CA bundle every actor
-	// certificate must chain to. Nil means the gateway cannot authenticate
-	// anyone, and every CONNECT fails closed.
+	// certificate must chain to. An error fails the CONNECT closed.
 	loadActorIdentityRoots func() (*x509.CertPool, error)
 	// policies is the per-actor EgressPolicy cache every leg reads through.
 	policies *policyCache
@@ -97,7 +96,8 @@ type Handler struct {
 
 // New builds the egress handler. loadActorIdentityRoots yields the egress
 // listener's trusted_ca; It is called on every CONNECT, so a rotated bundle
-// applies to the next tunnel. policyCacheTTL of 0 fetches the policy on every callout.
+// applies to the next tunnel. A nil loadActorIdentityRoots fails every
+// CONNECT with 503. policyCacheTTL of 0 fetches the policy on every callout.
 //
 // provider resolves an allowed rule's credential_uri injections on the
 // TLS-terminated MITM leg; nil leaves them off, so a request that needs one is
@@ -105,6 +105,11 @@ type Handler struct {
 // the provider this gateway serves; a credential URI naming another provider
 // is refused.
 func New(apiClient ateapipb.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
+	if loadActorIdentityRoots == nil {
+		loadActorIdentityRoots = func() (*x509.CertPool, error) {
+			return nil, errors.New("no actor-identity CA configured")
+		}
+	}
 	return &Handler{
 		apiClient:              apiClient,
 		loadActorIdentityRoots: loadActorIdentityRoots,
@@ -146,12 +151,8 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress denied: expected CONNECT, got %q", md.Method)
 	}
 
-	// No roots means the gateway cannot authenticate anyone. Fail closed, and
+	// Without roots the gateway cannot authenticate anyone. Fail closed, and
 	// as 503 rather than 403: this is our misconfiguration, not the actor's.
-	if h.loadActorIdentityRoots == nil {
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_ServiceUnavailable,
-			"egress unavailable: no actor-identity CA configured")
-	}
 	roots, err := h.loadActorIdentityRoots()
 	if err != nil {
 		slog.ErrorContext(ctx, "egress unavailable: loading the actor-identity CA failed", slog.Any("err", err))
