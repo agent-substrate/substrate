@@ -46,8 +46,6 @@ const injectionTimeout = 4 * time.Second
 // completed as the policy promised.
 func mapCredentialProviderError(err error) error {
 	switch status.Code(err) {
-	case codes.NotFound, codes.PermissionDenied:
-		return extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
 	case codes.Unavailable, codes.DeadlineExceeded:
 		return extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err, deniedBody)
 	default:

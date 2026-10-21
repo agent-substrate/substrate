@@ -82,7 +82,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 
 	fs.DurationVar(&cfg.EgressPolicyCacheTTL, "egress-policy-cache-ttl", egress.DefaultPolicyCacheTTL, "How long the egress gateway keeps acting on an actor's EgressPolicy before fetching it from ateapi again, which bounds the lag between a policy change and its effect on new requests. 0 disables the cache (concurrent callouts for one actor still share a fetch)")
 
-	// Egress credential injection (MITM leg). Only the egress gateway sets these,
+	// Egress credential injection. Only the egress gateway sets these,
 	// and only when injection is enabled: with an empty
 	// --credential-provider-address, a request matching an EgressPolicy rule
 	// that requires injection is denied.
