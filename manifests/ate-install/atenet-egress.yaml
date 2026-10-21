@@ -98,12 +98,17 @@ data:
                     resource_api_version: V3
                     path_config_source:
                       path: /etc/envoy/sds-servicedns-cert.yaml
-                validation_context:
-                  # Actors authenticate with an actor-identity client cert.
-                  # Envoy enforces chain, signature, and validity period here, so
-                  # an unsigned or expired actor cert never reaches ext_proc,
-                  # which reads the actor from its SPIFFE URI SAN.
-                  trusted_ca: { filename: /run/actor-id-ca-certs/ca.crt }
+                # Actors authenticate with an actor-identity client cert.
+                # Envoy enforces chain, signature, and validity period here, so
+                # an unsigned or expired actor cert never reaches ext_proc,
+                # which reads the actor from its SPIFFE URI SAN. Filesystem SDS
+                # for the same reason as the serving cert above.
+                validation_context_sds_secret_config:
+                  name: actor_identity_validation_context
+                  sds_config:
+                    resource_api_version: V3
+                    path_config_source:
+                      path: /etc/envoy/sds-actor-identity-validation.yaml
           filters:
           - name: envoy.filters.network.http_connection_manager
             typed_config:
@@ -1117,6 +1122,15 @@ data:
         certificate_chain: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
         private_key: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
         watched_directory: { path: /run/servicedns.podcert.ate.dev }
+  # SDS resource for the actor-identity CA roots the egress listener trusts.
+  # The actor-id-ca-certs Secret volume rotates the same way.
+  sds-actor-identity-validation.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: actor_identity_validation_context
+      validation_context:
+        trusted_ca: { filename: /run/actor-id-ca-certs/ca.crt }
+        watched_directory: { path: /run/actor-id-ca-certs }
   # The next two keys are used only by the additional_egress_ext_proc cluster
   # spliced over the #ATE_MITM_EXTPROC_CLUSTER marker. They ship
   # unconditionally because the splice can only rewrite envoy.yaml, not add

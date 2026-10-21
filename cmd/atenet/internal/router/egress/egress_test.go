@@ -86,10 +86,11 @@ func newTestCA(t *testing.T, commonName string) *testCA {
 	return &testCA{cert: cert, key: key}
 }
 
-func (ca *testCA) roots() *x509.CertPool {
+// loadRoots is an actor-identity roots loader for New that trusts only ca.
+func (ca *testCA) loadRoots() (*x509.CertPool, error) {
 	pool := x509.NewCertPool()
 	pool.AddCert(ca.cert)
-	return pool
+	return pool, nil
 }
 
 // actorCertOptions mutates the leaf template so each test can break exactly one
@@ -165,8 +166,8 @@ func xfccHeaderDER(chain ...[]byte) string {
 
 // egressHandler builds a Handler with an allow-everything policy, so the
 // identity tests are about identity alone.
-func egressHandler(roots *x509.CertPool, actor *ateapipb.Actor, err error) *Handler {
-	return New(&egressMockClient{actor: actor, err: err, policy: allowAllPolicy()}, roots, DefaultPolicyCacheTTL, nil, "")
+func egressHandler(loadRoots func() (*x509.CertPool, error), actor *ateapipb.Actor, err error) *Handler {
+	return New(&egressMockClient{actor: actor, err: err, policy: allowAllPolicy()}, loadRoots, DefaultPolicyCacheTTL, nil, "")
 }
 
 // egressMockClient is the slice of ateapi the egress handler talks to.
@@ -332,7 +333,7 @@ func wantStatus(t *testing.T, err error, want envoy_type.StatusCode) {
 func TestHandleRequestHeadersAllowsVerifiedActor(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
-	h := egressHandler(ca.roots(), runningActor(), nil)
+	h := egressHandler(ca.loadRoots, runningActor(), nil)
 
 	res, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
 	if err != nil {
@@ -408,7 +409,7 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(&egressMockClient{actor: runningActor(), policy: tc.policy}, ca.roots(), 0, nil, "")
+			h := New(&egressMockClient{actor: runningActor(), policy: tc.policy}, ca.loadRoots, 0, nil, "")
 			md := egressMetadata(xfccHeader(leaf))
 			md.Host = "93.184.216.34:443"
 			if tc.dialed != "" {
@@ -467,7 +468,7 @@ func TestConnectLegWithoutRequestLegs(t *testing.T) {
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
 	certificate := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw}))
 
-	h := New(&egressMockClient{actor: runningActor(), policy: httpPolicy("api.example.com")}, ca.roots(), 0, nil, "")
+	h := New(&egressMockClient{actor: runningActor(), policy: httpPolicy("api.example.com")}, ca.loadRoots, 0, nil, "")
 	res, err := h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))
 	if err != nil {
 		t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
@@ -475,7 +476,7 @@ func TestConnectLegWithoutRequestLegs(t *testing.T) {
 	if got := dialedPortOf(res); got != "80" {
 		t.Errorf("dialed port = %q, want %q", got, "80")
 	}
-	h = New(&egressMockClient{actor: runningActor()}, ca.roots(), 0, nil, "")
+	h = New(&egressMockClient{actor: runningActor()}, ca.loadRoots, 0, nil, "")
 	_, err = h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))
 	wantStatus(t, err, envoy_type.StatusCode_Forbidden)
 }
@@ -483,7 +484,7 @@ func TestConnectLegWithoutRequestLegs(t *testing.T) {
 func TestHandleRequestHeadersAllowsAgentgatewayCertificateAttribute(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
-	h := egressHandler(ca.roots(), runningActor(), nil)
+	h := egressHandler(ca.loadRoots, runningActor(), nil)
 
 	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw})
 	if _, err := h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(string(certificate))); err != nil {
@@ -701,7 +702,7 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := egressHandler(ca.roots(), runningActor(), nil)
+			h := egressHandler(ca.loadRoots, runningActor(), nil)
 			_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(tc.xfcc(t)))
 			wantStatus(t, err, tc.want)
 		})
@@ -745,7 +746,7 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := egressHandler(ca.roots(), tc.actor, tc.err)
+			h := egressHandler(ca.loadRoots, tc.actor, tc.err)
 			leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
 			_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
 			wantStatus(t, err, tc.want)
@@ -753,15 +754,52 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 	}
 }
 
-// An ingress-only router has no actor-identity CA. If an egress CONNECT somehow
-// reaches it, it must fail closed rather than tunnel unauthenticated traffic.
-func TestHandleRequestHeadersWithoutConfiguredCA(t *testing.T) {
+// Without actor-identity roots the gateway must fail closed rather than tunnel
+// unauthenticated traffic. An ingress-only router has no CA configured, and a
+// configured bundle can become unreadable after startup.
+func TestHandleRequestHeadersWithoutUsableCA(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
-	h := egressHandler(nil, runningActor(), nil)
+
+	tests := []struct {
+		name      string
+		loadRoots func() (*x509.CertPool, error)
+	}{
+		{
+			name: "no CA configured",
+		},
+		{
+			name: "CA fails to load",
+			loadRoots: func() (*x509.CertPool, error) {
+				return nil, errors.New("trust bundle contains no certificates")
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := egressHandler(tc.loadRoots, runningActor(), nil)
+			_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
+			wantStatus(t, err, envoy_type.StatusCode_ServiceUnavailable)
+		})
+	}
+}
+
+// A rotated actor-identity CA applies to the next CONNECT without a restart.
+func TestHandleRequestHeadersPicksUpRotatedCA(t *testing.T) {
+	oldCA := newTestCA(t, "actor-identity-ca")
+	newCA := newTestCA(t, "actor-identity-ca-rotated")
+	leaf := newCA.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
+	load := oldCA.loadRoots
+	h := egressHandler(func() (*x509.CertPool, error) { return load() }, runningActor(), nil)
 
 	_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
-	wantStatus(t, err, envoy_type.StatusCode_ServiceUnavailable)
+	wantStatus(t, err, envoy_type.StatusCode_Forbidden)
+
+	load = newCA.loadRoots
+	if _, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf))); err != nil {
+		t.Fatalf("HandleRequestHeaders() after rotation error = %v, want nil", err)
+	}
 }
 
 // atunnel always sends the address the actor's kernel dialed; a name here is
@@ -769,7 +807,7 @@ func TestHandleRequestHeadersWithoutConfiguredCA(t *testing.T) {
 func TestHandleRequestHeadersRejectsNonAddressAuthority(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
-	h := egressHandler(ca.roots(), runningActor(), nil)
+	h := egressHandler(ca.loadRoots, runningActor(), nil)
 
 	for _, authority := range []string{"example.com:443", "93.184.216.34", ""} {
 		md := egressMetadata(xfccHeader(leaf))
@@ -783,7 +821,7 @@ func TestHandleRequestHeadersRejectsNonAddressAuthority(t *testing.T) {
 func TestHandleRequestHeadersRejectsNonConnect(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
-	h := egressHandler(ca.roots(), runningActor(), nil)
+	h := egressHandler(ca.loadRoots, runningActor(), nil)
 
 	md := egressMetadata(xfccHeader(leaf))
 	md.Method = "GET"

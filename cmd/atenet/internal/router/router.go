@@ -22,7 +22,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -40,6 +39,7 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 	"go.ate.dev/substrate/internal/ateapiauth"
+	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
@@ -206,17 +206,14 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	if s.cfg.Mode.ServesEgress() {
 		// Load the actor-identity CA up front so a missing or unusable bundle
 		// fails startup, rather than turning into a 503 on the first actor
-		// egress attempt. An unset flag leaves the handler with no roots, which
-		// denies every CONNECT — see egress.New.
-		var actorIdentityRoots *x509.CertPool
+		// egress attempt. The handler reloads it when the file changes. An
+		// unset flag leaves the handler with no roots, which denies every
+		// CONNECT — see egress.New.
+		var loadActorIdentityRoots func() (*x509.CertPool, error)
 		if s.cfg.ActorIdentityCAFile != "" {
-			pemBytes, err := os.ReadFile(s.cfg.ActorIdentityCAFile)
-			if err != nil {
-				return fmt.Errorf("reading --actor-identity-ca-file: %w", err)
-			}
-			actorIdentityRoots, err = egress.LoadActorIdentityRoots(pemBytes)
-			if err != nil {
-				return fmt.Errorf("loading --actor-identity-ca-file %q: %w", s.cfg.ActorIdentityCAFile, err)
+			loadActorIdentityRoots = credbundle.PoolLoader(s.cfg.ActorIdentityCAFile)
+			if _, err := loadActorIdentityRoots(); err != nil {
+				return fmt.Errorf("loading --actor-identity-ca-file: %w", err)
 			}
 		}
 		// Enable egress credential injection when a credential provider address
@@ -247,7 +244,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				slog.String("provider_name", s.cfg.CredentialProvider.Name))
 		}
 
-		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName)
+		egressHandler := egress.New(s.apiClient, loadActorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 

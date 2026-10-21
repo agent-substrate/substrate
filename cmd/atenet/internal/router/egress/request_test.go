@@ -446,7 +446,7 @@ func TestConnectLegRequiresAPolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(tc.client, ca.roots(), DefaultPolicyCacheTTL, nil, "")
+			h := New(tc.client, ca.loadRoots, DefaultPolicyCacheTTL, nil, "")
 			res, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
 			if tc.want == 0 {
 				wantAllowed(t, res, err)
