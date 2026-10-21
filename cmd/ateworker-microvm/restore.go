@@ -583,12 +583,15 @@ func (s *AteWorkerService) cleanupFailedRestoreRootfs(ctx context.Context, actor
 //
 // The guest did run, though: after Resume, it and the workload in it run while
 // the agent is dialed and the CRNG reseeded (up to about 15s plus
-// reseedTimeout). Nothing routes inbound traffic to it yet, and atunnel's
-// egress proxy closes its outbound TCP connections until tunnel.Activate, but
-// it can query the DNS relay and write to its volumes, and what it writes to
-// external volumes stays. When the reseed is what failed, it ran on CRNG state
-// shared with the snapshot's other clones. The retry resumes the same snapshot
-// again.
+// reseedTimeout). Nothing routes inbound traffic to it yet (not even the wakeup
+// probe), and atunnel's egress proxy closes its outbound TCP connections until
+// tunnel.Activate, but a background task in the guest can query the DNS relay
+// or write to its filesystems. The retry re-extracts the rootfs upper and
+// durable-dir volumes from the snapshot, whereas a CSI volume is outside the
+// snapshot and keeps any writes made during that window while guest memory and
+// its page cache resume from the snapshot; we accept that narrow window over
+// crashing the actor on a transient host stall. When the reseed is what failed,
+// the guest also ran on CRNG state shared with the snapshot's other clones.
 //
 // A guest found stopped while dialing the agent (errGuestStopped:
 // cloud-hypervisor exited, e.g. a guest kernel panic after resume or a corrupt

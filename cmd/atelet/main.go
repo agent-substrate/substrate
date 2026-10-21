@@ -1617,36 +1617,6 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		}
 	}()
 
-	// If the restore fails, unmount the external volumes so a retried Restore's
-	// resetActorDirs can remove the mountpoint directories without hitting
-	// EBUSY/ENOTEMPTY. Registered before mounting, so a mount failure partway
-	// through the list unmounts the volumes mounted before it. That also asks
-	// the plugin to unmount the volumes that were never mounted:
-	// unmountExternalVolumes treats a NotFound as already unmounted, and this
-	// defer only logs any other error.
-	//
-	// Once the worker call starts, the sandbox may be using the volumes, so they
-	// are unmounted only if RestoreWorkload returned an error while atelet was
-	// still waiting for it. A worker returns an error only after its failure
-	// cleanup has run: the micro-VM worker kills cloud-hypervisor and
-	// virtiofsd, and the gVisor worker runs runsc delete on the containers it
-	// created. A transport error, such as the connection dropping mid-call,
-	// leaves the worker's outcome unknown: its cleanup may still be running, or
-	// may never run if the worker process died. After a successful worker call
-	// (a later step failing), or when atelet stopped waiting first, the volumes
-	// stay mounted, and a retried Restore here then fails in resetActorDirs,
-	// crashing the actor.
-	unmountVolumesOnFailure := true
-	defer func() {
-		if err != nil && unmountVolumesOnFailure {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			if uerr := s.unmountExternalVolumes(cleanupCtx, actorUID, req.GetSpec().GetVolumes()); uerr != nil {
-				slog.WarnContext(cleanupCtx, "Failed to unmount external volumes after Restore failure",
-					slog.Any("actor", actorRef), slog.Any("err", uerr))
-			}
-		}
-	}()
 	tMount := time.Now()
 	mountErr := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
 	dMount = time.Since(tMount)
@@ -1792,7 +1762,6 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// The worker_restore phase is opaque from here; worker logs its own breakdown of
 	// this call as "Actor restore phases".
 	tWorker := time.Now()
-	unmountVolumesOnFailure = false
 	_, err = client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
@@ -1810,7 +1779,6 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {
-		unmountVolumesOnFailure = ctx.Err() == nil
 		return nil, s.boundRetryableRestoreError(actorUID, req.GetSnapshot().GetSnapshotUuid(), workerRestoreError(ctx, err))
 	}
 
@@ -1876,18 +1844,8 @@ const maxConsecutiveRetryableRestoreFailures = 3
 
 // restoreFailureCounter counts each actor's consecutive retryable worker
 // restore failures on this node, per snapshot. The zero value is ready to use.
-//
-// An actor's count changes only while its actor lock is held. Atelet.Restore
-// resets it when the restore succeeds or fails with an error that crashes the
-// actor (see endsRestoreFailureStreak), except for the errors it returns
-// before taking the lock: an invalid request, or a runtime this node does not
-// advertise. Those come before any on-node work, and leave a count that
-// matters only if the same snapshot is restored here again. A successful
-// Terminate resets the count too. An actor that leaves this node in the middle
-// of a streak keeps its one entry until it is restored or terminated here
-// again; restoring a different snapshot then starts the count over. The counts
-// live in memory: an atelet restart starts every actor over, which only allows
-// a few more retries.
+// Entries for actors that left this node stay until the actor is restored or
+// terminated here again.
 type restoreFailureCounter struct {
 	mu      sync.Mutex
 	streaks map[string]restoreFailureStreak

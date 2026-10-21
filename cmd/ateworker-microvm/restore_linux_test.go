@@ -17,11 +17,14 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/roottest"
@@ -31,8 +34,9 @@ import (
 // by the time buildActorContainers returns: a rootfs upper dir re-materialized
 // from the snapshot and each container's bundle rootfs. With overlays, the
 // bundle rootfs is an overlay mount, as in production.
-func failedRestoreRootfs(t *testing.T, overlays bool) *ateworkerpb.ActorDirs {
+func failedRestoreRootfs(t *testing.T, actorUID string, overlays bool) *ateworkerpb.ActorDirs {
 	t.Helper()
+	t.Cleanup(func() { kata.CleanupSandboxState(context.Background(), actorUID) })
 	dirs := &ateworkerpb.ActorDirs{RootDir: t.TempDir(), OciBundleDir: t.TempDir()}
 	if err := os.MkdirAll(filepath.Join(rootfsUpperDir(dirs), "app", "data"), 0o755); err != nil {
 		t.Fatal(err)
@@ -57,7 +61,7 @@ func failedRestoreRootfs(t *testing.T, overlays bool) *ateworkerpb.ActorDirs {
 		// t.TempDir can remove the bundle.
 		t.Cleanup(func() { _ = imagecache.UnmountAllUnder(dirs.GetOciBundleDir()) })
 	}
-	if _, err := (&AteWorkerService{}).buildActorContainers("restore-cleanup-test", dirs, containers); err != nil {
+	if _, err := (&AteWorkerService{}).buildActorContainers(actorUID, dirs, containers); err != nil {
 		t.Fatalf("buildActorContainers: %v", err)
 	}
 	return dirs
@@ -89,8 +93,9 @@ func mountsUnder(t *testing.T, dir string) []string {
 // same dir and remounts the bundles.
 func TestCleanupFailedRestoreRootfs(t *testing.T) {
 	t.Run("removes the rootfs upper dir", func(t *testing.T) {
-		dirs := failedRestoreRootfs(t, false)
-		(&AteWorkerService{}).cleanupFailedRestoreRootfs(t.Context(), "restore-cleanup-test", dirs)
+		actorUID := uuid.NewString()
+		dirs := failedRestoreRootfs(t, actorUID, false)
+		(&AteWorkerService{}).cleanupFailedRestoreRootfs(t.Context(), actorUID, dirs)
 		if _, err := os.Stat(rootfsUpperDir(dirs)); !os.IsNotExist(err) {
 			t.Errorf("rootfs upper dir after cleanup: stat = %v, want it removed", err)
 		}
@@ -98,11 +103,12 @@ func TestCleanupFailedRestoreRootfs(t *testing.T) {
 
 	t.Run("detaches the bundle rootfs overlays", func(t *testing.T) {
 		roottest.Require(t, "mounts the bundle rootfs overlay")
-		dirs := failedRestoreRootfs(t, true)
+		actorUID := uuid.NewString()
+		dirs := failedRestoreRootfs(t, actorUID, true)
 		if len(mountsUnder(t, dirs.GetOciBundleDir())) == 0 {
 			t.Fatal("buildActorContainers mounted no bundle rootfs overlay")
 		}
-		(&AteWorkerService{}).cleanupFailedRestoreRootfs(t.Context(), "restore-cleanup-test", dirs)
+		(&AteWorkerService{}).cleanupFailedRestoreRootfs(t.Context(), actorUID, dirs)
 		if got := mountsUnder(t, dirs.GetOciBundleDir()); len(got) != 0 {
 			t.Errorf("mounts under the bundle dir after cleanup = %v, want none", got)
 		}
