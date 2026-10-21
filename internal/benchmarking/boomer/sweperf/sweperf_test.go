@@ -424,19 +424,24 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 // mode of the SuspendActor that ends each cycle.
 func TestSuspendLifecycleMode(t *testing.T) {
 	for _, tt := range []struct {
-		mode string
-		want ateapipb.DurabilityMode
+		mode       string
+		want       ateapipb.DurabilityMode
+		wantMetric string
 	}{
-		{"", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
-		{dynconfig.LifecycleModeSuspend, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
-		{dynconfig.LifecycleModePause, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		{"", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, "SuspendActor"},
+		{dynconfig.LifecycleModeSuspend, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, "SuspendActor"},
+		{dynconfig.LifecycleModePause, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
 	} {
 		t.Run("mode="+tt.mode, func(t *testing.T) {
 			cfg, _, fakeCtrl := newTestConfig(t, http.NotFoundHandler())
 			cfg.Dyn = dynconfig.Static(knobs{Lifecycle: dynconfig.Lifecycle{LifecycleMode: tt.mode}})
 			u := &sweperfUser{cfg: cfg, actorName: "test-actor", userClass: sweperfUserClass}
+			before := readStats(t)
 			if !u.suspend(context.Background()) {
 				t.Fatal("suspend() = false, want true")
+			}
+			if got := recordedSince(t, before, tt.wantMetric, "success"); got.count != 1 {
+				t.Errorf("%s recorded %d samples, want 1", tt.wantMetric, got.count)
 			}
 			fakeCtrl.mu.Lock()
 			defer fakeCtrl.mu.Unlock()
