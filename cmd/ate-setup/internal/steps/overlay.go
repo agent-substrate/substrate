@@ -389,7 +389,11 @@ func (e *Env) patchAtenetEgressManifest() ([]byte, error) {
 	address := fmt.Sprintf("%s.%s.svc.cluster.local", service, namespace)
 	serverName := fmt.Sprintf("%s.%s.svc", service, namespace)
 
-	filterBlock := emitAdditionalEgressExtprocFilter(e.Cfg.AdditionalEgressExtprocAuthoritative)
+	responseHeaderMode := "SKIP"
+	if e.Cfg.AdditionalEgressExtprocAuthoritative {
+		responseHeaderMode = "SEND"
+	}
+	filterBlock := emitAdditionalEgressExtprocFilter(responseHeaderMode)
 	clusterBlock := emitAdditionalEgressExtprocCluster(address, port, serverName)
 
 	lines := strings.Split(string(raw), "\n")
@@ -431,19 +435,27 @@ func (e *Env) patchAtenetEgressManifest() ([]byte, error) {
 			e.atenetEgressManifestPath(), filtersReplaced, clustersReplaced)
 	}
 
-	return []byte(strings.Join(out, "\n")), nil
+	// An authoritative processor also writes the SNI rules on the CONNECT
+	// chain, which the sidecar then leaves out.
+	var connectBlock string
+	if e.Cfg.AdditionalEgressExtprocAuthoritative {
+		connectBlock = emitAdditionalEgressExtprocFilter("SKIP", "dev.ate.policy.egress")
+	}
+	return replaceManifestMarker([]byte(strings.Join(out, "\n")), "#ATE_EGRESS_CONNECT_EXTPROC_FILTER", connectBlock)
 }
 
 const additionalEgressExtprocCluster = "additional_egress_ext_proc"
 
 // emitAdditionalEgressExtprocFilter is the additional processor's filter. It
-// gets the same trusted attributes as the policy filter. An authoritative
-// processor decides each request in place of the policy, so it also gets the
-// response headers.
-func emitAdditionalEgressExtprocFilter(authoritative bool) string {
-	responseHeaderMode := "SKIP"
-	if authoritative {
-		responseHeaderMode = "SEND"
+// gets the same trusted attributes as the policy filter. Envoy keeps the
+// dynamic metadata it returns only in receivingNamespaces.
+func emitAdditionalEgressExtprocFilter(responseHeaderMode string, receivingNamespaces ...string) string {
+	var metadataOptions string
+	if len(receivingNamespaces) > 0 {
+		metadataOptions = "\n    metadata_options:\n      receiving_namespaces:\n        untyped:"
+		for _, ns := range receivingNamespaces {
+			metadataOptions += "\n        - " + ns
+		}
 	}
 	return fmt.Sprintf(`- name: envoy.filters.http.ext_proc
   typed_config:
@@ -468,7 +480,7 @@ func emitAdditionalEgressExtprocFilter(authoritative bool) string {
       response_trailer_mode: SKIP
     mutation_rules:
       disallow_system: true
-      disallow_is_error: true`, responseHeaderMode)
+      disallow_is_error: true%s`, responseHeaderMode, metadataOptions)
 }
 
 func emitAdditionalEgressExtprocCluster(address, port, serverName string) string {

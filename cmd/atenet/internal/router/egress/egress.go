@@ -93,9 +93,10 @@ type Handler struct {
 	// its ate-secret:// credential URIs); a credential URI naming another
 	// provider is refused.
 	providerName string
-	// externalAuthorization skips the http and https rules and their
-	// credential effects on the request legs. An external ext_proc filter
-	// later in the chain decides each request instead.
+	// externalAuthorization leaves the EgressPolicy out entirely. The CONNECT
+	// leg returns no SNI rules, and the request legs evaluate no rules and
+	// inject no credentials. An external ext_proc filter later in each chain
+	// supplies the rules and decides each request.
 	externalAuthorization bool
 }
 
@@ -109,10 +110,10 @@ type Handler struct {
 // the provider this gateway serves; a credential URI naming another provider
 // is refused.
 //
-// externalAuthorization leaves each request inside the tunnel to an external
-// ext_proc filter: the request legs allow any request from an authenticated
-// actor and answer its dial, without evaluating rules or injecting
-// credentials. The CONNECT leg is unchanged.
+// externalAuthorization leaves the policy to an external ext_proc filter. The
+// CONNECT leg authenticates the actor but returns no SNI rules, and the
+// request legs allow any request from an authenticated actor and answer its
+// dial, without evaluating rules or injecting credentials.
 func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string, externalAuthorization bool) *Handler {
 	return &Handler{
 		apiClient:             apiClient,
@@ -147,7 +148,8 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 // the identity.
 //
 // It returns the SNI rules for the dialed port, and the port itself for the
-// passthrough chain. Actors without policy rules are refused here.
+// passthrough chain. Actors without policy rules are refused here. With
+// externalAuthorization it returns the port alone.
 func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
 	// Sanity check that we were called on the Egress listener filter chain with
 	// a CONNECT.
@@ -186,6 +188,16 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	if err != nil || !dest.IP.IsValid() || dest.Port == 0 {
 		slog.WarnContext(ctx, "egress denied: CONNECT authority is not an IP:port", slog.Any("actor", ref), slog.String("leg", leg), slog.String("authority", md.Host), slog.Any("err", err))
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
+	}
+
+	// The external processor writes the SNI rules; without them the
+	// dataplane denies every TLS connection.
+	if h.externalAuthorization {
+		res := allow()
+		res.DynamicMetadata = metadataAnswer(map[string]string{
+			extproc.EgressDialedPortKey: strconv.Itoa(int(dest.Port)),
+		})
+		return res, nil
 	}
 
 	// This also warms the cache for the requests inside the tunnel, and

@@ -154,11 +154,10 @@ type routerConfig struct {
 	// EgressPolicy, and so how long a policy change takes to bite. 0 disables
 	// the cache.
 	EgressPolicyCacheTTL time.Duration
-	// EgressExternalAuthorization leaves the decision on each request inside
-	// the tunnel to an external ext_proc filter after this one. The handler
-	// still authenticates the actor and answers the dial, but evaluates no
-	// http or https rules and injects no credentials. The CONNECT leg still
-	// applies the EgressPolicy SNI rules.
+	// EgressExternalAuthorization leaves the egress policy to an external
+	// ext_proc filter after this one. The handler still authenticates the
+	// actor and answers the dial, but returns no SNI rules, evaluates no http
+	// or https rules, and injects no credentials.
 	EgressExternalAuthorization bool
 
 	// CredentialProvider configures egress credential injection on the MITM leg.

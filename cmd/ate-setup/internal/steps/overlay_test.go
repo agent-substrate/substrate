@@ -148,38 +148,79 @@ func assertEgressManifestParses(t *testing.T, manifest []byte) {
 
 // The emitted cluster must reference its TLS material through SDS: an inline
 // tls_certificates entry never picks up kubelet's certificate rotation.
-// An authoritative processor also sees response headers. Both see the trusted
-// context the policy filter gets.
-func TestEmitAdditionalEgressExtprocFilter(t *testing.T) {
+// The additional processor runs on both HTTP chains, with response headers
+// when authoritative. Authoritative, it also runs on the CONNECT chain, after
+// the sidecar and before the store module, which reads the SNI rules it writes.
+func TestPatchAtenetEgressManifestAuthoritative(t *testing.T) {
+	root, err := config.RepoRoot()
+	if err != nil {
+		t.Fatalf("resolving repo root: %v", err)
+	}
 	for _, tc := range []struct {
-		authoritative bool
-		want          string
+		authoritative          bool
+		wantResponseHeaderMode string
+		wantConnect            bool
 	}{
-		{authoritative: false, want: "SKIP"},
-		{authoritative: true, want: "SEND"},
+		{authoritative: false, wantResponseHeaderMode: "SKIP"},
+		{authoritative: true, wantResponseHeaderMode: "SEND", wantConnect: true},
 	} {
-		var filters []struct {
-			TypedConfig struct {
-				RequestAttributes []string `json:"request_attributes"`
-				ProcessingMode    struct {
-					ResponseHeaderMode string `json:"response_header_mode"`
-				} `json:"processing_mode"`
-			} `json:"typed_config"`
-		}
-		if err := yaml.Unmarshal([]byte(emitAdditionalEgressExtprocFilter(tc.authoritative)), &filters); err != nil {
-			t.Fatalf("filter is not valid YAML: %v", err)
-		}
-		if len(filters) != 1 {
-			t.Fatalf("got %d filters, want 1", len(filters))
-		}
-		cfg := filters[0].TypedConfig
-		if got := cfg.ProcessingMode.ResponseHeaderMode; got != tc.want {
-			t.Errorf("authoritative=%v: response_header_mode = %q, want %q", tc.authoritative, got, tc.want)
-		}
-		if !slices.Contains(cfg.RequestAttributes, "xds.filter_chain_name") ||
-			!slices.Contains(cfg.RequestAttributes, "filter_state['dev.ate.connect.authority']") {
-			t.Errorf("authoritative=%v: request_attributes = %v, want the filter chain and CONNECT authority", tc.authoritative, cfg.RequestAttributes)
-		}
+		t.Run(fmt.Sprintf("authoritative=%v", tc.authoritative), func(t *testing.T) {
+			env := &Env{Cfg: &config.Config{
+				Root:                                 root,
+				AdditionalEgressExtprocService:       "ate-system/foo:50051",
+				AdditionalEgressExtprocAuthoritative: tc.authoritative,
+			}}
+			patched, err := env.patchAtenetEgressManifest()
+			if err != nil {
+				t.Fatalf("patchAtenetEgressManifest failed: %v", err)
+			}
+			httpChains, connectChains := 0, 0
+			for _, filters := range httpFilterChains(t, envoyYAMLOf(t, patched)) {
+				policyAt, additionalAt, storeAt := -1, -1, -1
+				for i, f := range filters {
+					switch {
+					case extProcCluster(f) == "ext_proc_server":
+						policyAt = i
+					case extProcCluster(f) == additionalEgressExtprocCluster:
+						additionalAt = i
+					case f["name"] == "envoy.filters.http.dynamic_modules":
+						storeAt = i
+					}
+				}
+				if additionalAt < 0 {
+					continue
+				}
+				if policyAt < 0 || policyAt > additionalAt {
+					t.Errorf("additional ext_proc at http_filters[%d] runs before the policy ext_proc at [%d]", additionalAt, policyAt)
+				}
+				typedConfig, _ := filters[additionalAt]["typed_config"].(map[string]any)
+				mode, _ := typedConfig["processing_mode"].(map[string]any)
+				_, receives := typedConfig["metadata_options"]
+				if storeAt < 0 {
+					httpChains++
+					if got := mode["response_header_mode"]; got != tc.wantResponseHeaderMode {
+						t.Errorf("response_header_mode = %v, want %s", got, tc.wantResponseHeaderMode)
+					}
+					if receives {
+						t.Error("additional ext_proc on an HTTP chain may write dynamic metadata")
+					}
+					continue
+				}
+				connectChains++
+				if additionalAt > storeAt {
+					t.Errorf("additional ext_proc at http_filters[%d] runs after the policy store at [%d]", additionalAt, storeAt)
+				}
+				if !strings.Contains(fmt.Sprint(typedConfig["metadata_options"]), "dev.ate.policy.egress") {
+					t.Errorf("CONNECT-chain ext_proc metadata_options = %v, want dev.ate.policy.egress", typedConfig["metadata_options"])
+				}
+			}
+			if httpChains != 2 {
+				t.Errorf("additional ext_proc on %d HTTP chains, want 2", httpChains)
+			}
+			if got := connectChains == 1; got != tc.wantConnect || connectChains > 1 {
+				t.Errorf("additional ext_proc on %d CONNECT chains, want it there: %v", connectChains, tc.wantConnect)
+			}
+		})
 	}
 }
 
@@ -240,29 +281,12 @@ func TestPatchAtenetEgressManifest(t *testing.T) {
 	// Prose that merely mentions a marker survives on purpose; only lines
 	// that start with one are splice targets.
 	for _, line := range strings.Split(string(patched), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#ATE_MITM_EXTPROC") {
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "#ATE_MITM_EXTPROC") || strings.HasPrefix(trimmed, "#ATE_EGRESS_CONNECT_EXTPROC") {
 			t.Errorf("patched manifest still contains an unreplaced marker line: %q", line)
 		}
 	}
 
-	// Find the atenet-egress ConfigMap among the manifest's documents.
-	var data map[string]string
-	for _, doc := range strings.Split(string(patched), "\n---\n") {
-		var obj struct {
-			Kind string            `json:"kind"`
-			Data map[string]string `json:"data"`
-		}
-		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
-			t.Fatalf("patched manifest document is not valid YAML: %v", err)
-		}
-		if obj.Kind == "ConfigMap" {
-			data = obj.Data
-			break
-		}
-	}
-	if data == nil {
-		t.Fatal("no ConfigMap found in the patched manifest")
-	}
+	data := configMapData(t, patched)
 
 	// Every file Envoy will read from /etc/envoy must be present and parse.
 	for _, key := range []string{
@@ -306,31 +330,32 @@ func TestPatchAtenetEgressManifest(t *testing.T) {
 			t.Errorf("SDS resource %q is missing watched_directory; rotation would be silently broken", key)
 		}
 	}
+}
 
-	// The additional processor is spliced in below the policy ext_proc on
-	// both HTTP chains, so it sees only requests the policy allowed.
-	spliced := 0
-	for _, filters := range httpFilterChains(t, envoyYaml) {
-		policyAt, additionalAt := -1, -1
-		for i, f := range filters {
-			switch extProcCluster(f) {
-			case "ext_proc_server":
-				policyAt = i
-			case additionalEgressExtprocCluster:
-				additionalAt = i
-			}
+// configMapData returns the data of the atenet-egress ConfigMap among the
+// manifest's documents.
+func configMapData(t *testing.T, manifest []byte) map[string]string {
+	t.Helper()
+	for _, doc := range strings.Split(string(manifest), "\n---\n") {
+		var obj struct {
+			Kind string            `json:"kind"`
+			Data map[string]string `json:"data"`
 		}
-		if additionalAt < 0 {
-			continue
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatalf("patched manifest document is not valid YAML: %v", err)
 		}
-		spliced++
-		if policyAt < 0 || policyAt > additionalAt {
-			t.Errorf("additional ext_proc at http_filters[%d] runs before the policy ext_proc at [%d]", additionalAt, policyAt)
+		if obj.Kind == "ConfigMap" {
+			return obj.Data
 		}
 	}
-	if spliced != 2 {
-		t.Errorf("additional ext_proc spliced into %d HTTP chains, want 2", spliced)
-	}
+	t.Fatal("no ConfigMap found in the patched manifest")
+	return nil
+}
+
+// envoyYAMLOf returns the Envoy bootstrap the manifest ships.
+func envoyYAMLOf(t *testing.T, manifest []byte) string {
+	t.Helper()
+	return configMapData(t, manifest)["envoy.yaml"]
 }
 
 // httpFilterChains returns the http_filters of every HTTP connection manager

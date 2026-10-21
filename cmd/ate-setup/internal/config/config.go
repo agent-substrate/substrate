@@ -217,8 +217,8 @@ type Config struct {
 
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
-	// AdditionalEgressExtprocAuthoritative makes that filter decide every
-	// egress request in place of the EgressPolicy http and https rules.
+	// AdditionalEgressExtprocAuthoritative makes that filter replace the
+	// EgressPolicy: it writes the SNI rules and decides every request.
 	AdditionalEgressExtprocAuthoritative bool
 
 	// CredentialProviderJSON is the --credential-provider value; see

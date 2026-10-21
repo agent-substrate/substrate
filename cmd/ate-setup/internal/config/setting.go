@@ -168,9 +168,9 @@ var Registry = []Setting{
 	{
 		Key: "atenet.egress.additionalExtprocAuthoritative", Env: "ATE_ADDITIONAL_EGRESS_EXTPROC_AUTHORITATIVE",
 		Flag: "experimental-additional-egress-extproc-authoritative", Kind: KindBool, Default: "false",
-		Usage: "Let the additional ext_proc filter decide every egress request in place of the EgressPolicy " +
-			"http and https rules, and send it response headers too. Substrate still authenticates the actor " +
-			"and applies the SNI rules. Requires --experimental-additional-egress-extproc-service and a " +
+		Usage: "Let the additional ext_proc filter replace the EgressPolicy: it writes the SNI rules " +
+			"on CONNECT, decides every request, and gets response headers. Substrate still authenticates " +
+			"the actor. Requires --experimental-additional-egress-extproc-service and a " +
 			"disabled credential provider",
 	},
 

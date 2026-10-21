@@ -524,7 +524,7 @@ func TestCanceledCallerIsNotAPolicyFailure(t *testing.T) {
 }
 
 // With external authorization the request legs answer the dial for any request
-// from an authenticated actor, without fetching its policy or injecting
+// from an identified actor, without fetching its policy or injecting
 // credentials. Identity and the dataplane's own limits still apply.
 func TestRequestLegWithExternalAuthorization(t *testing.T) {
 	for _, leg := range []string{extproc.EgressCleartextFilterChainName, extproc.EgressTLSMITMFilterChainName} {
