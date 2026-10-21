@@ -3118,13 +3118,15 @@ func TestImmediateCheckpointHoldsOffBackgroundUpload(t *testing.T) {
 // Revert needs the retained state even when a previous detach already finished.
 func TestTerminateRetainsSnapshotState(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		mode     ateletpb.UploadMode
-		detached bool
+		name        string
+		mode        ateletpb.UploadMode
+		detached    bool
+		lostTracker bool
 	}{
 		{name: "pending local", mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED},
 		{name: "completed local", mode: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE},
 		{name: "already detached", mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED, detached: true},
+		{name: "tracker state lost", mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED, lostTracker: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := runPluginActor(t)
@@ -3141,6 +3143,9 @@ func TestTerminateRetainsSnapshotState(t *testing.T) {
 			} else {
 				a.restoreLocal(t, "revert-snap", 1)
 			}
+			if tc.lostTracker {
+				a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+			}
 			want := a.s.snapshots.State(pluginActorUID)
 			resp, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
 				Atespace: "ate-demo", ActorName: "counter", ActorUid: pluginActorUID,
@@ -3154,6 +3159,60 @@ func TestTerminateRetainsSnapshotState(t *testing.T) {
 			}
 			if !tc.detached {
 				a.restoreLocal(t, "revert-snap", 1)
+			}
+		})
+	}
+}
+
+func TestTerminateDiscardsIncompleteLocalCheckpoint(t *testing.T) {
+	for _, keepCommitted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("committed=%t", keepCommitted), func(t *testing.T) {
+			a := runPluginActor(t)
+			if keepCommitted {
+				if _, err := a.checkpoint(t, a.snapshot("committed-snap", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+					t.Fatal(err)
+				}
+				a.restoreLocal(t, "committed-snap", 1)
+			}
+			want := a.s.snapshots.State(pluginActorUID)
+			// Exercise the local writer directly to force a manifest write failure
+			// after moving the images, without adding an I/O fault hook.
+			conflict := filepath.Join(sandboxManifestName, "fragment")
+			checkpointDir := ateletpath.CheckpointStateDir(pluginActorUID)
+			if err := os.MkdirAll(filepath.Join(checkpointDir, sandboxManifestName), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			rec := *a.rec
+			rec.SnapshotFiles = []string{"checkpoint.img", conflict}
+			for _, name := range rec.SnapshotFiles {
+				if err := os.WriteFile(filepath.Join(checkpointDir, name), []byte("uncommitted"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := a.s.moveLocalCheckpoint(t.Context(), &ateletpb.CheckpointRequest{
+				ActorUid: pluginActorUID, Snapshot: a.snapshot("incomplete-snap", 2),
+			}, &rec)
+			if err == nil || !strings.Contains(err.Error(), "writing snapshot manifest") {
+				t.Fatalf("moveLocalCheckpoint error = %v, want manifest write failure", err)
+			}
+			resp, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+				Atespace: "ate-demo", ActorName: "counter", ActorUid: pluginActorUID,
+				WorkerPodUid: pluginWorkerPodUID, Spec: a.spec, PreserveSnapshots: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(resp.GetState(), want) {
+				t.Errorf("retained snapshot state = %v, want %v", resp.GetState(), want)
+			}
+			if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "incomplete-snap")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("incomplete checkpoint survived Terminate: %v", err)
+			}
+			if entries, err := os.ReadDir(checkpointDir); err != nil || len(entries) != 0 {
+				t.Errorf("checkpoint working directory after Terminate = %v, %v; want empty", entries, err)
+			}
+			if keepCommitted {
+				a.restoreLocal(t, "committed-snap", 1)
 			}
 		})
 	}

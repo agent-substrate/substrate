@@ -2022,7 +2022,7 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	if req.GetPreserveSnapshots() {
 		// Workload teardown must not cancel uploads or remove the checkpoint and
 		// sandbox assets needed to restore the last successful suspend.
-		if err := resetActorDirs(actorUID); err != nil {
+		if err := actordirs.ResetActorDirs(actorUID); err != nil {
 			return nil, fmt.Errorf("failed to reset actor directories during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 		}
 		if err := s.snapshots.ScheduleDetach(actorUID); err != nil {
