@@ -638,6 +638,26 @@ func TestPrintTagsTo_Table(t *testing.T) {
 				},
 			},
 		},
+		{
+			// A tag being deleted still names its snapshot, but no Actor can
+			// be created from it.
+			Metadata: &ateapi.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "v4",
+				CreateTime: timestamppb.New(now.Add(-time.Minute)),
+				DeleteTime: timestamppb.New(now),
+			},
+			Scope: ateapi.TagScope_TAG_SCOPE_ATESPACE,
+			Status: &ateapi.TagStatus{
+				Snapshot: &ateapi.Snapshot{
+					Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapi.SnapshotStorage{
+						Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v4"},
+					},
+				},
+			},
+		},
 	}
 
 	if err := PrintTagsTo(&buf, tags, "table"); err != nil {
@@ -645,10 +665,11 @@ func TestPrintTagsTo_Table(t *testing.T) {
 	}
 
 	// Sorted by atespace, then name.
-	expected := `ATESPACE   NAME   SCOPE                 STATE     SNAPSHOT                                FIDELITY                   AGE
-team-a     v1     TAG_SCOPE_ATESPACE    Ready     gs://private/atespaces/team-a/tags/v1   SNAPSHOT_FIDELITY_MEMORY   5h
-team-a     v2     TAG_SCOPE_PUBLISHED   Ready     gs://private/atespaces/team-a/tags/v2   SNAPSHOT_FIDELITY_MEMORY   5m
-team-a     v3     TAG_SCOPE_ATESPACE    Pending   <none>                                  <none>                     30s
+	expected := `ATESPACE   NAME   SCOPE                 STATE      SNAPSHOT                                FIDELITY                   AGE
+team-a     v1     TAG_SCOPE_ATESPACE    Ready      gs://private/atespaces/team-a/tags/v1   SNAPSHOT_FIDELITY_MEMORY   5h
+team-a     v2     TAG_SCOPE_PUBLISHED   Ready      gs://private/atespaces/team-a/tags/v2   SNAPSHOT_FIDELITY_MEMORY   5m
+team-a     v3     TAG_SCOPE_ATESPACE    Pending    <none>                                  <none>                     30s
+team-a     v4     TAG_SCOPE_ATESPACE    Deleting   gs://private/atespaces/team-a/tags/v4   SNAPSHOT_FIDELITY_MEMORY   60s
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

@@ -120,6 +120,12 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 
 	sourceName := "snapshot-source-" + nsObj.Name
 	cloneName := "snapshot-clone-" + nsObj.Name
+	tagRef := &ateapi.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + nsObj.Name}
+	// Registered first so it runs last: the Tag cannot be deleted while an Actor
+	// is still borrowing its snapshot.
+	t.Cleanup(func() {
+		_, _ = clients.SubstrateAPI.DeleteTag(context.Background(), &ateapi.DeleteTagRequest{Tag: tagRef})
+	})
 	for _, name := range []string{sourceName, cloneName} {
 		t.Cleanup(func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -161,10 +167,6 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	validateCounterResponse(t, response, "source", 1, 1)
 
-	tagRef := &ateapi.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + nsObj.Name}
-	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.DeleteTag(context.Background(), &ateapi.DeleteTagRequest{Tag: tagRef})
-	})
 	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
 		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: sourceName},
 		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
@@ -252,6 +254,21 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	validateCounterResponse(t, response, "clone", 2, 2)
 
+	// The clone is running off the Tag's snapshot, so the Tag cannot be deleted
+	// out from under it.
+	if _, err := clients.SubstrateAPI.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("DeleteTag while the clone borrows the snapshot returned %v, want FailedPrecondition", err)
+	}
+
+	// A synchronous suspend uploads a snapshot of the clone's own, which
+	// releases the Tag's. An asynchronous one releases it only once atelet
+	// reports the upload.
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: cloneName},
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}); err != nil {
+		t.Fatalf("failed to suspend cloned Actor: %v", err)
+	}
 	if _, err := clients.SubstrateAPI.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil {
 		t.Fatalf("failed to delete Tag: %v", err)
 	}

@@ -370,16 +370,19 @@ func assertSnapshotCollected(t *testing.T, tc *testContext, snapshotURI string) 
 	}
 }
 
+// goldenSnapshotName is the uuid of the snapshot every test golden tag holds.
 const goldenSnapshotName = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
 
-// goldenSnapshotURI is the snapshot owned by the test template's golden tag.
-func goldenSnapshotURI(t *testing.T) string {
+// goldenSnapshotURI is the snapshot owned by the golden tag of tmpl. An Actor
+// created from tmpl with no source tag of its own starts out on it.
+func goldenSnapshotURI(t *testing.T, tc *testContext, tmpl *ateapi.ActorTemplate) string {
 	t.Helper()
-	uri, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, goldenSnapshotName)
+	goldenRef := tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
+	tag, err := tc.client.GetTag(context.Background(), &ateapi.GetTagRequest{Tag: goldenRef})
 	if err != nil {
-		t.Fatalf("NewTagSnapshotURI: %v", err)
+		t.Fatalf("GetTag(golden tag of %s/%s): %v", tmpl.GetMetadata().GetAtespace(), tmpl.GetMetadata().GetName(), err)
 	}
-	return uri.String()
+	return tagSnapshotURI(tag)
 }
 
 // snapshotOwnedByActor reports whether snapshotURI sits under the actor's own
@@ -487,24 +490,46 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		t.Fatalf("failed to create actor template: %v", err)
 	}
 
-	tag, err := tc.persistence.CreateTag(context.Background(), &ateapi.Tag{
-		Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
-		SourceActor: &ateapi.ObjectRef{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
+	return publishGoldenTag(t, tc, created, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+}
+
+// publishGoldenTag publishes a golden snapshot of fidelity for tmpl as a READY
+// tag and points tmpl's status at it, returning the updated template.
+func publishGoldenTag(t *testing.T, tc *testContext, tmpl *ateapi.ActorTemplate, fidelity ateapi.SnapshotFidelity) *ateapi.ActorTemplate {
+	t.Helper()
+	ctx := context.Background()
+	reserved, err := tc.persistence.CreateTag(ctx, &ateapi.Tag{
+		Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()},
+		SourceActor: &ateapi.ObjectRef{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()},
 		Scope:       ateapi.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapi.TagStatus{
-			Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, created.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
-			ActorTemplateUid: created.GetMetadata().GetUid(),
+			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
 		},
 	})
 	if err != nil {
 		t.Fatalf("create golden tag: %v", err)
+	}
+	// The snapshot's prefix is keyed on the UID the store assigned. An Actor
+	// that inherits it borrows this tag, the same way a clone of an
+	// explicitly named tag does.
+	goldenURI, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, reserved.GetMetadata().GetUid())
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI: %v", err)
+	}
+	tc.objectStore.PutSnapshot(t, goldenURI, "manifest.json", "memory.zst")
+	tag, err := tc.persistence.UpdateTag(ctx, resources.TagRefFromTag(reserved), store.PreconditionFrom(reserved), func(toUpdate *ateapi.Tag) error {
+		toUpdate.Status.Snapshot = newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, fidelity, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenURI.String())
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("record golden tag snapshot: %v", err)
 	}
 
 	// Record the golden snapshot on the template's status directly in the
 	// store, as the ActorTemplateReconciler's checkpoint would: there is no
 	// status RPC, and the reconciler does not run in this test environment.
 	updated, err := tc.persistence.UpdateActorTemplate(context.Background(),
-		resources.ActorTemplateRefFromActorTemplate(created), store.PreconditionFrom(created),
+		resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl),
 		func(dbTemplate *ateapi.ActorTemplate) error {
 			dbTemplate.Status = &ateapi.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{

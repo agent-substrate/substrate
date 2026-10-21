@@ -338,6 +338,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runAtespaceContractTests(t, setup)
 	runActorTemplateContractTests(t, setup)
 	runTagContractTests(t, setup)
+	runTagBorrowContractTests(t, setup)
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
 	runUnknownFieldContractTests(t, setup)
@@ -3354,6 +3355,297 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		}
 		if _, err := s.DeleteAtespace(ctx, "team-b", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("DeleteAtespace(team-b, non-empty) = %v, want ErrFailedPrecondition", err)
+		}
+	})
+}
+
+func runTagBorrowContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	// recordTag reserves the tag and records its PENDING snapshot under the
+	// prefix of the UID the store assigned, the way the tag workflow does. A
+	// borrowing Actor's URI names the tag by that UID.
+	recordTag := func(t *testing.T, s store.Interface, name string, source *ateapi.Actor) *ateapi.Tag {
+		t.Helper()
+		ctx := context.Background()
+		tag := newTestInProgressTag(name, source)
+		snapshot := tag.Status.Snapshot
+		tag.Status.Snapshot = nil
+		reserved, err := s.CreateTag(ctx, tag)
+		if err != nil {
+			t.Fatalf("CreateTag(%q) failed: %v", name, err)
+		}
+		snapshot.DurableSnapshot.Object.SnapshotUri = testTagSnapshotURI("gs://private", testAtespace, reserved.GetMetadata().GetUid())
+		recorded, err := s.UpdateTag(ctx, resources.TagRefFromTag(reserved), store.PreconditionFrom(reserved), func(toUpdate *ateapi.Tag) error {
+			toUpdate.Status.Snapshot = snapshot
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("recording the snapshot of tag %q failed: %v", name, err)
+		}
+		return recorded
+	}
+	// seedReadyTags seeds testAtespace, a source actor, and one finished tag per
+	// name, returned in the same order.
+	seedReadyTags := func(t *testing.T, s store.Interface, names ...string) []*ateapi.Tag {
+		t.Helper()
+		mustCreateAtespace(t, s, testAtespace)
+		source, err := s.CreateActor(context.Background(), newTestSuspendedActor(testAtespace, "actor-source"))
+		if err != nil {
+			t.Fatalf("CreateActor(actor-source) failed: %v", err)
+		}
+		var tags []*ateapi.Tag
+		for _, name := range names {
+			recorded := recordTag(t, s, name, source)
+			stored, err := s.UpdateTag(context.Background(), resources.TagRefFromTag(recorded), store.PreconditionFrom(recorded), finalizeTag)
+			if err != nil {
+				t.Fatalf("finalizing tag %q failed: %v", name, err)
+			}
+			tags = append(tags, stored)
+		}
+		return tags
+	}
+	// borrowedSnapshot is the copy of the tag's snapshot an Actor created from
+	// the tag starts out on.
+	borrowedSnapshot := func(tag *ateapi.Tag) *ateapi.Snapshot {
+		return proto.CloneOf(tag.GetStatus().GetSnapshot())
+	}
+	borrowingActor := func(name string, tag *ateapi.Tag) *ateapi.Actor {
+		return &ateapi.Actor{
+			Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name},
+			Status: &ateapi.ActorStatus{
+				State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+				LastAssignedGeneration: 1,
+				Snapshots:              []*ateapi.Snapshot{borrowedSnapshot(tag)},
+			},
+		}
+	}
+	// markForDeletion marks the tag for deletion, which the store refuses with
+	// ErrTagBorrowed while an Actor borrows its snapshot.
+	markForDeletion := func(s store.Interface, tag *ateapi.Tag) (*ateapi.Tag, error) {
+		return s.MarkTagForDeletion(context.Background(), resources.TagRefFromTag(tag), store.DeletePreconditions{UID: tag.GetMetadata().GetUid()}, nil)
+	}
+	// checkBorrowed reports through markForDeletion whether the tag is
+	// borrowed. A tag that is not ends up marked, so it is the last check of a
+	// test.
+	checkBorrowed := func(t *testing.T, s store.Interface, tag *ateapi.Tag, want bool) {
+		t.Helper()
+		_, err := markForDeletion(s, tag)
+		switch {
+		case want && !errors.Is(err, store.ErrTagBorrowed):
+			t.Errorf("marking tag %s for deletion = %v, want ErrTagBorrowed", tag.GetMetadata().GetName(), err)
+		case !want && err != nil:
+			t.Errorf("marking tag %s for deletion = %v, want nil", tag.GetMetadata().GetName(), err)
+		}
+	}
+
+	// A borrow is only recorded against a finished tag that is not marked for
+	// deletion, so an Actor can never
+	// start out on a snapshot that is still being copied or already going away.
+	t.Run("TagBorrow_CreateActorRequiresReadyTag", func(t *testing.T) {
+		tests := []struct {
+			name string
+			tag  func(t *testing.T, s store.Interface) *ateapi.Tag
+		}{
+			{
+				name: "missing tag",
+				tag: func(t *testing.T, s store.Interface) *ateapi.Tag {
+					tag := seedReadyTags(t, s, "tag-1")[0]
+					if _, err := markForDeletion(s, tag); err != nil {
+						t.Fatalf("marking tag for deletion failed: %v", err)
+					}
+					if _, err := s.DeleteTag(context.Background(), resources.TagRefFromTag(tag), store.DeletePreconditions{}); err != nil {
+						t.Fatalf("DeleteTag failed: %v", err)
+					}
+					return tag
+				},
+			},
+			{
+				name: "tag still being created",
+				tag: func(t *testing.T, s store.Interface) *ateapi.Tag {
+					seedReadyTags(t, s)
+					source, err := s.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "actor-source"})
+					if err != nil {
+						t.Fatalf("GetActor failed: %v", err)
+					}
+					recorded := recordTag(t, s, "tag-1", source)
+					// The snapshot a finished create would name, without the
+					// create having finished.
+					if err := finalizeTag(recorded); err != nil {
+						t.Fatalf("finalizeTag failed: %v", err)
+					}
+					return recorded
+				},
+			},
+			{
+				name: "tag marked for deletion",
+				tag: func(t *testing.T, s store.Interface) *ateapi.Tag {
+					tag := seedReadyTags(t, s, "tag-1")[0]
+					if _, err := markForDeletion(s, tag); err != nil {
+						t.Fatalf("marking tag for deletion failed: %v", err)
+					}
+					return tag
+				},
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				s := setup(t)
+				ctx := context.Background()
+				tag := test.tag(t, s)
+
+				actorRef := resources.ActorRef{Atespace: testAtespace, Name: "session-1"}
+				if _, err := s.CreateActor(ctx, borrowingActor(actorRef.Name, tag)); !errors.Is(err, store.ErrTagNotReady) {
+					t.Fatalf("CreateActor borrowing a %s tag = %v, want ErrTagNotReady", test.name, err)
+				}
+				if _, err := s.GetActor(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("GetActor after the refused create = %v, want ErrNotFound, the whole write to have rolled back", err)
+				}
+			})
+		}
+	})
+
+	// A borrow that stands is left alone by later writes, so an Actor still on
+	// the snapshot of a tag it borrowed is not refused.
+	t.Run("TagBorrow_UpdateActorKeepsBorrow", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		tag := seedReadyTags(t, s, "tag-1")[0]
+
+		created, err := s.CreateActor(ctx, borrowingActor("session-1", tag))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(toUpdate *ateapi.Actor) error {
+			toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+			return nil
+		}); err != nil {
+			t.Fatalf("UpdateActor on a standing borrow = %v, want nil", err)
+		}
+		checkBorrowed(t, s, tag, true)
+	})
+
+	t.Run("TagBorrow_UpdateActorToMarkedTagRefused", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		tags := seedReadyTags(t, s, "tag-1", "tag-2")
+		if _, err := markForDeletion(s, tags[1]); err != nil {
+			t.Fatalf("marking tag-2 for deletion failed: %v", err)
+		}
+
+		created, err := s.CreateActor(ctx, borrowingActor("session-1", tags[0]))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(toUpdate *ateapi.Actor) error {
+			toUpdate.Status.Snapshots = []*ateapi.Snapshot{borrowedSnapshot(tags[1])}
+			return nil
+		}); !errors.Is(err, store.ErrTagNotReady) {
+			t.Fatalf("UpdateActor onto a tag marked for deletion = %v, want ErrTagNotReady", err)
+		}
+		checkBorrowed(t, s, tags[0], true)
+	})
+
+	t.Run("TagBorrow_DeleteActor", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		tag := seedReadyTags(t, s, "tag-1")[0]
+
+		created, err := s.CreateActor(ctx, borrowingActor("session-1", tag))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		deleting, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(toUpdate *ateapi.Actor) error {
+			toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_DELETING
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("marking the actor deleting failed: %v", err)
+		}
+		// The borrow stands until the row is gone.
+		if _, err := markForDeletion(s, tag); !errors.Is(err, store.ErrTagBorrowed) {
+			t.Fatalf("marking the tag for deletion while its borrower is deleting = %v, want ErrTagBorrowed", err)
+		}
+		if _, err := s.DeleteActor(ctx, resources.ActorRefFromActor(deleting), store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor failed: %v", err)
+		}
+		checkBorrowed(t, s, tag, false)
+	})
+
+	// The row is the last thing a tag delete removes, so it is refused on its
+	// own too while the snapshot is borrowed.
+	t.Run("TagBorrow_DeleteTagRefused", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		tag := seedReadyTags(t, s, "tag-1")[0]
+
+		if _, err := s.CreateActor(ctx, borrowingActor("session-1", tag)); err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		if _, err := s.DeleteTag(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}); !errors.Is(err, store.ErrTagBorrowed) {
+			t.Fatalf("DeleteTag of a borrowed tag = %v, want ErrTagBorrowed", err)
+		}
+		if _, err := s.GetTag(ctx, resources.TagRefFromTag(tag)); err != nil {
+			t.Errorf("GetTag after the refused delete = %v, want the tag to stand", err)
+		}
+	})
+
+	// New Actors borrowing a tag race marking that tag for deletion. Exactly
+	// one side wins: either the tag is marked and no borrow was recorded,
+	// or the move is refused and every borrow was. A backend that decides
+	// either side on a read taken before the other commits lets both through,
+	// leaving an Actor on a snapshot the tag delete then collects.
+	t.Run("TagBorrow_ConcurrentBorrowsAndMarkForDeletion", func(t *testing.T) {
+		const rounds = 20
+		const borrowers = 4
+		s := setup(t)
+		ctx := context.Background()
+		names := make([]string, rounds)
+		for round := range rounds {
+			names[round] = fmt.Sprintf("tag-%d", round)
+		}
+		tags := seedReadyTags(t, s, names...)
+
+		for round, tag := range tags {
+			var start sync.WaitGroup
+			start.Add(1)
+			var wg sync.WaitGroup
+			borrowErrs := make([]error, borrowers)
+			for i := range borrowers {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					start.Wait()
+					_, borrowErrs[i] = s.CreateActor(ctx, borrowingActor(fmt.Sprintf("session-%d-%d", round, i), tag))
+				}()
+			}
+			var markErr error
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				start.Wait()
+				_, markErr = markForDeletion(s, tag)
+			}()
+			start.Done()
+			wg.Wait()
+
+			borrowed := 0
+			for i, err := range borrowErrs {
+				switch {
+				case err == nil:
+					borrowed++
+				case !errors.Is(err, store.ErrTagNotReady):
+					t.Fatalf("round %d: borrower %d = %v, want nil or ErrTagNotReady", round, i, err)
+				}
+			}
+			switch {
+			case markErr == nil && borrowed != 0:
+				t.Errorf("round %d: tag marked for deletion while %d of %d borrows were recorded", round, borrowed, borrowers)
+			case errors.Is(markErr, store.ErrTagBorrowed) && borrowed != borrowers:
+				t.Errorf("round %d: marking for deletion was refused, but only %d of %d borrows were recorded", round, borrowed, borrowers)
+			case markErr != nil && !errors.Is(markErr, store.ErrTagBorrowed):
+				t.Fatalf("round %d: marking tag for deletion = %v, want nil or ErrTagBorrowed", round, markErr)
+			}
 		}
 	})
 }
