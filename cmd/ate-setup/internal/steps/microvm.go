@@ -49,11 +49,13 @@ const (
 	// and bucket-init Job on Kind.
 	MicroVMStageTimeout = 300 * time.Second
 
+	defaultMicroVMAssetVersion    = "v1"
 	defaultKataVersion            = "4.1.0"
 	defaultCloudHypervisorVersion = "v53.0"
 
 	assetStampFile               = ".asset-versions"
 	defaultKindMicroVMBucket     = "ate-snapshots"
+	microvmAssetsPrefix          = "microvm-assets"
 	microvmSandboxConfigTemplate = "manifests/ate-install/sandboxconfig-microvm.yaml.tmpl"
 	microvmSandboxConfigName     = "microvm"
 
@@ -113,7 +115,7 @@ func (e *Env) DeployMicroVMDeps(ctx context.Context) error {
 	}
 
 	for _, arch := range microvmArches {
-		outDir := e.Cfg.Path("bin", "microvm-assets", arch)
+		outDir := e.Cfg.Path("bin", microvmAssetsPrefix, defaultMicroVMAssetVersion, arch)
 		wantStamp := microvmAssetStamp(arch, defaultKataVersion, defaultCloudHypervisorVersion)
 		needAssemble, stale := microvmAssetsNeedAssemble(outDir, wantStamp)
 		if stale {
@@ -133,12 +135,12 @@ func (e *Env) DeployMicroVMDeps(ctx context.Context) error {
 	}
 
 	if e.Cfg.Kind {
-		log.Infof("Staging assets to in-cluster rustfs bucket %s (kata-assets/)...", bucket)
+		log.Infof("Staging assets to in-cluster rustfs bucket %s (%s/%s/)...", bucket, microvmAssetsPrefix, defaultMicroVMAssetVersion)
 		if err := e.stageMicroVMAssetsToRustfs(ctx, bucket); err != nil {
 			return err
 		}
 	} else {
-		log.Infof("Uploading assets to gs://%s/kata-assets/ ...", bucket)
+		log.Infof("Uploading assets to gs://%s/%s/%s/ ...", bucket, microvmAssetsPrefix, defaultMicroVMAssetVersion)
 		if err := e.stageMicroVMAssetsToGCS(ctx, bucket); err != nil {
 			return err
 		}
@@ -179,7 +181,7 @@ func (e *Env) DeleteMicroVMDeps(ctx context.Context) error {
 		return err
 	}
 	if bucket, err := e.microVMBucket(); err == nil {
-		log.Infof("Done. (Bucket assets at %s://%s/kata-assets/ left in place.)", e.microVMBucketScheme(), bucket)
+		log.Infof("Done. (Bucket assets at %s://%s/%s/ left in place.)", e.microVMBucketScheme(), bucket, microvmAssetsPrefix)
 	} else {
 		log.Infof("Done.")
 	}
@@ -531,16 +533,17 @@ func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, bucket string) err
 		return e.runCmd(ctx, stdin, "docker", dockerArgs...)
 	}
 
-	log.Infof(">> Uploading assets to s3://%s/kata-assets/ via %s (netns of %s)...", bucket, endpoint, node)
+	log.Infof(">> Uploading assets to s3://%s/%s/%s/ via %s (netns of %s)...", bucket, microvmAssetsPrefix, defaultMicroVMAssetVersion, endpoint, node)
 	for _, arch := range microvmArches {
-		outDir := e.Cfg.Path("bin", "microvm-assets", arch)
+		outDir := e.Cfg.Path("bin", microvmAssetsPrefix, defaultMicroVMAssetVersion, arch)
 		for _, f := range microvmAssets {
 			log.Infof("   %s/%s", arch, f)
 			file, err := os.Open(filepath.Join(outDir, f))
 			if err != nil {
 				return err
 			}
-			err = awsCLI(file, "s3", "cp", "-", fmt.Sprintf("s3://%s/kata-assets/%s/%s", bucket, arch, f))
+			dst := fmt.Sprintf("s3://%s/%s/%s/%s/%s", bucket, microvmAssetsPrefix, defaultMicroVMAssetVersion, arch, f)
+			err = awsCLI(file, "s3", "cp", "-", dst)
 			_ = file.Close()
 			if err != nil {
 				return fmt.Errorf("while uploading %s/%s to rustfs: %w", arch, f, err)
@@ -549,7 +552,7 @@ func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, bucket string) err
 	}
 
 	log.Infof(">> Done. Verify:")
-	return awsCLI(nil, "s3", "ls", "--recursive", fmt.Sprintf("s3://%s/kata-assets/", bucket))
+	return awsCLI(nil, "s3", "ls", "--recursive", fmt.Sprintf("s3://%s/%s/", bucket, microvmAssetsPrefix))
 }
 
 func (e *Env) waitJobComplete(ctx context.Context, namespace, name string, timeout time.Duration) error {
@@ -581,11 +584,11 @@ func (e *Env) stageMicroVMAssetsToGCS(ctx context.Context, bucket string) error 
 	}
 
 	for _, arch := range microvmArches {
-		outDir := e.Cfg.Path("bin", "microvm-assets", arch)
+		outDir := e.Cfg.Path("bin", microvmAssetsPrefix, defaultMicroVMAssetVersion, arch)
 		for _, f := range microvmAssets {
 			log.Infof("   %s/%s", arch, f)
-			args := append(append([]string{"storage", "cp"}, projectFlag...),
-				filepath.Join(outDir, f), fmt.Sprintf("gs://%s/kata-assets/%s/%s", bucket, arch, f))
+			dst := fmt.Sprintf("gs://%s/%s/%s/%s/%s", bucket, microvmAssetsPrefix, defaultMicroVMAssetVersion, arch, f)
+			args := append(append([]string{"storage", "cp"}, projectFlag...), filepath.Join(outDir, f), dst)
 			if err := e.runCmd(ctx, nil, "gcloud", args...); err != nil {
 				return fmt.Errorf("while uploading %s/%s to GCS: %w", arch, f, err)
 			}
@@ -593,7 +596,7 @@ func (e *Env) stageMicroVMAssetsToGCS(ctx context.Context, bucket string) error 
 	}
 
 	log.Infof(">> Done. Verify:")
-	lsArgs := append(append([]string{"storage", "ls", "--recursive"}, projectFlag...), fmt.Sprintf("gs://%s/kata-assets/", bucket))
+	lsArgs := append(append([]string{"storage", "ls", "--recursive"}, projectFlag...), fmt.Sprintf("gs://%s/%s/", bucket, microvmAssetsPrefix))
 	return e.runCmd(ctx, nil, "gcloud", lsArgs...)
 }
 
