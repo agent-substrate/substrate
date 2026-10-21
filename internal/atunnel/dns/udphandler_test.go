@@ -31,18 +31,12 @@ func startTestUDPHandler(t *testing.T, upstreams []string, configure func(*udpHa
 	if err != nil {
 		t.Fatal(err)
 	}
-	egress, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		ingress.Close()
-		t.Fatal(err)
-	}
 
 	udpAddrs := make([]*net.UDPAddr, len(upstreams))
 	for i, u := range upstreams {
 		addr, err := net.ResolveUDPAddr("udp", u)
 		if err != nil {
 			ingress.Close()
-			egress.Close()
 			t.Fatal(err)
 		}
 		udpAddrs[i] = addr
@@ -51,7 +45,10 @@ func startTestUDPHandler(t *testing.T, upstreams []string, configure func(*udpHa
 	lim := newLimiter()
 	pending := newPendingRequests(lim)
 	dnsH := newDNSHandler(pending, lim, nil)
-	h := newUDPHandler(ingress, egress, udpAddrs, dnsH, pending)
+	pool := newUDPConnPool(func(network, _ string) (net.PacketConn, error) {
+		return net.ListenPacket(network, "127.0.0.1:0")
+	})
+	h := newUDPHandler(ingress, pool, udpAddrs, dnsH, pending)
 	if configure != nil {
 		configure(h, dnsH)
 	}
@@ -65,7 +62,7 @@ func startTestUDPHandler(t *testing.T, upstreams []string, configure func(*udpHa
 	t.Cleanup(func() {
 		cancel()
 		_ = ingress.Close()
-		_ = egress.Close()
+		_ = pool.Close()
 		<-done
 	})
 
@@ -165,5 +162,95 @@ func TestUDPHandlerFailoverOnSweepTimeoutAndDeferredDelivery(t *testing.T) {
 	}
 	if rcode := dnsmessage.RCode(got2[3] & 0x0f); rcode != dnsmessage.RCodeServerFailure {
 		t.Errorf("deferred rcode = %v, want %v", rcode, dnsmessage.RCodeServerFailure)
+	}
+}
+
+func TestUDPHandlerRotatesSourcePortsAndMatchesSocket(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+
+	type receivedQuery struct {
+		query []byte
+		from  net.Addr
+	}
+	queries := make(chan receivedQuery, 4)
+	go func() {
+		buf := make([]byte, maxDatagramSize)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			q := make([]byte, n)
+			copy(q, buf[:n])
+			queries <- receivedQuery{query: q, from: from}
+		}
+	}()
+
+	client := startTestUDPHandler(t, []string{pc.LocalAddr().String()}, func(h *udpHandler, _ *dnsHandler) {
+		h.pool.maxUses = 2
+	})
+
+	// Two concurrent queries lease two distinct ephemeral sockets.
+	if _, err := client.Write(dnsQuery(0x1001)); err != nil {
+		t.Fatal(err)
+	}
+	q1 := <-queries
+	if _, err := client.Write(dnsQuery(0x1002)); err != nil {
+		t.Fatal(err)
+	}
+	q2 := <-queries
+	if q1.from.String() == q2.from.String() {
+		t.Fatalf("concurrent queries shared source address %s", q1.from)
+	}
+
+	// A response for q1 sent to q2's socket must be dropped.
+	wrongPortResp := dnsAnswer(q1.query, byte(dnsmessage.RCodeRefused))
+	if _, err := pc.WriteTo(wrongPortResp, q2.from); err != nil {
+		t.Fatal(err)
+	}
+
+	// Answering both on their own sockets succeeds.
+	if _, err := pc.WriteTo(dnsAnswer(q1.query, 0), q1.from); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pc.WriteTo(dnsAnswer(q2.query, 0), q2.from); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		ans := readWithin(t, client)
+		if rcode := dnsmessage.RCode(ans[3] & 0x0f); rcode != dnsmessage.RCodeSuccess {
+			t.Fatalf("rcode = %v, want %v", rcode, dnsmessage.RCodeSuccess)
+		}
+	}
+
+	// Drain the remaining uses of q1.from and q2.from (maxUses = 2), then the
+	// fifth query must come from a fresh ephemeral port.
+	seen := map[string]int{
+		q1.from.String(): 1,
+		q2.from.String(): 1,
+	}
+	for i := range 3 {
+		id := uint16(0x2000 + i)
+		if _, err := client.Write(dnsQuery(id)); err != nil {
+			t.Fatal(err)
+		}
+		rq := <-queries
+		seen[rq.from.String()]++
+		if _, err := pc.WriteTo(dnsAnswer(rq.query, 0), rq.from); err != nil {
+			t.Fatal(err)
+		}
+		_ = readWithin(t, client)
+	}
+	for addr, uses := range seen {
+		if uses > 2 {
+			t.Errorf("socket %s used %d times, want at most maxUses=2", addr, uses)
+		}
+	}
+	if len(seen) < 3 {
+		t.Errorf("saw %d distinct source addresses across 5 queries with maxUses=2, want at least 3", len(seen))
 	}
 }

@@ -274,20 +274,25 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 	}
 
 	// 1. Response with QR == 0 is dropped.
-	if res := h.onUDPResponse(rewritten, upstream1); res.kind != actionDrop {
+	if res := h.onUDPResponse(rewritten, upstream1, nil); res.kind != actionDrop {
 		t.Errorf("QR=0 response kind = %v, want actionDrop", res.kind)
 	}
 
 	// 2. Response from unexpected upstream address is dropped without evicting pending request.
 	validResp := dnsAnswer(rewritten, 0)
-	if res := h.onUDPResponse(validResp, wrongUpstream); res.kind != actionDrop {
+	if res := h.onUDPResponse(validResp, wrongUpstream, nil); res.kind != actionDrop {
 		t.Errorf("wrong upstream source kind = %v, want actionDrop", res.kind)
+	}
+
+	// 2b. Response arriving on a different UDP socket than the one recorded is dropped.
+	if res := h.onUDPResponse(validResp, upstream1, &fakePacketConn{}); res.kind != actionDrop {
+		t.Errorf("wrong socket response kind = %v, want actionDrop", res.kind)
 	}
 
 	// 3. Response with wrong transaction ID is dropped.
 	wrongIDResp := bytes.Clone(validResp)
 	binary.BigEndian.PutUint16(wrongIDResp[0:2], upstreamID^0xffff)
-	if res := h.onUDPResponse(wrongIDResp, upstream1); res.kind != actionDrop {
+	if res := h.onUDPResponse(wrongIDResp, upstream1, nil); res.kind != actionDrop {
 		t.Errorf("wrong ID response kind = %v, want actionDrop", res.kind)
 	}
 
@@ -300,7 +305,7 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 		Type:  dnsmessage.TypeA,
 		Class: dnsmessage.ClassINET,
 	}})
-	if res := h.onUDPResponse(wrongQNameResp, upstream1); res.kind != actionDrop {
+	if res := h.onUDPResponse(wrongQNameResp, upstream1, nil); res.kind != actionDrop {
 		t.Errorf("wrong QNAME response kind = %v, want actionDrop", res.kind)
 	}
 
@@ -313,13 +318,13 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 		Type:  dnsmessage.TypeAAAA,
 		Class: dnsmessage.ClassINET,
 	}})
-	if res := h.onUDPResponse(wrongQTypeResp, upstream1); res.kind != actionDrop {
+	if res := h.onUDPResponse(wrongQTypeResp, upstream1, nil); res.kind != actionDrop {
 		t.Errorf("wrong QTYPE response kind = %v, want actionDrop", res.kind)
 	}
 
 	// 6. SERVFAIL from upstream1 triggers ActionFailover to upstream2.
 	servFailResp := dnsAnswer(rewritten, byte(dnsmessage.RCodeServerFailure))
-	failoverAct := h.onUDPResponse(servFailResp, upstream1)
+	failoverAct := h.onUDPResponse(servFailResp, upstream1, nil)
 	if failoverAct.kind != actionFailover {
 		t.Fatalf("SERVFAIL on first upstream kind = %v, want actionFailover", failoverAct.kind)
 	}
@@ -340,7 +345,7 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 		Type:  dnsmessage.TypeA,
 		Class: dnsmessage.ClassINET,
 	}})
-	deliverAct := h.onUDPResponse(lowerResp, upstream2)
+	deliverAct := h.onUDPResponse(lowerResp, upstream2, nil)
 	if deliverAct.kind != actionDeliver {
 		t.Fatalf("valid response on second upstream kind = %v, want actionDeliver", deliverAct.kind)
 	}
