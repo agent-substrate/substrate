@@ -43,7 +43,7 @@ func shouldDetachFromNode(actor *ateapipb.Actor, assignErr error) bool {
 
 // detachFromFullNode releases the node binding so scheduling can retry.
 // Unreachable nodes can be forgotten when the latest local snapshot is durable.
-// Otherwise a deleted node crashes the actor.
+// A deleted node crashes the actor when that snapshot is not durable.
 func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, assignErr error) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "DetachFromFullNode")
 	defer func() { err = done(err) }()
@@ -70,7 +70,7 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 		if canDetachWithoutAtelet(ctx, actor, err) {
 			return w.recordDetach(ctx, actorRef, actor, node, nil)
 		}
-		if errors.Is(err, ErrNoAteletOnNode) {
+		if errors.Is(err, ErrNoAteletOnNode) && latestLocalNotDurable(actor) {
 			gone, nodeErr := w.dialer.NodeGone(ctx, node)
 			if nodeErr != nil {
 				return nil, apierror.Unavailable("while getting atelet conn for node %q: %w (and while checking the node: %w)", node, err, nodeErr)
@@ -152,6 +152,13 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 		return nil, fmt.Errorf("while recording the detach of Actor %s from node %q: %w", actorRef, node, err)
 	}
 	return stored, nil
+}
+
+// latestLocalNotDurable reports whether the actor's latest local snapshot has
+// no completed durable copy.
+func latestLocalNotDurable(actor *ateapipb.Actor) bool {
+	local := findLatestLocalSnapshot(actor.GetStatus())
+	return local != nil && local.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 }
 
 func canDetachWithoutAtelet(ctx context.Context, actor *ateapipb.Actor, err error) bool {

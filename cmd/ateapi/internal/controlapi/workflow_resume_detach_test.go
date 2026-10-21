@@ -135,7 +135,9 @@ func TestDetachFromFullNode(t *testing.T) {
 		wantDetached bool
 		wantCrashed  bool
 		wantCode     codes.Code
-		wantCall     bool
+		// wantErrText is text the error must contain.
+		wantErrText string
+		wantCall    bool
 	}{{
 		name:         "another node has room: detaches",
 		node:         "node-1",
@@ -270,12 +272,23 @@ func TestDetachFromFullNode(t *testing.T) {
 		wantCrashed: true,
 		wantCode:    codes.FailedPrecondition,
 	}, {
+		name:      "node gone, crash recorded, upload completed: Unavailable, actor stays on its node",
+		node:      "node-3",
+		otherNode: true,
+		completed: true,
+		nodeGone:  true,
+		before: func(a *ateapipb.Actor) {
+			a.Status.Crash = &ateapipb.ActorCrash{Message: "restore failed"}
+		},
+		wantCode: codes.Unavailable,
+	}, {
 		name:          "node lookup fails: Unavailable, actor stays on its node",
 		node:          "node-3",
 		otherNode:     true,
 		nodeGone:      true,
 		nodeLookupErr: errors.New("connection refused"),
 		wantCode:      codes.Unavailable,
+		wantErrText:   "while checking the node",
 	}, {
 		name:      "atelet refuses: Aborted, actor stays on its node",
 		node:      "node-1",
@@ -380,6 +393,9 @@ func TestDetachFromFullNode(t *testing.T) {
 			stored, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapipb.ActorTemplate{}, noRoom)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("detachFromFullNode() = %v, want code %v", err, tt.wantCode)
+			}
+			if tt.wantErrText != "" && !strings.Contains(err.Error(), tt.wantErrText) {
+				t.Fatalf("detachFromFullNode() = %v, want it to contain %q", err, tt.wantErrText)
 			}
 			req := atelet.detachRequest()
 			if !tt.cancel && (req != nil) != tt.wantCall {
