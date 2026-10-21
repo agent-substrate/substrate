@@ -420,6 +420,36 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 	}
 }
 
+// TestSuspendLifecycleMode checks that lifecycle_mode picks the durability
+// mode of the SuspendActor that ends each cycle.
+func TestSuspendLifecycleMode(t *testing.T) {
+	for _, tt := range []struct {
+		mode string
+		want ateapipb.DurabilityMode
+	}{
+		{"", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		{dynconfig.LifecycleModeSuspend, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		{dynconfig.LifecycleModePause, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	} {
+		t.Run("mode="+tt.mode, func(t *testing.T) {
+			cfg, _, fakeCtrl := newTestConfig(t, http.NotFoundHandler())
+			cfg.Dyn = dynconfig.Static(knobs{Lifecycle: dynconfig.Lifecycle{LifecycleMode: tt.mode}})
+			u := &sweperfUser{cfg: cfg, actorName: "test-actor", userClass: sweperfUserClass}
+			if !u.suspend(context.Background()) {
+				t.Fatal("suspend() = false, want true")
+			}
+			fakeCtrl.mu.Lock()
+			defer fakeCtrl.mu.Unlock()
+			if len(fakeCtrl.suspendReqs) != 1 {
+				t.Fatalf("got %d SuspendActor requests, want 1", len(fakeCtrl.suspendReqs))
+			}
+			if got := fakeCtrl.suspendReqs[0].GetOptions().GetMode(); got != tt.want {
+				t.Errorf("suspend mode = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnsureAtespaceHandling(t *testing.T) {
 	t.Run("treats AlreadyExists error as success", func(t *testing.T) {
 		cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
