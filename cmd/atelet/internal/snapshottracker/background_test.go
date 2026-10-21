@@ -438,9 +438,8 @@ func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 
 func (h *recordingHandler) WithGroup(string) slog.Handler { return h }
 
-// logOp logs a finished operation at info level, a failed background one as a
-// warning, and a background one canceled by its context at info level. A
-// failed foreground operation goes back to its caller unlogged.
+// logOp logs a finished operation at info level, a failed one as a warning, and
+// one its context canceled at info level, in the background or not.
 func TestLogOp(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -467,12 +466,6 @@ func TestLogOp(t *testing.T) {
 			logOp(tc.ctx, trackedActorUID, opUpload, testRef("s1", 1, time.Time{}), false, tc.background, time.Second, tc.err)
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			if tc.wantMsg == "" {
-				if len(h.records) != 0 {
-					t.Errorf("logged %q, want nothing", h.records[0].Message)
-				}
-				return
-			}
 			if len(h.records) != 1 || h.records[0].Message != tc.wantMsg || h.records[0].Level != tc.wantLevel {
 				t.Errorf("logged %v, want one %v record %q", h.records, tc.wantLevel, tc.wantMsg)
 			}

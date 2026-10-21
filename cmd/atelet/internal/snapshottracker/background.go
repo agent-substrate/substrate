@@ -85,10 +85,9 @@ func (k opKind) String() string {
 	}
 }
 
-// logOp logs how an upload or detach ended. Foreground failures are returned
-// to the RPC caller, so only background failures are logged here: as a
-// warning, or at info level once ctx has ended, as when Terminate, an atelet
-// shutdown, or a newer durable snapshot cancels the operation.
+// logOp logs how an upload or detach ended. A failure logs as a warning, or at
+// info level once ctx has ended, as when Terminate, an atelet shutdown, or a
+// newer durable snapshot cancels the operation.
 func logOp(ctx context.Context, actorUID string, kind opKind, target SnapshotRef, uploaded, background bool, elapsed time.Duration, err error) {
 	attrs := []any{
 		slog.String("op", kind.String()),
