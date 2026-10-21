@@ -92,9 +92,9 @@ See [Nighthawk CLI help](https://github.com/envoyproxy/nighthawk#using-the-night
 
 | Egress Mode | Target URL | Port |
 |---|---|---|
-| Plaintext HTTP | `http://nighthawk-server.ate-system.svc.cluster.local:80` | `80` |
-| HTTPS (TLS MITM) | `https://nighthawk-server.ate-system.svc.cluster.local:443` | `443` |
-| TLS Passthrough | `https://nighthawk-server.ate-system.svc.cluster.local:8443` | `8443` |
+| Plaintext HTTP | `http://nighthawk-server.ate-system.svc:80` | `80` |
+| HTTPS (TLS MITM) | `https://nighthawk-server.ate-system.svc:443` | `443` |
+| TLS Passthrough | `https://nighthawk-server.ate-system.svc:8443` | `8443` |
 
 ## Cleanup
 
