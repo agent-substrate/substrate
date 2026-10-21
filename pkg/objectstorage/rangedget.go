@@ -45,10 +45,7 @@ type fetchRangeFunc func(ctx context.Context, i int, off, n int64, buf []byte) e
 // rangedReader reassembles parallel ranged reads into one ordered stream. head, if
 // set, is the already-open body of the first range, so the size probe is not wasted.
 type rangedReader struct {
-	size int64
-	// read is how many bytes Read has taken from ordered.
-	read    int64
-	ctx     context.Context
+	size    int64
 	cancel  context.CancelFunc
 	head    io.ReadCloser
 	ordered chan chan rangeResult
@@ -56,6 +53,9 @@ type rangedReader struct {
 	cur     []byte
 	curFull []byte
 	err     error
+	// stopErr is why schedule stopped before issuing every range. It is set
+	// before ordered is closed, so Read may use it once ordered is closed.
+	stopErr error
 }
 
 type rangeResult struct {
@@ -70,7 +70,6 @@ func newRangedReader(ctx context.Context, size int64, head io.ReadCloser, fetch 
 	ctx, cancel := context.WithCancel(ctx)
 	r := &rangedReader{
 		size:    size,
-		ctx:     ctx,
 		cancel:  cancel,
 		head:    head,
 		ordered: make(chan chan rangeResult, downloadConcurrency),
@@ -91,12 +90,14 @@ func (r *rangedReader) schedule(ctx context.Context, size int64, head io.Reader,
 		select {
 		case buf = <-r.free:
 		case <-ctx.Done():
+			r.stop(ctx, off, size)
 			return
 		}
 		out := make(chan rangeResult, 1)
 		select {
 		case r.ordered <- out:
 		case <-ctx.Done():
+			r.stop(ctx, off, size)
 			return
 		}
 		n := min(int64(downloadChunkSize), size-off)
@@ -119,6 +120,10 @@ func (r *rangedReader) schedule(ctx context.Context, size int64, head io.Reader,
 	}
 }
 
+func (r *rangedReader) stop(ctx context.Context, off, size int64) {
+	r.stopErr = fmt.Errorf("ranged read stopped at offset %d of %d: %w", off, size, context.Cause(ctx))
+}
+
 func (r *rangedReader) Read(p []byte) (int, error) {
 	if r.err != nil {
 		return 0, r.err
@@ -127,9 +132,8 @@ func (r *rangedReader) Read(p []byte) (int, error) {
 		out, ok := <-r.ordered
 		if !ok {
 			r.err = io.EOF
-			if r.read < r.size {
-				// schedule stops early only when ctx is done.
-				r.err = fmt.Errorf("ranged read stopped after %d of %d bytes: %w", r.read, r.size, context.Cause(r.ctx))
+			if r.stopErr != nil {
+				r.err = r.stopErr
 			}
 			return 0, r.err
 		}
@@ -138,7 +142,6 @@ func (r *rangedReader) Read(p []byte) (int, error) {
 			r.err = res.err
 			return 0, r.err
 		}
-		r.read += int64(len(res.buf))
 		r.cur = res.buf
 		r.curFull = res.buf[:cap(res.buf)]
 	}
