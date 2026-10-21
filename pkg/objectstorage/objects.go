@@ -424,8 +424,12 @@ func fetchFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL strin
 		}
 	}()
 
+	// An object of one chunk arrives as one stream. The serial decoder overlaps
+	// decoding with the download. parZstdReader cannot start a frame until all
+	// of it has arrived.
+	size, ok := ObjectSize(rc)
 	t0 := time.Now()
-	res, err := decodeContent(out, rc)
+	res, err := decodeContent(out, rc, ok && size > downloadChunkSize)
 	if err != nil {
 		return err
 	}
@@ -451,8 +455,9 @@ type decodeContentResult struct {
 // (older snapshots, or the non-file upload path). When out is an *os.File the plain
 // path writes SPARSE (skips zero blocks → holes) so only the resident set is
 // written, not a dense multi-GiB image. It touches only io, so it is unit-testable
-// without an object store, mirroring writeContent.
-func decodeContent(out io.Writer, src io.Reader) (decodeContentResult, error) {
+// without an object store, mirroring writeContent. parallel selects
+// parZstdReader over the serial decoder.
+func decodeContent(out io.Writer, src io.Reader, parallel bool) (decodeContentResult, error) {
 	magic := make([]byte, len(sparseMagic))
 	n, rerr := io.ReadFull(src, magic)
 	if rerr == nil && string(magic) == sparseMagic {
@@ -460,7 +465,7 @@ func decodeContent(out io.Writer, src io.Reader) (decodeContentResult, error) {
 		if !ok {
 			return decodeContentResult{}, fmt.Errorf("sparse-extent snapshot requires a file destination, got %T", out)
 		}
-		size, derr := readSparseZstd(f, src) // src is positioned just after the magic
+		size, derr := readSparseZstd(f, src, parallel) // src is positioned just after the magic
 		if derr != nil {
 			return decodeContentResult{}, fmt.Errorf("in sparse-extent decode: %w", derr)
 		}
@@ -472,7 +477,10 @@ func decodeContent(out io.Writer, src io.Reader) (decodeContentResult, error) {
 
 	// Plain zstd stream: put back the peeked bytes, then decompress.
 	r := io.MultiReader(bytes.NewReader(magic[:n]), src)
-	zrc := newParZstdReader(r)
+	zrc, err := newZstdReader(r, parallel)
+	if err != nil {
+		return decodeContentResult{}, fmt.Errorf("in zstd.NewReader: %w", err)
+	}
 	defer zrc.Close()
 	if f, ok := out.(*os.File); ok {
 		size, written, derr := copyZstdSparse(f, zrc)

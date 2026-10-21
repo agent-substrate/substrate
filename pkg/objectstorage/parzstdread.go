@@ -100,12 +100,22 @@ func (res parZstdResult) release() {
 
 type parZstdDecodeJob struct {
 	frame []byte
-	// size is the decoded size the frame header declares, or -1.
-	size int
 	// maxSize bounds the decoded size.
 	maxSize int
 	sem     chan struct{}
 	out     chan parZstdResult
+}
+
+// newZstdReader returns a parZstdReader if parallel, else a serial zstd decoder.
+func newZstdReader(src io.Reader, parallel bool) (io.ReadCloser, error) {
+	if parallel {
+		return newParZstdReader(src), nil
+	}
+	zr, err := zstd.NewReader(src, zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return nil, err
+	}
+	return zr.IOReadCloser(), nil
 }
 
 // newParZstdReader starts splitting src into frames and decoding them, on up to
@@ -145,10 +155,8 @@ func (r *parZstdReader) decodeWorker(jobs <-chan parZstdDecodeJob) {
 		case <-r.stop:
 			// Close discards the output.
 		default:
+			// DecodeAll checks the output against a declared size.
 			res.data, res.err = dec.DecodeAll(j.frame, getBuf(j.maxSize, parZstdChunk, getChunk))
-			if res.err == nil && j.size >= 0 && len(res.data) != j.size {
-				res.err = fmt.Errorf("zstd frame decoded to %d bytes, header declared %d", len(res.data), j.size)
-			}
 		}
 		putFrame(j.frame)
 		j.out <- res
@@ -158,6 +166,9 @@ func (r *parZstdReader) decodeWorker(jobs <-chan parZstdDecodeJob) {
 // acquire takes a decode token for the next frame: the reader's own if it is
 // free, else a shared one. It returns nil once the reader is closed.
 func (r *parZstdReader) acquire() chan struct{} {
+	if r.stopped() {
+		return nil
+	}
 	select {
 	case r.own <- struct{}{}:
 		return r.own
@@ -173,6 +184,28 @@ func (r *parZstdReader) acquire() chan struct{} {
 	}
 }
 
+func (r *parZstdReader) stopped() bool {
+	select {
+	case <-r.stop:
+		return true
+	default:
+		return false
+	}
+}
+
+// send queues out for Read. It returns false once the reader is closed.
+func (r *parZstdReader) send(out chan parZstdResult) bool {
+	if r.stopped() {
+		return false
+	}
+	select {
+	case r.ordered <- out:
+		return true
+	case <-r.stop:
+		return false
+	}
+}
+
 // split reads src one frame at a time and dispatches each, in order. At the first
 // frame that cannot be decoded in parallel, it hands the rest of the stream to
 // the reader as a tail.
@@ -185,7 +218,7 @@ func (r *parZstdReader) split(src io.Reader, jobs chan<- parZstdDecodeJob) {
 		if sem == nil {
 			return
 		}
-		frame, size, maxSize, ok, err := readZstdFrame(src)
+		frame, maxSize, ok, err := readZstdFrame(src)
 		res := parZstdResult{sem: sem}
 		switch {
 		case err == io.EOF:
@@ -197,9 +230,7 @@ func (r *parZstdReader) split(src io.Reader, jobs chan<- parZstdDecodeJob) {
 			res.tail = io.MultiReader(bytes.NewReader(frame), src)
 		}
 		out := make(chan parZstdResult, 1)
-		select {
-		case r.ordered <- out:
-		case <-r.stop:
+		if !r.send(out) {
 			<-sem
 			putFrame(frame)
 			return
@@ -208,7 +239,7 @@ func (r *parZstdReader) split(src io.Reader, jobs chan<- parZstdDecodeJob) {
 			out <- res
 			return
 		}
-		jobs <- parZstdDecodeJob{frame: frame, size: size, maxSize: maxSize, sem: sem, out: out}
+		jobs <- parZstdDecodeJob{frame: frame, maxSize: maxSize, sem: sem, out: out}
 	}
 }
 
@@ -270,39 +301,38 @@ func (r *parZstdReader) Close() error {
 
 // readZstdFrame reads the next frame from src, skipping skippable frames. It
 // returns:
-//   - the frame, the decoded size its header declares (-1 if none) and a bound
-//     on the decoded size, with ok=true, when the frame can be decoded in
-//     parallel;
+//   - the frame and a bound on its decoded size, with ok=true, when the frame
+//     can be decoded in parallel. The bound is the declared size, if any;
 //   - the bytes read so far, with ok=false, when it cannot: the caller decodes
 //     the rest of the stream serially, starting with those bytes.
 //
 // At a clean end of stream it returns io.EOF and no bytes.
-func readZstdFrame(src io.Reader) (frame []byte, size, maxSize int, ok bool, err error) {
+func readZstdFrame(src io.Reader) (frame []byte, maxSize int, ok bool, err error) {
 	var hdr [18]byte // magic, then the frame header (RFC 8878 3.1.1.1)
 	for {
 		if _, err := io.ReadFull(src, hdr[:4]); err != nil {
 			if err == io.EOF {
-				return nil, 0, 0, false, io.EOF
+				return nil, 0, false, io.EOF
 			}
-			return nil, 0, 0, false, fmt.Errorf("reading zstd frame magic: %w", err)
+			return nil, 0, false, fmt.Errorf("reading zstd frame magic: %w", err)
 		}
 		m := binary.LittleEndian.Uint32(hdr[:4])
 		if m == zstdFrameMagic {
 			break
 		}
 		if m&zstdSkippableMagicMask != zstdSkippableMagic {
-			return nil, 0, 0, false, fmt.Errorf("not a zstd frame (magic %#x)", m)
+			return nil, 0, false, fmt.Errorf("not a zstd frame (magic %#x)", m)
 		}
 		if _, err := io.ReadFull(src, hdr[4:8]); err != nil {
-			return nil, 0, 0, false, fmt.Errorf("reading skippable frame size: %w", noEOF(err))
+			return nil, 0, false, fmt.Errorf("reading skippable frame size: %w", noEOF(err))
 		}
 		if _, err := io.CopyN(io.Discard, src, int64(binary.LittleEndian.Uint32(hdr[4:8]))); err != nil {
-			return nil, 0, 0, false, fmt.Errorf("skipping skippable frame: %w", noEOF(err))
+			return nil, 0, false, fmt.Errorf("skipping skippable frame: %w", noEOF(err))
 		}
 	}
 
 	if _, err := io.ReadFull(src, hdr[4:5]); err != nil {
-		return nil, 0, 0, false, fmt.Errorf("reading zstd frame header: %w", noEOF(err))
+		return nil, 0, false, fmt.Errorf("reading zstd frame header: %w", noEOF(err))
 	}
 	desc := hdr[4]
 	fcsFlag := desc >> 6
@@ -318,17 +348,17 @@ func readZstdFrame(src io.Reader) (frame []byte, size, maxSize int, ok bool, err
 		hdrLen++ // window descriptor
 	}
 	if _, err := io.ReadFull(src, hdr[5:hdrLen]); err != nil {
-		return nil, 0, 0, false, fmt.Errorf("reading zstd frame header: %w", noEOF(err))
+		return nil, 0, false, fmt.Errorf("reading zstd frame header: %w", noEOF(err))
 	}
 	if !singleSegment {
 		// A single-segment frame's window is its declared size, checked below.
 		wd := hdr[5]
 		base := uint64(1) << (10 + wd>>3)
 		if base+base/8*uint64(wd&7) > parZstdMaxFrame {
-			return slices.Clone(hdr[:hdrLen]), 0, 0, false, nil
+			return slices.Clone(hdr[:hdrLen]), 0, false, nil
 		}
 	}
-	size = -1
+	size := -1
 	var fcs uint64
 	fcsBytes := hdr[hdrLen-fcsSize : hdrLen]
 	switch fcsSize {
@@ -343,7 +373,7 @@ func readZstdFrame(src io.Reader) (frame []byte, size, maxSize int, ok bool, err
 	}
 	if fcsSize > 0 {
 		if fcs > parZstdMaxFrame {
-			return slices.Clone(hdr[:hdrLen]), 0, 0, false, nil
+			return slices.Clone(hdr[:hdrLen]), 0, false, nil
 		}
 		size = int(fcs)
 	}
@@ -363,37 +393,37 @@ func readZstdFrame(src io.Reader) (frame []byte, size, maxSize int, ok bool, err
 	for last := false; !last; {
 		bh, err := read(3)
 		if err != nil {
-			return nil, 0, 0, false, fmt.Errorf("reading zstd block header: %w", err)
+			return nil, 0, false, fmt.Errorf("reading zstd block header: %w", err)
 		}
 		h := uint32(bh[0]) | uint32(bh[1])<<8 | uint32(bh[2])<<16
 		last = h&1 != 0
 		n := int(h >> 3)
 		if n > zstdMaxBlockOut {
-			return nil, 0, 0, false, fmt.Errorf("zstd block of %d bytes exceeds the maximum of %d", n, zstdMaxBlockOut)
+			return nil, 0, false, fmt.Errorf("zstd block of %d bytes exceeds the maximum of %d", n, zstdMaxBlockOut)
 		}
 		switch (h >> 1) & 3 {
 		case 1: // RLE: one byte, repeated
 			n = 1
 		case 3:
-			return nil, 0, 0, false, errors.New("reserved zstd block type")
+			return nil, 0, false, errors.New("reserved zstd block type")
 		}
 		maxSize += zstdMaxBlockOut
 		if maxSize > parZstdMaxFrame {
-			return buf, 0, 0, false, nil
+			return buf, 0, false, nil
 		}
 		if _, err := read(n); err != nil {
-			return nil, 0, 0, false, fmt.Errorf("reading zstd block: %w", err)
+			return nil, 0, false, fmt.Errorf("reading zstd block: %w", err)
 		}
 	}
 	if hasChecksum {
 		if _, err := read(4); err != nil {
-			return nil, 0, 0, false, fmt.Errorf("reading zstd frame checksum: %w", err)
+			return nil, 0, false, fmt.Errorf("reading zstd frame checksum: %w", err)
 		}
 	}
 	if size >= 0 {
 		maxSize = size
 	}
-	return buf, size, maxSize, true, nil
+	return buf, maxSize, true, nil
 }
 
 // getBuf returns an empty buffer for about n bytes: a pooled one from get when n

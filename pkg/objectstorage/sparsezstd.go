@@ -135,8 +135,9 @@ func writeSparseExtents(ctx context.Context, dst io.Writer, src *os.File, size i
 // readSparseZstd decodes the sparse-extent format into dst, which becomes a sparse
 // file (the holes between extents are never written). src must be positioned just
 // AFTER the magic (the caller reads + dispatches on it). dst is truncated to the
-// logical size so trailing holes + the exact size are represented.
-func readSparseZstd(dst *os.File, src io.Reader) (logical int64, err error) {
+// logical size so trailing holes + the exact size are represented. parallel
+// selects parZstdReader over the serial decoder.
+func readSparseZstd(dst *os.File, src io.Reader, parallel bool) (logical int64, err error) {
 	var ver uint32
 	if err := binary.Read(src, binary.LittleEndian, &ver); err != nil {
 		return 0, fmt.Errorf("reading sparse format version: %w", err)
@@ -145,7 +146,10 @@ func readSparseZstd(dst *os.File, src io.Reader) (logical int64, err error) {
 		return 0, fmt.Errorf("unsupported sparse snapshot format version %d (this build supports %d)", ver, sparseVersion)
 	}
 
-	zr := newParZstdReader(src)
+	zr, err := newZstdReader(src, parallel)
+	if err != nil {
+		return 0, err
+	}
 	defer zr.Close()
 
 	var size int64
