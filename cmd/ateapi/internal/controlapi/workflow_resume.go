@@ -387,8 +387,8 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef)
 	}
-	_, constraints := resumeConstraints(actor, actorTemplate)
-	if _, ok := firstMatch(constraints, worker); !ok {
+	_, constraints := resumeConstraintsBestFirst(actor, actorTemplate)
+	if _, ok := bestMatch(constraints, worker); !ok {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		// If that worker's pool is no longer eligible (e.g. the actor's
 		// worker_selector was updated after the failed attempt), release it back
@@ -426,7 +426,7 @@ func (w *ActorWorkflow) workerFromPreviousAttempt(ctx context.Context, actor *at
 	}
 
 	if worker.GetNodeName() != "" {
-		if c, ok := firstMatch(constraints, worker); ok {
+		if c, ok := bestMatch(constraints, worker); ok {
 			return worker, c, nil
 		}
 	}
@@ -486,7 +486,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 
 	limits := actorTemplate.GetResources().GetLimits()
 	class = snapshotSandboxClass(actor)
-	snapRuntime, constraints := resumeConstraints(actor, actorTemplate)
+	snapRuntime, constraints := resumeConstraintsBestFirst(actor, actorTemplate)
 
 	assignedWorker, picked, err := w.workerFromPreviousAttempt(ctx, actor, constraints)
 	if err != nil {
@@ -622,10 +622,10 @@ func toAteletSandboxRuntime(in *ateapipb.ActorSandboxRuntime) *ateletpb.ActorSan
 	return out
 }
 
-// resumeConstraints returns the runtime of the snapshot the resume restores
-// with its memory state, and the constraints a resume accepts, best first.
-// Assignment schedules against them in order, and a worker that already holds
-// the actor must still match one:
+// resumeConstraintsBestFirst returns the runtime of the snapshot the resume
+// restores with its memory state, and the constraints a resume accepts, best
+// first. Assignment schedules against them in order, and a worker that already
+// holds the actor must still match one:
 //  1. The sandbox class of the snapshot the actor restores from, the
 //     template's and the actor's worker selectors, the actor's AssignedNode
 //     when set, and the snapshot runtime. The resume keeps the snapshot's
@@ -634,7 +634,7 @@ func toAteletSandboxRuntime(in *ateapipb.ActorSandboxRuntime) *ateletpb.ActorSan
 //     memory state.
 //
 // Without a snapshot runtime only 2 applies.
-func resumeConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) (hardware.Requirement, []scheduling.Constraints) {
+func resumeConstraintsBestFirst(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) (hardware.Requirement, []scheduling.Constraints) {
 	snapRuntime := hardware.NewRequirement(requiredSnapshotRuntime(snapshotToResume(actor.GetStatus()), tmpl))
 	base := actorConstraints(actor, tmpl)
 	// A suspended Actor with a local snapshot stays pinned to its node until
@@ -661,8 +661,8 @@ func actorConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) sched
 		WithWorkerSelectors(tmplSel, labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())))
 }
 
-// firstMatch returns the first of constraints that worker matches.
-func firstMatch(constraints []scheduling.Constraints, worker *ateapipb.Worker) (scheduling.Constraints, bool) {
+// bestMatch returns the first of constraints that worker matches.
+func bestMatch(constraints []scheduling.Constraints, worker *ateapipb.Worker) (scheduling.Constraints, bool) {
 	for _, c := range constraints {
 		if c.Matches(worker) {
 			return c, true

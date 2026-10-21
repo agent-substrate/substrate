@@ -3164,10 +3164,10 @@ func TestResume_ChecksMountedVolumesBeforeAttach(t *testing.T) {
 	}
 }
 
-// TestResumeConstraints pins the constraints a resume accepts. The fallback
-// drops only the runtime. Each row maps a worker to the index of the first
-// constraints it matches. A worker missing from the map matches none.
-func TestResumeConstraints(t *testing.T) {
+// TestResumeConstraintsBestFirst pins the constraints a resume accepts. The
+// fallback drops only the runtime. Each row maps a worker to the index of the
+// first constraints it matches. A worker missing from the map matches none.
+func TestResumeConstraintsBestFirst(t *testing.T) {
 	rt := testSandboxRuntime()
 	armRT := testRuntime("arm64", "")
 	microvmRT := testRuntime("amd64", "")
@@ -3241,7 +3241,7 @@ func TestResumeConstraints(t *testing.T) {
 					Snapshots:    tc.snapshots,
 				},
 			}
-			_, constraints := resumeConstraints(actor, tmpl)
+			_, constraints := resumeConstraintsBestFirst(actor, tmpl)
 			got := map[string]int{}
 			for name, w := range workers {
 				for i, c := range constraints {
