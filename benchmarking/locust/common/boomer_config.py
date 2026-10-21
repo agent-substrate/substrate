@@ -85,6 +85,8 @@ _FLAGS = {
     "--spawn-concurrency": int,
     "--actor-deadline": float,
     "--target-rps": float,
+    "--spawn-template": str,
+    "--spawn-wake-storm": bool,
 }
 
 
@@ -98,7 +100,10 @@ def build_config_json(argv: Iterable[str]) -> str:
     boomer falls back to its own defaults."""
     p = argparse.ArgumentParser(add_help=False)
     for flag, type_func in _FLAGS.items():
-        p.add_argument(flag, type=type_func)
+        if type_func is bool:
+            p.add_argument(flag, action="store_true", default=None)
+        else:
+            p.add_argument(flag, type=type_func)
     parsed, _ = p.parse_known_args(argv)
     cfg = {
         _attr(f): getattr(parsed, _attr(f))

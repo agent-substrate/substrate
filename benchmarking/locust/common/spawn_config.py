@@ -44,3 +44,19 @@ def add_spawn_arguments(parser: LocustArgumentParser) -> None:
         help="Per-actor timeout in seconds; 0 uses boomer-worker's --actor-deadline (default 120s)",
         include_in_web_ui=True,
     )
+    parser.add_argument(
+        "--spawn-template",
+        type=str,
+        default="",
+        env_var="LOCUST_SPAWN_TEMPLATE",
+        help="ActorTemplate name for the spawn batch; empty uses boomer-worker's --spawn-template (default 'glutton')",
+        include_in_web_ui=True,
+    )
+    parser.add_argument(
+        "--spawn-wake-storm",
+        action="store_true",
+        default=False,
+        env_var="LOCUST_SPAWN_WAKE_STORM",
+        help="After spawning all actors, suspend all, wake all, and delete all with per-actor and batch timing",
+        include_in_web_ui=True,
+    )
