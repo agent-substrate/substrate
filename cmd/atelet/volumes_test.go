@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/volume"
@@ -415,7 +416,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		}
 	})
 
-	t.Run("resetActorDirs removes empty unmounted volume host directories", func(t *testing.T) {
+	t.Run("ResetActorDirs removes empty unmounted volume host directories", func(t *testing.T) {
 		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
@@ -441,14 +442,14 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			}
 		}
 
-		// resetActorDirs cleans up empty volume directories left after unmount.
-		if err := resetActorDirs(actorUID); err != nil {
-			t.Fatalf("resetActorDirs failed: %v", err)
+		// actordirs.ResetActorDirs cleans up empty volume directories left after unmount.
+		if err := actordirs.ResetActorDirs(actorUID); err != nil {
+			t.Fatalf("ResetActorDirs failed: %v", err)
 		}
 
 		for _, p := range []string{path1, path2} {
 			if _, err := os.Stat(p); !os.IsNotExist(err) {
-				t.Errorf("expected mount path %q to be deleted by resetActorDirs, stat err = %v", p, err)
+				t.Errorf("expected mount path %q to be deleted by ResetActorDirs, stat err = %v", p, err)
 			}
 		}
 
@@ -463,7 +464,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		}
 	})
 
-	t.Run("resetActorDirs preserves non-empty volume directories and returns error", func(t *testing.T) {
+	t.Run("ResetActorDirs preserves non-empty volume directories and returns error", func(t *testing.T) {
 		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
@@ -484,9 +485,9 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Fatalf("writing test file: %v", err)
 		}
 
-		err := resetActorDirs(actorUID)
+		err := actordirs.ResetActorDirs(actorUID)
 		if err == nil {
-			t.Fatal("expected resetActorDirs to fail on non-empty volume dir, got nil")
+			t.Fatal("expected ResetActorDirs to fail on non-empty volume dir, got nil")
 		}
 		if !strings.Contains(err.Error(), "while removing volume dir") {
 			t.Errorf("error = %v, want error containing 'while removing volume dir'", err)
@@ -498,11 +499,11 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		}
 	})
 
-	t.Run("resetActorDirs succeeds cleanly when volumes directory does not exist", func(t *testing.T) {
+	t.Run("ResetActorDirs succeeds cleanly when volumes directory does not exist", func(t *testing.T) {
 		useTempNodeDirs(t)
 
-		if err := resetActorDirs(actorUID); err != nil {
-			t.Fatalf("resetActorDirs failed when volumes dir does not exist: %v", err)
+		if err := actordirs.ResetActorDirs(actorUID); err != nil {
+			t.Fatalf("ResetActorDirs failed when volumes dir does not exist: %v", err)
 		}
 
 		volumesDir := ateletpath.ExternalVolumeMountsDir(actorUID)

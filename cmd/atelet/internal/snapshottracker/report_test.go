@@ -19,6 +19,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -275,37 +276,150 @@ func TestTrackerReportsBackgroundDetach(t *testing.T) {
 	})
 }
 
-// A Detach call makes a report of the detach due, as a background detach does.
+// A Detach call marks a detach report due and keeps snapshot-state.json on
+// disk until the report is acknowledged or refused with NotFound. On give-up
+// or any other refusal, snapshot-state.json stays on disk so a later Detach
+// call still returns LatestDurable.
 func TestTrackerReportsDetachCall(t *testing.T) {
-	store := newFakeSnapshotStore()
-	tr := newReportingTracker(t, store, newFakeReporter())
-	tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
-	if _, err := tr.Detach(t.Context(), trackedActorUID); err != nil {
-		t.Fatalf("detach: %v", err)
+	for _, tc := range []struct {
+		name       string
+		err        error
+		giveUp     bool
+		wantForget bool
+	}{
+		{name: "acknowledged", wantForget: true},
+		{name: "refused with NotFound", err: status.Error(codes.NotFound, "actor gone"), wantForget: true},
+		{name: "refused with Unimplemented", err: status.Error(codes.Unimplemented, "older ateapi"), wantForget: false},
+		{name: "refused with FailedPrecondition", err: status.Error(codes.FailedPrecondition, "conflict"), wantForget: false},
+		{name: "gives up after timeout", err: status.Error(codes.Unavailable, "ateapi down"), giveUp: true, wantForget: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeSnapshotStore()
+			reporter := newFakeReporter()
+			if tc.err != nil {
+				if tc.giveUp {
+					reporter.failNext(tc.err, tc.err)
+				} else {
+					reporter.failNext(tc.err)
+				}
+			}
+			tr := newReportingTracker(t, store, reporter)
+			tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
+			dueAt := tr.clock.Now()
+			if _, err := tr.Detach(t.Context(), trackedActorUID); err != nil {
+				t.Fatalf("detach: %v", err)
+			}
+			if !reportDue(tr) || !reportDueOnDisk() || tr.reporting.queue.Len() != 1 {
+				t.Fatalf("report due = %v, on disk = %v, queued = %d after Detach, want true, true, 1", reportDue(tr), reportDueOnDisk(), tr.reporting.queue.Len())
+			}
+
+			// A repeated Detach while the report is still pending returns
+			// LatestDurable and leaves the report due.
+			st, err := tr.Detach(t.Context(), trackedActorUID)
+			if err != nil {
+				t.Fatalf("second detach: %v", err)
+			}
+			if st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+				t.Errorf("second detach state = %v, want s1 durable and nothing local", st)
+			}
+			if !reportDue(tr) || !reportDueOnDisk() {
+				t.Fatal("second detach cleared the pending detach report")
+			}
+
+			processNextReport(t, tr)
+			if tc.giveUp {
+				stepTo(tr, dueAt.Add(DefaultReportGiveUpAfter))
+				processNextReport(t, tr)
+			}
+			if reportDue(tr) || reportDueOnDisk() {
+				t.Error("report still due once report ended")
+			}
+			if !tc.wantForget {
+				if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(trackedActorUID)); err != nil {
+					t.Errorf("snapshot-state.json missing after %s: %v", tc.name, err)
+				}
+			}
+			st, err = tr.Detach(t.Context(), trackedActorUID)
+			if err != nil {
+				t.Fatalf("third detach: %v", err)
+			}
+			if tc.wantForget {
+				if _, err := os.Stat(ateletpath.ActorPath(trackedActorUID)); !os.IsNotExist(err) {
+					t.Errorf("actor dir %s still exists: %v", ateletpath.ActorPath(trackedActorUID), err)
+				}
+				if !proto.Equal(st, &ateletpb.ActorSnapshotState{}) {
+					t.Errorf("third detach state = %v, want empty", st)
+				}
+			} else {
+				if st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+					t.Errorf("third detach state = %v, want s1 durable kept", st)
+				}
+				if !reportDue(tr) || !reportDueOnDisk() {
+					t.Fatal("third detach after report failure did not re-queue a detach report")
+				}
+				processNextReport(t, tr)
+				if _, err := os.Stat(ateletpath.ActorPath(trackedActorUID)); !os.IsNotExist(err) {
+					t.Errorf("actor dir %s still exists after re-queued detach report acknowledged: %v", ateletpath.ActorPath(trackedActorUID), err)
+				}
+			}
+		})
 	}
-	if !reportDue(tr) || !reportDueOnDisk() || tr.reporting.queue.Len() != 1 {
-		t.Errorf("report due = %v, on disk = %v, queued = %d after a Detach call, want due, saved, and queued",
-			reportDue(tr), reportDueOnDisk(), tr.reporting.queue.Len())
-	}
+
+	t.Run("started while detach report is due", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		reporter := newFakeReporter()
+		tr := newReportingTracker(t, store, reporter)
+		s1 := committedRef("s1", 1, tr.clock.Now())
+		tr.CommitLocal(trackedActorUID, s1)
+		if _, err := tr.Detach(t.Context(), trackedActorUID); err != nil {
+			t.Fatalf("detach: %v", err)
+		}
+
+		// BeginStart recreates the actor's state file on disk (which still
+		// exists while the detach report is due) with Started = true.
+		endStart, err := tr.BeginStart(t.Context(), trackedActorUID)
+		if err != nil {
+			t.Fatalf("BeginStart: %v", err)
+		}
+		endStart()
+
+		processNextReport(t, tr)
+		if reportDue(tr) || reportDueOnDisk() {
+			t.Error("detach report still due once acknowledged")
+		}
+		if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(trackedActorUID)); err != nil {
+			t.Errorf("snapshot-state.json removed for a started actor: %v", err)
+		}
+		if uuidOf(tr.State(trackedActorUID).GetLatestDurable()) != "s1" {
+			t.Errorf("state = %v, want s1 durable kept", tr.State(trackedActorUID))
+		}
+		if newTracker(t).NotStartedSince(trackedActorUID, s1.Snapshot) {
+			t.Error("NotStartedSince on a fresh tracker = true, want false kept in snapshot-state.json")
+		}
+	})
 }
 
-// A Detach call whose upload succeeds and prune fails still reports the upload.
+// A Detach call whose upload succeeds and cleanup fails still reports the upload.
 func TestTrackerReportsDetachCallUploadWhenPruneFails(t *testing.T) {
 	store := newFakeSnapshotStore()
 	tr := newReportingTracker(t, store, newFakeReporter())
 	tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
-	// A file where the local checkpoint directory belongs fails the prune.
-	if err := os.WriteFile(ateletpath.LocalCheckpointsDir(trackedActorUID), nil, 0o600); err != nil {
+	// A populated volume mount directory fails RemoveActorFilesExceptState.
+	stillMounted := filepath.Join(ateletpath.ExternalVolumeHostPath(trackedActorUID, "data"), "payload")
+	if err := os.MkdirAll(filepath.Dir(stillMounted), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stillMounted, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tr.Detach(t.Context(), trackedActorUID); err == nil {
-		t.Fatal("detach succeeded, want the prune's error")
+		t.Fatal("detach succeeded, want the cleanup's error")
 	}
 	if st := tr.State(trackedActorUID); uuidOf(st.GetLatestDurable()) != "s1" {
 		t.Fatalf("state = %v, want s1 durable", st)
 	}
 	if !reportDue(tr) || !reportDueOnDisk() {
-		t.Error("no report due for the upload after the prune failed")
+		t.Error("no report due for the upload after the cleanup failed")
 	}
 }
 
@@ -378,8 +492,12 @@ func TestTrackerDoesNotReportWhenNothingChanged(t *testing.T) {
 		durable.UploadTime = t0.Add(time.Second)
 		tr.CommitDurable(trackedActorUID, durable)
 		tr.CommitLocal(trackedActorUID, local)
-		// A file where the local checkpoint directory belongs fails the prune.
-		if err := os.WriteFile(ateletpath.LocalCheckpointsDir(trackedActorUID), nil, 0o600); err != nil {
+		// A populated volume mount directory fails RemoveActorFilesExceptState.
+		stillMounted := filepath.Join(ateletpath.ExternalVolumeHostPath(trackedActorUID, "data"), "payload")
+		if err := os.MkdirAll(filepath.Dir(stillMounted), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(stillMounted, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 
@@ -547,38 +665,6 @@ func TestTrackerGivesUpOnReportAfterTimeout(t *testing.T) {
 		}
 		eventually(t, "the detach report is acknowledged", func() bool { return !reportDue(tr) })
 	})
-}
-
-// WithReportWorkers(0) disables background reporting, even when WithReporter
-// is set: neither saved reports at startup nor fresh background changes are
-// queued or sent.
-func TestTrackerWithReportWorkersZeroDisablesReporting(t *testing.T) {
-	store := newFakeSnapshotStore()
-	store.setBlocking(true)
-	before := newTestTracker(t, store)
-	before.CommitLocal(trackedActorUID, committedRef("s1", 1, before.clock.Now()))
-	uploadNow(t, before, store, nil)
-
-	reporter := newFakeReporter()
-	tr := New(t.Context(), store, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)),
-		WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay),
-		WithReporter(reporter), WithReportWorkers(0))
-	tr.Start()
-	t.Cleanup(func() {
-		if err := tr.Wait(context.Background()); err != nil {
-			t.Errorf("Wait: %v", err)
-		}
-	})
-
-	stepTo(tr, tr.clock.Now().Add(reportStartupJitter))
-	tr.CommitLocal(trackedActorUID, committedRef("s2", 2, tr.clock.Now()))
-	uploadNow(t, tr, store, nil)
-	if n := tr.reporting.queue.Len(); n != 0 {
-		t.Errorf("reports queued = %d with 0 report workers, want none", n)
-	}
-	if got := len(reporter.reports()); got != 0 {
-		t.Errorf("reports sent = %d with 0 report workers, want none", got)
-	}
 }
 
 // A control-plane failure backs off the whole report queue, so other actors
@@ -813,6 +899,31 @@ func TestTrackerReportsAfterRestart(t *testing.T) {
 		}
 	})
 
+	t.Run("sends saved detach report and removes actor directory", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		// The first tracker has no reporter: it saves the detach report due,
+		// as an atelet that restarts before sending it does, but queues
+		// nothing.
+		before := newTestTracker(t, store)
+		before.CommitLocal(trackedActorUID, committedRef("s1", 1, before.clock.Now()))
+		detachNow(t, before)
+		if !reportDueOnDisk() {
+			t.Fatal("saved detach report not due on disk before restart")
+		}
+
+		reporter := newFakeReporter()
+		after := newStoreTracker(t, store)
+		startReporting(after, reporter)
+		processNextReport(t, after)
+		sent := reporter.reports()
+		if len(sent) != 1 || sent[0].state.GetLatestLocal() != nil || uuidOf(sent[0].state.GetLatestDurable()) != "s1" || sent[0].actor != testActor {
+			t.Fatalf("reports after the restart = %+v, want one detached report with s1 durable, for %+v", sent, testActor)
+		}
+		if _, err := os.Stat(ateletpath.ActorPath(trackedActorUID)); !os.IsNotExist(err) {
+			t.Errorf("actor dir %s after saved detach report acknowledged: %v", ateletpath.ActorPath(trackedActorUID), err)
+		}
+	})
+
 	t.Run("jitters saved reports at startup", func(t *testing.T) {
 		store := newFakeSnapshotStore()
 		store.setBlocking(true)
@@ -922,15 +1033,14 @@ func TestTrackerReportsStateChangedDuringReport(t *testing.T) {
 	})
 }
 
-// A Checkpoint, a PromoteSnapshot while a local snapshot is kept, or a Detach
-// call returns the actor's latest state to the control plane, so it cancels
-// any pending background report, whether queued in retry backoff or already in
+// A Checkpoint or PromoteSnapshot while a local snapshot is kept returns the
+// actor's latest state to the control plane, so it cancels any pending
+// background upload report, whether queued in retry backoff or already in
 // flight.
 func TestTrackerCancelsReportOnForegroundCall(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		alreadyDetached bool
-		call            func(t *testing.T, tr *Tracker)
+		name string
+		call func(t *testing.T, tr *Tracker)
 	}{
 		{
 			name: "CommitLocal",
@@ -962,25 +1072,13 @@ func TestTrackerCancelsReportOnForegroundCall(t *testing.T) {
 				tr.CommittedCheckpointState(trackedActorUID)
 			},
 		},
-		{
-			name:            "CommittedCheckpointState when already detached",
-			alreadyDetached: true,
-			call: func(_ *testing.T, tr *Tracker) {
-				tr.CommittedCheckpointState(trackedActorUID)
-			},
-		},
 	} {
 		makeReportDue := func(t *testing.T, tr *Tracker, store *fakeSnapshotStore) {
 			t.Helper()
 			tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
-			if tc.alreadyDetached {
-				store.setBlocking(false)
-				detachNow(t, tr)
-			} else {
-				store.setBlocking(true)
-				uploadNow(t, tr, store, nil)
-				store.setBlocking(false)
-			}
+			store.setBlocking(true)
+			uploadNow(t, tr, store, nil)
+			store.setBlocking(false)
 		}
 
 		t.Run(tc.name+"/queued in retry backoff", func(t *testing.T) {
@@ -1050,30 +1148,53 @@ func TestTrackerCancelsReportOnForegroundCall(t *testing.T) {
 	}
 }
 
-// CommitPromoted after a background detach cleared LatestLocal leaves the
-// pending detach report due, since the control plane does not read a promote's
-// response as a detach.
+// CommitPromoted or CommittedCheckpointState after a background detach cleared
+// LatestLocal leaves the pending detach report due, so the report still
+// completes and removes the actor's state file and directory.
 func TestTrackerKeepsDetachReportOnCommitPromotedWhenDetached(t *testing.T) {
-	store := newFakeSnapshotStore()
-	reporter := newFakeReporter()
-	tr := newReportingTracker(t, store, reporter)
-	tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
-	detachNow(t, tr)
-	if !reportDue(tr) || !reportDueOnDisk() {
-		t.Fatal("detach report not due before CommitPromoted")
-	}
+	for _, tc := range []struct {
+		name string
+		call func(tr *Tracker)
+	}{
+		{
+			name: "CommitPromoted",
+			call: func(tr *Tracker) {
+				tr.CommitPromoted(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
+			},
+		},
+		{
+			name: "CommittedCheckpointState",
+			call: func(tr *Tracker) {
+				tr.CommittedCheckpointState(trackedActorUID)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeSnapshotStore()
+			reporter := newFakeReporter()
+			tr := newReportingTracker(t, store, reporter)
+			tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
+			detachNow(t, tr)
+			if !reportDue(tr) || !reportDueOnDisk() {
+				t.Fatal("detach report not due before foreground call")
+			}
 
-	tr.CommitPromoted(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
-	if !reportDue(tr) || !reportDueOnDisk() {
-		t.Fatal("detach report canceled by CommitPromoted when LatestLocal was nil")
-	}
-	processNextReport(t, tr)
-	sent := reporter.reports()
-	if len(sent) != 1 || sent[0].state.GetLatestLocal() != nil || uuidOf(sent[0].state.GetLatestDurable()) != "s1" {
-		t.Errorf("reports = %+v, want 1 detach report with s1 durable", sent)
-	}
-	if reportDue(tr) || reportDueOnDisk() {
-		t.Error("detach report still due once acknowledged")
+			tc.call(tr)
+			if !reportDue(tr) || !reportDueOnDisk() {
+				t.Fatalf("detach report canceled by %s when LatestLocal was nil", tc.name)
+			}
+			processNextReport(t, tr)
+			sent := reporter.reports()
+			if len(sent) != 1 || sent[0].state.GetLatestLocal() != nil || uuidOf(sent[0].state.GetLatestDurable()) != "s1" {
+				t.Errorf("reports = %+v, want 1 detach report with s1 durable", sent)
+			}
+			if reportDue(tr) || reportDueOnDisk() {
+				t.Error("detach report still due once acknowledged")
+			}
+			if _, err := os.Stat(ateletpath.ActorPath(trackedActorUID)); !os.IsNotExist(err) {
+				t.Errorf("actor dir %s still exists after detach report acknowledged: %v", ateletpath.ActorPath(trackedActorUID), err)
+			}
+		})
 	}
 }
 

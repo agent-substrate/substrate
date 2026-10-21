@@ -35,6 +35,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/internal/apierror"
@@ -143,8 +144,8 @@ func TestValidateSnapshotUploadEstThroughput(t *testing.T) {
 	}
 }
 
-// Upload and detach worker flags must be at least 1, report workers must be at
-// least 0, and each flag defaults to the tracker's default count.
+// Upload, detach, and report worker flags must be at least 1, and each flag
+// defaults to the tracker's default count.
 func TestValidateSnapshotWorkerFlags(t *testing.T) {
 	setFlags := func(upload, detach, report int) {
 		*snapshotUploadWorkers, *snapshotDetachWorkers, *snapshotReportWorkers = upload, detach, report
@@ -160,11 +161,11 @@ func TestValidateSnapshotWorkerFlags(t *testing.T) {
 	}{
 		{"defaults", snapshottracker.DefaultUploadWorkers, snapshottracker.DefaultDetachWorkers, snapshottracker.DefaultReportWorkers, false},
 		{"single worker each", 1, 1, 1, false},
-		{"zero report workers", 2, 2, 0, false},
 		{"zero upload workers", 0, 2, 1, true},
 		{"negative upload workers", -1, 2, 1, true},
 		{"zero detach workers", 2, 0, 1, true},
 		{"negative detach workers", 2, -1, 1, true},
+		{"zero report workers", 2, 2, 0, true},
 		{"negative report workers", 2, 2, -1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -872,16 +873,16 @@ func TestRemoveActorDirsReclaimsTheRoot(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "actor-uid-1"
 
-	if err := resetActorDirs(actorUID); err != nil {
-		t.Fatalf("resetActorDirs: %v", err)
+	if err := actordirs.ResetActorDirs(actorUID); err != nil {
+		t.Fatalf("ResetActorDirs: %v", err)
 	}
 	// Written at Run and deliberately kept out of the directories reset wipes.
 	if err := os.WriteFile(ateletpath.ActorSandboxAssetsFile(actorUID), []byte("{}"), 0o600); err != nil {
 		t.Fatalf("writing sandbox assets file: %v", err)
 	}
 
-	if err := removeActorDirs(actorUID); err != nil {
-		t.Fatalf("removeActorDirs: %v", err)
+	if err := actordirs.RemoveActorDirs(actorUID); err != nil {
+		t.Fatalf("RemoveActorDirs: %v", err)
 	}
 
 	assertDirGone(t, "actor dir", ateletpath.ActorPath(actorUID))
@@ -911,8 +912,8 @@ func TestResetActorDirsCreatesBothTrees(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "actor-uid-isolation"
 
-	if err := resetActorDirs(actorUID); err != nil {
-		t.Fatalf("resetActorDirs(%q) failed: %v", actorUID, err)
+	if err := actordirs.ResetActorDirs(actorUID); err != nil {
+		t.Fatalf("ResetActorDirs(%q) failed: %v", actorUID, err)
 	}
 	for root, dirs := range map[string]map[string]string{
 		ateletpath.ActorSnapshotPath(actorUID): {
@@ -931,7 +932,7 @@ func TestResetActorDirsCreatesBothTrees(t *testing.T) {
 				t.Errorf("%s = %q, want it under %q", name, dir, root)
 			}
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-				t.Errorf("resetActorDirs did not create %s (%q): err=%v", name, dir, err)
+				t.Errorf("ResetActorDirs did not create %s (%q): err=%v", name, dir, err)
 			}
 		}
 	}
@@ -944,8 +945,8 @@ func TestRemoveActorDirsKeepsActorDirWhenSnapshotTreeRemains(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "actor-uid-1"
 
-	if err := resetActorDirs(actorUID); err != nil {
-		t.Fatalf("resetActorDirs(%q) failed: %v", actorUID, err)
+	if err := actordirs.ResetActorDirs(actorUID); err != nil {
+		t.Fatalf("ResetActorDirs(%q) failed: %v", actorUID, err)
 	}
 	record := ateletpath.ActorSandboxAssetsFile(actorUID)
 	if err := os.WriteFile(record, []byte("{}"), 0o600); err != nil {
@@ -964,8 +965,8 @@ func TestRemoveActorDirsKeepsActorDirWhenSnapshotTreeRemains(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
 
-	if err := removeActorDirs(actorUID); err == nil {
-		t.Fatal("removeActorDirs() = nil, want an error for the undeletable snapshot")
+	if err := actordirs.RemoveActorDirs(actorUID); err == nil {
+		t.Fatal("RemoveActorDirs() = nil, want an error for the undeletable snapshot")
 	}
 	if _, err := os.Stat(record); err != nil {
 		t.Errorf("sandbox record %s is gone (err=%v), want it kept for a retried Terminate", record, err)
@@ -973,9 +974,9 @@ func TestRemoveActorDirsKeepsActorDirWhenSnapshotTreeRemains(t *testing.T) {
 }
 
 // TestRemoveActorDirsKeepsPopulatedVolume checks that removing the root does
-// not defeat the mount safety resetActorDirs provides: a volume directory with
-// contents means the unmount did not take, and deleting it would take the
-// mounted volume's data rather than the actor's.
+// not defeat the mount safety actordirs.ResetActorDirs provides: a volume
+// directory with contents means the unmount did not take, and deleting it would
+// take the mounted volume's data rather than the actor's.
 func TestRemoveActorDirsKeepsPopulatedVolume(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "actor-uid-1"
@@ -988,15 +989,15 @@ func TestRemoveActorDirsKeepsPopulatedVolume(t *testing.T) {
 		t.Fatalf("writing volume contents: %v", err)
 	}
 
-	err := removeActorDirs(actorUID)
+	err := actordirs.RemoveActorDirs(actorUID)
 	if err == nil {
-		t.Fatal("removeActorDirs succeeded with a populated volume dir, want an error")
+		t.Fatal("RemoveActorDirs succeeded with a populated volume dir, want an error")
 	}
 	if strings.Contains(err.Error(), "%w") {
-		t.Errorf("removeActorDirs error %q has a literal %%w", err)
+		t.Errorf("RemoveActorDirs error %q has a literal %%w", err)
 	}
 	if _, err := os.Stat(stillMounted); err != nil {
-		t.Errorf("removeActorDirs deleted the contents of a volume that was still populated: %v", err)
+		t.Errorf("RemoveActorDirs deleted the contents of a volume that was still populated: %v", err)
 	}
 }
 
@@ -1006,8 +1007,8 @@ func TestResetDir(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := resetDir("state dir", dir, os.RemoveAll, 0o750); err != nil {
-			t.Fatalf("resetDir: %v", err)
+		if err := actordirs.ResetDir("state dir", dir, os.RemoveAll, 0o750); err != nil {
+			t.Fatalf("ResetDir: %v", err)
 		}
 		entries, err := os.ReadDir(dir)
 		if err != nil || len(entries) != 0 {
@@ -1020,9 +1021,9 @@ func TestResetDir(t *testing.T) {
 
 	t.Run("names the directory when the remove fails", func(t *testing.T) {
 		boom := errors.New("boom")
-		err := resetDir("state dir", t.TempDir(), func(string) error { return boom }, 0o700)
+		err := actordirs.ResetDir("state dir", t.TempDir(), func(string) error { return boom }, 0o700)
 		if !errors.Is(err, boom) {
-			t.Fatalf("resetDir = %v, want it to wrap %v", err, boom)
+			t.Fatalf("ResetDir = %v, want it to wrap %v", err, boom)
 		}
 		if got, want := err.Error(), "while deleting state dir: boom"; got != want {
 			t.Errorf("error = %q, want %q", got, want)
@@ -1034,9 +1035,9 @@ func TestResetDir(t *testing.T) {
 		if err := os.WriteFile(file, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		err := resetDir("state dir", filepath.Join(file, "child"), func(string) error { return nil }, 0o700)
+		err := actordirs.ResetDir("state dir", filepath.Join(file, "child"), func(string) error { return nil }, 0o700)
 		if err == nil || !strings.HasPrefix(err.Error(), "while creating state dir: ") {
-			t.Errorf("resetDir = %v, want an error starting %q", err, "while creating state dir: ")
+			t.Errorf("ResetDir = %v, want an error starting %q", err, "while creating state dir: ")
 		}
 		if err != nil && strings.Contains(err.Error(), "%w") {
 			t.Errorf("error %q has a literal %%w", err)

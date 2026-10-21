@@ -68,7 +68,7 @@ type Reporter interface {
 // changes to the control plane.
 type reportQueue struct {
 	// reporter tells the control plane what atelet holds of an actor's
-	// snapshots. Nil without WithReporter, or when workers is 0.
+	// snapshots. Nil without WithReporter.
 	reporter Reporter
 	// workers is how many report workers drain queue: DefaultReportWorkers
 	// unless WithReportWorkers sets it.
@@ -102,7 +102,7 @@ func newReportQueue(clk clock.WithTicker) reportQueue {
 	}
 }
 
-// markReportDueLocked records that a background upload or detach just made a
+// markReportDueLocked records that a background upload or a detach just made a
 // change to report, starting a fresh giveUpAfter window and retry backoff.
 func (t *Tracker) markReportDueLocked(a *actorSnapshots) {
 	a.ReportDueSince = t.clock.Now()
@@ -182,9 +182,9 @@ func (t *Tracker) waitReportQueue(delay time.Duration) bool {
 // returns how long the report queue should pause before the next report. A
 // report the control plane acknowledges or refuses is no longer due, unless a
 // background change was made while it ran. Any other failure is retried after
-// a backoff, until a commit cancels it or giveUpAfter has passed
-// since the report became due; a failure other than Aborted also backs off
-// the whole report queue.
+// a backoff, until a commit cancels it or giveUpAfter has passed since the
+// report became due; a failure other than Aborted also backs off the whole
+// report queue.
 func (t *Tracker) report(actorUID string) time.Duration {
 	actor, sent, dueSince, ok := t.beginReport(actorUID)
 	if !ok {
@@ -228,7 +228,7 @@ func (t *Tracker) report(actorUID string) time.Duration {
 	}
 	t.reporting.queueRetries.Forget("")
 	t.reporting.retries.Forget(actorUID)
-	t.endReport(actorUID, sent)
+	t.endReport(actorUID, sent, err == nil || status.Code(err) == codes.NotFound)
 	return 0
 }
 
@@ -267,10 +267,13 @@ func (t *Tracker) beginReport(actorUID string) (resources.ActorRef, *ateletpb.Ac
 }
 
 // endReport records that the control plane acknowledged or refused a report
-// of sent, so the report is no longer due. If a background change modified
-// the actor's state while sent was in flight, it queues the actor to report
-// again instead.
-func (t *Tracker) endReport(actorUID string, sent *ateletpb.ActorSnapshotState) {
+// of sent, so the report is no longer due. When forget is true (the report
+// was acknowledged or refused with NotFound) and the actor is detached with
+// no upload in progress and has not started again, it removes the actor's
+// snapshot state file and directory. If a background change modified the
+// actor's state while sent was in flight, it queues the actor to report again
+// instead.
+func (t *Tracker) endReport(actorUID string, sent *ateletpb.ActorSnapshotState, forget bool) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
 	a := t.findLocked(actorUID)
@@ -281,12 +284,12 @@ func (t *Tracker) endReport(actorUID string, sent *ateletpb.ActorSnapshotState) 
 		t.queueReportLocked(a)
 		return
 	}
-	t.clearReportDueLocked(a)
+	t.finishReportDueLocked(a, forget)
 }
 
 // retryReport schedules another attempt to send the report that became due at
-// dueSince after err, unless a commit canceled it, a newer
-// background change replaced it, or giveUpAfter has passed.
+// dueSince after err, unless a commit canceled it, a newer background change
+// replaced it, or giveUpAfter has passed.
 func (t *Tracker) retryReport(actorUID string, dueSince time.Time, attrs []any, err error) {
 	t.lock(actorUID)
 	a := t.findLocked(actorUID)
@@ -322,9 +325,24 @@ func (t *Tracker) retryReport(actorUID string, dueSince time.Time, attrs []any, 
 // clearReportDueLocked clears ReportDueSince, resets the report backoff, and
 // saves the actor's state.
 func (t *Tracker) clearReportDueLocked(a *actorSnapshots) {
+	t.finishReportDueLocked(a, false)
+}
+
+// finishReportDueLocked clears ReportDueSince and resets the report backoff.
+// When forget is true and the actor is detached with no upload in progress and
+// has not started again, it removes the actor's state file and empty
+// directory; otherwise it saves the actor's state so a running actor keeps its
+// state and a later DetachActor call still sees LatestDurable.
+func (t *Tracker) finishReportDueLocked(a *actorSnapshots, forget bool) {
 	t.addLocked(a)
 	t.cancelReportLocked(a)
-	t.saveLocked(a)
+	if forget && !a.Started && a.LatestLocal == nil && a.Uploading == nil {
+		a.unsaved = false
+		t.undurableActorsTally.forget(a.actorUID)
+		removeDetachedActorState(a.actorUID)
+	} else {
+		t.saveLocked(a)
+	}
 	t.requeueLocked(a)
 }
 

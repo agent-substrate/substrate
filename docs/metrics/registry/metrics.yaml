@@ -1105,17 +1105,18 @@ groups:
     instrument: histogram
     unit: s
     stability: development
-    brief: The time of deleting the local snapshots of an actor during a background detach on atelet, excluding any snapshot upload.
+    brief: The time of deleting the local snapshots and node files of an actor during a background detach on atelet, excluding any snapshot upload.
     note: >
       atelet detaches an actor once it stays suspended on the node for the
       detach delay. If object storage does not hold the latest local snapshot
       yet, the detach uploads it first and records that upload on
       atelet.snapshot.upload.duration; a detach whose upload fails stops there
       and is not recorded here. Once the snapshot is durable, the detach deletes
-      the local snapshots of the actor, which is what this histogram times. A
-      detach that Terminate or an atelet shutdown cancels records error.type
-      Canceled. A failed detach keeps the local snapshots, and atelet tries it
-      again later. A detach that a DetachActor call asks for is not recorded.
+      the local snapshots and other node files of the actor (except
+      snapshot-state.json), which is what this histogram times. A detach that
+      Terminate or an atelet shutdown cancels records error.type Canceled. A
+      failed detach keeps LatestLocal, and atelet tries it again later. A detach
+      that a DetachActor call asks for is not recorded.
     annotations:
       substrate:
         emitted_by: [atelet]

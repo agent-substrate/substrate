@@ -83,8 +83,9 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 
 	bundlePath := ateletpath.OCIBundlePath(actorUID, containerName)
 
-	// Clear any previous bundle contents (belt and suspenders: resetActorDirs
-	// already wiped the bundle dir on the Run/Restore path).
+	// Clear any previous bundle contents (belt and suspenders:
+	// actordirs.ResetActorDirs already wiped the bundle dir on the Run/Restore
+	// path).
 	if err := imagecache.RemoveAllWritable(bundlePath); err != nil {
 		return nil, fmt.Errorf("while clearing bundle %q: %w", bundlePath, err)
 	}

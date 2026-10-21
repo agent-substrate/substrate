@@ -77,9 +77,9 @@ func classifyOverdueBand(overdue time.Duration) overdueBand {
 // before its timeout, which is at least --snapshot-upload-timeout.
 var uploadDurationBuckets = []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600}
 
-// detachDurationBuckets cover deleting an actor's local snapshots during a
-// background detach, which takes milliseconds to seconds. The upload a detach
-// runs first is recorded on the upload histogram.
+// detachDurationBuckets cover deleting an actor's local snapshots and node
+// files during a background detach, which takes milliseconds to seconds. The
+// upload a detach runs first is recorded on the upload histogram.
 var detachDurationBuckets = []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60}
 
 // overdueBuckets cover how late background work starts: within 100ms of its
@@ -117,7 +117,7 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	detachDuration, err := meter.Float64Histogram(
 		detachDurationMetric,
 		metric.WithUnit("s"),
-		metric.WithDescription("Duration of deleting an actor's local snapshots during a background detach on atelet, excluding any snapshot upload."),
+		metric.WithDescription("Duration of deleting an actor's local snapshots and node files during a background detach on atelet, excluding any snapshot upload."),
 		metric.WithExplicitBucketBoundaries(detachDurationBuckets...),
 	)
 	if err != nil {

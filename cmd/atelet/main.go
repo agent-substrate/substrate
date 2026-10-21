@@ -34,6 +34,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/credentialprovider"
@@ -132,7 +133,7 @@ var (
 	snapshotUploadEstMiBps    = pflag.Int("snapshot-upload-est-throughput-mib", snapshottracker.DefaultUploadEstThroughput>>20, "Estimated snapshot upload throughput, in MiB per second of the snapshot's allocated size: each upload attempt may run --snapshot-upload-timeout plus the time the snapshot takes at this rate. 0 adds no time for the snapshot's size.")
 	snapshotUploadWorkers     = pflag.Int("snapshot-upload-workers", snapshottracker.DefaultUploadWorkers, "How many background snapshot uploads atelet runs at once.")
 	snapshotDetachWorkers     = pflag.Int("snapshot-detach-workers", snapshottracker.DefaultDetachWorkers, "How many background detaches atelet runs at once.")
-	snapshotReportWorkers     = pflag.Int("snapshot-report-workers", snapshottracker.DefaultReportWorkers, "How many background snapshot state reports atelet runs at once. 0 disables background reporting.")
+	snapshotReportWorkers     = pflag.Int("snapshot-report-workers", snapshottracker.DefaultReportWorkers, "How many background snapshot state reports atelet runs at once.")
 	snapshotReportGiveUpAfter = pflag.Duration("snapshot-report-give-up-after", snapshottracker.DefaultReportGiveUpAfter, "How long after a background upload or detach atelet keeps retrying a failed snapshot state report before giving up on it.")
 )
 
@@ -617,8 +618,8 @@ func validateSnapshotDelayFlags() error {
 }
 
 // validateSnapshotWorkerFlags checks --snapshot-upload-workers,
-// --snapshot-detach-workers, and --snapshot-report-workers: upload and detach
-// must be at least 1, and report must be at least 0.
+// --snapshot-detach-workers, and --snapshot-report-workers: each must be at
+// least 1.
 func validateSnapshotWorkerFlags() error {
 	if *snapshotUploadWorkers < 1 {
 		return fmt.Errorf("--snapshot-upload-workers %d must be >= 1", *snapshotUploadWorkers)
@@ -626,8 +627,8 @@ func validateSnapshotWorkerFlags() error {
 	if *snapshotDetachWorkers < 1 {
 		return fmt.Errorf("--snapshot-detach-workers %d must be >= 1", *snapshotDetachWorkers)
 	}
-	if *snapshotReportWorkers < 0 {
-		return fmt.Errorf("--snapshot-report-workers %d must be >= 0", *snapshotReportWorkers)
+	if *snapshotReportWorkers < 1 {
+		return fmt.Errorf("--snapshot-report-workers %d must be >= 1", *snapshotReportWorkers)
 	}
 	return nil
 }
@@ -823,7 +824,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	}()
 
 	s.systemInfoVolumes.Deregister(actorUID)
-	if err := resetActorDirsKeepingVolumes(actorUID); err != nil {
+	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
@@ -993,7 +994,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		// check holds through the cleanup.
 		if s.snapshots.NotStartedSince(actorUID, req.GetSnapshot()) {
 			tCleanup := time.Now()
-			err = s.cleanUpAfterCheckpoint(ctx, req)
+			err = s.cleanUpAfterCheckpoint(ctx, req, state.GetLatestLocal() != nil)
 			dCleanup = time.Since(tCleanup)
 			if err != nil {
 				return nil, err
@@ -1093,7 +1094,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		state = s.snapshots.CommitDurable(actorUID, durable)
 		// The snapshot is durable now, so the local copy only saves a
 		// download: failing to keep it must not fail the checkpoint.
-		// resetActorDirs cleans up checkpointDir if the move fails.
+		// RemoveActorFilesExceptState cleans up checkpointDir if the move fails.
 		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
 			slog.WarnContext(ctx, "Failed to keep a local copy of the uploaded snapshot", slog.Any("actor", actorRef), slog.Any("err", err))
 		} else {
@@ -1105,7 +1106,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	dPersist = time.Since(tPersist)
 
 	tCleanup := time.Now()
-	err = s.cleanUpAfterCheckpoint(ctx, req)
+	err = s.cleanUpAfterCheckpoint(ctx, req, state.GetLatestLocal() != nil)
 	dCleanup = time.Since(tCleanup)
 	if err != nil {
 		return nil, err
@@ -1115,10 +1116,10 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 
 // committedCheckpointState returns the actor's state for a retry of a
 // Checkpoint that committed req's snapshot, canceling any pending background
-// report. Under UPLOAD_MODE_IMMEDIATE it first makes the snapshot durable, as
-// PromoteSnapshot does, since the Checkpoint that committed it may have
-// deferred its upload. It records in op and dPersist what promoteLocalSnapshot
-// records.
+// upload report while a local snapshot is kept. Under UPLOAD_MODE_IMMEDIATE it
+// first makes the snapshot durable, as PromoteSnapshot does, since the
+// Checkpoint that committed it may have deferred its upload. It records in op
+// and dPersist what promoteLocalSnapshot records.
 func (s *Atelet) committedCheckpointState(ctx context.Context, req *ateletpb.CheckpointRequest, op *snapshotOp, dPersist *time.Duration) (*ateletpb.ActorSnapshotState, error) {
 	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
 		uri, err := resources.ParseSnapshotURI(req.GetSnapshot().GetObject().GetSnapshotUri())
@@ -1141,9 +1142,11 @@ func (s *Atelet) committedCheckpointState(ctx context.Context, req *ateletpb.Che
 
 // cleanUpAfterCheckpoint finishes a Checkpoint that has committed its
 // snapshot: it prunes the actor's local snapshots, unmounts its external
-// volumes, and empties its directories. Each step is idempotent, so a retried
-// Checkpoint runs them again.
-func (s *Atelet) cleanUpAfterCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest) error {
+// volumes, and empties its directories (or removes its files except
+// snapshot-state.json when keepLocal is false, as after a detach or a failed
+// local copy). Each step is idempotent, so a retried Checkpoint runs them
+// again.
+func (s *Atelet) cleanUpAfterCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, keepLocal bool) error {
 	actorUID := req.GetActorUid()
 
 	// Delete the actor's earlier local snapshots only now that this checkpoint
@@ -1174,8 +1177,14 @@ func (s *Atelet) cleanUpAfterCheckpoint(ctx context.Context, req *ateletpb.Check
 	}
 
 	// Note: we do not crash the actor if resetting the directory fails.
-	if err := resetActorDirs(actorUID); err != nil {
-		return fmt.Errorf("while resetting actor dirs: %w", err)
+	if keepLocal {
+		if err := actordirs.ResetActorDirs(actorUID); err != nil {
+			return fmt.Errorf("while resetting actor dirs: %w", err)
+		}
+	} else {
+		if err := actordirs.RemoveActorFilesExceptState(actorUID); err != nil {
+			return fmt.Errorf("while removing actor files: %w", err)
+		}
 	}
 	return nil
 }
@@ -1231,7 +1240,7 @@ func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Checkpoi
 
 	// Stage the files worker reported and the snapshot manifest inside
 	// checkpointDir before renaming the directory into local-checkpoint/, so a
-	// failure leaves nothing under local-checkpoint/ and resetActorDirs cleans
+	// failure leaves nothing under local-checkpoint/ and ResetActorDirs cleans
 	// checkpointDir up.
 	stageDir := filepath.Join(checkpointDir, ".staged")
 	if err := root.RemoveAll(stageDir); err != nil {
@@ -1581,7 +1590,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,
 	// node or the disk itself.
 	s.systemInfoVolumes.Deregister(actorUID)
-	if err := resetActorDirsKeepingVolumes(actorUID); err != nil {
+	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 	// A restore may bring another runtime than the one staged here before,
@@ -1881,7 +1890,7 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	}
 
 	// Reclaim the actor's directories on the node
-	if err := removeActorDirs(actorUID); err != nil {
+	if err := actordirs.RemoveActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("failed to remove actor directories during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 
@@ -2157,73 +2166,16 @@ func (d *WorkerDialer) DialWorkerPod(ctx context.Context, podUID string) (*grpc.
 	return conn, nil
 }
 
-// resetActorDirs empties the actor's directories and leaves them in place for
-// its next activation. Use removeActorDirs when the actor will not come back.
-func resetActorDirs(actorUID string) error {
-	if err := resetActorDirsKeepingVolumes(actorUID); err != nil {
-		return err
-	}
-	// Do not call RemoveAll on volume directories in case the unmount failed.
-	// We do not want to delete mount content.
-	volumesDir := ateletpath.ExternalVolumeMountsDir(actorUID)
-	entries, err := os.ReadDir(volumesDir)
-	if err != nil {
-		return wrapFileSystemErr("while reading volumes dir", err)
-	}
-	for _, entry := range entries {
-		volPath := filepath.Join(volumesDir, entry.Name())
-		if err := os.Remove(volPath); err != nil {
-			return wrapFileSystemErr("while removing volume dir", err)
-		}
-	}
-	return nil
-}
-
-// resetActorDirsKeepingVolumes is resetActorDirs for Run and Restore, which
-// leave the external volume mount points alone: a failed earlier attempt can
-// leave a volume published there, and publishing it again is a no-op.
-func resetActorDirsKeepingVolumes(actorUID string) error {
-	// Explicitly leave runsc logs dir untouched.
-
-	// RemoveAllWritable, not os.RemoveAll: the bundle's upper dir can hold
-	// copied-up actor-image directories keeping the image's (possibly
-	// read-only) modes, which atelet can't remove as plain root without first
-	// making them writable. (The rootfs itself is just an empty mountpoint
-	// here: the overlay is mounted in the worker pod's mount namespace, not
-	// atelet's, and is detached by worker at teardown.)
-	if err := resetDir("bundle dir", ateletpath.OCIBundleDir(actorUID), imagecache.RemoveAllWritable, 0o700); err != nil {
-		return err
-	}
-	if err := resetDir("checkpoint-state dir", ateletpath.CheckpointStateDir(actorUID), os.RemoveAll, 0o700); err != nil {
-		return err
-	}
-	if err := resetDir("restore-state dir", ateletpath.RestoreStateDir(actorUID), os.RemoveAll, 0o700); err != nil {
-		return err
-	}
-	if err := resetDir("durable-dir volumes mount dir", ateletpath.DurableDirVolumeMountsDir(actorUID), os.RemoveAll, 0o755); err != nil {
-		return err
-	}
-	// World-readable (0o755): bind-mounted read-only into the actor, whose
-	// workload reads it through the gofer.
-	if err := resetDir("system-info volume roots dir", ateletpath.SystemInfoVolumeRootsDir(actorUID), os.RemoveAll, 0o755); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(ateletpath.ExternalVolumeMountsDir(actorUID), 0o755); err != nil {
-		return wrapFileSystemErr("while creating volumes dir", err)
-	}
-	return nil
-}
-
 // resetSandboxAssetsDir empties the actor's sandbox assets dir for Restore
-// to stage into. Not part of resetActorDirs: the links an activation holds
-// stay while the actor remains resumable on this node, through Checkpoint
+// to stage into. Not part of actordirs.ResetActorDirs: the links an activation
+// holds stay while the actor remains resumable on this node, through Checkpoint
 // and its local snapshot, and keep its binaries in the cache meanwhile;
 // Run replaces them through its staging swap. The entries are hard links
 // into the asset cache, so removing them never touches the cached bytes.
 // Owner-only, like the bundle dir: the worker runs the binaries from here
 // as root.
 func resetSandboxAssetsDir(actorUID string) error {
-	return resetDir("sandbox assets dir", ateletpath.SandboxAssetsDir(actorUID), os.RemoveAll, 0o700)
+	return actordirs.ResetDir("sandbox assets dir", ateletpath.SandboxAssetsDir(actorUID), os.RemoveAll, 0o700)
 }
 
 // commitSandboxAssets replaces the actor's sandbox assets dir with the set
@@ -2249,41 +2201,6 @@ func commitSandboxAssets(actorUID, staging string, paths map[string]string) erro
 	}
 	for name, p := range moved {
 		paths[name] = p
-	}
-	return nil
-}
-
-// resetDir empties dir with remove and recreates it with mode. what names the
-// directory in errors.
-func resetDir(what, dir string, remove func(string) error, mode os.FileMode) error {
-	if err := remove(dir); err != nil {
-		return wrapFileSystemErr("while deleting "+what, err)
-	}
-	if err := os.MkdirAll(dir, mode); err != nil {
-		return wrapFileSystemErr("while creating "+what, err)
-	}
-	return nil
-}
-
-// removeActorDirs reclaims both of the actor's directory trees, roots
-// included: nothing else on the node deletes them, and no later activation
-// will look there.
-//
-// resetActorDirs runs first for the care a blanket RemoveAll lacks. It refuses
-// to proceed while a volume directory is still populated, so a failed unmount
-// cannot become a deletion of the mount's contents, and it can remove a bundle
-// upper dir carrying an image's read-only modes.
-func removeActorDirs(actorUID string) error {
-	if err := resetActorDirs(actorUID); err != nil {
-		return err
-	}
-	// The actor dir holds sandbox-assets.json, which a retried Terminate needs,
-	// so remove it last.
-	if err := os.RemoveAll(ateletpath.ActorSnapshotPath(actorUID)); err != nil {
-		return wrapFileSystemErr("while deleting actor snapshot dir", err)
-	}
-	if err := os.RemoveAll(ateletpath.ActorPath(actorUID)); err != nil {
-		return wrapFileSystemErr("while deleting actor dir", err)
 	}
 	return nil
 }

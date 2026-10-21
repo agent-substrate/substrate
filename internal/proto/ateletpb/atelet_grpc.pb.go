@@ -395,13 +395,13 @@ type AteletClient interface {
 	// atelet also detaches a suspended actor on its own after its detach delay.
 	// It reports either detach with WorkerService.ReportActorSnapshotState, so
 	// the control plane records a DetachActor call's detach even if the caller
-	// does not. The detach doesn't end with the call: if the caller's context
-	// ends first, DetachActor returns that error and the detach runs on. Waits
-	// for an operation already in progress on the actor, such as an upload or a
-	// detach. Does nothing when atelet holds no local snapshot for
-	// the actor. Returns ABORTED when the actor runs on this node, and
-	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
-	// durable, such as when it has no `snapshot.object`.
+	// does not, and once reported, forgets the actor. The detach doesn't end with
+	// the call: if the caller's context ends first, DetachActor returns that
+	// error and the detach runs on. Waits for an operation already in progress on
+	// the actor, such as an upload or a detach. Does nothing when atelet holds no
+	// local snapshot for the actor. Returns ABORTED when the actor runs on this
+	// node, and FAILED_PRECONDITION when atelet cannot make the latest local
+	// snapshot durable, such as when it has no `snapshot.object`.
 	DetachActor(ctx context.Context, in *DetachActorRequest, opts ...grpc.CallOption) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
@@ -522,13 +522,13 @@ type AteletServer interface {
 	// atelet also detaches a suspended actor on its own after its detach delay.
 	// It reports either detach with WorkerService.ReportActorSnapshotState, so
 	// the control plane records a DetachActor call's detach even if the caller
-	// does not. The detach doesn't end with the call: if the caller's context
-	// ends first, DetachActor returns that error and the detach runs on. Waits
-	// for an operation already in progress on the actor, such as an upload or a
-	// detach. Does nothing when atelet holds no local snapshot for
-	// the actor. Returns ABORTED when the actor runs on this node, and
-	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
-	// durable, such as when it has no `snapshot.object`.
+	// does not, and once reported, forgets the actor. The detach doesn't end with
+	// the call: if the caller's context ends first, DetachActor returns that
+	// error and the detach runs on. Waits for an operation already in progress on
+	// the actor, such as an upload or a detach. Does nothing when atelet holds no
+	// local snapshot for the actor. Returns ABORTED when the actor runs on this
+	// node, and FAILED_PRECONDITION when atelet cannot make the latest local
+	// snapshot durable, such as when it has no `snapshot.object`.
 	DetachActor(context.Context, *DetachActorRequest) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.

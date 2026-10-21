@@ -3353,8 +3353,9 @@ type ActorSnapshotState struct {
 	Uploading *SnapshotReport `protobuf:"bytes,2,opt,name=uploading,proto3" json:"uploading,omitempty"`
 	// The newest snapshot atelet knows is durable, whether or not the control
 	// plane has recorded it: one atelet uploaded since it started, or one a
-	// PromoteSnapshot found already uploaded. Unset if there is none, which says
-	// nothing about older durable snapshots.
+	// PromoteSnapshot found already uploaded, while atelet still tracks the
+	// actor. Unset if there is none (or once the actor is detached and
+	// reported), which says nothing about older durable snapshots.
 	LatestDurable *SnapshotReport `protobuf:"bytes,3,opt,name=latest_durable,json=latestDurable,proto3" json:"latest_durable,omitempty"`
 	// When atelet next plans to trigger a background upload, of `uploading` if
 	// it is waiting to resume or retry, or of `latest_local` otherwise. Unset
@@ -4087,8 +4088,9 @@ func (x *DetachActorRequest) GetActorUid() string {
 
 type DetachActorResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The actor's state once detached: latest_local is unset, and latest_durable
-	// is its latest snapshot, if atelet knows one.
+	// The actor's state from the detach: latest_local is unset, and
+	// latest_durable is its latest snapshot. Once detached and reported, atelet
+	// forgets the actor, so calling DetachActor again returns an empty state.
 	State         *ActorSnapshotState `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

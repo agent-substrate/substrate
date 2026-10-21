@@ -177,11 +177,11 @@ type actorSnapshotsRecord struct {
 	// (CommitLocal or CommitDurable). While it is unset, the actor's
 	// directories and volumes are still that Checkpoint's to clean up.
 	Started bool `json:"started,omitempty"`
-	// ReportDueSince is when the latest background change atelet owes a
-	// report of (a new LatestDurable, or local snapshots cleared by a
-	// detach) finished. Zero once no report is due: the control plane
-	// acknowledged or refused it, a commit returned the state, or atelet gave
-	// up after reportQueue.giveUpAfter.
+	// ReportDueSince is when the latest change atelet owes a report of (a
+	// new LatestDurable, or local snapshots cleared by a detach) finished.
+	// Zero once no report is due: the control plane acknowledged or refused
+	// it, a commit returned the state, or atelet gave up after
+	// reportQueue.giveUpAfter.
 	ReportDueSince time.Time `json:"reportDueSince,omitzero"`
 }
 

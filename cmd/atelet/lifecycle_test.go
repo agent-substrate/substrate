@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
@@ -1073,8 +1074,8 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 		snapshotName = "pause-snap-1"
 	)
 
-	if err := resetActorDirs(actorUID); err != nil {
-		t.Fatalf("resetActorDirs: %v", err)
+	if err := actordirs.ResetActorDirs(actorUID); err != nil {
+		t.Fatalf("ResetActorDirs: %v", err)
 	}
 	snapshotDir := ateletpath.LocalSnapshotDir(actorUID, snapshotName)
 	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
@@ -1313,6 +1314,9 @@ func TestImmediateCheckpointWithoutLocalCopy(t *testing.T) {
 	a.store.mu.Unlock()
 	// What the first call's cleanup leaves behind when it fails.
 	leftover := filepath.Join(ateletpath.OCIBundleDir(pluginActorUID), "leftover")
+	if err := os.MkdirAll(filepath.Dir(leftover), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(leftover, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1444,6 +1448,9 @@ func TestRetriedCheckpointAnswersFromCommittedSnapshot(t *testing.T) {
 			}
 			// What the first call's cleanup leaves behind when it fails.
 			leftover := filepath.Join(ateletpath.OCIBundleDir(pluginActorUID), "leftover")
+			if err := os.MkdirAll(filepath.Dir(leftover), 0o700); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(leftover, nil, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -1459,6 +1466,9 @@ func TestRetriedCheckpointAnswersFromCommittedSnapshot(t *testing.T) {
 			}
 			if _, err := os.Stat(leftover); !os.IsNotExist(err) {
 				t.Errorf("leftover in the bundle dir after the retry: stat = %v, want it cleaned up", err)
+			}
+			if _, err := os.Stat(ateletpath.OCIBundleDir(pluginActorUID)); (err == nil) != tc.wantLocal {
+				t.Errorf("bundle dir exists = %v (err = %v), want %v", err == nil, err, tc.wantLocal)
 			}
 			st := resp.GetState()
 			if got := st.GetLatestLocal().GetSnapshot(); proto.Equal(got, snap) != tc.wantLocal {
@@ -1971,11 +1981,21 @@ func detachActorRequest() *ateletpb.DetachActorRequest {
 }
 
 // TestDetachActorDetachesPausedActor detaches a suspended actor through the
-// RPC: atelet uploads its local snapshot, deletes the local copy, and returns
-// the new state.
+// RPC: atelet uploads its local snapshot, deletes the local copy, returns the
+// new state, and removes the actor's directory once the detach report is
+// acknowledged.
 func TestDetachActorDetachesPausedActor(t *testing.T) {
 	a := runPluginActor(t)
-	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{},
+		snapshottracker.WithReporter(&trackerReporter{workers: newFakeReportService()}))
+	a.s.snapshots.Start()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := a.s.snapshots.Wait(ctx); err != nil {
+			t.Errorf("Wait: %v", err)
+		}
+	})
 	if _, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
 		t.Fatalf("Checkpoint (pause): %v", err)
 	}
@@ -1990,8 +2010,18 @@ func TestDetachActorDetachesPausedActor(t *testing.T) {
 	if st := resp.GetState(); st.GetLatestLocal() != nil || st.GetLatestDurable().GetSnapshot().GetSnapshotUuid() != "pause-snap-1" {
 		t.Errorf("state = %v, want pause-snap-1 durable and nothing local", st)
 	}
-	if _, err := os.Stat(localDir); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("local snapshot dir after DetachActor: stat err = %v, want not exist", err)
+	if _, err := os.Stat(localDir); !os.IsNotExist(err) {
+		t.Errorf("local snapshot dir after DetachActor: stat = %v, want it deleted", err)
+	}
+	waitFor(t, "the actor dir to be removed after the detach report", func() bool {
+		return !exists(ateletpath.ActorPath(pluginActorUID))
+	})
+	resp, err = a.s.DetachActor(t.Context(), detachActorRequest())
+	if err != nil {
+		t.Fatalf("second DetachActor: %v", err)
+	}
+	if !proto.Equal(resp.GetState(), &ateletpb.ActorSnapshotState{}) {
+		t.Errorf("second DetachActor state = %v, want empty", resp.GetState())
 	}
 }
 
@@ -2231,6 +2261,55 @@ func TestPromoteSnapshotFoundAlreadyUploaded(t *testing.T) {
 		t.Fatalf("PruneLocalCheckpoints: %v", err)
 	}
 
+	if got := a.promote(t, snap).GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetDurableCompleteTime() != nil {
+		t.Errorf("latest_durable = %v, want %v with no upload time", got, snap)
+	}
+}
+
+// TestPromoteSnapshotAfterDetach verifies that after an actor is detached
+// (its entire directory removed), PromoteSnapshot still succeeds via its
+// remote manifest check in object storage (with UploadLocalSnapshot returning
+// uploaded = false).
+func TestPromoteSnapshotAfterDetach(t *testing.T) {
+	a := runPluginActor(t)
+	store := &trackerStore{s: a.s}
+	a.s.snapshots = snapshottracker.New(t.Context(), store, clock.RealClock{},
+		snapshottracker.WithReporter(&trackerReporter{workers: newFakeReportService()}))
+	a.s.snapshots.Start()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := a.s.snapshots.Wait(ctx); err != nil {
+			t.Errorf("Wait: %v", err)
+		}
+	})
+	snap := a.snapshot("pause-snap-1", 1)
+	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint (pause): %v", err)
+	}
+
+	// Detach uploads the snapshot and removes the actor directory once reported.
+	st, err := a.s.snapshots.Detach(t.Context(), pluginActorUID)
+	if err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	if st.GetLatestLocal() != nil || st.GetLatestDurable() == nil {
+		t.Fatalf("state = %v, want durable set and local nil", st)
+	}
+	waitFor(t, "the actor dir to be removed after the detach report", func() bool {
+		return !exists(ateletpath.ActorPath(pluginActorUID))
+	})
+
+	// TrackerStore.UploadLocalSnapshot after detach probes object storage and
+	// reports uploaded = false.
+	uploaded, err := store.UploadLocalSnapshot(t.Context(), pluginActorUID, snapshottracker.SnapshotRef{Snapshot: snap})
+	if err != nil || uploaded {
+		t.Fatalf("UploadLocalSnapshot after detach = (%v, %v), want (false, nil)", uploaded, err)
+	}
+
+	// PromoteSnapshot after detach finds the local snapshot gone, probes object
+	// storage for the manifest uploaded during detach, and succeeds without
+	// re-uploading.
 	if got := a.promote(t, snap).GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetDurableCompleteTime() != nil {
 		t.Errorf("latest_durable = %v, want %v with no upload time", got, snap)
 	}

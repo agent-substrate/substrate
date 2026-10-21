@@ -421,13 +421,13 @@ service Atelet {
   // atelet also detaches a suspended actor on its own after its detach delay.
   // It reports either detach with WorkerService.ReportActorSnapshotState, so
   // the control plane records a DetachActor call's detach even if the caller
-  // does not. The detach doesn't end with the call: if the caller's context
-  // ends first, DetachActor returns that error and the detach runs on. Waits
-  // for an operation already in progress on the actor, such as an upload or a
-  // detach. Does nothing when atelet holds no local snapshot for
-  // the actor. Returns ABORTED when the actor runs on this node, and
-  // FAILED_PRECONDITION when atelet cannot make the latest local snapshot
-  // durable, such as when it has no `snapshot.object`.
+  // does not, and once reported, forgets the actor. The detach doesn't end with
+  // the call: if the caller's context ends first, DetachActor returns that
+  // error and the detach runs on. Waits for an operation already in progress on
+  // the actor, such as an upload or a detach. Does nothing when atelet holds no
+  // local snapshot for the actor. Returns ABORTED when the actor runs on this
+  // node, and FAILED_PRECONDITION when atelet cannot make the latest local
+  // snapshot durable, such as when it has no `snapshot.object`.
   rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
@@ -965,8 +965,9 @@ message ActorSnapshotState {
 
   // The newest snapshot atelet knows is durable, whether or not the control
   // plane has recorded it: one atelet uploaded since it started, or one a
-  // PromoteSnapshot found already uploaded. Unset if there is none, which says
-  // nothing about older durable snapshots.
+  // PromoteSnapshot found already uploaded, while atelet still tracks the
+  // actor. Unset if there is none (or once the actor is detached and
+  // reported), which says nothing about older durable snapshots.
   SnapshotReport latest_durable = 3;
 
   // When atelet next plans to trigger a background upload, of `uploading` if
@@ -1201,7 +1202,8 @@ message DetachActorRequest {
 }
 
 message DetachActorResponse {
-  // The actor's state once detached: latest_local is unset, and latest_durable
-  // is its latest snapshot, if atelet knows one.
+  // The actor's state from the detach: latest_local is unset, and
+  // latest_durable is its latest snapshot. Once detached and reported, atelet
+  // forgets the actor, so calling DetachActor again returns an empty state.
   ActorSnapshotState state = 1;
 }

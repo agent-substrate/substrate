@@ -87,8 +87,8 @@ func ActorSnapshotPath(actorUID string) string {
 // binaries (class + content-addressed asset set, for this node's architecture)
 // the actor is currently running. It is written at Run/Restore and read at
 // Checkpoint (when the request no longer carries the sandbox config). It lives
-// directly under ActorPath — NOT under a subdir wiped by atelet's
-// resetActorDirs — so it survives between Run and a later Checkpoint.
+// directly under ActorPath — NOT under a subdir wiped by
+// actordirs.ResetActorDirs — so it survives between Run and a later Checkpoint.
 func ActorSandboxAssetsFile(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -99,7 +99,7 @@ func ActorSandboxAssetsFile(actorUID string) string {
 // ActorSnapshotStateFile is the per-actor file where atelet keeps what it
 // tracks of the actor's snapshots: its latest local and durable snapshots, so
 // a restarted atelet still knows them. Like ActorSandboxAssetsFile it lives
-// directly under ActorPath, outside the subdirs resetActorDirs wipes.
+// directly under ActorPath, outside the subdirs actordirs.ResetActorDirs wipes.
 func ActorSnapshotStateFile(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -118,7 +118,7 @@ func SandboxAssetsDir(actorUID string) string {
 // SandboxAssetsStagingDir is where Run stages an activation's assets before
 // moving them into SandboxAssetsDir, so a failed fetch leaves whatever a
 // live activation has there untouched. Not among the directories
-// resetActorDirs empties.
+// actordirs.ResetActorDirs empties.
 func SandboxAssetsStagingDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
