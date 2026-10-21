@@ -28,10 +28,12 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"net/url"
+	"syscall"
 	"testing"
 	"time"
 
@@ -50,7 +52,7 @@ const unlistedServiceAccount = "router-client-unlisted"
 
 // targetActor names an actor that does not exist. A client the router lets
 // through gets an HTTP response, whatever its status; one it turns away gets
-// none, because the TLS handshake fails first.
+// none, because certificate or network authorization rejects it first.
 var targetActor = resources.ActorRef{Atespace: "ate-e2e-ingressauth", Name: "nobody"}
 
 // atenet-router's Service ports; see manifests/ate-install/atenet-router.yaml.
@@ -70,9 +72,8 @@ type tlsListener struct {
 	request func(ctx context.Context, address string, cfg *tls.Config) (int, error)
 }
 
-// tlsListeners are both TLS ingress listeners. Every check runs against both:
-// they share a transport socket, but nothing else would notice one of them
-// losing it.
+// tlsListeners are both TLS ingress listeners. Every check runs against both
+// so one listener losing client authentication cannot hide behind the other.
 var tlsListeners = []tlsListener{
 	{name: "https", servicePort: httpsServicePort, request: httpsRequest},
 	{name: "connect-tls", servicePort: connectTLSServicePort, request: connectRequest},
@@ -173,19 +174,16 @@ func isRemoteTLSAlert(err error) bool {
 const refusalAttempts = 3
 
 // TestIngressAuthentication checks each kind of client against both TLS
-// listeners.
+// listeners. Certificate trust is checked during TLS; the URI SAN allowlist
+// may be enforced during TLS or by network authorization afterward.
 //
 // Each refused client gets a port-forward of its own, opened fresh and first
 // shown to carry the allowlisted client through: a port-forward tears down its
 // whole tunnel once one forwarded connection fails, so a shared one would turn
-// every check after the first refusal into a dial error. The refusal itself
-// has to be a TLS alert from the router, which a broken tunnel cannot fake; a
-// failure without one is retried on a fresh port-forward, refusalAttempts
-// times at most.
+// every check after the first refusal into a dial error. Missing or untrusted
+// certificates must receive a TLS alert. A trusted but unlisted identity may
+// instead receive a connection close or HTTP 403 before actor routing.
 func TestIngressAuthentication(t *testing.T) {
-	if !e2e.CurrentAtenetDataplane().AuthenticatesIngressClients() {
-		t.Skip("the atenet dataplane does not authenticate ingress clients")
-	}
 	ctx := context.Background()
 
 	allowed := e2e.RouterClientCertificate(t, ctx, e2e.RouterClientServiceAccount)
@@ -195,11 +193,12 @@ func TestIngressAuthentication(t *testing.T) {
 	for _, listener := range tlsListeners {
 		t.Run(listener.name, func(t *testing.T) {
 			for _, tc := range []struct {
-				name string
-				cert *tls.Certificate
+				name         string
+				cert         *tls.Certificate
+				allowPostTLS bool
 			}{
 				{name: "no client certificate", cert: nil},
-				{name: "podidentity certificate for an unlisted SPIFFE ID", cert: &unlisted},
+				{name: "podidentity certificate for an unlisted SPIFFE ID", cert: &unlisted, allowPostTLS: true},
 				{name: "allowlisted SPIFFE ID signed by an untrusted CA", cert: &foreign},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
@@ -213,19 +212,66 @@ func TestIngressAuthentication(t *testing.T) {
 						t.Logf("allowlisted client let through (status %d)", status)
 
 						status, err = listener.request(ctx, address, routerTLSConfig(t, ctx, tc.cert))
-						if err == nil {
-							t.Fatalf("router let the client through (status %d); want the TLS handshake refused", status)
-						}
-						if isRemoteTLSAlert(err) {
+						if ingressRefused(status, err, tc.allowPostTLS) {
 							t.Logf("refused: %v", err)
+							if tc.allowPostTLS {
+								// A close alone could be a broken port-forward.
+								address = forwardRouterPort(t, ctx, listener.servicePort)
+								if _, err := listener.request(ctx, address, routerTLSConfig(t, ctx, &allowed)); err != nil {
+									t.Fatalf("allowlisted client failed after unlisted client refusal: %v", err)
+								}
+							}
 							return
 						}
-						if attempt == refusalAttempts {
-							t.Fatalf("request failed without a TLS alert from the router %d times, so the refusal is unproven: %v", attempt, err)
+						if err == nil {
+							t.Fatalf("router let the client through (status %d); want client refusal", status)
 						}
-						t.Logf("attempt %d failed without a TLS alert from the router; retrying on a fresh port-forward: %v", attempt, err)
+						if attempt == refusalAttempts {
+							t.Fatalf("request failed without proving client refusal %d times: %v", attempt, err)
+						}
+						t.Logf("attempt %d failed without proving client refusal; retrying on a fresh port-forward: %v", attempt, err)
 					}
 				})
+			}
+		})
+	}
+}
+
+func ingressRefused(status int, err error, allowPostTLS bool) bool {
+	if isRemoteTLSAlert(err) {
+		return true
+	}
+	if !allowPostTLS {
+		return false
+	}
+	if err == nil {
+		return status == http.StatusForbidden
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
+}
+
+func TestIngressRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		status       int
+		err          error
+		allowPostTLS bool
+		want         bool
+	}{
+		{name: "TLS alert", err: &net.OpError{Op: "remote error", Err: errors.New("bad certificate")}, want: true},
+		{name: "unlisted identity closed", err: io.EOF, allowPostTLS: true, want: true},
+		{name: "unlisted identity reset", err: syscall.ECONNRESET, allowPostTLS: true, want: true},
+		{name: "unlisted identity forbidden", status: http.StatusForbidden, allowPostTLS: true, want: true},
+		{name: "missing certificate closed", err: io.EOF},
+		{name: "untrusted certificate forbidden", status: http.StatusForbidden},
+		{name: "dial failure", err: syscall.ECONNREFUSED, allowPostTLS: true},
+		{name: "timeout", err: context.DeadlineExceeded, allowPostTLS: true},
+		{name: "actor route reached", status: http.StatusNotFound, allowPostTLS: true},
+		{name: "CONNECT accepted", status: http.StatusOK, allowPostTLS: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ingressRefused(tc.status, tc.err, tc.allowPostTLS); got != tc.want {
+				t.Errorf("ingressRefused() = %t, want %t", got, tc.want)
 			}
 		})
 	}

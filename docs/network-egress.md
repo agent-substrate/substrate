@@ -1,6 +1,6 @@
 # Network Egress Contract
 
-Last updated: 10/19/2026
+Last updated: 10/20/2026
 
 ## Overview
 
@@ -15,12 +15,12 @@ Before traffic reaches the egress PEP, ateworker rejects packets destined for th
 ## Refusal responses and policy changes
 
 The [supported traffic table](egress-traffic.md) defines the permitted protocols.
-For HTTP and intercepted HTTPS, a destination denied by policy MUST receive HTTP
-403. WebSocket upgrades, other HTTP upgrades, and actor-originated CONNECT
-requests inside the tunnel MUST also receive HTTP 403, regardless of whether
-the destination is otherwise allowed. This applies to cleartext HTTP and
-intercepted HTTPS, including mixed-case HTTP upgrade tokens, and does not
-affect atunnel's outer CONNECT. The PEP MUST NOT open an upstream connection
+For cleartext HTTP requests and HTTP requests on an authorized intercepted TLS
+connection, a request denied by policy MUST receive HTTP 403. WebSocket upgrades,
+other HTTP upgrades, and actor-originated CONNECT requests inside the tunnel MUST
+also receive HTTP 403, regardless of whether the destination is otherwise allowed.
+This applies to cleartext HTTP and intercepted HTTPS, including mixed-case HTTP
+upgrade tokens, and does not affect atunnel's outer CONNECT. The PEP MUST NOT open an upstream connection
 or apply credential effects for these refused requests. Response bodies are
 implementation-specific.
 
@@ -28,10 +28,13 @@ A TLS passthrough authorization lasts for that connection. A policy update MUST
 apply to new connections after cached policy decisions expire; it need not
 terminate an already authorized connection. If a new ClientHello no longer
 matches a passthrough rule, the PEP MUST NOT pass the TLS connection through.
-It MUST instead intercept HTTPS and return HTTP 403 unless an HTTPS rule
-authorizes the request. An HTTP rule alone MUST NOT authorize TLS.
-Missing or invalid SNI and unsupported protocols MAY instead close the connection
-without an HTTP response.
+If an HTTPS rule matches the SNI and original destination port, the PEP MAY
+intercept the connection and authorize each HTTP request under that rule.
+Otherwise, the PEP MUST close the connection at ClientHello, without completing
+the TLS handshake, returning an HTTP response, or opening an upstream connection.
+An HTTP rule alone MUST NOT authorize TLS.
+Missing or invalid SNI MUST also close the connection without completing TLS.
+Unsupported protocols MAY close the connection without an HTTP response.
 
 DNS authorization happens before the PEP and is independent of the protocol and
 port being dialed. Removing every rule for a hostname can prevent resolution
