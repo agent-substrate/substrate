@@ -168,8 +168,7 @@ func TestEgressManifestsNameEveryExtProcChain(t *testing.T) {
 	want := []string{extproc.EgressFilterChainName, extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName}
 	var got []string
 	for _, lc := range allChains(bootstrapTree(t)) {
-		h := hcm(lc.chain)
-		if h == nil || filterIndex(list(h, "http_filters"), extProcFilter) < 0 {
+		if cfg, _, _ := extProcOf(lc.chain); cfg == nil {
 			continue
 		}
 		name := str(lc.chain, "name")
