@@ -38,35 +38,10 @@ import (
 // belongs to the caller, which knows whether that is the state it wanted.
 func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
 	ctx = preview.ContextWithOptIn(ctx)
-	worker, err := w.loadWorkerForDelete(ctx, name)
+	worker, err := w.ensureMarkedForDeletion(ctx, name, precondition)
 	if err != nil {
 		return nil, err
 	}
-
-	// Checked against the Worker the caller observed, before the drain below
-	// moves the version.
-	if err := precondition.Check(worker.GetMetadata()); err != nil {
-		switch {
-		case errors.Is(err, store.ErrUIDConflict):
-			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
-		case errors.Is(err, store.ErrVersionConflict):
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
-	}
-
-	// Scheduling only places on ACTIVE Workers, so draining first stops a
-	// concurrent resume from binding to a page the sweep has already passed.
-	// The delete would cascade that assignment away and leave the Actor
-	// pointing at a Worker that is gone.
-	worker, err = w.ensureDraining(ctx, worker)
-	if err != nil {
-		return nil, err
-	}
-
-	// The drain moved the version, so only the uid guard still means anything:
-	// a Worker replaced by a new incarnation mid-delete is still refused.
-	precondition.Version = 0
 
 	// Order matters: the delete is what erases the Actor's pointer at the
 	// Worker, so a failed release has to leave the record in place for the
@@ -75,46 +50,49 @@ func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondi
 		return nil, err
 	}
 
-	return w.finalizeDeleted(ctx, name, precondition)
+	return w.finalizeDeleted(ctx, worker)
 }
 
-// loadWorkerForDelete fetches the current worker record. Reading before any of
-// the release runs is also what reports an absent Worker as such.
-func (w *WorkerWorkflow) loadWorkerForDelete(ctx context.Context, name string) (_ *ateapipb.Worker, err error) {
-	ctx, done := stepSpan(ctx, "LoadWorkerForDelete")
+// ensureMarkedForDeletion sets the Worker's delete_time, checking
+// precondition, and drains it, returning the stored copy. Skips when a
+// previous attempt already marked the Worker.
+func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions) (_ *ateapipb.Worker, err error) {
+	ctx, done := stepSpan(ctx, "MarkWorkerForDeletion")
 	defer func() { err = done(err) }()
 
-	worker, err := w.store.GetWorker(ctx, name)
+	var alreadyDeleting *ateapipb.Worker
+	marked, err := w.store.MarkWorkerForDeletion(ctx, name, precondition, func(toUpdate *ateapipb.Worker) error {
+		if toUpdate.GetMetadata().GetDeleteTime() != nil {
+			alreadyDeleting = toUpdate
+			return errAlreadyMarked
+		}
+		// Scheduling only places on ACTIVE Workers, so draining first stops a
+		// concurrent resume from binding to a page the sweep has already passed.
+		// The delete would cascade that assignment away and leave the Actor
+		// pointing at a Worker that is gone.
+		if toUpdate.Status == nil {
+			toUpdate.Status = &ateapipb.WorkerStatus{}
+		}
+		toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+		return nil
+	})
+	if errors.Is(err, errAlreadyMarked) {
+		markSkipped(ctx, "worker already marked for deletion")
+		return alreadyDeleting, nil
+	}
 	if err != nil {
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
+		}
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Worker %s not found", name)
 		}
-		return nil, fmt.Errorf("while fetching worker: %w", err)
+		return nil, fmt.Errorf("while marking worker for deletion: %w", err)
 	}
-	return worker, nil
-}
-
-// ensureDraining moves the Worker out of the state scheduling will place on,
-// and is a no-op for one already draining.
-func (w *WorkerWorkflow) ensureDraining(ctx context.Context, worker *ateapipb.Worker) (_ *ateapipb.Worker, err error) {
-	ctx, done := stepSpan(ctx, "DrainWorkerForDelete")
-	defer func() { err = done(err) }()
-
-	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
-		return worker, nil
-	}
-	drained, err := w.store.UpdateWorker(ctx, worker.GetMetadata().GetName(), store.PreconditionFrom(worker),
-		func(toUpdate *ateapipb.Worker) error {
-			if toUpdate.Status == nil {
-				toUpdate.Status = &ateapipb.WorkerStatus{}
-			}
-			toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
-			return nil
-		})
-	if err != nil {
-		return nil, fmt.Errorf("while draining worker for delete: %w", err)
-	}
-	return drained, nil
+	return marked, nil
 }
 
 // ensureBoundActorsReleased resets every Actor bound to the Worker.
@@ -258,13 +236,16 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 }
 
 // finalizeDeleted removes the worker from the store and returns the deleted
-// record. The request's guards are carried down as delete preconditions, so a
-// worker that moved on since the caller read it is reported as a conflict rather
-// than removed.
-func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, name string, precondition store.DeletePreconditions) (_ *ateapipb.Worker, err error) {
+// record.
+func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, worker *ateapipb.Worker) (_ *ateapipb.Worker, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeDeleted")
 	defer func() { err = done(err) }()
 
+	name := worker.GetMetadata().GetName()
+	// Only the uid guards the delete. Each actor the sweep releases updates the
+	// Worker's allocation and moves its version. The uid still refuses a Worker
+	// replaced by a new incarnation.
+	precondition := store.DeletePreconditions{UID: worker.GetMetadata().GetUid()}
 	deleted, err := w.store.DeleteWorker(ctx, name, precondition)
 	if err != nil {
 		switch {

@@ -314,9 +314,9 @@ func TestMarkWorkerAvailability(t *testing.T) {
 }
 
 // TestDeleteWorker deregisters a Worker and checks it is gone. The delete
-// drains the Worker on its way out, so the record it returns is that one rather
-// than the one Create stored. Deregistering is not silently idempotent, so a
-// second attempt reports NOT_FOUND.
+// marks and drains the Worker in one write on its way out, so the record it
+// returns is one write past the one Create stored. Deregistering is not
+// silently idempotent, so a second attempt reports NOT_FOUND.
 func TestDeleteWorker(t *testing.T) {
 	ns := namespaceForTest("ns-worker-delete")
 	tc := setupTest(t, ns)
@@ -334,6 +334,9 @@ func TestDeleteWorker(t *testing.T) {
 	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
 	if diff := cmp.Diff(want, deleted, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("DeleteWorker response mismatch (-want +got):\n%s", diff)
+	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Error("DeleteWorker returned a worker without delete_time")
 	}
 
 	listed, err := tc.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})

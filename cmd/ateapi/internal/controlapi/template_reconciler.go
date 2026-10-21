@@ -191,6 +191,8 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 		}
 		return 0, err
 	}
+	// TODO: Skip a template with delete_time set. DeleteActorTemplate may
+	// already have deleted the golden actor and tag, and this pass rebuilds them.
 
 	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 		return 0, nil

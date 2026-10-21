@@ -40,19 +40,8 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	}
 	defer lease.Close()
 
-	actor, err := w.loadActorForDelete(ctx, actorRef)
+	actor, err := w.ensureMarkedDeleting(ctx, actorRef, precondition)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := precondition.Check(actor.GetMetadata()); err != nil {
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
-		}
-		return nil, apierror.Aborted("concurrent update conflict, please retry")
-	}
-
-	if actor, err = w.ensureMarkedDeleting(ctx, actorRef, actor); err != nil {
 		return nil, err
 	}
 
@@ -105,21 +94,6 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		return nil, errors.Join(errs...)
 	}
 	return w.finalizeDeleted(ctx, actor)
-}
-
-// loadActorForDelete fetches the current actor record.
-func (w *ActorWorkflow) loadActorForDelete(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
-	ctx, done := stepSpan(ctx, "LoadActorForDelete")
-	defer func() { err = done(err) }()
-
-	actor, err := w.store.GetActor(ctx, actorRef)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, fmt.Errorf("while fetching actor: %w", err)
-	}
-	return actor, nil
 }
 
 // ensureAteletTerminated calls atelet to terminate the workload for opName.
@@ -331,27 +305,39 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 	return latestActor, nil
 }
 
-// ensureMarkedDeleting transitions the actor to DELETING and persists the
-// change, returning the stored copy. Skips when a previous attempt already
-// marked the actor.
-func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor) (updated *ateapipb.Actor, err error) {
+var errAlreadyMarked = errors.New("already marked for deletion")
+
+// ensureMarkedDeleting sets the actor's delete_time, checking precondition,
+// and moves it to DELETING, returning the stored copy. Skips when a previous
+// attempt already marked the actor.
+func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (updated *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkDeleting")
 	defer func() { err = done(err) }()
 
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_DELETING {
-		markSkipped(ctx, "actor already DELETING")
-		return actor, nil
-	}
-
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	var alreadyDeleting *ateapipb.Actor
+	storedActor, err := w.store.MarkActorForDeletion(ctx, actorRef, precondition, func(toUpdate *ateapipb.Actor) error {
+		if toUpdate.GetMetadata().GetDeleteTime() != nil {
+			alreadyDeleting = toUpdate
+			return errAlreadyMarked
+		}
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 		return nil
 	})
+	if errors.Is(err, errAlreadyMarked) {
+		markSkipped(ctx, "actor already marked for deletion")
+		return alreadyDeleting, nil
+	}
 	if err != nil {
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
+		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
-		return nil, fmt.Errorf("while setting actor state to DELETING: %w", err)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
+		}
+		return nil, fmt.Errorf("while marking actor for deletion: %w", err)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationDelete)
 	return storedActor, nil
@@ -451,7 +437,10 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapipb.Act
 	defer func() { err = done(err) }()
 
 	actorRef := resources.ActorRefFromActor(actor)
-	precondition := store.DeletePreconditions{UID: actor.GetMetadata().GetUid(), Version: actor.GetMetadata().GetVersion()}
+	// Only the uid guards the delete. The mark already committed this
+	// incarnation to deletion, and a later write such as an UpdateActor RPC,
+	// which takes no actor lease, must not block removing the row.
+	precondition := store.DeletePreconditions{UID: actor.GetMetadata().GetUid()}
 	deleted, err := w.store.DeleteActor(ctx, actorRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

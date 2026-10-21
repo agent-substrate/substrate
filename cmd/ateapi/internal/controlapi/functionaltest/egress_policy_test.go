@@ -195,8 +195,11 @@ func TestDeleteActorEgressPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteActorEgressPolicy failed: %v", err)
 	}
-	if diff := cmp.Diff(created, deleted, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(created, deleted, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "delete_time")); diff != "" {
 		t.Errorf("deleted policy mismatch (-created +deleted):\n%s", diff)
+	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Errorf("the deleted policy carries no delete_time")
 	}
 	_, err = tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	assertGrpcError(t, err, codes.NotFound, "EgressPolicy not found")

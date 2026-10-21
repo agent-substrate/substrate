@@ -133,8 +133,11 @@ func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
 		UID:     updated.GetMetadata().GetUid(),
 		Version: updated.GetMetadata().GetVersion(),
 	})
-	if err != nil || !cmp.Equal(deleted, updated, protocmp.Transform()) {
+	if err != nil || !cmp.Equal(deleted, updated, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "delete_time")) {
 		t.Fatalf("DeleteAtespaceAccessPolicy = %v, %v; want %v", deleted, err, updated)
+	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Error("the deleted policy carries no delete_time")
 	}
 	if _, err := p.GetAtespaceAccessPolicy(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("GetAtespaceAccessPolicy after delete = %v, want ErrNotFound", err)

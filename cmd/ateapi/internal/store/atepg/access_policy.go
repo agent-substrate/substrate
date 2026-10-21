@@ -23,6 +23,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
@@ -227,6 +228,7 @@ func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name strin
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing access policy delete for %s: %w", name, err)
 	}
+	deleted.Metadata.DeleteTime = timestamppb.Now()
 	return deleted, nil
 }
 
