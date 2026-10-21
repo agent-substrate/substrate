@@ -951,6 +951,10 @@ func TestValidateResumeActorRequest(t *testing.T) {
 		withExpected(&ateapi.ExpectedSnapshot{ActorUid: "c4652e88-7079-448b-94ce-55b45fa12c43", SnapshotUuid: "snap-1", Generation: 0}),
 		field.ErrorList{field.Required(field.NewPath("expected", "generation"), "")},
 	}, {
+		"negative expected generation",
+		withExpected(&ateapi.ExpectedSnapshot{ActorUid: "c4652e88-7079-448b-94ce-55b45fa12c43", SnapshotUuid: "snap-1", Generation: -1}),
+		field.ErrorList{field.Invalid(field.NewPath("expected", "generation"), nil, "").WithOrigin("minimum")},
+	}, {
 		"malformed expected snapshot_uuid",
 		withExpected(&ateapi.ExpectedSnapshot{ActorUid: "c4652e88-7079-448b-94ce-55b45fa12c43", SnapshotUuid: "Bad/Snapshot", Generation: 1}),
 		field.ErrorList{field.Invalid(field.NewPath("expected", "snapshot_uuid"), "Bad/Snapshot", "").WithOrigin("format=k8s-short-name")},

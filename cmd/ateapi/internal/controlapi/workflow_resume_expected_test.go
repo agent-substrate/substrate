@@ -56,6 +56,16 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 		want        codes.Code
 	}{
 		{name: "matching checkpoint/durable"},
+		{name: "invalid lifecycle state", mutate: func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED }, diagnostic: "cannot resume an expected snapshot", want: codes.FailedPrecondition},
+		{name: "no held snapshot", mutate: func(a *ateapi.Actor) { a.Status.Snapshots = nil }, want: codes.FailedPrecondition},
+		{name: "local checkpoint/no durable copy", mutate: func(a *ateapi.Actor) {
+			local(a)
+			a.Status.Snapshots[0].DurableSnapshot = nil
+		}, want: codes.FailedPrecondition},
+		{name: "local checkpoint/unspecified durable status", mutate: func(a *ateapi.Actor) {
+			local(a)
+			a.Status.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED
+		}, want: codes.FailedPrecondition},
 		{name: "matching checkpoint/UUID mismatch", request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid = "other" }, diagnostic: "newest held snapshot", want: codes.FailedPrecondition},
 		{name: "matching checkpoint/generation mismatch", request: func(e *ateapi.ExpectedSnapshot) { e.Generation = 2 }, diagnostic: "newest held snapshot", want: codes.FailedPrecondition},
 		{name: "matching checkpoint/lost response identical retry", phase: "lost response"},
@@ -203,7 +213,7 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 					var details []string
 					if tc.diagnostic == "actor UID" {
 						details = []string{after.GetMetadata().GetUid(), req.GetExpected().GetActorUid()}
-					} else {
+					} else if tc.diagnostic == "newest held snapshot" {
 						held := latestSnapshot(after.GetStatus(), func(*ateapi.Snapshot) bool { return true })
 						details = []string{held.GetUuid(), fmt.Sprintf("generation %d", held.GetGeneration()), req.GetExpected().GetSnapshotUuid(), fmt.Sprintf("generation %d", req.GetExpected().GetGeneration())}
 					}
