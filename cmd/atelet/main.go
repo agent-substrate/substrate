@@ -379,12 +379,17 @@ func main() {
 	defer ateapiConn.Close()
 	workerService := ateapipb.NewWorkerServiceClient(ateapiConn)
 
+	bootID, err := readBootID(bootIDPath)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to read the node's boot ID", err)
+	}
 	// The snapshot tracker's workers get a context of their own, cancelled only
 	// once the gRPC server has drained, so background snapshot work keeps
 	// running while in-flight RPCs finish.
 	trackerCtx, stopTracker := context.WithCancel(ctx)
 	store := &trackerStore{}
 	snapshots := snapshottracker.New(trackerCtx, store, clock.RealClock{},
+		snapshottracker.WithBootCheck(localSnapshotBootCheck(bootID)),
 		snapshottracker.WithUploadDelay(*snapshotUploadDelay),
 		snapshottracker.WithDetachDelay(*snapshotDetachDelay),
 		snapshottracker.WithUploadTimeout(*snapshotUploadTimeout),
@@ -420,6 +425,7 @@ func main() {
 		systemInfoVolumes,
 		snapshots,
 		workerService,
+		bootID,
 	)
 	store.s = wmService
 	snapshots.Start()
@@ -723,6 +729,10 @@ type Atelet struct {
 	// failures, so a restore that can never succeed stops being retried (see
 	// boundRetryableRestoreError).
 	restoreFailures restoreFailureCounter
+	// bootID is the node's boot ID (see readBootID), recorded in the manifest
+	// of each local snapshot. A local snapshot recording another, or none,
+	// was written before the node last rebooted.
+	bootID string
 }
 
 var _ ateletpb.AteletServer = (*Atelet)(nil)
@@ -754,6 +764,7 @@ func NewService(
 	systemInfoVolumes *systemInfoVolumeRefresher,
 	snapshots *snapshottracker.Tracker,
 	workers ateapipb.WorkerServiceClient,
+	bootID string,
 ) *Atelet {
 	wms := &Atelet{
 		workerDialer:          workerDialer,
@@ -772,6 +783,7 @@ func NewService(
 		systemInfoVolumes:     systemInfoVolumes,
 		snapshots:             snapshots,
 		workerActorJWTs:       newWorkerActorJWTs(workers),
+		bootID:                bootID,
 	}
 	return wms
 }
@@ -1266,8 +1278,11 @@ func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Checkpoi
 		}
 	}
 
-	// Write the self-describing snapshot manifest beside the images.
-	manifest, err := json.Marshal(rec)
+	// Write the self-describing snapshot manifest beside the images, stamped
+	// with this boot so a reader can tell whether the node has rebooted since.
+	local := *rec
+	local.BootID = s.bootID
+	manifest, err := json.Marshal(&local)
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
 	}
@@ -1324,7 +1339,10 @@ func (s *Atelet) uploadSnapshot(ctx context.Context, actor actorRef, uri resourc
 		return fmt.Errorf("while uploading snapshot files: %w", err)
 	}
 
-	manifest, err := json.Marshal(rec)
+	// The boot ID describes this node's local copy, not the snapshot.
+	remote := *rec
+	remote.BootID = ""
+	manifest, err := json.Marshal(&remote)
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
 	}
@@ -1413,17 +1431,29 @@ func (s *Atelet) promoteLocalSnapshot(ctx context.Context, req *ateletpb.Promote
 
 // uploadLocalCheckpointDir uploads the local checkpoint in localDir to uri. It
 // returns the sandbox class recorded in the snapshot manifest (empty when the
-// manifest was not read), and whether it uploaded: it does not when the local
-// copy is gone but already uploaded. Parameterized by localDir for tests.
+// local copy is gone), and whether it uploaded: it does not when the local
+// copy is gone but already uploaded. A local copy written before the node last
+// rebooted counts as gone, since its files may be torn. Parameterized by
+// localDir for tests.
 func (s *Atelet) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.PromoteSnapshotRequest, localDir string, uri resources.SnapshotURI) (sandboxClass string, uploaded bool, err error) {
 	actor := actorRef{atespace: req.GetAtespace(), name: req.GetActorName(), uid: req.GetActorUid()}
 	localSnapshotName := req.GetSnapshot().GetSnapshotUuid()
+	var rec *sandboxAssetsRecord
 	manifest, err := readSnapshotManifest(localDir)
+	if err == nil {
+		if rec, err = unmarshalSandboxRecord(manifest); err != nil {
+			return "", false, err
+		}
+		if rec.BootID != s.bootID {
+			err = fmt.Errorf("local snapshot %q was written before the node last rebooted: %w", localSnapshotName, os.ErrNotExist)
+		}
+	}
 	if errors.Is(err, os.ErrNotExist) {
-		// The local snapshot is gone. A detach may have uploaded and pruned
-		// it: the remote manifest is uploaded last, so its presence means the
-		// whole snapshot is committed. Absent on both sides, the local
-		// snapshot is unrecoverable.
+		// The local snapshot is gone, or was written before the node last
+		// rebooted and may be torn. A detach, or an upload before the reboot,
+		// may have uploaded it: the remote manifest is uploaded last, so its
+		// presence means the whole snapshot is committed. Absent on both
+		// sides, the local snapshot is unrecoverable.
 		_, fetchErr := s.fetchManifest(ctx, actor, uri.String())
 		if fetchErr == nil {
 			slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", uri.String()))
@@ -1437,11 +1467,6 @@ func (s *Atelet) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.Pro
 	}
 	if err != nil {
 		return "", false, wrapFileSystemErr("while reading local snapshot manifest", err)
-	}
-
-	rec, err := unmarshalSandboxRecord(manifest)
-	if err != nil {
-		return "", false, err
 	}
 
 	capturedFidelity := rec.Fidelity
@@ -1480,15 +1505,17 @@ func (st *trackerStore) UploadLocalSnapshot(ctx context.Context, actorUID string
 }
 
 // errUnusableLocalSnapshot marks a node-local snapshot that is present on disk
-// (not simply absent) but cannot be read or validated: its manifest cannot be
-// read or parsed, or lists a file that is missing or not a regular file, as an
-// interrupted prune can leave. File contents and sizes are not checked.
+// (not simply absent) but cannot be used: its manifest cannot be read or
+// parsed, was written before the node last rebooted (its files may be torn),
+// or lists a file that is missing or not a regular file, as an interrupted
+// prune can leave. File contents and sizes are not checked.
 var errUnusableLocalSnapshot = errors.New("unusable local snapshot")
 
 // readLocalSnapshot returns the manifest of the node-local snapshot in
-// localDir once every file it lists is present. A missing manifest reports
-// os.ErrNotExist, and any other failure wraps errUnusableLocalSnapshot.
-func readLocalSnapshot(localDir string) (*sandboxAssetsRecord, error) {
+// localDir once it records bootID and every file it lists is present. A
+// missing manifest reports os.ErrNotExist, and any other failure wraps
+// errUnusableLocalSnapshot.
+func readLocalSnapshot(localDir, bootID string) (*sandboxAssetsRecord, error) {
 	manifest, err := readSnapshotManifest(localDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -1499,6 +1526,9 @@ func readLocalSnapshot(localDir string) (*sandboxAssetsRecord, error) {
 	rec, err := unmarshalSandboxRecord(manifest)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errUnusableLocalSnapshot, err)
+	}
+	if rec.BootID != bootID {
+		return nil, fmt.Errorf("%w: written before the node last rebooted", errUnusableLocalSnapshot)
 	}
 	if err := checkLocalSnapshotFiles(localDir, rec.SnapshotFiles); err != nil {
 		return nil, fmt.Errorf("%w: %w", errUnusableLocalSnapshot, err)
@@ -1641,7 +1671,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		}
 	}()
 	var sandboxRec *sandboxAssetsRecord
-	localRec, localErr := readLocalSnapshot(localDir)
+	localRec, localErr := readLocalSnapshot(localDir, s.bootID)
 	durable := req.GetSnapshot().GetObject()
 	if localErr == nil {
 		directLocal = true

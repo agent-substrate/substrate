@@ -3695,9 +3695,10 @@ type RestoreRequest struct {
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// Snapshot to restore from. atelet reads its local copy if it holds a
 	// usable one, and `snapshot.object` otherwise. A local copy is unusable if
-	// its manifest does not parse or lists a missing file. While atelet is
-	// detaching the actor, it waits for the detach to finish and then reads
-	// `snapshot.object`. Fails if neither copy exists: that generation is lost.
+	// its manifest does not parse, lists a missing file, or was written before
+	// the node last rebooted. While atelet is detaching the actor, it waits for
+	// the detach to finish and then reads `snapshot.object`. Fails if neither
+	// copy exists: that generation is lost.
 	//
 	// `snapshot.object` is required even while the control plane has not
 	// recorded the snapshot's upload complete: atelet may have uploaded the

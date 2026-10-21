@@ -91,6 +91,13 @@ func inMemory(tr *Tracker) bool {
 	return ok
 }
 
+// withCurrentBoot makes the tracker treat the local snapshots named in uuids as
+// written since the node last booted, and every other one as written before it
+// rebooted.
+func withCurrentBoot(uuids ...string) Option {
+	return WithBootCheck(func(_, uuid string) bool { return slices.Contains(uuids, uuid) })
+}
+
 // Start runs the workers until the tracker's context ends. Wait then returns
 // once they have stopped, even when a worker has taken an actor whose lock an
 // RPC still holds.
@@ -210,6 +217,257 @@ func TestStartQueuesActorsWithSnapshotState(t *testing.T) {
 	if want := []string{"actor-both", "actor-detach"}; !slices.Equal(got[opDetach], want) {
 		t.Errorf("detach queue after restart = %v, want %v", got[opDetach], want)
 	}
+}
+
+// With WithBootCheck, Start deletes any local snapshot written before the node
+// rebooted and stops tracking it: it reports an already-durable one as
+// detached, and queues no background upload or detach for an undurable one.
+// Local snapshots from the current boot stay.
+func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
+	useTempNodeDirs(t)
+	writeLocalSnapshot := func(actorUID, snapUUID string) string {
+		dir := ateletpath.LocalSnapshotDir(actorUID, snapUUID)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "checkpoint.img"), []byte("memory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	for _, actorUID := range []string{"actor-suspended-old", "actor-running-old", "actor-same-boot", "actor-undurable-old"} {
+		if err := os.MkdirAll(ateletpath.ActorPath(actorUID), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t0 := time.Unix(1_700_000_000, 0).Add(-testDetachDelay)
+	before := New(t.Context(), newFakeSnapshotStore(), clocktesting.NewFakeClock(t0), WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay))
+
+	s1 := testRef("s1", 1, t0)
+	before.CommitDurable("actor-suspended-old", s1)
+	before.CommitLocal("actor-suspended-old", s1)
+	suspendedOldDir := writeLocalSnapshot("actor-suspended-old", "s1")
+
+	s2 := testRef("s2", 1, t0)
+	before.CommitDurable("actor-running-old", s2)
+	before.CommitLocal("actor-running-old", s2)
+	endStart, err := before.BeginStart(t.Context(), "actor-running-old")
+	if err != nil {
+		t.Fatalf("BeginStart: %v", err)
+	}
+	endStart()
+	runningOldDir := writeLocalSnapshot("actor-running-old", "s2")
+
+	s3 := testRef("s3", 1, t0)
+	before.CommitDurable("actor-same-boot", s3)
+	before.CommitLocal("actor-same-boot", s3)
+	sameBootDir := writeLocalSnapshot("actor-same-boot", "s3")
+
+	s4 := testRef("s4", 1, t0)
+	before.CommitLocal("actor-undurable-old", s4)
+	undurableOldDir := writeLocalSnapshot("actor-undurable-old", "s4")
+
+	reporter := newFakeReporter()
+	clk := clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0))
+	after := New(t.Context(), newFakeSnapshotStore(), clk,
+		withCurrentBoot("s3"),
+		WithUploadDelay(testUploadDelay),
+		WithDetachDelay(testDetachDelay))
+	setWorkers(after, 0, 0)
+	startReporting(after, reporter)
+
+	for _, tc := range []struct {
+		actorUID string
+		snapUUID string
+		dir      string
+	}{
+		{"actor-suspended-old", "s1", suspendedOldDir},
+		{"actor-running-old", "s2", runningOldDir},
+	} {
+		if _, err := os.Stat(tc.dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s local snapshot dir stat = %v, want not exist", tc.actorUID, err)
+		}
+		st := after.State(tc.actorUID)
+		if got := uuidOf(st.GetLatestLocal()); got != "" {
+			t.Errorf("%s latest_local = %q, want empty", tc.actorUID, got)
+		}
+		if got := uuidOf(st.GetLatestDurable()); got != tc.snapUUID {
+			t.Errorf("%s latest_durable = %q, want %q", tc.actorUID, got, tc.snapUUID)
+		}
+	}
+
+	if _, err := os.Stat(sameBootDir); err != nil {
+		t.Errorf("actor-same-boot local snapshot dir stat = %v, want kept", err)
+	}
+	if got := uuidOf(after.State("actor-same-boot").GetLatestLocal()); got != "s3" {
+		t.Errorf("actor-same-boot latest_local = %q, want s3", got)
+	}
+
+	if _, err := os.Stat(undurableOldDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("actor-undurable-old local snapshot dir stat = %v, want not exist", err)
+	}
+	if got := after.State("actor-undurable-old").GetLatestLocal(); got != nil {
+		t.Errorf("actor-undurable-old latest_local = %v, want nil", got)
+	}
+
+	var gotQueued [numOpKinds][]string
+	for k, q := range after.queues {
+		for q.Len() > 0 {
+			uid, _ := q.Get()
+			gotQueued[k] = append(gotQueued[k], uid)
+			q.Done(uid)
+		}
+		slices.Sort(gotQueued[k])
+	}
+	if len(gotQueued[opUpload]) != 0 {
+		t.Errorf("upload queue = %v, want empty", gotQueued[opUpload])
+	}
+	if want := []string{"actor-same-boot"}; !slices.Equal(gotQueued[opDetach], want) {
+		t.Errorf("detach queue = %v, want %v", gotQueued[opDetach], want)
+	}
+
+	var reportedActors []string
+	for range 2 {
+		processNextReport(t, after)
+		r := waitReported(t, reporter)
+		if r.state.GetLatestLocal() != nil {
+			t.Errorf("report for %s carries latest_local %v, want nil", r.actorUID, r.state.GetLatestLocal())
+		}
+		reportedActors = append(reportedActors, r.actorUID)
+	}
+	slices.Sort(reportedActors)
+	if want := []string{"actor-running-old", "actor-suspended-old"}; !slices.Equal(reportedActors, want) {
+		t.Errorf("reported detached actors = %v, want %v", reportedActors, want)
+	}
+	if n := after.reporting.queue.Len(); n != 0 {
+		t.Errorf("reports still queued = %d, want 0", n)
+	}
+
+	t.Run("keeps unsaved detach in memory when state save fails", func(t *testing.T) {
+		useActorDir(t)
+		before := newIdleTestTracker(t, newFakeSnapshotStore())
+		s1 := testRef("s1", 1, before.clock.Now())
+		before.CommitDurable(trackedActorUID, s1)
+		before.CommitLocal(trackedActorUID, s1)
+		// With no local-checkpoint directory on disk, PruneLocalCheckpoints is a
+		// no-op and succeeds even when the actor directory is read-only, while
+		// saving the updated snapshot state file fails.
+		actorDir := ateletpath.ActorPath(trackedActorUID)
+		if err := os.Chmod(actorDir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(actorDir, 0o700) })
+
+		after := newStoreTracker(t, newFakeSnapshotStore(), withCurrentBoot())
+		setWorkers(after, 0, 0)
+		after.Start()
+
+		if got := after.State(trackedActorUID).GetLatestLocal(); got != nil {
+			t.Errorf("latest_local = %v, want nil kept in memory after failed save", got)
+		}
+	})
+
+	t.Run("schedules detach retry when pruning fails", func(t *testing.T) {
+		useActorDir(t)
+		before := newIdleTestTracker(t, newFakeSnapshotStore())
+		s1 := testRef("s1", 1, before.clock.Now())
+		before.CommitDurable(trackedActorUID, s1)
+		before.CommitLocal(trackedActorUID, s1)
+		endStart, err := before.BeginStart(t.Context(), trackedActorUID)
+		if err != nil {
+			t.Fatalf("BeginStart: %v", err)
+		}
+		endStart()
+
+		dir := writeLocalSnapshot(trackedActorUID, "s1")
+		nested := filepath.Join(dir, "sub")
+		if err := os.MkdirAll(nested, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(nested, "keep"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(nested, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(nested, 0o700) })
+
+		after := newStoreTracker(t, newFakeSnapshotStore(), withCurrentBoot())
+		setWorkers(after, 0, 0)
+		after.Start()
+
+		if got := uuidOf(after.State(trackedActorUID).GetLatestLocal()); got != "s1" {
+			t.Errorf("latest_local = %q, want s1 still recorded when prune fails", got)
+		}
+		if got := detachDueOf(after, trackedActorUID); !got.Equal(after.clock.Now().Add(testRetryDelay)) {
+			t.Errorf("detachDue = %v, want %v", got, after.clock.Now().Add(testRetryDelay))
+		}
+	})
+
+	t.Run("keeps current-boot LatestLocal when only Uploading is from earlier boot", func(t *testing.T) {
+		before := newIdleTestTracker(t, newFakeSnapshotStore())
+		t0 := before.clock.Now()
+		before.lock(trackedActorUID)
+		before.saveLocked(&actorSnapshots{actorUID: trackedActorUID, actorSnapshotsRecord: actorSnapshotsRecord{
+			Uploading:   testRef("s1", 1, t0).clone(),
+			LatestLocal: testRef("s2", 2, t0.Add(time.Second)).clone(),
+		}})
+		before.unlock(trackedActorUID)
+		upDir := writeLocalSnapshot(trackedActorUID, "s1")
+		localDir := writeLocalSnapshot(trackedActorUID, "s2")
+
+		after := newStoreTracker(t, newFakeSnapshotStore(), withCurrentBoot("s2"))
+		setWorkers(after, 0, 0)
+		after.Start()
+
+		if _, err := os.Stat(upDir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("earlier-boot Uploading dir stat = %v, want not exist", err)
+		}
+		if _, err := os.Stat(localDir); err != nil {
+			t.Errorf("current-boot LatestLocal dir stat = %v, want kept", err)
+		}
+		st := after.State(trackedActorUID)
+		if st.GetUploading() != nil {
+			t.Errorf("uploading = %v, want nil", st.GetUploading())
+		}
+		if got := uuidOf(st.GetLatestLocal()); got != "s2" {
+			t.Errorf("latest_local = %q, want s2", got)
+		}
+	})
+
+	t.Run("stops tracking an undurable snapshot when deleting it fails", func(t *testing.T) {
+		before := newIdleTestTracker(t, newFakeSnapshotStore())
+		// Older than the upload delay, so a snapshot still tracked would count
+		// as overdue.
+		before.CommitLocal(trackedActorUID, testRef("s1", 1, before.clock.Now().Add(-2*testUploadDelay)))
+		dir := writeLocalSnapshot(trackedActorUID, "s1")
+		nested := filepath.Join(dir, "sub")
+		if err := os.MkdirAll(nested, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(nested, "keep"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(nested, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(nested, 0o700) })
+
+		inst, _ := newTestInstruments(t)
+		after := newStoreTracker(t, newFakeSnapshotStore(), withCurrentBoot(), WithInstruments(inst))
+		setWorkers(after, 0, 0)
+		after.Start()
+
+		st := after.State(trackedActorUID)
+		if st.GetLatestLocal() != nil || st.GetUploadDueTime() != nil {
+			t.Errorf("state = %v, want no latest_local and no upload due", st)
+		}
+		if counts := after.undurableActorsTally.counts(); counts != (undurableActorsCounts{}) {
+			t.Errorf("undurable tally = %+v, want empty", counts)
+		}
+	})
 }
 
 // Forget cancels the actor's background operation in progress and waits for it

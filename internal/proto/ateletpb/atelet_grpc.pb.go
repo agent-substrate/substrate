@@ -385,6 +385,10 @@ type AteletClient interface {
 	// snapshot from the node. Waits for an in-flight detach, and fails for an
 	// actor running on this node.
 	//
+	// atelet never uploads a local copy written before the node last rebooted,
+	// since its files may be torn: it answers from the manifest at
+	// `snapshot.object` instead, and fails with NOT_FOUND if there is none.
+	//
 	// Idempotent: once the snapshot is durable, atelet answers from the
 	// manifest at `snapshot.object`, and fails if there is none.
 	//
@@ -511,6 +515,10 @@ type AteletServer interface {
 	// storage (e.g. for tagging) without evicting the suspended actor's local
 	// snapshot from the node. Waits for an in-flight detach, and fails for an
 	// actor running on this node.
+	//
+	// atelet never uploads a local copy written before the node last rebooted,
+	// since its files may be torn: it answers from the manifest at
+	// `snapshot.object` instead, and fails with NOT_FOUND if there is none.
 	//
 	// Idempotent: once the snapshot is durable, atelet answers from the
 	// manifest at `snapshot.object`, and fails if there is none.

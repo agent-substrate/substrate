@@ -410,6 +410,10 @@ service Atelet {
   // snapshot from the node. Waits for an in-flight detach, and fails for an
   // actor running on this node.
   //
+  // atelet never uploads a local copy written before the node last rebooted,
+  // since its files may be torn: it answers from the manifest at
+  // `snapshot.object` instead, and fails with NOT_FOUND if there is none.
+  //
   // Idempotent: once the snapshot is durable, atelet answers from the
   // manifest at `snapshot.object`, and fails if there is none.
   //
@@ -1111,9 +1115,10 @@ message RestoreRequest {
 
   // Snapshot to restore from. atelet reads its local copy if it holds a
   // usable one, and `snapshot.object` otherwise. A local copy is unusable if
-  // its manifest does not parse or lists a missing file. While atelet is
-  // detaching the actor, it waits for the detach to finish and then reads
-  // `snapshot.object`. Fails if neither copy exists: that generation is lost.
+  // its manifest does not parse, lists a missing file, or was written before
+  // the node last rebooted. While atelet is detaching the actor, it waits for
+  // the detach to finish and then reads `snapshot.object`. Fails if neither
+  // copy exists: that generation is lost.
   //
   // `snapshot.object` is required even while the control plane has not
   // recorded the snapshot's upload complete: atelet may have uploaded the

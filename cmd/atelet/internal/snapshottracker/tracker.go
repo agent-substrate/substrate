@@ -146,6 +146,11 @@ type Tracker struct {
 	store Store
 	// clock is what due times are measured on, and the queues wait on.
 	clock clock.WithTicker
+	// fromCurrentBoot reports whether an actor's local snapshot was written
+	// since the node last booted, or is nil without WithBootCheck. When set,
+	// atelet deletes any local snapshot written before the node rebooted (see
+	// prunePreRebootLocalLocked).
+	fromCurrentBoot func(actorUID, snapshotUUID string) bool
 	// uploadDelay is how long after UndurableSince the actor's latest local
 	// snapshot becomes due for background upload: DefaultUploadDelay unless
 	// WithUploadDelay sets it.
@@ -217,6 +222,16 @@ type Tracker struct {
 
 // Option configures a Tracker.
 type Option func(*Tracker)
+
+// WithBootCheck sets how atelet tells whether an actor's local snapshot was
+// written since the node last booted. A snapshot whose local copy is gone must
+// count as written before. With it, atelet deletes any local snapshot written
+// before the node rebooted, whose files may be torn.
+func WithBootCheck(fromCurrentBoot func(actorUID, snapshotUUID string) bool) Option {
+	return func(t *Tracker) {
+		t.fromCurrentBoot = fromCurrentBoot
+	}
+}
 
 // WithUploadDelay sets how long after the oldest snapshot of an actor not yet
 // durable was taken atelet uploads the actor's latest local snapshot.

@@ -106,6 +106,12 @@ type sandboxAssetsRecord struct {
 	// is knowable from the manifest alone. Empty in the on-node record written at
 	// Run/Restore.
 	Fidelity string `json:"fidelity,omitempty"`
+	// BootID is the node's boot ID when atelet wrote this local copy of the
+	// snapshot. Not every file of a local copy is synced to disk, so one
+	// written before the node last rebooted may be torn and is deleted on
+	// reboot. Set only in the manifest of a local copy, never in an uploaded
+	// one.
+	BootID string `json:"bootId,omitempty"`
 }
 
 // ensureSandboxAssets stages every asset in the record under dstDir, named

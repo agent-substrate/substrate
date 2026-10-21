@@ -3132,3 +3132,170 @@ func TestRestoreStopsRetryingAfterConsecutiveUnavailableFailures(t *testing.T) {
 		t.Fatalf("Restore after a canceled attempt: code = %v, want %v", got, codes.Internal)
 	}
 }
+
+// TestCheckpointManifestBootID checks that Checkpoint stamps the node's boot ID
+// into the local manifest only, omitting it from the uploaded manifest.
+func TestCheckpointManifestBootID(t *testing.T) {
+	a := runPluginActor(t)
+	a.s.bootID = "boot-1"
+	snap := a.snapshot("suspend-snap-1", 1)
+
+	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	localBytes, err := os.ReadFile(filepath.Join(ateletpath.LocalSnapshotDir(pluginActorUID, "suspend-snap-1"), sandboxManifestName))
+	if err != nil {
+		t.Fatalf("reading local manifest: %v", err)
+	}
+	localRec, err := unmarshalSandboxRecord(localBytes)
+	if err != nil {
+		t.Fatalf("unmarshalling local manifest: %v", err)
+	}
+	if localRec.BootID != "boot-1" {
+		t.Errorf("local manifest bootId = %q, want %q", localRec.BootID, "boot-1")
+	}
+
+	remoteBytes := a.store.objects[manifestKey("suspend-snap-1")]
+	if len(remoteBytes) == 0 {
+		t.Fatal("no remote manifest uploaded")
+	}
+	if strings.Contains(string(remoteBytes), `"bootId"`) {
+		t.Errorf("remote manifest %s carries bootId, want none", remoteBytes)
+	}
+
+	localDir := ateletpath.LocalSnapshotDir(pluginActorUID, "suspend-snap-1")
+	noWorkers := []snapshottracker.Option{
+		snapshottracker.WithUploadWorkers(0),
+		snapshottracker.WithDetachWorkers(0),
+		snapshottracker.WithReportWorkers(0),
+	}
+	sameBoot := snapshottracker.New(t.Context(), nil, clock.RealClock{}, append(noWorkers, snapshottracker.WithBootCheck(localSnapshotBootCheck("boot-1")))...)
+	sameBoot.Start()
+	if _, err := os.Stat(localDir); err != nil {
+		t.Fatalf("local snapshot after restart on same boot: stat = %v, want kept", err)
+	}
+	if got := sameBoot.State(pluginActorUID).GetLatestLocal().GetSnapshot().GetSnapshotUuid(); got != "suspend-snap-1" {
+		t.Errorf("latest_local after restart on same boot = %q, want %q", got, "suspend-snap-1")
+	}
+
+	newBoot := snapshottracker.New(t.Context(), nil, clock.RealClock{}, append(noWorkers, snapshottracker.WithBootCheck(localSnapshotBootCheck("boot-2")))...)
+	newBoot.Start()
+	if _, err := os.Stat(localDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("local snapshot after restart on new boot: stat = %v, want not exist", err)
+	}
+	if got := newBoot.State(pluginActorUID).GetLatestLocal(); got != nil {
+		t.Errorf("latest_local after restart on new boot = %v, want nil", got)
+	}
+	if got := newBoot.State(pluginActorUID).GetLatestDurable().GetSnapshot().GetSnapshotUuid(); got != "suspend-snap-1" {
+		t.Errorf("latest_durable after restart on new boot = %q, want %q", got, "suspend-snap-1")
+	}
+}
+
+// TestRestoreLocalSnapshotFromEarlierBoot checks that Restore never reads a
+// node-local snapshot whose manifest carries a boot ID from before the node
+// last rebooted: it restores from object storage when an uploaded copy
+// exists, and fails with NotFound wrapping errUnusableLocalSnapshot otherwise.
+func TestRestoreLocalSnapshotFromEarlierBoot(t *testing.T) {
+	const (
+		atespace     = "ate-demo"
+		actorName    = "counter"
+		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
+		workerPodUID = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+		snapshotName = "pause-snap-1"
+	)
+
+	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": ""}}
+	serveFakeWorker(t, worker)
+
+	host := imageVolumeTestRegistry(t)
+	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
+
+	release := newGVisorTestRelease(t)
+	sandboxRec := testSandboxRecord(release)
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
+	}
+	baseManifest := func() sandboxAssetsRecord {
+		return sandboxAssetsRecord{
+			SandboxClass:  "gvisor",
+			Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
+			SnapshotFiles: []string{"checkpoint.img"},
+			BootID:        "boot-1",
+		}
+	}
+
+	newHerder := func(t *testing.T, objStore *recordingObjectStorage) *Atelet {
+		t.Helper()
+		s := newPluginHerder(t, objStore)
+		s.bootID = "boot-2"
+		s.workerDialer = newWorkerDialer(1)
+		s.imageCache = newImageVolumeStore(t)
+		s.anonGCSClient = fakeObjectStorage{data: release.tarball}
+		s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+		advertiseRuntime(t, s, sandboxRec)
+		return s
+	}
+
+	restoreReq := &ateletpb.RestoreRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          workerPodUID,
+		SandboxRuntime:        runtimeFor(t, sandboxRec),
+		Spec:                  spec,
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: snapshotName,
+			Generation:   1,
+			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI},
+		},
+	}
+
+	t.Run("uploaded copy exists restores from object storage", func(t *testing.T) {
+		useTempNodeDirs(t)
+		objStore := &recordingObjectStorage{}
+		s := newHerder(t, objStore)
+
+		uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		remoteRec := baseManifest()
+		remoteSrcDir := t.TempDir()
+		writeLocalSnapshot(t, remoteSrcDir, remoteRec, map[string]string{"checkpoint.img": "object-storage-memory"})
+		if err := s.uploadSnapshot(t.Context(), testActor, uri, remoteSrcDir, &remoteRec); err != nil {
+			t.Fatalf("uploadSnapshot: %v", err)
+		}
+
+		localDir := ateletpath.LocalSnapshotDir(actorUID, snapshotName)
+		writeLocalSnapshot(t, localDir, baseManifest(), map[string]string{"checkpoint.img": "local-memory"})
+
+		if _, err := s.Restore(t.Context(), restoreReq); err != nil {
+			t.Fatalf("Restore: %v", err)
+		}
+		if got := worker.restored["checkpoint.img"]; got != "object-storage-memory" {
+			t.Errorf("restored checkpoint.img = %q, want %q", got, "object-storage-memory")
+		}
+		if worker.preserveRestoreDir {
+			t.Error("preserve_restore_dir = true, want false when restoring from object storage")
+		}
+	})
+
+	t.Run("no uploaded copy fails with NotFound", func(t *testing.T) {
+		useTempNodeDirs(t)
+		s := newHerder(t, &recordingObjectStorage{})
+		localDir := ateletpath.LocalSnapshotDir(actorUID, snapshotName)
+		writeLocalSnapshot(t, localDir, baseManifest(), map[string]string{"checkpoint.img": "local-memory"})
+
+		_, err := s.Restore(t.Context(), restoreReq)
+		if code := apierror.Code(err); code != codes.NotFound {
+			t.Fatalf("Restore error = %v (code %v), want NotFound", err, code)
+		}
+		if !errors.Is(err, errUnusableLocalSnapshot) {
+			t.Errorf("Restore error = %v, want it to wrap %v", err, errUnusableLocalSnapshot)
+		}
+	})
+}

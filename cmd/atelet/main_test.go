@@ -1514,6 +1514,54 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
 		}
 	})
+
+	t.Run("earlier boot already uploaded skips upload", func(t *testing.T) {
+		store := &recordingObjectStorage{
+			objects: map[string][]byte{
+				pausedSnapshotPath + "/manifest.json": []byte(`{"sandboxClass":"microvm"}`),
+			},
+			putErr: errors.New("must not upload a local copy from before the node rebooted"),
+		}
+		s := newPluginHerder(t, store)
+		s.bootID = "boot-2"
+		dir := filepath.Join(t.TempDir(), "pause-snap-1")
+		rec := fullRec("microvm")
+		rec.BootID = "boot-1"
+		writeLocalSnapshot(t, dir, rec, map[string]string{
+			"config.json": "cfg", "memory-ranges": "", "data.tar": "data",
+		})
+
+		_, uploaded, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+		if err != nil {
+			t.Fatalf("uploadLocalCheckpointDir: %v", err)
+		}
+		if uploaded {
+			t.Error("uploaded = true, want false when the remote manifest already exists")
+		}
+	})
+
+	t.Run("earlier boot not uploaded is NotFound", func(t *testing.T) {
+		store := &recordingObjectStorage{}
+		s := newPluginHerder(t, store)
+		s.bootID = "boot-2"
+		dir := filepath.Join(t.TempDir(), "pause-snap-1")
+		rec := fullRec("microvm")
+		rec.BootID = "boot-1"
+		writeLocalSnapshot(t, dir, rec, map[string]string{
+			"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
+		})
+
+		_, uploaded, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+		if uploaded {
+			t.Error("uploaded = true, want false")
+		}
+		if got := apierror.Code(err); got != codes.NotFound {
+			t.Fatalf("code = %v (err %v), want NotFound", got, err)
+		}
+		if len(store.keys()) != 0 {
+			t.Errorf("objects uploaded for a local copy from before the node rebooted: %v", store.keys())
+		}
+	})
 }
 
 func TestShouldHaveSnapshots(t *testing.T) {
