@@ -30,7 +30,6 @@ import (
 	"go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/internal/netns"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/workerstats"
 )
 
@@ -104,11 +103,6 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 	hosted.network = session
 	s.actorsMu.Unlock()
 	return hosted, nil
-}
-
-// actorLeaf opens the actor's cgroup.
-func (s *AteWorkerService) actorLeaf(actorUID string, size sizing.SandboxSize) (*cgroup.ActorLeaf, error) {
-	return cgroup.OpenActorLeaf(actorUID, size.MilliCPU)
 }
 
 // cleanupSandboxState kills what is left of the actor's host processes and
