@@ -16,7 +16,6 @@ package functionaltest
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"testing"
 
@@ -72,8 +71,8 @@ func TestSuspendCheckpointFailurePreservesLastGoodSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	tc.fakeAtelet.Lock.Lock()
-	tc.fakeAtelet.FailCheckpoint = fmt.Errorf("while calling ateom.CheckpointWorkload: %w",
-		status.Error(codes.FailedPrecondition, `application container "app" exited before checkpoint (exit code 1)`))
+	tc.fakeAtelet.FailCheckpoint = status.Error(codes.FailedPrecondition,
+		`worker.CheckpointWorkload: application container "app" exited before checkpoint (exit code 1)`)
 	tc.fakeAtelet.Lock.Unlock()
 	if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref,
 		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}); err == nil {

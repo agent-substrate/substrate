@@ -24,10 +24,11 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/api/ateapi/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 type applicationState struct {
@@ -66,7 +67,7 @@ func tagSnapshotURI(tag *ateapi.Tag) string {
 
 func TestActorSuspendRejectsExitedApplication(t *testing.T) {
 	if e2e.IsMicroVM() {
-		t.Skip("application liveness at FULL checkpoint is a gVisor contract")
+		t.Skip("application liveness at MEMORY checkpoint is a gVisor contract")
 	}
 	base, image := setup(t)
 	container := servingContainer(image, "app", 8080)
@@ -122,7 +123,10 @@ func TestActorSuspendRejectsExitedApplication(t *testing.T) {
 	}
 	resume()
 	savedState := readState(http.MethodPost, "/increment")
-	suspended, err := api.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
+	suspended, err := api.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor:   ref,
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,10 +153,16 @@ func TestActorSuspendRejectsExitedApplication(t *testing.T) {
 	if body, code, err := requestActor(ctx, router, actorRef, 8080, http.MethodPost, "/exit"); err != nil || code != http.StatusAccepted {
 		t.Fatalf("exit application: HTTP %d, %v, body %q", code, err, body)
 	}
-	if _, code, err := requestActor(ctx, router, actorRef, 8080, http.MethodGet, "/state"); err == nil && code == http.StatusOK {
-		t.Fatal("application still serves requests after exiting")
+	if err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		_, code, err := requestActor(ctx, router, actorRef, 8080, http.MethodGet, "/state")
+		return err != nil || code != http.StatusOK, nil
+	}); err != nil {
+		t.Fatalf("application still serves requests after exiting: %v", err)
 	}
-	if _, err := api.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref}); err == nil {
+	if _, err := api.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor:   ref,
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}); err == nil {
 		t.Fatal("suspend accepted an exited application")
 	}
 	crashed, err := api.GetActor(ctx, &ateapi.GetActorRequest{Actor: ref})

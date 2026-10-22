@@ -32,6 +32,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"golang.org/x/sys/unix"
 )
 
 // Bound inspection, including a stopped container's diagnostic wait, so a
@@ -70,9 +71,10 @@ func (r *runsc) cmdResume(ctx context.Context, containerName string) error {
 // checkpointRunningWorkload freezes the sandbox before checking its application
 // containers, so none can exit between inspection and saving. The sandbox
 // alone can outlive every application and still checkpoint successfully.
-func (r *runsc) checkpointRunningWorkload(ctx context.Context, containers []*ateworkerpb.Container, checkpointPath string, fsCheckpointPaths []string) (retErr error) {
+func (r *runsc) checkpointRunningWorkload(ctx context.Context, containers []*ateworkerpb.Container, checkpointPath string, fsCheckpointPaths []string, sandbox *sandboxProcess, terminate func() error) (retErr error) {
 	if err := r.cmdPause(ctx, ocispec.SandboxID); err != nil {
-		return fmt.Errorf("while pausing sandbox for checkpoint: %w", err)
+		// Pause can freeze the kernel before failing to save its metadata.
+		return apierror.Internal("%w", errors.Join(fmt.Errorf("while pausing sandbox for checkpoint: %w", err), abortCheckpointSandbox(sandbox, terminate)))
 	}
 	// Balance our pause even after a successful save: runsc queues the sandbox's
 	// exit, but its tasks cannot finish exiting until this outer pause is undone.
@@ -82,7 +84,7 @@ func (r *runsc) checkpointRunningWorkload(ctx context.Context, containers []*ate
 		resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resumeTimeout)
 		defer cancel()
 		if err := r.cmdResume(resumeCtx, ocispec.SandboxID); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("while resuming sandbox after checkpoint: %w", err))
+			retErr = apierror.Internal("%w", errors.Join(retErr, fmt.Errorf("while resuming sandbox after checkpoint: %w", err), abortCheckpointSandbox(sandbox, terminate)))
 		}
 	}()
 
@@ -118,6 +120,21 @@ func (r *runsc) checkpointRunningWorkload(ctx context.Context, containers []*ate
 		return fmt.Errorf("while checkpointing sandbox: %w", err)
 	}
 	return nil
+}
+
+// abortCheckpointSandbox stops the pinned process without reading runsc's
+// metadata, which a failed pause or resume may have left incomplete.
+func abortCheckpointSandbox(sandbox *sandboxProcess, terminate func() error) error {
+	var errs []error
+	if err := unix.PidfdSendSignal(sandbox.pidfd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+		errs = append(errs, fmt.Errorf("while aborting frozen sandbox: %w", err))
+	} else if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
+		errs = append(errs, fmt.Errorf("while waiting for aborted sandbox: %w", err))
+	}
+	if err := terminate(); err != nil {
+		errs = append(errs, fmt.Errorf("while cleaning up aborted sandbox: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 // containerJSON keeps stdout separate from runsc's stderr logs. These commands

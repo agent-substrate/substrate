@@ -176,6 +176,7 @@ func TestCheckpointPreservesApplicationExitCode(t *testing.T) {
 		anonGCSClient:     fakeObjectStorage{data: release.tarball},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+		checkpointTimeout: defaultCheckpointTimeout,
 	}
 	resp, err := s.Checkpoint(t.Context(), req)
 	if resp != nil || apierror.Code(err) != codes.FailedPrecondition {

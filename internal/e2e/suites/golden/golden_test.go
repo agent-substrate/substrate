@@ -23,10 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/api/infra/k8s/infra.ate.dev/v1alpha1"
-	"go.ate.dev/substrate/api/ateapi/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -34,7 +34,7 @@ import (
 // A surviving sandbox or probed sidecar must not hide an exited application.
 func TestGoldenApplications(t *testing.T) {
 	if e2e.IsMicroVM() {
-		t.Skip("application liveness at FULL checkpoint is a gVisor contract")
+		t.Skip("application liveness at MEMORY checkpoint is a gVisor contract")
 	}
 	base, image := setup(t)
 	for _, tc := range []struct {
@@ -142,7 +142,7 @@ func setup(t *testing.T) (*ateapi.ActorTemplate, string) {
 	clients := e2e.GetClients()
 	ctx := t.Context()
 	src := e2e.SubstrateCounterFixture()
-	wp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(src.PoolNamespace).Get(ctx, src.PoolName, metav1.GetOptions{})
+	wp, err := clients.SubstrateK8s.AteV1().WorkerPools(src.PoolNamespace).Get(ctx, src.PoolName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,14 +152,14 @@ func setup(t *testing.T) (*ateapi.ActorTemplate, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wp.Spec.DefaultSandboxClass() != v1alpha1.SandboxClassGvisor {
+	if wp.Spec.DefaultSandboxClass() != atev1.SandboxClassGvisor {
 		t.Fatal("golden regression requires a gVisor fixture")
 	}
 	ns := e2e.CreateNamespace(t).Name
 	labels := map[string]string{"golden-regression": ns}
 	poolSpec := wp.Spec.DeepCopy()
 	poolSpec.Replicas = 2
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(ns).Create(ctx, &v1alpha1.WorkerPool{
+	if _, err := clients.SubstrateK8s.AteV1().WorkerPools(ns).Create(ctx, &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "golden", Namespace: ns, Labels: labels},
 		Spec:       *poolSpec,
 	}, metav1.CreateOptions{}); err != nil {

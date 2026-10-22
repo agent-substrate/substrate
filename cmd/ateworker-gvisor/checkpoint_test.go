@@ -20,7 +20,9 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,12 +30,17 @@ import (
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/actorlog"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/atunnel/egress"
 	"go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"golang.org/x/sys/unix"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Exercise the RPC with a runsc executable: a successful state command can
@@ -87,28 +94,86 @@ func TestCheckpointWorkloadFailsClosed(t *testing.T) {
 	}
 }
 
-func TestCheckpointWorkloadResumesAfterCanceledInspection(t *testing.T) {
+func TestCheckpointWorkloadRejectsUnpinnedSandbox(t *testing.T) {
 	s, req, dir := checkpointFixture(t)
-	writeCheckpointFixture(t, dir, "state.block", "")
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() {
-		for {
-			if _, err := os.Stat(filepath.Join(dir, "inspecting")); err == nil {
-				cancel()
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(time.Millisecond):
-			}
-		}
-	}()
-	if _, err := s.CheckpointWorkload(ctx, req); err == nil {
-		t.Fatal("checkpoint succeeded after cancellation")
+	if err := os.Remove(pidFilePath(req.ActorDirs, ocispec.SandboxID)); err != nil {
+		t.Fatal(err)
 	}
-	assertCheckpointCommands(t, dir, false, true)
+	if _, err := s.CheckpointWorkload(t.Context(), req); err == nil || !strings.Contains(err.Error(), "pinning sandbox") {
+		t.Fatalf("CheckpointWorkload error = %v, want missing sandbox pin", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "calls")); !os.IsNotExist(err) {
+		t.Fatalf("runsc was called without a sandbox pin: %v", err)
+	}
+}
+
+func TestCheckpointWorkloadAbortsAfterFailedPause(t *testing.T) {
+	s, req, dir := checkpointFixture(t)
+	sandbox, err := openSandboxProcess(req.ActorDirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sandbox.Close()
+	// A failed pause may already have frozen the process while its persisted
+	// metadata still says running, so runsc resume cannot undo it.
+	if err := unix.PidfdSendSignal(sandbox.pidfd, unix.SIGSTOP, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	writeCheckpointFixture(t, dir, "pause.error", "saving paused metadata failed")
+	if _, err := s.CheckpointWorkload(t.Context(), req); err == nil || !strings.Contains(err.Error(), "while pausing sandbox") {
+		t.Fatalf("CheckpointWorkload error = %v, want pause failure", err)
+	}
+	if err := sandbox.waitGone(time.Second); err != nil {
+		t.Fatalf("sandbox survived the failed pause: %v", err)
+	}
+	assertCheckpointCommands(t, dir, false, false)
+}
+
+func TestCheckpointWorkloadUnwindsCanceledFreeze(t *testing.T) {
+	for _, stage := range []string{"pause", "state"} {
+		t.Run(stage, func(t *testing.T) {
+			s, req, dir := checkpointFixture(t)
+			sandbox, err := openSandboxProcess(req.ActorDirs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sandbox.Close()
+			if err := unix.Mkfifo(filepath.Join(dir, stage+".block"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			watchDone := make(chan struct{})
+			defer func() { cancel(); <-watchDone }()
+			go func() {
+				defer close(watchDone)
+				for {
+					if _, err := os.Stat(filepath.Join(dir, stage+".entered")); err == nil {
+						if stage == "pause" {
+							if err := unix.PidfdSendSignal(sandbox.pidfd, unix.SIGSTOP, nil, 0); err != nil {
+								t.Errorf("freeze sandbox: %v", err)
+							}
+						}
+						cancel()
+						return
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Millisecond):
+					}
+				}
+			}()
+			if _, err := s.CheckpointWorkload(ctx, req); err == nil {
+				t.Fatal("checkpoint succeeded after cancellation")
+			}
+			if stage == "pause" {
+				if err := sandbox.waitGone(time.Second); err != nil {
+					t.Fatalf("sandbox survived the canceled pause: %v", err)
+				}
+			}
+			assertCheckpointCommands(t, dir, false, stage == "state")
+		})
+	}
 }
 
 func TestCheckpointWorkloadLiveApplications(t *testing.T) {
@@ -140,28 +205,46 @@ func TestCheckpointWorkloadUnknownExitStatus(t *testing.T) {
 }
 
 func TestCheckpointWorkloadResumeFailure(t *testing.T) {
-	s, req, dir := checkpointFixture(t)
-	writeCheckpointFixture(t, dir, "app.state", `{"id":"app","status":"stopped"}`)
-	writeCheckpointFixture(t, dir, "resume.error", "resume failed")
-	if _, err := s.CheckpointWorkload(t.Context(), req); err == nil || !strings.Contains(err.Error(), "exited before checkpoint") || !strings.Contains(err.Error(), "while resuming sandbox") {
-		t.Fatalf("CheckpointWorkload error = %v, want both inspection and resume errors", err)
-	} else if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("joined checkpoint error code = %v, want FailedPrecondition", got)
+	for _, tc := range []struct {
+		name, file, value, want string
+		checkpoint, saved       bool
+	}{
+		{"after application exit", "app.state", `{"id":"app","status":"stopped"}`, "exited before checkpoint", false, false},
+		{"after checkpoint failure", "checkpoint.error", "save failed", "while checkpointing sandbox", true, false},
+		{"after successful save", "", "", "", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, req, dir := checkpointFixture(t)
+			sandbox, err := openSandboxProcess(req.ActorDirs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sandbox.Close()
+			if tc.file != "" {
+				writeCheckpointFixture(t, dir, tc.file, tc.value)
+			}
+			writeCheckpointFixture(t, dir, "resume.error", "resume failed")
+			resp, err := ateinterceptors.InternalServerUnaryInterceptor(t.Context(), req,
+				&grpc.UnaryServerInfo{FullMethod: ateworkerpb.Worker_CheckpointWorkload_FullMethodName},
+				func(ctx context.Context, _ any) (any, error) { return s.CheckpointWorkload(ctx, req) })
+			st := status.Convert(err)
+			if resp != nil || st.Code() != codes.Internal || !strings.Contains(st.Message(), "while resuming sandbox after checkpoint") {
+				t.Fatalf("CheckpointWorkload = %v, %v; want Internal with the resume failure", resp, err)
+			}
+			if !strings.Contains(st.Message(), tc.want) {
+				t.Errorf("RPC error = %q, want checkpoint failure %q", st.Message(), tc.want)
+			}
+			if err := sandbox.waitGone(time.Second); err != nil {
+				t.Fatalf("sandbox survived the resume failure: %v", err)
+			}
+			if tc.saved {
+				if _, err := os.Stat(filepath.Join(req.ActorDirs.CheckpointDir, "checkpoint.img")); err != nil {
+					t.Fatalf("checkpoint was not saved before the resume failure: %v", err)
+				}
+			}
+			assertCheckpointCommands(t, dir, tc.checkpoint, true)
+		})
 	}
-	assertCheckpointCommands(t, dir, false, true)
-}
-
-func TestCheckpointWorkloadResumeFailureAfterSave(t *testing.T) {
-	s, req, dir := checkpointFixture(t)
-	writeCheckpointFixture(t, dir, "resume.error", "resume failed")
-	resp, err := s.CheckpointWorkload(t.Context(), req)
-	if resp != nil || err == nil || !strings.Contains(err.Error(), "while resuming sandbox after checkpoint") {
-		t.Fatalf("CheckpointWorkload = %v, %v; want failure to unwind the sandbox pause", resp, err)
-	}
-	if _, err := os.Stat(filepath.Join(req.ActorDirs.CheckpointDir, "checkpoint.img")); err != nil {
-		t.Fatalf("checkpoint was not saved before the resume failure: %v", err)
-	}
-	assertCheckpointCommands(t, dir, true, true)
 }
 
 func TestCheckpointWorkloadVolumesDoesNotRequireLiveApplications(t *testing.T) {
@@ -188,32 +271,11 @@ func checkpointFixture(t *testing.T) (*AteWorkerService, *ateworkerpb.Checkpoint
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeCheckpointFixture(t, dir, "runsc", `#!/bin/sh
-set -eu
-dir=$(dirname "$0")
-while [ "$1" != "-root" ]; do shift; done
-shift 2
-printf '%s\n' "$*" >> "$dir/calls"
-if [ -f "$dir/$1.error" ]; then cat "$dir/$1.error" >&2; exit 1; fi
-case "$1" in
-pause)
-  for name in app sidecar; do
-    if [ -f "$dir/$name.after-pause" ]; then cp "$dir/$name.after-pause" "$dir/$name.state"; fi
-  done ;;
-state)
-  if [ -f "$dir/state.block" ]; then touch "$dir/inspecting"; exec sleep 30; fi
-  cat "$dir/$2.state" ;;
-wait) cat "$dir/$2.wait" ;;
-checkpoint)
-  img=""
-  while [ "$#" -gt 0 ]; do [ "$1" = "-image-path" ] && { img=$2; break; }; shift; done
-  mkdir -p "$img"; touch "$img/checkpoint.img" ;;
-fscheckpoint)
-  img=""
-  while [ "$#" -gt 0 ]; do [ "$1" = "-image-path" ] && { img=$2; break; }; shift; done
-  mkdir -p "$img/fs"; touch "$img/fs/fscheckpoint.pb" ;;
-esac
-`)
+	script, err := os.ReadFile("testdata/checkpoint-runsc.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCheckpointFixture(t, dir, "runsc", string(script))
 	if err := os.Chmod(filepath.Join(dir, "runsc"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +290,18 @@ esac
 		SystemInfoVolumeRootsDir:  filepath.Join(dir, "system-info"), ExternalVolumeMountsDir: filepath.Join(dir, "volumes"),
 		SandboxAssetsDir: dir,
 	}
+	if err := unix.Mkfifo(filepath.Join(dir, "sandbox.exit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := exec.Command("cat", filepath.Join(dir, "sandbox.exit"))
+	if err := sandbox.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reaped := make(chan struct{})
+	go func() { _ = sandbox.Wait(); close(reaped) }()
+	t.Cleanup(func() { _ = sandbox.Process.Kill(); <-reaped })
+	mustMkdir(t, pidFileDir(dirs))
+	mustWrite(t, pidFilePath(dirs, ocispec.SandboxID), strconv.Itoa(sandbox.Process.Pid))
 	s := &AteWorkerService{
 		locks: actorlock.New(), inFlight: actorlock.NewInFlight(),
 		actorLogger: actorlog.NewActorLogger(io.Discard, false),
