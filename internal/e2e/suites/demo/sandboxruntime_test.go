@@ -680,6 +680,85 @@ func TestSchedulerPrefersCompatibleWorkerPool(t *testing.T) {
 	validateRootfsCounter(t, resp, "after ROOTFS fallback across pools", 4)
 }
 
+// TestSandboxConfigVersionMutation verifies that runtime compatibility keys on
+// sandbox_bundle_hash rather than SandboxConfig version names:
+//  1. An actor boots on version "v1" (bundle A1), increments its counters twice
+//     (memory=2, file=2, rootfs=2), and suspends with an A1-stamped MEMORY
+//     snapshot.
+//  2. The SandboxConfig swaps version names while keeping defaultVersion: "v1":
+//     "v1" is given bundle A2's assets and "v2" is given bundle A1's assets.
+//     Resuming the actor still matches bundle A1 by hash via restorable_runtimes
+//     and restores at MEMORY fidelity (memory=3, file=3, rootfs=3).
+//  3. After suspending again on A1, the SandboxConfig keeps only version "v1"
+//     with bundle A2's assets (an in-place asset edit under the original name
+//     "v1"); resuming drops to ROOTFS on A2 (memory=1, file=4, rootfs=4).
+func TestSandboxConfigVersionMutation(t *testing.T) {
+	t.Parallel()
+	f := setupSuspendedV1Actor(t, "runtime-version-mutation", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+
+	// 2. Swap the assets under "v1" and "v2" while keeping defaultVersion: "v1".
+	// "v1" now carries v2's assets (default) and "v2" carries v1's original
+	// assets (restorable).
+	v1WithV2Assets := f.v2
+	v1WithV2Assets.Name = f.v1.Name
+	v2WithV1Assets := f.v1
+	v2WithV1Assets.Name = f.v2.Name
+	updateSandboxConfigVersions(t, f.ctx, f.clients, f.configName, f.v1.Name, []atev1alpha1.SandboxVersionConfig{v1WithV2Assets, v2WithV1Assets})
+	waitForWorkerRestorableUpgrade(t, f.ctx, f.clients, f.workerRef, f.v1Runtime)
+
+	resumed2, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapipb.ResumeActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to resume Actor after version name swap: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	if diff := cmp.Diff(f.v1Runtime, resumed2.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("workerAssignment.sandbox_runtime after version name swap (-want v1 hash +got):\n%s", diff)
+	}
+
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: f.actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after version name swap: %v", err)
+	}
+	validateCounterResponse(t, resp, "after version name swap", 3, 3)
+	validateRootfsCounter(t, resp, "after version name swap", 3)
+
+	// 3. Suspend on A1, then keep only version "v1" with A2's assets (an
+	// in-place asset edit of "v1"). Even though defaultVersion is still "v1",
+	// the bundle hash changed, so the next resume drops to ROOTFS.
+	suspended2, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapipb.SuspendActorRequest{
+		Actor:   f.actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to suspend Actor a second time: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	if diff := cmp.Diff(f.v1Runtime, durableSnapshot(suspended2.GetActor().GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("second snapshot sandbox_runtime mismatch (-want v1 hash +got):\n%s", diff)
+	}
+
+	updateSandboxConfigVersions(t, f.ctx, f.clients, f.configName, f.v1.Name, []atev1alpha1.SandboxVersionConfig{v1WithV2Assets})
+	v2Runtime := waitForWorkerRuntimeDisabled(t, f.ctx, f.clients, f.workerRef, f.v1Runtime)
+
+	resumed3, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapipb.ResumeActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to resume Actor after in-place asset edit of v1: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	if diff := cmp.Diff(v2Runtime, resumed3.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("workerAssignment.sandbox_runtime after in-place asset edit (-want v2 hash +got):\n%s", diff)
+	}
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: f.actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after in-place asset edit: %v", err)
+	}
+	validateCounterResponse(t, resp, "after in-place asset edit of v1", 1, 4)
+	validateRootfsCounter(t, resp, "after in-place asset edit of v1", 4)
+}
+
 type sandboxRuntimeFixture struct {
 	ctx         context.Context
 	clients     *e2e.Clients
