@@ -35,6 +35,7 @@ import (
 
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/oidcjwt"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -89,7 +90,7 @@ var withPlaceholder = []string{
 //     received — the on-the-wire proof, not an inference from a status code —
 //     and not the placeholder, so an actor cannot choose the value that
 //     leaves. The same fetch echoes an actor JWT naming this actor in
-//     actorJWTHeader.
+//     actorJWTHeader, signed by a key ate-idp-server publishes.
 //   - no header: the same fetch without the placeholders echoes neither
 //     header — the gateway replaces only a header the request carries, and
 //     does not add one.
@@ -141,6 +142,7 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 		t.Fatalf("NewRouterClient: %v", err)
 	}
 	defer rc.Close()
+	idp := e2e.IDPHTTPClient(t, ctx)
 
 	// HTTPS is injected on the gateway's MITM leg and plain HTTP on its
 	// cleartext leg, each by a rule with the same effect. dial is where the
@@ -163,7 +165,7 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 			if got := replaced["Authorization"]; got != wantHeader {
 				t.Errorf("upstream received Authorization %q, want the injected %q", got, wantHeader)
 			}
-			checkActorJWT(t, replaced[actorJWTHeader], actor.GetMetadata())
+			checkActorJWT(t, ctx, idp, replaced[actorJWTHeader], actor.GetMetadata())
 
 			// No header is added when the actor did not send one.
 			unasked := assertEchoedHeaders(t, "fetch without the headers", fetchEcho(t, ctx, rc, id, origin, nil))
@@ -273,8 +275,9 @@ func assertEchoedHeaders(t *testing.T, step string, resp fetchResponse) map[stri
 }
 
 // checkActorJWT checks the claims of an injected actor JWT against the actor
-// and the echo rules' actor_jwt source. It does not verify the signature.
-func checkActorJWT(t *testing.T, jwt string, actor *ateapipb.ResourceMetadata) {
+// and the echo rules' actor_jwt source, and verifies it the way a relying
+// party does: with the key set discovered from its iss, through idp.
+func checkActorJWT(t *testing.T, ctx context.Context, idp *http.Client, jwt string, actor *ateapipb.ResourceMetadata) {
 	t.Helper()
 	parts := strings.Split(jwt, ".")
 	if len(parts) != 3 {
@@ -308,6 +311,10 @@ func checkActorJWT(t *testing.T, jwt string, actor *ateapipb.ResourceMetadata) {
 	want := actoridjwt.WireSubstrateClaims{Atespace: actor.GetAtespace(), ActorName: actor.GetName(), ActorUID: actor.GetUid()}
 	if kind, got, ok := claims.Substrate(); !ok || kind != actoridjwt.KindActor || *got != want {
 		t.Errorf("actor JWT payload is %s, want only an actor.ate.dev claim of %+v", payload, want)
+	}
+	verifier := oidcjwt.NewVerifier(claims.Issuer, []string{actorJWTAudience}, oidcjwt.HTTPKeySource(claims.Issuer, idp))
+	if _, err := verifier.Verify(ctx, jwt, time.Now()); err != nil {
+		t.Errorf("verifying the actor JWT against the key set %s publishes: %v", claims.Issuer, err)
 	}
 }
 
