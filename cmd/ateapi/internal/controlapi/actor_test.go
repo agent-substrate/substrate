@@ -139,6 +139,9 @@ func TestUpdateActor(t *testing.T) {
 		req      *ateapi.Actor
 		want     *ateapi.Actor
 		wantCode codes.Code
+		// leaseConflict holds the actor lease across the update,
+		// as a running workflow does.
+		leaseConflict bool
 	}{
 		{
 			name:   "sets a worker_selector the stored actor does not have",
@@ -206,6 +209,16 @@ func TestUpdateActor(t *testing.T) {
 			},
 			wantCode: codes.InvalidArgument,
 		},
+		{
+			name:   "refused while another operation holds the actor",
+			stored: &ateapi.Actor{},
+			req: &ateapi.Actor{
+				ActorTemplate:  &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
+				WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			},
+			leaseConflict: true,
+			wantCode:      codes.Aborted,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -216,6 +229,15 @@ func TestUpdateActor(t *testing.T) {
 			}
 
 			svc, created := rpcServiceWithActor(t, tt.stored)
+			actorRef := resources.ActorRefFromActor(created)
+
+			if tt.leaseConflict {
+				lease, err := svc.impl.AcquireLease(context.Background(), actorLeaseKey(actorRef))
+				if err != nil {
+					t.Fatalf("AcquireLease() failed: %v", err)
+				}
+				defer lease.Close()
+			}
 
 			tt.req.Metadata = created.GetMetadata()
 			updated, err := svc.UpdateActor(context.Background(), &ateapi.UpdateActorRequest{Actor: tt.req})
@@ -223,6 +245,13 @@ func TestUpdateActor(t *testing.T) {
 			if tt.wantCode != codes.OK {
 				if code := apierror.Code(err); code != tt.wantCode {
 					t.Errorf("UpdateActor error = %v (code %v), want code %v", err, code, tt.wantCode)
+				}
+				got, err := svc.impl.GetActor(context.Background(), actorRef)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.GetMetadata().GetVersion() != created.GetMetadata().GetVersion() {
+					t.Errorf("a refused update wrote the actor: version %d, want %d", got.GetMetadata().GetVersion(), created.GetMetadata().GetVersion())
 				}
 				return
 			}
