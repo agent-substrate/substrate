@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,6 +55,7 @@ func getPromCounter(name, status string) float64 {
 	if err != nil {
 		return 0
 	}
+	var total float64
 	for _, mf := range mfs {
 		if mf.GetName() == "locust_requests_total" {
 			for _, m := range mf.GetMetric() {
@@ -67,12 +69,12 @@ func getPromCounter(name, status string) float64 {
 					}
 				}
 				if hasName && hasStatus {
-					return m.GetCounter().GetValue()
+					total += m.GetCounter().GetValue()
 				}
 			}
 		}
 	}
-	return 0
+	return total
 }
 
 func TestSpawnDecileThresholds(t *testing.T) {
@@ -220,6 +222,7 @@ func TestSpawnRunBatch_Success(t *testing.T) {
 	}
 
 	beforeSuccess := getPromCounter("TimeToAllReady", "success")
+	beforeComplete := getPromCounter("SpawnRunComplete", "success")
 
 	rt.runBatch(runCtx)
 
@@ -234,6 +237,9 @@ func TestSpawnRunBatch_Success(t *testing.T) {
 	afterSuccess := getPromCounter("TimeToAllReady", "success")
 	if afterSuccess-beforeSuccess != 1 {
 		t.Fatalf("expected TimeToAllReady success counter to increase by 1, got before=%v, after=%v", beforeSuccess, afterSuccess)
+	}
+	if diff := getPromCounter("SpawnRunComplete", "success") - beforeComplete; diff != 1 {
+		t.Fatalf("SpawnRunComplete diff = %v, want 1", diff)
 	}
 
 	names := rt.getActorNames()
@@ -338,6 +344,7 @@ func TestSpawnRunBatch_AllFailed(t *testing.T) {
 	}
 
 	beforeFailure := getPromCounter("TimeToAllReady", "failure")
+	beforeComplete := getPromCounter("SpawnRunComplete", "success")
 
 	rt.runBatch(runCtx)
 
@@ -348,6 +355,10 @@ func TestSpawnRunBatch_AllFailed(t *testing.T) {
 	afterFailure := getPromCounter("TimeToAllReady", "failure")
 	if afterFailure-beforeFailure != 1 {
 		t.Fatalf("expected TimeToAllReady failure counter to increase by 1, got before=%v, after=%v", beforeFailure, afterFailure)
+	}
+	// SpawnShape ends the run on SpawnRunComplete, so a failed batch records it too.
+	if diff := getPromCounter("SpawnRunComplete", "success") - beforeComplete; diff != 1 {
+		t.Fatalf("SpawnRunComplete diff = %v, want 1", diff)
 	}
 }
 
@@ -557,15 +568,16 @@ func TestSpawnShutdown_DeleteAll(t *testing.T) {
 		ActorDeadline:    5 * time.Second,
 	}
 
-	names := []string{"spawn-a-1", "spawn-a-2", "spawn-a-3", "spawn-a-4"}
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	rt := &spawnRuntime{
-		cfg:        cfg,
-		runCtx:     runCtx,
-		cancelRun:  cancel,
-		actorNames: names,
+		cfg:       cfg,
+		runCtx:    runCtx,
+		cancelRun: cancel,
+	}
+	for _, name := range []string{"spawn-a-1", "spawn-a-2", "spawn-a-3", "spawn-a-4"} {
+		rt.recordActorName(name)
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -719,4 +731,222 @@ func TestSpawnRunBatch_DynConfigOverride(t *testing.T) {
 			t.Fatalf("expected 4 recorded actor names, got %d", got)
 		}
 	})
+}
+
+func TestSpawnRunBatch_CustomTemplate(t *testing.T) {
+	srv := newTestHTTPServer(t, nil)
+	defer srv.Close()
+
+	fakeAPI := &fakeControlClient{}
+	cfg := &userclass.Config{
+		APIStub:          fakeAPI,
+		HTTPClient:       srv.Client(),
+		RouterURL:        srv.URL,
+		Atespace:         "test-space",
+		Tracer:           otel.Tracer("test"),
+		TotalActors:      2,
+		SpawnConcurrency: 1,
+		ActorDeadline:    5 * time.Second,
+		SpawnTemplate:    "glutton-storage",
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt := &spawnRuntime{
+		cfg:       cfg,
+		runCtx:    runCtx,
+		cancelRun: cancel,
+	}
+
+	beforeFirstResume := getPromCounter("ResumeActorFirst", "success")
+	beforeResume := getPromCounter("ResumeActor", "success")
+
+	rt.runBatch(runCtx)
+
+	if got := rt.readyCount.Load(); got != 2 {
+		t.Fatalf("expected readyCount 2, got %d", got)
+	}
+
+	if diff := getPromCounter("ResumeActorFirst", "success") - beforeFirstResume; diff != 2 {
+		t.Errorf("ResumeActorFirst diff = %v, want 2", diff)
+	}
+	// ResumeActor counts the first resume too.
+	if diff := getPromCounter("ResumeActor", "success") - beforeResume; diff != 2 {
+		t.Errorf("ResumeActor diff = %v, want 2", diff)
+	}
+
+	reqs := fakeAPI.recordedCreateRequests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 CreateActor requests, got %d", len(reqs))
+	}
+	for i, req := range reqs {
+		if req.GetActor().GetActorTemplate().GetName() != "glutton-storage" {
+			t.Errorf("req[%d] template: got %q, want glutton-storage", i, req.GetActor().GetActorTemplate().GetName())
+		}
+	}
+}
+
+func TestSpawnRunBatch_WakeStorm(t *testing.T) {
+	srv := newTestHTTPServer(t, nil)
+	defer srv.Close()
+
+	fakeAPI := &fakeControlClient{}
+	cfg := &userclass.Config{
+		APIStub:          fakeAPI,
+		HTTPClient:       srv.Client(),
+		RouterURL:        srv.URL,
+		Atespace:         "test-space",
+		Tracer:           otel.Tracer("test"),
+		TotalActors:      3,
+		SpawnConcurrency: 2,
+		ActorDeadline:    5 * time.Second,
+		SpawnTemplate:    "glutton-storage",
+		SpawnWakeStorm:   true,
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt := &spawnRuntime{
+		cfg:       cfg,
+		runCtx:    runCtx,
+		cancelRun: cancel,
+	}
+
+	beforeFirstResume := getPromCounter("ResumeActorFirst", "success")
+	beforeResume := getPromCounter("ResumeActor", "success")
+	beforeActorReady := getPromCounter("ActorTimeToReady", "success")
+	beforeAllReady := getPromCounter("TimeToAllReady", "success")
+	beforeSuspend := getPromCounter("SuspendActor", "success")
+	beforeAllSuspended := getPromCounter("TimeToAllSuspended", "success")
+	beforeWakeReady := getPromCounter("ActorWakeTimeToReady", "success")
+	beforeAllWoken := getPromCounter("TimeToAllWoken", "success")
+	beforeDelete := getPromCounter("DeleteActor", "success")
+	beforeAllDeleted := getPromCounter("TimeToAllDeleted", "success")
+	beforeComplete := getPromCounter("SpawnRunComplete", "success")
+
+	rt.runBatch(runCtx)
+
+	if got := rt.readyCount.Load(); got != 3 {
+		t.Fatalf("expected readyCount 3, got %d", got)
+	}
+
+	if diff := getPromCounter("ResumeActorFirst", "success") - beforeFirstResume; diff != 3 {
+		t.Errorf("ResumeActorFirst diff = %v, want 3", diff)
+	}
+	if diff := getPromCounter("ActorTimeToReady", "success") - beforeActorReady; diff != 3 {
+		t.Errorf("ActorTimeToReady diff = %v, want 3", diff)
+	}
+	if diff := getPromCounter("TimeToAllReady", "success") - beforeAllReady; diff != 1 {
+		t.Errorf("TimeToAllReady diff = %v, want 1", diff)
+	}
+	if diff := getPromCounter("SuspendActor", "success") - beforeSuspend; diff != 3 {
+		t.Errorf("SuspendActor diff = %v, want 3", diff)
+	}
+	if diff := getPromCounter("TimeToAllSuspended", "success") - beforeAllSuspended; diff != 1 {
+		t.Errorf("TimeToAllSuspended diff = %v, want 1", diff)
+	}
+	// Three first resumes and three wakes.
+	if diff := getPromCounter("ResumeActor", "success") - beforeResume; diff != 6 {
+		t.Errorf("ResumeActor diff = %v, want 6", diff)
+	}
+	if diff := getPromCounter("ActorWakeTimeToReady", "success") - beforeWakeReady; diff != 3 {
+		t.Errorf("ActorWakeTimeToReady diff = %v, want 3", diff)
+	}
+	if diff := getPromCounter("TimeToAllWoken", "success") - beforeAllWoken; diff != 1 {
+		t.Errorf("TimeToAllWoken diff = %v, want 1", diff)
+	}
+	if diff := getPromCounter("DeleteActor", "success") - beforeDelete; diff != 3 {
+		t.Errorf("DeleteActor diff = %v, want 3", diff)
+	}
+	if diff := getPromCounter("TimeToAllDeleted", "success") - beforeAllDeleted; diff != 1 {
+		t.Errorf("TimeToAllDeleted diff = %v, want 1", diff)
+	}
+	if diff := getPromCounter("SpawnRunComplete", "success") - beforeComplete; diff != 1 {
+		t.Errorf("SpawnRunComplete diff = %v, want 1", diff)
+	}
+
+	// The delete phase forgets each actor it deleted, so shutdown deletes nothing twice.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer shutdownCancel()
+	beforeShutdownDeletes := len(fakeAPI.recordedDeleteRequests())
+	rt.shutdown(shutdownCtx)
+	if afterDeletes := len(fakeAPI.recordedDeleteRequests()); afterDeletes != beforeShutdownDeletes {
+		t.Errorf("shutdown issued %d additional DeleteActor calls, want 0", afterDeletes-beforeShutdownDeletes)
+	}
+}
+
+// A run cancelled during the delete phase leaves the actors it has not
+// deleted to shutdown, and keeps the TimeToAllReady it recorded before the
+// storm.
+func TestSpawnRunBatch_WakeStormCancelledDuringDelete(t *testing.T) {
+	srv := newTestHTTPServer(t, nil)
+	defer srv.Close()
+
+	deleteStarted := make(chan struct{})
+	var deleteCalls atomic.Int64
+	var mu sync.Mutex
+	deleted := map[string]bool{}
+	fakeAPI := &fakeControlClient{
+		deleteActorFn: func(ctx context.Context, name string) error {
+			// The delete phase's first delete hangs until the run is cancelled.
+			if deleteCalls.Add(1) == 1 {
+				close(deleteStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			deleted[name] = true
+			return nil
+		},
+	}
+	cfg := &userclass.Config{
+		APIStub:          fakeAPI,
+		HTTPClient:       srv.Client(),
+		RouterURL:        srv.URL,
+		Atespace:         "test-space",
+		Tracer:           otel.Tracer("test"),
+		TotalActors:      3,
+		SpawnConcurrency: 1,
+		ActorDeadline:    10 * time.Second,
+		SpawnWakeStorm:   true,
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt := &spawnRuntime{
+		cfg:       cfg,
+		runCtx:    runCtx,
+		cancelRun: cancel,
+	}
+
+	beforeAllReady := getPromCounter("TimeToAllReady", "success")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.runBatch(runCtx)
+	}()
+	select {
+	case <-deleteStarted:
+	case <-done:
+		t.Fatal("runBatch returned before the delete phase")
+	}
+
+	rt.shutdown(context.Background())
+	<-done
+
+	if diff := getPromCounter("TimeToAllReady", "success") - beforeAllReady; diff != 1 {
+		t.Errorf("TimeToAllReady diff = %v, want 1", diff)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, req := range fakeAPI.recordedCreateRequests() {
+		if name := req.GetActor().GetMetadata().GetName(); !deleted[name] {
+			t.Errorf("actor %s was never deleted", name)
+		}
+	}
 }

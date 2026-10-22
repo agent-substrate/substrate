@@ -52,6 +52,11 @@ type Config struct {
 	TotalActors int
 	// SpawnConcurrency is the number of actors created concurrently (spawn benchmark).
 	SpawnConcurrency int
-	// ActorDeadline is the per-actor timeout covering CreateActor + ResumeActor + Ping (spawn benchmark).
+	// ActorDeadline is the per-actor timeout covering CreateActor + ResumeActor + Ping,
+	// and each actor's suspend, wake and delete in the wake storm (spawn benchmark).
 	ActorDeadline time.Duration
+	// SpawnTemplate is the ActorTemplate name used by the spawn benchmark (defaults to "glutton" when empty).
+	SpawnTemplate string
+	// SpawnWakeStorm runs suspend-all, wake-all, and timed delete-all phases after initial spawn in the spawn benchmark.
+	SpawnWakeStorm bool
 }

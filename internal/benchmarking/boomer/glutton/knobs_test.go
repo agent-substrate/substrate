@@ -105,12 +105,13 @@ func TestClassCodecs(t *testing.T) {
 			name:    "spawn",
 			codec:   spawnCodec,
 			initial: spawnKnobs{},
-			valid:   `{"total_actors": 50, "spawn_concurrency": 5, "actor_deadline": 60}`,
-			want:    spawnKnobs{TotalActors: 50, SpawnConcurrency: 5, ActorDeadline: dynconfig.Seconds(60 * time.Second)},
+			valid:   `{"total_actors": 50, "spawn_concurrency": 5, "actor_deadline": 60, "spawn_template": "glutton-storage", "spawn_wake_storm": true, "lifecycle_mode": "suspend"}`,
+			want:    spawnKnobs{Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend}, TotalActors: 50, SpawnConcurrency: 5, ActorDeadline: dynconfig.Seconds(60 * time.Second), SpawnTemplate: "glutton-storage", SpawnWakeStorm: true},
 			invalid: map[string]string{
 				"negative total actors":      `{"total_actors": -1}`,
 				"negative spawn concurrency": `{"spawn_concurrency": -1}`,
 				"negative actor deadline":    `{"actor_deadline": -1}`,
+				"invalid lifecycle mode":     `{"lifecycle_mode": "invalid_lifecycle"}`,
 			},
 		},
 	} {

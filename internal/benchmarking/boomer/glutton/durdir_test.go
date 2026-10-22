@@ -315,3 +315,60 @@ func TestDurDirShutdownHibernatesBeforeDelete(t *testing.T) {
 		})
 	}
 }
+
+func TestDurDirFirstResumeAndCompositeMetrics(t *testing.T) {
+	srv := &fake.Server{Data: []byte("initial data")}
+	fakeCtrl := &fakeControlClient{}
+	knobs := durDirKnobs{
+		FileSize:  int64(len(srv.Data)),
+		Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit},
+	}
+	cfg := newTestConfig(t, srv, &userclass.Config{
+		APIStub: fakeCtrl,
+		Dyn:     dynconfig.Static(knobs),
+	})
+
+	rt := &durDirRuntime{cfg: cfg}
+
+	beforeFirstResume := getPromCounter("ResumeActorFirst", "success")
+	beforeResume := getPromCounter("ResumeActor", "success")
+	beforeActorReady := getPromCounter("ActorTimeToReady", "success")
+	beforeWakeReady := getPromCounter("ActorWakeTimeToReady", "success")
+
+	u, err := rt.startUser(context.Background(), knobs)
+	if err != nil {
+		t.Fatalf("startUser failed: %v", err)
+	}
+
+	afterFirstResume := getPromCounter("ResumeActorFirst", "success")
+	afterResume := getPromCounter("ResumeActor", "success")
+	afterActorReady := getPromCounter("ActorTimeToReady", "success")
+
+	if afterFirstResume-beforeFirstResume != 1 {
+		t.Errorf("ResumeActorFirst counter change during startUser = %v, want 1", afterFirstResume-beforeFirstResume)
+	}
+	// ResumeActor counts every resume, the first one included.
+	if afterResume-beforeResume != 1 {
+		t.Errorf("ResumeActor counter change during startUser = %v, want 1", afterResume-beforeResume)
+	}
+	if afterActorReady-beforeActorReady != 1 {
+		t.Errorf("ActorTimeToReady counter change = %v, want 1", afterActorReady-beforeActorReady)
+	}
+
+	// A step resumes the actor again and records ActorWakeTimeToReady.
+	u.step(context.Background(), knobs)
+
+	finalFirstResume := getPromCounter("ResumeActorFirst", "success")
+	finalResume := getPromCounter("ResumeActor", "success")
+	finalWakeReady := getPromCounter("ActorWakeTimeToReady", "success")
+
+	if finalFirstResume-afterFirstResume != 0 {
+		t.Errorf("ResumeActorFirst counter change during step = %v, want 0", finalFirstResume-afterFirstResume)
+	}
+	if finalResume-afterResume != 1 {
+		t.Errorf("ResumeActor counter change during step = %v, want 1", finalResume-afterResume)
+	}
+	if finalWakeReady-beforeWakeReady != 1 {
+		t.Errorf("ActorWakeTimeToReady counter change during step = %v, want 1", finalWakeReady-beforeWakeReady)
+	}
+}

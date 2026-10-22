@@ -129,13 +129,19 @@ var durDirCodec = dynconfig.Typed[durDirKnobs]{
 // spawnKnobs is the SpawnUser slice. Each zero keeps the matching
 // boomer-worker flag.
 type spawnKnobs struct {
+	dynconfig.Lifecycle
 	TotalActors      int               `json:"total_actors"`
 	SpawnConcurrency int               `json:"spawn_concurrency"`
 	ActorDeadline    dynconfig.Seconds `json:"actor_deadline"`
+	SpawnTemplate    string            `json:"spawn_template"`
+	SpawnWakeStorm   bool              `json:"spawn_wake_storm"`
 }
 
 var spawnCodec = dynconfig.Typed[spawnKnobs]{
 	Validate: func(k spawnKnobs) error {
+		if err := k.Lifecycle.Validate(); err != nil {
+			return err
+		}
 		if k.TotalActors < 0 {
 			return fmt.Errorf("total_actors cannot be negative: %d", k.TotalActors)
 		}

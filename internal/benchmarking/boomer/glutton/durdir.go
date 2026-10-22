@@ -122,21 +122,26 @@ func (r *durDirRuntime) startUser(ctx context.Context, dynCfg durDirKnobs) (*dur
 		actorName:    "sb-" + uuid.NewString(),
 		templateName: tmpl,
 		userClass:    durDirUserClass,
+		firstResume:  true,
 	}
 	bmetrics.UpdateUsers(durDirUserClass, 1)
 	if err := u.ensureAtespace(ctx); err != nil {
 		bmetrics.UpdateUsers(durDirUserClass, -1)
 		return nil, err
 	}
+	coldStart := time.Now()
 	if err := u.create(ctx); err != nil {
+		bmetrics.RecordFailure("summary", "ActorTimeToReady", u.userClass, time.Since(coldStart), err.Error())
 		bmetrics.UpdateUsers(durDirUserClass, -1)
 		return nil, err
 	}
 	if err := u.bootstrap(ctx, dynCfg); err != nil {
+		bmetrics.RecordFailure("summary", "ActorTimeToReady", u.userClass, time.Since(coldStart), err.Error())
 		u.hibernateAndDelete(ctx, dynCfg)
 		bmetrics.UpdateUsers(durDirUserClass, -1)
 		return nil, err
 	}
+	bmetrics.RecordSuccess("summary", "ActorTimeToReady", u.userClass, time.Since(coldStart), 0)
 	return u, nil
 }
 
@@ -155,6 +160,7 @@ type durDirUser struct {
 	actorName      string
 	templateName   string
 	userClass      string
+	firstResume    bool
 	expectedDigest string
 	expectedSize   int64
 }
@@ -197,15 +203,25 @@ func (u *durDirUser) create(ctx context.Context) error {
 func (u *durDirUser) resume(ctx context.Context, mode string) bool {
 	// In implicit mode, the actor stays suspended until router traffic wakes it.
 	if mode == dynconfig.ResumeModeImplicit {
+		u.firstResume = false
 		return true
+	}
+	// ResumeActor covers every resume. The first is also recorded on its own.
+	var alsoAs []string
+	if u.firstResume {
+		alsoAs = []string{"ResumeActorFirst"}
 	}
 	err := u.tracedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
-	})
-	return err == nil
+	}, alsoAs...)
+	if err != nil {
+		return false
+	}
+	u.firstResume = false
+	return true
 }
 
 func (u *durDirUser) pause(ctx context.Context) {
@@ -263,7 +279,9 @@ func (u *durDirUser) delete(ctx context.Context) {
 	})
 }
 
-func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) error {
+// tracedCall times do and records the result under name, and under each of
+// alsoAs with the same latency.
+func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error, alsoAs ...string) error {
 	ctx, span := u.cfg.Tracer.Start(ctx, name)
 	defer span.End()
 
@@ -277,12 +295,14 @@ func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(contex
 		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(serverLatency)))
 	}
 	boomerutil.LogSampledTrace(span, name, latency, boomerutil.SourceClient, err)
-	if err != nil {
-		bmetrics.RecordFailure("grpc", name, u.userClass, latency, err.Error())
-		return err
+	for _, n := range append([]string{name}, alsoAs...) {
+		if err != nil {
+			bmetrics.RecordFailure("grpc", n, u.userClass, latency, err.Error())
+		} else {
+			bmetrics.RecordSuccess("grpc", n, u.userClass, latency, 0)
+		}
 	}
-	bmetrics.RecordSuccess("grpc", name, u.userClass, latency, 0)
-	return nil
+	return err
 }
 
 func (u *durDirUser) params(dynCfg durDirKnobs) (int64, gluttonpb.ReadMode) {
@@ -304,14 +324,18 @@ func (u *durDirUser) step(ctx context.Context, dynCfg durDirKnobs) {
 	u.hibernate(ctx, dynCfg)
 
 	// 2. Resume — a no-op in implicit mode, where router traffic wakes the actor.
+	wakeStart := time.Now()
 	if !u.resume(ctx, dynCfg.ResumeMode) {
+		bmetrics.RecordFailure("summary", "ActorWakeTimeToReady", u.userClass, time.Since(wakeStart), "resume failed")
 		return
 	}
 
 	// 3. Serve after resume (durability assertion: verify restored bytes)
 	if err := u.readDisk(ctx, "DurDirServeAfterResume", readMode); err != nil {
+		bmetrics.RecordFailure("summary", "ActorWakeTimeToReady", u.userClass, time.Since(wakeStart), err.Error())
 		return
 	}
+	bmetrics.RecordSuccess("summary", "ActorWakeTimeToReady", u.userClass, time.Since(wakeStart), 0)
 
 	// 4. Serve warm (immediate second read: measures page cache warming delta)
 	if err := u.readDisk(ctx, "DurDirServeWarm", readMode); err != nil {
