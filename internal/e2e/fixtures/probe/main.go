@@ -465,6 +465,51 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+type netInterfaceInfo struct {
+	Name  string   `json:"name"`
+	Addrs []string `json:"addrs"`
+}
+
+type netInfoResponse struct {
+	Interfaces []netInterfaceInfo `json:"interfaces"`
+	Error      string             `json:"error,omitempty"`
+}
+
+// netinfo reports the network interfaces and IPv4 CIDR addresses visible inside
+// the sandbox.
+func netinfo(w http.ResponseWriter, _ *http.Request) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		writeJSON(w, netInfoResponse{Error: err.Error()})
+		return
+	}
+	out := make([]netInterfaceInfo, 0, len(ifaces))
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			writeJSON(w, netInfoResponse{Error: fmt.Sprintf("interface %s addrs: %v", iface.Name, err)})
+			return
+		}
+		ipv4s := []string{}
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+				ipv4s = append(ipv4s, addr.String())
+			}
+		}
+		out = append(out, netInterfaceInfo{Name: iface.Name, Addrs: ipv4s})
+	}
+	writeJSON(w, netInfoResponse{Interfaces: out})
+}
+
+// echoheaders returns the HTTP request headers received by the probe.
+func echoheaders(w http.ResponseWriter, r *http.Request) {
+	headers := make(map[string]string, len(r.Header))
+	for name, values := range r.Header {
+		headers[name] = strings.Join(values, ", ")
+	}
+	writeJSON(w, map[string]any{"headers": headers})
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -485,6 +530,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/whoami", whoami)
 	mux.HandleFunc("/fetch", fetch)
+	mux.HandleFunc("/netinfo", netinfo)
+	mux.HandleFunc("/echoheaders", echoheaders)
 	mux.HandleFunc("/readfile", readfile)
 	mux.HandleFunc("/writefile", writefile)
 	mux.HandleFunc("/lookup", lookup)
