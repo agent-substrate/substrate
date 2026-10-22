@@ -37,6 +37,15 @@ type externalVolumeDeleter interface {
 	DeleteExternalVolume(ctx context.Context, volumeRef resources.ExternalVolumeRef, precondition store.DeletePreconditions) (*ateapipb.ExternalVolume, error)
 }
 
+func templateHasExternalVolumeRef(template *ateapipb.ActorTemplate) bool {
+	for _, vol := range template.GetVolumes() {
+		if vol.GetExternal().GetRef() != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveExternalVolumeRefs checks the actor's bindings against the template
 // and returns a mount for every ExternalVolume the actor references.
 func resolveExternalVolumeRefs(ctx context.Context, st externalVolumeRefStore, actor *ateapipb.Actor, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolumeStatus, error) {
