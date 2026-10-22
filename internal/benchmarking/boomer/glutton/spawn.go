@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,6 +73,39 @@ func firedDeciles(rank, totalActors int) []int {
 	return fired
 }
 
+// storeMax sets a to v if v is larger. Goroutines finish out of order, so the
+// last write is not always the max.
+func storeMax(a *atomic.Int64, v int64) {
+	for {
+		cur := a.Load()
+		if v <= cur || a.CompareAndSwap(cur, v) {
+			return
+		}
+	}
+}
+
+// runPool calls fn on each item from up to concurrency goroutines and returns
+// once they are done. Items not started before ctx is done are skipped.
+func runPool(ctx context.Context, concurrency int, items []string, fn func(string)) {
+	concurrency = max(1, min(concurrency, len(items)))
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+	for range concurrency {
+		go func() {
+			defer wg.Done()
+			for {
+				i := int(next.Add(1)) - 1
+				if i >= len(items) || ctx.Err() != nil {
+					return
+				}
+				fn(items[i])
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 func init() {
 	userclass.Add(userclass.Entry{
 		Name:       "spawn",
@@ -108,14 +143,17 @@ type spawnRuntime struct {
 	lastReadyElapsed atomic.Int64 // nanoseconds since batch start
 
 	actorMu         sync.Mutex
-	actorNames      []string
+	actorNames      map[string]struct{} // actors shutdown still has to delete
 	readyActorNames []string
 }
 
 func (r *spawnRuntime) recordActorName(name string) {
 	r.actorMu.Lock()
 	defer r.actorMu.Unlock()
-	r.actorNames = append(r.actorNames, name)
+	if r.actorNames == nil {
+		r.actorNames = make(map[string]struct{})
+	}
+	r.actorNames[name] = struct{}{}
 }
 
 func (r *spawnRuntime) recordReadyActorName(name string) {
@@ -127,9 +165,7 @@ func (r *spawnRuntime) recordReadyActorName(name string) {
 func (r *spawnRuntime) getActorNames() []string {
 	r.actorMu.Lock()
 	defer r.actorMu.Unlock()
-	names := make([]string, len(r.actorNames))
-	copy(names, r.actorNames)
-	return names
+	return slices.Collect(maps.Keys(r.actorNames))
 }
 
 func (r *spawnRuntime) getReadyActorNames() []string {
@@ -140,13 +176,11 @@ func (r *spawnRuntime) getReadyActorNames() []string {
 	return names
 }
 
-func (r *spawnRuntime) takeActorNames() []string {
+// forgetActorName drops a deleted actor, so shutdown does not delete it again.
+func (r *spawnRuntime) forgetActorName(name string) {
 	r.actorMu.Lock()
 	defer r.actorMu.Unlock()
-	names := r.actorNames
-	r.actorNames = nil
-	r.readyActorNames = nil
-	return names
+	delete(r.actorNames, name)
 }
 
 func (r *spawnRuntime) recordSuccess(category, name string, latency time.Duration, respBytes int64) {
@@ -174,7 +208,12 @@ func (r *spawnRuntime) iterate() {
 }
 
 func (r *spawnRuntime) runBatch(ctx context.Context) {
+	r.wg.Add(1)
+	defer r.wg.Done()
 	bmetrics.UpdateUsers(spawnUserClass, 1)
+	runStart := time.Now()
+	// SpawnShape ends the run once this is recorded.
+	defer func() { r.recordSuccess("summary", "SpawnRunComplete", time.Since(runStart), 0) }()
 
 	if err := r.ensureAtespace(ctx); err != nil {
 		slog.Error("failed to ensure atespace", slog.String("err", err.Error()))
@@ -213,46 +252,29 @@ func (r *spawnRuntime) runBatch(ctx context.Context) {
 	if tmpl == "" {
 		tmpl = templateName
 	}
-	spawnConcurrency = min(spawnConcurrency, totalActors)
-	if spawnConcurrency < 1 {
-		spawnConcurrency = 1
-	}
 
 	runID := uuid.NewString()[:8]
-	var nextIdx atomic.Int64
-
-	r.wg.Add(spawnConcurrency)
-	for i := 0; i < spawnConcurrency; i++ {
-		go func() {
-			defer r.wg.Done()
-			for {
-				idx := int(nextIdx.Add(1))
-				if idx > totalActors || ctx.Err() != nil {
-					return
-				}
-				actorName := fmt.Sprintf("spawn-%s-%d", runID, idx)
-				r.runOneActor(ctx, batchStart, actorName, tmpl, totalActors, deadline)
-			}
-		}()
+	names := make([]string, max(0, totalActors))
+	for i := range names {
+		names[i] = fmt.Sprintf("spawn-%s-%d", runID, i+1)
 	}
-
-	r.wg.Wait()
+	runPool(ctx, spawnConcurrency, names, func(actorName string) {
+		r.runOneActor(ctx, batchStart, actorName, tmpl, totalActors, deadline)
+	})
 
 	if r.runCtx != nil && r.runCtx.Err() != nil {
 		return
 	}
 
-	if r.readyCount.Load() == 0 {
+	if r.readyCount.Load() > 0 {
+		r.recordSuccess("summary", "TimeToAllReady", time.Duration(r.lastReadyElapsed.Load()), 0)
+	} else {
 		r.recordFailure("summary", "TimeToAllReady", time.Since(batchStart), "no actors became ready")
-		return
 	}
 
-	readyBatchDuration := time.Duration(r.lastReadyElapsed.Load())
 	if wakeStorm {
 		r.runStormAndDelete(ctx, r.getReadyActorNames(), spawnConcurrency, deadline, lifecycleMode)
 	}
-
-	r.recordSuccess("summary", "TimeToAllReady", readyBatchDuration, 0)
 }
 
 func (r *spawnRuntime) runOneActor(ctx context.Context, batchStart time.Time, actorName, tmpl string, totalActors int, deadline time.Duration) {
@@ -268,7 +290,7 @@ func (r *spawnRuntime) runOneActor(ctx context.Context, batchStart time.Time, ac
 		return
 	}
 
-	if err := r.resumeActorWithRetry(actorCtx, actorName, "ResumeActorFirstResume"); err != nil {
+	if err := r.resumeActorWithRetry(actorCtx, actorName, "ResumeActorFirst"); err != nil {
 		r.recordFailure("summary", "ActorTimeToReady", time.Since(actorStart), err.Error())
 		return
 	}
@@ -280,17 +302,7 @@ func (r *spawnRuntime) runOneActor(ctx context.Context, batchStart time.Time, ac
 
 	readyElapsed := time.Since(batchStart)
 	actorElapsed := time.Since(actorStart)
-
-	// Max, not last write: goroutines finish out of order.
-	for {
-		cur := r.lastReadyElapsed.Load()
-		if int64(readyElapsed) <= cur {
-			break
-		}
-		if r.lastReadyElapsed.CompareAndSwap(cur, int64(readyElapsed)) {
-			break
-		}
-	}
+	storeMax(&r.lastReadyElapsed, int64(readyElapsed))
 
 	rank := int(r.readyCount.Add(1))
 	for _, k := range firedDeciles(rank, totalActors) {
@@ -345,7 +357,9 @@ func (r *spawnRuntime) createActorWithRetry(ctx context.Context, actorName, tmpl
 	}
 }
 
-func (r *spawnRuntime) resumeActorWithRetry(ctx context.Context, actorName, metricName string) error {
+// resumeActorWithRetry records each attempt under ResumeActor, and under each
+// of alsoAs.
+func (r *spawnRuntime) resumeActorWithRetry(ctx context.Context, actorName string, alsoAs ...string) error {
 	actorRef := &ateapipb.ObjectRef{Atespace: r.cfg.Atespace, Name: actorName}
 	delay := spawnInitialRetryBackoff
 
@@ -354,14 +368,14 @@ func (r *spawnRuntime) resumeActorWithRetry(ctx context.Context, actorName, metr
 			return ctx.Err()
 		}
 
-		err := r.tracedCall(ctx, metricName, func(callCtx context.Context, tr *metadata.MD) error {
+		err := r.tracedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
 			return boomerutil.RetryOnConflict(callCtx, func() error {
 				_, err := r.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 					Actor: actorRef,
 				}, grpc.Trailer(tr))
 				return err
 			})
-		})
+		}, alsoAs...)
 
 		if err == nil {
 			return nil
@@ -447,51 +461,25 @@ func (r *spawnRuntime) runStormAndDelete(ctx context.Context, readyActors []stri
 	}
 
 	// Phase 4: Scale-in delete
-	r.runDeleteBatch(ctx, concurrency)
+	r.runDeleteBatch(ctx, concurrency, deadline)
 }
 
 func (r *spawnRuntime) runSuspendBatch(ctx context.Context, actors []string, concurrency int, deadline time.Duration, lifecycleMode string) []string {
 	suspendStart := time.Now()
-	concurrency = min(concurrency, len(actors))
-	if concurrency < 1 {
-		concurrency = 1
-	}
-
-	var nextIdx atomic.Int64
 	var lastSuspendElapsed atomic.Int64
 	var mu sync.Mutex
 	var suspended []string
-
-	var wg sync.WaitGroup
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			defer wg.Done()
-			for {
-				idx := int(nextIdx.Add(1)) - 1
-				if idx >= len(actors) || ctx.Err() != nil {
-					return
-				}
-				actorName := actors[idx]
-				actorCtx, cancel := context.WithTimeout(ctx, deadline)
-				err := r.hibernateActorWithRetry(actorCtx, actorName, lifecycleMode)
-				cancel()
-				if err == nil {
-					elapsed := time.Since(suspendStart)
-					for {
-						cur := lastSuspendElapsed.Load()
-						if int64(elapsed) <= cur || lastSuspendElapsed.CompareAndSwap(cur, int64(elapsed)) {
-							break
-						}
-					}
-					mu.Lock()
-					suspended = append(suspended, actorName)
-					mu.Unlock()
-				}
-			}
-		}()
-	}
-	wg.Wait()
+	runPool(ctx, concurrency, actors, func(actorName string) {
+		actorCtx, cancel := context.WithTimeout(ctx, deadline)
+		defer cancel()
+		if err := r.hibernateActorWithRetry(actorCtx, actorName, lifecycleMode); err != nil {
+			return
+		}
+		storeMax(&lastSuspendElapsed, int64(time.Since(suspendStart)))
+		mu.Lock()
+		defer mu.Unlock()
+		suspended = append(suspended, actorName)
+	})
 
 	if len(suspended) > 0 {
 		r.recordSuccess("summary", "TimeToAllSuspended", time.Duration(lastSuspendElapsed.Load()), 0)
@@ -503,60 +491,32 @@ func (r *spawnRuntime) runSuspendBatch(ctx context.Context, actors []string, con
 
 func (r *spawnRuntime) runWakeBatch(ctx context.Context, actors []string, concurrency int, deadline time.Duration) {
 	wakeStart := time.Now()
-	concurrency = min(concurrency, len(actors))
-	if concurrency < 1 {
-		concurrency = 1
-	}
-
-	var nextIdx atomic.Int64
 	var wokenCount atomic.Int64
 	var lastWakeElapsed atomic.Int64
+	runPool(ctx, concurrency, actors, func(actorName string) {
+		actorCtx, cancel := context.WithTimeout(ctx, deadline)
+		defer cancel()
+		actorStart := time.Now()
 
-	var wg sync.WaitGroup
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			defer wg.Done()
-			for {
-				idx := int(nextIdx.Add(1)) - 1
-				if idx >= len(actors) || ctx.Err() != nil {
-					return
-				}
-				actorName := actors[idx]
-				actorCtx, cancel := context.WithTimeout(ctx, deadline)
-				actorStart := time.Now()
+		if err := r.resumeActorWithRetry(actorCtx, actorName); err != nil {
+			r.recordFailure("summary", "ActorWakeTimeToReady", time.Since(actorStart), err.Error())
+			return
+		}
+		if err := r.pingUntilReady(actorCtx, actorName); err != nil {
+			r.recordFailure("summary", "ActorWakeTimeToReady", time.Since(actorStart), err.Error())
+			return
+		}
 
-				if err := r.resumeActorWithRetry(actorCtx, actorName, "ResumeActor"); err != nil {
-					cancel()
-					r.recordFailure("summary", "ActorWakeTimeToReady", time.Since(actorStart), err.Error())
-					continue
-				}
-				if err := r.pingUntilReady(actorCtx, actorName); err != nil {
-					cancel()
-					r.recordFailure("summary", "ActorWakeTimeToReady", time.Since(actorStart), err.Error())
-					continue
-				}
-				cancel()
+		readyElapsed := time.Since(wakeStart)
+		actorElapsed := time.Since(actorStart)
+		storeMax(&lastWakeElapsed, int64(readyElapsed))
 
-				readyElapsed := time.Since(wakeStart)
-				actorElapsed := time.Since(actorStart)
-
-				for {
-					cur := lastWakeElapsed.Load()
-					if int64(readyElapsed) <= cur || lastWakeElapsed.CompareAndSwap(cur, int64(readyElapsed)) {
-						break
-					}
-				}
-
-				rank := int(wokenCount.Add(1))
-				for _, k := range firedDeciles(rank, len(actors)) {
-					r.recordSuccess("summary", fmt.Sprintf("TimeToWoken_%dpct", k), readyElapsed, 0)
-				}
-				r.recordSuccess("summary", "ActorWakeTimeToReady", actorElapsed, 0)
-			}
-		}()
-	}
-	wg.Wait()
+		rank := int(wokenCount.Add(1))
+		for _, k := range firedDeciles(rank, len(actors)) {
+			r.recordSuccess("summary", fmt.Sprintf("TimeToWoken_%dpct", k), readyElapsed, 0)
+		}
+		r.recordSuccess("summary", "ActorWakeTimeToReady", actorElapsed, 0)
+	})
 
 	if wokenCount.Load() > 0 {
 		r.recordSuccess("summary", "TimeToAllWoken", time.Duration(lastWakeElapsed.Load()), 0)
@@ -565,46 +525,24 @@ func (r *spawnRuntime) runWakeBatch(ctx context.Context, actors []string, concur
 	}
 }
 
-func (r *spawnRuntime) runDeleteBatch(ctx context.Context, concurrency int) {
-	names := r.takeActorNames()
+func (r *spawnRuntime) runDeleteBatch(ctx context.Context, concurrency int, deadline time.Duration) {
+	names := r.getActorNames()
 	if len(names) == 0 || ctx.Err() != nil {
 		return
 	}
 	deleteStart := time.Now()
-	concurrency = min(concurrency, len(names))
-	if concurrency < 1 {
-		concurrency = 1
-	}
-
-	var nextIdx atomic.Int64
 	var deletedCount atomic.Int64
 	var lastDeleteElapsed atomic.Int64
-
-	var wg sync.WaitGroup
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			defer wg.Done()
-			for {
-				idx := int(nextIdx.Add(1)) - 1
-				if idx >= len(names) || ctx.Err() != nil {
-					return
-				}
-				name := names[idx]
-				if err := r.deleteActor(ctx, name); err == nil {
-					elapsed := time.Since(deleteStart)
-					for {
-						cur := lastDeleteElapsed.Load()
-						if int64(elapsed) <= cur || lastDeleteElapsed.CompareAndSwap(cur, int64(elapsed)) {
-							break
-						}
-					}
-					deletedCount.Add(1)
-				}
-			}
-		}()
-	}
-	wg.Wait()
+	runPool(ctx, concurrency, names, func(name string) {
+		actorCtx, cancel := context.WithTimeout(ctx, deadline)
+		defer cancel()
+		if err := r.deleteActor(actorCtx, name); err != nil {
+			return
+		}
+		storeMax(&lastDeleteElapsed, int64(time.Since(deleteStart)))
+		deletedCount.Add(1)
+		r.forgetActorName(name)
+	})
 
 	if deletedCount.Load() > 0 {
 		r.recordSuccess("summary", "TimeToAllDeleted", time.Duration(lastDeleteElapsed.Load()), 0)
@@ -762,7 +700,9 @@ func (r *spawnRuntime) deleteActor(ctx context.Context, name string) error {
 	})
 }
 
-func (r *spawnRuntime) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) error {
+// tracedCall times do and records the result under name, and under each of
+// alsoAs with the same latency.
+func (r *spawnRuntime) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error, alsoAs ...string) error {
 	ctx, span := r.cfg.Tracer.Start(ctx, name)
 	defer span.End()
 
@@ -775,12 +715,14 @@ func (r *spawnRuntime) tracedCall(ctx context.Context, name string, do func(cont
 		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(serverLatency)))
 	}
 	boomerutil.LogSampledTrace(span, name, latency, boomerutil.SourceClient, err)
-	if err != nil {
-		r.recordFailure("grpc", name, latency, err.Error())
-		return err
+	for _, n := range append([]string{name}, alsoAs...) {
+		if err != nil {
+			r.recordFailure("grpc", n, latency, err.Error())
+		} else {
+			r.recordSuccess("grpc", n, latency, 0)
+		}
 	}
-	r.recordSuccess("grpc", name, latency, 0)
-	return nil
+	return err
 }
 
 // isSpawnTerminalError reports whether retrying err cannot help. Unlisted

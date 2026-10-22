@@ -59,6 +59,16 @@ class TestBoomerConfig(unittest.TestCase):
         parsed = json.loads(raw)
         self.assertEqual(parsed["agentsession_phase_in"], 300.0)
         self.assertEqual(parsed["agentsession_resume_retry_budget"], 0.0)
+        self.assertNotIn("spawn_wake_storm", parsed)
+
+    def test_build_config_json_spawn_flags(self):
+        raw = boomer_config.build_config_json([
+            "--spawn-template=glutton-storage",
+            "--spawn-wake-storm",
+        ])
+        parsed = json.loads(raw)
+        self.assertEqual(parsed["spawn_template"], "glutton-storage")
+        self.assertTrue(parsed["spawn_wake_storm"])
 
 
 if __name__ == "__main__":

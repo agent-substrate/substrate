@@ -43,6 +43,9 @@ type fakeControlClient struct {
 	// createActorFn, when set, is called with each CreateActor's actor name;
 	// a non-nil error is returned in place of the actor.
 	createActorFn func(name string) error
+	// deleteActorFn does the same for DeleteActor, and also gets the call's
+	// context.
+	deleteActorFn func(ctx context.Context, name string) error
 }
 
 // nextErr pops the head of errs, or returns nil once it is drained. Callers
@@ -113,9 +116,15 @@ func suspendCallName(in *ateapipb.SuspendActorRequest) string {
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "DeleteActor")
 	f.deleteRequests = append(f.deleteRequests, in)
+	fn := f.deleteActorFn
+	f.mu.Unlock()
+	if fn != nil {
+		if err := fn(ctx, in.GetActor().GetName()); err != nil {
+			return nil, err
+		}
+	}
 	return &ateapipb.Actor{}, nil
 }
 

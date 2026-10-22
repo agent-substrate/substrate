@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -221,6 +222,7 @@ func TestSpawnRunBatch_Success(t *testing.T) {
 	}
 
 	beforeSuccess := getPromCounter("TimeToAllReady", "success")
+	beforeComplete := getPromCounter("SpawnRunComplete", "success")
 
 	rt.runBatch(runCtx)
 
@@ -235,6 +237,9 @@ func TestSpawnRunBatch_Success(t *testing.T) {
 	afterSuccess := getPromCounter("TimeToAllReady", "success")
 	if afterSuccess-beforeSuccess != 1 {
 		t.Fatalf("expected TimeToAllReady success counter to increase by 1, got before=%v, after=%v", beforeSuccess, afterSuccess)
+	}
+	if diff := getPromCounter("SpawnRunComplete", "success") - beforeComplete; diff != 1 {
+		t.Fatalf("SpawnRunComplete diff = %v, want 1", diff)
 	}
 
 	names := rt.getActorNames()
@@ -339,6 +344,7 @@ func TestSpawnRunBatch_AllFailed(t *testing.T) {
 	}
 
 	beforeFailure := getPromCounter("TimeToAllReady", "failure")
+	beforeComplete := getPromCounter("SpawnRunComplete", "success")
 
 	rt.runBatch(runCtx)
 
@@ -349,6 +355,10 @@ func TestSpawnRunBatch_AllFailed(t *testing.T) {
 	afterFailure := getPromCounter("TimeToAllReady", "failure")
 	if afterFailure-beforeFailure != 1 {
 		t.Fatalf("expected TimeToAllReady failure counter to increase by 1, got before=%v, after=%v", beforeFailure, afterFailure)
+	}
+	// SpawnShape ends the run on SpawnRunComplete, so a failed batch records it too.
+	if diff := getPromCounter("SpawnRunComplete", "success") - beforeComplete; diff != 1 {
+		t.Fatalf("SpawnRunComplete diff = %v, want 1", diff)
 	}
 }
 
@@ -558,15 +568,16 @@ func TestSpawnShutdown_DeleteAll(t *testing.T) {
 		ActorDeadline:    5 * time.Second,
 	}
 
-	names := []string{"spawn-a-1", "spawn-a-2", "spawn-a-3", "spawn-a-4"}
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	rt := &spawnRuntime{
-		cfg:        cfg,
-		runCtx:     runCtx,
-		cancelRun:  cancel,
-		actorNames: names,
+		cfg:       cfg,
+		runCtx:    runCtx,
+		cancelRun: cancel,
+	}
+	for _, name := range []string{"spawn-a-1", "spawn-a-2", "spawn-a-3", "spawn-a-4"} {
+		rt.recordActorName(name)
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -748,7 +759,8 @@ func TestSpawnRunBatch_CustomTemplate(t *testing.T) {
 		cancelRun: cancel,
 	}
 
-	beforeFirstResume := getPromCounter("ResumeActorFirstResume", "success")
+	beforeFirstResume := getPromCounter("ResumeActorFirst", "success")
+	beforeResume := getPromCounter("ResumeActor", "success")
 
 	rt.runBatch(runCtx)
 
@@ -756,9 +768,12 @@ func TestSpawnRunBatch_CustomTemplate(t *testing.T) {
 		t.Fatalf("expected readyCount 2, got %d", got)
 	}
 
-	afterFirstResume := getPromCounter("ResumeActorFirstResume", "success")
-	if afterFirstResume-beforeFirstResume != 2 {
-		t.Errorf("ResumeActorFirstResume counter change = %v, want 2", afterFirstResume-beforeFirstResume)
+	if diff := getPromCounter("ResumeActorFirst", "success") - beforeFirstResume; diff != 2 {
+		t.Errorf("ResumeActorFirst diff = %v, want 2", diff)
+	}
+	// ResumeActor counts the first resume too.
+	if diff := getPromCounter("ResumeActor", "success") - beforeResume; diff != 2 {
+		t.Errorf("ResumeActor diff = %v, want 2", diff)
 	}
 
 	reqs := fakeAPI.recordedCreateRequests()
@@ -799,8 +814,8 @@ func TestSpawnRunBatch_WakeStorm(t *testing.T) {
 		cancelRun: cancel,
 	}
 
-	beforeFirstResume := getPromCounter("ResumeActorFirstResume", "success")
-	beforeWarmResume := getPromCounter("ResumeActor", "success")
+	beforeFirstResume := getPromCounter("ResumeActorFirst", "success")
+	beforeResume := getPromCounter("ResumeActor", "success")
 	beforeActorReady := getPromCounter("ActorTimeToReady", "success")
 	beforeAllReady := getPromCounter("TimeToAllReady", "success")
 	beforeSuspend := getPromCounter("SuspendActor", "success")
@@ -809,6 +824,7 @@ func TestSpawnRunBatch_WakeStorm(t *testing.T) {
 	beforeAllWoken := getPromCounter("TimeToAllWoken", "success")
 	beforeDelete := getPromCounter("DeleteActor", "success")
 	beforeAllDeleted := getPromCounter("TimeToAllDeleted", "success")
+	beforeComplete := getPromCounter("SpawnRunComplete", "success")
 
 	rt.runBatch(runCtx)
 
@@ -816,8 +832,8 @@ func TestSpawnRunBatch_WakeStorm(t *testing.T) {
 		t.Fatalf("expected readyCount 3, got %d", got)
 	}
 
-	if diff := getPromCounter("ResumeActorFirstResume", "success") - beforeFirstResume; diff != 3 {
-		t.Errorf("ResumeActorFirstResume diff = %v, want 3", diff)
+	if diff := getPromCounter("ResumeActorFirst", "success") - beforeFirstResume; diff != 3 {
+		t.Errorf("ResumeActorFirst diff = %v, want 3", diff)
 	}
 	if diff := getPromCounter("ActorTimeToReady", "success") - beforeActorReady; diff != 3 {
 		t.Errorf("ActorTimeToReady diff = %v, want 3", diff)
@@ -831,8 +847,9 @@ func TestSpawnRunBatch_WakeStorm(t *testing.T) {
 	if diff := getPromCounter("TimeToAllSuspended", "success") - beforeAllSuspended; diff != 1 {
 		t.Errorf("TimeToAllSuspended diff = %v, want 1", diff)
 	}
-	if diff := getPromCounter("ResumeActor", "success") - beforeWarmResume; diff != 3 {
-		t.Errorf("ResumeActor diff = %v, want 3", diff)
+	// Three first resumes and three wakes.
+	if diff := getPromCounter("ResumeActor", "success") - beforeResume; diff != 6 {
+		t.Errorf("ResumeActor diff = %v, want 6", diff)
 	}
 	if diff := getPromCounter("ActorWakeTimeToReady", "success") - beforeWakeReady; diff != 3 {
 		t.Errorf("ActorWakeTimeToReady diff = %v, want 3", diff)
@@ -846,13 +863,90 @@ func TestSpawnRunBatch_WakeStorm(t *testing.T) {
 	if diff := getPromCounter("TimeToAllDeleted", "success") - beforeAllDeleted; diff != 1 {
 		t.Errorf("TimeToAllDeleted diff = %v, want 1", diff)
 	}
+	if diff := getPromCounter("SpawnRunComplete", "success") - beforeComplete; diff != 1 {
+		t.Errorf("SpawnRunComplete diff = %v, want 1", diff)
+	}
 
-	// Calling shutdown afterwards must not issue duplicate deletes because runDeleteBatch took all actor names.
+	// The delete phase forgets each actor it deleted, so shutdown deletes nothing twice.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer shutdownCancel()
 	beforeShutdownDeletes := len(fakeAPI.recordedDeleteRequests())
 	rt.shutdown(shutdownCtx)
 	if afterDeletes := len(fakeAPI.recordedDeleteRequests()); afterDeletes != beforeShutdownDeletes {
 		t.Errorf("shutdown issued %d additional DeleteActor calls, want 0", afterDeletes-beforeShutdownDeletes)
+	}
+}
+
+// A run cancelled during the delete phase leaves the actors it has not
+// deleted to shutdown, and keeps the TimeToAllReady it recorded before the
+// storm.
+func TestSpawnRunBatch_WakeStormCancelledDuringDelete(t *testing.T) {
+	srv := newTestHTTPServer(t, nil)
+	defer srv.Close()
+
+	deleteStarted := make(chan struct{})
+	var deleteCalls atomic.Int64
+	var mu sync.Mutex
+	deleted := map[string]bool{}
+	fakeAPI := &fakeControlClient{
+		deleteActorFn: func(ctx context.Context, name string) error {
+			// The delete phase's first delete hangs until the run is cancelled.
+			if deleteCalls.Add(1) == 1 {
+				close(deleteStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			deleted[name] = true
+			return nil
+		},
+	}
+	cfg := &userclass.Config{
+		APIStub:          fakeAPI,
+		HTTPClient:       srv.Client(),
+		RouterURL:        srv.URL,
+		Atespace:         "test-space",
+		Tracer:           otel.Tracer("test"),
+		TotalActors:      3,
+		SpawnConcurrency: 1,
+		ActorDeadline:    10 * time.Second,
+		SpawnWakeStorm:   true,
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt := &spawnRuntime{
+		cfg:       cfg,
+		runCtx:    runCtx,
+		cancelRun: cancel,
+	}
+
+	beforeAllReady := getPromCounter("TimeToAllReady", "success")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.runBatch(runCtx)
+	}()
+	select {
+	case <-deleteStarted:
+	case <-done:
+		t.Fatal("runBatch returned before the delete phase")
+	}
+
+	rt.shutdown(context.Background())
+	<-done
+
+	if diff := getPromCounter("TimeToAllReady", "success") - beforeAllReady; diff != 1 {
+		t.Errorf("TimeToAllReady diff = %v, want 1", diff)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, req := range fakeAPI.recordedCreateRequests() {
+		if name := req.GetActor().GetMetadata().GetName(); !deleted[name] {
+			t.Errorf("actor %s was never deleted", name)
+		}
 	}
 }

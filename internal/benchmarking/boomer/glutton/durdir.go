@@ -206,16 +206,17 @@ func (u *durDirUser) resume(ctx context.Context, mode string) bool {
 		u.firstResume = false
 		return true
 	}
-	metricName := "ResumeActor"
+	// ResumeActor covers every resume. The first is also recorded on its own.
+	var alsoAs []string
 	if u.firstResume {
-		metricName = "ResumeActorFirstResume"
+		alsoAs = []string{"ResumeActorFirst"}
 	}
-	err := u.tracedCall(ctx, metricName, func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
-	})
+	}, alsoAs...)
 	if err != nil {
 		return false
 	}
@@ -278,7 +279,9 @@ func (u *durDirUser) delete(ctx context.Context) {
 	})
 }
 
-func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) error {
+// tracedCall times do and records the result under name, and under each of
+// alsoAs with the same latency.
+func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error, alsoAs ...string) error {
 	ctx, span := u.cfg.Tracer.Start(ctx, name)
 	defer span.End()
 
@@ -292,12 +295,14 @@ func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(contex
 		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(serverLatency)))
 	}
 	boomerutil.LogSampledTrace(span, name, latency, boomerutil.SourceClient, err)
-	if err != nil {
-		bmetrics.RecordFailure("grpc", name, u.userClass, latency, err.Error())
-		return err
+	for _, n := range append([]string{name}, alsoAs...) {
+		if err != nil {
+			bmetrics.RecordFailure("grpc", n, u.userClass, latency, err.Error())
+		} else {
+			bmetrics.RecordSuccess("grpc", n, u.userClass, latency, 0)
+		}
 	}
-	bmetrics.RecordSuccess("grpc", name, u.userClass, latency, 0)
-	return nil
+	return err
 }
 
 func (u *durDirUser) params(dynCfg durDirKnobs) (int64, gluttonpb.ReadMode) {

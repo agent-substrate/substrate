@@ -14,7 +14,8 @@
 
 """Load shape for the Spawn benchmark.
 
-Holds (1, 1.0) until TimeToAllReady has num_requests >= 1 or run_time expires.
+Holds (1, 1.0) until SpawnRunComplete has num_requests >= 1 or run_time expires.
+boomer records SpawnRunComplete after the last phase of the run, failed or not.
 """
 
 import logging
@@ -31,7 +32,7 @@ class SpawnShape(LoadTestShape):
             # creates an empty StatsEntry row if the key is not present, which
             # would pollute the stats table.
             entry = self.runner.environment.stats.entries.get(
-                ("TimeToAllReady", "summary")
+                ("SpawnRunComplete", "summary")
             )
             if entry is not None and entry.num_requests >= 1:
                 return None

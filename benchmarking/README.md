@@ -163,6 +163,9 @@ and state restoration latency when a durable directory is attached to the actor.
 * `DurDirServeInitial`: First read immediately following file creation.
 * `SuspendActor`: Actor suspend latency (snapshot creation + persistence upload).
 * `ResumeActor`: Actor resume latency.
+* `ResumeActorFirst`: Each actor's first resume, also counted in `ResumeActor`.
+* `ActorTimeToReady`: Per actor, from `CreateActor` until `DurDirServeInitial` returns.
+* `ActorWakeTimeToReady`: Per cycle, from the resume until `DurDirServeAfterResume` returns.
 * `DurDirServeAfterResume`: First read after resume (measures page faults / lazy load overhead on restored volume).
 * `DurDirServeWarm`: Subsequent read within the same active cycle (cached state baseline).
 * `DurDirOverwrite`: In-place file overwrite with checksum verification.
@@ -509,32 +512,55 @@ To go back to a built-in variant, redeploy without the flag.
 
 The Spawn benchmark creates a batch of actors once and measures how long each
 actor takes from creation to its first answered ping, and how long the whole
-batch takes. `tests.yaml` runs it as `spawn_smoke_10_actors` with
-`shapes/spawn_shape.py`, which holds one user and ends the run once
-`TimeToAllReady` is recorded.
+batch takes. With `--spawn-wake-storm`, it then suspends the ready actors,
+wakes the ones that suspended, and deletes the whole batch, timing each phase
+the same way. If no actor suspends, the wake and delete phases are skipped.
+`tests.yaml` runs it as `spawn_smoke_10_actors` with `shapes/spawn_shape.py`,
+which holds one user and ends the run once `SpawnRunComplete` is recorded.
 
 Each boomer process creates one batch; extra users in the same process do
-nothing. Actors are named `spawn-<run-id>-<n>` and deleted when boomer exits.
+nothing. Actors are named `spawn-<run-id>-<n>`. Actors the run did not delete
+are deleted when boomer exits.
 
 #### Spawn Configuration Knobs
 
 * `--total-actors`: Actors in the batch (default `100`).
-* `--spawn-concurrency`: Actors created concurrently (default `1`).
+* `--spawn-concurrency`: Actors created concurrently (default `1`). Each storm
+  phase uses the same concurrency.
 * `--actor-deadline`: Per-actor timeout in seconds, covering create, resume and
-  first ping (default `120`).
+  first ping, and each actor's suspend, wake and delete in the storm (default `120`).
+* `--spawn-template`: ActorTemplate of the batch (default `glutton`).
+* `--spawn-wake-storm`: Run the suspend, wake and delete phases after the batch
+  is ready (default off). The suspend is asynchronous under `--lifecycle-mode pause`.
 
-The web UI shows the same fields; `0` keeps the value boomer-worker started with.
+The web UI shows the same fields; `0` or an empty template keeps the value
+boomer-worker started with.
 
 #### Spawn Reported Metrics
 
 * `CreateActor`, `ResumeActor`, `GluttonPing`: Latency of each call.
+* `ResumeActorFirst`: The `ResumeActor` calls of each actor's first resume,
+  retries included. Also counted in `ResumeActor`.
 * `ActorTimeToReady`: Per actor, from its first `CreateActor` attempt to its
   first successful ping.
 * `TimeToReady_<k>pct` (`k` = 10, 20, … 100): From batch start until `k`% of
   the batch was ready.
 * `TimeToAllReady`: From batch start until the last ready actor answered.
   Actors that failed show up as `ActorTimeToReady` failures instead.
+* `SpawnRunComplete`: From the start of the run until its last phase finished,
+  whether or not the phases succeeded.
 * `CrashCount`: Actors that crashed during resume.
+
+With `--spawn-wake-storm`, also:
+
+* `SuspendActor` (`SuspendActorAsync` under `--lifecycle-mode pause`),
+  `DeleteActor`: Latency of each call.
+* `TimeToAllSuspended`, `TimeToAllDeleted`: From the start of the phase until
+  the last actor finished it.
+* `ActorWakeTimeToReady`: Per actor, from its wake `ResumeActor` to its first
+  successful ping.
+* `TimeToWoken_<k>pct`, `TimeToAllWoken`: As `TimeToReady_<k>pct` and
+  `TimeToAllReady`, for the wake.
 
 The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
 count users × `--actors-per-user`, not `--total-actors`.
