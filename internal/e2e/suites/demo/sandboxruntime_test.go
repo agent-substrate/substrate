@@ -186,6 +186,203 @@ func TestSandboxRuntimeDisableDropsToRootfs(t *testing.T) {
 	validateRootfsCounter(t, resp, "after v2 MEMORY resume", 4)
 }
 
+// TestWorkerPoolSwitchSandboxConfig covers switching a WorkerPool's configRef
+// to another SandboxConfig of the same class:
+//  1. A pool starts on configA (v1), builds a golden ActorTemplate stamped with
+//     v1, and resumes actor1 on v1 (memory=1, file=1, rootfs=1).
+//  2. While actor1 is RUNNING on v1, the pool's configRef switches to configB
+//     (v2); the worker re-registers with v2 as default_runtime while actor1
+//     continues running on v1 (memory=2, file=2, rootfs=2).
+//  3. Suspending actor1 stamps the snapshot with v1 (from
+//     WorkerAssignment.sandbox_runtime, not the worker's new default_runtime),
+//     and resuming actor1 on configB drops to ROOTFS on v2 (memory=1, file=3,
+//     rootfs=3).
+//  4. Creating and resuming a fresh actor2 from the v1-stamped golden template
+//     while the pool is on configB also drops the borrowed golden snapshot to
+//     ROOTFS on v2 (memory=1, file=1, rootfs=1).
+func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
+	t.Parallel()
+	nsObj := e2e.CreateNamespace(t)
+	ctx := context.Background()
+	clients := e2e.GetClients()
+
+	env, err := e2e.CheckEnv("BUCKET_NAME")
+	if err != nil {
+		t.Fatalf("CheckEnv failed: %v", err)
+	}
+
+	class := atev1alpha1.SandboxClassGvisor
+	if e2e.IsMicroVM() {
+		class = atev1alpha1.SandboxClassMicroVM
+	}
+	baseConfig := newestClassDefault(t, ctx, clients, class)
+	v1 := defaultVersionFromConfig(t, baseConfig, "v1")
+	v2 := secondSandboxVersion(v1, "v2", class)
+
+	configAName := "e2e-switch-a-" + nsObj.Name
+	configBName := "e2e-switch-b-" + nsObj.Name
+	poolName := "runtime-switch"
+	for _, cfg := range []struct {
+		name string
+		ver  atev1alpha1.SandboxVersionConfig
+	}{
+		{name: configAName, ver: v1},
+		{name: configBName, ver: v2},
+	} {
+		if _, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Create(ctx, &atev1alpha1.SandboxConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.name},
+			Spec: atev1alpha1.SandboxConfigSpec{
+				SandboxClass:   class,
+				DefaultVersion: cfg.ver.Name,
+				Versions:       []atev1alpha1.SandboxVersionConfig{cfg.ver},
+			},
+		}, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("failed to create SandboxConfig %s: %v", cfg.name, err)
+		}
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_ = clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Delete(cleanupCtx, poolName, metav1.DeleteOptions{})
+		for _, name := range []string{configAName, configBName} {
+			if err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Delete(cleanupCtx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				t.Errorf("failed to delete SandboxConfig %s: %v", name, err)
+			}
+		}
+	})
+
+	tmplName := poolName + "-" + nsObj.Name
+	tmpl := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
+		Atespace:          demoAtespace,
+		Name:              tmplName,
+		PoolName:          poolName,
+		PoolReplicas:      1,
+		SandboxConfigName: configAName,
+		Labels:            map[string]string{"demo": nsObj.Name},
+		SnapshotConfig: &ateapipb.SnapshotConfig{
+			StorageLocation:   "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + tmplName,
+			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		},
+	})
+
+	actor1Name := "switch-actor1-" + nsObj.Name
+	actor2Name := "switch-actor2-" + nsObj.Name
+	actor1Ref := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actor1Name}
+	actor2Ref := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actor2Name}
+	for _, ref := range []*ateapipb.ObjectRef{actor1Ref, actor2Ref} {
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: ref})
+			_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: ref})
+		})
+	}
+
+	// 1. Create and resume actor1 on configA (v1), and call it once.
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actor1Name},
+		ActorTemplate: e2e.TemplateRef(tmpl),
+	}}); err != nil {
+		t.Fatalf("failed to create actor1: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actor1Name, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	resumed1, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actor1Ref})
+	if err != nil {
+		t.Fatalf("failed to resume actor1 on configA: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actor1Name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	assignment1 := resumed1.GetActor().GetStatus().GetWorkerAssignment()
+	v1Runtime := assignment1.GetSandboxRuntime()
+	workerRef := assignment1.GetWorker()
+
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actor1Name})
+	if err != nil {
+		t.Fatalf("failed to call actor1 on configA: %v", err)
+	}
+	validateCounterResponse(t, resp, "on configA before switch", 1, 1)
+	validateRootfsCounter(t, resp, "on configA before switch", 1)
+
+	// 2. Switch the pool's configRef to configB while actor1 is still RUNNING.
+	updateWorkerPoolSandboxConfig(t, ctx, clients, nsObj.Name, poolName, configBName)
+	v2Runtime := waitForWorkerRuntimeDisabled(t, ctx, clients, workerRef, v1Runtime)
+
+	// Verify actor1 is untouched while running and stamps v1 when suspended.
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actor1Name})
+	if err != nil {
+		t.Fatalf("failed to call running actor1 after pool config switch: %v", err)
+	}
+	validateCounterResponse(t, resp, "running actor1 after pool switch", 2, 2)
+	validateRootfsCounter(t, resp, "running actor1 after pool switch", 2)
+
+	// 3. Suspend actor1: its snapshot must carry v1 (its assignment's runtime), not v2.
+	suspended1, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   actor1Ref,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to suspend actor1: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actor1Name, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	if diff := cmp.Diff(v1Runtime, durableSnapshot(suspended1.GetActor().GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("actor1 snapshot stamp after pool switch (-want v1 +got):\n%s", diff)
+	}
+
+	// Resume actor1 on configB: it drops from MEMORY to ROOTFS on v2.
+	resumed1OnB, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actor1Ref})
+	if err != nil {
+		t.Fatalf("failed to resume actor1 on configB: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actor1Name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	if diff := cmp.Diff(v2Runtime, resumed1OnB.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("actor1 assignment runtime on configB (-want v2 +got):\n%s", diff)
+	}
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actor1Name})
+	if err != nil {
+		t.Fatalf("failed to call actor1 after ROOTFS fallback on configB: %v", err)
+	}
+	validateCounterResponse(t, resp, "actor1 on configB", 1, 3)
+	validateRootfsCounter(t, resp, "actor1 on configB", 3)
+
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   actor1Ref,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}); err != nil {
+		t.Fatalf("failed to suspend actor1 on configB: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actor1Name, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	// 4. Create actor2 from the v1-stamped golden template and resume it on configB (C4).
+	created2, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actor2Name},
+		ActorTemplate: e2e.TemplateRef(tmpl),
+	}})
+	if err != nil {
+		t.Fatalf("failed to create actor2 from golden template: %v", err)
+	}
+	if diff := cmp.Diff(v1Runtime, durableSnapshot(created2.GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("actor2 borrowed golden snapshot stamp (-want v1 +got):\n%s", diff)
+	}
+
+	resumed2, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actor2Ref})
+	if err != nil {
+		t.Fatalf("failed to resume actor2 from v1 golden snapshot on configB: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actor2Name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	if diff := cmp.Diff(v2Runtime, resumed2.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("actor2 assignment runtime after golden ROOTFS fallback (-want v2 +got):\n%s", diff)
+	}
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actor2Name})
+	if err != nil {
+		t.Fatalf("failed to call actor2 after golden ROOTFS fallback: %v", err)
+	}
+	validateCounterResponse(t, resp, "actor2 after golden ROOTFS fallback", 1, 1)
+	validateRootfsCounter(t, resp, "actor2 after golden ROOTFS fallback", 1)
+}
+
 type sandboxRuntimeFixture struct {
 	ctx        context.Context
 	clients    *e2e.Clients
@@ -395,14 +592,44 @@ func secondSandboxVersion(v1 atev1alpha1.SandboxVersionConfig, name string, clas
 // updateSandboxConfigVersions updates configName's defaultVersion and versions list.
 func updateSandboxConfigVersions(t *testing.T, ctx context.Context, clients *e2e.Clients, configName, defaultVersion string, versions []atev1alpha1.SandboxVersionConfig) {
 	t.Helper()
-	sc, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Get(ctx, configName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("failed to get SandboxConfig %s: %v", configName, err)
+	for {
+		sc, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Get(ctx, configName, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("failed to get SandboxConfig %s: %v", configName, err)
+		}
+		sc.Spec.DefaultVersion = defaultVersion
+		sc.Spec.Versions = versions
+		_, err = clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Update(ctx, sc, metav1.UpdateOptions{})
+		if apierrors.IsConflict(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("failed to update SandboxConfig %s: %v", configName, err)
+		}
+		return
 	}
-	sc.Spec.DefaultVersion = defaultVersion
-	sc.Spec.Versions = versions
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Update(ctx, sc, metav1.UpdateOptions{}); err != nil {
-		t.Fatalf("failed to update SandboxConfig %s: %v", configName, err)
+}
+
+// updateWorkerPoolSandboxConfig updates poolName's sandboxClasses[].configRef
+// to point at configName.
+func updateWorkerPoolSandboxConfig(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, poolName, configName string) {
+	t.Helper()
+	for {
+		wp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace).Get(ctx, poolName, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("failed to get WorkerPool %s/%s: %v", namespace, poolName, err)
+		}
+		for i := range wp.Spec.SandboxClasses {
+			wp.Spec.SandboxClasses[i].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: configName}
+		}
+		_, err = clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace).Update(ctx, wp, metav1.UpdateOptions{})
+		if apierrors.IsConflict(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("failed to update WorkerPool %s/%s: %v", namespace, poolName, err)
+		}
+		return
 	}
 }
 
