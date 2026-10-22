@@ -80,7 +80,7 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 				return nil, apierror.Unavailable("while getting atelet conn for node %q: %w (and while checking the node: %w)", node, err, nodeErr)
 			}
 			if gone {
-				return w.recordGoneNode(ctx, actorRef, actor, node)
+				return w.recordGoneNode(ctx, actorRef, actor, actorTemplate, node)
 			}
 		}
 		return nil, apierror.Unavailable("while getting atelet conn for node %q: %w", node, err)
@@ -160,7 +160,7 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 // recordGoneNode crashes an actor whose latest snapshot went with its deleted
 // node. It reads the actor again first, so an upload recorded during the node
 // lookup detaches it instead, and it crashes only the version it checked.
-func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, node string) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, node string) (*ateapipb.Actor, error) {
 	actor, err := w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), node)
 	if err != nil {
 		return nil, err
@@ -168,7 +168,7 @@ func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.A
 	if !latestLocalNotDurable(actor) {
 		return w.recordDetach(ctx, actorRef, actor, node, nil)
 	}
-	if err := crashActorVersion(ctx, w.store, actorRef, actor, ateattr.OperationResume, crashMessageLocalSnapshotNodeGone); err != nil {
+	if err := w.crashActorVersion(ctx, actorRef, actor, actorTemplate, ateattr.OperationResume, crashMessageLocalSnapshotNodeGone); err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef)
 		}

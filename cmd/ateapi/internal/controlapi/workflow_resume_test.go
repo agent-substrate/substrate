@@ -890,11 +890,12 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 // recovery path loads the worker by pod name only, so the assignment may have
 // been cleared and the worker re-claimed by another actor in the meantime. On
 // a mismatch the actor is crashed and the worker — which is not ours — must
-// not be written.
+// not be written. A worker that still hosts the actor but is draining or no
+// longer eligible gets the actor's slot back when the actor is crashed.
 func TestValidateAssignedWorker(t *testing.T) {
+	// ownAssignment's ActorUid is the seeded actor's, filled in per run.
 	ownAssignment := &ateapipb.ActorAssignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
-		ActorUid: "own-actor-uid",
+		Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
 	}
 	otherAssignment := &ateapipb.ActorAssignment{
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-b", Name: "shared"},
@@ -937,13 +938,14 @@ func TestValidateAssignedWorker(t *testing.T) {
 			wantCrashMessage: "resume failed: " + crashMessageWorkerGone,
 		},
 		{
-			name:             "crashes actor and leaves worker untouched when worker is draining",
+			name:             "releases own draining worker and crashes actor",
 			workerStatus:     drainingStatus,
 			assignment:       ownAssignment,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
 			wantCrashMessage: "resume failed: " + crashMessageWorkerDraining,
-			wantAssignment:   ownAssignment,
+			wantAssignment:   nil,
+			wantWorkerWrite:  true,
 		},
 		{
 			name:           "leaves actor and worker untouched when worker is unavailable",
@@ -1019,6 +1021,31 @@ func TestValidateAssignedWorker(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "shared"}
+
+			// The stored actor names the worker, as a RESUMING actor's record
+			// does, so crashing it releases whatever it still holds there.
+			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RESUMING, func(a *ateapipb.Actor) {
+				a.Status.WorkerAssignment = &ateapipb.WorkerAssignment{
+					Worker:          &ateapipb.ObjectRef{Name: testWorkerUID("pod-1")},
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-1",
+					WorkerPodUid:    testWorkerUID("pod-1"),
+				}
+			})
+			resumingActor, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			assignment, wantAssignment := tt.assignment, tt.wantAssignment
+			if assignment == ownAssignment {
+				assignment = proto.CloneOf(ownAssignment)
+				assignment.ActorUid = resumingActor.GetMetadata().GetUid()
+			}
+			if wantAssignment == ownAssignment {
+				wantAssignment = assignment
+			}
 
 			var seeded *ateapipb.Worker
 			if tt.workerStatus != nil {
@@ -1032,41 +1059,25 @@ func TestValidateAssignedWorker(t *testing.T) {
 				}); err != nil {
 					t.Fatalf("CreateWorker: %v", err)
 				}
-				seedAssignment(t, persistence, testWorkerUID("pod-1"), tt.assignment)
+				seedAssignment(t, persistence, testWorkerUID("pod-1"), assignment)
 				// Fetch the stored version so the no-write assertion below can
 				// detect any optimistic update.
-				var err error
 				if seeded, err = persistence.GetWorker(ctx, testWorkerUID("pod-1")); err != nil {
 					t.Fatalf("GetWorker: %v", err)
 				}
 			}
 
-			seedWorkflowActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "shared"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RESUMING)
-
 			w := &ActorWorkflow{store: persistence, scheduler: scheduling.New(nil)}
-			resumingActor := &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "own-actor-uid"},
-				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker:          &ateapipb.ObjectRef{Name: testWorkerUID("pod-1")},
-						WorkerNamespace: "worker-ns",
-						WorkerPool:      "pool",
-						WorkerPod:       "pod-1",
-						WorkerPodUid:    testWorkerUID("pod-1"),
-					},
-				},
-			}
 			tmpl := &ateapipb.ActorTemplate{}
 			if tt.tmplSelector != nil {
 				tmpl.WorkerSelector = &ateapipb.Selector{MatchLabels: tt.tmplSelector}
 			}
-			_, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
+			_, err = w.validateAssignedWorker(ctx, actorRef, resumingActor, tmpl)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
 
-			actor, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"})
+			actor, err := persistence.GetActor(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
@@ -1084,8 +1095,8 @@ func TestValidateAssignedWorker(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetWorker: %v", err)
 			}
-			if got := firstAssignment(t, persistence, testWorkerUID("pod-1")); !proto.Equal(got, tt.wantAssignment) {
-				t.Errorf("stored worker assignment = %v, want %v", got, tt.wantAssignment)
+			if got := firstAssignment(t, persistence, testWorkerUID("pod-1")); !proto.Equal(got, wantAssignment) {
+				t.Errorf("stored worker assignment = %v, want %v", got, wantAssignment)
 			}
 			if !tt.wantWorkerWrite && stored.GetMetadata().GetVersion() != seeded.GetMetadata().GetVersion() {
 				t.Errorf("worker version moved %d -> %d, want no write", seeded.GetMetadata().GetVersion(), stored.GetMetadata().GetVersion())
@@ -1130,6 +1141,7 @@ type capturingAtelet struct {
 	promote     *ateletpb.PromoteSnapshotRequest
 	checkpoints int
 	promotes    int
+	terminates  int
 
 	// onCheckpoint, when set, runs before Checkpoint returns, standing in for
 	// whatever else happens while the workload checkpoints. Its error fails
@@ -1218,18 +1230,25 @@ func (f *capturingAtelet) Terminate(ctx context.Context, req *ateletpb.Terminate
 		hook()
 	}
 	f.mu.Lock()
-	err := f.terminateErr
-	f.mu.Unlock()
-	if err != nil {
-		return nil, err
+	defer f.mu.Unlock()
+	f.terminates++
+	if f.terminateErr != nil {
+		return nil, f.terminateErr
 	}
-	return f.UnimplementedAteletServer.Terminate(ctx, req)
+	return &ateletpb.TerminateResponse{}, nil
 }
 
 func (f *capturingAtelet) detachRequest() *ateletpb.DetachActorRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return proto.CloneOf(f.detach)
+}
+
+// terminateCalls returns how many Terminate RPCs were received.
+func (f *capturingAtelet) terminateCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.terminates
 }
 
 // calls returns how many Checkpoint and PromoteSnapshot RPCs were received.

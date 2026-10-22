@@ -53,7 +53,7 @@ type ReleaseWindowWorkflow struct {
 	// Snapshot, when set, is the actor's latest snapshot.
 	Snapshot func(t *testing.T) *ateapipb.Snapshot
 	// Finalize runs the workflow or step that releases the worker and then
-	// records the actor's new state against st. Async and sync suspend reach the
+	// records the actor's new state against st. Every workflow reaches the
 	// fake atelet newWireCaptureWorkflow serves for the worker
 	// WireTestAssignment names, so the actor must be assigned that worker
 	// and run from the template SeedSuspendTemplate stores.
@@ -111,20 +111,23 @@ func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 		{
 			Name:  "crash",
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			Finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
-				return crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash")
+			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
+				w, _ := newWireCaptureWorkflow(t, st)
+				return w.crashActor(ctx, actorRef, nil, ateattr.OperationResume, "test crash")
 			},
 			WantRetry:      codes.OK,
 			WantFinalState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
-			// A resume that finds its worker ineligible releases it, then
-			// crashes the actor. The retry finds the worker no longer hosts
-			// the actor and crashes it.
+			// A resume that finds its worker ineligible crashes the actor,
+			// which releases the worker first. The retry finds the worker no
+			// longer hosts the actor and crashes it.
 			Name:  "resume onto an ineligible worker",
 			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
-			Finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, actor *ateapipb.Actor) error {
-				_, err := (&ActorWorkflow{store: st, scheduler: scheduling.New(nil)}).validateAssignedWorker(ctx, actorRef, actor, ineligibleTemplate)
+			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, actor *ateapipb.Actor) error {
+				w, _ := newWireCaptureWorkflow(t, st)
+				w.scheduler = scheduling.New(nil)
+				_, err := w.validateAssignedWorker(ctx, actorRef, actor, ineligibleTemplate)
 				return err
 			},
 			WantRetry:      codes.Aborted,
