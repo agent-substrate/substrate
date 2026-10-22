@@ -192,7 +192,7 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	ctx, done := stepSpan(ctx, "DiscardWorker")
 	defer func() { err = done(err) }()
 
-	if node := actor.GetStatus().GetAssignedNode(); node != "" {
+	if actor.GetStatus().GetAssignedNode() != "" {
 		state, err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert)
 		// The revert can go on without an unreachable atelet when nothing runs
 		// on the node and its latest local snapshot is already uploaded.
@@ -201,7 +201,7 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 		if err != nil && !canDetachWithoutAtelet(ctx, actor, err) {
 			return nil, err
 		}
-		if actor, err = w.recordTerminatedUpload(ctx, actorRef, actor, node, state); err != nil {
+		if actor, err = w.recordTerminatedUpload(ctx, actorRef, actor, state); err != nil {
 			return nil, err
 		}
 		if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
@@ -217,19 +217,29 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	return actor, w.releaseAssignmentWithoutBacklink(ctx, actor)
 }
 
-// recordTerminatedUpload marks COMPLETED the snapshot that the atelet on node
-// reported durable in state as it terminated the actor, with the same rules
-// as a report. atelet may upload a snapshot without its report landing, and a
-// CRASHED actor refuses reports, so without this the revert would delete the
-// upload as in progress. It writes at once because atelet forgot the actor, so
-// a retried Terminate returns nothing.
-func (w *ActorWorkflow) recordTerminatedUpload(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, node string, state *ateletpb.ActorSnapshotState) (*ateapipb.Actor, error) {
-	reportedGen := state.GetLatestDurable().GetSnapshot().GetGeneration()
-	snap := findSnapshotByGeneration(actor.GetStatus().GetSnapshots(), reportedGen)
-	if snap != nil && snap.GetLocality() == "" && snap.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
-		// A snapshot on no node is the one a crashed suspend minted and never
-		// finalized. It stays PENDING, so the revert deletes it with the rest of the
-		// discarded execution.
+// recordTerminatedUpload marks COMPLETED the snapshot that the atelet on the
+// actor's assigned node reported durable in state as it terminated the actor,
+// with the same rules as a report. atelet may upload a snapshot without its
+// report landing, and a CRASHED actor refuses reports, so without this the
+// revert would delete the upload as in progress. It writes at once because
+// atelet forgot the actor, so a retried Terminate returns nothing.
+func (w *ActorWorkflow) recordTerminatedUpload(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, state *ateletpb.ActorSnapshotState) (*ateapipb.Actor, error) {
+	reported := state.GetLatestDurable().GetSnapshot()
+	if reported == nil {
+		return actor, nil
+	}
+	node := actor.GetStatus().GetAssignedNode()
+	// Only a finalized suspend places a snapshot on a node, so any other
+	// snapshot, such as one a crashed suspend created, stays PENDING and the
+	// revert deletes it with the rest of the discarded execution.
+	snap := findSnapshotByGeneration(actor.GetStatus().GetSnapshots(), reported.GetGeneration())
+	if got := snap.GetLocality(); got != node {
+		slog.InfoContext(ctx, "Discarding an upload Terminate reported for a snapshot not on its node",
+			slog.Any("actor", actorRef),
+			slog.String("node", node),
+			slog.String("snapshot_locality", got),
+			slog.Int("generation", int(reported.GetGeneration())),
+			slog.String("uuid", reported.GetSnapshotUuid()))
 		return actor, nil
 	}
 	applied := proto.CloneOf(actor.GetStatus())
