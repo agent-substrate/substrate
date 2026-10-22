@@ -134,7 +134,7 @@ go run ./tools/setup-gcp create cluster [flags]
 
 An existing cluster is never replaced. If its network, subnetwork or Dataplane V2
 setting differs from the flags, the command fails and names the differences;
-set the matching flags or delete the cluster yourself.
+set the matching flags or run `hack/teardown.sh --delete-cluster`.
 
 `NODE_MACHINE_TYPE` was named `GVISOR_NODE_MACHINE_TYPE`. The old name still
 works and warns; rename it in your `.ate-dev-env.sh`.

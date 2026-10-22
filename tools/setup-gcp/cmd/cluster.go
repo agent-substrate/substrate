@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -256,10 +257,10 @@ func checkExistingCluster(cluster *containerpb.Cluster, cfg *Config) error {
 
 	var mismatches []string
 	if n := nc.GetNetwork(); n != "" && !strings.HasSuffix(n, expectedNetwork) {
-		mismatches = append(mismatches, fmt.Sprintf("network is %q, want %q (NETWORK)", n, expectedNetwork))
+		mismatches = append(mismatches, fmt.Sprintf("network is %q, want %q (NETWORK)", path.Base(n), cfg.Network))
 	}
 	if n := nc.GetSubnetwork(); n != "" && !strings.HasSuffix(n, expectedSubnetwork) {
-		mismatches = append(mismatches, fmt.Sprintf("subnetwork is %q, want %q (SUBNETWORK)", n, expectedSubnetwork))
+		mismatches = append(mismatches, fmt.Sprintf("subnetwork is %q, want %q (SUBNETWORK)", path.Base(n), cfg.Subnetwork))
 	}
 	if currentIsV2 != cfg.EnableDataplaneV2 {
 		mismatches = append(mismatches, fmt.Sprintf("Dataplane V2 is %t, want %t (ENABLE_DATAPLANE_V2)", currentIsV2, cfg.EnableDataplaneV2))
@@ -267,7 +268,7 @@ func checkExistingCluster(cluster *containerpb.Cluster, cfg *Config) error {
 	if len(mismatches) == 0 {
 		return nil
 	}
-	return fmt.Errorf("cluster %q exists but %s; setup-gcp does not replace an existing cluster, so set the variables to match it or delete it first",
+	return fmt.Errorf("cluster %q exists but %s; setup-gcp does not replace an existing cluster, so set the variables to match it or delete it with hack/teardown.sh --delete-cluster",
 		cfg.ClusterName, strings.Join(mismatches, "; "))
 }
 

@@ -622,12 +622,12 @@ func TestCheckExistingCluster(t *testing.T) {
 		{
 			name:    "network mismatch",
 			cluster: clusterWith("projects/proj/global/networks/other", subnetwork, v2),
-			want:    []string{`network is "projects/proj/global/networks/other"`, "(NETWORK)"},
+			want:    []string{`network is "other", want "default" (NETWORK)`},
 		},
 		{
 			name:    "per-cluster subnetwork",
 			cluster: clusterWith(network, "projects/proj/regions/us-west1/subnetworks/gke-c-subnet-1a2b", v2),
-			want:    []string{`subnetwork is "projects/proj/regions/us-west1/subnetworks/gke-c-subnet-1a2b"`, "(SUBNETWORK)"},
+			want:    []string{`subnetwork is "gke-c-subnet-1a2b", want "default" (SUBNETWORK)`},
 		},
 		{
 			name:    "legacy datapath",
@@ -637,7 +637,7 @@ func TestCheckExistingCluster(t *testing.T) {
 		{
 			name:    "every mismatch is reported",
 			cluster: clusterWith("projects/proj/global/networks/other", "projects/proj/regions/us-west1/subnetworks/other", legacy),
-			want:    []string{"(NETWORK)", "(SUBNETWORK)", "(ENABLE_DATAPLANE_V2)", "does not replace an existing cluster"},
+			want:    []string{"(NETWORK)", "(SUBNETWORK)", "(ENABLE_DATAPLANE_V2)", "hack/teardown.sh --delete-cluster"},
 		},
 	}
 
