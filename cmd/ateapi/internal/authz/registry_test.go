@@ -288,6 +288,34 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			want:       []check{{RelationCanMintActorCertificate, "actor:team-a/runner"}},
 		},
 
+		// Shared volumes.
+		{
+			name:       "CreateExternalVolume checks its atespace",
+			fullMethod: ateapipb.Control_CreateExternalVolume_FullMethodName,
+			req: &ateapipb.CreateExternalVolumeRequest{ExternalVolume: &ateapipb.ExternalVolume{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "ctx"},
+			}},
+			want: []check{{RelationCanCreateExternalVolume, "atespace:team-a"}},
+		},
+		{
+			name:       "GetExternalVolume",
+			fullMethod: ateapipb.Control_GetExternalVolume_FullMethodName,
+			req:        &ateapipb.GetExternalVolumeRequest{ExternalVolume: &ateapipb.ObjectRef{Atespace: "team-a", Name: "ctx"}},
+			want:       []check{{RelationCanGet, "external_volume:team-a/ctx"}},
+		},
+		{
+			name:       "ListExternalVolumes across all atespaces",
+			fullMethod: ateapipb.Control_ListExternalVolumes_FullMethodName,
+			req:        &ateapipb.ListExternalVolumesRequest{},
+			want:       []check{{RelationCanListExternalVolumes, GlobalRootObject}},
+		},
+		{
+			name:       "DeleteExternalVolume",
+			fullMethod: ateapipb.Control_DeleteExternalVolume_FullMethodName,
+			req:        &ateapipb.DeleteExternalVolumeRequest{ExternalVolume: &ateapipb.ObjectRef{Atespace: "team-a", Name: "ctx"}},
+			want:       []check{{RelationCanDelete, "external_volume:team-a/ctx"}},
+		},
+
 		// Tags.
 		{
 			name:       "CreateTag checks its source actor's atespace",

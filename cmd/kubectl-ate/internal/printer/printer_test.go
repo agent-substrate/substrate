@@ -699,6 +699,95 @@ func TestPrintTagTo_YAML(t *testing.T) {
 	}
 }
 
+func TestPrintExternalVolumesTo_Table(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
+	var buf bytes.Buffer
+	volumes := []*ateapipb.ExternalVolume{
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "shared",
+				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
+			},
+			DeleteTrigger: ateapipb.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR,
+			VolumeId:      "projects/p/zones/z/disks/substrate-1",
+			VolumeType:    "pd.csi.storage.gke.io",
+			Refs: []*ateapipb.ActorRef{
+				{ActorUid: "uid-1", ActorName: "producer", Active: true},
+				{ActorUid: "uid-2", ActorName: "consumer"},
+			},
+		},
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "adopted",
+				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
+			},
+			DeleteTrigger: ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL,
+			VolumeId:      "projects/p/zones/z/disks/preexisting",
+			VolumeType:    "pd.csi.storage.gke.io",
+		},
+	}
+
+	if err := PrintExternalVolumesTo(&buf, volumes, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `ATESPACE   NAME      VOLUME TYPE             VOLUME ID                              DELETE TRIGGER   REFS   AGE
+team-a     adopted   pd.csi.storage.gke.io   projects/p/zones/z/disks/preexisting   Manual           0/0    5h
+team-a     shared    pd.csi.storage.gke.io   projects/p/zones/z/disks/substrate-1   LastActor        1/2    5m
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintExternalVolumesTo_Invalid(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintExternalVolumesTo(&buf, nil, "xml"); err == nil {
+		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
+func TestPrintExternalVolumeTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	volume := &ateapipb.ExternalVolume{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"}}
+
+	if err := PrintExternalVolumeTo(&buf, volume, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "metadata": {
+    "atespace": "team-a",
+    "name": "shared"
+  }
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintExternalVolumeTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	volume := &ateapipb.ExternalVolume{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"}}
+
+	if err := PrintExternalVolumeTo(&buf, volume, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `metadata:
+  atespace: team-a
+  name: shared
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestPrintAtespacesTo_Table(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinNow(t, now)
