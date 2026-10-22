@@ -1,7 +1,7 @@
 ---
 title: "Metrics Reference & Best Practices"
 linkTitle: "Metrics"
-weight: 4
+weight: 5
 repo_source: "docs/dev/best-practices/metrics.md"
 card_icon: "fa-solid fa-gauge-high"
 description: >

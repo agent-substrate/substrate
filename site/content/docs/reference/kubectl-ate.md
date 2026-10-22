@@ -1,7 +1,7 @@
 ---
 title: "kubectl-ate CLI Reference"
 linkTitle: "CLI Reference"
-weight: 2
+weight: 3
 repo_source: "cmd/kubectl-ate/README.md"
 card_icon: "fa-solid fa-terminal"
 description: >

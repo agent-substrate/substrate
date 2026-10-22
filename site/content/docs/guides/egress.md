@@ -1,7 +1,7 @@
 ---
 title: "Egress"
 linkTitle: "Egress"
-weight: 5
+weight: 8
 repo_source: "docs/network-egress.md"
 repo_sources:
   - "docs/egress-traffic.md"

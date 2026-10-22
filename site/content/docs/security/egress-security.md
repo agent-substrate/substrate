@@ -1,7 +1,7 @@
 ---
 title: "MITM & Egress Policies"
 linkTitle: "MITM & Egress Policies"
-weight: 2
+weight: 3
 description: >
   Actor identity certificates, default-deny egress policy enforcement, and TLS man-in-the-middle trust bundles.
 ---

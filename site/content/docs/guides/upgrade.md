@@ -1,7 +1,7 @@
 ---
 title: "Rolling Upgrades"
 linkTitle: "Rolling Upgrades"
-weight: 7
+weight: 12
 repo_source: "docs/upgrade.md"
 description: >
   Runbook for a rolling upgrade of Agent Substrate.

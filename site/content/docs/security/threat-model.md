@@ -1,7 +1,7 @@
 ---
 title: "Threat Model"
 linkTitle: "Threat Model"
-weight: 1
+weight: 2
 repo_source: "docs/threat-model.md"
 description: >
   Assets, trust boundaries, and threats considered for Agent Substrate.

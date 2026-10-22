@@ -1,7 +1,7 @@
 ---
 title: "Glossary"
 linkTitle: "Glossary"
-weight: 3
+weight: 4
 repo_source: "docs/glossary.md"
 card_icon: "fa-solid fa-book"
 aliases:
