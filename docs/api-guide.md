@@ -182,6 +182,21 @@ their request `headers` mapping. WebSocket clients add the same header to the
 opening HTTP upgrade request. gRPC clients send it as outgoing metadata using
 the lowercase name `ate-target-actor`.
 
+Ordinary HTTP requests use Actor port `80` by default. Set `ate-target-port`
+to reach another port without changing the application's `Host`/`:authority`,
+path, or method:
+
+```bash
+curl -H "ate-target-actor: my-atespace/my-actor" \
+  -H "ate-target-port: 9090" https://router.example.com/api
+```
+
+`ate-target-port` accepts one decimal value in `1..65535`. An empty value uses
+the default port `80`. Invalid, out-of-range, and duplicate values return
+`400 Bad Request`. The router removes
+this header before forwarding to the Actor. Port selection uses the same
+forwarding path and port restrictions as CONNECT.
+
 For an HTTP `CONNECT` tunnel to a non-default Actor port, put the routing
 header on the outer `CONNECT` request and keep the target port in its
 authority. With curl, use `--proxy-header` instead of `-H`:
@@ -192,9 +207,13 @@ curl --proxytunnel --proxy http://localhost:8001 \
   http://actor-upstream:9090/
 ```
 
+CONNECT uses only the port in its outer authority. `ate-target-port` is ignored
+on both the CONNECT request and requests inside the tunnel. The header is
+removed from tunneled requests before forwarding to the Actor.
+
 Browser navigation cannot add custom request headers. Browser-based and other
 fixed clients must therefore connect through a user-controlled reverse proxy or
-policy enforcement point that overwrites the routing header before forwarding
+policy enforcement point that overwrites the routing headers before forwarding
 to `atenet-router`. The [Jupyter demo](../demos/jupyter/README.md) shows this
 pattern with NGINX. The proxy must derive the value from trusted configuration
 or authenticated request context rather than forwarding values supplied by an
