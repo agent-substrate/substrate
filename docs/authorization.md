@@ -83,7 +83,7 @@ ATE_API_AUTHZ_BOOTSTRAP_OWNERS=<sub>,system:serviceaccount:ate-system:ate-client
 
 Then add the Google provider to the `ate-api-authentication` ConfigMap and
 restart `ate-api-server`
-([authentication.md](authentication.md#google-cloud-cli-tokens)), and act as
+([authentication.md](authentication.md#configuring-jwt-providers)), and act as
 yourself:
 
 ```sh
@@ -93,11 +93,9 @@ kubectl ate --token-file me.token get atespaces
 
 ## `kubectl ate` and `ate-setup` identities
 
-`kubectl ate` sends the token from `--token-file` (`-` for stdin). Without
-one, it uses your kubeconfig to mint a token for `ate-client` (or
-`ATE_CLIENT_SERVICE_ACCOUNT`) and warns that it is acting as a shared
-identity. It still needs Kubernetes rights to port-forward to `ate-api-server`
-unless you pass `--endpoint`.
+`kubectl ate` sends the token from `--token-file`. Without one, it mints a
+token for `ate-client` (or `ATE_CLIENT_SERVICE_ACCOUNT`); see
+[authentication.md](authentication.md#people-running-kubectl-ate).
 
 `ate-setup` calls the API only to deploy and delete demos and benchmarks, as
 `ate-client`. If you leave `ate-client` out of the bootstrap owners, grant it
@@ -285,24 +283,7 @@ For a shared cluster, beyond replacing the default bootstrap owner:
 
 - **Give people their own identities** in access policies, and have them pass
   `--token-file` with a token from a trusted JWT provider or their own
-  ServiceAccount. To let a user mint tokens only for their own ServiceAccount:
-
-  ```yaml
-  apiVersion: rbac.authorization.k8s.io/v1
-  kind: Role
-  metadata: {name: mint-alice-token, namespace: team-a}
-  rules:
-  - apiGroups: [""]
-    resources: ["serviceaccounts/token"]
-    resourceNames: ["alice"]
-    verbs: ["create"]
-  ```
-
-  ```sh
-  kubectl create token -n team-a alice --audience api.ate-system.svc > alice.token
-  kubectl ate --token-file alice.token get actors -a team-a
-  ```
-
+  ServiceAccount ([authentication.md](authentication.md#people-running-kubectl-ate)).
 - **Limit who can act as a ServiceAccount bootstrap owner.** Anyone who can
   create `serviceaccounts/token`, pods or Secrets in its namespace, or change
   RBAC there, can get its token. A
@@ -315,11 +296,8 @@ For a shared cluster, beyond replacing the default bootstrap owner:
 
 ### Not yet supported
 
-- **Signing in.** `kubectl ate` has no login flow or credential plugin; people
-  obtain tokens themselves.
-- **JWT providers at install time.** `ate-setup` configures only the cluster's
-  ServiceAccount issuer; add others to the ConfigMap afterwards.
 - **Groups.** Policy members are individual principals.
+- **Signing in.** See [authentication.md](authentication.md#not-yet-supported).
 
 ## Known limitations
 

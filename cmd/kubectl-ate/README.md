@@ -24,7 +24,9 @@ go run ./cmd/kubectl-ate <command>
 ## Connection & Auto Port-Forwarding
 By default, `kubectl-ate` will automatically read your `~/.kube/config`, discover the `ate-api-server` pods in your cluster, and establish a temporary background port-forward tunnel to execute gRPC calls securely.
 
-If you prefer to route traffic directly (e.g., through a LoadBalancer or when running natively inside a cluster pod), simply provide the `--endpoint` flag to bypass the tunnel.
+If you prefer to route traffic directly (e.g., through a LoadBalancer or when running natively inside a cluster pod), simply provide the `--endpoint` flag to bypass the tunnel. Either way, `kubectl-ate` reads the CA that verifies `ate-api-server` from the cluster, so it needs a kubeconfig or in-cluster config.
+
+For which credential to pass with `--token-file`, see the [Authentication Guide](../../docs/authentication.md#people-running-kubectl-ate).
 
 ## Tracing
 The CLI supports on-demand tracing using the `--trace` flag. When enabled, the CLI will generate a trace ID and signal to the server that it wants the request to be traced.
