@@ -35,11 +35,13 @@ the exchange accepts only the worker-for-actor kind, never an actor's own
 token. Its public keys come from the `jwks` key of the `actor-id-jwt-pool`
 Secret, read through `oidcjwt.FileKeySource`.
 
-Three packages behind the exchange know no storage provider and are what a
+Four packages behind the exchange know no storage provider and are what a
 provider's own plugin binary reuses. The rest is this binary's.
 
 Reusable by every provider:
 
+- `internal/objectstoreplugin/actorauthz`: the checks every exchange applies
+  before it issues a credential, built on the three below.
 - `internal/oidcjwt`: verifies the JWT against the `jwks` file.
 - `internal/objectstoreplugin/actorlookup`: fetches the actor over the
   loopback, refuses a recreated one.
@@ -68,7 +70,7 @@ S3 has no issuer: its node plugin ignores the JWT and transfers with the
 pod's own credentials, and the exchange answers `UNIMPLEMENTED` there. A
 provider other than these two brings its own binary in this repository, with
 its own exchange handler and proto shaped for its credential, its own issuer
-and storage client, and imports the three reusable packages. A binary outside
+and storage client, and imports the four reusable packages. A binary outside
 the repository cannot, since they are under `internal/`.
 
 ## Upload memory

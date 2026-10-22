@@ -29,6 +29,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorauthz"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorlookup"
 	"go.ate.dev/substrate/internal/objectstoreplugin/exchange"
 	"go.ate.dev/substrate/internal/objectstoreplugin/gcsissuer"
@@ -84,7 +85,7 @@ func newExchangeService(ctx context.Context, cfg exchangeConfig) (exchangepb.Cre
 		lookup.Close()
 		return nil, nil, fmt.Errorf("while setting up the GCS credential issuer: %w", err)
 	}
-	return exchange.New(verifier, lookup, issuer), func() { _ = lookup.Close() }, nil
+	return exchange.New(actorauthz.New(verifier, lookup), issuer), func() { _ = lookup.Close() }, nil
 }
 
 // exchangeTransportCredentials serves the pod's service DNS certificate,
