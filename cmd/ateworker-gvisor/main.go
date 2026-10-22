@@ -131,6 +131,9 @@ func do(ctx context.Context) error {
 	}
 
 	slog.InfoContext(ctx, "ateworker booting", slog.String("version", version.Version))
+	// Settle the overlayfs mount mode now rather than at the first actor's
+	// mount: the probe logs the chosen mode, naming the kernel >= 6.5 fallback.
+	imagecache.ProbeMountAPI()
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
 	}
