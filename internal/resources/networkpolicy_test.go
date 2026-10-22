@@ -18,26 +18,38 @@ import "testing"
 
 func TestNetworkPolicyName(t *testing.T) {
 	tests := []struct {
+		name   string
 		wpName string
 		want   string
 	}{
-		{"my-wp", "substrate-my-wp"},
-		{"a-very-long-workerpool-name-that-exceeds-30-chars", "substrate-a-very-long-workerpool-name-that-exceeds-30-chars"},
-		{"my.pool", "substrate-my.pool"},
+		{
+			name:   "short name",
+			wpName: "my-wp",
+			want:   "substrate-my-wp",
+		},
+		{
+			name:   "dotted name",
+			wpName: "my.pool",
+			want:   "substrate-my.pool",
+		},
+		// The next two share their first 30 characters and the first 5 hex
+		// digits of their SHA-256.
+		{
+			name:   "long name ending 323",
+			wpName: "a-very-long-workerpool-name-th-323",
+			want:   "substrate-a-very-long-workerpool-name-th-323",
+		},
+		{
+			name:   "long name ending 423",
+			wpName: "a-very-long-workerpool-name-th-423",
+			want:   "substrate-a-very-long-workerpool-name-th-423",
+		},
 	}
 	for _, tt := range tests {
-		if got := NetworkPolicyName(tt.wpName); got != tt.want {
-			t.Errorf("NetworkPolicyName(%q) = %q, want %q", tt.wpName, got, tt.want)
-		}
-	}
-}
-
-// These names share their first 30 characters and the first 5 hex digits of
-// their SHA-256, so a name built from those collided.
-func TestNetworkPolicyNameDiffersForFormerlyCollidingPools(t *testing.T) {
-	a := NetworkPolicyName("a-very-long-workerpool-name-th-323")
-	b := NetworkPolicyName("a-very-long-workerpool-name-th-423")
-	if a == b {
-		t.Errorf("NetworkPolicyName gave %q for both pools", a)
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NetworkPolicyName(tt.wpName); got != tt.want {
+				t.Errorf("NetworkPolicyName(%q) = %q, want %q", tt.wpName, got, tt.want)
+			}
+		})
 	}
 }

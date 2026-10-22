@@ -20,7 +20,9 @@ import (
 
 	networkingv1 "k8s.io/api/networking/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -80,6 +82,18 @@ func (r *NetworkPolicyReconciler) reconcileImpl(ctx context.Context, wp *atev1.W
 
 	npAC := r.buildNetworkPolicyApplyConfig(wp)
 
+	existing := &networkingv1.NetworkPolicy{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: *npAC.Namespace, Name: *npAC.Name}, existing)
+	switch {
+	case k8errors.IsNotFound(err):
+	case err != nil:
+		return fmt.Errorf("failed to get NetworkPolicy %s:%s: %w", *npAC.Namespace, *npAC.Name, err)
+	default:
+		if err := checkNetworkPolicyOwner(existing, wp); err != nil {
+			return err
+		}
+	}
+
 	if err := r.Apply(ctx, npAC, client.FieldOwner(networkPolicyFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply NetworkPolicy %s:%s: %w", *npAC.Namespace, *npAC.Name, err)
 	}
@@ -87,6 +101,22 @@ func (r *NetworkPolicyReconciler) reconcileImpl(ctx context.Context, wp *atev1.W
 		"namespace", *npAC.Namespace,
 		"name", *npAC.Name)
 
+	return nil
+}
+
+// checkNetworkPolicyOwner returns an error unless np is labeled for wp and is
+// not controlled by another object. The apply forces ownership, so without
+// this check it would rewrite another pool's policy, or a policy someone else
+// created with the same name. An unowned policy labeled for wp is adopted.
+func checkNetworkPolicyOwner(np *networkingv1.NetworkPolicy, wp *atev1.WorkerPool) error {
+	if got := np.Labels[workerPoolLabel]; got != wp.Name {
+		return fmt.Errorf("refusing to take over NetworkPolicy %s:%s: label %s is %q, want %q",
+			np.Namespace, np.Name, workerPoolLabel, got, wp.Name)
+	}
+	if owner := metav1.GetControllerOf(np); owner != nil && owner.UID != wp.UID {
+		return fmt.Errorf("refusing to take over NetworkPolicy %s:%s: controlled by %s %s (UID %s)",
+			np.Namespace, np.Name, owner.Kind, owner.Name, owner.UID)
+	}
 	return nil
 }
 

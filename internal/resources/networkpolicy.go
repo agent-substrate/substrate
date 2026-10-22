@@ -14,9 +14,10 @@
 
 package resources
 
-// NetworkPolicyName returns the NetworkPolicy name for a WorkerPool. The
-// WorkerPool name is a label value (at most 63 characters), so the result is
-// unique per pool and a valid name without truncation.
+// NetworkPolicyName returns the NetworkPolicy name for a WorkerPool. It keeps
+// the whole pool name, so each pool gets its own policy. The policy also uses
+// the pool name as its ate.dev/worker-pool label value, which Kubernetes caps
+// at 63 characters, so the result never needs truncating.
 func NetworkPolicyName(wpName string) string {
 	return "substrate-" + wpName
 }
