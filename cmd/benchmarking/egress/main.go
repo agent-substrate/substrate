@@ -26,6 +26,8 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+
+	"go.ate.dev/substrate/cmd/benchmarking/egress/internal/cmd/actor"
 )
 
 func main() {
@@ -42,6 +44,8 @@ happened; the target is the endpoint every tunnel leads to.`,
 		// Nobody types these commands often enough to want shell completion.
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
+	root.AddCommand(actor.Command())
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := root.ExecuteContext(ctx); err != nil {
