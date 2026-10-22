@@ -16,6 +16,7 @@ package controllers
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	networkingv1 "k8s.io/api/networking/v1"
@@ -23,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
@@ -39,7 +41,7 @@ func TestWorkerPoolCreatesNetworkPolicy(t *testing.T) {
 	deleteOnCleanup(t, wp)
 
 	eventually(t, func(ctx context.Context) (bool, error) {
-		npName := resources.NetworkPolicyName(wp.Name)
+		npName := resources.NetworkPolicyNamePrefix + wp.Name
 		np := &networkingv1.NetworkPolicy{}
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: npName, Namespace: wp.Namespace}, np)
 		if err != nil {
@@ -146,6 +148,11 @@ func TestNetworkPolicyTakeover(t *testing.T) {
 			name:  "orphaned policy of this pool",
 			label: "netpol-takeover",
 		},
+		{
+			name:     "controlled by this pool with an edited label",
+			label:    "edited",
+			ownerUID: "netpol-takeover-uid",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -154,9 +161,10 @@ func TestNetworkPolicyTakeover(t *testing.T) {
 			wp := makeWorkerPool("netpol-takeover", "default", 1, "worker:v1")
 			wp.UID = "netpol-takeover-uid"
 
-			// Apply as the controller's field manager, so the owner reference
-			// row looks like a policy an earlier reconcile left behind.
-			ac := networkingv1ac.NetworkPolicy(resources.NetworkPolicyName(wp.Name), wp.Namespace).
+			// Apply as the controller's field manager, as an earlier reconcile would.
+			// The API server rejects a second controller reference written by another
+			// manager, so the earlier-pool row would pass even without the check.
+			ac := networkingv1ac.NetworkPolicy(resources.NetworkPolicyNamePrefix+wp.Name, wp.Namespace).
 				WithSpec(networkingv1ac.NetworkPolicySpec().
 					WithPolicyTypes(networkingv1.PolicyTypeIngress))
 			if tt.label != "" {
@@ -179,10 +187,21 @@ func TestNetworkPolicyTakeover(t *testing.T) {
 			}
 			deleteOnCleanup(t, np)
 
-			r := &NetworkPolicyReconciler{Client: k8sClient, SystemNamespace: installdefaults.SystemNamespace}
+			rec := events.NewFakeRecorder(10)
+			r := &NetworkPolicyReconciler{Client: k8sClient, SystemNamespace: installdefaults.SystemNamespace, Recorder: rec}
 			err := r.reconcileImpl(ctx, wp)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("reconcileImpl() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			var gotEvents, wantEvents []string
+			for len(rec.Events) > 0 {
+				gotEvents = append(gotEvents, <-rec.Events)
+			}
+			if err != nil {
+				wantEvents = []string{"Warning " + eventReasonNetworkPolicyConflict + " " + err.Error()}
+			}
+			if !slices.Equal(gotEvents, wantEvents) {
+				t.Errorf("events = %q, want %q", gotEvents, wantEvents)
 			}
 
 			got := &networkingv1.NetworkPolicy{}
@@ -197,6 +216,9 @@ func TestNetworkPolicyTakeover(t *testing.T) {
 			}
 			if !metav1.IsControlledBy(got, wp) {
 				t.Errorf("NetworkPolicy owners = %+v, want controller UID %s", got.OwnerReferences, wp.UID)
+			}
+			if got.Labels[workerPoolLabel] != wp.Name {
+				t.Errorf("NetworkPolicy label %s = %q, want %q", workerPoolLabel, got.Labels[workerPoolLabel], wp.Name)
 			}
 		})
 	}

@@ -68,7 +68,7 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 		t.Fatalf("failed to create WorkerPool: %v", err)
 	}
 
-	expectedNpName := resources.NetworkPolicyName(wpName)
+	expectedNpName := resources.NetworkPolicyNamePrefix + wpName
 	t.Logf("Waiting for NetworkPolicy %s to be created...", expectedNpName)
 
 	var np *networkingv1.NetworkPolicy
