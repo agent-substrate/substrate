@@ -26,8 +26,6 @@ type CreateVolumeRequest struct {
 	CapacityBytes int64
 	// Parameters are the driver-specific parameters from the StorageClass.
 	Parameters map[string]string
-	// DriverName selects the provisioner.
-	DriverName string
 	// SourceSnapshotID seeds the new volume from an existing snapshot. Empty
 	// provisions an empty volume. The snapshot must belong to the same driver:
 	// a handle means nothing to any other one.
@@ -42,9 +40,11 @@ type CreateVolumeResponse struct {
 	// mount the volume.
 	VolumeContext map[string]string
 	// ContentSourceSnapshotID is the snapshot the driver reports it restored
-	// from, empty for an empty volume. Callers that requested a source must
-	// check this: a driver that ignores the request returns an empty volume and
-	// reports success, which for a restore is silent data loss.
+	// from, empty for an empty volume. It is in the driver's own format and
+	// need not equal SourceSnapshotID. A driver that ignores a requested source
+	// returns an empty volume and reports success, which for a restore is
+	// silent data loss, so plugins fail CreateVolume when a source was
+	// requested and none is reported.
 	ContentSourceSnapshotID string
 }
 
@@ -81,8 +81,9 @@ type MountVolumeRequest struct {
 // CreateSnapshotRequest describes a snapshot to take.
 type CreateSnapshotRequest struct {
 	// Name is the caller's name for the snapshot. Like volume provisioning,
-	// this is idempotent on (Name, SourceVolumeID), so a retry within one call
-	// returns the snapshot the previous attempt created.
+	// this is idempotent on Name: calling again with the same Name and
+	// SourceVolumeID returns the existing snapshot, which lets cleanup recover
+	// a handle it never recorded.
 	Name string
 	// SourceVolumeID is the volume to capture.
 	SourceVolumeID string

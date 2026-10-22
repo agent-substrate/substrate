@@ -176,6 +176,11 @@ func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeReques
 		Parameters:         req.Parameters,
 	}
 	if req.SourceSnapshotID != "" {
+		// Like CreateSnapshot, refuse locally rather than ask a driver that
+		// cannot handle snapshots to restore from one.
+		if !p.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT) {
+			return volume.CreateVolumeResponse{}, fmt.Errorf("CSI driver does not support restoring from snapshot %q", req.SourceSnapshotID)
+		}
 		csiReq.VolumeContentSource = &csi.VolumeContentSource{
 			Type: &csi.VolumeContentSource_Snapshot{
 				Snapshot: &csi.VolumeContentSource_SnapshotSource{
@@ -194,10 +199,30 @@ func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeReques
 		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume response returned nil volume")
 	}
 
+	restoredFrom := resp.GetVolume().GetContentSource().GetSnapshot()
+	if req.SourceSnapshotID != "" && restoredFrom == nil {
+		// A driver that ignores the requested source returns an empty volume
+		// and reports success, which for a restore is silent data loss.
+		//
+		// Only the presence of a snapshot source is checked, not that its ID
+		// matches the request: drivers may report the source in their own
+		// format. GCE PD, for example, reports the disk's numeric
+		// sourceSnapshotId rather than the projects/.../snapshots/... handle
+		// it was given. Kubernetes' external-provisioner checks the same way.
+		//
+		// The caller only knows the volume by its requested name, not the ID
+		// the driver issued, so delete it here rather than leak it.
+		volumeID := resp.GetVolume().GetVolumeId()
+		if delErr := p.DeleteVolume(ctx, volumeID); delErr != nil {
+			slog.WarnContext(ctx, "failed to delete volume not restored from the requested snapshot", slog.String("volume_id", volumeID), slog.Any("error", delErr))
+		}
+		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume did not report restoring from requested snapshot %q", req.SourceSnapshotID)
+	}
+
 	return volume.CreateVolumeResponse{
 		VolumeID:                resp.GetVolume().GetVolumeId(),
 		VolumeContext:           resp.GetVolume().GetVolumeContext(),
-		ContentSourceSnapshotID: req.SourceSnapshotID,
+		ContentSourceSnapshotID: restoredFrom.GetSnapshotId(),
 	}, nil
 }
 
@@ -281,18 +306,22 @@ func (p *Plugin) CreateSnapshot(ctx context.Context, req volume.CreateSnapshotRe
 		}
 		return volume.Snapshot{}, fmt.Errorf("CSI CreateSnapshot failed: %w", err)
 	}
-	if resp.GetSnapshot() == nil {
-		return volume.Snapshot{}, fmt.Errorf("CSI CreateSnapshot response returned nil snapshot")
+	if resp.GetSnapshot().GetSnapshotId() == "" {
+		return volume.Snapshot{}, fmt.Errorf("CSI CreateSnapshot response returned no snapshot ID")
 	}
 	return snapshotFromCSI(resp.GetSnapshot()), nil
 }
 
-// GetSnapshot maps to CSI Controller ListSnapshots filtered to one handle. The
-// CSI spec has no single-snapshot read, and a driver that does not implement
-// ListSnapshots at all cannot report readiness, so treat that as "not found"
-// rather than an error: the caller decides whether an unobservable snapshot is
-// acceptable.
+// GetSnapshot maps to CSI Controller ListSnapshots filtered to one handle.
+// ListSnapshots is used rather than the newer GetSnapshot RPC because far more
+// drivers implement it. A driver that does not implement ListSnapshots cannot
+// report readiness, so treat that as "not found" rather than an error: the
+// caller decides whether an unobservable snapshot is acceptable.
 func (p *Plugin) GetSnapshot(ctx context.Context, snapshotID string) (volume.Snapshot, bool, error) {
+	if snapshotID == "" {
+		// An empty filter would list every snapshot the driver holds.
+		return volume.Snapshot{}, false, fmt.Errorf("snapshot ID is required")
+	}
 	if !p.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS) {
 		return volume.Snapshot{}, false, nil
 	}
@@ -303,6 +332,11 @@ func (p *Plugin) GetSnapshot(ctx context.Context, snapshotID string) (volume.Sna
 		if status.Code(err) == codes.Unimplemented {
 			slog.WarnContext(ctx, "CSI ListSnapshots is unimplemented by driver; cannot observe snapshot readiness", slog.String("snapshot_id", snapshotID))
 			p.disableControllerCap(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS)
+			return volume.Snapshot{}, false, nil
+		}
+		// Some drivers answer NotFound for an unknown snapshot_id filter
+		// instead of an empty list.
+		if status.Code(err) == codes.NotFound {
 			return volume.Snapshot{}, false, nil
 		}
 		return volume.Snapshot{}, false, fmt.Errorf("CSI ListSnapshots failed: %w", err)
