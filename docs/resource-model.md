@@ -37,6 +37,7 @@ Global
 │   ├── Actor
 │   │   └── EgressPolicy "default" subresource (singleton)
 │   └── Tag
+├── ServerInfo                     read-only
 └── Worker
     └── ActorAssignment            subresource (one per hosted Actor, managed by Substrate)
 ```
@@ -49,6 +50,7 @@ Global
 | `ActorTemplate` | Atespace | 0..N | Clients |
 | `Actor` | Atespace | 0..N | Clients |
 | `Tag` | Atespace | 0..N | Clients |
+| `ServerInfo` | Global | 1, describing the ateapi instance that serves the request | Substrate |
 | `Worker` | Global | 0..N | Substrate |
 
 ## Subresources

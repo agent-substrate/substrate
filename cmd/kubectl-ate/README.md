@@ -317,6 +317,18 @@ kubectl ate logs actor my-actor -a <atespace> --source=lifecycle
 
 Logs are streamable only while the actor is bound to a worker (i.e., `ACTOR_STATE_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
 
+### Version
+
+```bash
+# Print the client version and the version of the ateapi server
+kubectl ate version
+
+# Print the client version only, without contacting the server
+kubectl ate version --client
+```
+
+ateapi runs several replicas, and during an upgrade they run different versions. The server version comes from whichever replica answered the request, and the `instance=` field names it. If the client and server were built from different commits, the command prints a warning to stderr. `kubectl ate --version` prints only the client version.
+
 ### Administration & Setup
 Commands for bootstrapping the Substrate control plane.
 
