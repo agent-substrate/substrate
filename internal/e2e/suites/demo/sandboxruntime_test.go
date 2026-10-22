@@ -61,6 +61,149 @@ var gvisorSecondReleaseAssets = map[string]map[string]atev1alpha1.AssetFile{
 //     re-stamps v1 on the next suspend.
 func TestSandboxRuntimeUpgrade(t *testing.T) {
 	t.Parallel()
+	f := setupSuspendedV1Actor(t, "runtime-upgrade")
+
+	// 2. Add v2 (Enabled) and flip defaultVersion from v1 to v2 while v1 stays Enabled.
+	updateSandboxConfigVersions(t, f.ctx, f.clients, f.configName, f.v2.Name, []atev1alpha1.SandboxVersionConfig{f.v1, f.v2})
+	waitForWorkerRestorableUpgrade(t, f.ctx, f.clients, f.workerRef, f.v1Runtime)
+
+	// 3. Resume the actor: it matches v1 via restorable_runtimes and restores MEMORY.
+	resumed2, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapipb.ResumeActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to resume Actor via restorable runtime: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	assignment2 := resumed2.GetActor().GetStatus().GetWorkerAssignment()
+	if diff := cmp.Diff(f.v1Runtime, assignment2.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("workerAssignment.sandbox_runtime after restorable resume (-want v1 +got):\n%s", diff)
+	}
+
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: f.actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after restorable resume: %v", err)
+	}
+	validateCounterResponse(t, resp, "after restorable resume", 3, 3)
+	validateRootfsCounter(t, resp, "after restorable resume", 3)
+
+	// 4. Suspend again and verify the new snapshot is still stamped with v1.
+	suspended2, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapipb.SuspendActorRequest{
+		Actor:   f.actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to suspend Actor a second time: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	snap2 := durableSnapshot(suspended2.GetActor().GetStatus())
+	if snap2.GetGeneration() <= f.snap1.GetGeneration() {
+		t.Fatalf("second snapshot generation = %d, want > %d", snap2.GetGeneration(), f.snap1.GetGeneration())
+	}
+	if diff := cmp.Diff(f.v1Runtime, snap2.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("second snapshot sandbox_runtime mismatch (-want v1 +got):\n%s", diff)
+	}
+}
+
+// TestSandboxRuntimeDisableDropsToRootfs covers disabling a SandboxConfig
+// version after an actor has suspended on it:
+//  1. An actor boots on v1, increments its memory, rootfs, and volume counters
+//     twice, and suspends; its snapshot is stamped with v1's runtime.
+//  2. The pool's SandboxConfig switches defaultVersion to v2 and marks v1
+//     Disabled; the worker re-registers with v2 as default_runtime and drops v1
+//     from restorable_runtimes.
+//  3. Resuming the actor drops from MEMORY to ROOTFS on v2: rootfs and volume
+//     counters continue while the memory counter resets, and
+//     WorkerAssignment.sandbox_runtime records v2.
+//  4. Suspending the actor re-stamps the new MEMORY snapshot with v2, and the
+//     next resume restores MEMORY on v2.
+func TestSandboxRuntimeDisableDropsToRootfs(t *testing.T) {
+	t.Parallel()
+	f := setupSuspendedV1Actor(t, "runtime-disable")
+
+	// 2. Switch defaultVersion to v2 and mark v1 Disabled.
+	disabled := atev1alpha1.SandboxVersionStateDisabled
+	v1Disabled := f.v1
+	v1Disabled.State = &disabled
+	updateSandboxConfigVersions(t, f.ctx, f.clients, f.configName, f.v2.Name, []atev1alpha1.SandboxVersionConfig{v1Disabled, f.v2})
+	v2Runtime := waitForWorkerRuntimeDisabled(t, f.ctx, f.clients, f.workerRef, f.v1Runtime)
+
+	// 3. Resume the actor: no worker can restore v1, so it drops to ROOTFS on v2.
+	resumed2, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapipb.ResumeActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to resume Actor after v1 disabled: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	assignment2 := resumed2.GetActor().GetStatus().GetWorkerAssignment()
+	if diff := cmp.Diff(v2Runtime, assignment2.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("workerAssignment.sandbox_runtime after ROOTFS fallback (-want v2 +got):\n%s", diff)
+	}
+
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: f.actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after ROOTFS fallback: %v", err)
+	}
+	validateCounterResponse(t, resp, "after ROOTFS fallback", 1, 3)
+	validateRootfsCounter(t, resp, "after ROOTFS fallback", 3)
+
+	// 4. Suspend and verify the new MEMORY snapshot is stamped with v2, then
+	// resume again to confirm a warm MEMORY restore on v2.
+	suspended2, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapipb.SuspendActorRequest{
+		Actor:   f.actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to suspend Actor on v2: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	snap2 := durableSnapshot(suspended2.GetActor().GetStatus())
+	if snap2.GetGeneration() <= f.snap1.GetGeneration() {
+		t.Fatalf("second snapshot generation = %d, want > %d", snap2.GetGeneration(), f.snap1.GetGeneration())
+	}
+	if got := snap2.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		t.Fatalf("snapshot fidelity after v2 suspend = %v, want MEMORY", got)
+	}
+	if diff := cmp.Diff(v2Runtime, snap2.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("second snapshot sandbox_runtime mismatch (-want v2 +got):\n%s", diff)
+	}
+
+	resumed3, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapipb.ResumeActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to resume Actor on v2: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	if diff := cmp.Diff(v2Runtime, resumed3.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("workerAssignment.sandbox_runtime on v2 MEMORY resume (-want v2 +got):\n%s", diff)
+	}
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: f.actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after v2 MEMORY resume: %v", err)
+	}
+	validateCounterResponse(t, resp, "after v2 MEMORY resume", 2, 4)
+	validateRootfsCounter(t, resp, "after v2 MEMORY resume", 4)
+}
+
+type sandboxRuntimeFixture struct {
+	ctx        context.Context
+	clients    *e2e.Clients
+	configName string
+	v1, v2     atev1alpha1.SandboxVersionConfig
+	actorName  string
+	actorRef   *ateapipb.ObjectRef
+	workerRef  *ateapipb.ObjectRef
+	v1Runtime  *ateapipb.ActorSandboxRuntime
+	snap1      *ateapipb.Snapshot
+}
+
+// setupSuspendedV1Actor creates a per-test SandboxConfig (at v1), WorkerPool,
+// ActorTemplate, and Actor, runs the actor on v1 for two calls (memory=2,
+// file=2, rootfs=2), suspends it synchronously, and verifies its MEMORY
+// snapshot is stamped with v1.
+func setupSuspendedV1Actor(t *testing.T, prefix string) *sandboxRuntimeFixture {
+	t.Helper()
 	nsObj := e2e.CreateNamespace(t)
 	ctx := context.Background()
 	clients := e2e.GetClients()
@@ -78,8 +221,7 @@ func TestSandboxRuntimeUpgrade(t *testing.T) {
 	v1 := defaultVersionFromConfig(t, baseConfig, "v1")
 	v2 := secondSandboxVersion(v1, "v2", class)
 
-	configName := "e2e-runtime-" + nsObj.Name
-	poolName := "runtime-upgrade"
+	configName := "e2e-" + prefix + "-" + nsObj.Name
 	if _, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Create(ctx, &atev1alpha1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: configName},
 		Spec: atev1alpha1.SandboxConfigSpec{
@@ -93,17 +235,17 @@ func TestSandboxRuntimeUpgrade(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		_ = clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Delete(cleanupCtx, poolName, metav1.DeleteOptions{})
+		_ = clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Delete(cleanupCtx, prefix, metav1.DeleteOptions{})
 		if err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Delete(cleanupCtx, configName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			t.Errorf("failed to delete SandboxConfig %s: %v", configName, err)
 		}
 	})
 
-	tmplName := "runtime-upgrade-" + nsObj.Name
+	tmplName := prefix + "-" + nsObj.Name
 	tmpl := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
 		Atespace: demoAtespace,
 		Name:     tmplName,
-		PoolName: poolName,
+		PoolName: prefix,
 		// Single worker so GetWorker on workerRef observes the only candidate
 		// before the second resume.
 		PoolReplicas:      1,
@@ -115,7 +257,7 @@ func TestSandboxRuntimeUpgrade(t *testing.T) {
 		},
 	})
 
-	actorName := "runtime-upgrade-" + nsObj.Name
+	actorName := prefix + "-" + nsObj.Name
 	actorRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName}
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -124,7 +266,6 @@ func TestSandboxRuntimeUpgrade(t *testing.T) {
 		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef})
 	})
 
-	// 1. Create and resume the actor on v1, call it twice, and suspend.
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
 		ActorTemplate: e2e.TemplateRef(tmpl),
@@ -141,8 +282,7 @@ func TestSandboxRuntimeUpgrade(t *testing.T) {
 
 	assignment1 := resumed1.GetActor().GetStatus().GetWorkerAssignment()
 	v1Runtime := assignment1.GetSandboxRuntime()
-	v1Hash := runtimeAttribute(v1Runtime, hardware.AttrSandboxBundleHash)
-	if v1Hash == "" {
+	if runtimeAttribute(v1Runtime, hardware.AttrSandboxBundleHash) == "" {
 		t.Fatalf("initial assignment runtime %v has no %q attribute", v1Runtime, hardware.AttrSandboxBundleHash)
 	}
 	workerRef := assignment1.GetWorker()
@@ -176,45 +316,17 @@ func TestSandboxRuntimeUpgrade(t *testing.T) {
 		t.Fatalf("snapshot sandbox_runtime mismatch after v1 suspend (-want +got):\n%s", diff)
 	}
 
-	// 2. Add v2 (Enabled) and flip defaultVersion from v1 to v2 while v1 stays Enabled.
-	updateSandboxConfigVersions(t, ctx, clients, configName, v2.Name, []atev1alpha1.SandboxVersionConfig{v1, v2})
-	waitForWorkerRestorableUpgrade(t, ctx, clients, workerRef, v1Runtime)
-
-	// 3. Resume the actor: it matches v1 via restorable_runtimes and restores MEMORY.
-	resumed2, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef})
-	if err != nil {
-		t.Fatalf("failed to resume Actor via restorable runtime: %v", err)
-	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
-
-	assignment2 := resumed2.GetActor().GetStatus().GetWorkerAssignment()
-	if diff := cmp.Diff(v1Runtime, assignment2.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Fatalf("workerAssignment.sandbox_runtime after restorable resume (-want v1 +got):\n%s", diff)
-	}
-
-	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
-	if err != nil {
-		t.Fatalf("failed to call actor after restorable resume: %v", err)
-	}
-	validateCounterResponse(t, resp, "after restorable resume", 3, 3)
-	validateRootfsCounter(t, resp, "after restorable resume", 3)
-
-	// 4. Suspend again and verify the new snapshot is still stamped with v1.
-	suspended2, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor:   actorRef,
-		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
-	})
-	if err != nil {
-		t.Fatalf("failed to suspend Actor a second time: %v", err)
-	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-
-	snap2 := durableSnapshot(suspended2.GetActor().GetStatus())
-	if snap2.GetGeneration() <= snap1.GetGeneration() {
-		t.Fatalf("second snapshot generation = %d, want > %d", snap2.GetGeneration(), snap1.GetGeneration())
-	}
-	if diff := cmp.Diff(v1Runtime, snap2.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Fatalf("second snapshot sandbox_runtime mismatch (-want v1 +got):\n%s", diff)
+	return &sandboxRuntimeFixture{
+		ctx:        ctx,
+		clients:    clients,
+		configName: configName,
+		v1:         v1,
+		v2:         v2,
+		actorName:  actorName,
+		actorRef:   actorRef,
+		workerRef:  workerRef,
+		v1Runtime:  v1Runtime,
+		snap1:      snap1,
 	}
 }
 
@@ -320,6 +432,39 @@ func waitForWorkerRestorableUpgrade(t *testing.T, ctx context.Context, clients *
 		case <-ctx.Done():
 			raw, _ := json.Marshal(lastClasses)
 			t.Fatalf("timed out after %v waiting for Worker %s to report a new default_runtime and v1 (%s) in restorable_runtimes (last sandbox_classes=%s, err=%v)",
+				timeout, workerRef.GetName(), v1Hash, raw, err)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// waitForWorkerRuntimeDisabled polls GetWorker until workerRef reports a
+// default_runtime with a different bundle hash than v1Runtime and no longer
+// matches v1Runtime in default_runtime or restorable_runtimes.
+func waitForWorkerRuntimeDisabled(t *testing.T, ctx context.Context, clients *e2e.Clients, workerRef *ateapipb.ObjectRef, v1Runtime *ateapipb.ActorSandboxRuntime) *ateapipb.ActorSandboxRuntime {
+	t.Helper()
+	const timeout = 2 * time.Minute
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	v1Hash := runtimeAttribute(v1Runtime, hardware.AttrSandboxBundleHash)
+	var lastClasses []*ateapipb.WorkerSandboxClass
+	for {
+		w, err := clients.SubstrateAPI.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: workerRef})
+		if err == nil {
+			status := w.GetStatus()
+			lastClasses = status.GetSandboxClasses()
+			defRuntime := hardware.ColdBootRuntime(status)
+			defHash := runtimeAttribute(defRuntime, hardware.AttrSandboxBundleHash)
+			if defHash != "" && defHash != v1Hash && !hardware.WorkerMatches(status, v1Runtime) {
+				t.Logf("Worker %s re-registered with v1 disabled: default=%s", workerRef.GetName(), defHash)
+				return defRuntime
+			}
+		}
+		select {
+		case <-ctx.Done():
+			raw, _ := json.Marshal(lastClasses)
+			t.Fatalf("timed out after %v waiting for Worker %s to report a new default_runtime and drop v1 (%s) (last sandbox_classes=%s, err=%v)",
 				timeout, workerRef.GetName(), v1Hash, raw, err)
 		case <-time.After(500 * time.Millisecond):
 		}
