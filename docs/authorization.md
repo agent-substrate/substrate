@@ -243,10 +243,10 @@ metadata:
 bindings:
 - role: editor
   members:
-  - user:system:serviceaccount:team-a:alice
+  - user:system:serviceaccount:ate-users:alice
 - role: viewer
   members:
-  - user:system:serviceaccount:team-a:bob
+  - user:system:serviceaccount:ate-users:bob
 ```
 
 ```sh
@@ -285,10 +285,8 @@ For a shared cluster, beyond replacing the default bootstrap owner:
   `--token-file` with a token from a trusted JWT provider or their own
   ServiceAccount ([authentication.md](authentication.md#people-running-kubectl-ate)).
 - **Limit who can act as a ServiceAccount bootstrap owner.** Anyone who can
-  create `serviceaccounts/token`, pods or Secrets in its namespace, or change
-  RBAC there, can get its token. A
-  `kubernetes.io/service-account-token` Secret gets one that never expires.
-  Check who can, and alert on the audit events:
+  create `serviceaccounts/token` or pods in its namespace, or change RBAC
+  there, can get its token. Check who can, and alert on the audit events:
 
   ```sh
   kubectl auth can-i create serviceaccounts/ate-client --subresource=token -n ate-system --as alice@example.com
