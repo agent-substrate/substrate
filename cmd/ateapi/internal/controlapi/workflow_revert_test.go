@@ -413,6 +413,76 @@ func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 	}
 }
 
+// TestRecordTerminatedUpload verifies a revert records the upload Terminate
+// reports. A report the record already holds writes nothing. A report that
+// conflicts with the record, or a write that races another, fails the revert.
+func TestRecordTerminatedUpload(t *testing.T) {
+	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	for _, tc := range []struct {
+		name string
+		// uploaded seeds the snapshot's upload as already recorded.
+		uploaded bool
+		// uuid is the snapshot uuid Terminate reports.
+		uuid string
+		// stale passes the actor as read before another write landed.
+		stale       bool
+		wantCode    codes.Code
+		wantDurable ateapipb.SnapshotStorageStatus
+		wantWrite   bool
+	}{
+		{name: "records the upload", uuid: "pause-snap", wantDurable: completed, wantWrite: true},
+		{name: "upload already recorded", uploaded: true, uuid: "pause-snap", wantDurable: completed},
+		{name: "report conflicts with the record", uuid: "other-snap", wantCode: codes.Internal, wantDurable: pending},
+		{name: "concurrent update", uuid: "pause-snap", stale: true, wantCode: codes.Aborted, wantDurable: pending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+
+			ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			shape := withPausedShape(t, "node-1")
+			if tc.uploaded {
+				shape = withUploadedPausedShape(t, "node-1")
+			}
+			seedWorkflowActor(t, ctx, st, ref, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_REVERTING, shape)
+			actor, err := st.GetActor(ctx, ref)
+			if err != nil {
+				t.Fatalf("get seeded actor: %v", err)
+			}
+			before := actor
+			if tc.stale {
+				before = mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
+					s.Crash = newActorCrash("ResumeActor", "interrupted execution")
+				})
+			}
+			state := &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
+				SnapshotUuid: tc.uuid,
+				Generation:   1,
+				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				Object:       &ateletpb.ObjectStorage{SnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "pause-snap")},
+			}}}
+
+			_, err = w.recordTerminatedUpload(ctx, ref, actor, state)
+			if got := apierror.Code(err); got != tc.wantCode {
+				t.Fatalf("recordTerminatedUpload = %v, want %v", err, tc.wantCode)
+			}
+			stored, err := st.GetActor(ctx, ref)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if got := stored.GetStatus().GetSnapshots()[0].GetDurableSnapshot().GetStatus(); got != tc.wantDurable {
+				t.Errorf("snapshot durable status = %v, want %v", got, tc.wantDurable)
+			}
+			if got := stored.GetMetadata().GetVersion() != before.GetMetadata().GetVersion(); got != tc.wantWrite {
+				t.Errorf("wrote the actor = %v, want %v", got, tc.wantWrite)
+			}
+		})
+	}
+}
+
 // TestRevertActor_RejectsSuspended covers both ways an actor can already be
 // SUSPENDED when a revert arrives: it never ran, or a previous revert already
 // finished. Both are FailedPrecondition — revert is not a no-op success on its
