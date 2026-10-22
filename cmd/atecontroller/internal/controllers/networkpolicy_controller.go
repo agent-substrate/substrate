@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -36,6 +38,11 @@ import (
 const (
 	networkPolicyFieldOwner = "ate-networkpolicy"
 	atenetRouterAppName     = "atenet-router"
+	// eventReasonNetworkPolicyConflict is the reason of the Warning event a
+	// pool emits when checkNetworkPolicyOwner refuses its NetworkPolicy.
+	eventReasonNetworkPolicyConflict = "NetworkPolicyConflict"
+	// eventActionApplyNetworkPolicy is the action of that event.
+	eventActionApplyNetworkPolicy = "ApplyNetworkPolicy"
 )
 
 type NetworkPolicyReconciler struct {
@@ -46,10 +53,15 @@ type NetworkPolicyReconciler struct {
 	// ingress policy admits only that namespace, so a value that does not
 	// match the running router blocks every request to the worker pool.
 	SystemNamespace string
+
+	// Recorder emits a Warning event on the pool when checkNetworkPolicyOwner
+	// refuses its NetworkPolicy, which leaves the pool without one.
+	Recorder events.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools,verbs=get;list;watch
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
@@ -90,6 +102,7 @@ func (r *NetworkPolicyReconciler) reconcileImpl(ctx context.Context, wp *atev1.W
 		return fmt.Errorf("failed to get NetworkPolicy %s:%s: %w", *npAC.Namespace, *npAC.Name, err)
 	default:
 		if err := checkNetworkPolicyOwner(existing, wp); err != nil {
+			r.Recorder.Eventf(wp, existing, corev1.EventTypeWarning, eventReasonNetworkPolicyConflict, eventActionApplyNetworkPolicy, "%v", err)
 			return err
 		}
 	}
@@ -104,24 +117,28 @@ func (r *NetworkPolicyReconciler) reconcileImpl(ctx context.Context, wp *atev1.W
 	return nil
 }
 
-// checkNetworkPolicyOwner returns an error unless np is labeled for wp and is
-// not controlled by another object. The apply forces ownership, so without
-// this check it would rewrite another pool's policy, or a policy someone else
-// created with the same name. An unowned policy labeled for wp is adopted.
+// checkNetworkPolicyOwner returns an error if np belongs to something other
+// than wp. The apply forces ownership, so without this check it would rewrite
+// another pool's policy, or a policy someone else created with the same name.
+// A policy controlled by wp passes even if its label was edited, so the apply
+// restores it. A policy with no controller passes only if it is labeled for wp.
 func checkNetworkPolicyOwner(np *networkingv1.NetworkPolicy, wp *atev1.WorkerPool) error {
+	if owner := metav1.GetControllerOf(np); owner != nil {
+		if owner.UID == wp.UID {
+			return nil
+		}
+		return fmt.Errorf("refusing to take over NetworkPolicy %s:%s: controlled by %s %s (UID %s)",
+			np.Namespace, np.Name, owner.Kind, owner.Name, owner.UID)
+	}
 	if got := np.Labels[workerPoolLabel]; got != wp.Name {
 		return fmt.Errorf("refusing to take over NetworkPolicy %s:%s: label %s is %q, want %q",
 			np.Namespace, np.Name, workerPoolLabel, got, wp.Name)
-	}
-	if owner := metav1.GetControllerOf(np); owner != nil && owner.UID != wp.UID {
-		return fmt.Errorf("refusing to take over NetworkPolicy %s:%s: controlled by %s %s (UID %s)",
-			np.Namespace, np.Name, owner.Kind, owner.Name, owner.UID)
 	}
 	return nil
 }
 
 func (r *NetworkPolicyReconciler) buildNetworkPolicyApplyConfig(wp *atev1.WorkerPool) *networkingv1ac.NetworkPolicyApplyConfiguration {
-	np := networkingv1ac.NetworkPolicy(resources.NetworkPolicyName(wp.Name), wp.Namespace).
+	np := networkingv1ac.NetworkPolicy(resources.NetworkPolicyNamePrefix+wp.Name, wp.Namespace).
 		WithLabels(map[string]string{
 			"ate.dev/worker-pool": wp.Name,
 		}).
