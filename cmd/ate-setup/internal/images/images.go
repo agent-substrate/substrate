@@ -61,9 +61,9 @@ var Components = []string{
 
 // released is the allowlist of Components a release publishes. A component is
 // published only after it is added here, so one added to Components stays out
-// of releases until someone decides, in review, to publish it. An image not
-// listed exists only in a build from source, and a pre-built install that needs
-// one fails naming it rather than with a registry 404.
+// of releases until it is added here in review. A pre-built install still
+// looks an unlisted image up in its registry; if the lookup fails, the error
+// says releases do not publish it.
 var released = []string{
 	"cmd/ate-idp-server",
 	"cmd/ateapi",

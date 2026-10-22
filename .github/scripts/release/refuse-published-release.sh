@@ -23,18 +23,22 @@
 #     .github/scripts/release/refuse-published-release.sh
 #
 # A draft is not returned by tag, so a 404 means there is no published
-# release. Any other failure stops the script rather than being read as "none".
+# release. Any other failure stops the script. A release the API returns is
+# treated as published unless it says it is a draft.
 #
 # Used by the images job in .github/workflows/release.yaml.
 
 set -o errexit -o nounset -o pipefail
 
-if out="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" --jq .draft 2>&1)"; then
-  if [[ "${out}" == false ]]; then
+errfile="$(mktemp)"
+trap 'rm -f "${errfile}"' EXIT
+
+if draft="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" --jq .draft 2>"${errfile}")"; then
+  if [[ "${draft}" != true ]]; then
     echo "::error::${VERSION} has a published release; its images are not published again"
     exit 1
   fi
-elif [[ "${out}" != *"HTTP 404"* ]]; then
-  echo "::error::checking for a published ${VERSION} release: ${out}"
+elif ! grep -q 'HTTP 404' "${errfile}"; then
+  echo "::error::checking for a published ${VERSION} release: $(<"${errfile}")"
   exit 1
 fi

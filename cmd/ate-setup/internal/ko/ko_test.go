@@ -87,7 +87,7 @@ func TestLdflagsStampTheCommit(t *testing.T) {
 	dir := t.TempDir()
 	for _, args := range [][]string{
 		{"init", "-q"},
-		{"-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "test"},
+		{"-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "test"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
@@ -105,11 +105,12 @@ func TestLdflagsStampTheCommit(t *testing.T) {
 		"-X=go.ate.dev/substrate/internal/version.Commit=" + commit,
 		"-X=go.ate.dev/substrate/internal/version.BuildDate=" + date,
 	}
-	if got := Ldflags(dir); !slices.Equal(got, want) {
+	got := Ldflags(dir)
+	if !slices.Equal(got, want) {
 		t.Errorf("Ldflags() = %v, want %v", got, want)
 	}
 	// ko splits --ldflags on commas, so no stamp may contain one.
-	for _, flag := range want {
+	for _, flag := range got {
 		if strings.Contains(flag, ",") {
 			t.Errorf("%s contains a comma, which ko would split", flag)
 		}

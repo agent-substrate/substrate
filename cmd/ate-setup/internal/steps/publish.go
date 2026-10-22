@@ -30,11 +30,14 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
-// releaseBinary is the binary a release attaches, and releaseBinaryPlatforms
-// the GOOS/GOARCH pairs it is built for. Windows is not among them.
+// releaseBinary is the binary a release attaches.
 const releaseBinary = "kubectl-ate"
 
-var releaseBinaryPlatforms = []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
+// releaseBinaryPlatforms returns the GOOS/GOARCH pairs releaseBinary is built
+// for. Windows is not among them.
+func releaseBinaryPlatforms() []string {
+	return []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
+}
 
 // releaseBinaryName is the file name of the release binary for platform, e.g.
 // kubectl-ate-linux-amd64.
@@ -49,6 +52,12 @@ func releaseBinaryName(platform string) string {
 // The version has to be a release tag, and the checkout has to have a commit,
 // since a binary without one reports the wrong version.
 func (e *Env) PublishReleaseBinaries(ctx context.Context, w io.Writer, outDir string) error {
+	return e.publishReleaseBinaries(ctx, w, outDir, releaseBinaryPlatforms())
+}
+
+// publishReleaseBinaries is PublishReleaseBinaries for the given GOOS/GOARCH
+// pairs.
+func (e *Env) publishReleaseBinaries(ctx context.Context, w io.Writer, outDir string, platforms []string) error {
 	version := e.SubstrateVersion()
 	if err := images.CheckReleaseVersion(version); err != nil {
 		return fmt.Errorf("the build version: %w; set VERSION to the release tag", err)
@@ -62,7 +71,7 @@ func (e *Env) PublishReleaseBinaries(ctx context.Context, w io.Writer, outDir st
 	}
 	ldflags := strings.Join(ko.Ldflags(e.Cfg.Root), " ")
 	var written []string
-	for _, platform := range releaseBinaryPlatforms {
+	for _, platform := range platforms {
 		goos, goarch, _ := strings.Cut(platform, "/")
 		out, err := filepath.Abs(filepath.Join(outDir, releaseBinaryName(platform)))
 		if err != nil {
@@ -218,9 +227,9 @@ func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer, opts Publis
 	for _, pkg := range images.ReleaseComponents() {
 		pkgs = append(pkgs, "./"+pkg)
 	}
-	revision, err := images.Revision(ctx, e.Cfg.Root)
-	if err != nil {
-		return err
+	revision, _, ok := ko.CommitStamp(e.Cfg.Root)
+	if !ok {
+		return fmt.Errorf("release images are labeled with the commit they were built from, and %s has none checked out", e.Cfg.Root)
 	}
 	labels := []string{
 		images.SourceLabel + "=" + images.SourceURL,

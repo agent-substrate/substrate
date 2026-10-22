@@ -6,7 +6,9 @@ A release is a `vX.Y.Z` tag, or `vX.Y.Z-rc.N` for a release candidate, with cont
 
 Pushing a `vX.Y.Z` or `vX.Y.Z-PRERELEASE` tag publishes that commit's images to `ghcr.io/agent-substrate/substrate` and creates a release, under the repository's token. Whoever can push such a tag can therefore publish images for any commit. Only release managers may push one.
 
-A tag ruleset on `agent-substrate/substrate` that restricts creating, updating, and deleting `v*` tags to release managers enforces this. An organization admin maintains it, and it has to be in place before the first release that publishes images. Starting the workflow manually also needs write access, so the same people should be the only ones who run it.
+A tag ruleset on `agent-substrate/substrate` that restricts creating, updating, and deleting `v[0-9]*` tags to release managers enforces this for tag pushes. An organization admin maintains it, and it has to be in place before the first release that publishes images.
+
+The ruleset limits tag pushes only. Anyone with write access can still publish images: they can start this workflow from the Actions tab, from any branch, and publish or overwrite the images of a tag whose release is still a draft, and a workflow on a branch they push can request `packages: write` as well. Once a tag's release is published, this workflow publishes nothing for it.
 
 ## Cut a release
 
@@ -14,7 +16,7 @@ A tag ruleset on `agent-substrate/substrate` that restricts creating, updating, 
    1. The `images` job runs `ate-setup publish release-images`, which builds every release image for `linux/amd64` and `linux/arm64`, pushes it to `ghcr.io/agent-substrate/substrate/<image>:<tag>`, and then checks that every tag names the image just pushed, for both platforms. Every release image is built with `ko`, which cross-compiles for arm64 without emulation.
    2. Once the images are verified, the `draft` job builds the `kubectl-ate` binaries with `ate-setup publish release-binaries`, then runs [`hack/release/draft-release.sh`](../../hack/release/draft-release.sh), which creates a draft release, and attaches the binaries to it. The notes cover every change since the previous `vX.Y.Z` release, say where the release images are published and link to the list below, give the steps to check and install `kubectl-ate`, and end with a list of committers. A release candidate is marked as a prerelease.
 
-   If the `images` job or the binary build fails, no draft is created. Fix the cause and run the workflow again from the Actions tab with the tag as input.
+   If the `images` job or the binary build fails, no draft is created. If attaching the binaries fails, the draft exists without them. Either way, fix the cause and run the workflow again from the Actions tab with the tag as input.
 2. Edit the draft:
    - Write a summary at the top.
    - Rewrite each breaking change with its upgrade step.
@@ -31,7 +33,7 @@ hack/release/draft-release.sh v0.3.0             # create the draft
 
 The script never modifies a release that already exists.
 
-To preview the notes before tagging, run the dry run with the tag you plan to push. If the tag does not exist yet, the notes run up to your local `HEAD`, which must already be on a branch in the repository.
+To preview the notes before tagging, run the dry run with the tag you plan to push. If the tag does not exist yet, the notes run up to `origin/main` in your clone, which must already be in the repository.
 
 ## Release images
 
@@ -39,9 +41,9 @@ A release publishes `ate-idp-server`, `ateapi`, `atecontroller`, `atelet`, `aten
 
 The list is an allowlist, `released` in `images.go`. A new component is not published until a pull request adds it there, so publishing an image is always an explicit, reviewed change.
 
-It leaves out `envoy-dataplane`, the Kubernetes Secrets credential provider, the demos, and the benchmarking fakes. The release images are therefore not a complete install of the default configuration, and the notes give no install command: an install has to take the images releases leave out from another registry, or build them from source. `ate-setup --image-repo` fails naming any of them it needs.
+It leaves out `envoy-dataplane`, the Kubernetes Secrets credential provider, the demos, and the benchmarking fakes. The release images are therefore not a complete install of the default configuration, and the notes give no install command: an install has to take the images releases leave out from another registry, or build them from source. `ate-setup --image-repo` looks those images up like any other; if one is missing, the error says releases do not publish it.
 
-Only tags of the form `vX.Y.Z` or `vX.Y.Z-PRERELEASE` start the workflow, and `ate-setup` refuses any other version before building.
+Tags that begin `vX.Y.Z` start the workflow. `ate-setup` refuses any version that is not `vX.Y.Z` or `vX.Y.Z-PRERELEASE` before building, so a tag like `v1.2.3foo` publishes nothing.
 
 Only `agent-substrate/substrate` publishes images. In a fork the `images` job is skipped, since GitHub bills package storage to the fork's owner, and the draft is created without them.
 

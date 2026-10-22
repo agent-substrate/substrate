@@ -22,7 +22,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 
@@ -229,31 +228,38 @@ func TestPrebuiltReportsEveryFailure(t *testing.T) {
 	}
 }
 
-// An image releases do not publish fails naming what it is, without a registry
-// lookup: the lookup could only end in a 404 that does not say why.
-func TestPrebuiltRejectsUnreleasedImages(t *testing.T) {
-	registry := newStubRegistry()
-	in := "a: ko://go.ate.dev/substrate/demos/counter\n" +
-		"b: ko://go.ate.dev/substrate/cmd/benchmarking/isolate/fake-atelet\n" +
-		"c: ko://go.ate.dev/substrate/cmd/credential-provider/kubernetes-secrets\n"
+// An image releases do not publish resolves from a registry that holds it,
+// such as one the operator published to. When the lookup fails, the error says
+// releases do not publish it; for a released image it does not.
+func TestPrebuiltUnreleasedImages(t *testing.T) {
+	const ref = "image: ko://go.ate.dev/substrate/cmd/credential-provider/kubernetes-secrets\n"
+	const hint = "releases do not publish kubernetes-secrets"
 
-	_, err := images.NewPrebuilt(testSource, registry.digest).
-		ResolveBytes(context.Background(), []byte(in))
-	if err == nil {
-		t.Fatal("ResolveBytes() = nil error, want failures for unreleased images")
+	got, err := images.NewPrebuilt(testSource, newStubRegistry().digest).
+		ResolveBytes(context.Background(), []byte(ref))
+	if err != nil {
+		t.Fatalf("ResolveBytes() from a registry that holds it = %v", err)
 	}
-	for _, want := range []string{
-		"demos/counter is not in the release set",
-		"fake-atelet is not in the release set",
-		"kubernetes-secrets is not in the release set",
-		"dropping --image-repo",
-	} {
+	if want := "image: example.com/substrate/kubernetes-secrets:v1.2.3" + digestSuffix + "\n"; string(got) != want {
+		t.Errorf("ResolveBytes() = %q, want %q", got, want)
+	}
+
+	missing := newStubRegistry()
+	missing.err = errors.New("MANIFEST_UNKNOWN")
+	_, err = images.NewPrebuilt(testSource, missing.digest).ResolveBytes(context.Background(), []byte(ref))
+	if err == nil {
+		t.Fatal("ResolveBytes() from a registry without it = nil error, want one")
+	}
+	for _, want := range []string{"MANIFEST_UNKNOWN", hint, "dropping --image-repo"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error is missing %q:\n%v", want, err)
 		}
 	}
-	if len(registry.calls) != 0 {
-		t.Errorf("registry lookups = %v, want none", registry.calls)
+
+	_, err = images.NewPrebuilt(testSource, missing.digest).
+		ResolveBytes(context.Background(), []byte("image: ko://go.ate.dev/substrate/cmd/ateapi\n"))
+	if err == nil || strings.Contains(err.Error(), "releases do not publish") {
+		t.Errorf("ResolveBytes() for a released image = %v, want a lookup error without the release hint", err)
 	}
 }
 
@@ -358,8 +364,7 @@ var resolvedRef = regexp.MustCompile(regexp.QuoteMeta(testSource.Repo) + `/[^\s"
 
 // Resolving the control plane manifests must produce a manifest that still
 // parses and holds no unresolved reference. This is the closest a unit test
-// gets to the install itself. A manifest that references an image releases do
-// not publish must instead fail, naming each such image and nothing else.
+// gets to the install itself.
 func TestResolveEveryInstallManifest(t *testing.T) {
 	root, err := config.RepoRoot()
 	if err != nil {
@@ -373,16 +378,6 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 	}
 
 	resolver := images.NewPrebuilt(testSource, newStubRegistry().digest)
-
-	var unreleased []string
-	for _, pkg := range images.Components {
-		if !slices.Contains(images.ReleaseComponents(), pkg) {
-			unreleased = append(unreleased, pkg)
-		}
-	}
-	// Counts the manifests that resolved, so the test cannot pass with every
-	// manifest taking the unreleased branch.
-	resolved := 0
 
 	// The directory as a whole is what a plain GKE install applies.
 	paths := []string{installDir}
@@ -398,33 +393,10 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadPath() = %v", err)
 			}
-			var excluded []string
-			for _, ref := range koRefPattern.FindAllString(string(manifest), -1) {
-				pkg := strings.TrimPrefix(ref, "ko://"+images.ModulePath+"/")
-				if slices.Contains(unreleased, pkg) && !slices.Contains(excluded, ref) {
-					excluded = append(excluded, ref)
-				}
-			}
 			out, err := resolver.ResolveBytes(context.Background(), manifest)
-			if len(excluded) > 0 {
-				if err == nil {
-					t.Fatalf("ResolveBytes() = nil error, want one naming %v", excluded)
-				}
-				lines := strings.Split(err.Error(), "\n")
-				if len(lines) != len(excluded) {
-					t.Errorf("ResolveBytes() reported %d problem(s), want only the %d unreleased image(s):\n%v", len(lines), len(excluded), err)
-				}
-				for _, ref := range excluded {
-					if !strings.Contains(err.Error(), ref+" is not in the release set") {
-						t.Errorf("error does not name %s as unreleased:\n%v", ref, err)
-					}
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("ResolveBytes() = %v", err)
 			}
-			resolved++
 			if refs := koRefPattern.FindAllString(string(out), -1); len(refs) > 0 {
 				t.Errorf("unresolved references survived: %v", refs)
 			}
@@ -441,8 +413,5 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 				t.Errorf("the resolved manifest no longer parses: %v", err)
 			}
 		})
-	}
-	if resolved == 0 {
-		t.Error("no install manifest resolved; every one referenced an unreleased image")
 	}
 }

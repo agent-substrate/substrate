@@ -148,7 +148,7 @@ func TestReleaseImageRefs(t *testing.T) {
 // build.
 func TestReleaseBinaryNames(t *testing.T) {
 	var got []string
-	for _, platform := range releaseBinaryPlatforms {
+	for _, platform := range releaseBinaryPlatforms() {
 		got = append(got, releaseBinaryName(platform))
 	}
 	want := []string{"kubectl-ate-darwin-amd64", "kubectl-ate-darwin-arm64", "kubectl-ate-linux-amd64", "kubectl-ate-linux-arm64"}
@@ -202,15 +202,12 @@ func TestPublishReleaseBinaries(t *testing.T) {
 		t.Fatalf("%s has no commit checked out", root)
 	}
 	platform := runtime.GOOS + "/" + runtime.GOARCH
-	saved := releaseBinaryPlatforms
-	releaseBinaryPlatforms = []string{platform}
-	t.Cleanup(func() { releaseBinaryPlatforms = saved })
 	t.Setenv("VERSION", "v1.2.3")
 
 	out := t.TempDir()
 	e := &Env{Cfg: &config.Config{Root: root}}
-	if err := e.PublishReleaseBinaries(t.Context(), io.Discard, out); err != nil {
-		t.Fatalf("PublishReleaseBinaries() error = %v", err)
+	if err := e.publishReleaseBinaries(t.Context(), io.Discard, out, []string{platform}); err != nil {
+		t.Fatalf("publishReleaseBinaries() error = %v", err)
 	}
 
 	binary := filepath.Join(out, releaseBinaryName(platform))

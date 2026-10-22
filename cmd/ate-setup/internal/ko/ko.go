@@ -186,9 +186,8 @@ func (r *Runner) ldflags() []string {
 // Ldflags returns the -X flags that stamp a binary built from root with
 // internal/version's Version, and with Commit and BuildDate when root has a
 // commit checked out. internal/version replaces a stamped Version with the
-// module's build info unless Commit is stamped too, so the commit is part of
-// the version stamp, not decoration. BuildDate is the commit's time rather than
-// the build's, so rebuilding one commit gives the same binary.
+// module's build info unless Commit is stamped too. BuildDate is the commit's
+// time, so rebuilding one commit gives the same binary.
 func Ldflags(root string) []string {
 	flags := []string{fmt.Sprintf("-X=%s.Version=%s", versionPkg, BuildVersion(root))}
 	if commit, date, ok := CommitStamp(root); ok {

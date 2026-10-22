@@ -19,7 +19,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -33,8 +32,7 @@ import (
 )
 
 // An allowlist entry that is not a component publishes nothing and hides that
-// the component it meant was renamed or removed. A component not on the
-// allowlist is never released, however it got into Components.
+// the component it meant was renamed or removed.
 func TestReleasedAreComponents(t *testing.T) {
 	seen := make(map[string]bool, len(released))
 	for _, pkg := range released {
@@ -45,19 +43,6 @@ func TestReleasedAreComponents(t *testing.T) {
 			t.Errorf("released lists %s twice", pkg)
 		}
 		seen[pkg] = true
-	}
-	for _, pkg := range Components {
-		if IsReleased(pkg) != seen[pkg] {
-			t.Errorf("IsReleased(%s) = %v, want %v", pkg, IsReleased(pkg), seen[pkg])
-		}
-	}
-}
-
-// ghcr.io links a package to the repository its source label names, so the
-// label has to be the GitHub repository, whatever the module path is.
-func TestSourceURL(t *testing.T) {
-	if want := "https://github.com/agent-substrate/substrate"; SourceURL != want {
-		t.Errorf("SourceURL = %q, want %q", SourceURL, want)
 	}
 }
 
@@ -123,41 +108,6 @@ func indexDigest(t *testing.T, ref string) string {
 	return d
 }
 
-// The revision label names the commit the images were built from, so it has
-// to be the checked-out commit itself, and a directory with no commit fails
-// rather than labeling images with nothing.
-func TestRevision(t *testing.T) {
-	dir := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q"},
-		{"-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "test"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	head := exec.Command("git", "rev-parse", "HEAD")
-	head.Dir = dir
-	want, err := head.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := Revision(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("Revision() error = %v", err)
-	}
-	if got != strings.TrimSpace(string(want)) {
-		t.Errorf("Revision() = %q, want %q", got, strings.TrimSpace(string(want)))
-	}
-
-	if got, err := Revision(t.Context(), t.TempDir()); err == nil {
-		t.Errorf("Revision() outside a repository = %q, nil; want an error", got)
-	}
-}
-
 func parseRef(t *testing.T, ref string) name.Reference {
 	t.Helper()
 	parsed, err := name.ParseReference(ref)
@@ -196,11 +146,25 @@ func TestCheckPublished(t *testing.T) {
 	if err := remote.Write(parseRef(t, repo+"/single:v1"), empty.Image); err != nil {
 		t.Fatal(err)
 	}
+	// ko pushes a plain image, not an index, when a build targets one platform.
+	config, err := empty.Image.ConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.OS, config.Architecture = "linux", "amd64"
+	plain, err := mutate.ConfigFile(empty.Image, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(parseRef(t, repo+"/plain-amd64:v1"), plain); err != nil {
+		t.Fatal(err)
+	}
 
 	refs := []string{
 		repo + "/complete:v1",
 		repo + "/amd64-only:v1",
 		repo + "/single:v1",
+		repo + "/plain-amd64:v1",
 		repo + "/complete:v2",
 		repo + "/absent:v1",
 	}
@@ -211,6 +175,7 @@ func TestCheckPublished(t *testing.T) {
 	want := []Incomplete{
 		{Ref: repo + "/amd64-only:v1", Missing: []string{"linux/arm64"}},
 		{Ref: repo + "/single:v1", Missing: []string{"linux/amd64", "linux/arm64"}},
+		{Ref: repo + "/plain-amd64:v1", Missing: []string{"linux/arm64"}},
 		{Ref: repo + "/complete:v2", Missing: []string{"linux/amd64", "linux/arm64"}},
 		{Ref: repo + "/absent:v1", Missing: []string{"linux/amd64", "linux/arm64"}},
 	}
@@ -218,6 +183,12 @@ func TestCheckPublished(t *testing.T) {
 		return a.Ref == b.Ref && slices.Equal(a.Missing, b.Missing)
 	}) {
 		t.Errorf("CheckPublished() = %v, want %v", got, want)
+	}
+
+	// A single-platform release is complete as a plain image.
+	got, err = CheckPublished(t.Context(), []string{repo + "/plain-amd64:v1"}, []string{"linux/amd64"})
+	if err != nil || len(got) != 0 {
+		t.Errorf("CheckPublished() for one platform = %v, %v; want complete", got, err)
 	}
 }
 

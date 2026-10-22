@@ -83,12 +83,9 @@ is the build, the Go toolchain, and write access to a registry.
 needs an image `REPO` lacks fails naming it.
 
 The images a release publishes to `ghcr.io/agent-substrate/substrate`, with
-`publish release-images`, are not a complete install: releases leave out
-`envoy-dataplane`, the Kubernetes Secrets credential provider, the demos, and
-the benchmarking fakes (see
-[`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images)). Under
-`--image-repo`, a reference to one of those fails before any registry lookup,
-saying releases do not publish it.
+`publish release-images`, are not a complete install; see
+[`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images). When an
+image releases do not publish is missing from `REPO`, the error says so.
 
 Each reference is pinned to the digest its tag names, which takes one HEAD
 request per image, so the installer needs read access to `REPO` and not only the

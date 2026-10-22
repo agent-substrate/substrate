@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"regexp"
 	"strings"
 
@@ -35,24 +34,13 @@ import (
 const SourceLabel = "org.opencontainers.image.source"
 
 // SourceURL is the SourceLabel value for images built from this repository:
-// its GitHub URL, which is what ghcr.io matches. The module path is a vanity
-// import path, not a repository URL.
+// its GitHub URL, which ghcr.io matches. It cannot be derived from ModulePath,
+// which is a vanity import path.
 const SourceURL = "https://github.com/agent-substrate/substrate"
 
 // RevisionLabel is the OCI image label naming the commit an image was built
 // from.
 const RevisionLabel = "org.opencontainers.image.revision"
-
-// Revision returns the commit checked out at rootDir, the RevisionLabel value.
-func Revision(ctx context.Context, rootDir string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
-	cmd.Dir = rootDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("while reading the commit checked out at %s: %w", rootDir, err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
 
 // releaseTag matches a release tag, vMAJOR.MINOR.PATCH, or a release candidate,
 // vMAJOR.MINOR.PATCH-PRERELEASE. hack/release/draft-release.sh accepts the same.
@@ -132,8 +120,7 @@ func Platforms(rootDir, koDefaultPlatforms string) ([]string, error) {
 type Incomplete struct {
 	Ref string
 	// Missing lists the wanted platforms the reference lacks. A reference that
-	// does not exist, or names a single-platform manifest rather than an
-	// index, lacks all of them.
+	// does not exist lacks all of them.
 	Missing []string
 }
 
@@ -141,8 +128,8 @@ func (i Incomplete) String() string {
 	return fmt.Sprintf("%s lacks %s", i.Ref, strings.Join(i.Missing, ", "))
 }
 
-// CheckPublished returns the refs that do not exist as an image index holding
-// an image for each of platforms. An error is returned only when a registry
+// CheckPublished returns the refs that do not hold an image for each of
+// platforms. An error is returned only when a registry
 // cannot answer (network, credentials), since that says nothing about whether
 // an image exists; treating it as missing would lead a caller to rebuild and
 // replace images that are already published.
@@ -175,9 +162,10 @@ func CheckPublished(ctx context.Context, refs, platforms []string) ([]Incomplete
 	return incomplete, nil
 }
 
-// indexPlatforms returns the platforms of the images in the index ref names.
-// It returns none, without an error, if ref does not exist or names a
-// single-platform manifest.
+// indexPlatforms returns the platforms of the images ref names: each image in
+// an index, or the one image of a plain manifest, which ko pushes when a build
+// targets a single platform. It returns none, without an error, if ref does
+// not exist.
 func indexPlatforms(ctx context.Context, ref string) ([]v1.Platform, error) {
 	parsed, err := name.ParseReference(ref)
 	if err != nil {
@@ -194,7 +182,15 @@ func indexPlatforms(ctx context.Context, ref string) ([]v1.Platform, error) {
 		return nil, fmt.Errorf("while inspecting %s: %w", ref, err)
 	}
 	if !desc.MediaType.IsIndex() {
-		return nil, nil
+		img, err := desc.Image()
+		if err != nil {
+			return nil, fmt.Errorf("while reading the image %s names: %w", ref, err)
+		}
+		config, err := img.ConfigFile()
+		if err != nil {
+			return nil, fmt.Errorf("while reading the config of %s: %w", ref, err)
+		}
+		return []v1.Platform{{OS: config.OS, Architecture: config.Architecture, Variant: config.Variant}}, nil
 	}
 	index, err := desc.ImageIndex()
 	if err != nil {

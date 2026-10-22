@@ -51,14 +51,16 @@ worker ref.`,
 
 var publishReleaseImagesCmd = &cobra.Command{
 	Use:   "release-images",
-	Short: "Build and push every image a pre-built install needs, tagged with the build version",
-	Long: `Build and push every component image, including the Dockerfile-built
-envoy-dataplane, to KO_DOCKER_REPO, all tagged with the build version (VERSION,
-else git describe), and print their pushed references.
-
-The result is what "deploy --image-repo REPO --image-tag TAG" installs:
+	Short: "Build and push the release images, tagged with the release version",
+	Long: `Build and push the images a release publishes (images.ReleaseComponents) to
+KO_DOCKER_REPO, all tagged with the build version, and print their pushed
+references. The version comes from VERSION, else git describe, and has to be a
+release tag (vMAJOR.MINOR.PATCH[-PRERELEASE]).
 
   VERSION=TAG ate-setup publish release-images --ko-docker-repo REPO
+
+The release images are not a complete install; docs/dev/releasing.md lists
+what they cover.
 
 If REPO already holds every image for the tag on every platform, nothing is
 built unless --overwrite is set. After pushing, every image is checked for
