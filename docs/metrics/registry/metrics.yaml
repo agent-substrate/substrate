@@ -261,7 +261,7 @@ groups:
             - id: microvm
               stability: development
               value: microvm
-              brief: A micro-VM sandbox.
+              brief: A microVM sandbox.
             - id: unknown
               stability: development
               value: unknown
@@ -1049,7 +1049,7 @@ groups:
     brief: The uncompressed allocated size in bytes of each snapshot image that a checkpoint writes.
     note: >
       atelet records one measurement for each image file from its allocated disk
-      blocks (st_blocks * 512, excluding sparse holes in micro-VM
+      blocks (st_blocks * 512, excluding sparse holes in microVM
       memory-ranges). It does not record one measurement for each checkpoint.
       Use the file.name key to compare the same type of image.
     annotations:
@@ -1249,10 +1249,10 @@ groups:
       It does not count usage twice. It can count less: the end of an
       activation after the last sample atelet read of it, which is up to one
       poll interval plus one ateworker sample interval plus the sweep's own time
-      (up to 45s on a micro-VM), so an activation shorter than that can lose
+      (up to 45s on a microVM), so an activation shorter than that can lose
       most or all of its CPU here, while its usage records keep it; the time
       around an atelet restart; and, in a
-      micro-VM restored from a full snapshot, a container's use before its
+      microVM restored from a full snapshot, a container's use before its
       first successful reading. A node clock that steps back across an atelet
       restart can count one activation in full a second time.
     annotations:
@@ -1398,7 +1398,7 @@ groups:
     brief: The number of entries that the eviction passes removed from a file cache on the node, by cache.
     note: >
       An entry is one cached file or tree, such as a runsc binary or a
-      micro-VM kernel. A pass removes only an entry that nothing links,
+      microVM kernel. A pass removes only an entry that nothing links,
       oldest first, and a dry run removes none. A rate that stays above zero
       with a size at the budget means that the cache thrashes: an entry
       leaves and returns on each pass, and each return pays for a download.

@@ -8,13 +8,13 @@ normal public roots.
 
 The CI workflow installs both egress ActorTemplates, adds the service-DNS CA
 to the gateway's upstream roots with `hack/setup-e2e-egress-tls-kind.sh`, and
-runs the networking suite on gVisor and micro-VM. The commands below reproduce
+runs the networking suite on gVisor and microVM. The commands below reproduce
 that setup locally.
 
 ## Prerequisites
 
 Follow the [development quickstart](../../README.md#quickstart-development)
-for Go, Docker, `kubectl`, and Kind. The micro-VM lane also needs KVM and the
+for Go, Docker, `kubectl`, and Kind. The microVM lane also needs KVM and the
 setup in [Running the microVM runtime locally](microvm-local.md).
 
 ## Install the cluster and fixtures
@@ -25,7 +25,7 @@ kubectl config use-context kind-kind
 ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' ./hack/install-ate-kind.sh --deploy-ate-system
 ```
 
-For micro-VM, install its assets before deploying the fixture:
+For microVM, install its assets before deploying the fixture:
 
 ```bash
 NO_DEV_ENV=true ATE_INSTALL_KIND=true KUBECTL_CONTEXT=kind-kind \
@@ -54,7 +54,7 @@ Run the gVisor lane:
 hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
 ```
 
-Run the micro-VM lane sequentially on the same cluster:
+Run the microVM lane sequentially on the same cluster:
 
 ```bash
 E2E_SANDBOX_CLASS=microvm hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress|^TestMicroVMClockAfterDelayedRestore' -v -args --no-color
@@ -64,7 +64,7 @@ The HTTPS protocol test checks a verified HTTP/1.1 request to a local TLS
 origin on port 8443. The WebSocket tests check that both `ws` and `wss`
 upgrades are denied with HTTP 403 before the origin receives any messages.
 The delayed-restore test issues a fresh origin certificate after the Actor is
-suspended, then checks that the restored micro-VM can complete the TLS request.
+suspended, then checks that the restored microVM can complete the TLS request.
 
 ## Troubleshooting
 

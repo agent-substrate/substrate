@@ -352,13 +352,13 @@ does not create the bucket or grant access to it: run
 [tools/setup-gcp](../tools/setup-gcp/README.md)).
 
 setup-gcp also creates an asset bucket, `<BUCKET_NAME>-assets`, where
-`hack/install-microvm-deps.sh` stages micro-VM sandbox assets, and gives atelet
+`hack/install-microvm-deps.sh` stages microVM sandbox assets, and gives atelet
 read access to it. atelet gets no access to the snapshot bucket: every snapshot
 transfer runs on a token scoped to its actor, issued by ate-api-server's
 credential exchange. A GCP project set up before the asset bucket existed
 keeps atelet's old grants, since setup-gcp only adds bindings. Remove them as
 [tools/setup-gcp](../tools/setup-gcp/README.md#upgrading-an-existing-install)
-shows, which also covers recreating a cluster with micro-VM workers.
+shows, which also covers recreating a cluster with microVM workers.
 
 With the `PerTemplateSnapshotLocation` preview gate, an ActorTemplate may set
 `snapshotConfig.storageLocation` to store its snapshots elsewhere; templates

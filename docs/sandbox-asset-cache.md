@@ -3,7 +3,7 @@
 ## Summary
 
 Every actor runs on sandbox binaries that come from a cluster-scoped
-`SandboxConfig`: a gVisor release, or a micro-VM kernel, VMM and guest image.
+`SandboxConfig`: a gVisor release, or a microVM kernel, VMM and guest image.
 `atelet` keeps **one node-local, content-addressed cache** of these assets and
 gives each actor **hard links** into it. Nothing is copied per actor, an asset
 is downloaded once per node however many actors and workers use it, and the
@@ -68,7 +68,7 @@ pool runs, hashes every enabled version, and:
   the index file durably, *before* anything else, so a hash is resolvable
   before the worker can register it with the control plane;
 - probes what a snapshot taken on each runtime must find again (CPU features
-  for gVisor, host CPU identity for micro-VM) and writes the worker's
+  for gVisor, host CPU identity for microVM) and writes the worker's
   `sandbox-runtimes.json`, from which the worker registers;
 - records what the worker now advertises, which is what the written file
   says;
@@ -105,7 +105,7 @@ which directories exist. Nothing counts references and nothing prunes.
   directories as they were, with the previous default still linked and still
   advertised. The prewarm starts late by only a little: a gVisor default's
   release is fetched by the build's probe, so the prewarm is links, and a
-  micro-VM build takes milliseconds.
+  microVM build takes milliseconds.
 - The prewarm fills what exists and creates nothing. It checks that its
   directory is there, stages into it, and on an error checks again: a
   directory gone, after a later sync or the pod's removal, means the item
