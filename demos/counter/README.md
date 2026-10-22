@@ -122,8 +122,8 @@ To interact with the router locally:
 # Port-forward the Atenet Router
 kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
-# Also port-forward the CONNECT listener if you want to reach the actor's
-# extra port (see "Reaching a non-default port" below).
+# Also port-forward the CONNECT listener if you want to use a tunnel
+# (see "Reaching a non-default port" below).
 kubectl port-forward -n ate-system svc/atenet-router 8001:8081
 ```
 
@@ -217,9 +217,13 @@ kubectl ate delete actor my-counter-1 -a ate-demo-counter
 
 `counter.go` also listens on a second, configurable port (`--extra-port=9090`
 in this demo's template) to demonstrate atenet-router's arbitrary-port ingress
-support: a client reaches any port an actor listens on, not just its default
-(port 80), by naming the port in an HTTP `CONNECT` request's authority rather
-than a separate header. The router terminates the `CONNECT` on its own
+support. Set `ate-target-port: 9090` on an ordinary HTTP request to reach that
+listener without a tunnel. A missing or empty header uses port 80. See
+[Workload Connectivity](../../docs/api-guide.md#workload-connectivity).
+
+Alternatively, name the port in an HTTP `CONNECT` request's authority.
+CONNECT ignores `ate-target-port` on both the outer request and requests inside
+the tunnel. The router terminates the `CONNECT` on its own
 listener (`--port-connect`, 8081 by default) and tunnels ordinary HTTP requests
 through it to the named port.
 
