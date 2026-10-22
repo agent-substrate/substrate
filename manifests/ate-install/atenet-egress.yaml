@@ -815,7 +815,6 @@ data:
                     receiving_namespaces:
                       untyped:
                       - dev.ate.egress
-                      - dev.ate.policy.egress
               # Envoy dials a port written in the Host unless the name to dial
               # comes from filter state too, so the name the request was
               # decided on goes there. Must stay after ext_proc.
