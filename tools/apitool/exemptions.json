@@ -348,5 +348,15 @@
     "rule": "documented",
     "subject": "ateapi.WorkerStatus.state",
     "message": "field has no doc comment"
+  },
+  {
+    "rule": "get-request-shape",
+    "subject": "ateapi.Control.GetServerInfo",
+    "message": "request has no \"server_info\" ateapi.ObjectRef field"
+  },
+  {
+    "rule": "resource-metadata",
+    "subject": "ateapi.ServerInfo",
+    "message": "has no \"metadata\" field"
   }
 ]

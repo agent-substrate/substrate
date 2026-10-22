@@ -130,6 +130,15 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 			wantCode:    codes.OK,
 			wantHandler: true,
 		},
+		{
+			// Any authenticated caller may read the server's build identity.
+			name:        "GetServerInfo needs no grant",
+			fullMethod:  ateapipb.Control_GetServerInfo_FullMethodName,
+			req:         &ateapipb.GetServerInfoRequest{},
+			ctx:         deniedCtx,
+			wantCode:    codes.OK,
+			wantHandler: true,
+		},
 	}
 
 	for _, tc := range tests {

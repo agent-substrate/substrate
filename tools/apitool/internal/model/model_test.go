@@ -226,6 +226,7 @@ func TestBuild_Annotations(t *testing.T) {
 		"Worker":          {Scope: ateapipb.Scope_SCOPE_GLOBAL, Plural: "Workers"},
 		"ActorAssignment": {Parents: []string{"Worker"}, Plural: "ActorAssignments"},
 		"AccessPolicy":    {Parents: []string{"Global", "Atespace"}, Singleton: true, Plural: "AccessPolicies"},
+		"ServerInfo":      {Scope: ateapipb.Scope_SCOPE_GLOBAL, Plural: "ServerInfos"},
 	}
 	if diff := cmp.Diff(wantResources, gotResources); diff != "" {
 		t.Errorf("resource annotations mismatch (-want +got):\n%s", diff)

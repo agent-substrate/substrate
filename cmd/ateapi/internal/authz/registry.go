@@ -200,6 +200,12 @@ var defaultRPCPermissions = map[string]rpcRule{
 		return onAtespace(RelationCanDeleteAccessPolicy, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
 
+	// Server info. Any authenticated caller may read the serving instance's
+	// build.
+	ateapipb.Control_GetServerInfo_FullMethodName: rule(checksOf(func(*ateapipb.GetServerInfoRequest) ([]check, field.ErrorList) {
+		return nil, nil
+	})),
+
 	// Actor templates.
 	ateapipb.Control_CreateActorTemplate_FullMethodName: rule(checksOf(func(r *ateapipb.CreateActorTemplateRequest) ([]check, field.ErrorList) {
 		return onAtespace(RelationCanCreateActorTemplate, r.GetActorTemplate().GetMetadata().GetAtespace(), field.NewPath("actor_template", "metadata", "atespace"))
