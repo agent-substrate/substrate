@@ -378,9 +378,9 @@ func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.
 				}
 				return true
 			case "agentgateway":
-				if strings.Contains(line.text, "CONNECT tunnel terminated") &&
-					strings.Contains(line.text, "target=") &&
-					strings.Contains(line.text, ":"+port) {
+				target, ok := accessLogField(line.text, "target")
+				if ok && strings.HasSuffix(target, ":"+port) &&
+					protocolGatewayAccessLogMatches(line, resources.ActorRef{Atespace: atespace, Name: actorName}, target, true) {
 					t.Logf("egress gateway tunneled the request: %s", line.text)
 					return true
 				}

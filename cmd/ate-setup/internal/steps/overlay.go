@@ -17,6 +17,7 @@ package steps
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,6 +49,8 @@ const cordonControlPlaneComponent = installDir + "/components/cordon-control-pla
 // over the atelet and ate-controller applies under --fake-data-plane.
 const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
 
+const agentgatewayStaticMTLSComponent = installDir + "/components/agentgateway-static-mtls"
+
 // components lists the kustomize components every control plane apply is
 // composed with. Each patch targets its workloads by name, and kustomize leaves
 // a stream alone when nothing in it matches, so composing a manifest that
@@ -56,6 +59,9 @@ func (e *Env) components() []string {
 	var components []string
 	if e.Cfg.FakeDataPlane {
 		components = append(components, e.Cfg.Path(fakeDataPlaneComponent))
+	}
+	if e.Cfg.Router == config.RouterAgentgateway {
+		components = append(components, e.Cfg.Path(agentgatewayStaticMTLSComponent))
 	}
 	if e.Cfg.CordonControlPlane {
 		components = append(components, e.Cfg.Path(cordonControlPlaneComponent))
@@ -142,6 +148,9 @@ func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
 	if manifest, err = setIDPServerIssuer(manifest, e.Cfg.ActorJWTIssuer); err != nil {
 		return nil, err
 	}
+	if manifest, err = e.setAgentgatewayIngressAllowedSPIFFEIDs(manifest); err != nil {
+		return nil, err
+	}
 	if e.Cfg.Router != config.RouterAgentgateway {
 		manifest, err = e.patchAtenetRouterAllowedSPIFFEIDs(manifest)
 		if err != nil {
@@ -160,7 +169,15 @@ func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
 // selected dataplane.
 func (e *Env) renderAtenetRouterManifest(ctx context.Context) ([]byte, error) {
 	if e.Cfg.Router == config.RouterAgentgateway {
-		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-router"))
+		manifest, err := e.render(e.Cfg.Path(installDir + "/agentgateway-router"))
+		if err != nil {
+			return nil, err
+		}
+		manifest, err = e.setAgentgatewayIngressAllowedSPIFFEIDs(manifest)
+		if err != nil {
+			return nil, err
+		}
+		return e.ResolveManifestBytes(ctx, manifest)
 	}
 	manifest, err := e.render(e.Cfg.Manifest("atenet-router.yaml"))
 	if err != nil {
@@ -176,6 +193,25 @@ func (e *Env) renderAtenetRouterManifest(ctx context.Context) ([]byte, error) {
 	}
 	manifest = e.patchEnvoyDataplaneImage(manifest, imageReference)
 	return e.ResolveManifestBytes(ctx, manifest)
+}
+
+func (e *Env) setAgentgatewayIngressAllowedSPIFFEIDs(raw []byte) ([]byte, error) {
+	if e.Cfg.Router != config.RouterAgentgateway {
+		return raw, nil
+	}
+	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
+		return nil, err
+	}
+
+	ids, err := json.Marshal(e.Cfg.IngressAllowedSPIFFEIDs)
+	if err != nil {
+		return nil, fmt.Errorf("encoding AgentGateway ingress SPIFFE IDs: %w", err)
+	}
+	marker := []byte("[ATE_INGRESS_ALLOWED_SPIFFE_IDS]")
+	if count := bytes.Count(raw, marker); count != 1 {
+		return nil, fmt.Errorf("expected 1 AgentGateway ingress SPIFFE IDs placeholder, found %d", count)
+	}
+	return bytes.Replace(raw, marker, ids, 1), nil
 }
 
 // atenetEgressManifestPath returns the envoy egress gateway manifest.
@@ -195,6 +231,10 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 			return nil, fmt.Errorf("internal: additional ext_proc filter reached rendering with dataplane %s", config.RouterAgentgateway)
 		}
 		raw, err := e.render(e.Cfg.Path(installDir + "/agentgateway-egress"))
+		if err != nil {
+			return nil, err
+		}
+		raw, err = e.setAgentgatewayIngressAllowedSPIFFEIDs(raw)
 		if err != nil {
 			return nil, err
 		}

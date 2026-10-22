@@ -561,8 +561,14 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     the actor its `ate-target-actor` header names, and only to recognized,
     registered actors. It accepts only mTLS clients whose SPIFFE ID is on a
     static allowlist; any listed client may reach any actor, as per-actor
-    ingress authorization is not yet supported. The agentgateway dataplane
-    does not authenticate clients yet.
+    ingress authorization is not yet supported.
+    The installer takes that allowlist from `--ingress-allowed-spiffe-ids`
+    (`ATE_INGRESS_ALLOWED_SPIFFE_IDS` or `ingressAllowedSPIFFEIDs` in its config).
+    Both dataplanes must verify the client certificate against the Pod Identity
+    CA during the TLS handshake on both HTTPS and TLS CONNECT listeners.
+    The SPIFFE URI SAN allowlist may be checked during or after TLS, but an
+    unlisted client must not reach actor routing or open a CONNECT tunnel.
+    Neither dataplane serves plaintext ingress listeners.
 
   * **Network Policy**: Agent Substrate leverages standard Kubernetes
     NetworkPolicy for connectivity control. Policies can be applied at the
