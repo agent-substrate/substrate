@@ -428,14 +428,14 @@ func (p *statsPoller) resolveWorkerPools(ctx context.Context, podUIDs []string) 
 // Deliberately not a standing informer: at the poll cadence the apiserver
 // cost is negligible, there is no informer cache to sync before the first
 // sweep, and resolveWorkerPools already absorbs failed lists.
-func newWorkerPoolFetcher(client kubernetes.Interface, nodeName string) func(ctx context.Context) map[string]workerPoolRef {
+func newWorkerPoolFetcher(client kubernetes.Interface, namespace, nodeName string) func(ctx context.Context) map[string]workerPoolRef {
 	return func(ctx context.Context) map[string]workerPoolRef {
 		// Bounded so a hung apiserver cannot stall the sweep: past the
 		// deadline the fetch returns nil and resolveWorkerPools falls back
 		// to the cache.
 		listCtx, cancel := context.WithTimeout(ctx, workerPoolListTimeout)
 		defer cancel()
-		pods, err := client.CoreV1().Pods(metav1.NamespaceAll).List(listCtx, metav1.ListOptions{
+		pods, err := client.CoreV1().Pods(namespace).List(listCtx, metav1.ListOptions{
 			FieldSelector: "spec.nodeName=" + nodeName,
 			LabelSelector: workerPoolLabel,
 		})
@@ -582,7 +582,7 @@ func (i *statsInstruments) addCPU(ctx context.Context, aggs map[templateKey]*tem
 // The poller dials its own short-lived connection per probe (see
 // dialWorkerStats) and takes no WorkerDialer: the isolation from the lifecycle
 // RPCs' connection cache is structural, not just behavioral.
-func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface) {
+func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface, namespace string) {
 	poller := &statsPoller{
 		interval:   interval,
 		workersDir: nodepath.WorkersDir(),
@@ -599,7 +599,7 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.
 	if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
-		poller.fetchWorkerPools = newWorkerPoolFetcher(k8sClient, nodeName)
+		poller.fetchWorkerPools = newWorkerPoolFetcher(k8sClient, namespace, nodeName)
 	} else {
 		slog.WarnContext(ctx, "NODE_NAME not set; actor stats will carry no worker pool labels")
 	}
