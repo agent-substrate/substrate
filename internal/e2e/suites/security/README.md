@@ -1,77 +1,173 @@
-# Security e2e suite
+# Running the security e2e suite by hand
 
-End-to-end tests for Substrate's isolation boundaries. This is the runbook
-for running them on a local kind cluster and for watching what they do while
-they run.
+This is the manual runbook for the security isolation tests: how to run them
+on a local kind cluster, how to run a subset, and what to watch while they
+run. CI runs them with every other e2e suite; nothing here is needed for that.
 
-Prereqs: Go, kubectl, a running Docker. kind is auto-managed.
+Prereqs: Go, kubectl, a running Docker. kind is created for you.
 
-## Steps to run the security tests
+## Run the tests
 
-1. Create the cluster (in the repo root):
+1. Create the cluster, from the repo root:
+
+   ```
+   hack/create-kind-cluster.sh
+   ```
+
+2. Install the control plane. This is the slow step; it pulls about 570 MB:
+
+   ```
+   hack/install-ate-kind.sh --deploy-ate-system
+   ```
+
+   Stop there. The NFS/CSI and demo steps CI runs are for other suites.
+
+3. Run one of the three top-level tests. They are split by the boundary under
+   test: between two actors in one atespace, between two atespaces, or across
+   two worker pods running concurrently in space.
+
+   **`TestActorIsolation`** ([actor_isolation_test.go](actor_isolation_test.go)),
+   one atespace, fixtures `actor-isolation.yaml.tmpl` and
+   `actor-isolation-template.yaml.tmpl`:
+
+   ```
+   hack/run-e2e-kind.sh ./internal/e2e/suites/security -v -run TestActorIsolation
+   ```
+
+   - `VictimDurableMarkerNotVisibleThroughAttackerMount` — **ST-1 [time]** (durable-dir volume mount isolation across worker reuse)
+   - `VictimHostStateNotReachableFromAttackerSandbox` — **EX-4 [time]** (per-actor host state and worker-pod credential isolation: T-18, T-19, T-22)
+   - `VictimEphemeralStateNotPresentInAttackerSandbox` — **EX-5 [time]** (no residual `/tmp`, writable rootfs layer, `/dev` tmpfs, or open fd state across worker reuse: T-27)
+   - `ProjectedIdentityNotCapturedInSnapshot` — **ST-3 [time]** (projected `/run/ate` `system-info` identity excluded from snapshots: T-23)
+   - `DeletedActorSnapshotsRemoved` — **ST-5 [time]** (actor deletion removes external snapshots from object storage and prevents recovery)
+
+   **`TestCrossAtespaceIsolation`** ([crossatespace_test.go](crossatespace_test.go)),
+   two atespaces, fixtures `atespace-a-pool.yaml.tmpl`,
+   `atespace-b-namespace.yaml.tmpl` and `atespace-template.yaml.tmpl`:
+
+   ```
+   hack/run-e2e-kind.sh ./internal/e2e/suites/security -v -run TestCrossAtespaceIsolation
+   ```
+
+   - `TagScopedToAtespaceCannotSeedAnotherAtespace` — **ST-4 [space]** (unpublished `ATESPACE`-scoped snapshot tag isolation across atespaces)
+
+   **`TestConcurrentActorIsolation`** ([concurrent_isolation_test.go](concurrent_isolation_test.go)),
+   two replicas, fixtures `concurrent-a-pool.yaml.tmpl`,
+   `concurrent-b-namespace.yaml.tmpl` and `concurrent-template.yaml.tmpl`:
+
+   ```
+   hack/run-e2e-kind.sh ./internal/e2e/suites/security -v -run TestConcurrentActorIsolation
+   ```
+
+   - `RouterDeliversOnlyToNamedActorInSpace` — **NW-6 [space]** (ingress router atespace/actor isolation with concurrent actors on distinct workers: T-14)
+   - `DirectActorToActorTrafficBlocked` — **NW-2 [space]** (no direct actor-to-actor traffic across the pod network; blocked by NetworkPolicy: T-17)
+   - `ConcurrentDurableMountIsolation` — **ST-1 [space]** (durable-dir volume mount isolation across concurrent actors: T-18, T-27)
+   - `ConcurrentHostStateNotReachableFromActorSandbox` — **EX-4 [space]** (live per-actor host state under shared `/var/lib/ate` not reachable across concurrent sandboxes: T-18)
+
+   To run a subset of subtests:
+
+   ```
+   hack/run-e2e-kind.sh ./internal/e2e/suites/security -v \
+     -run 'TestActorIsolation/(VictimDurableMarkerNotVisibleThroughAttackerMount|VictimHostStateNotReachableFromAttackerSandbox)'
+   ```
+
+   The setup still runs in full (victim runs, writes, suspends; attacker takes
+   the worker). The filter only picks which assertions execute.
+
+4. A failed run keeps its namespaces so you can read the worker logs:
+
+   ```
+   kubectl get ns | grep ate-e2e
+   kubectl -n <ns> logs -l ate.dev/worker-pool -c ateworker
+   KIND_CLUSTER_NAME=kind hack/cleanup-e2e.sh   # reclaim when done
+   ```
+
+   `cleanup-e2e.sh` removes namespaces labeled `ate.dev/e2e`. Of this suite's
+   fixtures only `actor-isolation.yaml.tmpl` carries that label, so delete
+   `ate-e2e-sec-a` and `ate-e2e-sec-b` by hand if the cross-atespace test
+   left them behind.
+
+## Watch a run
+
+Namespaces are `ate-e2e-sec-actor` for `TestActorIsolation` and
+`ate-e2e-sec-a` plus `ate-e2e-sec-b` for `TestCrossAtespaceIsolation`. The
+micro-VM lane inserts `-microvm` after `ate-e2e`. Worker pods are labeled
+`ate.dev/worker-pool=<pool>`; the pools are `actor` and `shared`.
+
+Start these before launching the test.
+
+Lifecycle:
 
 ```
-hack/create-kind-cluster.sh
+# Fixture namespaces appear and vanish; this is the run's heartbeat.
+kubectl get ns -w | grep ate-e2e
+
+# The single worker pod. It should be reused, never replaced.
+kubectl get pods -n ate-e2e-sec-actor -w
 ```
 
-2. Install the control plane (slow step — pulls ~570 MB):
+The reuse, which is the point of `TestActorIsolation`. Actors are not
+Kubernetes objects, so use the plugin:
 
 ```
-hack/install-ate-kind.sh --deploy-ate-system
+# Actor state and worker assignment: victim runs, suspends, attacker binds
+# to the same worker, then the clone, then the recreated victim.
+watch -n1 'kubectl ate get actors -a ate-e2e-sec-actor'
+
+kubectl ate get workers
+kubectl ate top workers        # Actors used/total goes 1/1, 0/1, 1/1, ...
 ```
 
-Stop here — the NFS/CSI and demo steps CI runs are for other suites; this suite needs none of them.
+The worker name every actor shows is the string `requireReusedWorker`
+asserts on.
 
-3. Run the cross-atespace isolation test:
-
-```
-hack/run-e2e-kind.sh ./internal/e2e/suites/security -v -run TestCrossAtespaceIsolation
-```
-
-The wrapper sets KO_DOCKER_REPO, BUCKET_NAME, the kube context, and builds the probe image via ko. To run only the durable-mount and host-state subtests and skip the tag-scope one:
+The worker host:
 
 ```
-hack/run-e2e-kind.sh ./internal/e2e/suites/security -v \
-  -run 'TestCrossAtespaceIsolation/(VictimDurableMarkerNotVisibleThroughAttackerMount|VictimHostStateNotReachableFromAttackerSandbox)'
+# Sandbox lifecycle, checkpoints and restores.
+kubectl logs -n ate-e2e-sec-actor -l ate.dev/worker-pool=actor -c ateworker -f
+
+# The per-actor layout under /var/lib/ateworker-gvisor/actors that the
+# host-state probes target. Only the running actor has durable-dir and
+# system-info; atelet removes both at suspend, and a suspended actor's UID
+# directory keeps just sandbox-assets.json.
+POD=$(kubectl get pods -n ate-e2e-sec-actor -l ate.dev/worker-pool=actor -o name | head -1)
+kubectl exec -n ate-e2e-sec-actor "$POD" -c ateworker -- ls -la /var/lib/ateworker-gvisor/actors
 ```
 
-Note the setup (victim run/write/suspend, attacker reuse) runs regardless — the subtest filter only selects which assertions execute.
+Control plane and snapshots:
 
-4. On failure, a failed suite keeps its namespaces so you can read the worker logs:
-
-
-kubectl get ns -l ate.dev/e2e
-kubectl -n <ns> logs <worker-pod> -c ateworker
-KIND_CLUSTER_NAME=kind hack/cleanup-e2e.sh   # reclaim when done
-
-
+```
+kubectl ate get tags -a ate-e2e-sec-actor    # actor-snapshot-tag, during ProjectedIdentityNotCapturedInSnapshot
+kubectl ate get tags -a ate-e2e-sec-a        # atespace-a-tag, during the cross-atespace test
+kubectl ate get atespaces
+kubectl logs -n ate-system -l app=ateapi -f
+```
 
 ## Run the GitHub checks locally
 
-The PR workflow (`.github/workflows/pr-workflow.yaml`) runs three checks:
-`run-tests`, `E2E (<dataplane>)`, and `e2e-test`, which only aggregates the
-E2E matrix. Every one of them compiles this suite, so a build error here
-fails all three.
+The PR workflow (`.github/workflows/pr-workflow.yaml`) has two jobs:
+`run-tests` and the `e2e-test` matrix, one entry per dataplane. Both compile
+this suite, so a build error here fails both.
 
-Fast, no cluster needed. This is what CI's `run-tests` job does, minus the
-JUnit wrapping, and it also type-checks every E2E suite:
+Fast, no cluster needed. This is what `run-tests` does, minus the JUnit
+wrapping, and it type-checks every e2e suite:
 
 ```
 go vet ./... && go test -race ./... && hack/verify-all.sh && (cd tools/apitool && go test -race ./...)
 ```
 
 `hack/verify-all.sh` runs gofmt, boilerplate, licenses, go.mod, metrics
-registry, and generated-code checks.
-Commit or stash first: the generated-code check refuses a dirty tree. The
-metrics check needs Docker or a local `weaver` at the version pinned in
-`hack/verify/metrics.sh`. The root-gated tests CI runs under sudo need Linux:
+registry, and generated-code checks. Commit or stash first: the
+generated-code check refuses a dirty tree. The metrics check needs Docker or
+a local `weaver` at the version pinned in `hack/verify/metrics.sh`. The
+root-gated tests CI runs under sudo need Linux:
 
 ```
 hack/run-root-tests.sh -race -v
 ```
 
-Full E2E, same as CI's gVisor lane. Do steps 1 and 2 above, then run every
-suite with CI's flags instead of the `-run` filter from step 3:
+Full e2e, same as CI's gVisor lane. Do steps 1 and 2 above, then run every
+suite with CI's flags:
 
 ```
 hack/run-e2e-kind.sh -v -args --no-color
@@ -79,41 +175,3 @@ hack/run-e2e-kind.sh -v -args --no-color
 
 CI also deploys the NFS CSI driver and the demos before this, and repeats the
 run with `E2E_SANDBOX_CLASS=microvm`. Neither matters for this suite.
-
-## Commands to run while the test is running to observe
-Watch the lifecycle (start these first, before/at test launch)
-
-# The two atespace namespaces appear and vanish — this is the run's heartbeat
-kubectl get ns -l ate.dev/e2e -w
-
-# The one shared worker pod: watch the victim's pod get reused, not replaced
-kubectl get pods -n ate-e2e-sec-a -w
-The reuse itself (the point of the test)
-Actors aren't in k8s, so use the plugin. This is where you see victim B run, suspend, then attacker A bind to the same worker:
-
-
-# Actor state + worker assignment, atespace B (victim) then A (attacker)
-watch -n1 'kubectl ate get actors -a ate-e2e-sec-b; echo ---; kubectl ate get actors -a ate-e2e-sec-a'
-
-# Which worker each actor is on — the name should match across the two atespaces
-kubectl ate get workers
-kubectl ate top workers        # capacity: Actors used/total (you'll see 1/1 then 0/1 then 1/1)
-The worker name that B's victim shows, then A's attacker shows after the suspend, is the same string requireReusedWorker asserts on. Seeing them match live is the manual version of that check.
-
-The shared worker pod on the host
-
-# The pod hosting both actors in turn
-kubectl get pods -n ate-e2e-sec-a -o wide
-
-# worker logs — the sandbox lifecycle, checkpoints, resumes
-kubectl logs -n ate-e2e-sec-a -l app=ateworker -c ateworker -f
-
-# The on-host per-actor layout the host-state probes assert against.
-# Two UID-keyed durable dirs (victim's + attacker's) live side by side here:
-POD=$(kubectl get pods -n ate-e2e-sec-a -l app=ateworker -o name | head -1)
-kubectl exec -n ate-e2e-sec-a "$POD" -c ateworker -- ls -la /var/lib/ateworker-gvisor/actors
-Control plane / snapshots (for the tag-scope subtest)
-
-kubectl ate get tags -a ate-e2e-sec-a          # atespace-a-tag appears during the last subtest
-kubectl ate get atespaces                       # ate-e2e-sec-a / -b listed while live
-kubectl logs -n ate-system -l app=ateapi -f     # Create
