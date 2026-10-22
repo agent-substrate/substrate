@@ -29,6 +29,7 @@ import (
 
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/grpcechopb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -38,6 +39,7 @@ import (
 // cache after the first request, record hit/miss metrics on atenet-router, and
 // expire after the cache TTL (5 seconds).
 func TestIngressCache_HitAndTTL(t *testing.T) {
+	e2e.RequireIngressCache(t)
 	ctx := context.Background()
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "cache-hit", e2e.SubstrateCounterFixture())
 	router := mustRouterClient(t, ctx)
@@ -109,6 +111,7 @@ func TestIngressCache_HitAndTTL(t *testing.T) {
 // caution against duplicate side effects), allowing a single client retry to
 // succeed immediately via ext_proc without waiting for cache TTL.
 func TestIngressCache_WorkerDisconnectionEvictsWithoutReplay(t *testing.T) {
+	e2e.RequireIngressCache(t)
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "cache-evict", e2e.SubstrateCounterFixture())
@@ -182,6 +185,7 @@ func TestIngressCache_WorkerDisconnectionEvictsWithoutReplay(t *testing.T) {
 // replayed by the proxy, preventing payload truncation or duplicate execution.
 // However, the stale binding is still evicted, so a subsequent client call succeeds.
 func TestIngressCache_BodyDoesNotReplayOnWorkerFailure(t *testing.T) {
+	e2e.RequireIngressCache(t)
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "cache-body", e2e.SubstrateCounterFixture())
@@ -256,6 +260,7 @@ func TestIngressCache_BodyDoesNotReplayOnWorkerFailure(t *testing.T) {
 // client cannot forge ate-endpoint-cached: 1 on an un-cached actor to bypass
 // ext_proc resolution or corrupt routing.
 func TestIngressCache_UntrustedCachedHeaderStripped(t *testing.T) {
+	e2e.RequireIngressCache(t)
 	ctx := context.Background()
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "cache-spoof", e2e.SubstrateCounterFixture())
 	router := mustRouterClient(t, ctx)
@@ -308,10 +313,69 @@ func TestIngressCache_UntrustedCachedHeaderStripped(t *testing.T) {
 	}
 }
 
+// TestIngressCache_DisabledByDefault verifies that without the IngressCache
+// preview gate a forged ate-endpoint-cached header has no effect: the router
+// has no route that skips ext_proc, so the request is resolved and served
+// normally, and the ingress-cache filter never sees it.
+func TestIngressCache_DisabledByDefault(t *testing.T) {
+	if preview.IsEnabled(preview.GateIngressCache) {
+		t.Skipf("preview gate %q is enabled; this test covers the default install", preview.GateIngressCache)
+	}
+	ctx := context.Background()
+	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "cache-off", e2e.SubstrateCounterFixture())
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForRouteReady(t, "Warm up actor route", func() (*http.Response, error) {
+		return router.Get(ctx, actorRef, "/readyz")
+	})
+
+	countCacheMetrics := e2e.CurrentAtenetDataplane().SupportsIngressCache()
+	var lookupsBefore float64
+	if countCacheMetrics {
+		scrape, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
+		if err != nil {
+			t.Fatalf("ScrapeRouterEnvoyMetrics before forged request: %v", err)
+		}
+		lookupsBefore = e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_hit") +
+			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_miss")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, router.BaseURL()+"/readyz", nil)
+	if err != nil {
+		t.Fatalf("creating request: %v", err)
+	}
+	req.Header.Set(atenet.TargetActorHeader, actorRef.String())
+	req.Header.Set("ate-endpoint-cached", "1")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("request with forged ate-endpoint-cached failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("request with forged header returned status %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	if countCacheMetrics {
+		scrape, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
+		if err != nil {
+			t.Fatalf("ScrapeRouterEnvoyMetrics after forged request: %v", err)
+		}
+		lookupsAfter := e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_hit") +
+			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_miss")
+		if lookupsAfter != lookupsBefore {
+			t.Fatalf("ingress cache lookups changed with the gate off, before=%.0f, after=%.0f", lookupsBefore, lookupsAfter)
+		}
+	}
+}
+
 // TestIngressCache_GRPCUnavailableEvictsCache verifies that when a gRPC request
 // encounters an unavailable worker (grpc-status: 14 UNAVAILABLE), ingress-cache
 // evicts the stale binding without proxy-side stream replay.
 func TestIngressCache_GRPCUnavailableEvictsCache(t *testing.T) {
+	e2e.RequireIngressCache(t)
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)

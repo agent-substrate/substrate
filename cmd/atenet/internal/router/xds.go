@@ -258,6 +258,8 @@ type XdsServer struct {
 	upstreamTrustBundlePath      string
 	// upstreamConnect: see SetUpstreamConnect.
 	upstreamConnect bool
+	// ingressCache: see SetIngressCache.
+	ingressCache bool
 
 	// Downstream (client-facing) mTLS. When downstreamClientCAPath is set,
 	// every TLS ingress listener requests a client certificate and rejects
@@ -436,6 +438,15 @@ func (x *XdsServer) SetUpstreamConnect(enabled bool) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.upstreamConnect = enabled
+}
+
+// SetIngressCache installs the ingress-cache filter and, for each workload
+// route, a copy that matches endpointCachedHeader and skips ext_proc. When
+// disabled, neither exists, so every request is resolved by ext_proc.
+func (x *XdsServer) SetIngressCache(enabled bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.ingressCache = enabled
 }
 
 // SetOtlpCollector enables Envoy-side tracing pointed at the OTLP gRPC
@@ -1025,7 +1036,7 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 	if x.upstreamConnect {
 		routes = x.buildActorTunnelRoutes()
 	} else {
-		routes = withCachedRoute(&routev3.Route{
+		routes = x.withCachedRoute(&routev3.Route{
 			Match: &routev3.RouteMatch{
 				PathSpecifier: &routev3.RouteMatch_Prefix{
 					Prefix: "/",
@@ -1060,7 +1071,11 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 
 // withCachedRoute returns a pair of routes: a copy of r that matches
 // endpointCachedHeader="1" and disables ext_proc, followed by r itself.
-func withCachedRoute(r *routev3.Route) []*routev3.Route {
+// Without the ingress cache it returns r alone, so no route skips ext_proc.
+func (x *XdsServer) withCachedRoute(r *routev3.Route) []*routev3.Route {
+	if !x.ingressCache {
+		return []*routev3.Route{r}
+	}
 	cached := proto.Clone(r).(*routev3.Route)
 	headers := make([]*routev3.HeaderMatcher, 0, len(r.GetMatch().GetHeaders())+1)
 	headers = append(headers, r.GetMatch().GetHeaders()...)
@@ -1141,8 +1156,8 @@ func (x *XdsServer) buildActorTunnelRoutes() []*routev3.Route {
 			},
 		},
 	}
-	routes := withCachedRoute(route(ActorTunnelHTTP2ClusterName, grpcHeaders...))
-	return append(routes, withCachedRoute(route(ActorTunnelHTTP1ClusterName))...)
+	routes := x.withCachedRoute(route(ActorTunnelHTTP2ClusterName, grpcHeaders...))
+	return append(routes, x.withCachedRoute(route(ActorTunnelHTTP1ClusterName))...)
 }
 
 func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
@@ -1434,26 +1449,26 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 		},
 	})
 
-	ingressCacheConfig := newAny(&httpdynamicmodulesv3.DynamicModuleFilter{
-		DynamicModuleConfig: &dynamicmodulesv3.DynamicModuleConfig{
-			Name: ingressCacheDynamicModuleName,
-		},
-		FilterName: ingressCacheDynamicModuleName,
-	})
-
 	routerAny := newAny(&routerv3.Router{})
 
 	httpFilters := []*hcmv3.HttpFilter{}
 	if captureActorRouting {
 		httpFilters = append(httpFilters, actorRoutingFilterStateFilter(false))
 	}
-	httpFilters = append(httpFilters,
-		&hcmv3.HttpFilter{
+	if x.ingressCache {
+		httpFilters = append(httpFilters, &hcmv3.HttpFilter{
 			Name: httpDynamicModulesFilterName,
 			ConfigType: &hcmv3.HttpFilter_TypedConfig{
-				TypedConfig: ingressCacheConfig,
+				TypedConfig: newAny(&httpdynamicmodulesv3.DynamicModuleFilter{
+					DynamicModuleConfig: &dynamicmodulesv3.DynamicModuleConfig{
+						Name: ingressCacheDynamicModuleName,
+					},
+					FilterName: ingressCacheDynamicModuleName,
+				}),
 			},
-		},
+		})
+	}
+	httpFilters = append(httpFilters,
 		&hcmv3.HttpFilter{
 			Name: httpExtProcFilterName,
 			ConfigType: &hcmv3.HttpFilter_TypedConfig{

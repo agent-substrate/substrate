@@ -81,3 +81,13 @@ func RequirePreview(t testing.TB, gate preview.Gate) {
 		t.Skipf("preview gate %q is not enabled (pass --preview)", gate)
 	}
 }
+
+// RequireIngressCache skips t unless the router under test caches ingress
+// routing: the IngressCache preview gate is on and the dataplane implements it.
+func RequireIngressCache(t testing.TB) {
+	t.Helper()
+	RequirePreview(t, preview.GateIngressCache)
+	if !CurrentAtenetDataplane().SupportsIngressCache() {
+		t.Skipf("the %s dataplane does not implement the %q preview gate", os.Getenv(AtenetDataplaneEnv), preview.GateIngressCache)
+	}
+}

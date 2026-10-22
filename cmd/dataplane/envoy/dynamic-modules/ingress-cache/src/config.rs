@@ -30,9 +30,6 @@ pub const DEFAULT_ATUNNEL_PORT: u16 = 443;
 /// Default request header carrying the actor's target port to `atunnel`.
 pub const DEFAULT_TARGET_PORT_HEADER: &str = "x-ate-target-port";
 
-/// Default value for `cache_enabled`.
-pub const DEFAULT_CACHE_ENABLED: bool = true;
-
 /// Filter configuration supplied as JSON in the Envoy HTTP filter config.
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(default)]
@@ -43,8 +40,6 @@ pub struct Config {
   pub atunnel_port: u16,
   /// Header carrying the actor's target port to `atunnel`.
   pub target_port_header: String,
-  /// Set `false` to disable caching.
-  pub cache_enabled: bool,
 }
 
 impl Default for Config {
@@ -53,7 +48,6 @@ impl Default for Config {
       cache_ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
       atunnel_port: DEFAULT_ATUNNEL_PORT,
       target_port_header: DEFAULT_TARGET_PORT_HEADER.to_string(),
-      cache_enabled: DEFAULT_CACHE_ENABLED,
     }
   }
 }
@@ -109,7 +103,7 @@ mod tests {
     assert_eq!(Config::from_config(b"{}").unwrap(), Config::default());
 
     let custom = Config::from_config(
-      br#"{"cache_ttl_seconds": 10, "atunnel_port": 8443, "target_port_header": "x-custom-port", "cache_enabled": false}"#,
+      br#"{"cache_ttl_seconds": 10, "atunnel_port": 8443, "target_port_header": "x-custom-port"}"#,
     )
     .unwrap();
     assert_eq!(
@@ -118,7 +112,6 @@ mod tests {
         cache_ttl_seconds: 10,
         atunnel_port: 8443,
         target_port_header: "x-custom-port".to_string(),
-        cache_enabled: false,
       }
     );
 

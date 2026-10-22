@@ -276,9 +276,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
     let key = actor.cache_key();
     self.actor_key = Some(key.clone());
 
-    if self.config.cache_enabled
-      && let Some(entry) = cache().get(&key)
-    {
+    if let Some(entry) = cache().get(&key) {
       if entry.expires_at > Instant::now() {
         let worker_ip = entry.worker_ip.clone();
         let worker_spiffe_id = entry.worker_spiffe_id.clone();
@@ -363,8 +361,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
     }
 
     // On a cache miss that succeeded upstream, learn from the metadata ext_proc published.
-    if self.config.cache_enabled
-      && !stale_rejection
+    if !stale_rejection
       && !grpc_unavailable
       && let Some(key) = self.learn_key.take()
       && let Some((worker_ip, worker_spiffe_id)) = read_learned_binding(envoy_filter)
