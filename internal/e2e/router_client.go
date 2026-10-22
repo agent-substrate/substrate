@@ -120,14 +120,15 @@ func (c *RouterClient) Address() string {
 	return c.address
 }
 
-// ConnectAddress returns the host:port of the local port-forward to the
-// router's CONNECT listener, opening it on first use, for a caller that has to
-// control the protocol it speaks to the router itself.
-func (c *RouterClient) ConnectAddress(ctx context.Context) (string, error) {
-	if err := c.ensureConnectPortForward(ctx); err != nil {
-		return "", err
+// ConnectPortForward opens a new port-forward to the router's CONNECT listener
+// and returns its local host:port, for a caller that has to control the
+// protocol it speaks to the router itself. The caller must call stop.
+func (c *RouterClient) ConnectPortForward(ctx context.Context) (addr string, stop func(), err error) {
+	localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, SystemNamespace(), ResourceName("atenet-router"), routerConnectTLSServicePort)
+	if err != nil {
+		return "", nil, fmt.Errorf("port-forwarding to the router's CONNECT listener: %w", err)
 	}
-	return c.connectAddr, nil
+	return fmt.Sprintf("127.0.0.1:%d", localPort), stop, nil
 }
 
 // TLSConfig returns a copy of the TLS config the client dials the router
@@ -188,11 +189,10 @@ func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef,
 func (c *RouterClient) ConnectWithHeaders(ctx context.Context, actorRef resources.ActorRef, port int, header http.Header) (net.Conn, error) {
 	// client-go tears down a whole port-forward when any one of its
 	// connections errors, so each tunnel gets its own
-	localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, SystemNamespace(), ResourceName("atenet-router"), routerConnectTLSServicePort)
+	addr, stop, err := c.ConnectPortForward(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("port-forwarding to the router's CONNECT listener: %w", err)
+		return nil, err
 	}
-	addr := fmt.Sprintf("127.0.0.1:%d", localPort)
 	conn, err := c.connect(ctx, addr, actorRef, port, header)
 	if err != nil {
 		stop()
