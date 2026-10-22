@@ -59,7 +59,8 @@ installs the fixtures elsewhere: `E2E_SUBSTRATE_TEMPLATE_ATESPACE` /
 gVisor, 10m on microVM, where the golden is a cloud-hypervisor cold boot plus
 a checkpoint). The upgrade suite runs `ate-setup` with `--config
 $E2E_ATE_SETUP_CONFIG` when it is set, and otherwise with `--kind`, which
-`E2E_ATE_SETUP_FLAGS` replaces.
+`E2E_ATE_SETUP_FLAGS` replaces. With a record of pre-built images, it rolls the
+pool to the worker image for its sandbox class at the record's tag.
 
 ## Settings
 

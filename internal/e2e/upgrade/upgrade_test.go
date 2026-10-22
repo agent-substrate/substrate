@@ -33,6 +33,8 @@
 // ate-setup runs with --config E2E_ATE_SETUP_CONFIG, the previous release's
 // install record, as the runbook does. Without it, ate-setup runs with --kind,
 // or with E2E_ATE_SETUP_FLAGS for another cluster, and the test's kube context.
+// A record of pre-built images has to name the new tag, as the runbook's
+// new.yaml does, and the pool rolls to the worker image at that tag.
 // .github/workflows/upgrade-e2e.yaml runs the suite for every push to a
 // release branch, against the newest release on that branch.
 package upgrade
@@ -54,10 +56,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/google"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/yaml"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
@@ -182,9 +189,9 @@ func TestRollingUpgrade(t *testing.T) {
 	var newImage string
 	ok := t.Run(stepPoolRoll, func(t *testing.T) {
 		harness.setStep(stepPoolRoll)
-		newImage = publishWorkerImage(t, installed.sandboxClass)
+		newImage = newWorkerImage(ctx, t, installed.sandboxClass)
 		if newImage == installed.workerImage {
-			t.Fatalf("this checkout's worker image %s is the installed one; nothing to upgrade", newImage)
+			t.Fatalf("the new worker image %s is the installed one; nothing to upgrade", newImage)
 		}
 		rollPool(ctx, t, api.get(), fixture.PoolNamespace, fixture.PoolName, newImage)
 		// Every old worker is gone, so the harness has suspended these.
@@ -744,6 +751,52 @@ func ateSetupCommand(t *testing.T, args ...string) (name string, cmd []string) {
 	cmd = append(cmd, "--rollout-timeout=5m")
 	cmd = append(cmd, args...)
 	return "go", cmd
+}
+
+// newWorkerImage returns the worker image for class to roll the pool to. With
+// pre-built images it is the one at the record's tag, pinned by digest as the
+// runbook does. From source, this checkout builds and pushes it.
+func newWorkerImage(ctx context.Context, t *testing.T, class atev1.SandboxClass) string {
+	t.Helper()
+	repo, tag := prebuiltImages(t)
+	if repo == "" {
+		return publishWorkerImage(t, class)
+	}
+	ref := repo + "/ateworker-" + string(class) + ":" + tag
+	parsed, err := name.ParseReference(ref)
+	if err != nil {
+		t.Fatalf("%s is not a valid image reference: %v", ref, err)
+	}
+	desc, err := remote.Head(parsed, remote.WithContext(ctx),
+		remote.WithAuthFromKeychain(authn.NewMultiKeychain(authn.DefaultKeychain, google.Keychain)))
+	if err != nil {
+		t.Fatalf("failed to resolve %s to a digest: %v", ref, err)
+	}
+	return ref + "@" + desc.Digest.String()
+}
+
+// prebuiltImages returns the image repository and tag of E2E_ATE_SETUP_CONFIG,
+// or empty strings when the install builds from source.
+func prebuiltImages(t *testing.T) (repo, tag string) {
+	t.Helper()
+	path := os.Getenv("E2E_ATE_SETUP_CONFIG")
+	if path == "" {
+		return "", ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read the install record: %v", err)
+	}
+	var record struct {
+		Images struct {
+			Repo string `json:"repo"`
+			Tag  string `json:"tag"`
+		} `json:"images"`
+	}
+	if err := yaml.Unmarshal(data, &record); err != nil {
+		t.Fatalf("failed to parse the install record %s: %v", path, err)
+	}
+	return strings.TrimSuffix(record.Images.Repo, "/"), record.Images.Tag
 }
 
 // publishWorkerImage builds and pushes this checkout's worker image for class
