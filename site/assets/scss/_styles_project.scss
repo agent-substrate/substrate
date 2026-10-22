@@ -463,6 +463,14 @@ footer {
 
   .td-sidebar__inner {
     padding: 0;
+
+    // The nav scrolls with the page, and the page grows to fit it. Docsy makes
+    // it sticky, which let a long nav run over the footer.
+    @media (min-width: 768px) {
+      position: static;
+      height: auto;
+      overflow: visible;
+    }
   }
 }
 
@@ -506,6 +514,50 @@ footer {
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  // Section headings are <summary> rows: the title links to the section
+  // page, and the rest of the row toggles the section open and closed.
+  &__summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    list-style: none;
+    cursor: pointer;
+    padding-right: 6px;
+    border-radius: 6px;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &:hover .as-sb__chevron,
+    &:focus-visible .as-sb__chevron {
+      color: #e4ebe6;
+    }
+
+    &:focus-visible {
+      outline: 2px solid #64d86b;
+      outline-offset: 2px;
+    }
+
+    .as-sb__heading {
+      padding-bottom: 0;
+      line-height: 28px;
+    }
+  }
+
+  &__chevron {
+    color: #6e7d73;
+    transition: transform 0.15s ease, color 0.15s ease;
+  }
+
+  &__group[open] > &__summary {
+    margin-bottom: 6px;
+
+    .as-sb__chevron {
+      transform: rotate(90deg);
+    }
   }
 
   &__heading {

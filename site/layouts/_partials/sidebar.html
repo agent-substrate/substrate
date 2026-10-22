@@ -26,8 +26,12 @@ limitations under the License.
     {{- $root := .FirstSection -}}
     {{- range where $root.Sections.ByWeight ".Params.toc_hide" "!=" true }}
     {{- $secActive := eq $.RelPermalink .RelPermalink -}}
-    <div class="as-sb__group">
-      <a href="{{ .RelPermalink }}" class="as-sb__heading{{ if $secActive }} is-active{{ end }}">{{ .LinkTitle }}</a>
+    {{/* Each section collapses; the one holding the current page starts open. */ -}}
+    <details class="as-sb__group"{{ if or $secActive ($.IsDescendant .) }} open{{ end }}>
+      <summary class="as-sb__summary">
+        <a href="{{ .RelPermalink }}" class="as-sb__heading{{ if $secActive }} is-active{{ end }}">{{ .LinkTitle }}</a>
+        <svg class="ic as-sb__chevron" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>
+      </summary>
       {{- range where .Pages.ByWeight ".Params.toc_hide" "!=" true }}
       {{- $active := eq $.RelPermalink .RelPermalink -}}
       <a href="{{ .RelPermalink }}" class="as-sb__link{{ if $active }} is-active{{ end }}"{{ if $active }} aria-current="page"{{ end }}>
@@ -35,7 +39,7 @@ limitations under the License.
         {{- partial "page-pills.html" (dict "page" . "new" true) }}
       </a>
       {{- end }}
-    </div>
+    </details>
     {{- end }}
   </nav>
 </div>
