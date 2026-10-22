@@ -57,8 +57,9 @@ func initialExternalVolumes(ctx context.Context, scLister storagev1listers.Stora
 			}
 
 			volumes = append(volumes, &ateapipb.ExternalVolumeStatus{
-				Name:       vol.GetName(),
-				VolumeType: sc.Provisioner,
+				Name:         vol.GetName(),
+				VolumeType:   sc.Provisioner,
+				MountOptions: sc.MountOptions,
 			})
 		}
 	}

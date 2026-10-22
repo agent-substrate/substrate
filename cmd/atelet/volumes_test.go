@@ -34,9 +34,10 @@ import (
 )
 
 type mountCall struct {
-	volumeID   string
-	targetPath string
-	attributes map[string]string
+	volumeID     string
+	targetPath   string
+	attributes   map[string]string
+	mountOptions []string
 }
 
 type fakeWorkerPlugin struct {
@@ -50,9 +51,10 @@ type fakeWorkerPlugin struct {
 
 func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
 	f.mountCalls = append(f.mountCalls, mountCall{
-		volumeID:   req.VolumeID,
-		targetPath: req.TargetPath,
-		attributes: req.VolumeContext,
+		volumeID:     req.VolumeID,
+		targetPath:   req.TargetPath,
+		attributes:   req.VolumeContext,
+		mountOptions: req.MountOptions,
 	})
 	if f.mountErrs != nil {
 		if err, ok := f.mountErrs[req.VolumeID]; ok {
@@ -359,6 +361,37 @@ func TestMountExternalVolumes(t *testing.T) {
 		// Verify host mount directory for vol-2 was also created prior to MountVolume call.
 		if _, err := os.Stat(expectedPath2); err != nil {
 			t.Errorf("stat vol-2 mount path %q: %v", expectedPath2, err)
+		}
+	})
+
+	t.Run("mount options are forwarded to the plugin", func(t *testing.T) {
+		useTempNodeDirs(t)
+
+		volWithOpts := &ateletpb.Volume{
+			Name: "vol-opts",
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-opts",
+				VolumeType:      "mock-driver",
+				MountOptions:    []string{"vers=3", "nolock"},
+			},
+		}
+
+		fake := &fakeWorkerPlugin{}
+		s := &Atelet{
+			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
+				"mock-driver": fake,
+			},
+		}
+
+		if err := s.mountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{volWithOpts}); err != nil {
+			t.Fatalf("mountExternalVolumes failed: %v", err)
+		}
+		if len(fake.mountCalls) != 1 {
+			t.Fatalf("mountCalls count = %d, want 1", len(fake.mountCalls))
+		}
+		want := []string{"vers=3", "nolock"}
+		if diff := cmp.Diff(want, fake.mountCalls[0].mountOptions); diff != "" {
+			t.Errorf("mountOptions mismatch (-want +got):\n%s", diff)
 		}
 	})
 }

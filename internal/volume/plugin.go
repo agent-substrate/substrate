@@ -65,6 +65,10 @@ type MountVolumeRequest struct {
 	// PublishContext is the metadata returned when the volume was attached to
 	// this node. It is empty for drivers that do not implement attachment.
 	PublishContext map[string]string
+	// MountOptions are passed to the CSI driver as MountFlags in the
+	// VolumeCapability. They originate from the StorageClass mountOptions
+	// field and are forwarded unchanged.
+	MountOptions []string
 }
 
 // VolumePluginControlPlane abstracts storage operations performed on the control plane.

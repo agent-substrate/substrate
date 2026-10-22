@@ -590,6 +590,12 @@ message ExternalVolumeSource {
   // +k8s:optional
   // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
   map<string, string> publish_context = 4;
+
+  // mount_options are the StorageClass mountOptions, forwarded to the CSI
+  // driver as VolumeCapability.Mount.MountFlags.
+  //
+  // +k8s:optional
+  repeated string mount_options = 5;
 }
 
 message ImageVolumeSource {

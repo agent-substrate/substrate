@@ -142,8 +142,9 @@ func TestInitialActorVolumes(t *testing.T) {
 
 	want := []*ateapipb.ExternalVolumeStatus{
 		{
-			Name:       "data-vol-1",
-			VolumeType: "mock-standard",
+			Name:         "data-vol-1",
+			VolumeType:   "mock-standard",
+			MountOptions: []string{"vers=3", "nolock"},
 		},
 		{
 			Name:       "data-vol-2",
@@ -154,8 +155,9 @@ func TestInitialActorVolumes(t *testing.T) {
 	scLister := &fakeStorageClassLister{
 		storageClasses: map[string]*storagev1.StorageClass{
 			"standard": {
-				ObjectMeta:  metav1.ObjectMeta{Name: "standard"},
-				Provisioner: "mock-standard",
+				ObjectMeta:   metav1.ObjectMeta{Name: "standard"},
+				Provisioner:  "mock-standard",
+				MountOptions: []string{"vers=3", "nolock"},
 			},
 			"fast": {
 				ObjectMeta:  metav1.ObjectMeta{Name: "fast"},

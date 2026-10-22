@@ -464,6 +464,45 @@ func TestAppendExternalVolumes(t *testing.T) {
 		})
 	}
 
+	// Test mount options from ExternalVolumeStatus are forwarded.
+	t.Run("with mount options", func(t *testing.T) {
+		actorWithMountOpts := &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: "space-abc",
+				Name:     "actor-123",
+			},
+			Status: &ateapipb.ActorStatus{
+				ExternalVolumes: &ateapipb.ExternalVolumes{Volumes: []*ateapipb.ExternalVolumeStatus{
+					{
+						Name:            "vol-1",
+						StorageVolumeId: "vol-gce-pd-123",
+						VolumeType:      "pd-standard",
+						MountOptions:    []string{"vers=3", "nolock"},
+					},
+				}},
+			},
+		}
+		workloadSpec := &ateletpb.WorkloadSpec{}
+		if err := appendExternalVolumes(workloadSpec, template, actorWithMountOpts, nil); err != nil {
+			t.Fatalf("appendExternalVolumes unexpected error: %v", err)
+		}
+		want := &ateletpb.WorkloadSpec{
+			Volumes: []*ateletpb.Volume{
+				{
+					Name: "vol-1",
+					External: &ateletpb.ExternalVolumeSource{
+						StorageVolumeId: "vol-gce-pd-123",
+						VolumeType:      "pd-standard",
+						MountOptions:    []string{"vers=3", "nolock"},
+					},
+				},
+			},
+		}
+		if diff := cmp.Diff(want, workloadSpec, protocmp.Transform()); diff != "" {
+			t.Errorf("appendExternalVolumes mismatch (-want +got):\n%s", diff)
+		}
+	})
+
 	// Test missing mounted volume returns an error
 	missingActor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{

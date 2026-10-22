@@ -1407,6 +1407,34 @@ func Validate_ExternalVolumeSource(
 		errs = append(errs, fn(fldPath.Child("publish_context"), obj.PublishContext, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateletpb.ExternalVolumeSource.MountOptions
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.ExternalVolumeSource) []string {
+				return oldObj.MountOptions
+			})
+		errs = append(errs, fn(fldPath.Child("mount_options"), obj.MountOptions, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

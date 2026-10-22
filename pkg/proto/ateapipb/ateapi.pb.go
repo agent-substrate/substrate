@@ -1136,6 +1136,11 @@ type ExternalVolumeStatus struct {
 	// +k8s:optional
 	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	VolumeContext map[string]string `protobuf:"bytes,4,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// mount_options from the StorageClass, forwarded to the CSI driver as
+	// VolumeCapability.Mount.MountFlags at mount time.
+	//
+	// +k8s:optional
+	MountOptions  []string `protobuf:"bytes,5,rep,name=mount_options,json=mountOptions,proto3" json:"mount_options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1194,6 +1199,13 @@ func (x *ExternalVolumeStatus) GetVolumeType() string {
 func (x *ExternalVolumeStatus) GetVolumeContext() map[string]string {
 	if x != nil {
 		return x.VolumeContext
+	}
+	return nil
+}
+
+func (x *ExternalVolumeStatus) GetMountOptions() []string {
+	if x != nil {
+		return x.MountOptions
 	}
 	return nil
 }
@@ -9820,13 +9832,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\vdelete_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"deleteTime\"I\n" +
 	"\x0fExternalVolumes\x126\n" +
-	"\avolumes\x18\x01 \x03(\v2\x1c.ateapi.ExternalVolumeStatusR\avolumes\"\x91\x02\n" +
+	"\avolumes\x18\x01 \x03(\v2\x1c.ateapi.ExternalVolumeStatusR\avolumes\"\xb6\x02\n" +
 	"\x14ExternalVolumeStatus\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12*\n" +
 	"\x11storage_volume_id\x18\x02 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x03 \x01(\tR\n" +
 	"volumeType\x12V\n" +
-	"\x0evolume_context\x18\x04 \x03(\v2/.ateapi.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x1a@\n" +
+	"\x0evolume_context\x18\x04 \x03(\v2/.ateapi.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x12#\n" +
+	"\rmount_options\x18\x05 \x03(\tR\fmountOptions\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa1\x02\n" +

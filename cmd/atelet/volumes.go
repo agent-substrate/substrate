@@ -54,6 +54,7 @@ func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volu
 			TargetPath:     hostPath,
 			VolumeContext:  ext.GetVolumeContext(),
 			PublishContext: ext.GetPublishContext(),
+			MountOptions:   ext.GetMountOptions(),
 		}); err != nil {
 			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
 		}

@@ -22,6 +22,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/internal/volume"
@@ -819,4 +822,77 @@ func TestNewCSIPlugin_CapabilityQueryFailureIsNotFatal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPlugin_MountVolume_MountOptions(t *testing.T) {
+	driver := &mockCSIDriver{}
+	var capturedStageFlags, capturedPublishFlags []string
+	driver.nodeStageVolumeFunc = func(_ context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+		if m := req.GetVolumeCapability().GetMount(); m != nil {
+			capturedStageFlags = m.GetMountFlags()
+		}
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+	driver.nodePublishVolumeFunc = func(_ context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+		if m := req.GetVolumeCapability().GetMount(); m != nil {
+			capturedPublishFlags = m.GetMountFlags()
+		}
+		return &csi.NodePublishVolumeResponse{}, nil
+	}
+
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	require.NoError(t, err)
+	defer client.Close()
+
+	plugin := NewPlugin(client)
+	tmpDir := t.TempDir()
+	plugin.stagingDirPrefix = filepath.Join(tmpDir, "staging")
+
+	ctx := context.Background()
+	plugin.InitNodeCapabilities(ctx)
+
+	mountOpts := []string{"noatime", "rw", "vers=3"}
+	err = plugin.MountVolume(ctx, volume.MountVolumeRequest{
+		VolumeID:     "test-vol-opts",
+		TargetPath:   filepath.Join(tmpDir, "target"),
+		MountOptions: mountOpts,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, mountOpts, capturedStageFlags, "NodeStageVolume should receive mount options")
+	assert.Equal(t, mountOpts, capturedPublishFlags, "NodePublishVolume should receive mount options")
+}
+
+func TestPlugin_MountVolume_EmptyMountOptions(t *testing.T) {
+	driver := &mockCSIDriver{}
+	var capturedPublishFlags []string
+	driver.nodePublishVolumeFunc = func(_ context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+		if m := req.GetVolumeCapability().GetMount(); m != nil {
+			capturedPublishFlags = m.GetMountFlags()
+		}
+		return &csi.NodePublishVolumeResponse{}, nil
+	}
+
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	require.NoError(t, err)
+	defer client.Close()
+
+	plugin := NewPlugin(client)
+	tmpDir := t.TempDir()
+	plugin.stagingDirPrefix = filepath.Join(tmpDir, "staging")
+
+	ctx := context.Background()
+	plugin.InitNodeCapabilities(ctx)
+
+	err = plugin.MountVolume(ctx, volume.MountVolumeRequest{
+		VolumeID:   "test-vol-no-opts",
+		TargetPath: filepath.Join(tmpDir, "target"),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, capturedPublishFlags, "NodePublishVolume should receive empty mount flags when none specified")
 }

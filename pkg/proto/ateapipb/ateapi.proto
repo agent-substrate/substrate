@@ -544,6 +544,12 @@ message ExternalVolumeStatus {
   // +k8s:optional
   // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
   map<string, string> volume_context = 4;
+
+  // mount_options from the StorageClass, forwarded to the CSI driver as
+  // VolumeCapability.Mount.MountFlags at mount time.
+  //
+  // +k8s:optional
+  repeated string mount_options = 5;
 }
 
 message Actor {
