@@ -56,8 +56,8 @@ func (c *Client) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequ
 }
 
 // ListSnapshots lists snapshots, optionally filtered to one snapshot or source
-// volume. This is the only way the CSI spec offers to read a snapshot's state
-// after CreateSnapshot returns; there is no GetSnapshot RPC.
+// volume. It is used to read a snapshot's state after CreateSnapshot returns
+// because far more drivers implement it than the newer GetSnapshot RPC.
 func (c *Client) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
 	return c.controller.ListSnapshots(ctx, req)
 }
