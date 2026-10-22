@@ -57,11 +57,12 @@ type EgressConnectStats struct {
 // from the outer CONNECT request. A value of -1 indicates that the
 // dataplane does not report the stat.
 type EgressRequestStats struct {
-	MitmExtProcCalls     int
-	EgressPolicyHits     int
-	EgressPolicyMisses   int
-	EgressPolicyAllowed  int
-	EgressPolicyRejected int
+	MitmExtProcCalls                      int
+	EgressPolicyHits                      int
+	EgressPolicyMisses                    int
+	EgressPolicyAllowed                   int
+	EgressPolicyRejected                  int
+	EgressPolicyChangeForActiveConnection int
 }
 
 // CurrentAtenetDataplane returns the implementation selected for this test
@@ -121,11 +122,12 @@ func (envoyAtenetDataplane) EgressRequestStats(before, after string) EgressReque
 	beforeStats := parseEnvoyEgressRequestMetrics(before)
 	afterStats := parseEnvoyEgressRequestMetrics(after)
 	return EgressRequestStats{
-		MitmExtProcCalls:     afterStats.MitmExtProcCalls - beforeStats.MitmExtProcCalls,
-		EgressPolicyHits:     afterStats.EgressPolicyHits - beforeStats.EgressPolicyHits,
-		EgressPolicyMisses:   afterStats.EgressPolicyMisses - beforeStats.EgressPolicyMisses,
-		EgressPolicyAllowed:  afterStats.EgressPolicyAllowed - beforeStats.EgressPolicyAllowed,
-		EgressPolicyRejected: afterStats.EgressPolicyRejected - beforeStats.EgressPolicyRejected,
+		MitmExtProcCalls:                      afterStats.MitmExtProcCalls - beforeStats.MitmExtProcCalls,
+		EgressPolicyHits:                      afterStats.EgressPolicyHits - beforeStats.EgressPolicyHits,
+		EgressPolicyMisses:                    afterStats.EgressPolicyMisses - beforeStats.EgressPolicyMisses,
+		EgressPolicyAllowed:                   afterStats.EgressPolicyAllowed - beforeStats.EgressPolicyAllowed,
+		EgressPolicyRejected:                  afterStats.EgressPolicyRejected - beforeStats.EgressPolicyRejected,
+		EgressPolicyChangeForActiveConnection: afterStats.EgressPolicyChangeForActiveConnection - beforeStats.EgressPolicyChangeForActiveConnection,
 	}
 }
 
@@ -184,6 +186,8 @@ func parseEnvoyEgressRequestMetrics(scrape string) EgressRequestStats {
 			stats.EgressPolicyAllowed += int(val)
 		case "envoy_dynamicmodulescustom_ate_egress_rejected", "envoy_ate_egress_rejected":
 			stats.EgressPolicyRejected += int(val)
+		case "envoy_dynamicmodulescustom_ate_egress_policy_change_for_active_connection", "envoy_ate_egress_policy_change_for_active_connection":
+			stats.EgressPolicyChangeForActiveConnection += int(val)
 		}
 	}
 	return stats
@@ -235,11 +239,12 @@ func (agentGatewayAtenetDataplane) EgressConnectStats(_, _ string) EgressConnect
 
 func (agentGatewayAtenetDataplane) EgressRequestStats(_, _ string) EgressRequestStats {
 	return EgressRequestStats{
-		MitmExtProcCalls:     -1,
-		EgressPolicyHits:     -1,
-		EgressPolicyMisses:   -1,
-		EgressPolicyAllowed:  -1,
-		EgressPolicyRejected: -1,
+		MitmExtProcCalls:                      -1,
+		EgressPolicyHits:                      -1,
+		EgressPolicyMisses:                    -1,
+		EgressPolicyAllowed:                   -1,
+		EgressPolicyRejected:                  -1,
+		EgressPolicyChangeForActiveConnection: -1,
 	}
 }
 

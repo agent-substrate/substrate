@@ -73,6 +73,8 @@ envoy_dynamicmodulescustom_ate_egress_cache_miss{} 1
 envoy_dynamicmodulescustom_ate_egress_allowed{} 3
 # TYPE envoy_dynamicmodulescustom_ate_egress_rejected counter
 envoy_dynamicmodulescustom_ate_egress_rejected{} 1
+# TYPE envoy_dynamicmodulescustom_ate_egress_policy_change_for_active_connection counter
+envoy_dynamicmodulescustom_ate_egress_policy_change_for_active_connection{} 0
 `
 	const after = `# TYPE envoy_http_ext_proc_egress_policy_mitm_streams_started counter
 envoy_http_ext_proc_egress_policy_mitm_streams_started{envoy_http_conn_manager_prefix="mitm_http"} 3
@@ -84,17 +86,20 @@ envoy_dynamicmodulescustom_ate_egress_cache_miss{} 4
 envoy_dynamicmodulescustom_ate_egress_allowed{} 8
 # TYPE envoy_dynamicmodulescustom_ate_egress_rejected counter
 envoy_dynamicmodulescustom_ate_egress_rejected{} 2
+# TYPE envoy_dynamicmodulescustom_ate_egress_policy_change_for_active_connection counter
+envoy_dynamicmodulescustom_ate_egress_policy_change_for_active_connection{} 1
 `
 
 	t.Run("envoy", func(t *testing.T) {
 		t.Setenv(AtenetDataplaneEnv, "")
 		got := CurrentAtenetDataplane().EgressRequestStats(before, after)
 		want := EgressRequestStats{
-			MitmExtProcCalls:     2,
-			EgressPolicyHits:     6,
-			EgressPolicyMisses:   3,
-			EgressPolicyAllowed:  5,
-			EgressPolicyRejected: 1,
+			MitmExtProcCalls:                      2,
+			EgressPolicyHits:                      6,
+			EgressPolicyMisses:                    3,
+			EgressPolicyAllowed:                   5,
+			EgressPolicyRejected:                  1,
+			EgressPolicyChangeForActiveConnection: 1,
 		}
 		if got != want {
 			t.Errorf("EgressRequestStats() = %+v, want %+v", got, want)
@@ -104,11 +109,12 @@ envoy_dynamicmodulescustom_ate_egress_rejected{} 2
 		t.Setenv(AtenetDataplaneEnv, "agentgateway")
 		got := CurrentAtenetDataplane().EgressRequestStats(before, after)
 		want := EgressRequestStats{
-			MitmExtProcCalls:     -1,
-			EgressPolicyHits:     -1,
-			EgressPolicyMisses:   -1,
-			EgressPolicyAllowed:  -1,
-			EgressPolicyRejected: -1,
+			MitmExtProcCalls:                      -1,
+			EgressPolicyHits:                      -1,
+			EgressPolicyMisses:                    -1,
+			EgressPolicyAllowed:                   -1,
+			EgressPolicyRejected:                  -1,
+			EgressPolicyChangeForActiveConnection: -1,
 		}
 		if got != want {
 			t.Errorf("EgressRequestStats() = %+v, want %+v", got, want)
