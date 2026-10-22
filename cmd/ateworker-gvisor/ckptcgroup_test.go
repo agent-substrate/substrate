@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/snapshotcache"
@@ -55,6 +56,7 @@ func newCkptFixture(t *testing.T, sandboxPID string) ckptFixture {
 	mustWrite(t, filepath.Join(f.leaf, "cgroup.procs"), "100\n"+sandboxPID+"\n")
 	mustWrite(t, filepath.Join(f.leaf, "memory.max"), "805306368\n")
 	mustWrite(t, filepath.Join(f.leaf, "cpu.max"), "200000 100000\n")
+	mustWrite(t, filepath.Join(f.leaf, "cpu.weight"), "100\n")
 
 	if sandboxPID != "" {
 		pidFile := pidFilePath(f.actorDirs, ocispec.SandboxID)
@@ -65,15 +67,19 @@ func newCkptFixture(t *testing.T, sandboxPID string) ckptFixture {
 	origMovePID := movePID
 	t.Cleanup(func() { movePID = origMovePID })
 	movePID = func(dir string, pid int) error {
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+		if dir == ckptDir {
+			_ = os.WriteFile(filepath.Join(ckptDir, "cpu.weight"), []byte("100\n"), 0o644)
+		}
 		if err := writeCgroupPID(dir, pid); err != nil {
 			return err
 		}
 		// Emulate cgroup2 migration out of the sibling checkpoint cgroup so rmdir
 		// succeeds once the sentry moves back into its sandbox leaf.
-		ckptDir := checkpointCgroupDir(f.root, testActorUID)
 		if dir != ckptDir {
 			_ = os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
 			_ = os.Remove(filepath.Join(ckptDir, "cpu.max"))
+			_ = os.Remove(filepath.Join(ckptDir, "cpu.weight"))
 		}
 		return nil
 	}
@@ -117,6 +123,12 @@ func TestIsolateCheckpointCacheMovesOnlyTheSentry(t *testing.T) {
 	if got := mustRead(t, filepath.Join(dir, "cpu.max")); got != "200000 100000\n" {
 		t.Errorf("checkpoint cpu.max = %q, want \"200000 100000\\n\"", got)
 	}
+	if got := mustRead(t, filepath.Join(dir, "cpu.weight")); got != "10000" {
+		t.Errorf("checkpoint cpu.weight = %q, want \"10000\"", got)
+	}
+	if got := mustRead(t, filepath.Join(f.leaf, "cpu.weight")); got != "10000" {
+		t.Errorf("sandbox leaf cpu.weight during checkpoint = %q, want \"10000\"", got)
+	}
 	if _, err := os.Stat(filepath.Join(dir, "memory.max")); !os.IsNotExist(err) {
 		t.Errorf("checkpoint memory.max should not be set, stat err = %v", err)
 	}
@@ -127,8 +139,53 @@ func TestIsolateCheckpointCacheMovesOnlyTheSentry(t *testing.T) {
 	if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "101" {
 		t.Errorf("sandbox leaf cgroup.procs after restore = %q, want 101", got)
 	}
+	if got := mustRead(t, filepath.Join(f.leaf, "cpu.weight")); got != "100" {
+		t.Errorf("sandbox leaf cpu.weight after restore = %q, want \"100\"", got)
+	}
 	if err := c.remove(); err != nil {
 		t.Fatalf("remove: %v", err)
+	}
+}
+
+func TestSetSandboxCPUWeight(t *testing.T) {
+	f := newCkptFixture(t, "101")
+	s := &AteWorkerService{cgroupRoot: f.root, cgroupDelegated: false}
+
+	// Not delegated: no-op.
+	s.setSandboxCPUWeight(context.Background(), testActorUID, cgroup.MaxCPUWeight)
+	if got := mustRead(t, filepath.Join(f.leaf, "cpu.weight")); got != "100\n" {
+		t.Fatalf("sandbox cpu.weight with !cgroupDelegated = %q, want \"100\\n\"", got)
+	}
+
+	// Delegated: transitions between MaxCPUWeight and DefaultCPUWeight.
+	s.cgroupDelegated = true
+	s.setSandboxCPUWeight(context.Background(), testActorUID, cgroup.MaxCPUWeight)
+	if got := mustRead(t, filepath.Join(f.leaf, "cpu.weight")); got != "10000" {
+		t.Fatalf("sandbox cpu.weight after startup boost = %q, want \"10000\"", got)
+	}
+	s.setSandboxCPUWeight(context.Background(), testActorUID, cgroup.DefaultCPUWeight)
+	if got := mustRead(t, filepath.Join(f.leaf, "cpu.weight")); got != "100" {
+		t.Fatalf("sandbox cpu.weight after wakeup probe = %q, want \"100\"", got)
+	}
+}
+
+func BenchmarkSetSandboxCPUWeight(b *testing.B) {
+	ctx := context.Background()
+	root := b.TempDir()
+	leaf := filepath.Join(root, ocispec.GVisorCgroupLeaf(testActorUID, ocispec.SandboxID))
+	if err := os.MkdirAll(leaf, 0o755); err != nil {
+		b.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leaf, "cpu.weight"), []byte("100\n"), 0o644); err != nil {
+		b.Fatal(err)
+	}
+	s := &AteWorkerService{cgroupRoot: root, cgroupDelegated: true}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		s.setSandboxCPUWeight(ctx, testActorUID, cgroup.MaxCPUWeight)
+		s.setSandboxCPUWeight(ctx, testActorUID, cgroup.DefaultCPUWeight)
 	}
 }
 
@@ -232,6 +289,7 @@ func TestCheckpointIsolated(t *testing.T) {
 				terminated = true
 				// Emulate container teardown emptying the checkpoint cgroup so rmdir succeeds.
 				_ = os.Remove(filepath.Join(ckptDir, "cpu.max"))
+				_ = os.Remove(filepath.Join(ckptDir, "cpu.weight"))
 				return os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
 			},
 		)
@@ -318,6 +376,7 @@ func TestCheckpointIsolated(t *testing.T) {
 			func() error {
 				terminated = true
 				_ = os.Remove(filepath.Join(ckptDir, "cpu.max"))
+				_ = os.Remove(filepath.Join(ckptDir, "cpu.weight"))
 				return os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
 			},
 		)
@@ -349,6 +408,7 @@ func TestCheckpointIsolated(t *testing.T) {
 			func() error {
 				terminated = true
 				_ = os.Remove(filepath.Join(ckptDir, "cpu.max"))
+				_ = os.Remove(filepath.Join(ckptDir, "cpu.weight"))
 				return os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
 			},
 		)

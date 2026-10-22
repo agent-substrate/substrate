@@ -29,6 +29,7 @@ import (
 	"strings"
 	"syscall"
 
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/snapshotcache"
@@ -62,14 +63,16 @@ func checkpointCgroupDir(root, actorUID string) string {
 
 // isolateCheckpointCache moves the actor's sentry from its sandbox leaf into a
 // sibling <uid>-_ckpt cgroup, preserving the sandbox leaf's cpu.max so checkpoint
-// serialization remains capped to the actor's CPU limit.
+// serialization remains capped to the actor's CPU limit while raising cpu.weight
+// to MaxCPUWeight so checkpointing is not starved by steady-state actors.
 func isolateCheckpointCache(root string, actorDirs *ateworkerpb.ActorDirs, actorUID string) (*checkpointCgroup, error) {
 	pid, err := readSandboxPID(actorDirs)
 	if err != nil {
 		return nil, err
 	}
 
-	leaf := filepath.Join(root, ocispec.GVisorCgroupLeaf(actorUID, ocispec.SandboxID))
+	sandboxLeaf := ocispec.GVisorCgroupLeaf(actorUID, ocispec.SandboxID)
+	leaf := filepath.Join(root, sandboxLeaf)
 	if !cgroupHasPID(leaf, pid) {
 		return nil, fmt.Errorf("sandbox pid %d is not in cgroup %q", pid, leaf)
 	}
@@ -85,6 +88,12 @@ func isolateCheckpointCache(root string, actorDirs *ateworkerpb.ActorDirs, actor
 	c := &checkpointCgroup{leaf: leaf, dir: dir, pid: pid}
 	if err := movePID(dir, pid); err != nil {
 		return nil, errors.Join(err, c.remove())
+	}
+	if err := cgroup.SetActorLeafCPUWeightUnder(root, actorUID+checkpointCgroupSuffix, cgroup.MaxCPUWeight); err != nil {
+		slog.Debug("Failed to set cpu.weight on checkpoint cgroup", slog.String("cgroup", dir), slog.Any("err", err))
+	}
+	if err := cgroup.SetActorLeafCPUWeightUnder(root, sandboxLeaf, cgroup.MaxCPUWeight); err != nil {
+		slog.Debug("Failed to set cpu.weight on sandbox cgroup", slog.String("cgroup", leaf), slog.Any("err", err))
 	}
 	return c, nil
 }
@@ -134,7 +143,13 @@ func (c *checkpointCgroup) restore() error {
 	if errors.Is(err, unix.ESRCH) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if werr := cgroup.SetActorLeafCPUWeightUnder(filepath.Dir(c.leaf), filepath.Base(c.leaf), cgroup.DefaultCPUWeight); werr != nil {
+		slog.Debug("Failed to restore steady cpu.weight on sandbox cgroup", slog.String("cgroup", c.leaf), slog.Any("err", werr))
+	}
+	return nil
 }
 
 // remove deletes the empty sibling cgroup, reparenting its page cache.
