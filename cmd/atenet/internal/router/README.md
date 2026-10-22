@@ -33,9 +33,10 @@ Router has several responsibilities:
   at the ClientHello. An actor with no policy gets no tunnel. See
   [egress legs](#egress-legs).
 * Serves arbitrary-port ingress: a client reaches a port on the actor other
-  than its default (80) by sending an HTTP CONNECT to
-  `<actor-dns>:<port>` on `--port-connect-tls`, rather than
-  naming the port some other way. Envoy terminates the CONNECT and reinjects
+  than its default (80) with `ate-target-port` on ordinary HTTP requests,
+  or by sending an HTTP CONNECT to `<actor-dns>:<port>` on
+  `--port-connect-tls`. CONNECT ignores `ate-target-port` and uses only the
+  outer authority's port. Envoy terminates the CONNECT and reinjects
   the tunneled bytes into an internal listener that runs the same ext_proc
   path as ordinary traffic, so each request inside a long-lived tunnel still
   resumes the actor and re-routes independently if it moves workers. Only
