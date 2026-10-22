@@ -128,3 +128,9 @@ func ActorNetNSName(actorUID string) string {
 func ActorNetNSPath(actorUID string) string {
 	return filepath.Join("/run/netns", ActorNetNSName(actorUID))
 }
+
+// IsPlainName reports whether name is one path element that is safe to join
+// under a directory: not empty, not "." or "..", and without separators.
+func IsPlainName(name string) bool {
+	return name != "" && name != "." && name == filepath.Base(name) && filepath.IsLocal(name)
+}

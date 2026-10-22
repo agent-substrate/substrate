@@ -51,9 +51,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/tarutil"
 )
@@ -65,7 +65,7 @@ import (
 // index=off pinned on the mount (see kata.StageMergedRootfs) a restored
 // workdir would be inert, and StageMergedRootfs recreates it regardless.
 func rootfsUpperTarFile(containerID string) (string, error) {
-	if containerID == "" || containerID == "." || strings.Contains(containerID, "/") || !filepath.IsLocal(containerID) {
+	if !nodepath.IsPlainName(containerID) {
 		return "", fmt.Errorf("invalid container name %q", containerID)
 	}
 	return "rootfs-upper-" + containerID + ".tar", nil
