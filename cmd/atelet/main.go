@@ -2007,7 +2007,7 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	// most one item.
 	state, err := s.snapshots.Forget(actorUID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to delete snapshot state during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		return nil, fmt.Errorf("failed to forget snapshot state during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 	if err := snapshottracker.PruneLocalCheckpoints(ctx, actorUID); err != nil {
 		return nil, fmt.Errorf("failed to prune local checkpoints during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)

@@ -146,9 +146,10 @@ func RemoveActorFilesExceptState(actorUID string) error {
 // It refuses to proceed while a volume directory is still populated, so a
 // failed unmount cannot become a deletion of the mount's contents, and removes
 // a bundle upper dir carrying an image's read-only modes without recreating
-// directories. Terminate calls Forget first, which has already deleted
-// snapshot-state.json; after a crash here, Start finds no state file, so only a
-// retried Terminate finishes the cleanup.
+// directories. Terminate calls Forget first, which leaves only the latest
+// durable snapshot in snapshot-state.json. This deletes that file after the
+// actor's other files, so a Terminate retried after a failure here returns the
+// snapshot again.
 func RemoveActorDirs(actorUID string) error {
 	if err := RemoveActorFilesExceptState(actorUID); err != nil {
 		return err

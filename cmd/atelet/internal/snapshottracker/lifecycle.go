@@ -16,6 +16,7 @@ package snapshottracker
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
@@ -346,16 +347,18 @@ func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots, kind holdKind) 
 	}
 }
 
-// Forget drops the actor's state, in memory and on disk, and returns the state
-// it dropped with only its latest durable snapshot, since the caller deletes
-// the actor's local snapshots. It first cancels any background upload or
-// detach of the actor in progress and waits for it to end, releasing the
-// actor's lock meanwhile.
+// Forget drops the actor's state and returns it with only its latest durable
+// snapshot, since the caller deletes the actor's local snapshots. It leaves
+// only that snapshot in the state file, for the caller to delete with the
+// actor's directory, so a retry after a failed cleanup returns it again. It
+// first cancels any background upload or detach of the actor in progress and
+// waits for it to end, releasing the actor's lock meanwhile.
 func (t *Tracker) Forget(actorUID string) (*ateletpb.ActorSnapshotState, error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
 	state := &ateletpb.ActorSnapshotState{}
-	if a := t.findLocked(actorUID); a != nil {
+	a := t.findLocked(actorUID)
+	if a != nil {
 		t.addLocked(a)
 		a.hold = holdTerminate
 		for a.op != nil {
@@ -370,8 +373,18 @@ func (t *Tracker) Forget(actorUID string) (*ateletpb.ActorSnapshotState, error) 
 	t.retries.Forget(actorUID)
 	t.reporting.retries.Forget(actorUID)
 	t.dropLocked(actorUID)
+	if a == nil || a.LatestDurable == nil {
+		t.undurableActorsTally.forget(actorUID)
+		return state, removeSnapshotState(actorUID)
+	}
+	// With nothing local and no report due, an atelet restarted before the
+	// caller's cleanup finishes starts no background work on the actor.
+	err := t.writeStateLocked(&actorSnapshots{actorUID: actorUID, actorSnapshotsRecord: actorSnapshotsRecord{LatestDurable: a.LatestDurable}})
 	t.undurableActorsTally.forget(actorUID)
-	return state, removeSnapshotState(actorUID)
+	if err != nil {
+		return state, fmt.Errorf("while saving the actor's latest durable snapshot: %w", err)
+	}
+	return state, nil
 }
 
 // setLatestLocalLocked records snap as the actor's latest local snapshot and

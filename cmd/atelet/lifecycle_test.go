@@ -1298,7 +1298,8 @@ func TestTerminateReclaimsStateWithoutALiveSandbox(t *testing.T) {
 
 // TestTerminateCanBeRetried pins that a repeated Terminate succeeds, both when
 // a single caller retries and when DeleteActor or RevertActor sends a second
-// Terminate after DeleteWorker's best-effort Terminate.
+// Terminate after DeleteWorker's best-effort Terminate. A retry after a failed
+// Terminate still returns the actor's latest durable snapshot.
 func TestTerminateCanBeRetried(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -1324,7 +1325,8 @@ func TestTerminateCanBeRetried(t *testing.T) {
 			ctx := t.Context()
 
 			snap := a.snapshot("pause-snap-1", 1)
-			if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+			checkpointResp, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+			if err != nil {
 				t.Fatalf("Checkpoint: %v", err)
 			}
 
@@ -1349,7 +1351,7 @@ func TestTerminateCanBeRetried(t *testing.T) {
 				WorkerPodUid:          pluginWorkerPodUID,
 				Spec:                  a.spec,
 			}
-			_, err := a.s.Terminate(ctx, firstReq)
+			_, err = a.s.Terminate(ctx, firstReq)
 			if tt.failFirst {
 				if err == nil {
 					t.Fatal("first Terminate succeeded through a populated volume directory")
@@ -1366,8 +1368,16 @@ func TestTerminateCanBeRetried(t *testing.T) {
 			if tt.secondWithoutWorker {
 				secondReq.WorkerPodUid = ""
 			}
-			if _, err := a.s.Terminate(ctx, secondReq); err != nil {
+			resp, err := a.s.Terminate(ctx, secondReq)
+			if err != nil {
 				t.Fatalf("second Terminate: %v", err)
+			}
+			var wantDurable *ateletpb.SnapshotReport
+			if tt.failFirst {
+				wantDurable = checkpointResp.GetState().GetLatestDurable()
+			}
+			if got := resp.GetState().GetLatestDurable(); !proto.Equal(got, wantDurable) {
+				t.Errorf("second Terminate returned latest_durable %v, want %v", got, wantDurable)
 			}
 			if got := a.worker.terminations.Load(); got != tt.wantTeardowns {
 				t.Errorf("worker saw %d TerminateWorkload calls, want %d", got, tt.wantTeardowns)
