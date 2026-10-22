@@ -43,7 +43,7 @@ func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, _ = s.admitActor(resources.ActorAttribution{UID: fmt.Sprintf("actor-%d", i)})
+			_, _, _ = s.admitActor(resources.ActorAttribution{UID: fmt.Sprintf("actor-%d", i)}, 0)
 		}()
 	}
 	wg.Wait()
@@ -57,11 +57,11 @@ func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 // on a full worker and a retry cannot lose its place to another actor.
 func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 	s := &AteWorkerService{actors: map[string]*hostedActor{}, maxActors: 1}
-	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"})
+	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"})
+	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, 0)
 	if err != nil {
 		t.Fatalf("re-admitting a hosted actor on a full worker: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 		t.Error("re-admission kept the old record; readers could not tell the incarnations apart")
 	}
 	// ResourceExhausted, so the control plane treats it as a capacity miss.
-	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}); apierror.Code(err) != codes.ResourceExhausted {
+	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}, 0); apierror.Code(err) != codes.ResourceExhausted {
 		t.Errorf("admitting past the ceiling: got %v, want ResourceExhausted", err)
 	}
 	if got := len(s.hostedActors()); got != 1 {
@@ -85,7 +85,7 @@ func TestDrainingActorsStillCountAgainstTheCeiling(t *testing.T) {
 		maxActors: 1,
 		draining:  1,
 	}
-	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}, nil); err == nil {
+	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}, nil, 0); err == nil {
 		t.Error("admitted an actor while a draining one still held the only place")
 	}
 }
@@ -163,5 +163,16 @@ func TestBeginRPCRegistersBeforeCheckingForADrain(t *testing.T) {
 	}
 	if got := s.inFlight.Names(); len(got) != 0 {
 		t.Errorf("a refused RPC stayed registered: %v", got)
+	}
+}
+
+func TestUnbookedMemory(t *testing.T) {
+	const limit = 4 << 30
+	s := &AteWorkerService{actors: map[string]*hostedActor{
+		"a": {memoryBytes: 1 << 30},
+		"b": {memoryBytes: 256 << 20},
+	}}
+	if got, want := s.unbookedMemory(limit), int64(limit-memoryReservedBytes-1<<30-256<<20); got != want {
+		t.Errorf("unbookedMemory() = %d, want %d", got, want)
 	}
 }

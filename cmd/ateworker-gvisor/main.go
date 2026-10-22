@@ -43,6 +43,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworker"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
+	"go.ate.dev/substrate/internal/ateworker/memborrow"
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
@@ -57,6 +58,7 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/sizing"
+	"go.ate.dev/substrate/internal/snapshotcache"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/wakeupprobe"
 	"go.ate.dev/substrate/internal/workerstats"
@@ -91,13 +93,6 @@ var (
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 )
-
-// memoryReservedBytes is how much of the worker pod's memory limit we keep from
-// actors: the worker process itself, and the page cache of checkpoints in
-// flight, which leaves the actor's own cgroup with its sentry (see
-// isolateCheckpointCache). Otherwise an actor's sentry and gofers are charged
-// to its own cgroup, so gVisor reports no actor overhead.
-const memoryReservedBytes = 64 << 20
 
 // minUsageSampleInterval is the floor of --usage-sample-interval, the same as
 // atelet's poll interval floor.
@@ -389,22 +384,30 @@ type AteWorkerService struct {
 
 	// flags holds the watched JSON flag configuration.
 	flags *flagStore
+
+	// checkpointWrites holds a slot per checkpoint writing its page cache,
+	// which memoryReservedBytes budgets for.
+	checkpointWrites chan struct{}
+	borrow           *memborrow.Ledger
 }
 
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
 func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteWorkerService {
-	return &AteWorkerService{
-		locks:       actorlock.New(),
-		inFlight:    actorlock.NewInFlight(),
-		actors:      map[string]*hostedActor{},
-		maxActors:   maxActors,
-		tunnel:      tunnel,
-		actorLogger: actorLogger,
-		cgroupRoot:  defaultCgroupRoot,
-		flags:       flags,
+	s := &AteWorkerService{
+		locks:            actorlock.New(),
+		inFlight:         actorlock.NewInFlight(),
+		actors:           map[string]*hostedActor{},
+		maxActors:        maxActors,
+		tunnel:           tunnel,
+		actorLogger:      actorLogger,
+		cgroupRoot:       defaultCgroupRoot,
+		flags:            flags,
+		checkpointWrites: make(chan struct{}, checkpointWriteSlots),
 	}
+	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
+	return s
 }
 
 // beginRPC registers before checking the drain flag so shutdown cannot miss it.
@@ -662,7 +665,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
+	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -700,6 +703,9 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			}
 		}
 	}()
+	if err := s.borrow.Wait(ctx); err != nil {
+		return nil, err
+	}
 	// Egress is activated before the sandbox starts, ingress is activated after
 	// the wakeup probe (see tunnel.Tunnel.ActivateEgress).
 	if err := s.tunnel.ActivateEgress(attribution, egress); err != nil {
@@ -927,15 +933,28 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	default:
 		return nil, fmt.Errorf("unsupported snapshot fidelity: %v", fidelity)
 	}
+	if s.checkpointWrites != nil {
+		select {
+		case s.checkpointWrites <- struct{}{}:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("while waiting to checkpoint: %w", ctx.Err())
+		}
+	}
 	// the sentry leaves its sandbox leaf for the checkpoint cgroup
 	var memoryLimit uint64
 	if hosted != nil {
 		memoryLimit = pauseMemoryWatch(hosted)
 	}
-	if err := checkpointIsolated(ctx, s.cgroupRoot, req.GetActorUid(), req.GetActorDirs(), checkpointFn, terminate); err != nil {
+	cacheHigh, borrowed := s.checkpointCacheLimit(hosted, req.GetActorUid())
+	err = checkpointIsolated(ctx, s.cgroupRoot, req.GetActorUid(), cacheHigh, req.GetActorDirs(), checkpointFn, terminate)
+	if s.checkpointWrites != nil {
+		<-s.checkpointWrites
+	}
+	if err != nil {
 		if hosted != nil && memoryLimit != 0 {
 			resumeMemoryWatch(hosted, memoryLimit)
 		}
+		s.borrow.Return(borrowed)
 		return nil, err
 	}
 
@@ -944,7 +963,17 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	// rather than a hardcoded list.
 	snapshotFiles, err := listSnapshotFiles(checkpointPath)
 	if err != nil {
+		s.borrow.Return(borrowed)
 		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
+	}
+	// the borrowed page cache is returned once it is clean, and reclaimable
+	written := make([]string, len(snapshotFiles))
+	for i, f := range snapshotFiles {
+		written[i] = filepath.Join(checkpointPath, f)
+	}
+	if err := snapshotcache.StartWriteback(written, func() { s.borrow.Return(borrowed) }); err != nil {
+		s.borrow.Return(borrowed)
+		slog.WarnContext(ctx, "Failed to start checkpoint writeback", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
 	}
 	durableFiles := durableSnapshotFiles(snapshotFiles)
 
@@ -1112,7 +1141,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, err
 	}
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
+	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
 	timing.netSetup = lap(&tLast)
 	if err != nil {
 		return nil, err
@@ -1148,6 +1177,9 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			}
 		}
 	}()
+	if err := s.borrow.Wait(ctx); err != nil {
+		return nil, err
+	}
 	err = s.tunnel.ActivateEgress(attribution, egress)
 	timing.activate = lap(&tLast)
 	if err != nil {
