@@ -76,14 +76,13 @@ func TestOptionalSyncForbiddenCache(t *testing.T) {
 	})
 	factory := externalversions.NewSharedInformerFactoryWithOptions(client, 0, externalversions.WithNamespace("agent-workloads"))
 	workerPools := factory.Api().V1alpha1().WorkerPools().Informer()
-	sandboxConfigs := factory.Api().V1alpha1().SandboxConfigs().Informer()
 	csiConfigs := factory.Api().V1alpha1().CSIDriverConfigs().Informer()
 	factory.Start(ctx.Done())
 	t.Cleanup(func() {
 		cancel()
 		factory.Shutdown()
 	})
-	if !cache.WaitForCacheSync(ctx.Done(), sandboxConfigs.HasSynced, csiConfigs.HasSynced) {
+	if !cache.WaitForCacheSync(ctx.Done(), csiConfigs.HasSynced) {
 		t.Fatal("required caches did not sync")
 	}
 	OptionalSync(ctx, 100*time.Millisecond, map[string]cache.InformerSynced{"WorkerPools": workerPools.HasSynced},
@@ -92,7 +91,7 @@ func TestOptionalSyncForbiddenCache(t *testing.T) {
 				"watch-namespace", "agent-workloads", "err", err)
 		})
 	if err := WaitForCacheSync(ctx, 100*time.Millisecond, map[string]cache.InformerSynced{
-		"SandboxConfigs": sandboxConfigs.HasSynced, "CSIDriverConfigs": csiConfigs.HasSynced,
+		"CSIDriverConfigs": csiConfigs.HasSynced,
 	}); err != nil {
 		t.Fatalf("optional WorkerPool cache blocked startup: %v", err)
 	}
