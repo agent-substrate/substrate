@@ -5,6 +5,8 @@ environment variable, or a configuration document. This page describes the
 document, because it is the only one of the three an operator owns as a file,
 reviews in a change, and reuses across runs.
 
+Nodes must meet the [node requirements](node-requirements.md).
+
 ## The document
 
 ```yaml
