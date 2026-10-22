@@ -30,7 +30,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -49,9 +48,10 @@ import (
 )
 
 // The test binary doubles as an exec credential plugin when pluginEnv is set.
-// Each run increments a counter in pluginStateEnv's directory and returns
-// "token-<n>". With pluginSameTokenEnv it always returns "token-1"; with
-// pluginCachedTokenEnv it returns "token-1" unless RefreshCredentialEnv is set.
+// Run n writes its KUBERNETES_EXEC_INFO to info-<n>.json in pluginStateEnv's
+// directory and returns "token-<n>". With pluginSameTokenEnv it always
+// returns "token-1"; with pluginCachedTokenEnv it returns "token-1" unless
+// RefreshCredentialEnv is set.
 const (
 	pluginEnv            = "ATECLIENT_TEST_PLUGIN"
 	pluginStateEnv       = "ATECLIENT_TEST_PLUGIN_STATE"
@@ -74,17 +74,24 @@ func TestMain(m *testing.M) {
 
 func runTestPlugin() error {
 	dir := os.Getenv(pluginStateEnv)
-	n := 1
-	if b, err := os.ReadFile(filepath.Join(dir, "count")); err == nil {
-		n, _ = strconv.Atoi(string(b))
-		n++
-	}
-	if err := os.WriteFile(filepath.Join(dir, "count"), []byte(strconv.Itoa(n)), 0o600); err != nil {
-		return err
-	}
 	info := os.Getenv("KUBERNETES_EXEC_INFO")
-	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("info-%d.json", n)), []byte(info), 0o600); err != nil {
-		return err
+	n := 1
+	for ; ; n++ {
+		f, err := os.OpenFile(filepath.Join(dir, fmt.Sprintf("info-%d.json", n)), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		_, err = f.WriteString(info)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return err
+		}
+		break
 	}
 	var in clientauthv1.ExecCredential
 	if err := json.Unmarshal([]byte(info), &in); err != nil {
@@ -140,15 +147,11 @@ func testPlugin(t *testing.T, apiVersion string, env ...clientcmdapi.ExecEnvVar)
 
 func pluginRuns(t *testing.T, dir string) int {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(dir, "count"))
-	if errors.Is(err, os.ErrNotExist) {
-		return 0
-	}
+	runs, err := filepath.Glob(filepath.Join(dir, "info-*.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, _ := strconv.Atoi(string(b))
-	return n
+	return len(runs)
 }
 
 func authorization(t *testing.T, creds credentials.PerRPCCredentials) string {
@@ -161,6 +164,7 @@ func authorization(t *testing.T, creds credentials.PerRPCCredentials) string {
 }
 
 func TestExecCreds(t *testing.T) {
+	t.Parallel()
 	for _, apiVersion := range []string{"client.authentication.k8s.io/v1", "client.authentication.k8s.io/v1beta1"} {
 		t.Run(apiVersion, func(t *testing.T) {
 			plugin, dir := testPlugin(t, apiVersion, clientcmdapi.ExecEnvVar{Name: pluginTTLEnv, Value: "1h"})
@@ -216,6 +220,7 @@ func TestExecCreds(t *testing.T) {
 }
 
 func TestExecCredsExpiry(t *testing.T) {
+	t.Parallel()
 	plugin, dir := testPlugin(t, "client.authentication.k8s.io/v1", clientcmdapi.ExecEnvVar{Name: pluginTTLEnv, Value: "-1s"})
 	creds, err := newExecCreds(plugin, nil)
 	if err != nil {
@@ -231,6 +236,7 @@ func TestExecCredsExpiry(t *testing.T) {
 }
 
 func TestExecCredsRefreshSameToken(t *testing.T) {
+	t.Parallel()
 	plugin, _ := testPlugin(t, "client.authentication.k8s.io/v1", clientcmdapi.ExecEnvVar{Name: pluginSameTokenEnv, Value: "1"})
 	creds, err := newExecCreds(plugin, nil)
 	if err != nil {
@@ -243,6 +249,7 @@ func TestExecCredsRefreshSameToken(t *testing.T) {
 }
 
 func TestExecCredsRefreshCachedToken(t *testing.T) {
+	t.Parallel()
 	plugin, dir := testPlugin(t, "client.authentication.k8s.io/v1", clientcmdapi.ExecEnvVar{Name: pluginCachedTokenEnv, Value: "1"})
 	creds, err := newExecCreds(plugin, nil)
 	if err != nil {
@@ -271,32 +278,61 @@ func TestExecCredsRefreshCachedToken(t *testing.T) {
 }
 
 func TestExecCredsConcurrentRefresh(t *testing.T) {
-	plugin, _ := testPlugin(t, "client.authentication.k8s.io/v1", clientcmdapi.ExecEnvVar{Name: pluginCachedTokenEnv, Value: "1"})
-	creds, err := newExecCreds(plugin, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	authorization(t, creds)
-	var wg sync.WaitGroup
-	for range 4 {
-		wg.Go(func() {
-			for range 20 {
-				if _, err := creds.GetRequestMetadata(context.Background()); err != nil {
-					t.Error(err)
-				}
-				if _, err := creds.clientCertificate(nil); err != nil {
-					t.Error(err)
-				}
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		env      clientcmdapi.ExecEnvVar
+		wantRuns int
+	}{
+		{"new token", clientcmdapi.ExecEnvVar{Name: pluginTTLEnv, Value: "1h"}, 2},
+		{"cached token", clientcmdapi.ExecEnvVar{Name: pluginCachedTokenEnv, Value: "1"}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			plugin, dir := testPlugin(t, "client.authentication.k8s.io/v1", tc.env)
+			creds, err := newExecCreds(plugin, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			authorization(t, creds)
+			var readers, refreshers sync.WaitGroup
+			done := make(chan struct{})
+			for range 4 {
+				readers.Go(func() {
+					for {
+						select {
+						case <-done:
+							return
+						default:
+						}
+						if _, err := creds.GetRequestMetadata(context.Background()); err != nil {
+							t.Error(err)
+						}
+						if _, err := creds.clientCertificate(nil); err != nil {
+							t.Error(err)
+						}
+					}
+				})
+			}
+			for range 8 {
+				refreshers.Go(func() {
+					if !creds.refresh("Bearer token-1") {
+						t.Error("refresh = false, want true")
+					}
+				})
+			}
+			refreshers.Wait()
+			close(done)
+			readers.Wait()
+			if n := pluginRuns(t, dir); n != tc.wantRuns {
+				t.Errorf("plugin ran %d times, want %d", n, tc.wantRuns)
 			}
 		})
 	}
-	if !creds.refresh("Bearer token-1") {
-		t.Error("refresh = false, want true")
-	}
-	wg.Wait()
 }
 
 func TestExecCredsRefreshAlreadyRotated(t *testing.T) {
+	t.Parallel()
 	plugin, dir := testPlugin(t, "client.authentication.k8s.io/v1")
 	creds, err := newExecCreds(plugin, nil)
 	if err != nil {
@@ -312,6 +348,7 @@ func TestExecCredsRefreshAlreadyRotated(t *testing.T) {
 }
 
 func TestExecCredsClientCertificate(t *testing.T) {
+	t.Parallel()
 	ca := newTestCA(t)
 	certDir := t.TempDir()
 	certPEM, keyPEM := ca.issue(t, "client", nil)
@@ -336,11 +373,11 @@ func TestExecCredsClientCertificate(t *testing.T) {
 }
 
 func TestExecCredsMissingPlugin(t *testing.T) {
+	t.Parallel()
 	creds, err := newExecCreds(&clientcmdapi.ExecConfig{
 		APIVersion:      "client.authentication.k8s.io/v1",
 		Command:         "ateclient-test-missing-plugin",
 		InteractiveMode: clientcmdapi.NeverExecInteractiveMode,
-		InstallHint:     "install the missing plugin",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -348,8 +385,8 @@ func TestExecCredsMissingPlugin(t *testing.T) {
 	if cert, err := creds.clientCertificate(nil); err != nil || len(cert.Certificate) != 0 {
 		t.Errorf("clientCertificate = (%v, %v), want an empty certificate and no error", cert, err)
 	}
-	if _, err := creds.GetRequestMetadata(context.Background()); err == nil || !strings.Contains(err.Error(), "install the missing plugin") {
-		t.Errorf("GetRequestMetadata error = %v, want one carrying the install hint", err)
+	if _, err := creds.GetRequestMetadata(context.Background()); err == nil || !strings.Contains(err.Error(), "ateclient-test-missing-plugin") {
+		t.Errorf("GetRequestMetadata error = %v, want one naming the missing plugin", err)
 	}
 }
 
@@ -372,15 +409,6 @@ func TestMintedTokenCreds(t *testing.T) {
 	now = now.Add(time.Minute)
 	if got := authorization(t, creds); got != "Bearer token-2" {
 		t.Errorf("authorization within the expiry margin = %q, want Bearer token-2", got)
-	}
-
-	creds.refresh("Bearer token-1")
-	if got := authorization(t, creds); got != "Bearer token-2" {
-		t.Errorf("authorization after refresh for an old token = %q, want Bearer token-2", got)
-	}
-	creds.refresh("Bearer token-2")
-	if got := authorization(t, creds); got != "Bearer token-3" {
-		t.Errorf("authorization after refresh = %q, want Bearer token-3", got)
 	}
 }
 
@@ -455,6 +483,7 @@ type fakeAuthentication struct {
 	ateapipb.UnimplementedAuthenticationServer
 	mu       sync.Mutex
 	rejected map[string]bool
+	calls    int
 }
 
 func (f *fakeAuthentication) WhoAmI(ctx context.Context, _ *ateapipb.WhoAmIRequest) (*ateapipb.WhoAmIResponse, error) {
@@ -462,6 +491,7 @@ func (f *fakeAuthentication) WhoAmI(ctx context.Context, _ *ateapipb.WhoAmIReque
 	token := strings.TrimPrefix(strings.Join(md.Get("authorization"), ""), "Bearer ")
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
 	if token == "" || f.rejected[token] {
 		return nil, status.Error(codes.Unauthenticated, "rejected")
 	}
@@ -469,6 +499,7 @@ func (f *fakeAuthentication) WhoAmI(ctx context.Context, _ *ateapipb.WhoAmIReque
 }
 
 func TestConnectExecCredential(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		env      clientcmdapi.ExecEnvVar
@@ -484,8 +515,10 @@ func TestConnectExecCredential(t *testing.T) {
 	}
 }
 
-// testConnectExecCredential calls WhoAmI through a server that rejects token-1.
-func testConnectExecCredential(t *testing.T, env clientcmdapi.ExecEnvVar, wantID string, wantRuns int) {
+// connectFakeAuthentication connects with creds to a fakeAuthentication
+// server that rejects token-1.
+func connectFakeAuthentication(t *testing.T, creds credentials.PerRPCCredentials) (*fakeAuthentication, ateapipb.AuthenticationClient) {
+	t.Helper()
 	ca := newTestCA(t)
 	certPEM, keyPEM := ca.issue(t, "ateapi.test", []string{"ateapi.test"})
 	serverCert, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -502,11 +535,6 @@ func testConnectExecCredential(t *testing.T, env clientcmdapi.ExecEnvVar, wantID
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 
-	plugin, dir := testPlugin(t, "client.authentication.k8s.io/v1", env)
-	creds, err := newExecCreds(plugin, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(ca.pem)
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: "ateapi.test"}
@@ -514,9 +542,19 @@ func testConnectExecCredential(t *testing.T, env clientcmdapi.ExecEnvVar, wantID
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer conn.Close()
+	t.Cleanup(func() { conn.Close() })
+	return authn, ateapipb.NewAuthenticationClient(conn)
+}
 
-	resp, err := ateapipb.NewAuthenticationClient(conn).WhoAmI(context.Background(), &ateapipb.WhoAmIRequest{})
+func testConnectExecCredential(t *testing.T, env clientcmdapi.ExecEnvVar, wantID string, wantRuns int) {
+	plugin, dir := testPlugin(t, "client.authentication.k8s.io/v1", env)
+	creds, err := newExecCreds(plugin, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, client := connectFakeAuthentication(t, creds)
+
+	resp, err := client.WhoAmI(context.Background(), &ateapipb.WhoAmIRequest{})
 	if err != nil {
 		t.Fatalf("WhoAmI: %v", err)
 	}
@@ -525,6 +563,39 @@ func testConnectExecCredential(t *testing.T, env clientcmdapi.ExecEnvVar, wantID
 	}
 	if n := pluginRuns(t, dir); n != wantRuns {
 		t.Errorf("plugin ran %d times, want %d", n, wantRuns)
+	}
+}
+
+func TestConnectMintedTokenNotRetried(t *testing.T) {
+	t.Parallel()
+	mints := 0
+	creds := newMintedTokenCreds(func(context.Context) (string, time.Time, error) {
+		mints++
+		return fmt.Sprintf("token-%d", mints), time.Now().Add(time.Hour), nil
+	})
+	authn, client := connectFakeAuthentication(t, creds)
+
+	if _, err := client.WhoAmI(context.Background(), &ateapipb.WhoAmIRequest{}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("WhoAmI error = %v, want Unauthenticated for the rejected token-1", err)
+	}
+	authn.mu.Lock()
+	defer authn.mu.Unlock()
+	if authn.calls != 1 || mints != 1 {
+		t.Errorf("WhoAmI reached the server %d times after %d mints, want 1 and 1", authn.calls, mints)
+	}
+}
+
+func TestConnectCredentialError(t *testing.T) {
+	t.Parallel()
+	authn, client := connectFakeAuthentication(t, fileBearerTokenCreds(filepath.Join(t.TempDir(), "missing")))
+	_, err := client.WhoAmI(context.Background(), &ateapipb.WhoAmIRequest{})
+	if _, isStatus := status.FromError(err); isStatus || !strings.Contains(err.Error(), "missing") {
+		t.Errorf("WhoAmI error = %v, want a local error, not a gRPC status, naming the token file", err)
+	}
+	authn.mu.Lock()
+	defer authn.mu.Unlock()
+	if authn.calls != 0 {
+		t.Errorf("WhoAmI reached the server %d times, want 0", authn.calls)
 	}
 }
 
@@ -605,6 +676,7 @@ func TestClientCredentials(t *testing.T) {
 }
 
 func TestConnectClientCertificate(t *testing.T) {
+	t.Parallel()
 	ca := newTestCA(t)
 	serverCertPEM, serverKeyPEM := ca.issue(t, "ateapi.test", []string{"ateapi.test"})
 	serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)

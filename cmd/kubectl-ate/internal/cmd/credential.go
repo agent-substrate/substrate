@@ -54,10 +54,10 @@ as an ExecCredential, so it can be passed to --credential-plugin (or named in a
 kubeconfig exec stanza). Tokens are cached under ~/.ate/cache until shortly
 before they expire.
 
-Without --kubeconfig or --context, it uses $` + kubeconfigEnv + ` and $` + kubeContextEnv + `,
-which kubectl ate sets from its own flags when it runs the plugin. The audience
-is --audience, else spec.cluster.config.audience from KUBERNETES_EXEC_INFO, else
-ate-api's in-cluster Service name.`,
+Without --kubeconfig it uses $` + kubeconfigEnv + `, and without --context
+$` + kubeContextEnv + `; kubectl ate sets both from its own flags when it runs the
+plugin. The audience is --audience, else spec.cluster.config.audience from
+KUBERNETES_EXEC_INFO, else ate-api's in-cluster Service name.`,
 	Example: `  # Act as a per-user ServiceAccount you are allowed to create tokens for
   export ` + credentialPluginEnv + `="kubectl-ate credential --service-account=ate-users/alice"
   kubectl ate whoami

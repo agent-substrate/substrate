@@ -93,7 +93,7 @@ func TestCredential(t *testing.T) {
 	calls := fakeMinter(t)
 	t.Setenv(credplugin.InfoEnv, `{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","spec":{"interactive":false,"cluster":{"server":"https://api.ate-system.svc","config":{"audience":"exec-audience"}}}}`)
 
-	out, errOut, err := runRoot(t, "credential")
+	out, errOut, err := runRootCLI(t, "credential")
 	if err != nil {
 		t.Fatalf("credential: %v", err)
 	}
@@ -108,10 +108,10 @@ func TestCredential(t *testing.T) {
 		t.Errorf("stderr = %q, want the shared identity warning", errOut)
 	}
 
-	if _, _, err := runRoot(t, "credential"); err != nil {
+	if _, _, err := runRootCLI(t, "credential"); err != nil {
 		t.Fatalf("second credential: %v", err)
 	}
-	if out, _, err = runRoot(t, "credential", "--service-account=ate-users/alice", "--audience=flag-audience", "-o", "token"); err != nil {
+	if out, _, err = runRootCLI(t, "credential", "--service-account=ate-users/alice", "--audience=flag-audience", "-o", "token"); err != nil {
 		t.Fatalf("credential --service-account: %v", err)
 	}
 	if out != "minted-2\n" {
@@ -126,19 +126,19 @@ func TestCredential(t *testing.T) {
 		t.Errorf("mints = %v, want %v (the second default run should hit the cache)", *calls, want)
 	}
 
-	if _, _, err := runRoot(t, "credential", "--refresh"); err != nil {
+	if _, _, err := runRootCLI(t, "credential", "--refresh"); err != nil {
 		t.Fatal(err)
 	}
-	if out, _, err = runRoot(t, "credential", "-o", "token"); err != nil || out != "minted-3\n" || len(*calls) != 3 {
+	if out, _, err = runRootCLI(t, "credential", "-o", "token"); err != nil || out != "minted-3\n" || len(*calls) != 3 {
 		t.Errorf("after --refresh: token %q (err %v) after %d mints, want the cached minted-3 after 3", out, err, len(*calls))
 	}
 
 	t.Setenv(ateclient.RefreshCredentialEnv, "1")
-	if out, _, err = runRoot(t, "credential", "-o", "token"); err != nil || out != "minted-4\n" {
+	if out, _, err = runRootCLI(t, "credential", "-o", "token"); err != nil || out != "minted-4\n" {
 		t.Errorf("with %s set: token %q (err %v), want a new minted-4", ateclient.RefreshCredentialEnv, out, err)
 	}
 	t.Setenv(ateclient.RefreshCredentialEnv, "")
-	if out, _, err = runRoot(t, "credential", "-o", "token"); err != nil || out != "minted-4\n" || len(*calls) != 4 {
+	if out, _, err = runRootCLI(t, "credential", "-o", "token"); err != nil || out != "minted-4\n" || len(*calls) != 4 {
 		t.Errorf("after %s: token %q (err %v) after %d mints, want the cached minted-4 after 4", ateclient.RefreshCredentialEnv, out, err, len(*calls))
 	}
 }
@@ -149,14 +149,14 @@ func TestCredentialKubeEnv(t *testing.T) {
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
 	t.Setenv(kubeconfigEnv, kubeconfigPath)
 
-	if _, _, err := runRoot(t, "credential"); err != nil {
+	if _, _, err := runRootCLI(t, "credential"); err != nil {
 		t.Fatalf("credential with %s: %v", kubeconfigEnv, err)
 	}
 	t.Setenv(kubeContextEnv, "kind-b")
-	if _, _, err := runRoot(t, "credential"); err != nil {
+	if _, _, err := runRootCLI(t, "credential"); err != nil {
 		t.Fatalf("credential with %s: %v", kubeContextEnv, err)
 	}
-	if _, _, err := runRoot(t, "credential", "--context=kind-a", "--refresh"); err != nil {
+	if _, _, err := runRootCLI(t, "credential", "--context=kind-a", "--refresh"); err != nil {
 		t.Fatalf("credential --context: %v", err)
 	}
 	var hosts []string
@@ -176,7 +176,7 @@ func TestCredentialErrors(t *testing.T) {
 		{"credential", "-o", "yaml"},
 		{"credential", "extra"},
 	} {
-		if _, _, err := runRoot(t, args...); err == nil {
+		if _, _, err := runRootCLI(t, args...); err == nil {
 			t.Errorf("%q succeeded, want error", args)
 		}
 	}
@@ -187,7 +187,7 @@ func TestCredentialWrap(t *testing.T) {
 	t.Setenv(credplugin.InfoEnv, `{"apiVersion":"client.authentication.k8s.io/v1beta1","kind":"ExecCredential","spec":{}}`)
 	jwt := "e30." + base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"https://idp.example","exp":1760616000}`)) + ".sig"
 
-	out, _, err := runRoot(t, "credential", "wrap", "--", "sh", "-c", "echo "+jwt)
+	out, _, err := runRootCLI(t, "credential", "wrap", "--", "sh", "-c", "echo "+jwt)
 	if err != nil {
 		t.Fatalf("credential wrap: %v", err)
 	}
@@ -199,10 +199,10 @@ func TestCredentialWrap(t *testing.T) {
 		t.Errorf("ExecCredential = %+v %+v", cred.TypeMeta, cred.Status)
 	}
 
-	if _, _, err := runRoot(t, "credential", "wrap", "--", "sh", "-c", "echo opaque"); err == nil {
+	if _, _, err := runRootCLI(t, "credential", "wrap", "--", "sh", "-c", "echo opaque"); err == nil {
 		t.Error("wrapping a command that prints a non-JWT succeeded, want error")
 	}
-	if _, _, err := runRoot(t, "credential", "wrap", "--", "sh", "-c", "exit 3"); err == nil {
+	if _, _, err := runRootCLI(t, "credential", "wrap", "--", "sh", "-c", "exit 3"); err == nil {
 		t.Error("wrapping a failing command succeeded, want error")
 	}
 }

@@ -59,18 +59,20 @@ type refreshableCredentials interface {
 	refresh(rejected string) bool
 }
 
-// retryUnauthenticated retries an RPC once, with a fresh credential, when
-// ateapi rejects the one it sent. This relies on ateapi returning
-// Unauthenticated only before an RPC has changed anything.
-func retryUnauthenticated(creds refreshableCredentials) grpc.UnaryClientInterceptor {
+// retryUnauthenticated reports a credential it cannot fetch as a local error,
+// and retries an RPC once when ateapi rejects a refreshable credential. The
+// retry relies on ateapi rejecting a credential before the RPC changes anything.
+func retryUnauthenticated(creds credentials.PerRPCCredentials) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		// The credentials cache, so this returns what the RPC will send.
+		// Refreshable credentials cache, so for them this is what the RPC
+		// will send.
 		md, err := creds.GetRequestMetadata(ctx)
 		if err != nil {
 			return fmt.Errorf("get credentials for ate-api: %w", err)
 		}
 		err = invoker(ctx, method, req, reply, cc, opts...)
-		if status.Code(err) != codes.Unauthenticated || !creds.refresh(md["authorization"]) {
+		rc, ok := creds.(refreshableCredentials)
+		if status.Code(err) != codes.Unauthenticated || !ok || !rc.refresh(md["authorization"]) {
 			return err
 		}
 		return invoker(ctx, method, req, reply, cc, opts...)
@@ -100,8 +102,6 @@ func (c bearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (ma
 
 func (c bearerTokenCreds) RequireTransportSecurity() bool { return true }
 
-func (c bearerTokenCreds) refresh(string) bool { return false }
-
 type fileBearerTokenCreds string
 
 func (c fileBearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
@@ -117,11 +117,6 @@ func (c fileBearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string)
 }
 
 func (c fileBearerTokenCreds) RequireTransportSecurity() bool { return true }
-
-func (c fileBearerTokenCreds) refresh(rejected string) bool {
-	md, err := c.GetRequestMetadata(context.Background())
-	return err == nil && md["authorization"] != rejected
-}
 
 // MintServiceAccountToken requests a token for the ServiceAccount
 // namespace/name, bound to audience, and returns it with its expiry.
@@ -142,8 +137,7 @@ func MintServiceAccountToken(ctx context.Context, clientset kubernetes.Interface
 	return tr.Status.Token, tr.Status.ExpirationTimestamp.Time, nil
 }
 
-// mintedTokenCreds mints a token on first use and again once it nears expiry
-// or ateapi rejects it.
+// mintedTokenCreds mints a token on first use and again once it nears expiry.
 type mintedTokenCreds struct {
 	mint func(context.Context) (string, time.Time, error)
 	now  func() time.Time
@@ -172,15 +166,6 @@ func (c *mintedTokenCreds) GetRequestMetadata(ctx context.Context, _ ...string) 
 
 func (c *mintedTokenCreds) RequireTransportSecurity() bool { return true }
 
-func (c *mintedTokenCreds) refresh(rejected string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if "Bearer "+c.token == rejected {
-		c.token = ""
-	}
-	return true
-}
-
 // execCreds runs a kubeconfig exec credential plugin through client-go's
 // authenticator, which caches the credential until its expirationTimestamp.
 // That authenticator is built for net/http, so execCreds drives it with
@@ -188,6 +173,10 @@ func (c *mintedTokenCreds) refresh(rejected string) bool {
 type execCreds struct {
 	config  *clientcmdapi.ExecConfig
 	cluster *clientauthentication.Cluster
+
+	// refreshMu serializes refresh, so that RPCs rejected together share one
+	// refresh.
+	refreshMu sync.Mutex
 
 	mu      sync.Mutex
 	wrap    transport.WrapperFunc
@@ -280,6 +269,8 @@ func (c *execCreds) GetRequestMetadata(ctx context.Context, _ ...string) (map[st
 func (c *execCreds) RequireTransportSecurity() bool { return true }
 
 func (c *execCreds) refresh(rejected string) bool {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
 	ctx := context.Background()
 	current, err := c.authorization(ctx, http.StatusOK)
 	if err != nil {

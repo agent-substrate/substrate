@@ -36,15 +36,30 @@ func TestCredentialPluginExec(t *testing.T) {
 	if err := os.WriteFile(spaced, nil, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	execConfig := func(command string, args []string, env ...clientcmdapi.ExecEnvVar) *clientcmdapi.ExecConfig {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("rel-plugin", nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relPlugin := filepath.Join(wd, "rel-plugin")
+	execConfigEnv := func(command string, args []string, kubeconfig, kubeContext string) *clientcmdapi.ExecConfig {
 		return &clientcmdapi.ExecConfig{
-			APIVersion:         "client.authentication.k8s.io/v1",
-			Command:            command,
-			Args:               args,
-			Env:                env,
+			APIVersion: "client.authentication.k8s.io/v1",
+			Command:    command,
+			Args:       args,
+			Env: []clientcmdapi.ExecEnvVar{
+				{Name: kubeconfigEnv, Value: kubeconfig},
+				{Name: kubeContextEnv, Value: kubeContext},
+			},
 			InteractiveMode:    clientcmdapi.IfAvailableExecInteractiveMode,
 			ProvideClusterInfo: true,
 		}
+	}
+	execConfig := func(command string, args []string) *clientcmdapi.ExecConfig {
+		return execConfigEnv(command, args, "", "")
 	}
 	for _, tc := range []struct {
 		name                                          string
@@ -63,11 +78,12 @@ func TestCredentialPluginExec(t *testing.T) {
 		{name: "env", env: "plugin --x", want: execConfig("plugin", []string{"--x"})},
 		{name: "flag over env", flag: "a", env: "b", want: execConfig("a", nil)},
 		{name: "existing file", flag: spaced, want: execConfig(spaced, nil)},
+		{name: "relative file", flag: "./rel-plugin", want: execConfig(relPlugin, nil)},
+		{name: "relative command line", flag: "./rel-plugin --x", want: execConfig(relPlugin, []string{"--x"})},
+		{name: "relative missing file", flag: "bin/plugin", want: execConfig(filepath.Join(wd, "bin", "plugin"), nil)},
 		{
 			name: "kube flags", flag: spaced, kubeconfig: "/kubeconfig", kubeContext: "kind-a",
-			want: execConfig(spaced, nil,
-				clientcmdapi.ExecEnvVar{Name: kubeconfigEnv, Value: "/kubeconfig"},
-				clientcmdapi.ExecEnvVar{Name: kubeContextEnv, Value: "kind-a"}),
+			want: execConfigEnv(spaced, nil, "/kubeconfig", "kind-a"),
 		},
 		{name: "unterminated quote", flag: `plugin "x`, wantErr: true},
 		{name: "blank", flag: "  ", wantErr: true},

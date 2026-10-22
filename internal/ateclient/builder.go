@@ -258,8 +258,8 @@ func dial(ctx context.Context, opts DialOptions) (*Client, error) {
 }
 
 // connect dials target, attaching creds to every RPC and retrying an RPC once
-// when ateapi rejects them.
-func connect(target string, tlsCfg *tls.Config, creds refreshableCredentials, opts DialOptions) (*grpc.ClientConn, error) {
+// when ateapi rejects a refreshable credential.
+func connect(target string, tlsCfg *tls.Config, creds credentials.PerRPCCredentials, opts DialOptions) (*grpc.ClientConn, error) {
 	if cc, ok := creds.(interface {
 		clientCertificate(*tls.CertificateRequestInfo) (*tls.Certificate, error)
 	}); ok {
@@ -333,7 +333,7 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 // The minted token authenticates as FallbackPrincipal, not as whoever runs
 // the client: anyone Kubernetes RBAC lets create a token for that
 // ServiceAccount gets the same identity, and whatever it is granted.
-func clientCredentials(opts DialOptions, clientset kubernetes.Interface) (refreshableCredentials, error) {
+func clientCredentials(opts DialOptions, clientset kubernetes.Interface) (credentials.PerRPCCredentials, error) {
 	switch {
 	case opts.TokenFile == "-":
 		creds, err := readBearerToken(os.Stdin)

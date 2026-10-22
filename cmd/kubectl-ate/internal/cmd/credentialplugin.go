@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -30,8 +31,8 @@ const (
 	// is not given.
 	credentialPluginEnv = "ATE_CREDENTIAL_PLUGIN"
 	// kubeconfigEnv and kubeContextEnv pass --kubeconfig and --context to a
-	// credential plugin; `kubectl ate credential` uses them when it is given
-	// neither flag itself.
+	// credential plugin; `kubectl ate credential` uses each when it is not
+	// given that flag itself.
 	kubeconfigEnv  = "ATE_KUBECONFIG"
 	kubeContextEnv = "ATE_KUBE_CONTEXT"
 )
@@ -66,18 +67,25 @@ func credentialPluginExec() (*clientcmdapi.ExecConfig, error) {
 		}
 		command, args = words[0], words[1:]
 	}
-	var env []clientcmdapi.ExecEnvVar
-	if kubeconfig != "" {
-		env = append(env, clientcmdapi.ExecEnvVar{Name: kubeconfigEnv, Value: kubeconfig})
-	}
-	if k8sContext != "" {
-		env = append(env, clientcmdapi.ExecEnvVar{Name: kubeContextEnv, Value: k8sContext})
+	// client-go cleans the command, which would turn ./plugin into a name
+	// looked up on PATH.
+	if strings.ContainsRune(command, filepath.Separator) {
+		abs, err := filepath.Abs(command)
+		if err != nil {
+			return nil, fmt.Errorf("credential plugin %s: %w", command, err)
+		}
+		command = abs
 	}
 	return &clientcmdapi.ExecConfig{
-		APIVersion:         credplugin.APIVersionV1,
-		Command:            command,
-		Args:               args,
-		Env:                env,
+		APIVersion: credplugin.APIVersionV1,
+		Command:    command,
+		Args:       args,
+		// Set even when empty, so that the plugin does not inherit values
+		// from the user's environment that kubectl ate itself ignores.
+		Env: []clientcmdapi.ExecEnvVar{
+			{Name: kubeconfigEnv, Value: kubeconfig},
+			{Name: kubeContextEnv, Value: k8sContext},
+		},
 		InteractiveMode:    clientcmdapi.IfAvailableExecInteractiveMode,
 		ProvideClusterInfo: true,
 	}, nil

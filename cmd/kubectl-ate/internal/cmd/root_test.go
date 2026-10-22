@@ -22,7 +22,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"go.ate.dev/substrate/internal/preview"
 	"google.golang.org/grpc/metadata"
 )
@@ -41,40 +40,6 @@ func resetRootFlags(t *testing.T) {
 		f.Changed = false
 	}
 	verbosity = 0
-}
-
-// runRoot executes rootCmd with args and resets every flag afterwards.
-func runRoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
-	t.Helper()
-	var out, errOut bytes.Buffer
-	rootCmd.SetOut(&out)
-	rootCmd.SetErr(&errOut)
-	rootCmd.SetArgs(args)
-	defer func() {
-		resetFlags(rootCmd)
-		resetRootFlags(t)
-	}()
-	err = rootCmd.ExecuteContext(context.Background())
-	return out.String(), errOut.String(), err
-}
-
-func resetFlags(cmd *cobra.Command) {
-	reset := func(f *pflag.Flag) {
-		if !f.Changed {
-			return
-		}
-		if sv, ok := f.Value.(pflag.SliceValue); ok {
-			_ = sv.Replace(nil)
-		} else {
-			_ = f.Value.Set(f.DefValue)
-		}
-		f.Changed = false
-	}
-	cmd.Flags().VisitAll(reset)
-	cmd.PersistentFlags().VisitAll(reset)
-	for _, c := range cmd.Commands() {
-		resetFlags(c)
-	}
 }
 
 func TestVersionFlag(t *testing.T) {
