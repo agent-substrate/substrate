@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -759,6 +761,101 @@ func TestSandboxConfigVersionMutation(t *testing.T) {
 	validateRootfsCounter(t, resp, "after in-place asset edit of v1", 4)
 }
 
+// TestBadVersionSHAAndConvergence verifies that flipping defaultVersion to a
+// gVisor version with a wrong asset SHA256 preserves the worker's existing
+// runtime registration until the SHA256 is fixed:
+//  1. An actor boots on v1, increments its counters twice (memory=2, file=2,
+//     rootfs=2), and suspends with a v1-stamped MEMORY snapshot.
+//  2. The SandboxConfig flips defaultVersion to v2 with a wrong asset SHA256.
+//     atelet's syncer fails buildFile on the default version and leaves
+//     sandbox-runtimes.json on v1, so the worker keeps advertising v1 and the
+//     actor still restores at MEMORY fidelity (memory=3, file=3, rootfs=3).
+//  3. After suspending again on v1, v2's SHA256 is fixed in the SandboxConfig;
+//     the worker converges to default_runtime=v2 with v1 in restorable_runtimes
+//     and the actor restores via restorable_runtimes (memory=4, file=4,
+//     rootfs=4).
+func TestBadVersionSHAAndConvergence(t *testing.T) {
+	if e2e.IsMicroVM() {
+		t.Skip("only gVisor fetches and verifies version assets before writing sandbox-runtimes.json")
+	}
+	t.Parallel()
+	f := setupSuspendedV1Actor(t, "runtime-bad-sha", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+
+	// 2. Flip defaultVersion to v2 with a wrong SHA256 and wait for atelet on
+	// the worker's node to log the sync failure for the worker pod.
+	v2Bad := *f.v2.DeepCopy()
+	for arch, files := range v2Bad.Assets {
+		for name, entry := range files {
+			entry.SHA256 = strings.Repeat("0", 64)
+			files[name] = entry
+		}
+		v2Bad.Assets[arch] = files
+	}
+	updateSandboxConfigVersions(t, f.ctx, f.clients, f.configName, v2Bad.Name, []atev1alpha1.SandboxVersionConfig{f.v1, v2Bad})
+	waitForAteletSyncFailure(t, f.ctx, f.clients, f.workerRef, f.configName)
+
+	// Verify the worker still advertises v1 as default_runtime with no
+	// restorable_runtimes, and that the suspended v1 actor MEMORY-restores.
+	w, err := f.clients.SubstrateAPI.GetWorker(f.ctx, &ateapipb.GetWorkerRequest{Worker: f.workerRef})
+	if err != nil {
+		t.Fatalf("failed to get Worker %s after bad defaultVersion sync: %v", f.workerRef.GetName(), err)
+	}
+	if diff := cmp.Diff(f.v1Runtime, hardware.ColdBootRuntime(w.GetStatus()), protocmp.Transform()); diff != "" {
+		t.Fatalf("worker default_runtime changed after bad defaultVersion sync (-want v1 +got):\n%s", diff)
+	}
+
+	resumed2, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapipb.ResumeActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to resume Actor while defaultVersion has a bad SHA256: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	if diff := cmp.Diff(f.v1Runtime, resumed2.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("workerAssignment.sandbox_runtime while defaultVersion has a bad SHA256 (-want v1 +got):\n%s", diff)
+	}
+
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: f.actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor while defaultVersion has a bad SHA256: %v", err)
+	}
+	validateCounterResponse(t, resp, "while defaultVersion has bad SHA256", 3, 3)
+	validateRootfsCounter(t, resp, "while defaultVersion has bad SHA256", 3)
+
+	// 3. Suspend on v1, fix v2's SHA256 in the SandboxConfig, and verify the
+	// worker converges to default_runtime=v2 with v1 in restorable_runtimes.
+	suspended2, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapipb.SuspendActorRequest{
+		Actor:   f.actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to suspend Actor a second time: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	if diff := cmp.Diff(f.v1Runtime, durableSnapshot(suspended2.GetActor().GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("second snapshot sandbox_runtime mismatch (-want v1 +got):\n%s", diff)
+	}
+
+	updateSandboxConfigVersions(t, f.ctx, f.clients, f.configName, f.v2.Name, []atev1alpha1.SandboxVersionConfig{f.v1, f.v2})
+	waitForWorkerRestorableUpgrade(t, f.ctx, f.clients, f.workerRef, f.v1Runtime)
+
+	resumed3, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapipb.ResumeActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to resume Actor after fixing v2 SHA256: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	if diff := cmp.Diff(f.v1Runtime, resumed3.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("workerAssignment.sandbox_runtime after convergence (-want v1 +got):\n%s", diff)
+	}
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: f.actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after convergence: %v", err)
+	}
+	validateCounterResponse(t, resp, "after fixing v2 SHA256", 4, 4)
+	validateRootfsCounter(t, resp, "after fixing v2 SHA256", 4)
+}
+
 type sandboxRuntimeFixture struct {
 	ctx         context.Context
 	clients     *e2e.Clients
@@ -1123,6 +1220,54 @@ func waitForPoolWorkerActive(t *testing.T, ctx context.Context, clients *e2e.Cli
 			raw, _ := json.Marshal(lastWorker)
 			t.Fatalf("timed out after %v waiting for pool %s/%s to have an ACTIVE worker on v2 (last worker=%s, err=%v)",
 				timeout, namespace, poolName, raw, err)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// waitForAteletSyncFailure polls the atelet pod logs on workerRef's node until
+// atelet logs a worker sandbox runtimes sync failure for workerRef's pod UID
+// and configName.
+func waitForAteletSyncFailure(t *testing.T, ctx context.Context, clients *e2e.Clients, workerRef *ateapipb.ObjectRef, configName string) {
+	t.Helper()
+	w, err := clients.SubstrateAPI.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: workerRef})
+	if err != nil {
+		t.Fatalf("failed to get Worker %s: %v", workerRef.GetName(), err)
+	}
+	podUID := w.GetWorkerPodUid()
+	nodeName := w.GetNodeName()
+
+	pods, err := clients.K8s.CoreV1().Pods("ate-system").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=atelet",
+		FieldSelector: "spec.nodeName=" + nodeName,
+	})
+	if err != nil || len(pods.Items) == 0 {
+		t.Fatalf("failed to find atelet pod on node %s (pods=%d, err=%v)", nodeName, len(pods.Items), err)
+	}
+	ateletPod := pods.Items[0].Name
+
+	const timeout = 2 * time.Minute
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	tailLines := int64(200)
+	for {
+		raw, err := clients.K8s.CoreV1().Pods("ate-system").GetLogs(ateletPod, &corev1.PodLogOptions{
+			Container: "atelet",
+			TailLines: &tailLines,
+		}).DoRaw(ctx)
+		if err == nil {
+			for line := range strings.SplitSeq(string(raw), "\n") {
+				if strings.Contains(line, podUID) && strings.Contains(line, configName) && strings.Contains(line, "Could not sync worker sandbox runtimes") {
+					t.Logf("Observed atelet sync failure for pod %s (%s): %s", podUID, configName, line)
+					return
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out after %v waiting for atelet %s on node %s to log sync failure for pod %s and SandboxConfig %s (err=%v)",
+				timeout, ateletPod, nodeName, podUID, configName, err)
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
