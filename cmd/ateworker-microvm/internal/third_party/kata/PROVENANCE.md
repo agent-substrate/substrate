@@ -5,7 +5,7 @@ and used by `cmd/ateworker-microvm`. The upstream `LICENSE` in this directory co
 everything under it.
 
 - **Upstream:** github.com/kata-containers/kata-containers
-- **Version:** tag `3.31.0`. The micro-VM demo's runtime assets track a newer kata
+- **Version:** tag `3.31.0`. The microVM demo's runtime assets track a newer kata
   (see `hack/microvm-assets/assemble.sh` `KATA_VER`, currently `4.1.0`); the four
   vendored `.proto` files are byte-identical between `3.31.0` and `4.1.0` (verified
   2026-09-16), so the generated Go needs no re-vendor.

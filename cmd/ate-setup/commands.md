@@ -198,9 +198,9 @@ See
 |---|---|---|
 | `deploy demo counter` | `--deploy-demo-counter` | A counter actor exercising snapshot, resume, and atenet ingress |
 | `deploy demo counter --with-external-volume [--storage-class NAME]` | `--deploy-demo-counter-with-external-volume` (`STORAGE_CLASS=NAME`) | The same, plus an external volume and a pre-seeded file to validate (requires `--preview=ExternalVolumes`). Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
-| `deploy demo counter-microvm` | `--deploy-demo-counter-microvm` | The counter demo on micro-VM workers. Run `hack/install-microvm-deps.sh --install` first |
+| `deploy demo counter-microvm` | `--deploy-demo-counter-microvm` | The counter demo on microVM workers. Run `hack/install-microvm-deps.sh --install` first |
 | `deploy demo egress` | `--deploy-demo-egress` | Egress policy enforcement through atenet; the actors trust the egress gateway's CA |
-| `deploy demo egress-microvm` | `--deploy-demo-egress-microvm` | The same on micro-VM workers. Run `hack/install-microvm-deps.sh --install` first |
+| `deploy demo egress-microvm` | `--deploy-demo-egress-microvm` | The same on microVM workers. Run `hack/install-microvm-deps.sh --install` first |
 | `deploy demo jupyter` | `--deploy-demo-jupyter` | A Jupyter notebook server per actor, reached through atenet ingress |
 | `deploy demo sandbox` | `--deploy-demo-sandbox` | An on-demand sandbox actor driven by the sandbox client |
 | `deploy demo multi-template` | `--deploy-demo-multi-template` | Two ActorTemplates sharing one WorkerPool |

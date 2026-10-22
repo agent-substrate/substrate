@@ -466,7 +466,7 @@ sandbox, so each of those turns needs an external wake.
 `personal-assistant-light` is the same day with the RAM arrays scaled
 down to 28Mi and everything else unchanged (files, reads, CPU, dwell and
 the 61 wakes), for runs that want the always-on wake pattern with a small
-memory image: about 40 to 95 MB per pause under gVisor, and under micro-VM
+memory image: about 40 to 95 MB per pause under gVisor, and under microVM
 about 100 MB of guest before the script writes anything, bounded by the
 actor's memory limit. It fits a 256Mi actor. Run it with the same
 fractional think scale.

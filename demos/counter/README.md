@@ -25,16 +25,16 @@ The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, whil
 <details>
 <summary>Installation on MicroVM</summary>
 
-The in-RAM-counter suspend/resume-continuity demo be run on the micro-VM
+The in-RAM-counter suspend/resume-continuity demo be run on the microVM
 sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor).
 
 - [`demos/counter/counter-microvm.yaml.tmpl`](counter-microvm.yaml.tmpl) —
-  the `WorkerPool` for the micro-VM sandbox class.
+  the `WorkerPool` for the microVM sandbox class.
 - [`demos/counter/counter-microvm-template.yaml.tmpl`](counter-microvm-template.yaml.tmpl) —
   the `counter-microvm` actor template, created through the ate API in the
   `ate-demo-counter-microvm` atespace.
 - [`hack/run-microvm-demo.sh`](../../hack/run-microvm-demo.sh) — one-shot bring-up
-  that builds the micro-VM worker image, stages the guest assets, deploys the
+  that builds the microVM worker image, stages the guest assets, deploys the
   control plane, and applies the manifests above. Like the other hack scripts it
   reads `.ate-dev-env.sh` for GKE; use the kind wrapper for a local cluster.
 
@@ -48,7 +48,7 @@ Run it and follow the printed next steps:
 KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
 ```
 
-On a cluster that already has the micro-VM deps (`hack/install-microvm-deps.sh`),
+On a cluster that already has the microVM deps (`hack/install-microvm-deps.sh`),
 deploy directly instead:
 
 ```bash

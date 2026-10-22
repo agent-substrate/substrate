@@ -1,4 +1,4 @@
-# Micro-VM runtime assets + counter demo (kind, fetch-not-bake)
+# MicroVM runtime assets + counter demo (kind, fetch-not-bake)
 
 The `microvm` runtime (`cmd/ateworker-microvm`, kata + cloud-hypervisor) fetches its
 toolchain at runtime — nothing kata-specific is baked into the worker image. ateworker drives
@@ -15,7 +15,7 @@ set. The asset set is four files:
 These helpers assemble the asset set for your node arch, stage it into the cluster's rustfs
 S3 bucket, and the demo manifest's `SandboxConfig` points at it. When `/dev/kvm` is
 available, `hack/create-kind-cluster.sh` mounts it into the node; atelet then advertises
-it as a device, which is what places micro-VM workers there.
+it as a device, which is what places microVM workers there.
 
 > [!TIP]
 > `hack/run-microvm-demo.sh` automates the full bring-up below (assets, control plane,
