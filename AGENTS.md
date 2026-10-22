@@ -12,6 +12,7 @@
   - Prefer verbs to abstract nouns: "evicts" instead of "performs eviction".
   - Say each thing once. Don't restate the diff, open with "This PR …" or "This commit …", or repeat the same explanation in several comments.
   - Explain why only when the code doesn't make it obvious, in a clause or a line.
+  - Write `microVM` (`MicroVM` at the start of a sentence) without a hyphen in docs, comments, and commits. Use `microvm` for API strings and flags.
   - Avoid:
     - em-dashes, and chains of semicolons
     - headings, bold, or test plans in commit messages
@@ -43,7 +44,7 @@
 - Check every claim in comments, docs and the PR description against the code. Don't claim a guarantee the code doesn't enforce. When you change behavior, update the comments, docs and scripts elsewhere that describe it. Link to existing docs instead of copying them.
 - Find the root cause before fixing a symptom. Back performance claims with a measurement.
 - Keep atelet and the worker runtimes opaque to each other. The only knowledge they may share is `internal/proto/ateworkerpb` and the paths in `internal/nodepath`. Using the same library code is fine; depending on how the other side is built is not. We want atelet to roll ahead of workers eventually, so don't widen that interface casually. Until v1.0.0 nothing enforces this; see Backward Compatibility.
-- Actor features work on both gVisor and micro-VM, with e2e coverage for both, unless the issue or PR description scopes the change to one runtime.
+- Actor features work on both gVisor and microVM, with e2e coverage for both, unless the issue or PR description scopes the change to one runtime.
 - Don't assume kind, GKE, amd64 or a newer kernel than the repo already needs. Dev scripts must work on arm64 macOS. Don't change host-wide state.
 - Put shell code in standalone `.sh` scripts so shellcheck can lint them. Place each script near what uses it, such as `hack/` for dev scripts or a directory under `.github/` for a workflow. Don't inline it in YAML, such as a GitHub workflow `run:` block, in JSON, or in another language's source, such as Go or Python. Have those call the script. Get a reviewer's agreement before making an exception.
 - Read the `CI` environment variable only inside a named fail-closed predicate, never inline. See Testing Instructions 5.
