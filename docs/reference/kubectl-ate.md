@@ -33,7 +33,7 @@ go run ./cmd/kubectl-ate <command>
 ## Connection & Auto Port-Forwarding
 By default, `kubectl-ate` will automatically read your `~/.kube/config`, discover the `ate-api-server` pods in your cluster, and establish a temporary background port-forward tunnel to execute gRPC calls securely.
 
-If you prefer to route traffic directly (e.g., through a LoadBalancer or when running natively inside a cluster pod), simply provide the `--endpoint` flag to bypass the tunnel. Either way, `kubectl-ate` reads the CA that verifies `ate-api-server` from the cluster, so it needs a kubeconfig or in-cluster config.
+If you prefer to route traffic directly (e.g., from a pod in a namespace labeled `ate.dev/api-access=true`), simply provide the `--endpoint` flag to bypass the tunnel. Either way, `kubectl-ate` reads the CA that verifies `ate-api-server` from the cluster, so it needs a kubeconfig or in-cluster config.
 
 For which credential to pass with `--token-file`, see the [Authentication Guide](../guides/authentication.md#people-running-kubectl-ate).
 
@@ -59,7 +59,7 @@ These flags can be appended to any command:
 | `--kubeconfig` | | Path to your kubeconfig file | `~/.kube/config` |
 | `--context` | | Name of the kubeconfig context to use | current context |
 | `--endpoint` | | Manual gRPC endpoint override (e.g., `localhost:8080`) | |
-| `--token-file` | | Path to a bearer token for ate-api authentication, or `-` for stdin | Kubernetes ServiceAccount token |
+| `--token-file` | | Path to a bearer token for ate-api authentication, or `-` for stdin | a token for the shared `ate-client` ServiceAccount |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
 | `--verbose` | `-v` | Increase output verbosity; may be repeated or stacked (e.g., `-v`, `-vv`, `-vvvvv`) | `0` |
