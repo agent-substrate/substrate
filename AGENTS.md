@@ -130,6 +130,8 @@ Agent Substrate makes no compatibility guarantee before v1.0.0. Do not add code 
 Remove or rename fields, RPCs, flags, and types outright and update every caller in the same change.
 Do not add `reserved` statements to protos, deprecated aliases, fallbacks for old formats, or version negotiation.
 
+The exception is field numbers in `api/ateapi/v1`. ateapi stores those messages in Postgres as binary protobuf, so reserve a field's number when you delete it, and never renumber a field. `hack/verify/proto-breaking.sh` enforces this.
+
 ## Version Skew
 
 From v1.0.0, changes must keep upgrades and rollbacks working under [docs/reference/version-skew-policy.md](docs/reference/version-skew-policy.md). Read it before you change an RPC, a CRD, the worker pod template, a database migration, or file(s) that `atelet` and `ateworker` share on a node.
