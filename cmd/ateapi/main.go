@@ -315,12 +315,7 @@ func main() {
 		slog.WarnContext(ctx, "WorkerPool cache has not synced; worker-count metrics may omit empty pools",
 			"watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "", "err", err)
 	})
-	if err := cachesync.WaitForCacheSync(shutdownCtx, cacheSyncTimeout, map[string]cache.InformerSynced{
-		"atelet Pods":      ateletPodInformer.HasSynced,
-		"SandboxConfigs":   ateFactory.Api().V1alpha1().SandboxConfigs().Informer().HasSynced,
-		"CSIDriverConfigs": ateFactory.Api().V1alpha1().CSIDriverConfigs().Informer().HasSynced,
-		"StorageClasses":   scInformerFactory.Storage().V1().StorageClasses().Informer().HasSynced,
-	}); err != nil {
+	if err := cachesync.WaitForCacheSync(shutdownCtx, cacheSyncTimeout, requiredKubernetesCaches(ateletPodInformer, ateFactory, scInformerFactory)); err != nil {
 		serverboot.Fatal(ctx, "Failed to sync required Kubernetes caches", err)
 	}
 
@@ -617,6 +612,14 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 		}
 	}
 	return nil, fmt.Errorf("connect to PostgreSQL after %d attempts: %w", postgresConnectTries, connectErr)
+}
+
+func requiredKubernetesCaches(ateletPods cache.SharedIndexInformer, ateFactory externalversions.SharedInformerFactory, scFactory informers.SharedInformerFactory) map[string]cache.InformerSynced {
+	return map[string]cache.InformerSynced{
+		"atelet Pods":      ateletPods.HasSynced,
+		"CSIDriverConfigs": ateFactory.Api().V1alpha1().CSIDriverConfigs().Informer().HasSynced,
+		"StorageClasses":   scFactory.Storage().V1().StorageClasses().Informer().HasSynced,
+	}
 }
 
 // newKubeClients builds the standard Kubernetes clientset and the ate
