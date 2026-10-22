@@ -879,7 +879,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 					defer sandbox.Close()
 				}
 			}
-			err := rcmd.cmdCheckpoint(ctx, ocispec.SandboxID, checkpointPath, fsPaths)
+			err := rcmd.checkpointRunningWorkload(ctx, req.GetSpec().GetContainers(), checkpointPath, fsPaths)
 			if err != nil {
 				// the actor may stay RUNNING, so its sandbox dying is a crash
 				// again, including if this checkpoint stopped it
