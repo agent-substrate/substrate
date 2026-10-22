@@ -61,7 +61,7 @@ var gvisorSecondReleaseAssets = map[string]map[string]atev1alpha1.AssetFile{
 //     re-stamps v1 on the next suspend.
 func TestSandboxRuntimeUpgrade(t *testing.T) {
 	t.Parallel()
-	f := setupSuspendedV1Actor(t, "runtime-upgrade")
+	f := setupSuspendedV1Actor(t, "runtime-upgrade", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
 
 	// 2. Add v2 (Enabled) and flip defaultVersion from v1 to v2 while v1 stays Enabled.
 	updateSandboxConfigVersions(t, f.ctx, f.clients, f.configName, f.v2.Name, []atev1alpha1.SandboxVersionConfig{f.v1, f.v2})
@@ -119,7 +119,7 @@ func TestSandboxRuntimeUpgrade(t *testing.T) {
 //     next resume restores MEMORY on v2.
 func TestSandboxRuntimeDisableDropsToRootfs(t *testing.T) {
 	t.Parallel()
-	f := setupSuspendedV1Actor(t, "runtime-disable")
+	f := setupSuspendedV1Actor(t, "runtime-disable", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
 
 	// 2. Switch defaultVersion to v2 and mark v1 Disabled.
 	disabled := atev1alpha1.SandboxVersionStateDisabled
@@ -383,6 +383,103 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 	validateRootfsCounter(t, resp, "actor2 after golden ROOTFS fallback", 1)
 }
 
+// TestPausedActorSandboxRuntime covers a paused actor (DURABILITY_MODE_ASYNCHRONOUS)
+// holding a node-local MEMORY checkpoint across SandboxConfig version changes:
+//  1. An actor boots on v1, increments its memory, rootfs, and volume counters
+//     twice, and pauses; its node-local MEMORY checkpoint is stamped with v1.
+//  2. The pool's SandboxConfig switches defaultVersion to v2 while keeping v1
+//     Enabled; resuming the paused actor matches v1 via restorable_runtimes on
+//     the pinned node without detaching the local checkpoint, preserving the
+//     in-memory counter (memory=3, file=3, rootfs=3).
+//  3. The actor pauses again on v1, and SandboxConfig marks v1 Disabled.
+//  4. Resuming the paused actor cannot relax the runtime while pinned to its
+//     local checkpoint, so ResumeActor detaches the checkpoint to durable
+//     storage first and then restores at ROOTFS fidelity on v2 (memory=1,
+//     file=4, rootfs=4).
+func TestPausedActorSandboxRuntime(t *testing.T) {
+	t.Parallel()
+	f := setupSuspendedV1Actor(t, "runtime-paused", ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS)
+
+	// 2. Add v2 (Enabled) and flip defaultVersion from v1 to v2 while v1 stays Enabled.
+	updateSandboxConfigVersions(t, f.ctx, f.clients, f.configName, f.v2.Name, []atev1alpha1.SandboxVersionConfig{f.v1, f.v2})
+	waitForWorkerRestorableUpgrade(t, f.ctx, f.clients, f.workerRef, f.v1Runtime)
+
+	// Resume from the node-local checkpoint via restorable_runtimes.
+	resumed2, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapipb.ResumeActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to resume paused Actor via restorable runtime: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	if diff := cmp.Diff(f.v1Runtime, resumed2.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("workerAssignment.sandbox_runtime after local restorable resume (-want v1 +got):\n%s", diff)
+	}
+	if !hasLocalSnapshot(resumed2.GetActor().GetStatus()) {
+		t.Fatalf("expected local checkpoint to remain attached after matching restorable_runtimes, got %v", resumed2.GetActor().GetStatus().GetSnapshots())
+	}
+
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: f.actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after local restorable resume: %v", err)
+	}
+	validateCounterResponse(t, resp, "after local restorable resume", 3, 3)
+	validateRootfsCounter(t, resp, "after local restorable resume", 3)
+
+	// 3. Pause the actor again on v1, then mark v1 Disabled.
+	paused2, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapipb.SuspendActorRequest{
+		Actor:   f.actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to pause Actor a second time: %v", err)
+	}
+	waitForActorPaused(f.ctx, t, f.clients, f.actorName)
+
+	snap2 := localSnapshot(paused2.GetActor().GetStatus())
+	if snap2.GetGeneration() <= f.snap1.GetGeneration() {
+		t.Fatalf("second local snapshot generation = %d, want > %d", snap2.GetGeneration(), f.snap1.GetGeneration())
+	}
+	if diff := cmp.Diff(f.v1Runtime, snap2.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("second local snapshot sandbox_runtime mismatch (-want v1 +got):\n%s", diff)
+	}
+
+	disabled := atev1alpha1.SandboxVersionStateDisabled
+	v1Disabled := f.v1
+	v1Disabled.State = &disabled
+	updateSandboxConfigVersions(t, f.ctx, f.clients, f.configName, f.v2.Name, []atev1alpha1.SandboxVersionConfig{v1Disabled, f.v2})
+	v2Runtime := waitForWorkerRuntimeDisabled(t, f.ctx, f.clients, f.workerRef, f.v1Runtime)
+
+	// 4. Resume the paused actor: ResumeActor detaches the local checkpoint to
+	// durable storage before relaxing the runtime to v2 (ROOTFS fallback).
+	resumed3, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapipb.ResumeActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to resume paused Actor after v1 disabled: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	status3 := resumed3.GetActor().GetStatus()
+	if diff := cmp.Diff(v2Runtime, status3.GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("workerAssignment.sandbox_runtime after paused detach and ROOTFS fallback (-want v2 +got):\n%s", diff)
+	}
+	if hasLocalSnapshot(status3) {
+		t.Fatalf("local snapshot survived runtime fallback on a paused actor: %v", status3.GetSnapshots())
+	}
+	detachedDurable := durableSnapshot(status3)
+	if detachedDurable.GetGeneration() != snap2.GetGeneration() {
+		t.Fatalf("durable snapshot generation after detach = %d, want %d", detachedDurable.GetGeneration(), snap2.GetGeneration())
+	}
+	if diff := cmp.Diff(f.v1Runtime, detachedDurable.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("detached durable snapshot sandbox_runtime mismatch (-want v1 +got):\n%s", diff)
+	}
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: f.actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after paused detach and ROOTFS fallback: %v", err)
+	}
+	validateCounterResponse(t, resp, "after paused detach and ROOTFS fallback", 1, 4)
+	validateRootfsCounter(t, resp, "after paused detach and ROOTFS fallback", 4)
+}
+
 type sandboxRuntimeFixture struct {
 	ctx        context.Context
 	clients    *e2e.Clients
@@ -397,9 +494,9 @@ type sandboxRuntimeFixture struct {
 
 // setupSuspendedV1Actor creates a per-test SandboxConfig (at v1), WorkerPool,
 // ActorTemplate, and Actor, runs the actor on v1 for two calls (memory=2,
-// file=2, rootfs=2), suspends it synchronously, and verifies its MEMORY
-// snapshot is stamped with v1.
-func setupSuspendedV1Actor(t *testing.T, prefix string) *sandboxRuntimeFixture {
+// file=2, rootfs=2), suspends it with mode, and verifies its MEMORY snapshot
+// is stamped with v1.
+func setupSuspendedV1Actor(t *testing.T, prefix string, mode ateapipb.DurabilityMode) *sandboxRuntimeFixture {
 	t.Helper()
 	nsObj := e2e.CreateNamespace(t)
 	ctx := context.Background()
@@ -498,14 +595,19 @@ func setupSuspendedV1Actor(t *testing.T, prefix string) *sandboxRuntimeFixture {
 
 	suspended1, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor:   actorRef,
-		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		Options: &ateapipb.SuspendOptions{Mode: mode},
 	})
 	if err != nil {
 		t.Fatalf("failed to suspend Actor on v1: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-
-	snap1 := durableSnapshot(suspended1.GetActor().GetStatus())
+	var snap1 *ateapipb.Snapshot
+	if mode == ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		waitForActorPaused(ctx, t, clients, actorName)
+		snap1 = localSnapshot(suspended1.GetActor().GetStatus())
+	} else {
+		waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+		snap1 = durableSnapshot(suspended1.GetActor().GetStatus())
+	}
 	if got := snap1.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		t.Fatalf("snapshot fidelity after v1 suspend = %v, want MEMORY", got)
 	}
