@@ -335,6 +335,46 @@ func isDeniedLookup(body, name string) bool {
 	return strings.Contains(body, "lookup "+name) && strings.Contains(body, "no such host")
 }
 
+// The gateway rejects a MITM HTTPS request whose Host header does not match the connection's TLS SNI.
+func TestActorEgressHTTPSHostMismatchMITM(t *testing.T) {
+	ctx := context.Background()
+	dataplane := e2e.CurrentAtenetDataplane()
+	const mitmBody = "mitm origin"
+	mitm := e2e.DeployServerPod(t, ctx, egressHTTPSTarget("mitm-origin", mitmBody))
+	_, actorName, _ := createAndResumeActorWithEgress(
+		t, ctx, "egress-slow-headers", e2e.EgressFixture(),
+		e2e.EgressAllowHTTPS(mitm.SvcName(), mitm.SvcName()+".cluster.local"),
+	)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	beforeScrape, err := dataplane.ScrapeMetrics(ctx)
+	if err != nil {
+		t.Fatalf("scraping egress metrics before request: %v", err)
+	}
+
+	mitmURL := "https://" + mitm.SvcName() + "/healthz"
+	payload := []byte(fmt.Sprintf(`{"url":%q,"host":%q}`, mitmURL, "foo.bar.com"))
+	status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, notTransient)
+	if status != http.StatusBadRequest {
+		t.Fatalf("fetch of %s with Host foo.bar.com returned HTTP %d, want %d; body: %s", mitmURL, status, http.StatusBadRequest, body)
+	}
+
+	afterScrape, err := dataplane.ScrapeMetrics(ctx)
+	if err != nil {
+		t.Fatalf("scraping egress metrics after request: %v", err)
+	}
+	requestStatsDiff := dataplane.EgressRequestStats(beforeScrape, afterScrape)
+	if requestStatsDiff.EgressPolicyRejected != 1 {
+		t.Fatalf("ate_egress.rejected incremented by %d, want 1", requestStatsDiff.EgressPolicyRejected)
+	}
+	if requestStatsDiff.EgressPolicyHits != 1 {
+		t.Fatalf("ate_egress.cache_hit incremented by %d, want 1", requestStatsDiff.EgressPolicyHits)
+	}
+}
+
 // TestActorEgressStalePolicyCallsExtProc: once the cached policy on an inner
 // connection exceeds its TTL, egress_policy_pep records a cache miss, falls
 // back to calling ext_proc when processing the request, refreshes the cached

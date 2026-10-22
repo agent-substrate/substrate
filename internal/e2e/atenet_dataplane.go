@@ -57,9 +57,11 @@ type EgressConnectStats struct {
 // from the outer CONNECT request. A value of -1 indicates that the
 // dataplane does not report the stat.
 type EgressRequestStats struct {
-	MitmExtProcCalls   int
-	EgressPolicyHits   int
-	EgressPolicyMisses int
+	MitmExtProcCalls     int
+	EgressPolicyHits     int
+	EgressPolicyMisses   int
+	EgressPolicyAllowed  int
+	EgressPolicyRejected int
 }
 
 // CurrentAtenetDataplane returns the implementation selected for this test
@@ -119,9 +121,11 @@ func (envoyAtenetDataplane) EgressRequestStats(before, after string) EgressReque
 	beforeStats := parseEnvoyEgressRequestMetrics(before)
 	afterStats := parseEnvoyEgressRequestMetrics(after)
 	return EgressRequestStats{
-		MitmExtProcCalls:   afterStats.MitmExtProcCalls - beforeStats.MitmExtProcCalls,
-		EgressPolicyHits:   afterStats.EgressPolicyHits - beforeStats.EgressPolicyHits,
-		EgressPolicyMisses: afterStats.EgressPolicyMisses - beforeStats.EgressPolicyMisses,
+		MitmExtProcCalls:     afterStats.MitmExtProcCalls - beforeStats.MitmExtProcCalls,
+		EgressPolicyHits:     afterStats.EgressPolicyHits - beforeStats.EgressPolicyHits,
+		EgressPolicyMisses:   afterStats.EgressPolicyMisses - beforeStats.EgressPolicyMisses,
+		EgressPolicyAllowed:  afterStats.EgressPolicyAllowed - beforeStats.EgressPolicyAllowed,
+		EgressPolicyRejected: afterStats.EgressPolicyRejected - beforeStats.EgressPolicyRejected,
 	}
 }
 
@@ -176,6 +180,10 @@ func parseEnvoyEgressRequestMetrics(scrape string) EgressRequestStats {
 			stats.EgressPolicyHits += int(val)
 		case "envoy_dynamicmodulescustom_ate_egress_cache_miss", "envoy_ate_egress_cache_miss":
 			stats.EgressPolicyMisses += int(val)
+		case "envoy_dynamicmodulescustom_ate_egress_allowed", "envoy_ate_egress_allowed":
+			stats.EgressPolicyAllowed += int(val)
+		case "envoy_dynamicmodulescustom_ate_egress_rejected", "envoy_ate_egress_rejected":
+			stats.EgressPolicyRejected += int(val)
 		}
 	}
 	return stats
@@ -226,7 +234,13 @@ func (agentGatewayAtenetDataplane) EgressConnectStats(_, _ string) EgressConnect
 }
 
 func (agentGatewayAtenetDataplane) EgressRequestStats(_, _ string) EgressRequestStats {
-	return EgressRequestStats{MitmExtProcCalls: -1, EgressPolicyHits: -1, EgressPolicyMisses: -1}
+	return EgressRequestStats{
+		MitmExtProcCalls:     -1,
+		EgressPolicyHits:     -1,
+		EgressPolicyMisses:   -1,
+		EgressPolicyAllowed:  -1,
+		EgressPolicyRejected: -1,
+	}
 }
 
 type agentGatewayParkingObserver struct{}
