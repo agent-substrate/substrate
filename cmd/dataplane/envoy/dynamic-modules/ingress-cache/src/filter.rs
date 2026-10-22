@@ -492,7 +492,9 @@ mod tests {
     let config = Config::default();
     let mut filter = CacheFilter::new_test_filter(config);
 
-    let target_actor = b"team-b/actor-2";
+    // The cache is process-wide and tests run in parallel, so this test needs an
+    // actor no other test caches to be sure it sees a miss.
+    let target_actor = b"team-b/actor-forged";
     let mut mock = MockEnvoyHttpFilter::default();
     mock
       .expect_get_filter_state_bytes()
