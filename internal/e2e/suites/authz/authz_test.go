@@ -31,8 +31,9 @@ import (
 )
 
 // TestAuthz deploys one fixture, the expensive part, and runs every check
-// against it. The subtests run in order, not in parallel: each sets the
-// fixture atespace's AccessPolicy for its own principals.
+// against it. The subtests run in order, not in parallel: BasicFlow and
+// SecurityRegression each set the fixture atespace's AccessPolicy for their
+// own principals.
 func TestAuthz(t *testing.T) {
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
@@ -43,4 +44,5 @@ func TestAuthz(t *testing.T) {
 
 	t.Run("BasicFlow", func(t *testing.T) { testBasicFlow(t, ctx, f) })
 	t.Run("SecurityRegression", func(t *testing.T) { testSecurityRegression(t, ctx, f) })
+	t.Run("WhoAmI", func(t *testing.T) { testWhoAmI(t, ctx, f) })
 }

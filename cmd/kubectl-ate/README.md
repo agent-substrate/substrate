@@ -26,6 +26,26 @@ By default, `kubectl-ate` will automatically read your `~/.kube/config`, discove
 
 If you prefer to route traffic directly (e.g., through a LoadBalancer or when running natively inside a cluster pod), simply provide the `--endpoint` flag to bypass the tunnel.
 
+## Authentication
+`kubectl-ate` authenticates to ate-api with the first of these it is given:
+
+1. `--token-file`: a bearer token file, re-read on every RPC, or `-` for stdin.
+2. `--credential-plugin`, else `$ATE_CREDENTIAL_PLUGIN`: a [kubectl credential plugin](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#client-go-credential-plugins). A path to an existing file runs with no arguments; any other value is split into a command and its arguments, honoring shell quoting. The plugin receives `--kubeconfig` and `--context` as `$ATE_KUBECONFIG` and `$ATE_KUBE_CONTEXT`. `kubectl-ate` caches its credential until the `expirationTimestamp`, and runs it again when ate-api rejects the credential.
+3. A token minted for the shared `ate-client` ServiceAccount.
+
+Passing both `--token-file` and `--credential-plugin` is an error.
+
+```bash
+# Authenticate as your own ServiceAccount (see docs/authentication.md)
+export ATE_CREDENTIAL_PLUGIN="kubectl-ate credential --service-account=ate-users/alice"
+
+# Show the principal ate-api authenticated you as
+kubectl ate whoami
+
+# Print a raw bearer token, e.g. for grpcurl
+kubectl ate credential -o token
+```
+
 ## Tracing
 The CLI supports on-demand tracing using the `--trace` flag. When enabled, the CLI will generate a trace ID and signal to the server that it wants the request to be traced.
 
@@ -67,6 +87,7 @@ These flags can be appended to any command:
 | `--context` | | Name of the kubeconfig context to use | current context |
 | `--endpoint` | | Manual gRPC endpoint override (e.g., `localhost:8080`) | |
 | `--token-file` | | Path to a bearer token for ate-api authentication, or `-` for stdin | Kubernetes ServiceAccount token |
+| `--credential-plugin` | | kubectl credential plugin that provides the ate-api credential: an executable's path, or a command line | `$ATE_CREDENTIAL_PLUGIN` |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
 | `--verbose` | `-v` | Increase output verbosity; may be repeated or stacked (e.g., `-v`, `-vv`, `-vvvvv`) | `0` |
