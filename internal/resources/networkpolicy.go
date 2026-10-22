@@ -14,9 +14,9 @@
 
 package resources
 
-// NetworkPolicyName returns the NetworkPolicy name for a WorkerPool. The
-// WorkerPool name is a label value (at most 63 characters), so the result is
-// unique per pool and a valid name without truncation.
+// NetworkPolicyName returns the NetworkPolicy name for a WorkerPool. The pool
+// name is also the ate.dev/worker-pool label value, so it is at most 63
+// characters and the prefixed name needs no truncation.
 func NetworkPolicyName(wpName string) string {
 	return "substrate-" + wpName
 }
