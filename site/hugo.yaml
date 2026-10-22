@@ -182,7 +182,6 @@ module:
       target: assets/repo/demos
       disableWatch: false
       files:
-        - "autoscaled-workerpool/README.md"
         - "claude-code-multiplex/README.md"
         - "counter/README.md"
         - "egress/README.md"

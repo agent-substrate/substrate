@@ -35,5 +35,5 @@ Agent Substrate decouples the logical **Actor** (a stateful agent or workload in
 
 ## Optional
 
-- [Tutorials Overview]({{ "docs/tutorials/" | absURL }}): Interactive step-by-step example workloads demonstrating stateful actors, sandboxes, request parking, egress, and autoscaling.
+- [Tutorials Overview]({{ "docs/tutorials/" | absURL }}): Interactive step-by-step example workloads demonstrating stateful actors, sandboxes, request parking, egress, and multiplexing.
 - [GitHub Repository](https://github.com/agent-substrate/substrate): Source code, issue tracker, manifests, and release artifacts for Agent Substrate.
