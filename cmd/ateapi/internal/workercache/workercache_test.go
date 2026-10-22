@@ -39,6 +39,9 @@ func TestCache_NotReadyBeforeStart(t *testing.T) {
 	if _, err := c.Worker(workerName("ns", "pod")); err == nil {
 		t.Fatal("expected error from Worker before Start, got nil")
 	}
+	if _, err := c.WorkersByNode("node-a"); err == nil {
+		t.Fatal("expected error from WorkersByNode before Start, got nil")
+	}
 }
 
 func TestCache_SyncsOnStart(t *testing.T) {
@@ -607,4 +610,48 @@ func TestCache_AddHandler_SeesRelistChanges(t *testing.T) {
 	if diff := cmp.Diff([]int64{1}, h.versions(workerName("ns", "pod3"))); diff != "" {
 		t.Errorf("pod3 versions (-want +got):\n%s", diff)
 	}
+}
+
+func TestCache_WorkersByNode(t *testing.T) {
+	w1 := makeWorker("ns", "pod1", 1)
+	w1.NodeName = "node-a"
+	w2 := makeWorker("ns", "pod2", 1)
+	w2.NodeName = "node-b"
+
+	fs := newFakeStore(w1, w2)
+	c := workercache.New(fs, time.Hour)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	got, err := c.WorkersByNode("node-a")
+	if err != nil || len(got) != 1 || got[0].GetWorkerPod() != "pod1" {
+		t.Fatalf("WorkersByNode(node-a) = %v, %v, want [pod1], nil", got, err)
+	}
+
+	// Move pod1 to node-b via update event.
+	w1Moved := makeWorker("ns", "pod1", 2)
+	w1Moved.NodeName = "node-b"
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: w1Moved})
+	eventually(t, func() bool {
+		b, errB := c.WorkersByNode("node-b")
+		a, errA := c.WorkersByNode("node-a")
+		return errB == nil && errA == nil && len(b) == 2 && len(a) == 0
+	}, 2*time.Second)
+
+	c.Forget(workerName("ns", "pod1"))
+	got, err = c.WorkersByNode("node-b")
+	if err != nil || len(got) != 1 || got[0].GetWorkerPod() != "pod2" {
+		t.Fatalf("WorkersByNode(node-b) after Forget = %v, %v, want [pod2], nil", got, err)
+	}
+
+	// Delete events carry only the worker name.
+	fs.send(store.WorkerEvent{
+		Type:   store.WorkerEventDeleted,
+		Worker: &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: workerName("ns", "pod2")}},
+	})
+	eventually(t, func() bool {
+		b, err := c.WorkersByNode("node-b")
+		return err == nil && len(b) == 0
+	}, 2*time.Second)
 }
