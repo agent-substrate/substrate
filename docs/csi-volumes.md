@@ -201,3 +201,42 @@ volumes:
       capacityBytes: 5368709120 # 5Gi
       storageClassName: csi-nfs-sc
 ```
+
+## 5. Shared Volumes
+
+An `ExternalVolume` is an atespace-scoped record of a CSI volume that already
+exists in the storage system. Its lifetime is independent of any actor, so
+several actors can mount the same storage in turn. Register one by the
+driver's volume ID:
+
+```bash
+kubectl ate create externalvolume imported -a demo --volume-id <csi-volume-id> --volume-type nfs.csi.k8s.io
+```
+
+Each volume records:
+
+- `deleteTrigger`: `MANUAL`, the default, removes the volume only on an
+  explicit delete; `LAST_ACTOR` removes it when the last actor referencing it
+  is deleted. Deleting the volume also deletes the storage.
+- `refs`: every actor referencing the volume, with `active` set while the
+  actor is resumed. At most one reference is active at a time: a resume that
+  would take a held volume fails and names the holder. A referenced volume
+  cannot be deleted.
+
+A template mounts an `ExternalVolume` with `external.ref`. Name the volume
+in the template, or leave the name empty and bind it per actor at creation:
+
+```yaml
+volumes:
+- name: shared
+  external: {ref: {}}
+```
+
+```bash
+kubectl ate create actor producer-42 -a demo --template producer --volume shared=ctx-42
+kubectl ate create actor consumer-42 -a demo --template consumer --volume shared=ctx-42
+```
+
+Bindings are validated and recorded when the actor is created and cannot change
+afterwards. Golden actors never reference a shared volume; they warm up against
+an empty directory at the same mount path.

@@ -213,3 +213,232 @@ func TestDeleteExternalVolume(t *testing.T) {
 	_, err = tc.client.DeleteExternalVolume(context.Background(), &ateapi.DeleteExternalVolumeRequest{ExternalVolume: ref})
 	assertGrpcError(t, err, codes.NotFound, fmt.Sprintf("ExternalVolume %s/shared not found", testAtespace))
 }
+
+// refStates maps each actor referencing volumeName to whether its reference is active.
+func refStates(t *testing.T, tc *testContext, volumeName string) map[string]bool {
+	t.Helper()
+	states := make(map[string]bool)
+	for _, ref := range getExternalVolume(t, tc, volumeName).GetRefs() {
+		states[ref.GetActorName()] = ref.GetActive()
+	}
+	return states
+}
+
+func borrowedMount(t *testing.T, tc *testContext, actorName, volumeName string) *ateapi.ExternalVolumeStatus {
+	t.Helper()
+	actor, err := tc.client.GetActor(context.Background(), &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: actorName},
+	})
+	if err != nil {
+		t.Fatalf("GetActor(%s) failed: %v", actorName, err)
+	}
+	for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
+		if vol.GetName() == volumeName {
+			return vol
+		}
+	}
+	return nil
+}
+
+func createBorrowingActor(t *testing.T, tc *testContext, name string, bindings map[string]string) {
+	t.Helper()
+	if _, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:               &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate:          &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		ExternalVolumeBindings: bindings,
+	}}); err != nil {
+		t.Fatalf("CreateActor(%s) failed: %v", name, err)
+	}
+}
+
+func actorState(t *testing.T, tc *testContext, name string) ateapi.ActorState {
+	t.Helper()
+	actor, err := tc.client.GetActor(context.Background(), &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
+	})
+	if err != nil {
+		t.Fatalf("GetActor(%s) failed: %v", name, err)
+	}
+	return actor.GetStatus().GetState()
+}
+
+func TestExternalVolume_SequentialHandoff(t *testing.T) {
+	ns := namespaceForTest("ns-extvol-handoff")
+	tc, plugin := setupExternalVolumeTest(t, ns)
+	defer tc.cleanup()
+
+	shared := createExternalVolume(t, tc, "handoff", ateapi.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR)
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapi.Volume{{Name: "work", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "handoff"}}}},
+		[]*ateapi.VolumeMount{{Name: "work", MountPath: "/mnt/work"}})
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	ctx := context.Background()
+
+	createBorrowingActor(t, tc, "producer", nil)
+	createBorrowingActor(t, tc, "consumer", nil)
+	if diff := cmp.Diff(map[string]bool{"producer": false, "consumer": false}, refStates(t, tc, "handoff")); diff != "" {
+		t.Errorf("refs after create mismatch (-want +got):\n%s", diff)
+	}
+
+	waitForWorkerAvailable(t, tc, workerName)
+	if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "producer"}}); err != nil {
+		t.Fatalf("ResumeActor(producer) failed: %v", err)
+	}
+	if diff := cmp.Diff(map[string]bool{"producer": true, "consumer": false}, refStates(t, tc, "handoff")); diff != "" {
+		t.Errorf("refs while the producer runs mismatch (-want +got):\n%s", diff)
+	}
+	if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "producer"}}); err != nil {
+		t.Fatalf("SuspendActor(producer) failed: %v", err)
+	}
+	if diff := cmp.Diff(map[string]bool{"producer": false, "consumer": false}, refStates(t, tc, "handoff")); diff != "" {
+		t.Errorf("refs after the producer stops mismatch (-want +got):\n%s", diff)
+	}
+
+	waitForWorkerAvailable(t, tc, workerName)
+	if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "consumer"}}); err != nil {
+		t.Fatalf("ResumeActor(consumer) failed: %v", err)
+	}
+	if diff := cmp.Diff(map[string]bool{"producer": false, "consumer": true}, refStates(t, tc, "handoff")); diff != "" {
+		t.Errorf("refs while the consumer runs mismatch (-want +got):\n%s", diff)
+	}
+	for _, name := range []string{"producer", "consumer"} {
+		if got, want := borrowedMount(t, tc, name, "work").GetStorageVolumeId(), shared.GetVolumeId(); got != want {
+			t.Errorf("actor %s mounted %q, want the shared volume %q", name, got, want)
+		}
+	}
+	deleted, attached, detached := plugin.snapshot()
+	if diff := cmp.Diff([]string{shared.GetVolumeId() + "@node1", shared.GetVolumeId() + "@node1"}, attached); diff != "" {
+		t.Errorf("attached volumes mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{shared.GetVolumeId() + "@node1"}, detached); diff != "" {
+		t.Errorf("detached volumes mismatch (-want +got):\n%s", diff)
+	}
+	if len(deleted) != 0 {
+		t.Errorf("deleted %v, want the volume kept across the handoff", deleted)
+	}
+
+	if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "consumer"}}); err != nil {
+		t.Fatalf("SuspendActor(consumer) failed: %v", err)
+	}
+	for _, name := range []string{"producer", "consumer"} {
+		if _, err := tc.client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name}}); err != nil {
+			t.Fatalf("DeleteActor(%s) failed: %v", name, err)
+		}
+	}
+	_, err := tc.client.GetExternalVolume(ctx, &ateapi.GetExternalVolumeRequest{ExternalVolume: &ateapi.ObjectRef{Atespace: testAtespace, Name: "handoff"}})
+	assertGrpcError(t, err, codes.NotFound, fmt.Sprintf("ExternalVolume %s/handoff not found", testAtespace))
+	if deleted, _, _ := plugin.snapshot(); !cmp.Equal([]string{shared.GetVolumeId()}, deleted) {
+		t.Errorf("deleted volumes = %v, want the LAST_ACTOR trigger to delete %q", deleted, shared.GetVolumeId())
+	}
+}
+
+func TestExternalVolume_HeldByAnotherActor(t *testing.T) {
+	ns := namespaceForTest("ns-extvol-held")
+	tc, plugin := setupExternalVolumeTest(t, ns)
+	defer tc.cleanup()
+
+	shared := createExternalVolume(t, tc, "held", ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL)
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapi.Volume{{Name: "work", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "held"}}}},
+		[]*ateapi.VolumeMount{{Name: "work", MountPath: "/mnt/work"}})
+	firstWorker := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	ctx := context.Background()
+
+	createBorrowingActor(t, tc, "producer", nil)
+	createBorrowingActor(t, tc, "consumer", nil)
+	waitForWorkerAvailable(t, tc, firstWorker)
+	if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "producer"}}); err != nil {
+		t.Fatalf("ResumeActor(producer) failed: %v", err)
+	}
+
+	secondWorker := createWorkerPod(t, tc, ns, "worker-2", "node1", "pool1")
+	waitForWorkerAvailable(t, tc, secondWorker)
+	_, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "consumer"}})
+	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, `ExternalVolume .*held is already held by actor "producer"`)
+	if diff := cmp.Diff(map[string]bool{"producer": true, "consumer": false}, refStates(t, tc, "held")); diff != "" {
+		t.Errorf("refs after the refused resume mismatch (-want +got):\n%s", diff)
+	}
+	if got := actorState(t, tc, "consumer"); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("consumer is in %v, want it left SUSPENDED", got)
+	}
+	if _, attached, _ := plugin.snapshot(); !cmp.Equal([]string{shared.GetVolumeId() + "@node1"}, attached) {
+		t.Errorf("attached volumes = %v, want only the producer's attach", attached)
+	}
+
+	if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor:   &ateapi.ObjectRef{Atespace: testAtespace, Name: "producer"},
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	}); err != nil {
+		t.Fatalf("SuspendActor(producer) failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "consumer"}}); err != nil {
+		t.Fatalf("ResumeActor(consumer) after the handoff failed: %v", err)
+	}
+	if diff := cmp.Diff(map[string]bool{"producer": false, "consumer": true}, refStates(t, tc, "held")); diff != "" {
+		t.Errorf("refs after the handoff mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDeleteExternalVolume_Referenced(t *testing.T) {
+	ns := namespaceForTest("ns-extvol-referenced")
+	tc, plugin := setupExternalVolumeTest(t, ns)
+	defer tc.cleanup()
+
+	createExternalVolume(t, tc, "shared", ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL)
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapi.Volume{{Name: "work", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "shared"}}}},
+		[]*ateapi.VolumeMount{{Name: "work", MountPath: "/mnt/work"}})
+	ctx := context.Background()
+	ref := &ateapi.ObjectRef{Atespace: testAtespace, Name: "shared"}
+
+	createBorrowingActor(t, tc, "borrower", nil)
+	_, err := tc.client.DeleteExternalVolume(ctx, &ateapi.DeleteExternalVolumeRequest{ExternalVolume: ref})
+	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, `ExternalVolume .*shared is still referenced by 1 actor\(s\), starting with "borrower"`)
+
+	if _, err := tc.client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "borrower"}}); err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	if got := refStates(t, tc, "shared"); len(got) != 0 {
+		t.Errorf("refs after the actor is deleted = %v, want none", got)
+	}
+	if deleted, _, _ := plugin.snapshot(); len(deleted) != 0 {
+		t.Errorf("deleted %v, want a MANUAL volume left in place", deleted)
+	}
+	if _, err := tc.client.DeleteExternalVolume(ctx, &ateapi.DeleteExternalVolumeRequest{ExternalVolume: ref}); err != nil {
+		t.Fatalf("DeleteExternalVolume failed: %v", err)
+	}
+}
+
+func TestCreateActor_ExternalVolumeBindings(t *testing.T) {
+	ns := namespaceForTest("ns-extvol-bindings")
+	tc, _ := setupExternalVolumeTest(t, ns)
+	defer tc.cleanup()
+
+	shared := createExternalVolume(t, tc, "ctx-42", ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL)
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapi.Volume{{Name: "work", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{}}}},
+		[]*ateapi.VolumeMount{{Name: "work", MountPath: "/mnt/work"}})
+	ctx := context.Background()
+	create := func(name string, bindings map[string]string) error {
+		_, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+			Metadata:               &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name},
+			ActorTemplate:          &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			ExternalVolumeBindings: bindings,
+		}})
+		return err
+	}
+
+	assertGrpcErrorRegex(t, create("unbound", nil), codes.InvalidArgument, `external_volume_bindings must bind volume "work"`)
+	assertGrpcErrorRegex(t, create("stray", map[string]string{"work": "ctx-42", "other": "ctx-42"}), codes.InvalidArgument, `external_volume_bindings\["other"\]`)
+	assertGrpcErrorRegex(t, create("missing", map[string]string{"work": "ctx-41"}), codes.FailedPrecondition, fmt.Sprintf("ExternalVolume %s/ctx-41 not found", testAtespace))
+
+	if err := create("bound", map[string]string{"work": "ctx-42"}); err != nil {
+		t.Fatalf("CreateActor(bound) failed: %v", err)
+	}
+	if got, want := borrowedMount(t, tc, "bound", "work").GetStorageVolumeId(), shared.GetVolumeId(); got != want {
+		t.Errorf("bound actor mounts %q, want %q", got, want)
+	}
+	if diff := cmp.Diff(map[string]bool{"bound": false}, refStates(t, tc, "ctx-42")); diff != "" {
+		t.Errorf("refs mismatch (-want +got):\n%s", diff)
+	}
+}

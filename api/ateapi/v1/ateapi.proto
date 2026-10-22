@@ -569,6 +569,15 @@ message ExternalVolumeStatus {
   // +k8s:optional
   // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
   map<string, string> volume_context = 4;
+
+  // external_volume_name names the ExternalVolume this mount references, in the
+  // actor's atespace. Empty when the actor owns the volume itself.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  string external_volume_name = 5;
 }
 
 message Actor {
@@ -612,6 +621,17 @@ message Actor {
   //
   // +k8s:optional
   ActorStatus status = 5;
+
+  // external_volume_bindings maps each unnamed external.ref in the
+  // template, by volume name, to the ExternalVolume this actor mounts. Every
+  // unnamed ref must be bound; a named ref cannot be rebound. Set at creation.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:format=k8s-short-name
+  // +k8s:eachVal=+k8s:format=k8s-short-name
+  // +k8s:immutable
+  map<string, string> external_volume_bindings = 6;
 }
 
 // EgressPolicy is an egress policy resource nested under an Actor. An Actor has
@@ -1642,6 +1662,12 @@ message ExternalVolumeSource {
   // +k8s:optional
   // +k8s:unionMember
   ExternalVolumeTemplate template = 1;
+
+  // ref mounts an ExternalVolume that already exists.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  ExternalVolumeRef ref = 2;
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The
@@ -1676,6 +1702,17 @@ message ExternalVolumeTemplate {
   // +k8s:required
   // +k8s:format=k8s-long-name
   string storage_class_name = 2;
+}
+
+// ExternalVolumeRef mounts an ExternalVolume in the actor's atespace. The
+// volume outlives the actor, so several actors can mount it in turn.
+message ExternalVolumeRef {
+  // name of the ExternalVolume. Left empty, the actor names it at creation in
+  // Actor.external_volume_bindings.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  string name = 1;
 }
 
 // SystemInfoVolumeSource is a read-only volume of substrate-generated

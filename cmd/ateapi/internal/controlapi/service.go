@@ -106,10 +106,10 @@ func NewRPCService(
 		actorIDJWTPool:        actorIDJWTPool,
 		actorIDCAPool:         actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
+	s.externalVolumeWorkflow = NewExternalVolumeWorkflow(impl, s)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin, s.externalVolumeWorkflow)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
 	s.workerWorkflow = NewWorkerWorkflow(impl, dialer)
-	s.externalVolumeWorkflow = NewExternalVolumeWorkflow(impl, s)
 	return s
 }
 
