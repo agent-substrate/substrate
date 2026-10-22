@@ -30,6 +30,7 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // defaultWorkerReclaimTimeout bounds each Terminate a worker delete sends to
@@ -233,18 +234,18 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 	// crash keeps the actor's assigned node, so if this best-effort reclaim is
 	// skipped or fails, deleting or reverting the actor reclaims the state
 	// there later.
-	w.reclaimActorStateOnNode(ctx, worker, actor)
+	state := w.reclaimActorStateOnNode(ctx, worker, actor)
 
-	return w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a worker whose pod is gone", crashMessageWorkerPodGone)
+	return w.crashBoundActor(ctx, worker, actorRef, actor, state, "Releasing actor from a worker whose pod is gone", crashMessageWorkerPodGone)
 }
 
 // crashBoundActor moves an Actor that lost its sandbox on the Worker to
 // ACTOR_STATE_CRASHED and clears its pointers at the Worker. crashMsg is
-// recorded in the Actor's status. An Actor in ACTOR_STATE_DELETING is left
-// untouched. The Actor's assignment row in the worker is left for the caller to
-// release.
+// recorded in the Actor's status, along with the upload Terminate reported in
+// state, if any. An Actor in ACTOR_STATE_DELETING is left untouched. The
+// Actor's assignment row in the worker is left for the caller to release.
 // A concurrent write to the Actor fails this as ABORTED.
-func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.Worker, actorRef resources.ActorRef, actor *ateapipb.Actor, logMsg, crashMsg string) error {
+func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.Worker, actorRef resources.ActorRef, actor *ateapipb.Actor, state *ateletpb.ActorSnapshotState, logMsg, crashMsg string) error {
 	// DELETING is final. A CRASHED actor can be reverted and resumed, and the
 	// delete may already have collected its volumes and snapshots. The delete's
 	// retry clears the actor's pointers.
@@ -266,6 +267,13 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 
+	// atelet forgot the actor as it terminated it, so the crash records the
+	// upload Terminate reported.
+	applied := proto.CloneOf(actor.GetStatus())
+	if err := applyTerminatedUpload(ctx, actorRef, applied, state); err != nil {
+		return err
+	}
+
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
 	sandboxClass := actor.GetStatus().GetWorkerAssignment().GetSandboxRuntime().GetSandboxClass()
 	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName)
@@ -279,6 +287,8 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 			toUpdate.Status.Crash = newActorCrash(opName, crashMsg)
 		}
 		toUpdate.Status.WorkerAssignment = nil
+		// The precondition makes toUpdate the version applied was built from.
+		toUpdate.Status.Snapshots = applied.GetSnapshots()
 		return nil
 	})
 	switch {
@@ -309,17 +319,18 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 //
 // This call is best-effort so an unreachable node cannot wedge worker
 // deregistration. If it fails, the actor's revert or delete reclaims the state
-// on its assigned node. Each Terminate gets w.reclaimTimeout so a hung unmount,
+// on its assigned node. It returns the actor's state as Terminate returned it,
+// or nil if Terminate was skipped or failed. Each Terminate gets w.reclaimTimeout so a hung unmount,
 // such as against a dead NFS server, cannot run out the delete's own deadline
 // and fail the release after it.
-func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *ateapipb.Worker, actor *ateapipb.Actor) {
+func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *ateapipb.Worker, actor *ateapipb.Actor) *ateletpb.ActorSnapshotState {
 	ctx, done := stepSpan(ctx, "ReclaimActorStateOnNode")
 	defer func() { _ = done(nil) }()
 
 	nodeName := worker.GetNodeName()
 	if w.nodeGaveUp(nodeName) {
 		markSkipped(ctx, "an earlier reclaim on the node timed out or could not reach atelet")
-		return
+		return nil
 	}
 
 	actorRef := resources.ActorRefFromActor(actor)
@@ -337,7 +348,7 @@ func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *at
 		w.giveUpOnNode(nodeName)
 		slog.WarnContext(ctx, "Could not reach the atelet holding a released actor's state; leaving it, and other actors' state on the node, for their revert or delete",
 			append(logAttrs, slog.Any("err", err))...)
-		return
+		return nil
 	}
 
 	slog.InfoContext(ctx, "Reclaiming the node state of an actor released from a worker whose pod is gone", logAttrs...)
@@ -345,7 +356,7 @@ func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *at
 	// outlive it. The fallback spec carries the external volumes to unmount.
 	callCtx, cancel := context.WithTimeout(ctx, w.reclaimTimeout)
 	defer cancel()
-	_, err = ateletpb.NewAteletClient(conn).Terminate(callCtx, &ateletpb.TerminateRequest{
+	resp, err := ateletpb.NewAteletClient(conn).Terminate(callCtx, &ateletpb.TerminateRequest{
 		WorkerPodUid:          worker.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
@@ -356,6 +367,7 @@ func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *at
 	})
 	switch status.Code(err) {
 	case codes.OK:
+		return resp.GetState()
 	case codes.NotFound:
 		slog.InfoContext(ctx, "Actor already terminated on its node", logAttrs...)
 	case codes.DeadlineExceeded, codes.Unavailable:
@@ -366,6 +378,7 @@ func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *at
 		slog.WarnContext(ctx, "Failed to reclaim a released actor's node state; leaving it for the actor's revert or delete",
 			append(logAttrs, slog.Any("err", err))...)
 	}
+	return nil
 }
 
 // finalizeDeleted removes the worker from the store and returns the deleted

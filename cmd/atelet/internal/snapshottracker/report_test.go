@@ -1213,7 +1213,7 @@ func TestTrackerForgetDuringReport(t *testing.T) {
 	waitReported(t, reporter)
 
 	returnsPromptly(t, "Forget during a report", func() {
-		if err := tr.Forget(trackedActorUID); err != nil {
+		if _, err := tr.Forget(trackedActorUID); err != nil {
 			t.Errorf("Forget: %v", err)
 		}
 	})
@@ -1223,8 +1223,8 @@ func TestTrackerForgetDuringReport(t *testing.T) {
 		t.Errorf("reported %v after Forget, want nothing", r.state)
 	case <-time.After(50 * time.Millisecond):
 	}
-	if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(trackedActorUID)); !os.IsNotExist(err) {
-		t.Errorf("state file once the report ended: stat = %v, want none", err)
+	if got := newTracker(t).State(trackedActorUID); uuidOf(got.GetLatestDurable()) != "s1" || got.GetLatestLocal() != nil {
+		t.Errorf("state file once the report ended = %v, want only s1 durable", got)
 	}
 }
 

@@ -437,8 +437,13 @@ func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
 		// seed further shapes the stored actor.
 		seed func(*ateapipb.Actor)
 		// terminateErr is what the atelet answers, if anything.
-		terminateErr  error
-		wantTerminate bool
+		terminateErr error
+		// terminateState is the snapshot state a successful Terminate returns.
+		terminateState *ateletpb.ActorSnapshotState
+		wantTerminate  bool
+		// wantDurable is the durable status of the actor's snapshot after the
+		// crash, if it has one.
+		wantDurable ateapipb.SnapshotStorageStatus
 	}{
 		{
 			name:          "running actor is reclaimed",
@@ -453,6 +458,23 @@ func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
 			state:         ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			seed:          withPausedShape(t, "node-1"),
 			wantTerminate: true,
+			wantDurable:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+		},
+		{
+			// atelet forgets the actor as it terminates it, so the crash
+			// records the upload Terminate reports, or a revert would delete
+			// it as in progress.
+			name:  "upload terminate reports is recorded",
+			state: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			seed:  withPausedShape(t, "node-1"),
+			terminateState: &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
+				SnapshotUuid: "pause-snap",
+				Generation:   1,
+				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				Object:       &ateletpb.ObjectStorage{SnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "pause-snap")},
+			}}},
+			wantTerminate: true,
+			wantDurable:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
 		},
 		{
 			// A cleanly suspended actor already ran Checkpoint's teardown,
@@ -478,7 +500,7 @@ func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
 			persistence, cleanup := storetest.SetupTestStore(t)
 			t.Cleanup(cleanup)
 
-			atelet := &capturingTerminator{err: tt.terminateErr}
+			atelet := &capturingTerminator{err: tt.terminateErr, state: tt.terminateState}
 			wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
 
 			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
@@ -514,6 +536,18 @@ func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
 			}
 			if want := validWorker(apiWorkerName).GetWorkerPodUid(); req.GetWorkerPodUid() != want {
 				t.Errorf("Terminate worker_pod_uid = %q, want the worker's pod uid %q", req.GetWorkerPodUid(), want)
+			}
+
+			crashed, err := persistence.GetActor(ctx, apiActorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			var gotDurable ateapipb.SnapshotStorageStatus
+			if snaps := crashed.GetStatus().GetSnapshots(); len(snaps) > 0 {
+				gotDurable = snaps[0].GetDurableSnapshot().GetStatus()
+			}
+			if gotDurable != tt.wantDurable {
+				t.Errorf("snapshot durable status = %v, want %v", gotDurable, tt.wantDurable)
 			}
 		})
 	}
@@ -725,21 +759,22 @@ func TestDeleteWorkerWorkflow_HungReclaimDoesNotWedgeDelete(t *testing.T) {
 }
 
 // capturingTerminator is an atelet that records the Terminate calls it is sent
-// and answers them with err, or, with hang set, blocks until the caller gives
-// up, like an atelet stuck in an unmount.
+// and answers them with err, or with state if err is nil. With hang set, it
+// blocks until the caller gives up, like an atelet stuck in an unmount.
 type capturingTerminator struct {
 	ateletpb.UnimplementedAteletServer
 
-	mu   sync.Mutex
-	err  error
-	hang bool
-	reqs []*ateletpb.TerminateRequest
+	mu    sync.Mutex
+	err   error
+	state *ateletpb.ActorSnapshotState
+	hang  bool
+	reqs  []*ateletpb.TerminateRequest
 }
 
 func (f *capturingTerminator) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
 	f.mu.Lock()
 	f.reqs = append(f.reqs, proto.Clone(req).(*ateletpb.TerminateRequest))
-	hang, err := f.hang, f.err
+	hang, err, state := f.hang, f.err, proto.CloneOf(f.state)
 	f.mu.Unlock()
 	if hang {
 		<-ctx.Done()
@@ -748,7 +783,7 @@ func (f *capturingTerminator) Terminate(ctx context.Context, req *ateletpb.Termi
 	if err != nil {
 		return nil, err
 	}
-	return &ateletpb.TerminateResponse{}, nil
+	return &ateletpb.TerminateResponse{State: state}, nil
 }
 
 func (f *capturingTerminator) requests() []*ateletpb.TerminateRequest {

@@ -480,7 +480,9 @@ service Atelet {
   rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
-  // unmount its volumes, and clean up actor state on the node.
+  // unmount its volumes, and clean up actor state on the node. It returns the
+  // actor's state as atelet forgets it, so the caller can record an upload
+  // atelet has not reported yet.
   rpc Terminate(TerminateRequest) returns (TerminateResponse) {}
 }
 
@@ -522,6 +524,11 @@ message TerminateRequest {
 }
 
 message TerminateResponse {
+  // The actor's state as atelet forgets it: latest_local and uploading are
+  // unset, and latest_durable is its latest snapshot atelet knew was durable,
+  // if any. Terminate cancels an upload in progress, so that upload's snapshot
+  // is latest_durable only if the upload finished first.
+  ActorSnapshotState state = 1;
 }
 
 message RunRequest {

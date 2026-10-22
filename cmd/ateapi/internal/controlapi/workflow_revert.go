@@ -26,16 +26,18 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/protobuf/proto"
 )
 
 // revertableStates are the states a revert is accepted from. A SUSPENDED
 // actor is also accepted when its latest snapshot is node-local: the revert
 // discards the node-local copy and returns the actor to its latest durable
-// snapshot, which is that same snapshot once atelet's upload of it is
-// recorded. See isRevertable.
+// snapshot, which is that same snapshot once atelet has uploaded it. See
+// isRevertable.
 var revertableStates = []ateapipb.ActorState{
 	ateapipb.ActorState_ACTOR_STATE_RUNNING,
 	ateapipb.ActorState_ACTOR_STATE_CRASHED,
@@ -91,9 +93,11 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 	}
 	actor = marked
 
-	if err = w.ensureWorkerDiscarded(leaseCtx, actorRef, actor, actorTemplate); err != nil {
+	var discarded *ateapipb.Actor
+	if discarded, err = w.ensureWorkerDiscarded(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, err
 	}
+	actor = discarded
 
 	if err = w.ensureInProgressSnapshotDiscarded(leaseCtx, actor); err != nil {
 		return nil, err
@@ -181,34 +185,75 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 // worker. An assignment commits before the actor is updated to point at it, so
 // a crash in between leaves a row nothing references — and a CRASHED actor is
 // the likeliest holder of one. Absence is the ordinary case, not an error.
-func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
+//
+// It returns the actor as stored after the upload Terminate reports is
+// recorded.
+func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "DiscardWorker")
 	defer func() { err = done(err) }()
 
 	if actor.GetStatus().GetAssignedNode() != "" {
-		forgetNode := false
-		if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
-			if !canDetachWithoutAtelet(ctx, actor, err) {
-				return err
-			}
-			forgetNode = true
+		state, err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert)
+		// The revert can go on without an unreachable atelet when nothing runs
+		// on the node and its latest local snapshot is already uploaded.
+		// FinalizeReverted drops the node binding, and the actor resumes from
+		// the uploaded copy.
+		if err != nil && !canDetachWithoutAtelet(ctx, actor, err) {
+			return nil, err
+		}
+		if actor, err = w.recordTerminatedUpload(ctx, actorRef, actor, state); err != nil {
+			return nil, err
 		}
 		if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
-			return err
-		}
-		if forgetNode {
-			if _, err := w.recordDetach(ctx, actorRef, actor, actor.GetStatus().GetAssignedNode(), nil); err != nil {
-				return err
-			}
+			return nil, err
 		}
 		if actor.GetStatus().GetWorkerAssignment() != nil {
 			if _, err := releaseWorker(ctx, w.store, actor); err != nil {
-				return fmt.Errorf("while releasing worker: %w", err)
+				return nil, fmt.Errorf("while releasing worker: %w", err)
 			}
 		}
 	}
 
-	return w.releaseAssignmentWithoutBacklink(ctx, actor)
+	return actor, w.releaseAssignmentWithoutBacklink(ctx, actor)
+}
+
+// recordTerminatedUpload records the upload that Terminate reported in state,
+// as applyTerminatedUpload does. atelet may upload a snapshot without its
+// report landing, so without this the revert would delete the upload as in
+// progress. It writes at once because atelet forgot the actor, so a retried
+// Terminate returns nothing.
+func (w *ActorWorkflow) recordTerminatedUpload(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, state *ateletpb.ActorSnapshotState) (*ateapipb.Actor, error) {
+	node := actor.GetStatus().GetAssignedNode()
+	applied := proto.CloneOf(actor.GetStatus())
+	if err := applyTerminatedUpload(ctx, actorRef, applied, state); err != nil {
+		return nil, err
+	}
+	if proto.Equal(applied, actor.GetStatus()) {
+		return actor, nil
+	}
+	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		// The precondition makes toUpdate the version applied was built from.
+		toUpdate.Status.Snapshots = applied.GetSnapshots()
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		}
+		return nil, fmt.Errorf("while recording the upload atelet on node %q reported for Actor %s: %w", node, actorRef, err)
+	}
+	return stored, nil
+}
+
+// applyTerminatedUpload records in status the upload that the atelet on the
+// actor's assigned node reported durable in state as it terminated the actor,
+// as applyUploadOnNode does.
+func applyTerminatedUpload(ctx context.Context, actorRef resources.ActorRef, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState) error {
+	node := status.GetAssignedNode()
+	if err := applyUploadOnNode(ctx, actorRef, status, node, snapshotReportFromAtelet(state.GetLatestDurable())); err != nil {
+		return apierror.Internal("atelet on node %q reported a durable snapshot for Actor %s that conflicts with its record: %w", node, actorRef, err)
+	}
+	return nil
 }
 
 // ensureInProgressSnapshotDiscarded removes pending uploads of the discarded execution.

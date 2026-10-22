@@ -1143,7 +1143,11 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 		Containers: []*ateletpb.Container{{Name: "app", Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 	}
 
-	if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+	// atelet uploaded the snapshot, and the control plane has not recorded it.
+	uploaded := lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+	s.snapshots.CommitDurable(actorUID, snapshottracker.SnapshotRef{Snapshot: uploaded})
+
+	resp, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -1151,10 +1155,14 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          "",
 		Spec:                  spec,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Terminate: %v", err)
 	}
 
+	if got := resp.GetState().GetLatestDurable().GetSnapshot(); !proto.Equal(got, uploaded) {
+		t.Errorf("TerminateResponse.state.latest_durable = %v, want the uploaded snapshot %v", got, uploaded)
+	}
 	if got := worker.actorDirs["TerminateWorkload"]; got != nil {
 		t.Errorf("TerminateWorkload was called on worker (%v), want skipped when WorkerPodUid is empty", got)
 	}
@@ -1290,7 +1298,8 @@ func TestTerminateReclaimsStateWithoutALiveSandbox(t *testing.T) {
 
 // TestTerminateCanBeRetried pins that a repeated Terminate succeeds, both when
 // a single caller retries and when DeleteActor or RevertActor sends a second
-// Terminate after DeleteWorker's best-effort Terminate.
+// Terminate after DeleteWorker's best-effort Terminate. A retry after a failed
+// Terminate still returns the actor's latest durable snapshot.
 func TestTerminateCanBeRetried(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -1316,7 +1325,8 @@ func TestTerminateCanBeRetried(t *testing.T) {
 			ctx := t.Context()
 
 			snap := a.snapshot("pause-snap-1", 1)
-			if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+			checkpointResp, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+			if err != nil {
 				t.Fatalf("Checkpoint: %v", err)
 			}
 
@@ -1341,7 +1351,7 @@ func TestTerminateCanBeRetried(t *testing.T) {
 				WorkerPodUid:          pluginWorkerPodUID,
 				Spec:                  a.spec,
 			}
-			_, err := a.s.Terminate(ctx, firstReq)
+			_, err = a.s.Terminate(ctx, firstReq)
 			if tt.failFirst {
 				if err == nil {
 					t.Fatal("first Terminate succeeded through a populated volume directory")
@@ -1358,8 +1368,16 @@ func TestTerminateCanBeRetried(t *testing.T) {
 			if tt.secondWithoutWorker {
 				secondReq.WorkerPodUid = ""
 			}
-			if _, err := a.s.Terminate(ctx, secondReq); err != nil {
+			resp, err := a.s.Terminate(ctx, secondReq)
+			if err != nil {
 				t.Fatalf("second Terminate: %v", err)
+			}
+			var wantDurable *ateletpb.SnapshotReport
+			if tt.failFirst {
+				wantDurable = checkpointResp.GetState().GetLatestDurable()
+			}
+			if got := resp.GetState().GetLatestDurable(); !proto.Equal(got, wantDurable) {
+				t.Errorf("second Terminate returned latest_durable %v, want %v", got, wantDurable)
 			}
 			if got := a.worker.terminations.Load(); got != tt.wantTeardowns {
 				t.Errorf("worker saw %d TerminateWorkload calls, want %d", got, tt.wantTeardowns)

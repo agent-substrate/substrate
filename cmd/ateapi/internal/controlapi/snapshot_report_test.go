@@ -468,7 +468,7 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 			assertUnwritten(t)
 		})
 	}
-	// A transitioning actor gets Aborted, and a crashed one FailedPrecondition.
+	// A transitioning actor gets Aborted.
 	for _, tc := range []struct {
 		state ateapipb.ActorState
 		want  codes.Code
@@ -477,7 +477,6 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 		{ateapipb.ActorState_ACTOR_STATE_RESUMING, codes.Aborted},
 		{ateapipb.ActorState_ACTOR_STATE_DELETING, codes.Aborted},
 		{ateapipb.ActorState_ACTOR_STATE_REVERTING, codes.Aborted},
-		{ateapipb.ActorState_ACTOR_STATE_CRASHED, codes.FailedPrecondition},
 	} {
 		t.Run("refused for a "+tc.state.String()+" actor", func(t *testing.T) {
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) { s.State = tc.state })
@@ -517,6 +516,73 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 		t.Fatalf("repeated ApplyReportedSnapshotState() failed: %v", err)
 	}
 	assertUnwritten(t)
+}
+
+// A report for a CRASHED actor records only the upload, and only of a snapshot
+// the record places on the reporting node. atelet forgets the actor when a
+// revert or delete terminates it, so the report is the upload's last chance
+// to be recorded before the revert deletes it as in progress.
+func TestApplyReportedSnapshotState_Crashed(t *testing.T) {
+	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	for _, tc := range []struct {
+		name string
+		// locality is the snapshot's node. A suspend that crashed before it
+		// committed leaves its snapshot on no node.
+		locality string
+		// detach sends the report atelet sends once it detached the actor:
+		// no local snapshot and no upload in progress.
+		detach      bool
+		wantDurable ateapipb.SnapshotStorageStatus
+	}{
+		{name: "records the upload", locality: reportNode, wantDurable: completed},
+		{name: "does not apply a detach", locality: reportNode, detach: true, wantDurable: completed},
+		{name: "leaves a crashed suspend's upload pending", wantDurable: pending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, nil)
+			actorRef := resources.ActorRef{Atespace: reportAtespace, Name: "actor-1"}
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: reportAtespace, Name: "tmpl"},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+			})
+			uid := actor.GetMetadata().GetUid()
+			uri := ownedURI(t, uid, 2)
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				s.AssignedNode = reportNode
+				s.LastAssignedGeneration = 2
+				snap := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", snapName(2), uri, pending)
+				snap.Locality = tc.locality
+				s.Snapshots = []*ateapipb.Snapshot{snap}
+			})
+			uploaded := reportedAt(t, 2, uri)
+			state := &ateapipb.ActorSnapshotState{LatestLocal: uploaded, LatestDurable: uploaded}
+			if tc.detach {
+				state.LatestLocal = nil
+			}
+
+			if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, state); err != nil {
+				t.Fatalf("ApplyReportedSnapshotState() failed: %v", err)
+			}
+			got, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatal(err)
+			}
+			snap := got.GetStatus().GetSnapshots()[0]
+			if st := snap.GetDurableSnapshot().GetStatus(); st != tc.wantDurable {
+				t.Errorf("durable snapshot status = %v, want %v", st, tc.wantDurable)
+			}
+			if snap.GetLocality() != tc.locality || got.GetStatus().GetAssignedNode() != reportNode {
+				t.Errorf("snapshot locality %q, assigned node %q, want %q and %q", snap.GetLocality(), got.GetStatus().GetAssignedNode(), tc.locality, reportNode)
+			}
+			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+			}
+		})
+	}
 }
 
 func TestActorOnNode(t *testing.T) {

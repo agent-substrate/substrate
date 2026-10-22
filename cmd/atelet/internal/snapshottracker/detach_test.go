@@ -769,7 +769,8 @@ func TestTrackerForgetCancelsDetach(t *testing.T) {
 
 	forgetDone := make(chan error, 1)
 	go func() {
-		forgetDone <- tr.Forget(trackedActorUID)
+		_, err := tr.Forget(trackedActorUID)
+		forgetDone <- err
 	}()
 	if got := waitCanceled(t, store); got != "s1" {
 		t.Fatalf("canceled detach upload = %q, want s1", got)

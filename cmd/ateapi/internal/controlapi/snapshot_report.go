@@ -37,9 +37,9 @@ func (s *RPCService) ApplyActorSnapshotState(ctx context.Context, actorRef resou
 }
 
 // ApplyReportedSnapshotState applies a report from the atelet on node to the
-// Actor. It holds the Actor's lease and applies reports only to a SUSPENDED or
-// RUNNING Actor, so a report never interleaves with a workflow. A report that
-// changes nothing writes nothing.
+// Actor. It holds the Actor's lease and applies reports only to a SUSPENDED,
+// RUNNING, or CRASHED Actor, so a report never interleaves with a workflow. A
+// report that changes nothing writes nothing.
 func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error {
 	ctx = preview.ContextWithOptIn(ctx)
 	// Check before taking the lease, so an atelet can't hold the lease of an
@@ -57,22 +57,25 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 		return err
 	}
 
+	applied := proto.Clone(before).(*ateapipb.Actor)
 	// A workflow owns a transitioning Actor's snapshots, even after its lease
-	// lapses. A crashed Actor's snapshots wait for a revert.
+	// lapses.
 	switch st := before.GetStatus().GetState(); st {
 	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_RUNNING:
+		if err := applyActorSnapshotState(leaseCtx, applied.GetStatus(), node, state); err != nil {
+			return err
+		}
 	case ateapipb.ActorState_ACTOR_STATE_CRASHED:
-		return apierror.FailedPrecondition("actor %s is %s; revert it first", actorRef, st)
+		// An Actor whose later generation crashed may have another async
+		// upload that uploaded its snapshot.
+		if err := applyUploadOnNode(leaseCtx, actorRef, applied.GetStatus(), node, state.GetLatestDurable()); err != nil {
+			return err
+		}
 	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING, ateapipb.ActorState_ACTOR_STATE_RESUMING,
 		ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
 		return apierror.Aborted("actor %s is %s; retry once that finishes", actorRef, st)
 	default:
 		return apierror.Internal("actor %s has unexpected state %s", actorRef, st)
-	}
-
-	applied := proto.Clone(before).(*ateapipb.Actor)
-	if err := applyActorSnapshotState(leaseCtx, applied.GetStatus(), node, state); err != nil {
-		return err
 	}
 	if proto.Equal(applied.GetStatus(), before.GetStatus()) {
 		return nil
@@ -160,6 +163,28 @@ func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, 
 // detach. The workflow that made the call records where its snapshot lives.
 func applyAteletResponseState(ctx context.Context, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState) error {
 	return applyLatestDurable(ctx, status, snapshotReportFromAtelet(state.GetLatestDurable()))
+}
+
+// applyUploadOnNode marks the reported durable snapshot COMPLETED, as
+// applyLatestDurable does, if the record places that snapshot on node. Only a
+// finalized suspend places a snapshot on a node, so any other snapshot, such
+// as one a crashed suspend created, stays PENDING and a revert deletes it with
+// the rest of the discarded execution.
+func applyUploadOnNode(ctx context.Context, actorRef resources.ActorRef, status *ateapipb.ActorStatus, node string, reported *ateapipb.SnapshotReport) error {
+	if reported == nil {
+		return nil
+	}
+	snap := findSnapshotByGeneration(status.GetSnapshots(), reported.GetGeneration())
+	if got := snap.GetLocality(); got != node {
+		slog.InfoContext(ctx, "Discarding an upload reported for a snapshot not on its node",
+			slog.Any("actor", actorRef),
+			slog.String("node", node),
+			slog.String("snapshot_locality", got),
+			slog.Int("generation", int(reported.GetGeneration())),
+			slog.String("uuid", reported.GetUuid()))
+		return nil
+	}
+	return applyLatestDurable(ctx, status, reported)
 }
 
 // applyLatestDurable marks the reported durable snapshot COMPLETED, and records

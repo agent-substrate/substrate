@@ -474,14 +474,24 @@ func TestTrackerState(t *testing.T) {
 		t.Errorf("State() on a fresh tracker = %v, want %v from the state file", got, st)
 	}
 
-	if err := tr.Forget(trackedActorUID); err != nil {
+	forgotten, err := tr.Forget(trackedActorUID)
+	if err != nil {
 		t.Fatalf("forget: %v", err)
 	}
-	if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(trackedActorUID)); !os.IsNotExist(err) {
-		t.Errorf("state file after forget: stat = %v, want it deleted", err)
+	want := &ateletpb.ActorSnapshotState{LatestDurable: st.GetLatestDurable()}
+	if !proto.Equal(forgotten, want) {
+		t.Errorf("Forget returned %v, want %v: s2 durable and nothing local", forgotten, want)
 	}
-	if got := tr.State(trackedActorUID); !proto.Equal(got, &ateletpb.ActorSnapshotState{}) {
-		t.Errorf("state after forget = %v, want empty", got)
+	// Terminate deletes the state file after the actor's other files, so a
+	// Terminate retried after a failed cleanup forgets s2 again.
+	if got := newTracker(t).State(trackedActorUID); !proto.Equal(got, want) {
+		t.Errorf("State() on a fresh tracker after forget = %v, want %v from the state file", got, want)
+	}
+	if forgotten, err = tr.Forget(trackedActorUID); err != nil {
+		t.Fatalf("second forget: %v", err)
+	}
+	if !proto.Equal(forgotten, want) {
+		t.Errorf("second Forget returned %v, want %v", forgotten, want)
 	}
 }
 

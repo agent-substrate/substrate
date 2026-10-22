@@ -2005,8 +2005,9 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	// up the copies on any other NodeVmsWithLocalSnapshots. This is fine *as of
 	// the day this was written* because today NodeVmsWithLocalSnapshots has at
 	// most one item.
-	if err := s.snapshots.Forget(actorUID); err != nil {
-		return nil, fmt.Errorf("failed to delete snapshot state during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	state, err := s.snapshots.Forget(actorUID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to forget snapshot state during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 	if err := snapshottracker.PruneLocalCheckpoints(ctx, actorUID); err != nil {
 		return nil, fmt.Errorf("failed to prune local checkpoints during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
@@ -2018,7 +2019,7 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	}
 	s.restoreFailures.reset(actorUID)
 
-	return &ateletpb.TerminateResponse{}, nil
+	return &ateletpb.TerminateResponse{State: state}, nil
 }
 
 // terminateWorkloadOnWorker tears the workload down on the worker hosting it.
