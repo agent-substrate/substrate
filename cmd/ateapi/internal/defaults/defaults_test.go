@@ -65,6 +65,14 @@ func TestApply(t *testing.T) {
 			GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		}},
 	}, {
+		name: "external volume without a delete trigger gets manual",
+		in:   &ateapi.ExternalVolume{},
+		want: &ateapi.ExternalVolume{DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL},
+	}, {
+		name: "external volume keeps its delete trigger",
+		in:   &ateapi.ExternalVolume{DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR},
+		want: &ateapi.ExternalVolume{DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR},
+	}, {
 		name: "container without wakeup probe stays without one",
 		in:   &ateapi.ActorTemplate{Containers: []*ateapi.Container{{Name: "main"}}},
 		want: &ateapi.ActorTemplate{SnapshotConfig: defaultSnapshotConfig(), Containers: []*ateapi.Container{{Name: "main"}}},
