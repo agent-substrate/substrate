@@ -41,6 +41,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/objectstorage"
 	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
@@ -142,7 +143,7 @@ func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsReco
 func (s *Atelet) stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
 	paths := make(map[string]string, len(rec.Assets))
 	for name, entry := range rec.Assets {
-		if !plainAssetName(name) {
+		if !nodepath.IsPlainName(name) {
 			return nil, apierror.InvalidArgument("sandbox asset name %q is not a plain file name", name)
 		}
 		dst := filepath.Join(dstDir, name)
@@ -159,14 +160,6 @@ func (s *Atelet) stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecor
 		paths[name] = p
 	}
 	return paths, nil
-}
-
-// plainAssetName reports whether name is one path element that names a
-// file of its own under the assets dir: not empty, not "." (which Base and
-// IsLocal both accept, and which would make the assets dir itself the
-// destination), not "..", and without separators.
-func plainAssetName(name string) bool {
-	return name != "" && name != "." && name == filepath.Base(name) && filepath.IsLocal(name)
 }
 
 // runscPathFor returns the local path of the gVisor `runsc` binary from a

@@ -105,3 +105,29 @@ func TestUnderBasePath(t *testing.T) {
 		})
 	}
 }
+
+func TestIsPlainName(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"uuid", "123e4567-e89b-12d3-a456-426614174000", true},
+		{"file name", "runsc", true},
+		{"dots inside", "a..b", true},
+		{"empty", "", false},
+		{"dot", ".", false},
+		{"dot dot", "..", false},
+		{"separator", "a/b", false},
+		{"trailing separator", "a/", false},
+		{"absolute", "/a", false},
+		{"parent prefix", "../a", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsPlainName(tt.in); got != tt.want {
+				t.Errorf("IsPlainName(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
