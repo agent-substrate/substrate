@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -96,6 +97,84 @@ func (l *ActorLeaf) SysProcAttr() *syscall.SysProcAttr {
 // RemoveActorLeaf.
 func (l *ActorLeaf) Close() error {
 	return l.dir.Close()
+}
+
+// LimitActorLeafGrowth sets memory.high on the actor's leaf to ceiling bytes, or
+// to its current usage plus headroom bytes if that is more, plus borrow bytes,
+// and returns a func that lifts it again. Past memory.high the kernel reclaims the leaf's page
+// cache and throttles whoever is allocating, where at the worker pod's
+// memory.max it may OOM-kill instead.
+func LimitActorLeafGrowth(actorUID string, headroom, ceiling, borrow int64) (func(), error) {
+	return limitLeafGrowth(Root, actorUID, headroom, ceiling, borrow)
+}
+
+func limitLeafGrowth(root, actorUID string, headroom, ceiling, borrow int64) (func(), error) {
+	current, err := actorLeafMemory(root, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	path, err := actorLeafPath(root, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	high := filepath.Join(path, "memory.high")
+	if err := writeExisting(high, strconv.FormatInt(max(current+headroom, ceiling)+borrow, 10)); err != nil {
+		return nil, fmt.Errorf("while limiting cgroup %q: %w", path, err)
+	}
+	return func() {
+		// the leaf may already be gone, and its limit with it
+		_ = writeExisting(high, "max")
+	}, nil
+}
+
+// ActorLeafMemory returns the actor's leaf memory.current.
+func ActorLeafMemory(actorUID string) (int64, error) {
+	return actorLeafMemory(Root, actorUID)
+}
+
+func actorLeafMemory(root, actorUID string) (int64, error) {
+	path, err := actorLeafPath(root, actorUID)
+	if err != nil {
+		return 0, err
+	}
+	raw, err := os.ReadFile(filepath.Join(path, "memory.current"))
+	if err != nil {
+		return 0, fmt.Errorf("while reading cgroup %q memory usage: %w", path, err)
+	}
+	current, err := parseBytes(raw)
+	if err != nil {
+		return 0, fmt.Errorf("while parsing cgroup %q memory usage %q: %w", path, raw, err)
+	}
+	return current, nil
+}
+
+// PodMemory returns the worker pod's memory limit and usage. limit is 0 when
+// the pod has none.
+func PodMemory() (limit, current int64, err error) {
+	return podMemory(Root)
+}
+
+func podMemory(root string) (limit, current int64, err error) {
+	raw, err := os.ReadFile(filepath.Join(root, "memory.max"))
+	if err != nil {
+		return 0, 0, err
+	}
+	if v := strings.TrimSpace(string(raw)); v != "max" {
+		if limit, err = parseBytes(raw); err != nil {
+			return 0, 0, fmt.Errorf("while parsing memory.max %q: %w", raw, err)
+		}
+	}
+	if raw, err = os.ReadFile(filepath.Join(root, "memory.current")); err != nil {
+		return 0, 0, err
+	}
+	if current, err = parseBytes(raw); err != nil {
+		return 0, 0, fmt.Errorf("while parsing memory.current %q: %w", raw, err)
+	}
+	return limit, current, nil
+}
+
+func parseBytes(raw []byte) (int64, error) {
+	return strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
 }
 
 // KillActorLeaf kills every process in the named leaf, including any they

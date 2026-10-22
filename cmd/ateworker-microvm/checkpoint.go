@@ -31,10 +31,12 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/ateworker"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
 	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/snapshotcache"
 	"go.ate.dev/substrate/internal/workerstats"
 	"golang.org/x/sync/errgroup"
 )
@@ -288,8 +290,8 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 
 	slog.InfoContext(ctx, "Snapshotting guest", slog.String("id", actorUID), slog.String("dir", checkpointDir))
 	tSnapshot := time.Now()
-	if err := client.Snapshot(ctx, checkpointDir); err != nil {
-		return 0, fmt.Errorf("while snapshotting guest: %w", err)
+	if err := s.writeSnapshot(ctx, client, ra, actorUID, checkpointDir); err != nil {
+		return 0, err
 	}
 	dSnapshot := time.Since(tSnapshot)
 
@@ -317,6 +319,72 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 	// The RO lower never ships (reconstructed from the OCI image at restore).
 	// The disk-backed upper ships as its own tar from CheckpointWorkload; a
 	return dSnapshot, nil
+}
+
+// snapshotWriteHeadroom is how far the actor's cgroup may grow past the paused
+// guest while CH writes the snapshot, when its booking leaves less than that,
+// and snapshotWriteSlots how many of those writes may run at once.
+// memoryReservedBytes covers both.
+const (
+	snapshotWriteHeadroom = 16 << 20
+	snapshotWriteSlots    = 2
+)
+
+// writeSnapshot has CH write the paused guest into checkpointDir.
+//
+// CH writes through the page cache from the actor's cgroup while the guest
+// still holds its memory. At the worker pod's memory limit that can OOM-kill
+// the whole pod, and every actor on it, so the leaf may only grow into what the
+// actor booked and the guest left untouched, plus what it can borrow, and the
+// kernel throttles CH to the disk past that.
+func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) error {
+	if s.snapshotWrites != nil {
+		select {
+		case s.snapshotWrites <- struct{}{}:
+			defer func() { <-s.snapshotWrites }()
+		case <-ctx.Done():
+			return fmt.Errorf("while waiting to snapshot: %w", ctx.Err())
+		}
+	}
+	var borrowed int64
+	// the write caches about as much as the guest has populated, which is
+	// at most the leaf's usage. When the pod can lend all of that, the leaf
+	// stays unlimited: memory.high also shrinks the cgroup's dirty page
+	// limit, which throttles the write to the disk long before the cap
+	current, err := cgroup.ActorLeafMemory(actorUID)
+	if err == nil {
+		borrowed = s.borrow.Take(current)
+	}
+	if err != nil || borrowed < current {
+		var ceiling int64
+		if ra != nil {
+			ceiling = ra.memoryBytes
+		}
+		release, err := cgroup.LimitActorLeafGrowth(actorUID, snapshotWriteHeadroom, ceiling, borrowed)
+		if err != nil {
+			slog.WarnContext(ctx, "Snapshotting without a page cache limit", slog.String("id", actorUID), slog.Any("err", err))
+		} else {
+			defer release()
+		}
+	}
+	if err := client.Snapshot(ctx, checkpointDir); err != nil {
+		s.borrow.Return(borrowed)
+		return fmt.Errorf("while snapshotting guest: %w", err)
+	}
+	// clean pages can be reclaimed, and dropped once a restore has read them.
+	// the tars sync themselves
+	var written []string
+	for _, name := range []string{"config.json", "state.json", memoryRangesFile} {
+		p := filepath.Join(checkpointDir, name)
+		if _, err := os.Stat(p); err == nil {
+			written = append(written, p)
+		}
+	}
+	if err := snapshotcache.StartWriteback(written, func() { s.borrow.Return(borrowed) }); err != nil {
+		s.borrow.Return(borrowed)
+		slog.WarnContext(ctx, "Failed to start snapshot writeback", slog.String("id", actorUID), slog.Any("err", err))
+	}
+	return nil
 }
 
 // mergeOnDemandDelta merges the OnDemand delta in checkpointDir with the base in

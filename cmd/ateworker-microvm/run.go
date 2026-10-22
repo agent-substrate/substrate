@@ -73,6 +73,8 @@ type runningActor struct {
 	// exit from a crash: shutting the VM down makes cloud-hypervisor exit, and
 	// virtiofsd exits once its only client is gone.
 	stopping atomic.Bool
+	// memoryBytes is the actor's memory limit, what it books on the worker.
+	memoryBytes int64
 
 	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
 	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
@@ -149,7 +151,7 @@ var actorOverhead = &ateletpb.RuntimeOverhead{MemoryBytes: 128 << 20, MemoryByte
 // memoryReservedBytes is how much of the worker pod's memory limit we keep from
 // actors: the worker process itself, and the page cache of snapshot writes in
 // flight.
-const memoryReservedBytes = 64 << 20
+const memoryReservedBytes = 32<<20 + snapshotWriteSlots*snapshotWriteHeadroom
 
 // minGuestMemMiB is the floor for guest RAM, and so for an actor's memory limit. A
 // smaller one is rejected at cold boot (see resolveGuestMemMiB), since too little
@@ -278,7 +280,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution, false); err != nil {
+	if _, err := s.hostActor(ctx, attribution, false, p.size.MemoryBytes); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -289,6 +291,9 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			_ = s.unhostActor(cleanupCtx, attribution.UID)
 		}
 	}()
+	if err := s.borrow.Wait(ctx); err != nil {
+		return nil, err
+	}
 
 	if err := s.coldBootActorRetrying(ctx, p); err != nil {
 		return nil, err
@@ -369,7 +374,7 @@ func (s *AteWorkerService) coldBootActorRetrying(ctx context.Context, p actorBoo
 			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
 		// The failed attempt deactivated egress, which retires the listener
 		// bound to it, so the network is rebuilt. The actor keeps its slot.
-		if _, err := s.hostActor(ctx, p.attribution(), false); err != nil {
+		if _, err := s.hostActor(ctx, p.attribution(), false, p.size.MemoryBytes); err != nil {
 			return err
 		}
 	}
@@ -607,7 +612,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}

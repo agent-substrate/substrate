@@ -175,7 +175,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	// so only it counts from the first reading; the lower fidelities cold-boot
 	// a fresh guest whose CPU counts from zero.
 	resumesGuest := includesMemory(req.GetFidelity())
-	if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
+	if _, err := s.hostActor(ctx, attribution, resumesGuest, p.size.MemoryBytes); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -186,6 +186,9 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			_ = s.unhostActor(cleanupCtx, attribution.UID)
 		}
 	}()
+	if err := s.borrow.Wait(ctx); err != nil {
+		return nil, err
+	}
 
 	// Restore the durable-dir volumes before anything can observe them: for MEMORY
 	// that means before the share's virtiofsd starts, for the lower fidelities
@@ -521,7 +524,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 
 	ra := &runningActor{
 		chProc: chProc, vfsdProc: vfsdProc,
-		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
+		apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: srcID, restoreSourceDir: restoreDir,
 		preserveRestoreSource:   preserveRestoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
 		// Signaling an id the agent does not know fails the whole graceful

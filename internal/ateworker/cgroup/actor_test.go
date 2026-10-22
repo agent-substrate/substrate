@@ -95,3 +95,76 @@ func TestActorLeafRejectsUnsafeNames(t *testing.T) {
 		}
 	}
 }
+
+func TestLimitLeafGrowth(t *testing.T) {
+	root := t.TempDir()
+	// A regular directory stands in for cgroupfs, which provides both files itself.
+	dir := filepath.Join(root, "uid-a")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "memory.current"), []byte("1000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "memory.high"), []byte("max\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	release, err := limitLeafGrowth(root, "uid-a", 24, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "memory.high")); string(got) != "1024" {
+		t.Errorf("memory.high = %q, want %q", got, "1024")
+	}
+	if _, err := limitLeafGrowth(root, "uid-a", 24, 4096, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "memory.high")); string(got) != "4096" {
+		t.Errorf("memory.high with a ceiling = %q, want %q", got, "4096")
+	}
+	if _, err := limitLeafGrowth(root, "uid-a", 24, 4096, 100); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "memory.high")); string(got) != "4196" {
+		t.Errorf("memory.high with a borrow = %q, want %q", got, "4196")
+	}
+	release()
+	if got, _ := os.ReadFile(filepath.Join(dir, "memory.high")); string(got) != "max" {
+		t.Errorf("memory.high after release = %q, want %q", got, "max")
+	}
+	// Releasing after the leaf is gone is a no-op.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	release()
+}
+
+// Without the memory controller there is no memory.high to write.
+func TestLimitLeafGrowthWithoutTheMemoryController(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "uid-a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := limitLeafGrowth(root, "uid-a", 24, 0, 0); err == nil {
+		t.Error("limitLeafGrowth succeeded without memory.current")
+	}
+}
+
+func TestPodMemory(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{"memory.max": "4294967296\n", "memory.current": "1073741824\n"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limit, current, err := podMemory(root)
+	if err != nil || limit != 4<<30 || current != 1<<30 {
+		t.Errorf("podMemory() = %d, %d, %v, want %d, %d", limit, current, err, int64(4<<30), int64(1<<30))
+	}
+	if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("max\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if limit, _, err := podMemory(root); err != nil || limit != 0 {
+		t.Errorf("podMemory() without a limit = %d, %v, want 0", limit, err)
+	}
+}

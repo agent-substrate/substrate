@@ -45,6 +45,7 @@ import (
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
+	"go.ate.dev/substrate/internal/ateworker/memborrow"
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
 	"go.ate.dev/substrate/internal/atunnel"
@@ -373,6 +374,11 @@ type AteWorkerService struct {
 	chBinary   string
 	guestDebug bool
 
+	// snapshotWrites holds a slot per CH snapshot write in flight, whose page
+	// cache memoryReservedBytes budgets for.
+	snapshotWrites chan struct{}
+	borrow         *memborrow.Ledger
+
 	// actorLogger forwards the actor container's stdout/stderr to the worker pod's
 	// stdout as ate.dev/*-labeled JSON and emits actor lifecycle events (parity
 	// with ateworker-gvisor).
@@ -397,18 +403,21 @@ var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
 func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
-	return &AteWorkerService{
-		locks:       actorlock.New(),
-		inFlight:    actorlock.NewInFlight(),
-		actors:      map[string]*hostedActor{},
-		guestSlots:  make(chan struct{}, statsFanOut),
-		maxActors:   maxActors,
-		podUID:      podUID,
-		chBinary:    chBinary,
-		guestDebug:  guestDebug,
-		tunnel:      tunnel,
-		actorLogger: actorLogger,
+	s := &AteWorkerService{
+		locks:          actorlock.New(),
+		inFlight:       actorlock.NewInFlight(),
+		actors:         map[string]*hostedActor{},
+		guestSlots:     make(chan struct{}, statsFanOut),
+		maxActors:      maxActors,
+		podUID:         podUID,
+		chBinary:       chBinary,
+		guestDebug:     guestDebug,
+		snapshotWrites: make(chan struct{}, snapshotWriteSlots),
+		tunnel:         tunnel,
+		actorLogger:    actorLogger,
 	}
+	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
+	return s
 }
 
 // beginRPC registers before checking the drain flag so shutdown cannot miss it.
