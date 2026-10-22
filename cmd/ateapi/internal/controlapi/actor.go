@@ -90,9 +90,8 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 
 	// Resolve the explicit tag, or freeze the template's current golden default.
 	tagRef := inActor.GetSourceTag()
-	if tagRef == nil {
-		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
-	} else {
+	switch {
+	case tagRef != nil:
 		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
 		// support cloning from a tag that has external volumes.
 		for _, volume := range template.GetVolumes() {
@@ -100,7 +99,14 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 				// TODO: Permit cloning after CSI volume snapshots are supported.
 				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates with external volumes")
 			}
+			if volume.GetExternal().GetRef() != nil {
+				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates that reference an ExternalVolume")
+			}
 		}
+	case templateHasExternalVolumeRef(template):
+		// TODO(shared-volumes): remove this bypass and seed from the golden tag once runsc no longer compares host-derived mount options on restore; see docs/csi-volumes.md.
+	default:
+		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
 	}
 	var sourceTag *ateapi.Tag
 	if tagRef != nil {

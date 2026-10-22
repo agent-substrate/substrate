@@ -4335,6 +4335,10 @@ func (x *ExternalVolumeTemplate) GetStorageClassName() string {
 
 // ExternalVolumeRef mounts an ExternalVolume in the actor's atespace. The
 // volume outlives the actor, so several actors can mount it in turn.
+//
+// Actors created from a template with an ExternalVolumeRef do not start from
+// the template's golden snapshot: the first resume boots from the image, and
+// later resumes restore the actor's own snapshot.
 type ExternalVolumeRef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name of the ExternalVolume. Left empty, the actor names it at creation in
