@@ -200,6 +200,20 @@ func (s *AteWorkerService) runningVM(actorUID string) *runningActor {
 	return hosted.vm
 }
 
+// guestAgentOf returns ra's kata-agent connection, or nil when ra is nil or a
+// teardown has closed it.
+func (s *AteWorkerService) guestAgentOf(ra *runningActor) containerFreezer {
+	if ra == nil {
+		return nil
+	}
+	s.actorsMu.RLock()
+	defer s.actorsMu.RUnlock()
+	if ra.guestAgent == nil {
+		return nil
+	}
+	return ra.guestAgent
+}
+
 // setGuestStats sets or clears the actor's stats target.
 func (s *AteWorkerService) setGuestStats(actorUID string, guest *guestStatsTarget) {
 	s.actorsMu.Lock()

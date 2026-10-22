@@ -103,3 +103,104 @@ func TestReseedRandomDevReturnsAgentError(t *testing.T) {
 		t.Fatal("ReseedRandomDev returned nil for an agent error, want the error")
 	}
 }
+
+func TestSetGuestDateTime(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "agent.sock")
+	listener, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server, err := ttrpc.NewServer()
+	if err != nil {
+		t.Fatalf("ttrpc.NewServer: %v", err)
+	}
+	got := make(chan *agentpb.SetGuestDateTimeRequest, 1)
+	server.Register("grpc.AgentService", map[string]ttrpc.Method{
+		"SetGuestDateTime": func(_ context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+			var req agentpb.SetGuestDateTimeRequest
+			if err := unmarshal(&req); err != nil {
+				return nil, err
+			}
+			got <- &req
+			return &emptypb.Empty{}, nil
+		},
+	})
+	go func() { _ = server.Serve(context.Background(), listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	ac := &AgentClient{conn: conn, client: ttrpc.NewClient(conn)}
+	t.Cleanup(func() { _ = ac.Close() })
+
+	want := time.Unix(123, 456789000)
+	if err := ac.SetGuestDateTime(t.Context(), want); err != nil {
+		t.Fatalf("SetGuestDateTime: %v", err)
+	}
+	req := <-got
+	if req.GetSec() != want.Unix() || req.GetUsec() != 456789 {
+		t.Errorf("SetGuestDateTime request = {%d, %d}, want {%d, 456789}", req.GetSec(), req.GetUsec(), want.Unix())
+	}
+}
+
+// A wrong service or method name here would fail every MSHV memory snapshot and
+// restore, so pin the wire names and the container id.
+func TestPauseResumeContainer(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "agent.sock")
+	listener, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server, err := ttrpc.NewServer()
+	if err != nil {
+		t.Fatalf("ttrpc.NewServer: %v", err)
+	}
+	got := make(chan string, 2)
+	server.Register("grpc.AgentService", map[string]ttrpc.Method{
+		"PauseContainer": func(_ context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+			var req agentpb.PauseContainerRequest
+			if err := unmarshal(&req); err != nil {
+				return nil, err
+			}
+			got <- "pause " + req.GetContainerId()
+			return &emptypb.Empty{}, nil
+		},
+		"ResumeContainer": func(_ context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+			var req agentpb.ResumeContainerRequest
+			if err := unmarshal(&req); err != nil {
+				return nil, err
+			}
+			if req.GetContainerId() == "refused" {
+				return nil, errors.New("container status is: Running, not paused")
+			}
+			got <- "resume " + req.GetContainerId()
+			return &emptypb.Empty{}, nil
+		},
+	})
+	go func() { _ = server.Serve(context.Background(), listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	ac := &AgentClient{conn: conn, client: ttrpc.NewClient(conn)}
+	t.Cleanup(func() { _ = ac.Close() })
+
+	if err := ac.PauseContainer(t.Context(), "app"); err != nil {
+		t.Fatalf("PauseContainer: %v", err)
+	}
+	if err := ac.ResumeContainer(t.Context(), "app"); err != nil {
+		t.Fatalf("ResumeContainer: %v", err)
+	}
+	for _, want := range []string{"pause app", "resume app"} {
+		if call := <-got; call != want {
+			t.Errorf("agent got %q, want %q", call, want)
+		}
+	}
+	if err := ac.ResumeContainer(t.Context(), "refused"); err == nil {
+		t.Error("ResumeContainer returned nil for an agent error, want the error")
+	}
+}

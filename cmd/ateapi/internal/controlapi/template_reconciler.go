@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -52,6 +54,7 @@ const (
 	reasonGoldenActorInvalid         = "GoldenActorInvalid"
 	reasonGoldenActorCrashed         = "GoldenActorCrashed"
 	reasonUnexpectedState            = "GoldenActorUnexpectedState"
+	reasonGoldenSnapshotAborted      = "GoldenSnapshotAborted"
 )
 
 // maxGoldenErrorMessageLen is the maxLength of
@@ -91,13 +94,22 @@ type ActorTemplateReconciler struct {
 	control        goldenActorControl
 	queue          workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]
 	resyncInterval time.Duration
+
+	// goldenActorGone holds the UIDs of templates whose golden snapshot
+	// aborted and whose golden actor this replica has deleted or seen gone,
+	// so resync stops enqueuing them. An aborted status is final and
+	// reconcileOne never recreates its golden actor, so the entry stays true.
+	// Each full resync drops the UIDs of templates it no longer lists.
+	goldenActorGoneMu sync.Mutex
+	goldenActorGone   map[string]bool
 }
 
 func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl, resyncInterval time.Duration) *ActorTemplateReconciler {
 	return &ActorTemplateReconciler{
-		persistence:    persistence,
-		control:        control,
-		resyncInterval: resyncInterval,
+		persistence:     persistence,
+		control:         control,
+		resyncInterval:  resyncInterval,
+		goldenActorGone: map[string]bool{},
 		// Create rate-limiting queue with exponential backoff
 		queue: workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[resources.ActorTemplateRef]()),
 	}
@@ -115,9 +127,13 @@ func (r *ActorTemplateReconciler) Start(ctx context.Context) {
 	}()
 }
 
-// resync lists ActorTemplate and adds them to the work queue.
+// resync lists ActorTemplate and adds them to the work queue. It skips
+// templates whose golden snapshot is done, except an aborted one, whose golden
+// actor may still need deleting after a restart, until this replica has
+// deleted that actor or seen it gone.
 func (r *ActorTemplateReconciler) resync(ctx context.Context) {
 	pageToken := ""
+	listed := map[string]bool{}
 	for {
 		// TODO: need sharding
 		page, err := r.persistence.ListActorTemplates(ctx, "", store.ListOptions{PageSize: templateListPageSize, PageToken: pageToken})
@@ -130,7 +146,10 @@ func (r *ActorTemplateReconciler) resync(ctx context.Context) {
 				continue
 			}
 			ref := resources.ActorTemplateRefFromActorTemplate(tmpl)
-			if goldenSnapshotDone(tmpl.GetStatus().GetGoldenSnapshotStatus()) {
+			uid := tmpl.GetMetadata().GetUid()
+			listed[uid] = true
+			status := tmpl.GetStatus().GetGoldenSnapshotStatus()
+			if goldenSnapshotDone(status) && (!goldenSnapshotAborted(status) || r.sawGoldenActorGone(uid)) {
 				slog.DebugContext(ctx, "Skipping actor template with terminal golden snapshot status", slog.String("ActorTemplate", ref.String()))
 			} else {
 				r.queue.Add(ref)
@@ -138,9 +157,30 @@ func (r *ActorTemplateReconciler) resync(ctx context.Context) {
 			}
 		}
 		if page.NextPageToken == "" {
+			r.forgetGoldenActorsGoneExcept(listed)
 			return
 		}
 		pageToken = page.NextPageToken
+	}
+}
+
+// sawGoldenActorGone reports whether this replica has deleted or seen gone the
+// golden actor of the aborted golden snapshot of the template uid.
+func (r *ActorTemplateReconciler) sawGoldenActorGone(uid string) bool {
+	r.goldenActorGoneMu.Lock()
+	defer r.goldenActorGoneMu.Unlock()
+	return r.goldenActorGone[uid]
+}
+
+// forgetGoldenActorsGoneExcept drops from goldenActorGone every template UID
+// not in listed.
+func (r *ActorTemplateReconciler) forgetGoldenActorsGoneExcept(listed map[string]bool) {
+	r.goldenActorGoneMu.Lock()
+	defer r.goldenActorGoneMu.Unlock()
+	for uid := range r.goldenActorGone {
+		if !listed[uid] {
+			delete(r.goldenActorGone, uid)
+		}
 	}
 }
 
@@ -218,6 +258,11 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 	// a deadline wait, or an error the workqueue retries.
 	for {
 		goldenSnapshotStatus := tmpl.GetStatus().GetGoldenSnapshotStatus()
+		if goldenSnapshotAborted(goldenSnapshotStatus) {
+			// The failed suspend left the golden actor RUNNING on its
+			// worker. Retry its deletion, never the suspend.
+			return 0, r.deleteAbortedGoldenActor(ctx, goldenActorRef)
+		}
 		if goldenSnapshotStatus.GetErrorMessage() != "" {
 			// The snapshot has already failed.
 			return 0, nil
@@ -259,6 +304,12 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, "golden actor crashed before its snapshot was taken")
 
 		case ateapipb.ActorState_ACTOR_STATE_RUNNING:
+			if gen := actor.GetStatus().GetLastAssignedGeneration(); goldenSuspendRolledBack(actor.GetStatus()) {
+				// A replica stopped after the rollback but before it
+				// recorded the failure.
+				return 0, r.failAborted(ctx, tmpl, goldenActorRef, fmt.Sprintf(
+					"golden actor is RUNNING, but its suspend at generation %d left no snapshot: the checkpoint was aborted and rolled back", gen))
+			}
 			takeAt := goldenSnapshotStatus.GetSnapshotTime()
 			if takeAt == nil {
 				// Resumed, but the deadline write was lost (a replica died
@@ -278,19 +329,11 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				return rem, nil
 			}
 			// Warmup done: suspend the golden actor and record its snapshot.
-			err := r.suspendActor(ctx, goldenActorRef)
-			if err != nil {
-				return 0, err
-			}
-			return 0, r.tagGoldenActor(ctx, tmpl, goldenActorRef)
+			return 0, r.suspendAndTagGoldenActor(ctx, tmpl, goldenActorRef)
 
 		case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
 			// A previous pass died mid-suspend; retry suspend.
-			err := r.suspendActor(ctx, goldenActorRef)
-			if err != nil {
-				return 0, err
-			}
-			return 0, r.tagGoldenActor(ctx, tmpl, goldenActorRef)
+			return 0, r.suspendAndTagGoldenActor(ctx, tmpl, goldenActorRef)
 
 		case ateapipb.ActorState_ACTOR_STATE_RESUMING,
 			ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
@@ -327,6 +370,103 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			return r.resyncInterval, nil
 		}
 	}
+}
+
+// suspendAndTagGoldenActor suspends the golden actor and records its snapshot
+// in the golden tag. A suspend that was aborted and rolled back, leaving the
+// actor RUNNING, fails the golden snapshot instead of being retried, as a
+// golden actor that crashes in its suspend does: the abort, a failed MSHV
+// guest freeze or a Cloud Hypervisor API failure before it, is not known to
+// clear on its own. See failAborted.
+func (r *ActorTemplateReconciler) suspendAndTagGoldenActor(ctx context.Context, tmpl *ateapipb.ActorTemplate, goldenRef *ateapipb.ObjectRef) error {
+	err := r.suspendActor(ctx, goldenRef)
+	if isCheckpointRolledBack(err) {
+		return r.failAborted(ctx, tmpl, goldenRef, err.Error())
+	}
+	if err != nil {
+		return err
+	}
+	return r.tagGoldenActor(ctx, tmpl, goldenRef)
+}
+
+// failAborted fails the golden snapshot with reasonGoldenSnapshotAborted and
+// then deletes the golden actor, since a RUNNING one holds its worker;
+// reconcileOne retries that deletion on later passes until the actor is gone.
+// The failure is recorded first: until it is stored, the next pass would
+// recreate a deleted golden actor and start over.
+func (r *ActorTemplateReconciler) failAborted(ctx context.Context, tmpl *ateapipb.ActorTemplate, goldenRef *ateapipb.ObjectRef, msg string) error {
+	if err := r.fail(ctx, tmpl, reasonGoldenSnapshotAborted, msg); err != nil {
+		return err
+	}
+	return r.deleteAbortedGoldenActor(ctx, goldenRef)
+}
+
+// goldenSuspendRolledBack reports whether a RUNNING golden actor's status
+// records a suspend that was aborted and rolled back. A golden actor never
+// starts from a source snapshot, and only a suspend assigns it a generation,
+// appending that generation's snapshot; rollBackAbortedCheckpoint returns the
+// actor to RUNNING, keeps the generation and drops its snapshot in a single
+// write. So the record survives a replica that stops before it fails the
+// golden snapshot. A RevertActor of the golden actor after a suspend assigned
+// a generation, which the reconciler never issues, leaves the same record.
+func goldenSuspendRolledBack(status *ateapipb.ActorStatus) bool {
+	return status.GetLastAssignedGeneration() > 0 && snapshotAtLatestGeneration(status) == nil
+}
+
+// deleteAbortedGoldenActor deletes the golden actor of a golden snapshot that
+// failed with reasonGoldenSnapshotAborted, in any state, and succeeds once the
+// actor is gone. It records the golden actor gone once this replica deletes it
+// or a read finds no actor, or one with another UID, under its name. From then
+// on this replica neither enqueues the template in resync nor reads the name
+// again, so it never deletes an actor a client later creates under that name.
+//
+// The delete is conditioned on the UID it read, so an actor that takes the
+// name between that read and the delete is left in place. The template does
+// not store the golden actor's UID, so the first read identifies the golden
+// actor by name alone: a replica that has not recorded it gone, another one or
+// this one after a restart, deletes an actor a client created under the name
+// after the golden actor was deleted.
+func (r *ActorTemplateReconciler) deleteAbortedGoldenActor(ctx context.Context, goldenRef *ateapipb.ObjectRef) error {
+	if r.sawGoldenActorGone(goldenRef.GetName()) {
+		// A resync can enqueue the template while a pass that records the
+		// golden actor gone is still running.
+		return nil
+	}
+	actor, err := r.control.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef})
+	if err != nil {
+		if apierror.Code(err) == codes.NotFound {
+			r.recordGoldenActorGone(goldenRef)
+			return nil
+		}
+		return fmt.Errorf("while getting golden actor of an aborted golden snapshot: %w", err)
+	}
+	uid := actor.GetMetadata().GetUid()
+	_, err = r.control.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor:   goldenRef,
+		Options: &ateapipb.DeleteOptions{Uid: uid},
+	})
+	if err == nil || apierror.Code(err) == codes.NotFound {
+		r.recordGoldenActorGone(goldenRef)
+		return nil
+	}
+	if apierror.Code(err) == codes.Aborted {
+		// Aborted is either a UID mismatch or another operation holding the
+		// actor's lease; only a re-read tells them apart.
+		current, getErr := r.control.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef})
+		if apierror.Code(getErr) == codes.NotFound || (getErr == nil && current.GetMetadata().GetUid() != uid) {
+			r.recordGoldenActorGone(goldenRef)
+			return nil
+		}
+	}
+	return fmt.Errorf("while deleting golden actor of an aborted golden snapshot: %w", err)
+}
+
+// recordGoldenActorGone records that the golden actor goldenRef names is gone.
+// A golden actor is named by its template's UID.
+func (r *ActorTemplateReconciler) recordGoldenActorGone(goldenRef *ateapipb.ObjectRef) {
+	r.goldenActorGoneMu.Lock()
+	defer r.goldenActorGoneMu.Unlock()
+	r.goldenActorGone[goldenRef.GetName()] = true
 }
 
 // suspendActor waits for the golden actor to produce an external snapshot.
@@ -419,6 +559,13 @@ func truncateUTF8(s string, n int) string {
 // terminal state: the snapshot was recorded, or the build failed.
 func goldenSnapshotDone(snapshotStatus *ateapipb.GoldenSnapshotStatus) bool {
 	return snapshotStatus.GetGoldenTag() != nil || snapshotStatus.GetErrorMessage() != ""
+}
+
+// goldenSnapshotAborted reports whether the golden snapshot failed with
+// reasonGoldenSnapshotAborted, whose golden actor is deleted after the failure
+// is recorded and so may still exist.
+func goldenSnapshotAborted(snapshotStatus *ateapipb.GoldenSnapshotStatus) bool {
+	return strings.HasPrefix(snapshotStatus.GetErrorMessage(), reasonGoldenSnapshotAborted+": ")
 }
 
 // goldenSnapshotWarmupFor returns 0 when every container has a wakeup probe
