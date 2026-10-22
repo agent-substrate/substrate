@@ -1,0 +1,60 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# An in-cluster client for calling actors through atenet-router, which accepts
+# only mTLS. The pod gets a client certificate from the podidentity signer and
+# the router's CA from the servicedns trust bundle (see
+# cmd/atenet/internal/router/README.md). Its SPIFFE ID,
+# spiffe://cluster.local/ns/ate-demo-client/sa/router-client, must be in the
+# router's --ingress-allowed-spiffe-ids.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-client
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: router-client
+  namespace: ate-demo-client
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: router-client
+  namespace: ate-demo-client
+spec:
+  serviceAccountName: router-client
+  containers:
+  - name: curl
+    image: curlimages/curl:8.11.1
+    command: ["sleep", "infinity"]
+    volumeMounts:
+    - name: router-client
+      mountPath: /var/run/router-client
+      readOnly: true
+  volumes:
+  - name: router-client
+    projected:
+      sources:
+      - podCertificate:
+          signerName: podidentity.podcert.ate.dev/identity
+          keyType: ECDSAP256
+          credentialBundlePath: credential-bundle.pem
+      - clusterTrustBundle:
+          signerName: servicedns.podcert.ate.dev/identity
+          labelSelector:
+            matchLabels:
+              podcert.ate.dev/canarying: live
+          path: router-ca.pem

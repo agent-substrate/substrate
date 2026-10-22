@@ -114,33 +114,40 @@ kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 ```
 </details>
 
-### 3. Port-Forward Services
+### 3. Start a Router Client
 
-To interact with the router locally:
+The router accepts mTLS only, from clients in `--ingress-allowed-spiffe-ids`.
+Start the client pod that the quickstart in the top-level README allows:
 
 ```bash
-# Port-forward the Atenet Router
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
+kubectl apply -f demos/router-client.yaml
+kubectl wait -n ate-demo-client --for=condition=Ready pod/router-client
+```
 
-# Also port-forward the CONNECT listener if you want to reach the actor's
-# extra port (see "Reaching a non-default port" below).
+To reach the actor's extra port, also port-forward the CONNECT listener (see
+"Reaching a non-default port" below):
+
+```bash
 kubectl port-forward -n ate-system svc/atenet-router 8001:8081
 ```
 
 ## How to Use
 
 When you send an HTTP request through the router, Substrate automatically detects the session, activates (resumes) the actor onto an available worker pod, and proxies the traffic.
-The two `-H` options below are the routing key; the request URL and `Host` are
-ordinary application metadata.
+The `ate-target-actor` header below is the routing key; the request URL and
+`Host` are ordinary application metadata.
 
 1. Send an HTTP POST request to increment the counter:
 <details>
 <summary>Send to MicroVM</summary>
 
 ```bash
-curl -X POST \
+kubectl exec -n ate-demo-client router-client -- curl -X POST \
+  --cacert /var/run/router-client/router-ca.pem \
+  --cert /var/run/router-client/credential-bundle.pem \
+  --key /var/run/router-client/credential-bundle.pem \
   -H "ate-target-actor: ate-demo-counter-microvm/my-counter-microvm-1" \
-  http://localhost:8000
+  https://atenet-router.ate-system.svc/
 ```
 </details>
 
@@ -148,9 +155,12 @@ curl -X POST \
 <summary>Send to GVisor</summary>
 
 ```bash
-curl -X POST \
+kubectl exec -n ate-demo-client router-client -- curl -X POST \
+  --cacert /var/run/router-client/router-ca.pem \
+  --cert /var/run/router-client/credential-bundle.pem \
+  --key /var/run/router-client/credential-bundle.pem \
   -H "ate-target-actor: ate-demo-counter/my-counter-1" \
-  http://localhost:8000
+  https://atenet-router.ate-system.svc/
 ```
 </details>
 

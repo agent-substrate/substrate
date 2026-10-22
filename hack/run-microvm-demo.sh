@@ -27,10 +27,13 @@
 #
 # Like the other hack scripts, this sources .ate-dev-env.sh for the cluster /
 # registry / bucket settings unless NO_DEV_ENV is set. The control plane deploy
-# requires a credential provider selection, which reaches it only through the
-# environment here: export ATE_CREDENTIAL_PROVIDER (e.g. '{"name":"k8s.io"}';
-# see hack/install-ate.sh --help) before running this, the kind wrapper
-# included.
+# requires a credential provider selection and the router's client allowlist,
+# which reach it only through the environment here: export
+# ATE_CREDENTIAL_PROVIDER (e.g. '{"name":"k8s.io"}') and
+# ATE_INGRESS_ALLOWED_SPIFFE_IDS (e.g.
+# spiffe://cluster.local/ns/ate-demo-client/sa/router-client, the client pod in
+# demos/router-client.yaml; see hack/install-ate.sh --help) before running
+# this, the kind wrapper included.
 #
 # Env (most come from .ate-dev-env.sh):
 #   KO_DOCKER_REPO   (required) image registry, e.g. gcr.io/PROJECT/ate-images for
@@ -121,11 +124,16 @@ cat <<EOF
        kubectl ate${KCTX_FLAG} create actor my-counter-1 -a ate-demo-counter-microvm \\
          --template counter-microvm
 
-  3. Port-forward the atenet-router and curl the in-RAM counter:
-       kubectl${KCTX_FLAG} port-forward -n ate-system svc/atenet-router 8000:80 &
-       curl -X POST \\
-         -H "ate-target-actor: ate-demo-counter-microvm/my-counter-1" \
-         http://localhost:8000
+  3. Start the router client (demos/router-client.yaml) and curl the in-RAM counter
+     through the mTLS router:
+       kubectl${KCTX_FLAG} apply -f demos/router-client.yaml
+       kubectl${KCTX_FLAG} wait -n ate-demo-client --for=condition=Ready pod/router-client
+       kubectl${KCTX_FLAG} exec -n ate-demo-client router-client -- curl -X POST \\
+         --cacert /var/run/router-client/router-ca.pem \\
+         --cert /var/run/router-client/credential-bundle.pem \\
+         --key /var/run/router-client/credential-bundle.pem \\
+         -H "ate-target-actor: ate-demo-counter-microvm/my-counter-1" \\
+         https://atenet-router.ate-system.svc/
 
      Increment, suspend (kubectl ate suspend actor my-counter-1 -a ate-demo-counter-microvm),
      resume on another worker, and confirm the count continues — the guest memory snapshot round-tripped.

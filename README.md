@@ -118,8 +118,10 @@ To quickly set up the complete environment:
 # create cluster and local registry (IPv4; IP_FAMILY=dual|ipv6 overrides)
 hack/create-kind-cluster.sh
 
-# install ate, PostgreSQL, rustfs
-hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
+# install ate, PostgreSQL, rustfs; the router accepts mTLS only, from the
+# client pod in demos/router-client.yaml
+hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-demo-client/sa/router-client
 
 # install counter demo
 hack/install-ate-kind.sh deploy demo-counter
@@ -131,8 +133,9 @@ go install ./cmd/kubectl-ate
 # actor template, resolved in the actor's atespace)
 kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 
-# port-forward the network router to bind to local port `8000`
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
+# start a client pod that can call the router
+kubectl apply -f demos/router-client.yaml
+kubectl wait -n ate-demo-client --for=condition=Ready pod/router-client
 ```
 
 > [!IMPORTANT]
@@ -141,11 +144,14 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 > injected, grant its atespace the namespaces whose Secrets it may read; see
 > [Enable it](docs/egress-credential-injection.md#enable-it).
 
-3. In a **separate terminal**, send an HTTP request to increment the counter:
+3. Send an HTTP request through the router to increment the counter:
 ```shell
-curl -X POST \
+kubectl exec -n ate-demo-client router-client -- curl -X POST \
+   --cacert /var/run/router-client/router-ca.pem \
+   --cert /var/run/router-client/credential-bundle.pem \
+   --key /var/run/router-client/credential-bundle.pem \
    -H "ate-target-actor: ate-demo-counter/my-counter-1" \
-   -i http://localhost:8000/
+   -i https://atenet-router.ate-system.svc/
 ```
 
 ### GKE Quickstart (Development)
@@ -177,8 +183,15 @@ curl -X POST \
 
 4. Deploy the Agent Substrate system to your cluster:
    ```bash
-   go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}'
+   go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}' \
+     --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-demo-client/sa/router-client
    ```
+
+   `--ingress-allowed-spiffe-ids` is required: it lists the SPIFFE IDs of the
+   clients the router accepts. The ID above is the client pod in
+   [demos/router-client.yaml](demos/router-client.yaml); see
+   [cmd/atenet/internal/router/README.md](cmd/atenet/internal/router/README.md)
+   for other clients. `ATE_INGRESS_ALLOWED_SPIFFE_IDS` is the same setting.
 
    `--credential-provider` is required. `{"name":"k8s.io"}` also deploys the
    bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only
