@@ -231,6 +231,81 @@ func TestFinalizeRunning_ReplacedWorkerProcess(t *testing.T) {
 	}
 }
 
+// A restore from the upload of a snapshot on a deleted node commits RUNNING
+// even when the record can't take the upload, since the workload already runs.
+func TestFinalizeRunning_UnrecordableUploadStillRuns(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedFinalizeActor(t, ctx, persistence, 1, []string{"10.0.0.1"})
+	actor, err := persistence.GetActor(ctx, ref)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.Snapshots[0].Locality = "node-3"
+		s.Snapshots[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+	})
+	w := &ActorWorkflow{store: persistence}
+
+	got, err := w.finalizeRunning(ctx, ref, 1)
+	if err != nil {
+		t.Fatalf("finalizeRunning: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING", got.GetStatus().GetState())
+	}
+	if snap := got.GetStatus().GetSnapshots()[0]; snap.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING || snap.GetLocality() != "node-3" {
+		t.Errorf("snapshot = %v, want it unrecorded: PENDING on node-3", snap)
+	}
+}
+
+func TestRecordRestoredUpload(t *testing.T) {
+	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	snapshot := func(locality string, fidelity ateapipb.SnapshotFidelity, storage ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
+		snap := newPausedSnapshot(t, 1, fidelity, "", "snap-1", locality)
+		snap.DurableSnapshot.Status = storage
+		return snap
+	}
+	for _, tt := range []struct {
+		name string
+		snap *ateapipb.Snapshot
+		// want is the snapshot after the call, or nil when it is unchanged.
+		want    *ateapipb.Snapshot
+		wantErr bool
+	}{
+		{name: "local on the assigned node: unchanged", snap: snapshot("node-2", memory, pending)},
+		{name: "durable only: unchanged", snap: snapshot("", memory, completed)},
+		{name: "local on a deleted node: recorded", snap: snapshot("node-1", memory, pending), want: snapshot("", memory, completed)},
+		{name: "local on a deleted node with no fidelity: unchanged, error", snap: snapshot("node-1", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, pending), wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			status := &ateapipb.ActorStatus{
+				State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
+				AssignedNode:           "node-2",
+				LastAssignedGeneration: 1,
+				Snapshots:              []*ateapipb.Snapshot{proto.CloneOf(tt.snap)},
+			}
+			err := recordRestoredUpload(context.Background(), status)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("recordRestoredUpload() = %v, want error %v", err, tt.wantErr)
+			}
+			want := tt.want
+			if want == nil {
+				want = tt.snap
+			}
+			if got := status.GetSnapshots()[0]; !proto.Equal(got, want) {
+				t.Errorf("snapshot = %v, want %v", got, want)
+			}
+			if status.GetAssignedNode() != "node-2" {
+				t.Errorf("assigned node = %q, want node-2", status.GetAssignedNode())
+			}
+		})
+	}
+}
+
 // bindErrorStore fails every claim, standing in for a worker that moved or
 // vanished between the pick and the write.
 type bindErrorStore struct {

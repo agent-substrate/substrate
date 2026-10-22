@@ -671,7 +671,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 			}
 
 			// The crash leaves the actor on node-2, so revert terminates it
-			// there rather than skipping a deleted node.
+			// there.
 			reverted, err := w.RevertActor(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("RevertActor: %v", err)

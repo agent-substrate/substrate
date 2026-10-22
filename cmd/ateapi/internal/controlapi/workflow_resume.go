@@ -941,7 +941,13 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch
 		toUpdate.Status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())
-		return recordRestoredUpload(ctx, toUpdate.Status)
+		// The workload already runs, so a record that can't take the upload
+		// doesn't hold the actor in RESUMING. The next suspend prunes the entry.
+		if err := recordRestoredUpload(ctx, toUpdate.Status); err != nil {
+			slog.WarnContext(ctx, "Restored a snapshot from its upload but could not record the upload",
+				slog.Any("actor", actorRef), slog.Any("err", err))
+		}
+		return nil
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
@@ -955,7 +961,8 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 
 // recordRestoredUpload records the upload of a snapshot that resume restored
 // on another node after its own node was deleted. The restore proved the
-// upload complete, and the deleted node no longer holds a copy.
+// upload complete, and the deleted node no longer holds a copy. On an error
+// it leaves status unchanged.
 func recordRestoredUpload(ctx context.Context, status *ateapipb.ActorStatus) error {
 	snap := snapshotToResume(status)
 	if !localElsewhere(snap, status.GetAssignedNode()) {
