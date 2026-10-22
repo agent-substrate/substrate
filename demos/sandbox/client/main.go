@@ -17,7 +17,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,11 +28,10 @@ import (
 	"syscall"
 
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 )
 
 type ProcessRequest struct {
@@ -49,21 +47,10 @@ type ProcessResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
-func dialAteAPI(endpoint string) (ateapipb.ControlClient, *grpc.ClientConn, error) {
-	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
-
-	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(creds))
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return ateapipb.NewControlClient(conn), conn, nil
-}
-
 func main() {
 	actorName := pflag.String("name", "", "Name of the sandbox actor (required)")
 	atespace := pflag.String("atespace", "", "Atespace the actor lives in (required)")
-	ateapiAddr := pflag.String("ateapi", "localhost:8080", "Address of the ateapi gRPC server")
+	ateapiAddr := pflag.String("ateapi", "", "Address of the ateapi gRPC server; empty auto-forwards to svc/api in the substrate system namespace")
 	atenetAddr := pflag.String("atenet", "localhost:8000", "Address of the atenet HTTP router")
 	pflag.Parse()
 
@@ -87,22 +74,21 @@ func main() {
 		cancel()
 	}()
 
-	// 1. Connect to ateapi and Resume Actor
-	log.Printf("Connecting to ateapi at %s...", *ateapiAddr)
-	cli, conn, err := dialAteAPI(*ateapiAddr)
+	// 1. Connect to ateapi, once, up front, so a bad kube context fails here
+	// rather than at the first command. The connection is deliberately not tied
+	// to ctx: ctx is canceled by the interrupt handler, and the deferred suspend
+	// below still has to reach ateapi after that.
+	log.Printf("Connecting to ateapi (endpoint=%q; empty = auto port-forward to svc/api)...", *ateapiAddr)
+	cli, err := ateclient.NewClient(context.Background(), "", "", *ateapiAddr, "", false)
 	if err != nil {
-		log.Fatalf("Failed to dial ateapi: %v", err)
+		log.Fatalf("Failed to connect to ateapi: %v", err)
 	}
-	defer conn.Close()
+	defer cli.Close()
 
-	log.Printf("Resuming actor %s...", actorRef.Name)
-	_, err = cli.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()})
-	if err != nil {
-		log.Fatalf("Failed to resume actor: %v", err)
-	}
-	log.Println("Actor resumed successfully.")
+	// No explicit resume: a request through the router activates a suspended
+	// actor on its own, so the first command wakes it.
 
-	// Ensure we suspend the actor on exit
+	// Ensure we suspend the actor on exit.
 	defer func() {
 		log.Printf("Suspending actor %s...", actorRef.Name)
 		suspendCtx := context.Background()
