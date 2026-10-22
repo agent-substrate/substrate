@@ -32,10 +32,10 @@ import (
 )
 
 // revertableStates are the states a revert is accepted from. A SUSPENDED
-// actor is also accepted when it is paused, that is, when its latest snapshot
-// is node-local: the revert discards the node-local copy and returns the actor
-// to its latest durable snapshot, which is that same snapshot once atelet's
-// upload of it is recorded. See isRevertable.
+// actor is also accepted when its latest snapshot is node-local: the revert
+// discards the node-local copy and returns the actor to its latest durable
+// snapshot, which is that same snapshot once atelet's upload of it is
+// recorded. See isRevertable.
 var revertableStates = []ateapipb.ActorState{
 	ateapipb.ActorState_ACTOR_STATE_RUNNING,
 	ateapipb.ActorState_ACTOR_STATE_CRASHED,

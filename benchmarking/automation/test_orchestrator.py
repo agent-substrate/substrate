@@ -62,19 +62,25 @@ class SubstrateArgsTest(unittest.TestCase):
 
 class DeploySubstrateTest(unittest.TestCase):
     # The runner Job authenticates with its pod certificate, so ate-api-server
-    # denies it unless the install makes it an owner.
+    # denies it unless the install makes it an owner, and the Envoy ingress
+    # router refuses to deploy without an allowed SPIFFE ID.
     @mock.patch("orchestrator.run")
     def test_runner_and_client_are_bootstrap_owners(self, run):
         orchestrator.deploy_substrate(["--credential-provider={}"])
         cmd = run.call_args.args[0]
         self.assertEqual(cmd, ["hack/install-ate.sh", "deploy", "ate-system", "--credential-provider={}"])
-        owners = run.call_args.kwargs["env"]["ATE_API_AUTHZ_BOOTSTRAP_OWNERS"].split(",")
+        env = run.call_args.kwargs["env"]
+        owners = env["ATE_API_AUTHZ_BOOTSTRAP_OWNERS"].split(",")
         self.assertEqual(
             owners,
             [
                 "system:serviceaccount:ate-system:ate-client",
                 "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner",
             ],
+        )
+        self.assertEqual(
+            env["ATE_INGRESS_ALLOWED_SPIFFE_IDS"],
+            "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner",
         )
 
     @mock.patch("orchestrator.run")

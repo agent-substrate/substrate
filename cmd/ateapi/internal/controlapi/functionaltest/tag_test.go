@@ -151,9 +151,10 @@ func TestCreateTag_ReusedTagName(t *testing.T) {
 	}
 }
 
-// TestCreateTag_FromPausedActor verifies that tagging a paused actor has the
-// atelet on its node upload the node-local snapshot first, and tags that
-// snapshot. The actor keeps the snapshot on its node.
+// TestCreateTag_FromPausedActor verifies that tagging a suspended actor whose
+// local snapshot is not uploaded yet has the atelet on its node upload the
+// node-local snapshot first, and tags that snapshot. The actor keeps the
+// snapshot on its node.
 func TestCreateTag_FromPausedActor(t *testing.T) {
 	ns := namespaceForTest("ns-tag-paused")
 	tc := setupTest(t, ns)
@@ -209,7 +210,7 @@ func TestCreateTag_FromPausedActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	// The paused snapshot is now durable and stays on its node.
+	// The node-local snapshot is now durable and stays on its node.
 	if got := durableSnapshot(stored.GetStatus()); got.GetUuid() != pausedSnap.GetUuid() {
 		t.Errorf("latest durable snapshot = %v, want the paused snapshot %q", got, pausedSnap.GetUuid())
 	}
@@ -359,6 +360,36 @@ func TestUpdateTag_NotFound(t *testing.T) {
 		},
 	})
 	assertGrpcError(t, err, codes.NotFound, "Tag test-atespace/does-not-exist not found")
+}
+
+func TestDeleteTag(t *testing.T) {
+	ns := namespaceForTest("ns-delete-tag")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	createTemplate(t, tc, ns)
+
+	created := seedTag(t, tc, "actor-1", "v1")
+	tagRef := resources.TagRefFromTag(created)
+	snapshotURI, err := resources.ParseSnapshotURI(tagSnapshotURI(created))
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI: %v", err)
+	}
+	tc.objectStore.PutSnapshot(t, snapshotURI, "manifest.json")
+
+	deleted, err := tc.client.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()})
+	if err != nil {
+		t.Fatalf("DeleteTag failed: %v", err)
+	}
+	if diff := cmp.Diff(created, deleted, protocmp.Transform(), ignoreVersion, ignoreTimestamps); diff != "" {
+		t.Errorf("DeleteTag response mismatch (-created +deleted):\n%s", diff)
+	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Errorf("the deleted tag carries no delete_time")
+	}
+	assertSnapshotCollected(t, tc, snapshotURI.String())
+	_, err = tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: tagRef.ToObjectRef()})
+	assertGrpcError(t, err, codes.NotFound, "Tag "+tagRef.String()+" not found")
 }
 
 func TestDeleteTag_NotFound(t *testing.T) {

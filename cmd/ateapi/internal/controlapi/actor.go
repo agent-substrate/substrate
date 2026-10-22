@@ -149,7 +149,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		outActor.Status.LastAssignedGeneration = 1
 	}
 	if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
-		return nil, toGRPCInternalError(errs)
+		return nil, resources.ToInternalError(errs)
 	}
 
 	// Save the data in the storage layer.
@@ -191,6 +191,8 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	default:
 		return nil, apierror.FailedPrecondition("source Tag has an invalid scope")
 	}
+	// TODO: Refuse a tag with delete_time set. DeleteTag may already have
+	// collected its snapshot.
 	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
 	if tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
 		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")
@@ -328,7 +330,7 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 
 		// Validate the final value before storing it.
 		if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, true); len(errs) > 0 {
-			return toGRPCInternalError(errs)
+			return resources.ToInternalError(errs)
 		}
 
 		return nil
@@ -452,6 +454,10 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	}
 
 	return deleted, nil
+}
+
+func (s *ServiceImpl) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	return s.store.MarkActorForDeletion(ctx, actorRef, precondition, mutate)
 }
 
 func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {

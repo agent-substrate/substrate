@@ -113,9 +113,10 @@ func TestMintWorkerActorJwt(t *testing.T) {
 	}
 }
 
-// pausedStatus is how a paused actor looks: SUSPENDED, no worker, assigned_node
-// on the node holding its local snapshot, and a latest generation that is
-// local-only. The latest generation is the one last_assigned_generation names.
+// pausedStatus is how an asynchronously suspended actor looks: SUSPENDED, no
+// worker, assigned_node on the node holding its local snapshot, and a latest
+// generation that is local-only. The latest generation is the one
+// last_assigned_generation names.
 func pausedStatus(state ateapipb.ActorState, node string) *ateapipb.ActorStatus {
 	return &ateapipb.ActorStatus{
 		State:                  state,
@@ -125,9 +126,9 @@ func pausedStatus(state ateapipb.ActorState, node string) *ateapipb.ActorStatus 
 	}
 }
 
-// uploadPendingStatus is how a paused actor looks until atelet's background
-// upload of its local snapshot is recorded: SUSPENDED, no worker, and the
-// latest generation's durable copy PENDING.
+// uploadPendingStatus is how an asynchronously suspended actor looks until
+// atelet's background upload of its local snapshot is recorded: SUSPENDED, no
+// worker, and the latest generation's durable copy PENDING.
 func uploadPendingStatus(node string) *ateapipb.ActorStatus {
 	status := pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, node)
 	status.Snapshots[0].DurableSnapshot = &ateapipb.SnapshotStorage{
@@ -154,8 +155,8 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 	onWorker := func(state ateapipb.ActorState) *ateapipb.ActorStatus {
 		return &ateapipb.ActorStatus{State: state, WorkerAssignment: &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: "worker-1"}}}
 	}
-	// pausingOnWorker is a pause in progress: SUSPENDING on worker-1 with a
-	// latest snapshot that is node-local and not yet captured.
+	// pausingOnWorker is an async suspend in progress: SUSPENDING on worker-1
+	// with a latest snapshot that is not yet captured.
 	pausingOnWorker := func() *ateapipb.ActorStatus {
 		status := onWorker(ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
 		status.AssignedNode = "node-1"
@@ -206,7 +207,7 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			want:   codes.OK,
 		},
 		{
-			// Pause, suspend and crash release the worker before they clear the
+			// Suspend and crash release the worker before they clear the
 			// actor's status, which keeps naming the worker until they do.
 			name:        "running actor whose worker was released",
 			ctx:         authed,
@@ -340,8 +341,8 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			want:   codes.NotFound,
 		},
 		{
-			// atelet uploads the paused actor's checkpoint in the background
-			// from the node that holds it, with no worker assigned.
+			// atelet uploads the asynchronously suspended actor's checkpoint in
+			// the background from the node that holds it, with no worker assigned.
 			name:   "paused actor with its upload pending on this node",
 			ctx:    authed,
 			status: uploadPendingStatus("node-1"),

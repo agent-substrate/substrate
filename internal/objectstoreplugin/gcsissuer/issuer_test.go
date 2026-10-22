@@ -98,7 +98,7 @@ func newTestIssuer(t *testing.T, sts *fakeSTS, src oauth2.TokenSource, now func(
 	t.Cleanup(srv.Close)
 	target, _ := url.Parse(srv.URL)
 	client := &http.Client{Transport: redirect{sts: sts, target: target}}
-	i, err := New(t.Context(), WithTokenSource(src), WithHTTPClient(client), WithClock(now), WithCacheSize(2))
+	i, err := New(t.Context(), "", WithTokenSource(src), WithHTTPClient(client), WithClock(now), WithCacheSize(2))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestIssue_StopsWhenTheCallerGivesUp(t *testing.T) {
 	t.Cleanup(srv.Close)
 	target, _ := url.Parse(srv.URL)
 	client := &http.Client{Transport: redirect{sts: &fakeSTS{t: t}, target: target}, Timeout: time.Minute}
-	i, err := New(t.Context(), WithTokenSource(staticSource(now.Add(time.Hour))), WithHTTPClient(client), WithClock(func() time.Time { return now }))
+	i, err := New(t.Context(), "", WithTokenSource(staticSource(now.Add(time.Hour))), WithHTTPClient(client), WithClock(func() time.Time { return now }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestWithCacheSize_ZeroIsBounded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(sts.handler))
 	t.Cleanup(srv.Close)
 	target, _ := url.Parse(srv.URL)
-	i, err := New(t.Context(), WithTokenSource(staticSource(now.Add(time.Hour))), WithHTTPClient(&http.Client{Transport: redirect{sts: sts, target: target}}), WithClock(func() time.Time { return now }), WithCacheSize(0))
+	i, err := New(t.Context(), "", WithTokenSource(staticSource(now.Add(time.Hour))), WithHTTPClient(&http.Client{Transport: redirect{sts: sts, target: target}}), WithClock(func() time.Time { return now }), WithCacheSize(0))
 	if err != nil {
 		t.Fatal(err)
 	}

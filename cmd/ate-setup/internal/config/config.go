@@ -139,6 +139,11 @@ type Config struct {
 	// template's snapshotConfig.storageLocation override it.
 	SnapshotLocation string
 
+	// TransferGSAName is the name of the Google service account snapshot
+	// transfers run as on GCS, in ProjectID (SNAPSHOT_TRANSFER_GSA_NAME).
+	// Only the in-tree GCS backend uses it. See TransferServiceAccount.
+	TransferGSAName string
+
 	// KODockerRepo is where ko pushes images (KO_DOCKER_REPO).
 	KODockerRepo string
 	// KODefaultPlatforms constrains ko's build platforms.
@@ -281,6 +286,33 @@ func (c *Config) RequireIngressAllowedSPIFFEIDs() error {
 		return nil
 	}
 	return c.Resolved().Require("ingressAllowedSPIFFEIDs")
+}
+
+// TransferServiceAccount is the email of the snapshot transfer service
+// account, built from TransferGSAName and ProjectID as tools/setup-gcp builds
+// it. It is empty when either is.
+func (c *Config) TransferServiceAccount() string {
+	if c.TransferGSAName == "" || c.ProjectID == "" {
+		return ""
+	}
+	return c.TransferGSAName + "@" + c.ProjectID + ".iam.gserviceaccount.com"
+}
+
+// RequireTransferServiceAccount fails when the install would deploy
+// ate-api-server on GCS without a transfer service account. Its credential
+// exchange impersonates the account and refuses to start without one.
+// ate-setup installs GCS everywhere but kind, which uses S3.
+func (c *Config) RequireTransferServiceAccount() error {
+	if c.Kind {
+		return nil
+	}
+	if c.TransferGSAName == "" {
+		return c.Resolved().Require("storage.transferGSAName")
+	}
+	if c.ProjectID == "" {
+		return c.Resolved().Require("gcp.projectID")
+	}
+	return nil
 }
 
 // SetResolved attaches resolved settings to a Config built directly. Load

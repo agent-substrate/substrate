@@ -35,7 +35,8 @@
 # Env (most come from .ate-dev-env.sh):
 #   KO_DOCKER_REPO   (required) image registry, e.g. gcr.io/PROJECT/ate-images for
 #                    GKE or localhost:5001 for kind.
-#   BUCKET_NAME      object store bucket for assets/snapshots (default: ate-snapshots).
+#   BUCKET_NAME      object store bucket for snapshots (default: ate-snapshots). On
+#                    GKE the assets go to BUCKET_NAME-assets, see install-microvm-deps.sh.
 #   KUBECTL_CONTEXT  (optional) kube context; threaded into install + ko apply + kubectl.
 #   PROJECT_ID       (optional) GCP project for the GCS asset upload (GKE path).
 #   ARCH             target arch (default: from KO_DEFAULTPLATFORMS, else host arch).

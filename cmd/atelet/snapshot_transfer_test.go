@@ -437,7 +437,7 @@ func (s *pluginSidecar) stop() {
 }
 
 // The upload after CheckpointWorkload waits out a plugin outage longer than
-// the ready wait, since a retried Checkpoint cannot redo it. The paused
+// the ready wait, since a retried Checkpoint cannot redo it. The PromoteSnapshot
 // upload, which a retry can redo, still fails within the ready wait.
 func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 	const wait = 200 * time.Millisecond
@@ -512,7 +512,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 	}
 }
 
-// fetchManifest keeps the plugin's NotFound readable, which the paused
+// fetchManifest keeps the plugin's NotFound readable, which the local
 // snapshot upload uses to tell a missing snapshot from a failed probe.
 func TestFetchManifestKeepsNotFound(t *testing.T) {
 	s := &Atelet{

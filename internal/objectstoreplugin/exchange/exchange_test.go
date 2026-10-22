@@ -186,7 +186,7 @@ func actorWithTag() *ateapipb.Actor {
 	}
 }
 
-// actorLocalOnly is a paused actor whose only snapshot is on node-1.
+// actorLocalOnly is a suspended actor whose only snapshot is on node-1.
 func actorLocalOnly() *ateapipb.Actor {
 	return &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name, Uid: uid},

@@ -93,9 +93,15 @@ func init() {
 
 // knobs is the SweperfUser slice of the runtime config. Each zero falls
 // back to the default above; the master populates the keys from the
-// --sweperf-* locust flags (common/sweperf_config.py).
+// --sweperf-* locust flags (common/sweperf_config.py) and the shared
+// --lifecycle-mode flag (common/lifecycle_mode.py).
 type knobs struct {
 	dynconfig.WaitTime
+	// Lifecycle picks how each cycle ends: lifecycle_mode "suspend" (or
+	// empty) sends a synchronous SuspendActor, "pause" an asynchronous one.
+	// "none" and resume_mode "implicit" are refused, since every sweperf
+	// cycle ends in a suspend and resumes with ResumeActor.
+	dynconfig.Lifecycle
 	Template       string `json:"sweperf_template"`
 	TotalSteps     int    `json:"sweperf_total_steps"`
 	NumCycles      int    `json:"sweperf_num_cycles"`
@@ -115,6 +121,15 @@ var knobsCodec = dynconfig.Typed[knobs]{
 		}
 		if k.PollIntervalMs < 0 {
 			return fmt.Errorf("sweperf_poll_interval_ms cannot be negative: %d", k.PollIntervalMs)
+		}
+		if err := k.Lifecycle.Validate(); err != nil {
+			return err
+		}
+		if k.LifecycleMode == dynconfig.LifecycleModeNone {
+			return fmt.Errorf("sweperf does not support lifecycle_mode %q: every cycle ends in a suspend", k.LifecycleMode)
+		}
+		if k.ResumeMode == dynconfig.ResumeModeImplicit {
+			return fmt.Errorf("sweperf does not support resume_mode %q: it resumes with ResumeActor", k.ResumeMode)
 		}
 		return nil
 	},
@@ -601,17 +616,23 @@ func (u *sweperfUser) resume(ctx context.Context) (time.Duration, bool) {
 }
 
 // suspend snapshots the actor and puts it to sleep, ending a cycle. It reports
-// whether the suspend succeeded, like resume.
+// whether the suspend succeeded, like resume. In pause lifecycle mode the
+// suspend is asynchronous and recorded as SuspendActorAsync, as in the other
+// user classes.
 func (u *sweperfUser) suspend(ctx context.Context) bool {
-	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
+	name, mode := "SuspendActor", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
+	if dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
+		name, mode = "SuspendActorAsync", ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
+	}
+	err := u.tracedCall(ctx, name, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor:   u.ref(),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			Options: &ateapipb.SuspendOptions{Mode: mode},
 		}, grpc.Trailer(tr))
 		return err
 	})
 	if err != nil {
-		slog.Error("SuspendActor failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
+		slog.Error(name+" failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
 		return false
 	}
 	return true

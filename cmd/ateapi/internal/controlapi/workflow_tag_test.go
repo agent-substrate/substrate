@@ -241,8 +241,8 @@ func TestTagActorSnapshot_TagsNewestExternalSnapshot(t *testing.T) {
 		// snapshot is always at generation extGen.
 		lastAssigned int32
 		extGen       int32
-		// locality is set on the external snapshot, as when a paused actor's
-		// local snapshot was uploaded in place.
+		// locality is set on the external snapshot, as when the snapshot also
+		// has a local copy on the node.
 		locality string
 	}{
 		{
@@ -287,11 +287,12 @@ func TestTagActorSnapshot_TagsNewestExternalSnapshot(t *testing.T) {
 	}
 }
 
-// TestTagActorSnapshot_PromotesLocalSnapshot verifies that tagging a paused
-// actor whose snapshot is not uploaded yet has the atelet on the snapshot's
-// node upload it first, records the upload on the actor, and tags that
-// snapshot. A failed upload fails the tag without reserving its name and leaves
-// the actor as it was. A create that cannot succeed fails before the upload.
+// TestTagActorSnapshot_PromotesLocalSnapshot verifies that tagging a suspended
+// actor whose local snapshot is not uploaded yet has the atelet on the
+// snapshot's node upload it first, records the upload on the actor, and tags
+// that snapshot. A failed upload fails the tag without reserving its name and
+// leaves the actor as it was. A create that cannot succeed fails before the
+// upload.
 func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 	// reported is the state atelet answers with once it made snap durable.
 	reported := func(snap *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
@@ -306,22 +307,22 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 
 	tests := []struct {
 		name string
-		// olderDurable seeds a COMPLETED snapshot below the paused one.
+		// olderDurable seeds a COMPLETED snapshot below the local one.
 		olderDurable bool
-		// uploaded records the paused snapshot's durable copy COMPLETED.
+		// uploaded records the local snapshot's durable copy COMPLETED.
 		uploaded bool
-		// nodeLost clears the paused snapshot's locality, as when its node
+		// nodeLost clears the local snapshot's locality, as when its node
 		// was lost before the upload finished.
 		nodeLost bool
 		// nameTaken seeds a tag under the name the create asks for.
 		nameTaken bool
 		// badLocation points the template at an unusable storage location.
 		badLocation bool
-		// noTemplateUID records no template the paused snapshot was built
+		// noTemplateUID records no template the local snapshot was built
 		// under, a broken row.
 		noTemplateUID bool
 		// promoteState builds the state PromoteSnapshot answers with from the
-		// paused snapshot.
+		// local snapshot.
 		promoteState func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState
 		promoteErr   error
 		wantPromote  bool
@@ -566,13 +567,13 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 				return
 			}
 
-			// The paused snapshot is now durable and stays on its node.
+			// The local snapshot is now durable and stays on its node.
 			wantPaused := proto.CloneOf(paused)
 			wantPaused.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 			if diff := cmp.Diff(wantPaused, findSnapshotByGeneration(stored.GetStatus().GetSnapshots(), 2), protocmp.Transform()); diff != "" {
 				t.Errorf("the actor's latest snapshot mismatch (-want +got):\n%s", diff)
 			}
-			// The tag copied the paused snapshot, not the older one.
+			// The tag copied the local snapshot, not the older one.
 			if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, tagSnapshot))); diff != "" {
 				t.Errorf("the tag's external snapshot mismatch (-want +got):\n%s", diff)
 			}
@@ -867,15 +868,34 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !isObjectStoreErr(err) {
 		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
 	}
-	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
+	admitted, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
 		t.Fatalf("GetTag after the failure: %v", err)
+	}
+	if admitted.GetMetadata().GetDeleteTime() == nil {
+		t.Fatal("a failed delete left delete_time unset")
+	}
+
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !isObjectStoreErr(err) {
+		t.Fatalf("retried DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
+	}
+	retried, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetTag after the retried failure: %v", err)
+	}
+	if got, want := retried.GetMetadata().GetVersion(), admitted.GetMetadata().GetVersion(); got != want {
+		t.Errorf("a retried delete moved the version to %d, want %d", got, want)
 	}
 
 	// Simulates a retried deletion. Now, the object deletion succeeds,
 	// so we can remove the row from the DB.
 	objects.OnDelete = nil
-	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+	deleted, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{})
+	if err != nil {
 		t.Fatalf("retried DeleteTag: %v", err)
+	}
+	if !deleted.GetMetadata().GetDeleteTime().AsTime().Equal(admitted.GetMetadata().GetDeleteTime().AsTime()) {
+		t.Errorf("the retry re-stamped delete_time: %v, want %v", deleted.GetMetadata().GetDeleteTime().AsTime(), admitted.GetMetadata().GetDeleteTime().AsTime())
 	}
 	if got := objects.Snapshot(t, uri); len(got) != 0 {
 		t.Errorf("the tag's external snapshot still holds %v, want it collected", got)

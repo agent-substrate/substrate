@@ -27,6 +27,7 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
@@ -46,15 +47,18 @@ const (
 )
 
 const (
-	reasonGoldenTagConflict  = "GoldenTagConflict"
-	reasonGoldenActorInvalid = "GoldenActorInvalid"
-	reasonGoldenActorCrashed = "GoldenActorCrashed"
-	reasonUnexpectedState    = "GoldenActorUnexpectedState"
+	reasonGoldenTagConflict          = "GoldenTagConflict"
+	reasonGoldenEgressPolicyConflict = "GoldenEgressPolicyConflict"
+	reasonGoldenActorInvalid         = "GoldenActorInvalid"
+	reasonGoldenActorCrashed         = "GoldenActorCrashed"
+	reasonUnexpectedState            = "GoldenActorUnexpectedState"
 )
 
 // maxGoldenErrorMessageLen is the maxLength of
 // GoldenSnapshotStatus.error_message.
 const maxGoldenErrorMessageLen = 4096
+
+var errGoldenEgressPolicyConflict = errors.New("golden actor egress policy does not match the template")
 
 // templateReconcilerStore enumerates the exact storage methods needed by
 // ActorTemplateReconciler and nothing more.
@@ -74,6 +78,8 @@ type goldenActorControl interface {
 	DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (*ateapipb.Actor, error)
 	CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error)
 	GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error)
+	CreateActorEgressPolicy(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error)
+	GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error)
 	ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error)
 	SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error)
 }
@@ -191,6 +197,8 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 		}
 		return 0, err
 	}
+	// TODO: Skip a template with delete_time set. DeleteActorTemplate may
+	// already have deleted the golden actor and tag, and this pass rebuilds them.
 
 	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 		return 0, nil
@@ -293,6 +301,12 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				// existing snapshot means an earlier suspend completed
 				// without being recorded.
 				return 0, r.tagGoldenActor(ctx, tmpl, goldenActorRef)
+			}
+			if err := r.ensureGoldenEgressPolicy(ctx, tmpl, goldenActorRef); err != nil {
+				if errors.Is(err, errGoldenEgressPolicyConflict) {
+					return 0, r.fail(ctx, tmpl, reasonGoldenEgressPolicyConflict, err.Error())
+				}
+				return 0, fmt.Errorf("while ensuring golden egress policy: %w", err)
 			}
 			if _, err := r.control.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: goldenActorRef}); err != nil {
 				// A crash during resume is observed as CRASHED on the retry.
@@ -445,4 +459,34 @@ func (r *ActorTemplateReconciler) ensureActorExists(ctx context.Context, tmpl *a
 		return nil, fmt.Errorf("while creating golden actor: %w", err)
 	}
 	return actor, nil
+}
+
+// ensureGoldenEgressPolicy also runs when an earlier pass created the actor but
+// failed before creating its policy or resuming it.
+func (r *ActorTemplateReconciler) ensureGoldenEgressPolicy(ctx context.Context, tmpl *ateapipb.ActorTemplate, actorRef *ateapipb.ObjectRef) error {
+	want := tmpl.GetGoldenEgressPolicy()
+	if want == nil {
+		return nil
+	}
+	_, err := r.control.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{
+		Actor: actorRef,
+		EgressPolicy: &ateapipb.EgressPolicy{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.GetAtespace(), Name: resources.SingletonName},
+			Rules:    proto.CloneOf(want).GetRules(),
+		},
+	})
+	if err == nil {
+		return nil
+	}
+	if apierror.Code(err) != codes.AlreadyExists {
+		return err
+	}
+	existing, err := r.control.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef, Name: resources.SingletonName})
+	if err != nil {
+		return err
+	}
+	if !proto.Equal(&ateapipb.EgressPolicyTemplate{Rules: existing.GetRules()}, want) {
+		return errGoldenEgressPolicyConflict
+	}
+	return nil
 }

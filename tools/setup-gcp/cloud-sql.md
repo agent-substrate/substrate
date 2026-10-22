@@ -46,6 +46,7 @@ This idempotently creates:
 | Google service account | `ate-api-server@<project>.iam.gserviceaccount.com` |
 | Project IAM roles | `roles/cloudsql.client`, `roles/cloudsql.instanceUser` on the GSA |
 | Workload Identity binding | `roles/iam.workloadIdentityUser` for `<project>.svc.id.goog[ate-system/ate-api-server]` on the GSA |
+| Token creator binding | `roles/iam.serviceAccountTokenCreator` for the GSA on the snapshot transfer service account, named by `SNAPSHOT_TRANSFER_GSA_NAME` and `ate-snapshot-transfer` by default, created if missing. ate-api-server's pod runs as the GSA, and its credential exchange impersonates the transfer account |
 | IAM database user | the GSA, type `CLOUD_IAM_SERVICE_ACCOUNT` |
 
 > **Note:** The repo otherwise uses WIF-direct

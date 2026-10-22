@@ -32,6 +32,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/client-go/tools/cache"
 )
 
 // testWorkerUID derives a stable pod UID from a pod name, for Workers seeded
@@ -157,9 +158,10 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 	storetest.MustCreateActor(t, ctx, st, actor)
 }
 
-// withPausedShape seeds the shape a pause leaves behind: a node-local
-// snapshot at the latest generation with a PENDING durable copy, pinned to
-// node. Pair it with ACTOR_STATE_SUSPENDED to seed a paused actor.
+// withPausedShape seeds the shape an asynchronous suspend leaves behind: a
+// node-local snapshot at the latest generation with a PENDING durable copy,
+// pinned to node. Pair it with ACTOR_STATE_SUSPENDED to seed an asynchronously
+// suspended actor.
 func withPausedShape(t *testing.T, node string) func(*ateapipb.Actor) {
 	t.Helper()
 	snap := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node)
@@ -170,8 +172,9 @@ func withPausedShape(t *testing.T, node string) func(*ateapipb.Actor) {
 	}
 }
 
-// withUploadedPausedShape seeds a paused actor whose snapshot atelet has since
-// uploaded: the paused shape, with its durable copy COMPLETED.
+// withUploadedPausedShape seeds an asynchronously suspended actor whose
+// snapshot atelet has since uploaded: the local-snapshot shape, with its
+// durable copy COMPLETED.
 func withUploadedPausedShape(t *testing.T, node string) func(*ateapipb.Actor) {
 	t.Helper()
 	paused := withPausedShape(t, node)
@@ -189,9 +192,10 @@ func newInProgressSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFi
 	return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", uuid, someActorSnapshotURI(t, testStorageLocation, "team-a", uuid), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
 }
 
-// newPausedSnapshot builds the snapshot a pause leaves on node locality at
-// generation gen: a node-local checkpoint whose PENDING durable copy atelet
-// uploads in the background. With no locality it is the in-progress mark.
+// newPausedSnapshot builds the snapshot an asynchronous suspend leaves on node
+// locality at generation gen: a node-local checkpoint whose PENDING durable
+// copy atelet uploads in the background. With no locality it is the in-progress
+// mark.
 func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
 	t.Helper()
 	snap := newInProgressSnapshot(t, gen, fidelity, uuid)
@@ -252,9 +256,8 @@ func suspendTestTemplateRef() *ateapipb.ObjectRef {
 	return &ateapipb.ObjectRef{Atespace: "ns", Name: "tmpl1"}
 }
 
-// seedSuspendTemplate stores the ActorTemplate the suspend and pause workflow
-// tests run their actors from, with the given snapshot config, and returns it
-// as stored.
+// seedSuspendTemplate stores the ActorTemplate the suspend workflow tests run
+// their actors from, with the given snapshot config, and returns it as stored.
 func seedSuspendTemplate(t *testing.T, ctx context.Context, st store.Interface, snapshotConfig *ateapipb.SnapshotConfig) *ateapipb.ActorTemplate {
 	t.Helper()
 	ref := suspendTestTemplateRef()
@@ -310,8 +313,8 @@ func assignmentOf(actor *ateapipb.Actor) *ateapipb.ActorAssignment {
 }
 
 // newMarkOnlyWorkflow builds an ActorWorkflow whose atelet dial always fails,
-// so a suspend or pause stops right after its mark step and leaves the actor
-// as that step committed it.
+// so a suspend stops right after its mark step and leaves the actor as that
+// step committed it.
 func newMarkOnlyWorkflow(st store.Interface) *ActorWorkflow {
 	return &ActorWorkflow{store: st, dialer: newDanglingDialer()}
 }
@@ -367,11 +370,17 @@ func mustReadActor(t *testing.T, ctx context.Context, st store.Interface, actorR
 }
 
 // workerDeletedDuringReleaseStore runs the DeleteWorker workflow's release of
-// an actor right after a finalize step frees the actor's worker. That workflow
-// takes no actor lease, so its crash can land between the step's read of the
-// actor and its write.
+// an actor right after a finalize step frees the actor's worker, so its crash
+// runs between the step's read of the actor and its write. In production the
+// release takes the actor's lease, which pause and suspend hold through their
+// finalize steps, so it waits for them instead; AcquireLease is bypassed here
+// to keep the finalize step's own version guard against the crash covered.
 type workerDeletedDuringReleaseStore struct {
 	store.Interface
+}
+
+func (s workerDeletedDuringReleaseStore) AcquireLease(ctx context.Context, _ string) (*store.Lease, error) {
+	return store.NewLease(ctx, func() {}), nil
 }
 
 func (s workerDeletedDuringReleaseStore) ReleaseActorFromWorker(ctx context.Context, workerName, actorUID string) (*ateapipb.Worker, error) {
@@ -387,7 +396,8 @@ func (s workerDeletedDuringReleaseStore) ReleaseActorFromWorker(ctx context.Cont
 	if err != nil {
 		return nil, err
 	}
-	if err := NewWorkerWorkflow(s.Interface).releaseBoundActor(ctx, worker, assignment); err != nil {
+	dialer := NewAteletDialer(cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{byNode: nil}), "", "", "")
+	if err := NewWorkerWorkflow(s, dialer).releaseBoundActor(ctx, worker, assignment); err != nil {
 		return nil, err
 	}
 	return released, nil

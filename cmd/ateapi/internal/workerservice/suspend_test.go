@@ -209,7 +209,7 @@ func TestRequestActorSuspend_Errors(t *testing.T) {
 }
 
 // The suspend is a proposal, and the control plane's refusal is the answer: a
-// request that loses a race to a resume, pause, or delete comes back as what
+// request that loses a race to a resume, suspend, or delete comes back as what
 // the workflow said, not as something the worker has to interpret.
 func TestRequestActorSuspend_PassesThroughTheWorkflowsRefusal(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)

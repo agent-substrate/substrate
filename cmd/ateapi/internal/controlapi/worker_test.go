@@ -73,7 +73,7 @@ func newWorkerAPIService(t *testing.T) (*RPCService, store.Interface) {
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
 	impl := newServiceImpl(persistence, nil)
-	return &RPCService{impl: impl, workerWorkflow: NewWorkerWorkflow(persistence)}, persistence
+	return &RPCService{impl: impl, workerWorkflow: NewWorkerWorkflow(persistence, newNodeAteletDialer(t, &capturingTerminator{}))}, persistence
 }
 
 // seedAPIWorker registers a worker directly through the store and returns it as
@@ -520,11 +520,15 @@ func TestDeleteWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}
-	// Delete drains before it sweeps, so it removes one revision past what was
-	// seeded.
+	// Delete admits and drains in one write before it sweeps, so it removes one
+	// revision past what was seeded.
+	if got.GetMetadata().GetDeleteTime() == nil {
+		t.Error("DeleteWorker() returned a worker without delete_time")
+	}
 	want := proto.Clone(seeded).(*ateapipb.Worker)
 	want.Metadata.Version = seeded.GetMetadata().GetVersion() + 1
 	want.Metadata.UpdateTime = got.GetMetadata().GetUpdateTime()
+	want.Metadata.DeleteTime = got.GetMetadata().GetDeleteTime()
 	want.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("DeleteWorker() returned something other than the worker it removed (-want +got):\n%s", diff)

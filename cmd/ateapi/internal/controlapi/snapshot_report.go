@@ -164,8 +164,8 @@ func applyAteletResponseState(ctx context.Context, status *ateapipb.ActorStatus,
 
 // applyLatestDurable marks the reported durable snapshot COMPLETED, and records
 // its fidelity. Its uuid and upload URI must match the recorded ones, and its
-// fidelity must be set. The snapshot keeps its locality, so a paused Actor
-// stays on its node.
+// fidelity must be set. The snapshot keeps its locality, so an Actor with a
+// node-local snapshot stays on its node.
 //
 // A late report changes nothing and is logged at Info. A report is late when
 // its generation is older than the latest COMPLETED one, or is no longer in

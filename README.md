@@ -168,8 +168,8 @@ curl -X POST \
    go run ./tools/setup-gcp bootstrap
    ```
 
-   On a fresh project this step also creates the atelet Workload Identity IAM
-   grants that snapshots depend on — see
+   On a fresh project this step also creates the Workload Identity IAM grants
+   that ate-api-server and atelet depend on. See
    [what `create iam` actually grants](tools/setup-gcp/README.md#what-create-iam-actually-grants)
    to audit them or apply them manually. If you bring your own cluster instead,
    note the required Kubernetes beta APIs can only be enabled **at cluster

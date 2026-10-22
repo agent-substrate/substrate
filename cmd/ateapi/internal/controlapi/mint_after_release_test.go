@@ -45,7 +45,7 @@ import (
 // window, nor once it hosts another actor or the status is finalized, and
 // another worker on the node never gets one.
 func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
-	// The worker is the one WireTestAssignment names, so a pause or suspend
+	// The worker is the one WireTestAssignment names, so an async or sync suspend
 	// reaches the workflow's fake atelet on its node.
 	wa := controlapi.WireTestAssignment()
 	node := wa.GetNodeName()
@@ -168,7 +168,7 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 			if actor.GetStatus().GetState() != wf.WantFinalState {
 				t.Errorf("actor state once finalized = %v, want %v", actor.GetStatus().GetState(), wf.WantFinalState)
 			}
-			// No worker runs the actor once finalized, paused or not.
+			// No worker runs the actor once finalized, with or without a local snapshot.
 			if got != codes.NotFound {
 				t.Errorf("certificate mint once finalized: code %v, want NotFound", got)
 			}

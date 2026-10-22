@@ -107,7 +107,7 @@ func NewRPCService(
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
-	s.workerWorkflow = NewWorkerWorkflow(impl)
+	s.workerWorkflow = NewWorkerWorkflow(impl, dialer)
 	return s
 }
 

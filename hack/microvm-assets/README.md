@@ -49,8 +49,9 @@ it as a device, which is what places micro-VM workers there.
    guest-memory snapshot round-tripped across pods.
 
 ## Notes
-- Assets may share the snapshot bucket, but must not be stored under a snapshot location
-  (an ActorTemplate's `snapshotConfig.location` followed by `/atespaces/`): the node's
-  object-store plugin refuses to serve anything there as an asset. The staging scripts use
-  `kata-assets/`, which is outside it.
+- Assets must not be stored under a snapshot location (an ActorTemplate's
+  `snapshotConfig.location` followed by `/atespaces/`): the node's object-store plugin
+  refuses to serve anything there as an asset. The staging scripts use `kata-assets/`,
+  which is outside it. On GKE they stage into the asset bucket, `BUCKET_NAME-assets`,
+  the only bucket setup-gcp lets nodes read. On kind they share the rustfs bucket.
 - `assets` is single-arch (unlike runsc's amd64/arm64): stage assets matching the node arch.

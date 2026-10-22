@@ -307,6 +307,16 @@ func TestExchangeScopesTheTokenToTheActor(t *testing.T) {
 	if left := time.Until(resp.GetExpireTime().AsTime()); token == "" || left <= 0 {
 		t.Fatalf("exchange returned token %q expiring in %v", token, left)
 	}
+	// A forced exchange mints from the current source token, which is
+	// replaced once less than 40 minutes are left. A minute is allowed for
+	// clock skew between this machine and Google.
+	fresh, err := xchg.ExchangeActorJwt(ctx, &exchangepb.ExchangeActorJwtRequest{ActorJwt: sign.jwt(t, forActor(alpha)), Force: true})
+	if err != nil {
+		t.Fatalf("forced exchange for a running actor: %v", err)
+	}
+	if left := time.Until(fresh.GetExpireTime().AsTime()); left < 39*time.Minute {
+		t.Errorf("a freshly minted token expires in %v, want at least 39m", left)
+	}
 	// The golden is readable and not writable. The actor's own prefix,
 	// which holds nothing yet, is writable.
 	expectGCS(t, ctx, "golden manifest read", token, http.MethodGet, goldenURI+"/manifest.json", "", http.StatusOK)

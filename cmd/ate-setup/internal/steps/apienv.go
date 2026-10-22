@@ -58,6 +58,9 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := e.Cfg.RequireTransferServiceAccount(); err != nil {
+		return err
+	}
 	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
 		return err
 	}
@@ -135,6 +138,9 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}
 	configVars["ATE_API_ACTOR_JWT_ISSUER"] = e.Cfg.ActorJWTIssuer
+	// Written empty on kind, so the sidecar's argument is never the literal
+	// $(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT).
+	configVars["ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT"] = e.Cfg.TransferServiceAccount()
 	if snapshotLocation != "" {
 		configVars["ATE_API_SNAPSHOT_LOCATION"] = snapshotLocation
 	}

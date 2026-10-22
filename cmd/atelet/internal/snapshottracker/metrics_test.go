@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -407,8 +408,12 @@ func TestDetachDurationOutcomes(t *testing.T) {
 		ref := testRef("s1", 1, tr.clock.Now())
 		tr.CommitDurable(trackedActorUID, ref)
 		tr.CommitLocal(trackedActorUID, ref)
-		// A file where the local checkpoint directory belongs fails the prune.
-		if err := os.WriteFile(ateletpath.LocalCheckpointsDir(trackedActorUID), nil, 0o600); err != nil {
+		// A populated volume mount directory fails RemoveActorFilesExceptState.
+		stillMounted := filepath.Join(ateletpath.ExternalVolumeHostPath(trackedActorUID, "data"), "payload")
+		if err := os.MkdirAll(filepath.Dir(stillMounted), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(stillMounted, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		stepTo(tr, detachDueOf(tr, trackedActorUID))

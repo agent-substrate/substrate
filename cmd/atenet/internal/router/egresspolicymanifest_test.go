@@ -624,6 +624,7 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesHashToTheInnerListener(t *test
 	}
 	entry := writers[0]
 	var gotKeys []string
+	var sharedTransitivelyKeys []string
 	actionsByKey := map[string]node{}
 	at := -1
 	for i, f := range filters {
@@ -637,8 +638,11 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesHashToTheInnerListener(t *test
 			if key == extproc.EgressPolicyHashFilterStateKey {
 				at = i
 			}
-			if got := str(v, "shared_with_upstream"); got != "ONCE" {
-				t.Errorf("%s has shared_with_upstream %q, want ONCE", key, got)
+			got := str(v, "shared_with_upstream")
+			if got == "TRANSITIVE" {
+				sharedTransitivelyKeys = append(sharedTransitivelyKeys, key)
+			} else if got != "ONCE" {
+				t.Errorf("%s has shared_with_upstream %q, want ONCE or TRANSITIVE", key, got)
 			}
 		}
 	}
@@ -652,6 +656,14 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesHashToTheInnerListener(t *test
 	}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("outer chain set_filter_state actions write keys %v, want %v", gotKeys, wantKeys)
+	}
+	// These keys allow origin pools to be partitioned per actor:port combination.
+	wantSharedTransitivelyKeys := []string{
+		extproc.ActorIdentityFilterStateKey,
+		extproc.ConnectAuthorityFilterStateKey,
+	}
+	if !slices.Equal(sharedTransitivelyKeys, wantSharedTransitivelyKeys) {
+		t.Errorf("outer chain set_filter_state TRANSITIVE keys %v, want %v", sharedTransitivelyKeys, wantSharedTransitivelyKeys)
 	}
 	// These keys determine pool selection and their values are bound to the pool at the
 	// time of pool creation. All CONNECT tunnels that have the same values for these filter

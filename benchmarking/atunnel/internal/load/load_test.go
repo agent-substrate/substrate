@@ -16,6 +16,7 @@ package load
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -120,6 +121,40 @@ func TestEgressActor(t *testing.T) {
 	}
 	if !held || l.Completed != 5 {
 		t.Fatalf("EgressIdle through the egress actor: held %v, completed %d, want true and 5", held, l.Completed)
+	}
+}
+
+// TestEgressActors splits an EgressIdle run across several egress actors and
+// adds up what they report.
+func TestEgressActors(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	target := listen(t)
+	go func() {
+		_ = http.Serve(target, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	}()
+
+	var sockets []string
+	for i := range 3 {
+		socket := filepath.Join(t.TempDir(), fmt.Sprintf("egress-actor-%d.sock", i))
+		lis, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() { _ = serveEgressActor(ctx, lis, Targets{Egress: target.Addr().String()}) }()
+		sockets = append(sockets, socket)
+	}
+
+	var held atomic.Int32
+	l, err := executeOnEgressActors(ctx, sockets, options{
+		mode: EgressIdle, rate: 300, duration: 500 * time.Millisecond, workers: 4, connections: 10,
+		whileHolding: func(context.Context) { held.Add(1) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.Load() != 1 || l.Completed != 10 || l.Errors != 0 {
+		t.Fatalf("EgressIdle across 3 egress actors: whileHolding ran %d times, completed %d, errors %d; want 1, 10, 0", held.Load(), l.Completed, l.Errors)
 	}
 }
 

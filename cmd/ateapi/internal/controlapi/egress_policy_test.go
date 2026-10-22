@@ -142,8 +142,15 @@ func TestActorEgressPolicy(t *testing.T) {
 		Actor: actorRef,
 		Name:  resources.SingletonName,
 	})
-	if err != nil || !proto.Equal(deleted, updated) {
-		t.Fatalf("deleted policy = %v, %v; want %v", deleted, err, updated)
+	if err != nil {
+		t.Fatalf("DeleteActorEgressPolicy: %v", err)
+	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Error("the deleted policy carries no delete_time")
+	}
+	deleted.Metadata.DeleteTime = nil
+	if !proto.Equal(deleted, updated) {
+		t.Fatalf("deleted policy = %v; want %v with delete_time set", deleted, updated)
 	}
 	if _, err := service.GetActorEgressPolicy(t.Context(), &ateapipb.GetActorEgressPolicyRequest{
 		Actor: actorRef,

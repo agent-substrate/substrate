@@ -11,7 +11,7 @@ It uses a hierarchical command structure:
     *   `enable apis` - Enable required GCP APIs.
     *   `create` - Parent command for resource creation.
         *   `cluster` - Create GKE cluster.
-        *   `bucket` - Create GCS bucket.
+        *   `bucket` - Create the GCS snapshot and asset buckets.
         *   `iam` - Create IAM policy bindings and grant permissions.
         *   `dashboards` - Create Cloud Monitoring dashboards.
         *   `cloudsql` - Create a Cloud SQL PostgreSQL instance for the ateapi store, with IAM database authentication (see [cloud-sql.md](cloud-sql.md)).
@@ -190,7 +190,8 @@ one of the options below.
 
 ### 3. Create Bucket
 
-Creates a GCS bucket for storing snapshots.
+Creates the GCS bucket for snapshots and the asset bucket, `NAME-assets`, for
+micro-VM sandbox assets.
 
 ```bash
 go run ./tools/setup-gcp create bucket [flags]
@@ -199,7 +200,7 @@ go run ./tools/setup-gcp create bucket [flags]
 **Flags:**
 | Flag | Description | Default Env Var | Fallback Default |
 | :--- | :--- | :--- | :--- |
-| `--name` | Name of the GCS bucket. | `BUCKET_NAME` | None (Required*) |
+| `--name` | Name of the GCS snapshot bucket. The micro-VM asset bucket is created beside it as `NAME-assets`. | `BUCKET_NAME` | None (Required*) |
 
 *\*Note: Required unless the `BUCKET_NAME` environment variable is set.*
 
@@ -217,42 +218,51 @@ go run ./tools/setup-gcp create iam [flags]
 | `--bucket` | GCS bucket name. | `BUCKET_NAME` | None (Required for bucket bindings*) |
 | `--gke-nodes` | Grant GKE nodes permission to pull images. | - | `true` |
 | `--atelet` | Grant atelet project-level permissions. | - | `true` |
-| `--bucket-bindings` | Grant atelet and ate-api-server access to the snapshot bucket. | - | `true` |
+| `--transfer-service-account` | Create the snapshot transfer service account and let ate-api-server create tokens for it. | - | `true` |
+| `--transfer-gsa-name` | Name of the snapshot transfer service account to create. ate-setup and `hack/teardown.sh` read the same variable. | `SNAPSHOT_TRANSFER_GSA_NAME` | `ate-snapshot-transfer` |
+| `--bucket-bindings` | Grant ate-api-server and the snapshot transfer service account access to the snapshot bucket, and atelet read access to the asset bucket. | - | `true` |
 
 *\*Note: Required for bucket bindings unless the `BUCKET_NAME` environment variable is set.*
 
 #### What `create iam` actually grants
 
 On a fresh GCP project these bindings do not exist, and nothing else creates
-them — without them atelet cannot read or write external snapshots (`403` from
-GCS on the first suspend/resume), ate-api cannot copy or collect them, and
-nodes cannot pull images. `bootstrap` and `create iam` apply them for you; the
-table below is the reference for auditing them, or for applying them by hand in
-projects where you cannot run the tool with project-level IAM permissions.
+them. Without them atelet cannot fetch micro-VM assets, ate-api cannot copy or
+collect snapshots or issue per-actor tokens for them (`403` from GCS on the
+first suspend/resume), and nodes cannot pull images. `bootstrap` and `create iam`
+apply them for you. The table below is the reference for auditing them, or for
+applying them by hand in projects where you cannot run the tool with
+project-level IAM permissions.
 
 atelet and ate-api authenticate via [GKE Workload Identity
 Federation](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity):
 their Kubernetes ServiceAccounts (`ate-system/atelet` and
 `ate-system/ate-api-server`, created by `install-ate.sh`) are addressed
-directly as IAM principals — no Google service account is created or
-impersonated. This only works on a cluster with Workload Identity enabled
-(`create cluster` enables the `PROJECT_ID.svc.id.goog` pool; a pre-existing
-cluster must have it enabled too, or their GCS calls fail with `401`).
+directly as IAM principals. The one Google service account `create iam`
+creates is the snapshot transfer account⁴, which ate-api-server's credential
+exchange impersonates and downscopes per actor for every snapshot transfer.
+This only works on a cluster with Workload Identity enabled. `create cluster`
+enables the `PROJECT_ID.svc.id.goog` pool, and a pre-existing cluster must
+have it enabled too, or their GCS calls fail with `401`.
 
 | Member | Role | Resource | Why |
 | :--- | :--- | :--- | :--- |
-| atelet WI principal¹ | `roles/storage.objectAdmin` | project² | Read/write actor snapshots in GCS |
 | atelet WI principal¹ | `roles/artifactregistry.reader` | project² | Pull sandbox runtime assets |
-| atelet WI principal¹ | `roles/storage.objectAdmin` | snapshot bucket | Read/write snapshot objects |
-| atelet WI principal¹ | `roles/storage.bucketViewer` | snapshot bucket | List/stat the snapshot bucket |
 | ate-api-server WI principal¹ | `roles/storage.objectAdmin` | snapshot bucket | Copy external snapshots for tags, delete the ones nothing refers to |
 | ate-api-server WI principal¹ | `roles/storage.bucketViewer` | snapshot bucket | List/stat the snapshot bucket |
-| default compute SA³ | `roles/storage.objectViewer` | project² | Nodes pull images from GCS-backed registries |
-| default compute SA³ | `roles/artifactregistry.reader` | project² | Nodes pull images from Artifact Registry |
+| snapshot transfer SA⁴ | `roles/storage.objectAdmin` | snapshot bucket | Snapshot transfers, on tokens the credential exchange downscopes per actor |
+| snapshot transfer SA⁴ | `roles/storage.bucketViewer` | snapshot bucket | List/stat the snapshot bucket |
+| ate-api-server WI principal¹ | `roles/iam.serviceAccountTokenCreator` | snapshot transfer SA⁴ | The credential exchange impersonates it |
+| Cloud SQL GSA⁵ | `roles/iam.serviceAccountTokenCreator` | snapshot transfer SA⁴ | Granted by `create cloudsql`: with Cloud SQL, ate-api-server's pod runs as this account |
+| atelet WI principal¹ | `roles/storage.objectViewer` | asset bucket (`BUCKET_NAME-assets`) | Read micro-VM sandbox assets |
+| default compute SA³ | `roles/artifactregistry.reader` | project² | Nodes pull images from Artifact Registry, which also serves gcr.io |
 
 ¹ `principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/ate-system/sa/SERVICE_ACCOUNT` — note it is keyed to the **project number**, not the ID.
 ² Project-level today; scoping these down is tracked in the TODOs in `cmd/iam.go`.
-³ `PROJECT_NUMBER-compute@developer.gserviceaccount.com` (least-privileged node SA is #76).
+³ `PROJECT_NUMBER-compute@developer.gserviceaccount.com`. It gets no storage role, since root on a node can use it. Installs set up before this also granted it `roles/storage.objectViewer` on the project. Remove that with
+`gcloud projects remove-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" --role=roles/storage.objectViewer --condition=None`.
+⁴ `NAME@PROJECT_ID.iam.gserviceaccount.com`, with `NAME` from `SNAPSHOT_TRANSFER_GSA_NAME`. setup-gcp and `hack/teardown.sh` default it to `ate-snapshot-transfer`. ate-setup has no default and requires it on GKE.
+⁵ `ate-api-server@PROJECT_ID.iam.gserviceaccount.com` by default, see [cloud-sql.md](cloud-sql.md).
 
 Manual equivalent:
 
@@ -260,17 +270,68 @@ Manual equivalent:
 WI="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ate-system/sa"
 ATELET="${WI}/atelet"
 ATE_API="${WI}/ate-api-server"
+TRANSFER_NAME="${SNAPSHOT_TRANSFER_GSA_NAME:-ate-snapshot-transfer}"
+TRANSFER="${TRANSFER_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-  --member="${ATELET}" --role=roles/storage.objectAdmin
-gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="${ATELET}" --role=roles/artifactregistry.reader
-for MEMBER in "${ATELET}" "${ATE_API}"; do
-  gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
-    --member="${MEMBER}" --role=roles/storage.objectAdmin
-  gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
-    --member="${MEMBER}" --role=roles/storage.bucketViewer
-done
+gcloud iam service-accounts create "${TRANSFER_NAME}" --project="${PROJECT_ID}" \
+  --display-name="Substrate snapshot transfers"
+gcloud iam service-accounts add-iam-policy-binding "${TRANSFER}" --project="${PROJECT_ID}" \
+  --member="${ATE_API}" --role=roles/iam.serviceAccountTokenCreator
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+  --member="${ATE_API}" --role=roles/storage.objectAdmin
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+  --member="${ATE_API}" --role=roles/storage.bucketViewer
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+  --member="serviceAccount:${TRANSFER}" --role=roles/storage.objectAdmin
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+  --member="serviceAccount:${TRANSFER}" --role=roles/storage.bucketViewer
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}-assets" \
+  --member="${ATELET}" --role=roles/storage.objectViewer
+```
+
+#### Upgrading an existing install
+
+Substrate does not support upgrading a cluster in place yet. A cluster with
+micro-VM workers has to be recreated: each node indexes a sandbox runtime by
+the digests of its assets, which do not change when the assets move to the
+asset bucket, so a node keeps fetching them from the snapshot bucket. The
+commands below still apply when the new cluster reuses the GCP project.
+
+Run `create iam` before deploying a Substrate release whose credential
+exchange impersonates the snapshot transfer account. It creates the account
+and its grants, and ate-setup refuses to deploy ate-api-server on GKE until
+`SNAPSHOT_TRANSFER_GSA_NAME` names it. With Cloud SQL, rerun
+`create cloudsql` too, so its account may create the transfer account's
+tokens.
+
+setup-gcp only adds bindings. An install set up before the asset bucket
+existed still grants atelet object admin on the project and on the snapshot
+bucket. Upgrade Substrate first, to a release whose node plugin gets snapshot
+credentials from ate-api-server's credential exchange. On an older release,
+removing these grants makes every suspend and resume fail with `403`. Remove
+those grants after running `create bucket` and `create iam`, and after
+rerunning `hack/install-microvm-deps.sh --install` if you use micro-VM
+workers, so the assets are in the asset bucket. `ATELET` is set as in the
+manual equivalent above:
+
+```bash
+gcloud projects remove-iam-policy-binding "${PROJECT_ID}" \
+  --member="${ATELET}" --role=roles/storage.objectAdmin --condition=None
+gcloud storage buckets remove-iam-policy-binding "gs://${BUCKET_NAME}" \
+  --member="${ATELET}" --role=roles/storage.objectAdmin
+gcloud storage buckets remove-iam-policy-binding "gs://${BUCKET_NAME}" \
+  --member="${ATELET}" --role=roles/storage.bucketViewer
+```
+
+An install from before the node service account lost its project-wide read
+access also still has that grant. Remove it too:
+
+```bash
+gcloud projects remove-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role=roles/storage.objectViewer --condition=None
 ```
 
 ### 5. Create Dashboards
@@ -308,6 +369,7 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 | `--bucket-name` | Name of the GCS bucket for snapshots. | `BUCKET_NAME` | None (Required*) |
 | `--dashboard-dir` | Directory containing dashboard JSON files. | `DASHBOARD_DIR` | `tools/setup-gcp/dashboards` |
+| `--transfer-gsa-name` | Name of the snapshot transfer service account to create. ate-setup and `hack/teardown.sh` read the same variable. | `SNAPSHOT_TRANSFER_GSA_NAME` | `ate-snapshot-transfer` |
 
 *\*Note: Required unless the `BUCKET_NAME` environment variable is set.*
 

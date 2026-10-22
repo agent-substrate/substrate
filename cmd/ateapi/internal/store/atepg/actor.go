@@ -80,6 +80,14 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
+	return p.updateActor(ctx, actorRef, store.DeletePreconditions(precondition), mutate, false)
+}
+
+func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	return p.updateActor(ctx, actorRef, precondition, mutate, true)
+}
+
+func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapipb.Actor) error, markForDeletion bool) (*ateapipb.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
 	var currentUID string
 	var currentVersion int64
@@ -104,12 +112,17 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, err
 	}
 	oldMeta := proto.CloneOf(dbActor.Metadata)
-	if err := mutate(dbActor); err != nil {
-		return nil, err
+	if mutate != nil {
+		if err := mutate(dbActor); err != nil {
+			return nil, err
+		}
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
 	setUpdateMetadata(dbActor.Metadata, oldMeta)
+	if markForDeletion && dbActor.Metadata.DeleteTime == nil {
+		dbActor.Metadata.DeleteTime = proto.CloneOf(dbActor.Metadata.UpdateTime)
+	}
 
 	updatedBytes, err := proto.Marshal(dbActor)
 	if err != nil {

@@ -40,7 +40,18 @@ type Handle = vishnetns.NsHandle
 
 // GetFromName opens the namespace of that name under /run/netns.
 func GetFromName(name string) (Handle, error) {
+	if err := validateName(name); err != nil {
+		return -1, err
+	}
 	return vishnetns.GetFromName(name)
+}
+
+// validateName rejects names that would resolve outside /run/netns.
+func validateName(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
+		return fmt.Errorf("invalid network namespace name %q: %w", name, os.ErrInvalid)
+	}
+	return nil
 }
 
 // CreateNamed creates a named netns and returns its handle, restoring the
@@ -86,8 +97,8 @@ func CreateNamed(name string) (Handle, error) {
 // it if it is a symlink. A name that is already gone is not an error, and the
 // namespace itself survives for as long as something holds it open.
 func RemoveNamed(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
-		return fmt.Errorf("invalid network namespace name %q: %w", name, os.ErrInvalid)
+	if err := validateName(name); err != nil {
+		return err
 	}
 	path := filepath.Join("/run/netns", name)
 	if err := unix.Unmount(path, unix.MNT_DETACH|unix.UMOUNT_NOFOLLOW); err != nil && !errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.EINVAL) {

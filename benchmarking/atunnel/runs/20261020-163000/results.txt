@@ -1,0 +1,12 @@
+=== EgressIdleConns: rungs are connection counts: open at 200/s through egress, one request each, then hold
+    unit: held connection; 10s per rung, first 0s not measured
+      offered  achieved      p50      p99      max   errs |  cores µs/unit   rss-max  heap-max    gor cg-cores    cg-mem | A cores C cores  verdict
+        25000     25000   5.87ms  14.54ms  39.01ms      0 |   0.15     806 1215.8MiB  663.7MiB 100345     0.15 1309.9MiB |    0.01    0.09  SHORTFALL (units waited for a worker, p99 10.4ms)
+              holding 25000: live heap 657.5MiB after GC, 26.9 KiB and 4.0 goroutines per connection
+        50000     50000   5.44ms  16.11ms    195ms      0 |   0.14     733 2401.5MiB 1331.0MiB 200595     0.14 2589.9MiB |    0.01    0.08  SHORTFALL (units waited for a worker, p99 11.6ms)
+              holding 50000: live heap 1325.0MiB after GC, 27.1 KiB and 4.0 goroutines per connection
+       100000    100000   5.04ms  15.17ms    235ms      0 |   0.19     975 4733.7MiB 2627.3MiB 401095     0.19 5192.6MiB |    0.01    0.11  OK
+              holding 100000: live heap 2619.1MiB after GC, 26.8 KiB and 4.0 goroutines per connection
+    cores..cg-mem are atunnel alone (process B); A and C are the traffic generator and the far end
+    sink counters: {"gateway_bytes_in":6825000,"gateway_connections":999,"gateway_rejected":0,"gateway_requests":175000,"gateway_tunnels":175000,"gateway_tunnels_h2":175000,"ingress_actor_connections":0,"ingress_actor_requests":0}
+

@@ -25,7 +25,9 @@ the router capacity benchmark — see
    images via `ko` as part of their deploy steps — there's no separate
    image build step). The install sets `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` to
    the `ate-client` and `benchmarking/benchmark-runner` ServiceAccounts so the
-   runner's calls pass [authorization](../../docs/authorization.md). For a `microvm` test the orchestrator also
+   runner's calls pass [authorization](../../docs/authorization.md), and sets
+   `ATE_INGRESS_ALLOWED_SPIFFE_IDS` to `benchmarking/benchmark-runner` for the
+   Envoy ingress router. For a `microvm` test the orchestrator also
    runs `hack/install-microvm-deps.sh --install` between the two, which
    stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
    store bucket and applies the cluster-wide `microvm` SandboxConfig.
@@ -54,9 +56,10 @@ Each entry in `tests.yaml` may set `sandboxClass: gvisor | microvm` (default
 `gvisor`). This controls both `spec.sandboxClasses[0].name` on the benchmark WorkerPool
 and its `workerImage` (`ateworker-gvisor` vs `ateworker-microvm`).
 
-For `microvm` tests the target cluster must have KVM-capable nodes and the
-object store bucket named in its `.ate-dev-env.sh` must be writable by the
-orchestrator's Workload Identity principal.
+For `microvm` tests the target cluster must have KVM-capable nodes. The
+orchestrator uploads the micro-VM assets, so its Workload Identity principal
+must be able to write to the bucket they go to. On GKE that is
+`<BUCKET_NAME>-assets`, where `BUCKET_NAME` comes from `.ate-dev-env.sh`.
 
 ## Setup
 

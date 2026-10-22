@@ -17,16 +17,20 @@ package snapshottracker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
+	clocktesting "k8s.io/utils/clock/testing"
 )
 
 // eventually polls cond until it holds, and fails the test if it does not
@@ -334,7 +338,7 @@ func TestTrackerDetach(t *testing.T) {
 	}
 }
 
-// A local snapshot no detach can make durable, as a pause takes today, never
+// A local snapshot no detach can make durable (e.g. with no upload URI) never
 // comes due for a background detach, rather than failing it again and again.
 // A checkpoint that replaces it schedules a detach again.
 func TestTrackerSkipsUndetachableSnapshots(t *testing.T) {
@@ -609,32 +613,62 @@ func TestTrackerFailedDetach(t *testing.T) {
 	})
 }
 
-// A detach whose prune fails keeps LatestLocal, now durable, and is retried:
-// the retry finds the snapshot durable and only prunes.
+// A detach whose cleanup fails (e.g. because an external volume mount directory
+// is still populated) keeps LatestLocal and its local snapshot on disk, records
+// the snapshot as durable, and is retried: the retry finds the snapshot durable
+// and only cleans up.
 func TestTrackerDetachRetriesFailedPrune(t *testing.T) {
 	store := newFakeSnapshotStore()
-	tr := newTestTracker(t, store)
-	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
-	// A file where the local checkpoint directory belongs fails the prune.
-	if err := os.WriteFile(ateletpath.LocalCheckpointsDir(trackedActorUID), nil, 0o600); err != nil {
+	tr := newReportingTracker(t, store, newFakeReporter())
+	localSnap := ateletpath.LocalSnapshotDir(trackedActorUID, "s1")
+	if err := os.MkdirAll(localSnap, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
+	// A populated volume mount directory fails RemoveActorFilesExceptState
+	// before it deletes the local snapshot tree.
+	stillMounted := filepath.Join(ateletpath.ExternalVolumeHostPath(trackedActorUID, "data"), "payload")
+	if err := os.MkdirAll(filepath.Dir(stillMounted), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stillMounted, []byte("volume contents"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tr.Detach(t.Context(), trackedActorUID); err == nil {
-		t.Fatal("detach succeeded, want the prune's error")
+		t.Fatal("detach succeeded, want RemoveActorFilesExceptState error")
 	}
 	if st := tr.State(trackedActorUID); uuidOf(st.GetLatestLocal()) != "s1" || uuidOf(st.GetLatestDurable()) != "s1" {
 		t.Errorf("state = %v, want s1 still local and now durable", st)
 	}
+	if _, err := os.Stat(localSnap); err != nil {
+		t.Errorf("local snapshot deleted on failed detach: %v", err)
+	}
+	if _, err := os.Stat(stillMounted); err != nil {
+		t.Errorf("stillMounted was deleted on failed detach: %v", err)
+	}
+	if _, err := os.Stat(ateletpath.OCIBundleDir(trackedActorUID)); !os.IsNotExist(err) {
+		t.Errorf("bundle dir was created during a failed detach cleanup: %v", err)
+	}
 
-	if err := os.Remove(ateletpath.LocalCheckpointsDir(trackedActorUID)); err != nil {
+	if err := os.Remove(stillMounted); err != nil {
 		t.Fatal(err)
 	}
 	detachNow(t, tr)
 	if got, want := store.uploads(), []string{"s1"}; !slices.Equal(got, want) {
-		t.Errorf("uploads = %v, want %v, as the retry only prunes", got, want)
+		t.Errorf("uploads = %v, want %v, as the retry only cleans up", got, want)
 	}
 	if got := tr.State(trackedActorUID).GetLatestLocal(); got != nil {
 		t.Errorf("latest_local = %v after the retried detach, want unset", got)
+	}
+	processNextReport(t, tr)
+	if inMemory(tr) {
+		t.Error("actor still in memory after retried detach")
+	}
+	if _, err := os.Stat(ateletpath.ActorPath(trackedActorUID)); !os.IsNotExist(err) {
+		t.Errorf("actor dir %s still exists: %v", ateletpath.ActorPath(trackedActorUID), err)
+	}
+	if _, err := os.Stat(ateletpath.ActorSnapshotPath(trackedActorUID)); !os.IsNotExist(err) {
+		t.Errorf("actor snapshot dir %s still exists: %v", ateletpath.ActorSnapshotPath(trackedActorUID), err)
 	}
 }
 
@@ -697,12 +731,16 @@ func TestTrackerLiftsBackoffWithDetach(t *testing.T) {
 			s1 := testRef("s1", 1, tr.clock.Now())
 			tr.CommitDurable(trackedActorUID, s1)
 			tr.CommitLocal(trackedActorUID, s1)
-			// A file where the local checkpoint directory belongs fails the prune.
-			if err := os.WriteFile(ateletpath.LocalCheckpointsDir(trackedActorUID), nil, 0o600); err != nil {
+			// A populated volume mount directory fails RemoveActorFilesExceptState.
+			stillMounted := filepath.Join(ateletpath.ExternalVolumeHostPath(trackedActorUID, "data"), "payload")
+			if err := os.MkdirAll(filepath.Dir(stillMounted), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(stillMounted, nil, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := tr.Detach(t.Context(), trackedActorUID); err == nil {
-				t.Fatal("detach succeeded, want the prune's error")
+				t.Fatal("detach succeeded, want the cleanup's error")
 			}
 			if !inMemory(tr) {
 				t.Fatal("entry not in memory after a failed detach, want it kept for its backoff")
@@ -844,8 +882,122 @@ func TestTrackerRequeuesUntilDetachIsDue(t *testing.T) {
 	}
 }
 
+// A Detach whose caller leaves mid-upload returns the caller's error, and the
+// detach runs on to finish and report. Wait covers it.
+func TestTrackerDetachOutlivesCaller(t *testing.T) {
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	tr := newIdleTestTracker(t, store)
+	if err := os.MkdirAll(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+	go func() {
+		_, err := tr.Detach(ctx, trackedActorUID)
+		first <- err
+	}()
+	waitStarted(t, store)
+	done := opDone(t, tr, trackedActorUID)
+	cancel()
+	returnsPromptly(t, "Detach after its caller left", func() {
+		if err := <-first; !errors.Is(err, context.Canceled) {
+			t.Errorf("first detach = %v, want %v", err, context.Canceled)
+		}
+	})
+
+	// Wait covers the detach, so atelet's shutdown waits for it.
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancelWait()
+	if err := tr.Wait(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Wait while the detach runs = %v, want %v", err, context.DeadlineExceeded)
+	}
+
+	store.release <- nil
+	waitClosed(t, done, "the detach its caller left")
+	if st := tr.State(trackedActorUID); st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+		t.Errorf("state = %v, want s1 durable and nothing local", st)
+	}
+	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("s1 after the detach: %v, want it deleted", err)
+	}
+	if !reportDue(tr) {
+		t.Error("no report due after the detach its caller left")
+	}
+	if got := store.uploads(); !slices.Equal(got, []string{"s1"}) {
+		t.Errorf("uploads = %v, want s1 once", got)
+	}
+}
+
+// A detach that fails after its caller left logs the failure.
+func TestTrackerLogsDetachFailingAfterCallerLeft(t *testing.T) {
+	failures := recordLogLevels(t, "Snapshot operation failed")
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	tr := newIdleTestTracker(t, store)
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+	go func() {
+		_, err := tr.Detach(ctx, trackedActorUID)
+		first <- err
+	}()
+	waitStarted(t, store)
+	done := opDone(t, tr, trackedActorUID)
+	cancel()
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatalf("detach = %v, want %v", err, context.Canceled)
+	}
+	store.release <- errors.New("object store unavailable")
+	waitClosed(t, done, "the detach its caller left")
+	if got := failures(); !slices.Equal(got, []slog.Level{slog.LevelWarn}) {
+		t.Errorf("failure logs = %v, want one at %v", got, slog.LevelWarn)
+	}
+}
+
+// After Wait begins, Detach starts nothing.
+func TestTrackerDetachRefusedOnceWaitBegins(t *testing.T) {
+	store := newFakeSnapshotStore()
+	tr := newIdleTestTracker(t, store)
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+	if err := tr.Wait(t.Context()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if _, err := tr.Detach(t.Context(), trackedActorUID); apierror.Code(err) != codes.Unavailable {
+		t.Errorf("detach after Wait = %v, want Unavailable", err)
+	}
+	if got := store.uploads(); len(got) != 0 {
+		t.Errorf("uploads = %v, want none", got)
+	}
+}
+
+// A detach the tracker's shutdown ends fails a live caller with Unavailable.
+func TestTrackerDetachStoppedByShutdownIsUnavailable(t *testing.T) {
+	useActorDir(t)
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	trackerCtx, stop := context.WithCancel(t.Context())
+	tr := New(trackerCtx, store, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)),
+		WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay))
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+	detached := make(chan error, 1)
+	go func() {
+		_, err := tr.Detach(t.Context(), trackedActorUID)
+		detached <- err
+	}()
+	waitStarted(t, store)
+	stop()
+	if err := <-detached; apierror.Code(err) != codes.Unavailable {
+		t.Errorf("detach during shutdown = %v, want Unavailable", err)
+	}
+}
+
 // cancelingStore is a Store whose upload succeeds just after cancel ends the
-// detach's context, as Forget or the Detach caller can.
+// detach's context, as Forget or the tracker's shutdown can.
 type cancelingStore struct{ cancel context.CancelFunc }
 
 func (s *cancelingStore) UploadLocalSnapshot(context.Context, string, SnapshotRef) (bool, error) {
@@ -853,18 +1005,21 @@ func (s *cancelingStore) UploadLocalSnapshot(context.Context, string, SnapshotRe
 	return true, nil
 }
 
-// A detach whose context ends as its upload succeeds records the upload, but
-// deletes no local snapshot, and fails with the context's error.
+// A detach whose context ends as its upload succeeds records the upload but
+// deletes no local snapshot. The tracker's shutdown ends it here, so the
+// caller gets Unavailable.
 func TestTrackerDetachDoesNotPruneOnceCancelled(t *testing.T) {
+	useActorDir(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	tr := newIdleTestTracker(t, &cancelingStore{cancel: cancel})
+	tr := New(ctx, &cancelingStore{cancel: cancel}, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)),
+		WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay))
 	if err := os.MkdirAll(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
 
-	if _, err := tr.Detach(ctx, trackedActorUID); !errors.Is(err, context.Canceled) {
-		t.Fatalf("detach = %v, want %v", err, context.Canceled)
+	if _, err := tr.Detach(t.Context(), trackedActorUID); apierror.Code(err) != codes.Unavailable {
+		t.Fatalf("detach = %v, want Unavailable", err)
 	}
 	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); err != nil {
 		t.Errorf("s1 after the cancelled detach: %v, want it kept", err)
@@ -915,9 +1070,126 @@ func TestTrackerDetachActsForTheActor(t *testing.T) {
 	})
 }
 
-// A background detach whose upload runs past the upload timeout fails, backs
-// off, and keeps the local snapshot to retry; a foreground Detach RPC is
-// bounded by its caller's context instead.
+// TestTrackerDetachCleansUpActorDirectory verifies that both explicit Detach and
+// background timer detachNow remove the actor's files immediately, keep
+// snapshot-state.json while the detach report is pending, and remove
+// snapshot-state.json and the actor directory once the detach report is
+// acknowledged.
+func TestTrackerDetachCleansUpActorDirectory(t *testing.T) {
+	populateActorDirs := func(t *testing.T, actorUID string) {
+		t.Helper()
+		// Sandbox assets dir with dummy asset binary.
+		assetsDir := ateletpath.SandboxAssetsDir(actorUID)
+		if err := os.MkdirAll(assetsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(assetsDir, "dummy-binary"), []byte("bin"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// Sandbox assets JSON record.
+		if err := os.WriteFile(ateletpath.ActorSandboxAssetsFile(actorUID), []byte(`{"version":1}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Runtime subdirs (bundles, durable-dir, etc.).
+		if err := actordirs.ResetActorDirs(actorUID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assertActorFilesCleanedExceptState := func(t *testing.T, actorUID string) {
+		t.Helper()
+		if _, err := os.Stat(ateletpath.ActorSnapshotPath(actorUID)); !os.IsNotExist(err) {
+			t.Errorf("actor snapshot dir still exists before report: %v", err)
+		}
+		if _, err := os.Stat(ateletpath.SandboxAssetsDir(actorUID)); !os.IsNotExist(err) {
+			t.Errorf("sandbox assets dir still exists before report: %v", err)
+		}
+		if _, err := os.Stat(ateletpath.ActorSandboxAssetsFile(actorUID)); !os.IsNotExist(err) {
+			t.Errorf("sandbox assets file still exists before report: %v", err)
+		}
+		if !reportDueOnDisk() {
+			t.Fatal("snapshot-state.json not kept with report due before report is sent")
+		}
+	}
+
+	assertActorDirCleanedUp := func(t *testing.T, actorUID string) {
+		t.Helper()
+		actorDir := ateletpath.ActorPath(actorUID)
+		if _, err := os.Stat(actorDir); !os.IsNotExist(err) {
+			t.Errorf("actor dir %s still exists: %v", actorDir, err)
+		}
+		snapshotDir := ateletpath.ActorSnapshotPath(actorUID)
+		if _, err := os.Stat(snapshotDir); !os.IsNotExist(err) {
+			t.Errorf("actor snapshot dir %s still exists: %v", snapshotDir, err)
+		}
+		if _, err := os.Stat(ateletpath.SandboxAssetsDir(actorUID)); !os.IsNotExist(err) {
+			t.Errorf("sandbox assets dir still exists: %v", err)
+		}
+		if _, err := os.Stat(ateletpath.ActorSandboxAssetsFile(actorUID)); !os.IsNotExist(err) {
+			t.Errorf("sandbox assets file still exists: %v", err)
+		}
+		if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(actorUID)); !os.IsNotExist(err) {
+			t.Errorf("snapshot state file still exists: %v", err)
+		}
+	}
+
+	t.Run("explicit Detach", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		tr := newReportingTracker(t, store, newFakeReporter())
+		populateActorDirs(t, trackedActorUID)
+		tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
+
+		st, err := tr.Detach(t.Context(), trackedActorUID)
+		if err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+		if st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+			t.Errorf("state = %v, want s1 durable and nothing local", st)
+		}
+		assertActorFilesCleanedExceptState(t, trackedActorUID)
+		if inMemory(tr) {
+			t.Error("actor still in memory while detach report is queued on disk")
+		}
+
+		// A retried DetachActor call before the report is acknowledged still
+		// returns LatestDurable from snapshot-state.json.
+		st, err = tr.Detach(t.Context(), trackedActorUID)
+		if err != nil {
+			t.Fatalf("second Detach: %v", err)
+		}
+		if st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+			t.Errorf("second Detach state = %v, want s1 durable and nothing local", st)
+		}
+
+		processNextReport(t, tr)
+		if inMemory(tr) {
+			t.Error("actor still in memory after detach report is acknowledged")
+		}
+		assertActorDirCleanedUp(t, trackedActorUID)
+	})
+
+	t.Run("background timer detachNow", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		tr := newReportingTracker(t, store, newFakeReporter())
+		populateActorDirs(t, trackedActorUID)
+		tr.CommitLocal(trackedActorUID, committedRef("s1", 1, tr.clock.Now()))
+
+		detachNow(t, tr)
+		assertActorFilesCleanedExceptState(t, trackedActorUID)
+		if inMemory(tr) {
+			t.Error("actor still in memory while detach report is queued on disk")
+		}
+
+		processNextReport(t, tr)
+		if inMemory(tr) {
+			t.Error("actor still in memory after detach report is acknowledged")
+		}
+		assertActorDirCleanedUp(t, trackedActorUID)
+	})
+}
+
+// A detach whose upload runs past the upload timeout fails and keeps the local
+// snapshot to retry, whether a worker or a Detach call runs it.
 func TestTrackerDetachUploadTimeout(t *testing.T) {
 	t.Run("background", func(t *testing.T) {
 		store := newFakeSnapshotStore()
@@ -949,21 +1221,28 @@ func TestTrackerDetachUploadTimeout(t *testing.T) {
 		}
 	})
 
-	t.Run("foreground ignores background upload timeout", func(t *testing.T) {
+	t.Run("foreground", func(t *testing.T) {
 		store := newFakeSnapshotStore()
 		store.setBlocking(true)
-		tr := newTestTracker(t, store)
+		tr := newIdleTestTracker(t, store)
 		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
-
 		detached := startDetach(t, tr)
 		waitStarted(t, store)
-		if d := store.lastDeadline(); !d.IsZero() {
-			t.Errorf("foreground Detach's upload has deadline %v, want none beyond its caller's", d)
+		if d := store.lastDeadline(); d.IsZero() {
+			t.Error("foreground Detach's upload has no deadline, want the upload timeout")
 		}
 
-		store.release <- nil
-		if err := <-detached; err != nil {
-			t.Fatalf("Detach: %v", err)
+		stepTo(tr, tr.clock.Now().Add(testUploadTimeout))
+		select {
+		case err := <-detached:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Detach = %v, want %v", err, context.DeadlineExceeded)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("Detach still running past the upload timeout")
+		}
+		if got := uuidOf(tr.State(trackedActorUID).GetLatestLocal()); got != "s1" {
+			t.Errorf("latest_local after timeout = %q, want s1 kept", got)
 		}
 	})
 }

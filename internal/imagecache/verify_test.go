@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -134,6 +136,22 @@ func assertPoolEmpty(t *testing.T, s *Store) {
 	}
 }
 
+// captureLogs sends the default logger to a buffer until the test ends.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	// slog.SetDefault also points the log package at the handler, and setting
+	// slog back does not undo that, so restore all three.
+	prev, prevOut, prevFlags := slog.Default(), log.Writer(), log.Flags()
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	return &buf
+}
+
 // A blob whose bytes differ from the manifest digest is rejected, even
 // though it decompresses to the claimed diffID.
 func TestPullRejectsBlobNotMatchingManifestDigest(t *testing.T) {
@@ -165,9 +183,13 @@ func TestPullRejectsContentNotMatchingClaimedDiffID(t *testing.T) {
 	pushLyingImage(t, evilRef, evil, good)
 	pushImage(t, goodRef, v1.Config{}, good)
 
+	logs := captureLogs(t)
 	s := newTestStore(t)
 	if _, err := s.EnsureImage(context.Background(), evilRef); !errors.Is(err, errDiffIDMismatch) {
 		t.Fatalf("lying pull error = %v, want errDiffIDMismatch", err)
+	}
+	if !strings.Contains(logs.String(), "level=WARN msg=\"Image layer does not match its claimed diffID\"") {
+		t.Errorf("no mismatch WARN in logs:\n%s", logs)
 	}
 	assertPoolEmpty(t, s)
 

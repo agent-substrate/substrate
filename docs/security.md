@@ -68,7 +68,7 @@ Other forms of tenancy:
 | Principle | Description | Status |
 | :--- | :--- | :--- |
 | **Untrusted Storage** | Persistence layers are treated as untrusted environments. Remote storage is protected with encryption. Local snapshot caching on storage attached to the node is multi-tenant and protected from cross-tenant attacks with encryption and strict filesystem permissions. | Met (Plugin isolation, SHA-256 asset verification)<br>Future (Per-Actor Encryption) |
-| **Dual-Party Snapshot Authorization** | Reading or writing snapshot storage requires dual-identity verification proving both the actor's identity and the node supervisor (`atelet`) operating on its behalf. Sandboxed guests cannot directly interact with snapshot storage. | Met (Supervisor-only storage access)<br>In Progress (Per-actor token exchange) |
+| **Dual-Party Snapshot Authorization** | Reading or writing snapshot storage requires dual-identity verification proving both the actor's identity and the node supervisor (`atelet`) operating on its behalf. Sandboxed guests cannot directly interact with snapshot storage. | Met (Supervisor-only storage access, Per-actor token exchange on GCS)<br>Future (Per-actor tokens on S3) |
 
 ### Network
 

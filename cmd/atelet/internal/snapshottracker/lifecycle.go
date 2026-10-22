@@ -97,9 +97,10 @@ func (t *Tracker) CommitDurable(actorUID string, snap SnapshotRef) *ateletpb.Act
 }
 
 // CommittedCheckpointState returns the actor's state for a Checkpoint whose
-// snapshot atelet committed already, and cancels any pending background
-// report: a Checkpoint returns the state to the control plane, including a
-// detach, in either upload mode.
+// snapshot atelet committed already, and cancels any pending background upload
+// report while a local snapshot is kept. Once LatestLocal is nil, a pending
+// detach report stays due so the actor's state file and directory are removed
+// once the detach report is acknowledged.
 func (t *Tracker) CommittedCheckpointState(actorUID string) *ateletpb.ActorSnapshotState {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
@@ -107,7 +108,7 @@ func (t *Tracker) CommittedCheckpointState(actorUID string) *ateletpb.ActorSnaps
 	if a == nil {
 		return &ateletpb.ActorSnapshotState{}
 	}
-	if a.reportDue() {
+	if a.LatestLocal != nil && a.reportDue() {
 		t.clearReportDueLocked(a)
 	}
 	return t.stateLocked(a)

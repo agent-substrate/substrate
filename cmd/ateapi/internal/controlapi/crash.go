@@ -37,6 +37,7 @@ import (
 const (
 	crashMessageWorkerAssignmentMissing  = "actor has no worker assignment in a state that requires one"
 	crashMessageLocalSnapshotNodeUnknown = "node holding the actor's local snapshot is unknown"
+	crashMessageLocalSnapshotNodeGone    = "node holding the actor's latest snapshot no longer exists"
 	crashMessageLocalSnapshotMissing     = "actor has no local snapshot"
 	crashMessageDurableSnapshotMissing   = "actor has no durable snapshot"
 	crashMessageSnapshotStateConflict    = "atelet's snapshot state conflicts with the actor's record"
@@ -127,7 +128,12 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
+	return crashActorVersion(ctx, st, actorRef, actor, opName, message)
+}
 
+// crashActorVersion is crashActor for actor as already read. It fails with
+// store.ErrVersionConflict if the actor changed since.
+func crashActorVersion(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, actor *ateapipb.Actor, opName, message string) error {
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 	opName = ateattr.NormalizeOperationName(opName)
 
@@ -148,7 +154,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	sandboxClass := actor.GetStatus().GetWorkerAssignment().GetSandboxRuntime().GetSandboxClass()
 	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName)
 
-	_, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		// An actor crashed concurrently, e.g. by worker deletion, keeps its first crash.
 		if !wasAlreadyCrashed {
@@ -161,8 +167,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 		// failed workflow steps must never promote them to COMPLETED.
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("while marking actor crashed: %w", err)
 	}
 

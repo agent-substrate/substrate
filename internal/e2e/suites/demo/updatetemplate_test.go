@@ -197,11 +197,11 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 		t.Errorf("[after template update] expected %q (template B validating the preserved file), got response: %s", want, resp)
 	}
 
-	// Pause under template B while status.snapshots still holds the last
-	// committed snapshot from template A. Resuming from pause restores the
-	// local checkpoint (which was captured under template B, since templates
-	// can only be updated while SUSPENDED) and preserves the in-memory counter
-	// when preferredFidelity is MEMORY.
+	// Suspend asynchronously under template B while status.snapshots still
+	// holds the last committed snapshot from template A. Resuming from the
+	// local snapshot restores the local checkpoint (which was captured under
+	// template B, since templates can only be updated while SUSPENDED) and
+	// preserves the in-memory counter when preferredFidelity is MEMORY.
 	t.Logf("Pausing Actor %q under template B...", actorID)
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -233,7 +233,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	if err != nil {
 		t.Fatalf("failed to call actor after pause/resume under template B: %v", err)
 	}
-	// The pause snapshot was captured under B, so it restores at its own
+	// The local snapshot was captured under B, so it restores at its own
 	// fidelity: MEMORY keeps both counters, ROOTFS keeps the rootfs one, and
 	// VOLUMES neither.
 	wantMemAfterPause, wantRootfsAfterPause := 2, 2
@@ -324,7 +324,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 
 // createUpdateTestTemplate creates a per-test WorkerPool plus a substrate
 // ActorTemplate copying the deployed counter fixture's resolved runtime,
-// capturing at the scope under test on both pause and commit.
+// capturing at the scope under test on suspend.
 func createUpdateTestTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, name, poolName, bucket string, fidelity ateapipb.SnapshotFidelity, modify func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate {
 	t.Helper()
 	return e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{

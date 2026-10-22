@@ -103,9 +103,11 @@ spec:
         # JWTs with the public keys mounted below, and reaches ate-api-server
         # over the loopback with the pod identity certificate. The issuer must
         # be the one ate-api-server mints with, so both read it from the same
-        # ConfigMap key.
+        # ConfigMap key. On GCS it downscopes a token for the snapshot
+        # transfer service account, which it impersonates.
         - --exchange-listen=:8445
         - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
+        - --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
         ports:
         - name: exchange
           containerPort: 8445
@@ -138,6 +140,11 @@ spec:
             configMapKeyRef:
               name: ate-api-server-envvars
               key: ATE_API_ACTOR_JWT_ISSUER
+        - name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+          valueFrom:
+            configMapKeyRef:
+              name: ate-api-server-envvars
+              key: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
         # The exchange verifies ate-api-server's certificate against the API
         # Service name in this namespace.
         - name: POD_NAMESPACE

@@ -1925,7 +1925,7 @@ type WorkerServiceClient interface {
 	// The control plane mints only for the Worker that the Actor is assigned
 	// to, and only to an atelet on that Worker's node. A request from any
 	// other node or Worker gets NotFound; one from the assigned Worker with a
-	// stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a paused Actor
+	// stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a SUSPENDED Actor
 	// gets NotFound, since it has no Worker to bind the certificate to.
 	MintWorkerActorCertificate(ctx context.Context, in *MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*MintWorkerActorCertificateResponse, error)
 	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
@@ -1946,7 +1946,7 @@ type WorkerServiceClient interface {
 	//
 	// This is a request, not a command. It runs the same suspend workflow
 	// Control.SuspendActor runs, behind the same preconditions, so a proposal
-	// that races a resume, pause, or delete loses to it.
+	// that races a resume, suspend, or delete loses to it.
 	//
 	// atelet calls this with its own client certificate, as it does for
 	// RegisterWorker, naming the Worker its caller proved itself to be. The
@@ -2081,7 +2081,7 @@ type WorkerServiceServer interface {
 	// The control plane mints only for the Worker that the Actor is assigned
 	// to, and only to an atelet on that Worker's node. A request from any
 	// other node or Worker gets NotFound; one from the assigned Worker with a
-	// stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a paused Actor
+	// stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a SUSPENDED Actor
 	// gets NotFound, since it has no Worker to bind the certificate to.
 	MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error)
 	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
@@ -2102,7 +2102,7 @@ type WorkerServiceServer interface {
 	//
 	// This is a request, not a command. It runs the same suspend workflow
 	// Control.SuspendActor runs, behind the same preconditions, so a proposal
-	// that races a resume, pause, or delete loses to it.
+	// that races a resume, suspend, or delete loses to it.
 	//
 	// atelet calls this with its own client certificate, as it does for
 	// RegisterWorker, naming the Worker its caller proved itself to be. The

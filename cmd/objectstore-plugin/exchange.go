@@ -40,11 +40,12 @@ import (
 
 // exchangeConfig is what control mode needs to serve the credential exchange.
 type exchangeConfig struct {
-	listen     string
-	credBundle string
-	issuer     string
-	jwksFile   string
-	ateapi     actorlookup.Config
+	listen          string
+	credBundle      string
+	issuer          string
+	jwksFile        string
+	transferAccount string
+	ateapi          actorlookup.Config
 }
 
 // newExchangeService builds the exchange handler for the configured backend.
@@ -64,6 +65,9 @@ func newExchangeService(ctx context.Context, cfg exchangeConfig) (exchangepb.Cre
 	if cfg.jwksFile == "" {
 		return nil, nil, errors.New("--actor-jwt-jwks-file is required to serve the exchange on GCS")
 	}
+	if cfg.transferAccount == "" {
+		return nil, nil, errors.New("--transfer-service-account is required to serve the exchange on GCS")
+	}
 	// Read the key set once now, so a wrong path fails the start rather
 	// than the first exchange.
 	keys := oidcjwt.FileKeySource(cfg.jwksFile)
@@ -75,7 +79,7 @@ func newExchangeService(ctx context.Context, cfg exchangeConfig) (exchangepb.Cre
 	if err != nil {
 		return nil, nil, err
 	}
-	issuer, err := gcsissuer.New(ctx)
+	issuer, err := gcsissuer.New(ctx, cfg.transferAccount)
 	if err != nil {
 		lookup.Close()
 		return nil, nil, fmt.Errorf("while setting up the GCS credential issuer: %w", err)

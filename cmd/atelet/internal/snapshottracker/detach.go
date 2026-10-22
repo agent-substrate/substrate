@@ -17,33 +17,38 @@ package snapshottracker
 import (
 	"context"
 
+	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // beginDetachLocked begins a detach of the actor's latest local snapshot,
-// under a context derived from ctx, and returns the func that finishes it
-// once the caller releases the actor's lock. It begins nothing, and fails,
+// under a context derived from ctx, and returns its op and the func that runs
+// it once the caller releases the actor's lock. It begins nothing, and fails,
 // when no detach can make the snapshot durable (see detachTarget).
-func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, background bool) (func() (*ateletpb.ActorSnapshotState, error), error) {
+func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, background bool) (*actorOp, func(), error) {
 	target, alreadyDurable, err := a.detachTarget()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	opCtx, op := t.beginOpLocked(ctx, a, opDetach, target)
-	return func() (*ateletpb.ActorSnapshotState, error) {
-		return t.finishDetach(opCtx, a.actorUID, op, alreadyDurable, background)
+	return op, func() {
+		defer close(op.done)
+		op.state, op.err = t.finishDetach(opCtx, a.actorUID, op, alreadyDurable, background)
 	}, nil
 }
 
 // Detach makes the actor's latest local snapshot durable, then deletes the
-// actor's local snapshots. It is a no-op when atelet holds no local snapshot
-// for the actor. It fails with Aborted once a Run or Restore of the actor has
-// begun since its latest local snapshot, and with FailedPrecondition when no
-// detach can make the snapshot durable. It runs in the calling goroutine
-// rather than through the background queue, once any operation in progress on
-// the actor has ended. Callers serialize it with the actor's other lifecycle
-// RPCs (see Tracker).
+// actor's local snapshots and its files on this node (keeping
+// snapshot-state.json until the detach is reported). It is a no-op when atelet
+// holds no local snapshot for the actor. It fails with Aborted once a Run or
+// Restore of the actor has begun since its latest local snapshot, and with
+// FailedPrecondition when no detach can make the snapshot durable. It starts
+// once the actor's operation in progress ends, and runs on the tracker's
+// context, not ctx. If ctx ends first, Detach returns ctx's error and the
+// detach runs on, recorded by its report. After Wait begins, Detach fails with
+// Unavailable. Callers serialize it with the actor's other lifecycle RPCs (see
+// Tracker).
 func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorSnapshotState, error) {
 	if t.store == nil {
 		return nil, apierror.Unimplemented("atelet has no snapshot store to detach actors with")
@@ -59,13 +64,23 @@ func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorS
 	}
 	if a == nil || a.LatestLocal == nil {
 		// No local snapshot is stored on this node, so there is no work to be
-		// done.
+		// done. A report already due stays due, in case the caller doesn't
+		// record this state, and so a retried DetachActor call still sees
+		// LatestDurable until the report is acknowledged. When the actor has
+		// not started and no report is due (as after a report gave up or was
+		// refused with an error other than NotFound), make a report due again
+		// so the next acknowledgement removes snapshot-state.json and the
+		// actor directory.
 		st := &ateletpb.ActorSnapshotState{}
 		if a != nil {
-			if a.reportDue() {
-				t.clearReportDueLocked(a)
-			}
 			st = t.stateLocked(a)
+			if !a.Started && !a.reportDue() && a.LatestDurable != nil {
+				t.addLocked(a)
+				t.markReportDueLocked(a)
+				t.saveLocked(a)
+				t.queueReportLocked(a)
+				t.requeueLocked(a)
+			}
 		}
 		t.unlock(actorUID)
 		return st, nil
@@ -76,21 +91,48 @@ func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorS
 		t.unlock(actorUID)
 		return nil, apierror.Aborted("actor %s is in use on this node", actorUID)
 	}
-	finish, err := t.beginDetachLocked(ctx, a, false)
-	t.unlock(actorUID)
+	// Under foregroundMu, so no detach joins workersDone after Wait begins.
+	t.foregroundMu.Lock()
+	if t.waiting || t.ctx.Err() != nil {
+		t.foregroundMu.Unlock()
+		t.unlock(actorUID)
+		return nil, apierror.Unavailable("atelet is shutting down")
+	}
+	op, run, err := t.beginDetachLocked(t.ctx, a, false)
 	if err != nil {
+		t.foregroundMu.Unlock()
+		t.unlock(actorUID)
 		return nil, err
 	}
-	return finish()
+	t.workersDone.Go(run)
+	t.foregroundMu.Unlock()
+	t.unlock(actorUID)
+
+	select {
+	case <-op.done:
+		return op.state, t.detachCallError(ctx, op.err)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// detachCallError returns err, or Unavailable if the tracker's shutdown ended
+// the detach, so the caller doesn't mistake it for its own cancellation.
+func (t *Tracker) detachCallError(ctx context.Context, err error) error {
+	if err != nil && t.ctx.Err() != nil && ctx.Err() == nil {
+		return apierror.Unavailable("atelet stopped during the detach: %v", err)
+	}
+	return err
 }
 
 // finishDetach runs op, a detach of the actor's latest local snapshot: it
 // uploads the snapshot unless already durable, then deletes the actor's local
-// snapshots. background reports whether a worker runs it, rather than a Detach
-// call; a worker's detach makes a report of what it changed due, while a
-// Detach call returns the new state and cancels any pending report.
+// snapshots and its other files on this node except snapshot-state.json.
+// background reports whether a worker runs it, rather than a Detach call.
+// Either way it makes a report of what it changed due, so snapshot-state.json
+// and the actor's directory are removed once the control plane acknowledges
+// the detach (or refuses it with NotFound).
 func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp, alreadyDurable, background bool) (*ateletpb.ActorSnapshotState, error) {
-	defer close(op.done)
 	uploaded := false
 	target := op.target
 	detachStart := t.clock.Now()
@@ -102,7 +144,7 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 		}
 		if err == nil {
 			t.updateOp(actorUID, func(a *actorSnapshots) {
-				if t.recordUploadLocked(a, target, uploaded) && background {
+				if t.recordUploadLocked(a, target, uploaded) {
 					t.markReportDueLocked(a)
 				}
 			})
@@ -110,30 +152,28 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	}
 
 	// The upload is recorded before anything is deleted, and LatestLocal is
-	// cleared only once its files are gone. After a crash or a failed prune in
-	// between, the detach is retried, finds the snapshot durable, and only
-	// prunes. Until then LatestLocal can name a half-deleted copy, which is
-	// safe because the snapshot is durable: Restore reads snapshot.object
-	// when the local copy is unusable. The prune runs with op in progress
-	// (before op.done is closed), so Run, Restore, and Checkpoint wait for it.
+	// cleared only once its files and the actor's other files are gone. After
+	// a crash or a failed cleanup in between, the detach is retried, finds the
+	// snapshot durable, and only cleans up. Until then LatestLocal can name a
+	// half-deleted copy, which is safe because the snapshot is durable:
+	// Restore reads snapshot.object when the local copy is unusable. The
+	// cleanup runs with op in progress (before op.done is closed), so Run,
+	// Restore, and Checkpoint wait for it.
 	recordDetach := err == nil
 	if recordDetach {
 		detachStart = t.clock.Now()
-		// Forget or the caller may have ended ctx as the upload finished.
+		// Forget or the tracker's shutdown may have ended ctx as the upload
+		// finished.
 		err = ctx.Err()
 	}
 	if err == nil {
-		err = PruneLocalCheckpoints(ctx, actorUID)
+		err = actordirs.RemoveActorFilesExceptState(actorUID)
 	}
 	t.updateOp(actorUID, func(a *actorSnapshots) {
 		switch {
 		case err == nil:
 			t.clearLatestLocalLocked(a)
-			if background {
-				t.markReportDueLocked(a)
-			} else {
-				t.cancelReportLocked(a)
-			}
+			t.markReportDueLocked(a)
 		case ctx.Err() == nil:
 			// Detach again once the retry delay has passed, and no sooner
 			// than the detach was due.

@@ -87,6 +87,7 @@ func loadEnv(t *testing.T) {
 		"MEMORYSTORE_INSTANCE",
 		"PROJECT_ID",
 		"SNAPSHOT_LOCATION",
+		"SNAPSHOT_TRANSFER_GSA_NAME",
 		"ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
 	} {
 		// Unset, not blanked. An exported empty variable is a value a channel
@@ -309,6 +310,67 @@ func TestRequireIngressAllowedSPIFFEIDs(t *testing.T) {
 			var required *RequiredError
 			if !errors.As(err, &required) || required.Setting.Key != "ingressAllowedSPIFFEIDs" {
 				t.Fatalf("RequireIngressAllowedSPIFFEIDs() = %v, want a RequiredError for ingressAllowedSPIFFEIDs", err)
+			}
+		})
+	}
+}
+
+// The credential exchange impersonates the transfer account only on GCS, so
+// only a GKE deploy needs one, and its email needs both the name and the
+// project.
+func TestRequireTransferServiceAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cfg     Config
+		wantKey string
+	}{
+		{name: "GKE without a name", cfg: Config{ProjectID: "proj"}, wantKey: "storage.transferGSAName"},
+		{name: "GKE without a project", cfg: Config{TransferGSAName: "xfer"}, wantKey: "gcp.projectID"},
+		{name: "GKE with both", cfg: Config{TransferGSAName: "xfer", ProjectID: "proj"}},
+		{name: "kind without either", cfg: Config{Kind: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.RequireTransferServiceAccount()
+			if tc.wantKey == "" {
+				if err != nil {
+					t.Fatalf("RequireTransferServiceAccount() = %v, want nil", err)
+				}
+				return
+			}
+			var required *RequiredError
+			if !errors.As(err, &required) || required.Setting.Key != tc.wantKey {
+				t.Fatalf("RequireTransferServiceAccount() = %v, want a RequiredError for %s", err, tc.wantKey)
+			}
+		})
+	}
+}
+
+func TestLoadTransferServiceAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		opts     Options
+		env      map[string]string
+		wantName string
+		want     string
+	}{
+		{name: "built from the name and the project", env: map[string]string{"SNAPSHOT_TRANSFER_GSA_NAME": "xfer", "PROJECT_ID": "proj"}, wantName: "xfer", want: "xfer@proj.iam.gserviceaccount.com"},
+		{name: "no default name", env: map[string]string{"PROJECT_ID": "proj"}},
+		{name: "kind ignores the environment", opts: Options{Kind: true}, env: map[string]string{"SNAPSHOT_TRANSFER_GSA_NAME": "xfer", "PROJECT_ID": "proj"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.TransferGSAName != tc.wantName {
+				t.Errorf("TransferGSAName = %q, want %q", cfg.TransferGSAName, tc.wantName)
+			}
+			if got := cfg.TransferServiceAccount(); got != tc.want {
+				t.Errorf("TransferServiceAccount() = %q, want %q", got, tc.want)
 			}
 		})
 	}

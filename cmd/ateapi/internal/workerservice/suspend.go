@@ -47,7 +47,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 
 	// From here it is an ordinary suspend. Running the same workflow Control
 	// runs is the point: its preconditions already refuse an Actor that is not
-	// suspendable, and a proposal that races a resume, pause, or delete loses
+	// suspendable, and a proposal that races a resume, suspend, or delete loses
 	// to whichever holds the Actor's lease.
 	//
 	// TODO: the checks above run outside the Actor's lease, so there is a small
@@ -119,7 +119,8 @@ func checkActorHostedBy(ctx context.Context, actor *ateapipb.Actor, workerName, 
 		return apierror.NotFound("Actor %s not found", actorRef)
 	}
 	// An Actor with no assignment has no worker to speak for it: it is
-	// SUSPENDED (paused or not) or CRASHED, and nothing hosts it.
+	// SUSPENDED (with or without a local snapshot) or CRASHED, and nothing
+	// hosts it.
 	if assigned := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); assigned != workerName {
 		slog.WarnContext(ctx, "Refusing a request for an actor hosted elsewhere",
 			slog.String("worker", workerName),

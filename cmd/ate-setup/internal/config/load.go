@@ -234,6 +234,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 
 		BucketName:         r.String("storage.bucketName"),
 		SnapshotLocation:   r.String("storage.snapshotLocation"),
+		TransferGSAName:    r.String("storage.transferGSAName"),
 		KODockerRepo:       r.String("ko.dockerRepo"),
 		KODefaultPlatforms: r.String("ko.defaultPlatforms"),
 		ActorJWTAlgorithm:  r.String("actorJWT.algorithm"),
@@ -333,11 +334,12 @@ func splitKubeconfig(r *Resolved) (explicitPath, scriptValue string) {
 // kindCluster.enabled -- which replays to whatever the defaults happen to be
 // on the next machine and the next release, not to the install it recorded.
 func applyKindDefaults(r *Resolved) {
-	// A Kind cluster has no GCP project, so the coordinates are cleared even
-	// when the developer environment named them. Only when something did name
-	// them: clearing an already-empty setting would report a value as set by
-	// the profile when the profile changed nothing.
-	for _, key := range []string{"gcp.projectID", "gcp.clusterLocation"} {
+	// A Kind cluster has no GCP project, so the coordinates and the transfer
+	// service account are cleared even when the developer environment named
+	// them. Only when something did name them: clearing an already-empty
+	// setting would report a value as set by the profile when the profile
+	// changed nothing.
+	for _, key := range []string{"gcp.projectID", "gcp.clusterLocation", "storage.transferGSAName"} {
 		if r.String(key) != "" {
 			r.set(key, "", OriginKindProfile)
 		}

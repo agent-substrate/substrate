@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.ate.dev/substrate/benchmarking/atunnel/internal/procstats"
@@ -158,4 +160,66 @@ func executeOnEgressActor(ctx context.Context, socket string, opts options) (rep
 		return report.Load{}, fmt.Errorf("egress actor: %w", err)
 	}
 	return report.Load{}, fmt.Errorf("egress actor: no result")
+}
+
+// executeOnEgressActors splits an EgressIdle run evenly across the egress
+// actors at sockets, one per sandbox. A sandbox has one address, so it can hold
+// at most ~64k egress connections at a time: atunnel's redirect makes every one
+// of them look the same but for the source port. whileHolding runs once, after
+// every actor holds its connections.
+func executeOnEgressActors(ctx context.Context, sockets []string, opts options) (report.Load, error) {
+	n := len(sockets)
+	var waiting atomic.Int64
+	waiting.Store(int64(n))
+	loads := make([]report.Load, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i, socket := range sockets {
+		sub := opts
+		sub.rate = opts.rate / float64(n)
+		sub.connections = opts.connections / n
+		if i < opts.connections%n {
+			sub.connections++
+		}
+		sub.whileHolding = func(ctx context.Context) {
+			if waiting.Add(-1) == 0 && opts.whileHolding != nil {
+				opts.whileHolding(ctx)
+			}
+		}
+		wg.Go(func() { loads[i], errs[i] = executeOnEgressActor(ctx, socket, sub) })
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return report.Load{}, err
+	}
+	return mergeLoads(loads), nil
+}
+
+// mergeLoads adds up loads that ran side by side. Latency percentiles are the
+// worst of them.
+func mergeLoads(loads []report.Load) report.Load {
+	var m report.Load
+	worst := func(a, b report.Percentiles) report.Percentiles {
+		return report.Percentiles{P50: max(a.P50, b.P50), P90: max(a.P90, b.P90), P99: max(a.P99, b.P99), Max: max(a.Max, b.Max), Mean: max(a.Mean, b.Mean)}
+	}
+	for _, l := range loads {
+		m.Offered += l.Offered
+		m.MeasuredSeconds = max(m.MeasuredSeconds, l.MeasuredSeconds)
+		m.Scheduled += l.Scheduled
+		m.Skipped += l.Skipped
+		m.Completed += l.Completed
+		m.Errors += l.Errors
+		m.Bytes += l.Bytes
+		m.Latency = worst(m.Latency, l.Latency)
+		m.SendLag = worst(m.SendLag, l.SendLag)
+		m.ErrorSamples = append(m.ErrorSamples, l.ErrorSamples...)
+	}
+	if len(m.ErrorSamples) > maxErrorSamples {
+		m.ErrorSamples = m.ErrorSamples[:maxErrorSamples]
+	}
+	if m.MeasuredSeconds > 0 {
+		m.Achieved = float64(m.Completed) / m.MeasuredSeconds
+		m.MBytesPerSec = float64(m.Bytes) / m.MeasuredSeconds / 1e6
+	}
+	return m
 }

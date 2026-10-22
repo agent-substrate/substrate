@@ -27,7 +27,9 @@ import (
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -236,6 +238,14 @@ func (c *fakeGoldenControl) ResumeActor(_ context.Context, req *ateapipb.ResumeA
 	}
 	c.goldenState = ateapipb.ActorState_ACTOR_STATE_RUNNING
 	return &ateapipb.ResumeActorResponse{}, nil
+}
+
+func (c *fakeGoldenControl) CreateActorEgressPolicy(context.Context, *ateapipb.CreateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+	return nil, errors.New("unexpected golden egress policy creation")
+}
+
+func (c *fakeGoldenControl) GetActorEgressPolicy(context.Context, *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+	return nil, errors.New("unexpected golden egress policy lookup")
 }
 
 func (c *fakeGoldenControl) SuspendActor(_ context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
@@ -633,6 +643,228 @@ func TestReconcileOne(t *testing.T) {
 			}
 			if tt.wantDeadline && snapshotStatus.GetSnapshotTime() == nil {
 				t.Error("stored snapshot_time is nil, want set")
+			}
+		})
+	}
+}
+
+type goldenEgressControl struct {
+	*RPCService
+	resume       func(context.Context, *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error)
+	createPolicy func(context.Context, *ateapipb.CreateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error)
+	getPolicy    func(context.Context, *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error)
+}
+
+func (c *goldenEgressControl) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+	return c.resume(ctx, req)
+}
+
+func (c *goldenEgressControl) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+	if c.createPolicy != nil {
+		return c.createPolicy(ctx, req)
+	}
+	return c.RPCService.CreateActorEgressPolicy(ctx, req)
+}
+
+func (c *goldenEgressControl) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+	if c.getPolicy != nil {
+		return c.getPolicy(ctx, req)
+	}
+	return c.RPCService.GetActorEgressPolicy(ctx, req)
+}
+
+func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
+	preview.InitForTest(t, "GoldenEgressPolicy")
+	for _, tt := range []struct {
+		name   string
+		policy *ateapipb.EgressPolicyTemplate
+	}{
+		{name: "absent"},
+		{name: "configured", policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}}}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+			svc := &RPCService{impl: impl}
+			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
+			tmpl, err := svc.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
+				tmpl.GoldenEgressPolicy = tt.policy
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stop := errors.New("stop before running workload")
+			control := &goldenEgressControl{RPCService: svc, resume: func(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+				ref := req.GetActor()
+				if ref.GetAtespace() != tmpl.GetMetadata().GetAtespace() || ref.GetName() != tmpl.GetMetadata().GetUid() {
+					t.Fatalf("unexpected golden actor: %v", ref)
+				}
+				policy, err := svc.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
+				if tt.policy == nil {
+					if apierror.Code(err) != codes.NotFound {
+						t.Fatalf("golden without configured policy: %v, want NotFound", err)
+					}
+					return nil, stop
+				}
+				if err != nil {
+					t.Fatalf("golden policy must exist before resume: %v", err)
+				}
+				want := &ateapipb.EgressPolicy{Metadata: policy.Metadata, Rules: tmpl.GetGoldenEgressPolicy().GetRules()}
+				if policy.GetMetadata().GetAtespace() != ref.GetAtespace() || policy.GetMetadata().GetName() != "default" || !proto.Equal(policy, want) {
+					t.Fatalf("golden policy = %v, want rules %v in %s", policy, want.Rules, ref.GetAtespace())
+				}
+				if md := policy.GetMetadata(); md.GetUid() == "" || md.GetVersion() != 1 || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {
+					t.Errorf("unexpected policy metadata: %v", md)
+				}
+				return nil, stop
+			}}
+			r := newTestTemplateReconciler(persistence, control)
+			defer r.queue.ShutDown()
+			// Turning the gate off must not drop an existing template's policy.
+			preview.InitForTest(t)
+			for range 2 {
+				if _, err := r.reconcileOne(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl)); !errors.Is(err, stop) {
+					t.Fatalf("reconcile = %v, want to reach resume with the policy present", err)
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileOne_GoldenEgressPolicyRecovery(t *testing.T) {
+	preview.InitForTest(t, "GoldenEgressPolicy")
+	for _, scenario := range []string{"create fails", "create response lost", "lookup fails", "conflicting policy"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+			svc := &RPCService{impl: impl}
+			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
+			tmpl, err := svc.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
+				tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
+					{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}},
+				}}
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := &ateapipb.ObjectRef{Atespace: tmpl.GetMetadata().GetAtespace(), Name: tmpl.GetMetadata().GetUid()}
+			transient := errors.New("policy service unavailable")
+			stop := errors.New("stop before running workload")
+			resumeCalls := 0
+			control := &goldenEgressControl{RPCService: svc, resume: func(context.Context, *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+				resumeCalls++
+				return nil, stop
+			}}
+			control.createPolicy = func(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+				if scenario == "create fails" {
+					return nil, transient
+				}
+				if scenario == "conflicting policy" {
+					req.EgressPolicy.Rules[0].Https.Hostnames = []string{"other.example.com"}
+				}
+				if _, err := svc.CreateActorEgressPolicy(ctx, req); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "create response lost" {
+					return nil, transient
+				}
+				return nil, apierror.AlreadyExists("policy exists")
+			}
+			if scenario == "lookup fails" {
+				control.getPolicy = func(context.Context, *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+					return nil, transient
+				}
+			}
+			var actorUID string
+			var previousPolicy *ateapipb.EgressPolicy
+			for pass := range 2 {
+				// A fresh reconciler must recover from persisted state alone.
+				r := newTestTemplateReconciler(persistence, control)
+				after, err := r.reconcileOne(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl))
+				r.queue.ShutDown()
+				switch {
+				case scenario == "conflicting policy":
+					if err != nil || after != 0 {
+						t.Fatalf("reconcile = (%v, %v), want terminal failure without retry", after, err)
+					}
+				case pass == 0:
+					if !errors.Is(err, transient) {
+						t.Fatalf("reconcile = %v, want policy service error", err)
+					}
+				default:
+					if !errors.Is(err, stop) {
+						t.Fatalf("reconcile = %v, want to reach resume", err)
+					}
+				}
+				updated, err := persistence.GetActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl))
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantError := ""
+				if scenario == "conflicting policy" {
+					wantError = "GoldenEgressPolicyConflict: golden actor egress policy does not match the template"
+				}
+				snapshotStatus := updated.GetStatus().GetGoldenSnapshotStatus()
+				if snapshotStatus.GetErrorMessage() != wantError || snapshotStatus.GetGoldenTag() != nil {
+					t.Fatalf("unexpected golden snapshot status: %v", snapshotStatus)
+				}
+				wantResumes := 0
+				if pass == 1 && scenario != "conflicting policy" {
+					wantResumes = 1
+				}
+				if resumeCalls != wantResumes {
+					t.Fatalf("resume calls = %d, want %d", resumeCalls, wantResumes)
+				}
+				actor, err := svc.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if actorUID != "" && actor.GetMetadata().GetUid() != actorUID {
+					t.Fatal("retry recreated the golden actor")
+				}
+				actorUID = actor.GetMetadata().GetUid()
+				if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+					t.Fatalf("actor state = %v, want SUSPENDED", actor.GetStatus().GetState())
+				}
+				policy, err := svc.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
+				if pass == 0 && scenario == "create fails" {
+					if apierror.Code(err) != codes.NotFound {
+						t.Fatalf("policy lookup = %v, want NotFound", err)
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if previousPolicy != nil && !proto.Equal(policy, previousPolicy) {
+						t.Fatal("reconcile changed an existing policy")
+					}
+					wantHost := "api.example.com"
+					if scenario == "conflicting policy" {
+						wantHost = "other.example.com"
+					}
+					if got := policy.GetRules()[0].GetHttps().GetHostnames(); len(got) != 1 || got[0] != wantHost {
+						t.Fatalf("policy hostnames = %v, want %s", got, wantHost)
+					}
+					previousPolicy = policy
+				}
+				control.createPolicy = nil
+				control.getPolicy = nil
+				if scenario == "conflicting policy" {
+					control.createPolicy = func(context.Context, *ateapipb.CreateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+						t.Fatal("retried policy creation after terminal failure")
+						return nil, nil
+					}
+					control.getPolicy = func(context.Context, *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+						t.Fatal("retried policy lookup after terminal failure")
+						return nil, nil
+					}
+				}
 			}
 		})
 	}

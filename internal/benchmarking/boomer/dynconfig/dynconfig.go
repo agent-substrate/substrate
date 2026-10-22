@@ -240,8 +240,9 @@ func Uniform(lo, hi time.Duration) time.Duration {
 // Resume and lifecycle modes. Explicit issues a ResumeActor RPC before
 // sending traffic; implicit issues no wake request at all: the actor stays
 // suspended until a request reaches the atenet router, which wakes it
-// while the request is parked. Suspend writes the snapshot to durable
-// storage; pause keeps it on the node.
+// while the request is parked. Suspend runs a synchronous SuspendActor
+// (uploads the snapshot before returning); pause runs an asynchronous
+// SuspendActor (uploads the snapshot in the background).
 const (
 	ResumeModeExplicit = "explicit"
 	ResumeModeImplicit = "implicit"

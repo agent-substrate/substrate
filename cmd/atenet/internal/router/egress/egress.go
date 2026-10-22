@@ -78,10 +78,9 @@ const deniedBody = "egress denied"
 // the traffic inside the tunnel against the actor's EgressPolicy.
 type Handler struct {
 	apiClient ateapipb.ControlClient
-	// actorIdentityRoots is the actor-identity CA bundle every actor
-	// certificate must chain to. Nil means the gateway cannot authenticate
-	// anyone, and every CONNECT fails closed.
-	actorIdentityRoots *x509.CertPool
+	// loadActorIdentityRoots yields the actor-identity CA bundle every actor
+	// certificate must chain to. An error fails the CONNECT closed.
+	loadActorIdentityRoots func() (*x509.CertPool, error)
 	// policies is the per-actor EgressPolicy cache every leg reads through.
 	policies *policyCache
 	// actorJWTs mints the actor JWTs that credential injections ask for.
@@ -95,8 +94,10 @@ type Handler struct {
 	providerName string
 }
 
-// New builds the egress handler. actorIdentityRoots is the egress listener's
-// trusted_ca; see verifyActorCertificate for why it is checked again here.
+// New builds the egress handler. loadActorIdentityRoots yields the egress
+// listener's trusted_ca; see verifyActorCertificate for why it is checked
+// again here. It is called on every CONNECT, so a rotated bundle applies to
+// the next tunnel. A nil loadActorIdentityRoots fails every CONNECT with 503.
 // policyCacheTTL of 0 fetches the policy on every callout.
 //
 // provider resolves an allowed rule's credential_uri injections on the
@@ -104,14 +105,19 @@ type Handler struct {
 // denied. Actor JWT injections need no provider. providerName, when set, is
 // the provider this gateway serves; a credential URI naming another provider
 // is refused.
-func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
+func New(apiClient ateapipb.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
+	if loadActorIdentityRoots == nil {
+		loadActorIdentityRoots = func() (*x509.CertPool, error) {
+			return nil, errors.New("no actor-identity CA configured")
+		}
+	}
 	return &Handler{
-		apiClient:          apiClient,
-		actorIdentityRoots: actorIdentityRoots,
-		policies:           newPolicyCache(apiClient, policyCacheTTL),
-		actorJWTs:          actorjwt.New(apiClient),
-		provider:           provider,
-		providerName:       providerName,
+		apiClient:              apiClient,
+		loadActorIdentityRoots: loadActorIdentityRoots,
+		policies:               newPolicyCache(apiClient, policyCacheTTL),
+		actorJWTs:              actorjwt.New(apiClient),
+		provider:               provider,
+		providerName:           providerName,
 	}
 }
 
@@ -146,14 +152,15 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress denied: expected CONNECT, got %q", md.Method)
 	}
 
-	// No roots means the gateway cannot authenticate anyone. Fail closed, and
+	// Without roots the gateway cannot authenticate anyone. Fail closed, and
 	// as 503 rather than 403: this is our misconfiguration, not the actor's.
-	if h.actorIdentityRoots == nil {
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_ServiceUnavailable,
-			"egress unavailable: no actor-identity CA configured")
+	roots, err := h.loadActorIdentityRoots()
+	if err != nil {
+		return extproc.Result{}, extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err,
+			"egress unavailable: actor-identity CA failed to load")
 	}
 
-	actorRef, err := h.authenticateActorCertificate(md)
+	actorRef, err := authenticateActorCertificate(md, roots)
 	if err != nil {
 		// The body stays generic on purpose: an actor that fails authentication
 		// has not proven it is anyone, so it gets no detail about why. The
@@ -292,13 +299,13 @@ func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef
 // authenticateActorCertificate turns the mTLS peer certificate Envoy recorded
 // on the request into a verified ActorRef, or an error describing why it
 // cannot be trusted.
-func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (resources.ActorRef, error) {
+func authenticateActorCertificate(md *extproc.RequestMetadata, roots *x509.CertPool) (resources.ActorRef, error) {
 	if certificate := md.Attribute(agentgatewayClientCertificateAttribute); certificate != "" {
 		chain, err := parseCertificateChainPEM([]byte(certificate))
 		if err != nil {
 			return resources.ActorRef{}, err
 		}
-		return h.verifyActorCertificate(chain)
+		return verifyActorCertificate(chain, roots)
 	}
 	header := md.Header(forwardedClientCertHeader)
 	if header == "" {
@@ -308,7 +315,7 @@ func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (res
 	if err != nil {
 		return resources.ActorRef{}, err
 	}
-	return h.verifyActorCertificate(chain)
+	return verifyActorCertificate(chain, roots)
 }
 
 // verifyActorCertificate checks that chain[0] is a live, non-CA, client-auth
@@ -322,7 +329,7 @@ func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (res
 // It also keeps the handler safe if the Envoy config is ever loosened, and costs
 // one signature check per CONNECT rather than per request. The IsCA, ClientAuth-EKU,
 // and worker SPIFFE URI checks below have no Envoy-side equivalent at all.
-func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.ActorRef, error) {
+func verifyActorCertificate(chain []*x509.Certificate, roots *x509.CertPool) (resources.ActorRef, error) {
 	leaf := chain[0]
 	intermediates := x509.NewCertPool()
 	for _, cert := range chain[1:] {
@@ -342,7 +349,7 @@ func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.A
 	}
 
 	if _, err := leaf.Verify(x509.VerifyOptions{
-		Roots:         h.actorIdentityRoots,
+		Roots:         roots,
 		Intermediates: intermediates,
 		CurrentTime:   now,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
@@ -504,14 +511,4 @@ func mapEgressIdentityError(atespace, actorName string, err error) error {
 		return extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err,
 			"egress denied for %q/%q: %v", atespace, actorName, err)
 	}
-}
-
-// LoadActorIdentityRoots reads the actor-identity CA trust bundle the egress
-// gateway verifies actor client certificates against.
-func LoadActorIdentityRoots(pemBytes []byte) (*x509.CertPool, error) {
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(pemBytes) {
-		return nil, fmt.Errorf("actor-identity CA bundle contains no certificates")
-	}
-	return roots, nil
 }

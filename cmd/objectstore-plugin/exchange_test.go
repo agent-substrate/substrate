@@ -41,7 +41,8 @@ func TestNewExchangeService(t *testing.T) {
 	}{
 		{"GCS needs the issuer", exchangeConfig{jwksFile: "jwks.json"}, "--actor-jwt-issuer"},
 		{"GCS needs the JWKS file", exchangeConfig{issuer: "https://idp.ate-system.svc"}, "--actor-jwt-jwks-file"},
-		{"GCS needs a readable JWKS file", exchangeConfig{issuer: "https://idp.ate-system.svc", jwksFile: filepath.Join(t.TempDir(), "absent.json")}, "key set"},
+		{"GCS needs the transfer account", exchangeConfig{issuer: "https://idp.ate-system.svc", jwksFile: "jwks.json"}, "--transfer-service-account"},
+		{"GCS needs a readable JWKS file", exchangeConfig{issuer: "https://idp.ate-system.svc", jwksFile: filepath.Join(t.TempDir(), "absent.json"), transferAccount: "xfer@proj.iam.gserviceaccount.com"}, "key set"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ATE_STORAGE_BACKEND", "gcs")

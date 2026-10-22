@@ -98,12 +98,17 @@ data:
                     resource_api_version: V3
                     path_config_source:
                       path: /etc/envoy/sds-servicedns-cert.yaml
-                validation_context:
-                  # Actors authenticate with an actor-identity client cert.
-                  # Envoy enforces chain, signature, and validity period here, so
-                  # an unsigned or expired actor cert never reaches ext_proc,
-                  # which reads the actor from its SPIFFE URI SAN.
-                  trusted_ca: { filename: /run/actor-id-ca-certs/ca.crt }
+                # Actors authenticate with an actor-identity client cert.
+                # Envoy enforces chain, signature, and validity period here, so
+                # an unsigned or expired actor cert never reaches ext_proc,
+                # which reads the actor from its SPIFFE URI SAN. Filesystem SDS
+                # for the same reason as the serving cert above.
+                validation_context_sds_secret_config:
+                  name: actor_identity_validation_context
+                  sds_config:
+                    resource_api_version: V3
+                    path_config_source:
+                      path: /etc/envoy/sds-actor-identity-validation.yaml
           filters:
           - name: envoy.filters.network.http_connection_manager
             typed_config:
@@ -171,7 +176,9 @@ data:
                   on_request_headers:
                   - object_key: dev.ate.actor.identity
                     factory_key: envoy.hashable_string
-                    shared_with_upstream: ONCE
+                    # This will create connection per actor to the origin servers, preventing
+                    # different actors from sharing the same connection to the origin.
+                    shared_with_upstream: TRANSITIVE
                     skip_if_empty: true
                     format_string:
                       text_format_source:
@@ -183,7 +190,9 @@ data:
                   # rule's ports against: a port in a request's Host is not it.
                   - object_key: dev.ate.connect.authority
                     factory_key: envoy.hashable_string
-                    shared_with_upstream: ONCE
+                    # This will further partition connection pool per destination port, preventing
+                    # secure connections from picking pools that use cleartext ports.
+                    shared_with_upstream: TRANSITIVE
                     skip_if_empty: true
                     format_string:
                       text_format_source:
@@ -448,7 +457,7 @@ data:
                       sni: "%REQUESTED_SERVER_NAME%"
                       authority: "%REQ(:AUTHORITY)%"
                       method: "%REQ(:METHOD)%"
-                      path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+                      path: "%PATH(NQ:ORIG_OR_PATH)%"
                       protocol: "%PROTOCOL%"
                       status: "%RESPONSE_CODE%"
                       grpc_status: "%GRPC_STATUS%"
@@ -738,7 +747,7 @@ data:
                       actor: "%FILTER_STATE(dev.ate.actor.identity:PLAIN)%"
                       authority: "%REQ(:AUTHORITY)%"
                       method: "%REQ(:METHOD)%"
-                      path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+                      path: "%PATH(NQ:ORIG_OR_PATH)%"
                       protocol: "%PROTOCOL%"
                       status: "%RESPONSE_CODE%"
                       grpc_status: "%GRPC_STATUS%"
@@ -1081,8 +1090,14 @@ data:
             upstream_http_protocol_options:
               auto_sni: true
               auto_san_validation: true
-            explicit_http_config:
+            auto_config:
               http_protocol_options: {}
+              http2_protocol_options:
+                # Avoid hotspotting origins by piling all requests into one connection.
+                max_concurrent_streams: 100
+                # Prevent origin servers from overwhelming egress gateway if actor is slow.
+                initial_stream_window_size: 1048576
+                initial_connection_window_size: 1048576
         transport_socket:
           name: envoy.transport_sockets.tls
           typed_config:
@@ -1188,6 +1203,15 @@ data:
         certificate_chain: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
         private_key: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
         watched_directory: { path: /run/servicedns.podcert.ate.dev }
+  # SDS resource for the actor-identity CA roots the egress listener trusts.
+  # The actor-id-ca-certs Secret volume rotates the same way.
+  sds-actor-identity-validation.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: actor_identity_validation_context
+      validation_context:
+        trusted_ca: { filename: /run/actor-id-ca-certs/ca.crt }
+        watched_directory: { path: /run/actor-id-ca-certs }
   # The next two keys are used only by the additional_egress_ext_proc cluster
   # spliced over the #ATE_MITM_EXTPROC_CLUSTER marker. They ship
   # unconditionally because the splice can only rewrite envoy.yaml, not add

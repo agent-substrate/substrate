@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"syscall"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
@@ -82,6 +83,18 @@ func removeSnapshotState(actorUID string) error {
 		return fmt.Errorf("while deleting the actor's snapshot state: %w", err)
 	}
 	return nil
+}
+
+// removeDetachedActorState deletes a detached actor's snapshot state file and
+// its now-empty directory once its detach report is no longer due.
+func removeDetachedActorState(actorUID string) {
+	if err := removeSnapshotState(actorUID); err != nil {
+		slog.Warn("Failed to remove the detached actor's snapshot state", slog.String("actorUID", actorUID), slog.Any("err", err))
+		return
+	}
+	if err := os.Remove(ateletpath.ActorPath(actorUID)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+		slog.Warn("Failed to remove the detached actor's directory", slog.String("actorUID", actorUID), slog.Any("err", err))
+	}
 }
 
 // savedActorUIDs returns the UIDs of the actors with a snapshot state file on

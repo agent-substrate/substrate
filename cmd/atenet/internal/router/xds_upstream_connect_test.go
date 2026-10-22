@@ -365,7 +365,7 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 		}
 		return opts
 	}
-	checkCircuitBreakers := func(t *testing.T, c *clusterv3.Cluster) {
+	checkCircuitBreakers := func(t *testing.T, c *clusterv3.Cluster, want uint32) {
 		t.Helper()
 		limits := c.GetCircuitBreakers().GetThresholds()[0]
 		for name, got := range map[string]uint32{
@@ -373,8 +373,8 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 			"max_pending_requests": limits.GetMaxPendingRequests().GetValue(),
 			"max_requests":         limits.GetMaxRequests().GetValue(),
 		} {
-			if got != tunnelCircuitBreakerLimit {
-				t.Errorf("cluster %s %s = %d, want %d", c.GetName(), name, got, tunnelCircuitBreakerLimit)
+			if got != want {
+				t.Errorf("cluster %s %s = %d, want %d", c.GetName(), name, got, want)
 			}
 		}
 	}
@@ -393,7 +393,7 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 		if got := opts.GetCommonHttpProtocolOptions().GetIdleTimeout().AsDuration(); got != tunnelIdleTimeout {
 			t.Errorf("http2=%v: tunnel idle timeout = %v, want %v", http2, got, tunnelIdleTimeout)
 		}
-		checkCircuitBreakers(t, c)
+		checkCircuitBreakers(t, c, tunnelCircuitBreakerLimit)
 	}
 
 	x := NewXdsServer(0)
@@ -419,5 +419,5 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 	if got := protocolOptions(t, c).GetExplicitHttpConfig().GetHttp2ProtocolOptions(); got == nil {
 		t.Error("actor_connect is not HTTP/2; tunnels to one worker would each need a connection")
 	}
-	checkCircuitBreakers(t, c)
+	checkCircuitBreakers(t, c, actorConnectCircuitBreakerLimit)
 }

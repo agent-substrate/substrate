@@ -47,6 +47,9 @@ export KUBECTL_CONTEXT=
 export BUCKET_NAME=snapshot-substrate-test-${PROJECT_ID}
 # Cluster-wide location ate-api-server stores snapshots under.
 export SNAPSHOT_LOCATION="gs://${BUCKET_NAME}/"
+# Google service account snapshot transfers run as on GCS. setup-gcp creates
+# it, and ate-setup and hack/teardown.sh read the same name.
+export SNAPSHOT_TRANSFER_GSA_NAME=ate-snapshot-transfer
 
 export KO_DOCKER_REPO="gcr.io/${PROJECT_ID}/ate-images"
 

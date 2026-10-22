@@ -21,9 +21,11 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
 )
 
 // TestActorStateChangeRecords drives each transition that commits a new state
@@ -87,9 +89,13 @@ func TestActorStateChangeRecords(t *testing.T) {
 		{
 			name:      "delete marks the actor deleting",
 			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				if _, err := w.ensureMarkedDeleting(context.Background(), ref, actor); err != nil {
+			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
+				if _, err := w.ensureMarkedDeleting(context.Background(), ref, store.DeletePreconditions{}); err != nil {
 					t.Fatalf("ensureMarkedDeleting: %v", err)
+				}
+				// A retry finds the actor already marked and writes no second record.
+				if _, err := w.ensureMarkedDeleting(context.Background(), ref, store.DeletePreconditions{}); err != nil {
+					t.Fatalf("retried ensureMarkedDeleting: %v", err)
 				}
 			},
 			wantOp:     ateattr.OperationDelete,
@@ -168,9 +174,9 @@ func TestActorStateChangeRecords(t *testing.T) {
 	}
 }
 
-// markOnly runs a suspend or pause on a RUNNING actor only as far as its mark
-// step: the actor gets a worker to checkpoint on, but the atelet dial fails,
-// so the SUSPENDING mark is the only transition the workflow commits.
+// markOnly runs a suspend (sync or async) on a RUNNING actor only as far as its
+// mark step: the actor gets a worker to checkpoint on, but the atelet dial
+// fails, so the SUSPENDING mark is the only transition the workflow commits.
 func markOnly(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, mode suspendMode) {
 	t.Helper()
 	ctx := context.Background()
@@ -238,9 +244,9 @@ func TestActorDeletedRecord(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_DELETING)
-	actor, err := persistence.GetActor(ctx, actorRef)
+	actor, err := persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil)
 	if err != nil {
-		t.Fatalf("get actor: %v", err)
+		t.Fatalf("mark actor: %v", err)
 	}
 
 	w := &ActorWorkflow{store: persistence}
@@ -283,7 +289,7 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 	}
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	stale, err := persistence.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("get actor: %v", err)
@@ -301,8 +307,8 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence}
-	if _, err := w.ensureMarkedDeleting(ctx, actorRef, stale); err == nil {
-		t.Fatal("ensureMarkedDeleting on a stale actor = nil, want a conflict")
+	if _, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{Version: stale.GetMetadata().GetVersion()}); apierror.Code(err) != codes.Aborted {
+		t.Fatalf("ensureMarkedDeleting with a stale guard = %v, want ABORTED", err)
 	}
 	if len(*records) != 0 {
 		t.Errorf("got %d state records from a losing writer, want 0: %v", len(*records), *records)

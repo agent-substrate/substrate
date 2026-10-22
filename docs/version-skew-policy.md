@@ -62,15 +62,14 @@ Servers:
 * `ate-api-server` rejects a request that carries a field it does not know, with `INVALID_ARGUMENT`.
 * `ate-api-server` drops the fields it does not know when it reads a stored object, and serves the reduced object. Such a field was written by a newer replica, during `ate-api-server`'s roll or before a rollback, and this release cannot validate it. Rejecting it would make the object unreadable. Keeping it would serve a field this release cannot validate.
 * `atelet` rejects fields it does not know. Its callers, `ate-api-server` and `ateworker`, are never newer than it during an upgrade or a rollback in the supported order, so an unknown field means the upgrade order was not followed.
-* `ateworker` rejects fields it does not know. Its caller, `atelet`, can be one release newer, so `atelet` sends a new field only on releases after `ateworker` learns it (two-step releases).
+* `ateworker` rejects fields it does not know. Its caller, `atelet`, can be one release newer, so `atelet` sends a new field only from the minor release after the one in which `ateworker` learns it (two-step releases).
 
 Clients:
 
 * A client that reads an object, changes it and writes it back keeps the unknown fields. An older client must not strip fields that a newer server still understands.
 * `kubectl-ate` rejects a manifest file that has fields it does not know, as the server does for a create.
 
-Wherever a caller can be newer than its server, the caller sends a new field only one release after the server learns it (two-step releases). Today that is `atelet` calling `ate-api-server` and `ateworker`.
-
+Wherever a caller can be newer than its server, the server learns a new field in one minor release and the caller sends it only from the next minor release on (two-step releases). 
 ### CRDs
 
 The N+1 CRDs are applied with `ate-controller` N+1. Components that upgrade before it read the N CRDs, so users must not set new CRD fields until the upgrade completes.
@@ -99,7 +98,7 @@ This section is about data one release writes and another release reads, whether
 
 * Data on the node: the directory layout and the files `atelet` keeps there.
   * What N writes, N+1 can read. What N+1 writes, N can read.
-  * So a layout change takes two releases: N+1 reads the old and the new layout but still writes the old one, and N+2 writes the new one. This keeps a rollback possible.
+  * So a layout change takes two minor releases: the first reads the old and the new layout but still writes the old one, and the next writes the new one. This keeps a rollback possible. Neither step can go in a patch release: an upgrade can skip patch releases, and a rollback can land on any of them.
   * `atelet` passes the per-actor directories to `ateworker` in the RPC, so only `atelet` knows the layout. The sockets `atelet` and `ateworker` use to reach each other do not change within a major.
 * Data in snapshots: `manifest.json`, which `atelet` writes and reads.
   * Within a major, a release reads the snapshot data any earlier release of that major wrote.

@@ -27,7 +27,7 @@ import (
 
 // HostingNode is the node that holds the actor, and "" when no node does. The
 // actor's state decides which status field to trust, since both can outlive
-// the hosting they record: pause, suspend, crash and revert release the
+// the hosting they record: suspend, crash and revert release the
 // worker (delete its row in the store's worker assignments) before they clear
 // status.worker_assignment, and a crash keeps status.assigned_node as a record
 // of the last node. The rules:

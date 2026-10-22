@@ -130,6 +130,16 @@ func (c *RouterClient) Address() string {
 	return c.address
 }
 
+// ConnectAddress returns the host:port of the local port-forward to the
+// router's CONNECT listener, opening it on first use, for a caller that has to
+// control the protocol it speaks to the router itself.
+func (c *RouterClient) ConnectAddress(ctx context.Context) (string, error) {
+	if err := c.ensureConnectPortForward(ctx); err != nil {
+		return "", err
+	}
+	return c.connectAddr, nil
+}
+
 // TLSConfig returns a copy of the TLS config the client dials the router
 // with.
 func (c *RouterClient) TLSConfig() *tls.Config {

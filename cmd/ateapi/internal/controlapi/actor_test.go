@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -40,6 +41,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -361,8 +363,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Fatalf("UpdateActor repointing a running actor = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
-	// Repointing a paused actor is allowed while suspended, even when it holds
-	// a node-local snapshot.
+	// Repointing a suspended actor is allowed even when it holds a node-local
+	// snapshot.
 	for _, name := range []string{"paused-actor", "uploaded-paused-actor"} {
 		paused := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
@@ -468,10 +470,10 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		name     string
 		template string
 		snapshot func(*testing.T, *ateapipb.Actor) string
-		// pending leaves the snapshot's upload PENDING, as a pause does.
+		// pending leaves the snapshot's upload PENDING, as an async suspend does.
 		pending bool
 		// lastAssignedGen overrides status.LastAssignedGeneration when > 0
-		// (e.g. after a reverted pause or crashed suspend pruned a higher
+		// (e.g. after a reverted or crashed suspend pruned a higher
 		// pending generation).
 		lastAssignedGen int32
 		repointTo       string
@@ -757,11 +759,8 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(original), func(toUpdate *ateapipb.Actor) error {
-				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
-				return nil
-			}); err != nil {
-				t.Fatalf("racing writer: mark deleting: %v", err)
+			if _, err := persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil); err != nil {
+				t.Fatalf("racing writer: mark for deletion: %v", err)
 			}
 			if _, err := persistence.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
 				t.Fatalf("racing writer: DeleteActor: %v", err)
@@ -896,6 +895,69 @@ func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ate
 	return &RPCService{impl: newServiceImpl(persistence, nil)}, created
 }
 
+func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
+	preview.InitForTest(t, "GoldenEgressPolicy")
+	for _, tt := range []struct {
+		name   string
+		policy *ateapipb.EgressPolicyTemplate
+	}{
+		{name: "absent"},
+		{name: "configured", policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}},
+		}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+			svc := &RPCService{impl: impl}
+			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
+			storetest.MustCreateAtespace(t, ctx, persistence, "actors")
+			tmpl, err := svc.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
+				tmpl.GoldenEgressPolicy = tt.policy
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tmplRef := resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()
+			// Existing templates remain usable without the preview gate.
+			preview.InitForTest(t)
+			for _, target := range []resources.ActorRef{
+				{Atespace: "actors", Name: "alpha"},
+				{Atespace: "actors", Name: tmpl.GetMetadata().GetUid()},
+				{Atespace: tmpl.GetMetadata().GetAtespace(), Name: tmpl.GetMetadata().GetUid()},
+			} {
+				actor, err := svc.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: target.Atespace, Name: target.Name}, ActorTemplate: tmplRef,
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ref := resources.ActorRefFromActor(actor).ToObjectRef()
+				if _, err := svc.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName}); apierror.Code(err) != codes.NotFound {
+					t.Fatalf("actor %v inherited golden policy: %v, want NotFound", target, err)
+				}
+				if _, err := svc.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{
+					Actor: ref,
+					EgressPolicy: &ateapipb.EgressPolicy{
+						Metadata: &ateapipb.ResourceMetadata{Atespace: target.Atespace, Name: resources.SingletonName},
+						Rules:    []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{Hostnames: []string{"runtime.example.com"}}}},
+					},
+				}); err != nil {
+					t.Fatalf("creating the actor's runtime policy: %v", err)
+				}
+			}
+			gotTemplate, err := svc.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: tmplRef})
+			if err != nil || !proto.Equal(gotTemplate, tmpl) {
+				t.Fatalf("creating runtime policies changed the template: %v, %v", gotTemplate, err)
+			}
+		})
+	}
+}
+
 func TestCreateActor_GoldenTagDefault(t *testing.T) {
 	for _, scenario := range []string{"default", "explicit tag", "own snapshot", "missing", "pending", "wrong template", "data scope"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -933,6 +995,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			}
 			if _, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl), func(db *ateapipb.ActorTemplate) error {
 				db.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{GoldenTag: ref}}
+				db.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{Hostnames: []string{"init.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}}
 				return nil
 			}); err != nil {
 				t.Fatal(err)
@@ -958,6 +1021,9 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			if gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri() != tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) || gotSnap.GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
 				t.Fatalf("incorrect initial status: %v", created.GetStatus())
 			}
+			if _, err := persistence.GetEgressPolicy(ctx, resources.ActorRefFromActor(created)); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("actor restored from a tag inherited golden policy: %v, want NotFound", err)
+			}
 			if scenario == "own snapshot" {
 				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")
 				if err != nil {
@@ -974,11 +1040,12 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				}
 			}
 			workflow := &ActorWorkflow{store: persistence}
-			_, _, src, err := workflow.loadActorForResume(ctx, resources.ActorRefFromActor(created))
+			actorRef := resources.ActorRefFromActor(created)
+			loaded, _, err := workflow.loadActorForResume(ctx, actorRef)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if src.SnapshotURI.IsZero() {
+			if snapshotToResume(loaded.GetStatus()) == nil {
 				t.Fatalf("missing snapshot source for %s", scenario)
 			}
 		})

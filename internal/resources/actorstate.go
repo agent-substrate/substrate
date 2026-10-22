@@ -21,7 +21,7 @@ import "go.ate.dev/substrate/pkg/proto/ateapipb"
 //   - RESUMING: a resume fetches the snapshot.
 //   - RUNNING: the actor keeps the credentials its resume minted.
 //   - SUSPENDING: a suspend uploads the snapshot.
-//   - SUSPENDED: a paused actor's background upload runs.
+//   - SUSPENDED: a background upload of a local snapshot runs.
 //
 // In every other state no node acts for the actor, so no node may hold a
 // credential for its snapshots. The mint's host check and the objectstore

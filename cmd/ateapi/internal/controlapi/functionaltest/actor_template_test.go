@@ -24,6 +24,7 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/google/go-cmp/cmp"
@@ -118,8 +119,11 @@ func TestActorTemplateCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteActorTemplate failed: %v", err)
 	}
-	if diff := cmp.Diff(created, deleted, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(created, deleted, protocmp.Transform(), ignoreVersion, ignoreTimestamps); diff != "" {
 		t.Errorf("DeleteActorTemplate response mismatch (-created +deleted):\n%s", diff)
+	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Errorf("the deleted template carries no delete_time")
 	}
 	_, err = tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
@@ -464,6 +468,72 @@ func TestCreateActorTemplate_PerTemplateSnapshotLocationPreview(t *testing.T) {
 			})
 			if status.Code(err) != tt.wantCode {
 				t.Fatalf("CreateActorTemplate error = %v, want %v", err, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestCreateActorTemplate_GoldenEgressPolicyPreview(t *testing.T) {
+	tc := setupPreviewTest(t, namespaceForTest("ns-template-golden-egress-preview"))
+	t.Cleanup(tc.cleanup)
+	base := createTemplateWithSelector(t, tc, "base", nil)
+
+	for i, tt := range []struct {
+		name              string
+		gates             []string
+		optIn             bool
+		snapshotsDisabled bool
+		wantCode          codes.Code
+	}{
+		{name: "gate off", optIn: true, wantCode: codes.InvalidArgument},
+		{name: "no opt-in", gates: []string{"GoldenEgressPolicy"}, wantCode: codes.InvalidArgument},
+		{name: "unrelated gate", gates: []string{"ExternalVolumes"}, optIn: true, wantCode: codes.InvalidArgument},
+		{name: "gate on and opt-in", gates: []string{"GoldenEgressPolicy"}, optIn: true, wantCode: codes.OK},
+		{name: "all gates and opt-in", gates: []string{"ALL"}, optIn: true, wantCode: codes.OK},
+		{name: "golden snapshots disabled", gates: []string{"GoldenEgressPolicy"}, optIn: true, snapshotsDisabled: true, wantCode: codes.InvalidArgument},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, tt.gates...)
+			client := tc.noOptInClient
+			if tt.optIn {
+				client = tc.client
+			}
+			tmpl := proto.Clone(base).(*ateapipb.ActorTemplate)
+			tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("golden-egress-%d", i)}
+			tmpl.Status = nil
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: functionalEgressPolicy().Rules}
+			if tt.snapshotsDisabled {
+				tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}
+			}
+			ref := resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()
+			created, err := client.CreateActorTemplate(t.Context(), &ateapipb.CreateActorTemplateRequest{ActorTemplate: tmpl})
+			if tt.wantCode != codes.OK {
+				assertGrpcErrorRegex(t, err, tt.wantCode, "golden_egress_policy")
+				_, err = client.GetActorTemplate(t.Context(), &ateapipb.GetActorTemplateRequest{ActorTemplate: ref})
+				assertGrpcErrorRegex(t, err, codes.NotFound, "not found")
+				return
+			}
+			if err != nil {
+				t.Fatalf("CreateActorTemplate: %v", err)
+			}
+			wantPolicy := &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{
+				Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
+			}}}
+			if diff := cmp.Diff(wantPolicy, created.GetGoldenEgressPolicy(), protocmp.Transform()); diff != "" {
+				t.Fatalf("golden policy (-want +got):\n%s", diff)
+			}
+
+			// Opting out or disabling the gate must not strand existing templates.
+			preview.InitForTest(t)
+			got, err := tc.noOptInClient.GetActorTemplate(t.Context(), &ateapipb.GetActorTemplateRequest{ActorTemplate: ref})
+			if err != nil {
+				t.Fatalf("GetActorTemplate with gate disabled: %v", err)
+			}
+			if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+				t.Fatalf("template changed with gate disabled (-want +got):\n%s", diff)
+			}
+			if _, err := tc.noOptInClient.DeleteActorTemplate(t.Context(), &ateapipb.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil {
+				t.Fatalf("DeleteActorTemplate with gate disabled: %v", err)
 			}
 		})
 	}

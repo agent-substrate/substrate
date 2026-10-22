@@ -246,6 +246,68 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	}
 }
 
+// TestEnsureWorkerAssigned_MalformedSnapshotURIClaimsNoWorker verifies that a
+// snapshot URI that does not parse fails the resume before a worker is claimed,
+// so the actor stays SUSPENDED and the worker stays free.
+func TestEnsureWorkerAssigned_MalformedSnapshotURIClaimsNoWorker(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
+		WorkerNamespace: "worker-ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod-1",
+		WorkerPodUid:    testWorkerUID("pod-1"),
+		Status: &ateapipb.WorkerStatus{
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:       &ateapipb.WorkerResources{Actors: 1},
+			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
+		},
+	}
+	if _, err := persistence.CreateWorker(ctx, worker); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+
+	cacheCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	wc := workercache.New(persistence, time.Minute)
+	if err := wc.Start(cacheCtx); err != nil {
+		t.Fatalf("workercache.Start: %v", err)
+	}
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "not-a-valid-snapshot-uri", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		}
+	})
+	actor, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+
+	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	if _, _, err := w.ensureWorkerAssigned(ctx, actorRef, actor, &ateapipb.ActorTemplate{}); apierror.Code(err) != codes.DataLoss {
+		t.Fatalf("ensureWorkerAssigned() error = %v, want DataLoss", err)
+	}
+
+	if got := firstAssignment(t, persistence, testWorkerUID("pod-1")); got != nil {
+		t.Errorf("worker assignment = %v, want none", got)
+	}
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("stored state = %v, want SUSPENDED", got)
+	}
+	if got := stored.GetStatus().GetWorkerAssignment(); got != nil {
+		t.Errorf("stored WorkerAssignment = %v, want none", got)
+	}
+}
+
 // TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker verifies that a worker
 // claimed by a previous failed attempt whose pool is no longer eligible is
 // released back to the free pool, without failing the resume, while a fresh
@@ -935,108 +997,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 	}
 }
 
-// A golden tag becoming ready after creation does not change an actor's source.
-func TestLoadActorForResume_DoesNotDefaultGolden(t *testing.T) {
-	ctx := context.Background()
-	persistence := newTestPersistence(t)
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
-	if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-		Status: &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-			GoldenTag: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
-		}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	w := &ActorWorkflow{store: persistence}
-	_, _, src, err := w.loadActorForResume(ctx, actorRef)
-	if err != nil || !src.SnapshotURI.IsZero() {
-		t.Fatalf("source = %+v, err = %v; want cold boot", src, err)
-	}
-}
-
-// TestLoadActorForResume_TemplateReplaced covers the detection of a repointed
-// actor: when ExternalSnapshot.actor_template_uid differs from the actor's
-// current template UID, TemplateReplaced is set so the external restore
-// downgrades to data-only.
-func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-
-	// "current" stands for the created template's own UID.
-	const current = "current"
-
-	tests := []struct {
-		name        string
-		snapshotUID string
-		noSnapshot  bool
-		want        bool
-	}{
-		{
-			name:        "snapshot taken under the current template",
-			snapshotUID: current,
-		},
-		{
-			name:        "snapshot taken under a replaced template",
-			snapshotUID: "some-other-uid",
-			want:        true,
-		},
-		{
-			name:        "snapshot without a recorded template UID",
-			snapshotUID: "",
-		},
-		{
-			name:       "no durable snapshot",
-			noSnapshot: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			persistence := newTestPersistence(t)
-
-			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
-			tmpl, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-			})
-			if err != nil {
-				t.Fatalf("create template: %v", err)
-			}
-			if tmpl.GetMetadata().GetUid() == "" {
-				t.Fatal("created template has no UID; the matching cases would be vacuous")
-			}
-			resolve := func(uid string) string {
-				if uid == current {
-					return tmpl.GetMetadata().GetUid()
-				}
-				return uid
-			}
-
-			var seedOpts []func(*ateapipb.Actor)
-			if !tt.noSnapshot {
-				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
-					a.Status.LastAssignedGeneration = 1
-					a.Status.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, resolve(tt.snapshotUID), "snap-1", someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					}
-				})
-			}
-			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, seedOpts...)
-
-			w := &ActorWorkflow{store: persistence}
-			_, _, src, err := w.loadActorForResume(ctx, actorRef)
-			if err != nil {
-				t.Fatalf("loadActorForResume: %v", err)
-			}
-			if src.TemplateReplaced != tt.want {
-				t.Errorf("src.TemplateReplaced = %v, want %v", src.TemplateReplaced, tt.want)
-			}
-		})
-	}
-}
-
 func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
@@ -1049,7 +1009,7 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 
 	w := &ActorWorkflow{store: persistence}
 
-	actor, tmpl, src, err := w.loadActorForResume(ctx, actorRef)
+	actor, tmpl, err := w.loadActorForResume(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("loadActorForResume() unexpected error = %v", err)
 	}
@@ -1058,9 +1018,6 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	}
 	if tmpl != nil {
 		t.Errorf("expected nil template, got %v", tmpl)
-	}
-	if !src.SnapshotURI.IsZero() {
-		t.Errorf("expected empty snapshot source, got %+v", src)
 	}
 }
 
@@ -1233,17 +1190,24 @@ func wireTestAssignment() *ateapipb.WorkerAssignment {
 }
 
 // newWireCaptureWorkflow builds an ActorWorkflow whose atelet dialer resolves
-// to an in-process capturing fake. The dialer's conn cache is pre-warmed with
-// a bufconn-backed connection for the atelet pod's UID and IP, so
-// DialForAteletOnNode returns it without dialing the pod IP. The fake's server
-// runs atelet's interceptor, so its errors reach the workflow with the code
-// atelet would send.
+// to an in-process capturing fake.
 func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWorkflow, *capturingAtelet) {
 	t.Helper()
 
 	fake := &capturingAtelet{}
+	return &ActorWorkflow{store: persistence, dialer: newNodeAteletDialer(t, fake)}, fake
+}
+
+// newNodeAteletDialer resolves node-1's atelet to an in-process fake. The
+// dialer's conn cache is pre-warmed with a bufconn-backed connection for the
+// atelet pod's UID and IP, so DialForAteletOnNode returns it without dialing
+// the pod IP. The server runs atelet's interceptor, so its errors reach the
+// workflow with the code atelet would send.
+func newNodeAteletDialer(t *testing.T, srvImpl ateletpb.AteletServer) *AteletDialer {
+	t.Helper()
+
 	srv := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor))
-	ateletpb.RegisterAteletServer(srv, fake)
+	ateletpb.RegisterAteletServer(srv, srvImpl)
 	lis := bufconn.Listen(1 << 20)
 	go func() {
 		if err := srv.Serve(lis); err != nil {
@@ -1270,8 +1234,7 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 	}
 	dialer := NewAteletDialer(newTestAteletIndexer(t, ateletPod), installdefaults.SystemNamespace, "", "")
 	dialer.ateletConns.Add("atelet-uid", &ateletConn{ip: "10.0.0.1", conn: conn})
-
-	return &ActorWorkflow{store: persistence, dialer: dialer}, fake
+	return dialer
 }
 
 // TestResumeActor_AteletWireRequest is the characteristic test for the
@@ -1307,7 +1270,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		snap.SandboxRuntime = rt
 		return snap
 	}
-	// pauseUploadURI is where atelet uploads the pause snapshot.
+	// pauseUploadURI is where atelet uploads the local snapshot.
 	pauseUploadURI := someActorSnapshotURI(t, testStorageLocation, "team-a", localSnapshotName)
 	uploadedLocalSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
 		snap := localSnap(name, fidelity)
@@ -1327,7 +1290,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 
 	// actorSeed is the actor status a row persists before resuming.
 	type actorSeed struct {
-		// localSnapshot seeds a completed local snapshot (the pause checkpoint);
+		// localSnapshot seeds a completed local snapshot;
 		// a non-nil value also pins the actor to the snapshot's node.
 		localSnapshot *ateapipb.Snapshot
 		// externalSnapshot seeds a completed durable snapshot.
@@ -1340,6 +1303,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		sourceTag *ateapipb.ObjectRef
 		// assignedRuntime seeds WorkerAssignment.SandboxRuntime.
 		assignedRuntime *ateapipb.ActorSandboxRuntime
+		// externalNewer gives externalSnapshot a higher generation than
+		// localSnapshot. By default the local snapshot is newer.
+		externalNewer bool
 	}
 	// templateSeed is the ActorTemplate configuration a row persists.
 	type templateSeed struct {
@@ -1359,6 +1325,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		snapshotName string
 		snapshotURI  string
 		scope        ateletpb.SnapshotFidelity
+		// kind is the restore's snapshot kind label: local when the
+		// restored snapshot is on a node, otherwise latest.
+		kind string
 	}
 
 	amd64RT := testSandboxRuntime()
@@ -1402,6 +1371,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			tmpl:  templateSeed{golden: extSnap(goldenURI, fullScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  goldenURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1428,6 +1398,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor: actorSeed{externalSnapshot: extSnap(actorURI, fullScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1440,6 +1411,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1455,6 +1427,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1464,6 +1437,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor: actorSeed{externalSnapshot: extSnap(actorURI, rootfsScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1478,6 +1452,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1487,6 +1462,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor: actorSeed{externalSnapshot: extSnap(actorURI, dataScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1499,6 +1475,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			tmpl:  templateSeed{golden: extSnap(goldenURI, fullScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1511,6 +1488,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor: actorSeed{externalSnapshot: extSnap(actorURI, unspecScope)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 			},
@@ -1521,8 +1499,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
-			// A pause snapshot's upload is PENDING until atelet reports it,
-			// but a local restore names it anyway, so atelet can download the
+			// An async suspend snapshot's upload is PENDING until atelet reports
+			// it, but a local restore names it anyway, so atelet can download the
 			// snapshot if it detached the actor before the report landed.
 			name: "13 Full pause snapshot restores locally as Full",
 			actor: actorSeed{
@@ -1531,6 +1509,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1543,6 +1522,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1555,6 +1535,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1567,6 +1548,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1578,6 +1560,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1592,6 +1575,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1606,13 +1590,14 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
 			// An older external snapshot's template mismatch does not affect a
-			// local pause restore captured under the current template.
+			// local restore captured under the current template.
 			name: "18 local snapshot ignores an older external snapshot's template mismatch",
 			actor: actorSeed{
 				localSnapshot: func() *ateapipb.Snapshot {
@@ -1626,8 +1611,23 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			},
+		},
+		{
+			name: "18a newer durable snapshot wins over an older local snapshot",
+			actor: actorSeed{
+				localSnapshot:    localSnap(localSnapshotName, fullScope),
+				externalSnapshot: extSnap(actorURI, rootfsScope),
+				externalNewer:    true,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
 		},
 		{
@@ -1639,6 +1639,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
@@ -1652,6 +1653,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1666,6 +1668,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			tmpl: templateSeed{golden: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, goldenURI, fullScope, amd64RT)},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  goldenURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1680,6 +1683,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1694,6 +1698,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
@@ -1707,6 +1712,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1720,6 +1726,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
@@ -1733,27 +1740,29 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
 			// A recorded upload changes nothing: a local restore names the
-			// pause snapshot's upload whether or not it is COMPLETED.
+			// local snapshot's upload whether or not it is COMPLETED.
 			name: "25 uploaded pause snapshot restores locally and sends its upload",
 			actor: actorSeed{
 				localSnapshot: uploadedLocalSnap(localSnapshotName, fullScope),
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
-			// A local restore names the pause snapshot's upload, so a record
-			// that cannot name it fails before a worker is claimed, as a
-			// malformed durable snapshot URI does.
+			// A local restore names the local snapshot's upload, so a record
+			// that cannot name it fails, as a malformed durable snapshot URI
+			// does.
 			name:  "26 local snapshot with no upload recorded fails with DataLoss",
 			actor: actorSeed{localSnapshot: localSnapWithUpload(localSnapshotName, fullScope, nil)},
 			want:  restoreWant{code: codes.DataLoss},
@@ -1804,7 +1813,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				t.Fatal("created template has no UID; the matching tmplUID case would be vacuous")
 			}
 
-			// Paused and suspended actors are both SUSPENDED; a pause
+			// Sync and async suspended actors are both SUSPENDED; a node-local
 			// checkpoint is what makes the resume local.
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 			var extGen, localGen int32
@@ -1819,7 +1828,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					return uid
 				}
 				var gen int32
-				if tt.actor.externalSnapshot != nil {
+				seedExternal := func() {
+					if tt.actor.externalSnapshot == nil {
+						return
+					}
 					gen++
 					extGen = gen
 					ext := proto.CloneOf(tt.actor.externalSnapshot)
@@ -1829,7 +1841,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					}
 					a.Status.Snapshots = append(a.Status.Snapshots, ext)
 				}
-				if tt.actor.localSnapshot != nil {
+				seedLocal := func() {
+					if tt.actor.localSnapshot == nil {
+						return
+					}
 					gen++
 					localGen = gen
 					a.Status.AssignedNode = "node-1"
@@ -1842,12 +1857,20 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					}
 					a.Status.Snapshots = append(a.Status.Snapshots, loc)
 				}
+				if tt.actor.externalNewer {
+					seedLocal()
+					seedExternal()
+				} else {
+					seedExternal()
+					seedLocal()
+				}
 				a.Status.LastAssignedGeneration = gen
 			})
 
-			actor, loadedTmpl, src, err := w.loadActorForResume(ctx, actorRef)
+			actor, loadedTmpl, err := w.loadActorForResume(ctx, actorRef)
+			var tele restoreTelemetry
 			if err == nil {
-				_, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil, src)
+				tele, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
 			}
 			if got := apierror.Code(err); got != tt.want.code {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
@@ -1869,6 +1892,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				if !proto.Equal(run.GetSandboxRuntime(), wantSandboxRuntime) {
 					t.Errorf("run ActorSandboxRuntime = %v, want %v", run.GetSandboxRuntime(), wantSandboxRuntime)
 				}
+				if tele.SnapshotKind != ateattr.SnapshotKindBoot {
+					t.Errorf("SnapshotKind = %q, want %q", tele.SnapshotKind, ateattr.SnapshotKindBoot)
+				}
 				return
 			}
 			if restore == nil || run != nil {
@@ -1885,6 +1911,12 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			}
 			if got := restore.GetSnapshot().GetFidelity(); got != tt.want.scope {
 				t.Errorf("restore scope = %v, want %v", got, tt.want.scope)
+			}
+			if want := ateattr.SnapshotFidelityValue(tt.want.scope); tele.WireFidelity != want {
+				t.Errorf("WireFidelity = %q, want %q, the fidelity sent to atelet", tele.WireFidelity, want)
+			}
+			if tele.SnapshotKind != tt.want.kind {
+				t.Errorf("SnapshotKind = %q, want %q", tele.SnapshotKind, tt.want.kind)
 			}
 			wantGen := extGen
 			if tt.want.snapshotName == localSnapshotName {
@@ -2552,8 +2584,8 @@ func seedMicroVMWorker(t *testing.T, ctx context.Context, st store.Interface, po
 }
 
 // seedActorWithSnapshot stores actor team-a/id1 in state holding snap as its
-// only snapshot. node is the AssignedNode a PAUSED actor keeps, which pins
-// its resume to that node.
+// only snapshot. node is the AssignedNode a suspended actor with a local
+// snapshot keeps.
 func seedActorWithSnapshot(t *testing.T, ctx context.Context, st store.Interface, state ateapipb.ActorState, node string, snap *ateapipb.Snapshot) *ateapipb.Actor {
 	t.Helper()
 	return storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
@@ -2694,7 +2726,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		ctx := context.Background()
 		st := newTestPersistence(t)
 		seedRuntimeWorker(t, ctx, st, "node1-incompatible", "node-1", arm64RT)
-		// A paused actor: SUSPENDED, pinned to its node by a local snapshot.
+		// A suspended actor with a local snapshot on node-1.
 		local := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1")
 		local.SandboxRuntime = amd64RT
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "node-1", local)
@@ -2703,7 +2735,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		if got := apierror.Code(err); got != codes.ResourceExhausted {
 			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.ResourceExhausted, err)
 		}
-		// Nothing was written: the actor waits for its node, still paused,
+		// Nothing was written: the actor waits for its node, still SUSPENDED,
 		// unassigned, and holding no claim anything would have to release.
 		after, err := st.GetActor(ctx, actorRef)
 		if err != nil {
@@ -2846,12 +2878,13 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 	})
 }
 
-// TestRequiredSnapshotRuntime pins which snapshot a resume takes its runtime
-// constraint from, and when it takes none.
+// TestRequiredSnapshotRuntime pins which snapshot a resume takes its sandbox
+// class and runtime constraint from, and when it takes no runtime constraint.
 func TestRequiredSnapshotRuntime(t *testing.T) {
 	const tmplUID = "tmpl-uid"
 	tmpl := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Uid: tmplUID}}
 	localRT := testRuntime("amd64", "paused-under")
+	localRT.SandboxClass = "microvm"
 	durableRT := testRuntime("amd64", "suspended-under")
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	rootfs := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
@@ -2874,29 +2907,35 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 		name      string
 		snapshots []*ateapipb.Snapshot
 		want      *ateapipb.ActorSandboxRuntime
+		wantClass string
 	}{
 		{name: "no snapshot cold-boots unconstrained"},
 		{
 			name:      "completed MEMORY durable snapshot requires its runtime",
 			snapshots: []*ateapipb.Snapshot{durable(1, memory, tmplUID, completed, durableRT)},
 			want:      durableRT,
+			wantClass: "gvisor",
 		},
 		{
 			name:      "completed ROOTFS durable snapshot restores no memory state",
 			snapshots: []*ateapipb.Snapshot{durable(1, rootfs, tmplUID, completed, durableRT)},
+			wantClass: "gvisor",
 		},
 		{
 			name:      "VOLUMES durable snapshot restores no memory state",
 			snapshots: []*ateapipb.Snapshot{durable(1, volumes, tmplUID, completed, durableRT)},
+			wantClass: "gvisor",
 		},
 		{
 			name:      "durable snapshot captured under a replaced template is not restored",
 			snapshots: []*ateapipb.Snapshot{durable(1, memory, "old-tmpl-uid", completed, durableRT)},
+			wantClass: "gvisor",
 		},
 		{
 			name:      "durable snapshot with no template uid keeps its runtime",
 			snapshots: []*ateapipb.Snapshot{durable(1, memory, "", completed, durableRT)},
 			want:      durableRT,
+			wantClass: "gvisor",
 		},
 		{
 			name:      "unstamped durable snapshot imposes no constraint",
@@ -2910,26 +2949,36 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			name:      "local checkpoint requires its runtime",
 			snapshots: []*ateapipb.Snapshot{local(1, memory, tmplUID, localRT)},
 			want:      localRT,
+			wantClass: "microvm",
 		},
 		{
 			name:      "local checkpoint with no template uid keeps its runtime",
 			snapshots: []*ateapipb.Snapshot{local(1, memory, "", localRT)},
 			want:      localRT,
+			wantClass: "microvm",
 		},
 		{
 			name:      "local checkpoint captured under a replaced template is not restored",
 			snapshots: []*ateapipb.Snapshot{local(1, memory, "old-tmpl-uid", localRT)},
+			wantClass: "microvm",
 		},
 		{
-			// ensureAteletRestored restores a local checkpoint before any
-			// durable snapshot, so the constraint follows it regardless of
-			// which is newer.
-			name: "local checkpoint takes precedence over a newer durable snapshot",
+			name: "newer durable snapshot takes precedence over an older local checkpoint",
 			snapshots: []*ateapipb.Snapshot{
 				local(1, memory, tmplUID, localRT),
 				durable(2, memory, tmplUID, completed, durableRT),
 			},
-			want: localRT,
+			want:      durableRT,
+			wantClass: "gvisor",
+		},
+		{
+			name: "newer local checkpoint takes precedence over an older durable snapshot",
+			snapshots: []*ateapipb.Snapshot{
+				local(2, memory, tmplUID, localRT),
+				durable(1, memory, tmplUID, completed, durableRT),
+			},
+			want:      localRT,
+			wantClass: "microvm",
 		},
 		{
 			name: "ROOTFS local checkpoint imposes no constraint beside a stamped durable snapshot",
@@ -2937,6 +2986,7 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 				local(2, rootfs, tmplUID, localRT),
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
+			wantClass: "microvm",
 		},
 		{
 			name: "VOLUMES local checkpoint imposes no constraint beside a stamped durable snapshot",
@@ -2944,6 +2994,7 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 				local(2, volumes, tmplUID, localRT),
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
+			wantClass: "microvm",
 		},
 		{
 			// Restore uses the newer local snapshot's template.
@@ -2952,14 +3003,18 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 				durable(1, memory, "old-tmpl-uid", completed, durableRT),
 				local(2, memory, tmplUID, localRT),
 			},
-			want: localRT,
+			want:      localRT,
+			wantClass: "microvm",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{Snapshots: tc.snapshots}}
-			if diff := cmp.Diff(tc.want, requiredSnapshotRuntime(actor, tmpl), protocmp.Transform()); diff != "" {
+			if diff := cmp.Diff(tc.want, requiredSnapshotRuntime(snapshotToResume(actor.GetStatus()), tmpl), protocmp.Transform()); diff != "" {
 				t.Errorf("requiredSnapshotRuntime mismatch (-want +got):\n%s", diff)
+			}
+			if got := snapshotSandboxClass(actor); got != tc.wantClass {
+				t.Errorf("snapshotSandboxClass = %q, want %q", got, tc.wantClass)
 			}
 		})
 	}
@@ -3218,6 +3273,20 @@ func TestCanRelaxRuntime(t *testing.T) {
 			node:      "node-1",
 			snapshots: []*ateapipb.Snapshot{durable(1), localNoDurable(2)},
 			required:  rt,
+		},
+		{
+			name:      "pinned actor detaches before relaxing a newer durable snapshot",
+			state:     suspended,
+			node:      "node-1",
+			snapshots: []*ateapipb.Snapshot{local(1), durable(2)},
+			required:  rt,
+		},
+		{
+			name:      "newer durable snapshot may fall back beside an older pending checkpoint",
+			state:     suspended,
+			snapshots: []*ateapipb.Snapshot{localDurable(1, pending), durable(2)},
+			required:  rt,
+			want:      true,
 		},
 	}
 	for _, tc := range tests {

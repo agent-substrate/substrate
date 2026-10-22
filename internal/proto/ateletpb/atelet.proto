@@ -406,9 +406,13 @@ service Atelet {
 
   // PromoteSnapshot makes `snapshot` durable in object storage while keeping
   // its local copy on this node. Used when a snapshot needs to be in object
-  // storage (e.g. for tagging) without evicting the paused actor from the
-  // node. Waits for an in-flight detach, and fails for an actor running on
-  // this node.
+  // storage (e.g. for tagging) without evicting the suspended actor's local
+  // snapshot from the node. Waits for an in-flight detach, and fails for an
+  // actor running on this node.
+  //
+  // atelet never uploads a local copy written before the node last rebooted,
+  // since its files may be torn: it answers from the manifest at
+  // `snapshot.object` instead, and fails with NOT_FOUND if there is none.
   //
   // Idempotent: once the snapshot is durable, atelet answers from the
   // manifest at `snapshot.object`, and fails if there is none.
@@ -418,14 +422,16 @@ service Atelet {
 
   // DetachActor makes the actor's latest local snapshot durable, then deletes
   // the actor's local snapshots on this node, so it can resume on any node.
-  // atelet also detaches a suspended actor on its own after its detach delay,
-  // and reports that with WorkerService.ReportActorSnapshotState; it does not
-  // report a DetachActor call, whose caller reads the state from the response.
-  // Waits for an operation already in progress on the actor, such as an
-  // upload or a detach. Does nothing when atelet holds no local snapshot for
-  // the actor. Returns ABORTED when the actor runs on this node, and
-  // FAILED_PRECONDITION when atelet cannot make the latest local snapshot
-  // durable, such as when it has no `snapshot.object`.
+  // atelet also detaches a suspended actor on its own after its detach delay.
+  // It reports either detach with WorkerService.ReportActorSnapshotState, so
+  // the control plane records a DetachActor call's detach even if the caller
+  // does not, and once reported, forgets the actor. The detach doesn't end with
+  // the call: if the caller's context ends first, DetachActor returns that
+  // error and the detach runs on. Waits for an operation already in progress on
+  // the actor, such as an upload or a detach. Does nothing when atelet holds no
+  // local snapshot for the actor. Returns ABORTED when the actor runs on this
+  // node, and FAILED_PRECONDITION when atelet cannot make the latest local
+  // snapshot durable, such as when it has no `snapshot.object`.
   rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
@@ -963,8 +969,9 @@ message ActorSnapshotState {
 
   // The newest snapshot atelet knows is durable, whether or not the control
   // plane has recorded it: one atelet uploaded since it started, or one a
-  // PromoteSnapshot found already uploaded. Unset if there is none, which says
-  // nothing about older durable snapshots.
+  // PromoteSnapshot found already uploaded, while atelet still tracks the
+  // actor. Unset if there is none (or once the actor is detached and
+  // reported), which says nothing about older durable snapshots.
   SnapshotReport latest_durable = 3;
 
   // When atelet next plans to trigger a background upload, of `uploading` if
@@ -1109,9 +1116,10 @@ message RestoreRequest {
 
   // Snapshot to restore from. atelet reads its local copy if it holds a
   // usable one, and `snapshot.object` otherwise. A local copy is unusable if
-  // its manifest does not parse or lists a missing file. While atelet is
-  // detaching the actor, it waits for the detach to finish and then reads
-  // `snapshot.object`. Fails if neither copy exists: that generation is lost.
+  // its manifest does not parse, lists a missing file, or was written before
+  // the node last rebooted. While atelet is detaching the actor, it waits for
+  // the detach to finish and then reads `snapshot.object`. Fails if neither
+  // copy exists: that generation is lost.
   //
   // `snapshot.object` is required even while the control plane has not
   // recorded the snapshot's upload complete: atelet may have uploaded the
@@ -1199,7 +1207,8 @@ message DetachActorRequest {
 }
 
 message DetachActorResponse {
-  // The actor's state once detached: latest_local is unset, and latest_durable
-  // is its latest snapshot, if atelet knows one.
+  // The actor's state from the detach: latest_local is unset, and
+  // latest_durable is its latest snapshot. Once detached and reported, atelet
+  // forgets the actor, so calling DetachActor again returns an empty state.
   ActorSnapshotState state = 1;
 }

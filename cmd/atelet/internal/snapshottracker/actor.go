@@ -140,10 +140,10 @@ type actorSnapshotsRecord struct {
 	// checkpoint has superseded it.
 	//
 	// Measuring from UndurableSince rather than LatestLocal.CommitTime
-	// ensures an actor that pauses and resumes repeatedly still uploads
-	// within uploadDelay instead of postponing durability indefinitely. An
-	// upload changes UndurableSince only once it succeeds, and a failed or
-	// interrupted one leaves it as it was.
+	// ensures an actor that suspends asynchronously and resumes repeatedly
+	// still uploads within uploadDelay instead of postponing durability
+	// indefinitely. An upload changes UndurableSince only once it succeeds, and
+	// a failed or interrupted one leaves it as it was.
 	UndurableSince time.Time `json:"undurableSince,omitzero"`
 	// DetachAt is when atelet next checks whether to detach the actor. Zero
 	// means no detach is scheduled (see detachScheduled).
@@ -177,11 +177,11 @@ type actorSnapshotsRecord struct {
 	// (CommitLocal or CommitDurable). While it is unset, the actor's
 	// directories and volumes are still that Checkpoint's to clean up.
 	Started bool `json:"started,omitempty"`
-	// ReportDueSince is when the latest background change atelet owes a
-	// report of (a new LatestDurable, or local snapshots cleared by a
-	// detach) finished. Zero once no report is due: the control plane
-	// acknowledged or refused it, a commit or Detach call returned the
-	// state, or atelet gave up after reportQueue.giveUpAfter.
+	// ReportDueSince is when the latest change atelet owes a report of (a
+	// new LatestDurable, or local snapshots cleared by a detach) finished.
+	// Zero once no report is due: the control plane acknowledged or refused
+	// it, a commit returned the state, or atelet gave up after
+	// reportQueue.giveUpAfter.
 	ReportDueSince time.Time `json:"reportDueSince,omitzero"`
 }
 
@@ -550,7 +550,7 @@ func (a *actorSnapshots) detachScheduled() bool {
 // whether it is durable already. It fails with FailedPrecondition when no
 // detach can make it durable until a commit replaces it: LatestDurable names
 // the same snapshot differently, or LatestLocal is not durable and names no
-// object storage location to upload it to, as after a pause today.
+// object storage location to upload it to.
 func (a *actorSnapshots) detachTarget() (target SnapshotRef, alreadyDurable bool, err error) {
 	target = *a.LatestLocal
 	alreadyDurable, err = a.isLatestDurable(target)

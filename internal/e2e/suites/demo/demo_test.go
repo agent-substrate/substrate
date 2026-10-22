@@ -276,8 +276,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			// Pause captures the same VOLUMES fidelity as suspend, so memory
-			// and rootfs writes cold-boot on every resume.
+			// Async suspend captures the same VOLUMES fidelity as sync suspend,
+			// so memory and rootfs writes cold-boot on every resume.
 			name: "preferredFidelity:VOLUMES",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
@@ -314,7 +314,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 }
 
 // TestMultipleDurableDirLifecycle covers an Actor with TWO durable-dir volumes:
-// both must survive pause/resume and suspend/resume independently.
+// both must survive async suspend/resume and sync suspend/resume independently.
 func TestMultipleDurableDirLifecycle(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -547,13 +547,13 @@ func TestExternalVolume_NodeMigration(t *testing.T) {
 	}
 }
 
-// Verify that file and memory counters behavior after pause and suspend, for different snapshot scopes.
+// Verify that file and memory counters behavior after async and sync suspend, for different snapshot scopes.
 // Test case:
 //  1. Create actor.
 //  2. Call to actor and validate memory and file counters.
-//  3. Pause & Resume actor.
+//  3. Async Suspend & Resume actor.
 //  4. Call to actor and validate memory and file counters.
-//  5. Suspend & Resume actor.
+//  5. Sync Suspend & Resume actor.
 //  6. Call to actor and validate memory and file counters.
 type actorLifecycleTestCase struct {
 	fidelity               ateapipb.SnapshotFidelity
@@ -1169,9 +1169,10 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	}
 	validateCounterResponse(t, resp, "after revert from RUNNING", 2, 2)
 
-	// Revert from paused. Resume prefers a local snapshot over the external
-	// one, so clearing LocalSnapshot is what prevents this pause's count=2
-	// checkpoint from restoring on the next resume.
+	// Revert from async suspend (local snapshot). Resume prefers a local
+	// snapshot over the external one, so clearing the local snapshot is what
+	// prevents this async suspend's count=2 checkpoint from restoring on the
+	// next resume.
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
@@ -1196,7 +1197,7 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 		t.Fatalf("RevertActor from SUSPENDED: got %v, want FailedPrecondition", err)
 	}
 
-	// Final resume: if the pause checkpoint had been restored, the counter
+	// Final resume: if the local checkpoint had been restored, the counter
 	// would advance from 2 to 3. Expecting 2 proves the external snapshot won.
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to resume Actor after paused revert: %v", err)
@@ -1298,7 +1299,7 @@ func deletePausedActor(ctx context.Context, t *testing.T, clients *e2e.Clients, 
 	}
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
-	// 3. Pausing the actor
+	// 3. Suspending the actor asynchronously
 	t.Logf("Pausing Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
@@ -1308,7 +1309,7 @@ func deletePausedActor(ctx context.Context, t *testing.T, clients *e2e.Clients, 
 	}
 	waitForActorPaused(ctx, t, clients, actorName)
 
-	// 4. Delete the paused actor
+	// 4. Delete the asynchronously suspended actor
 	t.Logf("Deleting paused Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
@@ -1443,9 +1444,8 @@ func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, 
 	waitForActorStateWithTimeout(ctx, t, clients, actorName, expectedState, 60*time.Second)
 }
 
-// waitForActorPaused waits for the shape a pause leaves behind: SUSPENDED,
-// holding a node-local snapshot and pinned to its node. A plain suspend
-// leaves neither.
+// waitForActorPaused waits for a SUSPENDED actor holding a node-local snapshot
+// on its node.
 func waitForActorPaused(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string) {
 	t.Helper()
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)

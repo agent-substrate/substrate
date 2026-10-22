@@ -153,6 +153,10 @@ var Registry = []Setting{
 		Key: "storage.snapshotLocation", Env: "SNAPSHOT_LOCATION", Flag: "snapshot-location", Kind: KindString,
 		Usage: "Cluster-wide object-storage URI ate-api-server stores snapshots under, for example gs://BUCKET/PREFIX/ (required if the PerTemplateSnapshotLocation preview gate is not enabled)",
 	},
+	{
+		Key: "storage.transferGSAName", Env: "SNAPSHOT_TRANSFER_GSA_NAME", Flag: "snapshot-transfer-gsa-name", Kind: KindString,
+		Usage: "Name of the Google service account snapshot transfers run as on GCS, in gcp.projectID. ate-api-server's credential exchange impersonates it (required to deploy ate-api-server on GKE, unused on kind)",
+	},
 
 	{
 		Key: "atenet.dataplane", Env: "ATE_ATENET_DATAPLANE", Flag: "atenet-dataplane", Kind: KindString,

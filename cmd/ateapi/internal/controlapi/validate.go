@@ -14,15 +14,7 @@
 
 package controlapi
 
-import (
-	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	"k8s.io/apimachinery/pkg/util/validation/field"
-)
-
-func toGRPCInternalError(errs field.ErrorList) error {
-	return apierror.Internal("%v", errs.ToAggregate())
-}
+import "go.ate.dev/substrate/pkg/proto/ateapipb"
 
 // scrubResourceMetadataForCreate removes fields that should not be set by the
 // user when creating a resource.
@@ -34,6 +26,7 @@ func scrubResourceMetadataForCreate(in *ateapipb.ResourceMetadata) {
 	in.Version = 0      // will be set later
 	in.CreateTime = nil // will be set later
 	in.UpdateTime = nil // will be set later
+	in.DeleteTime = nil // will be set later
 }
 
 // scrubResourceMetadataForUpdate removes fields that should not be set by the
@@ -45,4 +38,5 @@ func scrubResourceMetadataForUpdate(in *ateapipb.ResourceMetadata) {
 	// in.Uid and in.Version are preconditions, so we don't scrub them.
 	in.CreateTime = nil // will be set later
 	in.UpdateTime = nil // will be set later
+	in.DeleteTime = nil // will be set later
 }

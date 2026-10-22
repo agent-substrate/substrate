@@ -202,13 +202,13 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 	i.lifecycleOpDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }
 
-// lifecycleOpAttrs builds the resume/suspend/pause/revert dimensions from
+// lifecycleOpAttrs builds the resume/suspend/revert dimensions from
 // workflow state. Nil-safe, and omits the template, pool, sandbox-class,
 // snapshot-kind and snapshot-fidelity labels until they are known so a failure
 // before the load/assign/restore steps never emits an empty-string series.
-// snapshotKind is empty for suspend/pause, which do not restore; snapshotScope
-// applies to all three and separates a full restore from a data-only one of the
-// same kind.
+// snapshotKind is empty for suspend, which does not restore; snapshotScope
+// applies to resume and suspend and separates a full restore from a data-only
+// one of the same kind.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
 func lifecycleOpAttrs(actor *ateapipb.Actor, snapshotKind, snapshotScope string) []attribute.KeyValue {
 	var attrs []attribute.KeyValue

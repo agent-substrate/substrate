@@ -104,8 +104,9 @@ groups:
               stability: development
               value: suspending
               brief: >
-                ateapi is writing a snapshot: node-local for an asynchronous
-                suspend, durable for a synchronous suspend.
+                ateapi is writing a snapshot: uploaded to object storage before
+                returning for a synchronous suspend, or in the background for
+                an asynchronous suspend.
             - id: suspended
               stability: development
               value: suspended
@@ -299,9 +300,11 @@ groups:
               stability: development
               value: local
               brief: >
-                The copy on the node. An asynchronous suspend writes it. A
-                resume reads it while the node still has it, after either kind
-                of suspend and whether or not the upload has finished.
+                The copy on the node. On checkpoint, an asynchronous suspend
+                writes local (whereas a synchronous suspend writes latest,
+                though it also keeps a copy on the node). On restore, a resume
+                reads local while the node still has the copy, after either
+                kind of suspend and whether or not the upload has finished.
             - id: latest
               stability: development
               value: latest
@@ -834,9 +837,14 @@ groups:
     stability: development
     brief: The number of workers in each pool, divided by state and by sandbox class.
     note: >
-      ateapi reads this value with a callback. You can add the counts together.
-      The sum across the states is the size of the pool. The sum across the
-      pools is the size of the fleet. Thus this instrument is an UpDownCounter
+      ateapi reads this value with a callback. Each ateapi replica reports the
+      whole fleet, and the default install runs two replicas. Thus a sum across
+      the replicas counts each worker once for each replica. Take the maximum
+      across the replicas first, by pool namespace, pool, state and sandbox
+      class, and add after that. Within one replica you can add the counts
+      together. The sum across the states is the size of the pool. The sum
+      across the pools is the size of the fleet. Thus this instrument is an
+      UpDownCounter
       and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
       full pool or an empty pool reports 0. An absent series would stop an alert
       on idle == 0.
@@ -1097,17 +1105,18 @@ groups:
     instrument: histogram
     unit: s
     stability: development
-    brief: The time of deleting the local snapshots of an actor during a background detach on atelet, excluding any snapshot upload.
+    brief: The time of deleting the local snapshots and node files of an actor during a background detach on atelet, excluding any snapshot upload.
     note: >
       atelet detaches an actor once it stays suspended on the node for the
       detach delay. If object storage does not hold the latest local snapshot
       yet, the detach uploads it first and records that upload on
       atelet.snapshot.upload.duration; a detach whose upload fails stops there
       and is not recorded here. Once the snapshot is durable, the detach deletes
-      the local snapshots of the actor, which is what this histogram times. A
-      detach that Terminate or an atelet shutdown cancels records error.type
-      Canceled. A failed detach keeps the local snapshots, and atelet tries it
-      again later. A detach that a DetachActor call asks for is not recorded.
+      the local snapshots and other node files of the actor (except
+      snapshot-state.json), which is what this histogram times. A detach that
+      Terminate or an atelet shutdown cancels records error.type Canceled. A
+      failed detach keeps LatestLocal, and atelet tries it again later. A detach
+      that a DetachActor call asks for is not recorded.
     annotations:
       substrate:
         emitted_by: [atelet]

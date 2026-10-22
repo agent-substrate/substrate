@@ -49,7 +49,7 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorke
 	}
 
 	// The actor doesn't need to be running: tokens are needed to fetch a
-	// snapshot before resume and to upload a checkpoint after pause.
+	// snapshot before resume and to upload a checkpoint during or after suspend.
 	dbActor, err := s.store.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("actor not found")

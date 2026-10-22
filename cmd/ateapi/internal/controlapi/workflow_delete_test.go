@@ -39,6 +39,8 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 		name        string
 		seedState   ateapipb.ActorState
 		missingTmpl bool
+		// markActorForDeletion marks the actor before the call, as a failed delete would.
+		markActorForDeletion bool
 	}{
 		{
 			name:      "delete suspended actor succeeds",
@@ -49,8 +51,9 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 			seedState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
-			name:      "delete deleting actor succeeds",
-			seedState: ateapipb.ActorState_ACTOR_STATE_DELETING,
+			name:                 "delete deleting actor succeeds",
+			seedState:            ateapipb.ActorState_ACTOR_STATE_DELETING,
+			markActorForDeletion: true,
 		},
 		{
 			name:      "delete running actor succeeds",
@@ -81,6 +84,11 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 				tmplName = "missing-tmpl"
 			}
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", tmplName, tc.seedState)
+			if tc.markActorForDeletion {
+				if _, err := st.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil); err != nil {
+					t.Fatalf("MarkActorForDeletion: %v", err)
+				}
+			}
 
 			deleted, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{})
 			if err != nil {
@@ -267,7 +275,7 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 }
 
 // TestEnsureMarkedDeleting_AllStates checks that every actor state can be
-// marked DELETING.
+// marked DELETING, and that a second call leaves the marked actor unwritten.
 func TestEnsureMarkedDeleting_AllStates(t *testing.T) {
 	for _, seedState := range allActorStates {
 		t.Run(seedState.String(), func(t *testing.T) {
@@ -283,12 +291,23 @@ func TestEnsureMarkedDeleting_AllStates(t *testing.T) {
 				t.Fatalf("get seeded actor: %v", err)
 			}
 
-			updated, err := w.ensureMarkedDeleting(ctx, actorRef, actor)
+			updated, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{Version: actor.GetMetadata().GetVersion()})
 			if err != nil {
 				t.Fatalf("ensureMarkedDeleting failed: %v", err)
 			}
 			if got := updated.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
 				t.Errorf("ensureMarkedDeleting returned actor in %v, want DELETING", got)
+			}
+			if updated.GetMetadata().GetDeleteTime() == nil {
+				t.Error("ensureMarkedDeleting left delete_time unset")
+			}
+
+			again, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{})
+			if err != nil {
+				t.Fatalf("second ensureMarkedDeleting failed: %v", err)
+			}
+			if got, want := again.GetMetadata().GetVersion(), updated.GetMetadata().GetVersion(); got != want {
+				t.Errorf("second ensureMarkedDeleting moved the version to %d, want %d", got, want)
 			}
 		})
 	}
@@ -584,16 +603,15 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				}
 				fresh = uri
 				objects.PutSnapshot(t, fresh, "manifest.json")
-				// The worker's pod goes away with the commit still outstanding, so
-				// the suspend never gets to finish.
-				if _, err := NewWorkerWorkflow(persistence).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
-					t.Errorf("DeleteWorker: %v", err)
-					return err
-				}
 				return apierror.Unavailable("worker pod is gone")
 			}
 			if _, err := actorWorkflow.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.Unavailable {
 				t.Fatalf("SuspendActor err = %v, want Unavailable from the failed checkpoint", err)
+			}
+			// SuspendActor failed mid-checkpoint and released the actor's lease,
+			// leaving the actor in SUSPENDING; DeleteWorker then crashes it.
+			if _, err := NewWorkerWorkflow(persistence, actorWorkflow.dialer).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker: %v", err)
 			}
 
 			// The actor is CRASHED; DeleteActor deletes the in-progress snapshot
@@ -612,5 +630,77 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				t.Errorf("deleting the actor left %v under its own prefix, want everything it wrote collected", left)
 			}
 		})
+	}
+}
+
+// TestDeleteActorWorkflow_RetryKeepsAdmission fails a guarded delete partway
+// and retries it. The first attempt spends the version guard and stamps
+// delete_time. Retries keep that delete_time and write nothing until the delete
+// finishes.
+func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	objects := objectstoretest.New()
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+	})
+	inFlight := mustActorSnapshotURI(t, &ateapipb.ActorTemplate{
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	}, actor, "abandoned")
+	objects.PutSnapshot(t, inFlight, "manifest.json")
+	observed := mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.LastAssignedGeneration = 1
+		s.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		}
+	})
+	// The guards a client sends after reading the actor.
+	guards := store.DeletePreconditions{UID: observed.GetMetadata().GetUid(), Version: observed.GetMetadata().GetVersion()}
+
+	objects.OnDelete = func(string, string) error { return errObjectStore }
+	if _, err := w.DeleteActor(ctx, actorRef, guards); !isObjectStoreErr(err) {
+		t.Fatalf("DeleteActor = %v, want it to report %v", err, errObjectStore)
+	}
+	admitted, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor after the failure: %v", err)
+	}
+	if admitted.GetMetadata().GetDeleteTime() == nil {
+		t.Fatal("a failed delete left delete_time unset")
+	}
+	if got := admitted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+		t.Fatalf("state after the failure = %v, want DELETING", got)
+	}
+
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{UID: guards.UID}); !isObjectStoreErr(err) {
+		t.Fatalf("retried DeleteActor = %v, want it to report %v", err, errObjectStore)
+	}
+	retried, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor after the retried failure: %v", err)
+	}
+	if got, want := retried.GetMetadata().GetVersion(), admitted.GetMetadata().GetVersion(); got != want {
+		t.Errorf("a retried delete moved the version to %d, want %d", got, want)
+	}
+
+	objects.OnDelete = nil
+	// The first attempt spent the version guard. The uid guard still holds.
+	if _, err := w.DeleteActor(ctx, actorRef, guards); apierror.Code(err) != codes.Aborted {
+		t.Fatalf("retry with the original version = %v, want ABORTED", err)
+	}
+	deleted, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{UID: guards.UID})
+	if err != nil {
+		t.Fatalf("retry with the uid alone: %v", err)
+	}
+	if !deleted.GetMetadata().GetDeleteTime().AsTime().Equal(admitted.GetMetadata().GetDeleteTime().AsTime()) {
+		t.Errorf("the retry re-stamped delete_time: %v, want %v", deleted.GetMetadata().GetDeleteTime().AsTime(), admitted.GetMetadata().GetDeleteTime().AsTime())
+	}
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); apierror.Code(err) != codes.NotFound {
+		t.Errorf("DeleteActor after the row is gone = %v, want NOT_FOUND", err)
 	}
 }

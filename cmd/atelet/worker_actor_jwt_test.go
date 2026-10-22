@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,17 +34,22 @@ import (
 var testActor = actorRef{atespace: "ate-demo", name: "bot", uid: "9f1e0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a"}
 
 // fakeJWTMinter answers MintWorkerActorJwt with a fixed token and records
-// what it was asked for.
+// what it was asked for. A restore fetches its files in parallel, and each
+// fetch mints while the cache is cold, so the record is locked.
 type fakeJWTMinter struct {
 	ateapipb.WorkerServiceClient
 	jwt    string
 	expiry time.Time
 	err    error
-	got    []*ateapipb.MintWorkerActorJwtRequest
+
+	mu  sync.Mutex
+	got []*ateapipb.MintWorkerActorJwtRequest
 }
 
 func (m *fakeJWTMinter) MintWorkerActorJwt(_ context.Context, in *ateapipb.MintWorkerActorJwtRequest, _ ...grpc.CallOption) (*ateapipb.MintWorkerActorJwtResponse, error) {
+	m.mu.Lock()
 	m.got = append(m.got, in)
+	m.mu.Unlock()
 	if m.err != nil {
 		return nil, m.err
 	}

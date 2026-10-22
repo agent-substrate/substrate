@@ -62,12 +62,12 @@ func (t *Tracker) cleanupSupersededUploadingLocked(a *actorSnapshots) {
 	}
 }
 
-// uploadSnapshot uploads target from its local copy to object storage and,
-// when background is true, bounds the attempt by uploadTimeoutFor, unless
-// uploadTimeout is zero or less, and records the background upload metric.
+// uploadSnapshot uploads target from its local copy to object storage, bounded
+// by uploadTimeoutFor unless uploadTimeout is zero or less. When background is
+// true, it records the background upload metric.
 func (t *Tracker) uploadSnapshot(ctx context.Context, actorUID string, target SnapshotRef, background bool) (uploaded bool, elapsed time.Duration, err error) {
 	uploadCtx := ctx
-	if background && t.uploadTimeout > 0 {
+	if t.uploadTimeout > 0 {
 		var cancel context.CancelFunc
 		uploadCtx, cancel = t.withTimeout(ctx, t.uploadTimeoutFor(ctx, actorUID, target))
 		defer cancel()
@@ -81,7 +81,7 @@ func (t *Tracker) uploadSnapshot(ctx context.Context, actorUID string, target Sn
 	return uploaded, elapsed, err
 }
 
-// uploadTimeoutFor returns how long a background upload attempt of target may
+// uploadTimeoutFor returns how long an upload attempt of target may
 // run: uploadTimeout, plus the time target's local copy takes to upload at
 // uploadEstThroughput, doubled for each consecutive failure of the actor's
 // background work, up to maxUploadTimeoutDoublings times. A copy that is

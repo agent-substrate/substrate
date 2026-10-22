@@ -100,11 +100,59 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). The pool decides the sandbox class, so this is also how a template pins one: if your cluster has pools of more than one sandbox class and the workload needs a particular class, make sure the selector points only at pools of that class. An actor booting with no snapshot and no selector may land on any class, and keeps it from its first checkpoint on. |
-| `snapshotConfig` | `SnapshotConfig` | Optional; omitted fields take their defaults. The base object-storage location snapshots are written under (a preview field, ignored without the `PerTemplateSnapshotLocation` gate), the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `snapshotConfig` | `SnapshotConfig` | Optional; omitted fields take their defaults. The base object-storage location snapshots are written under (a preview field, ignored without the `PerTemplateSnapshotLocation` gate), the snapshot fidelity (`preferredFidelity`) every Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `external` CSI volume source (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpuMillicores` and `memoryBytes` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
+| `goldenEgressPolicy` | `EgressPolicyTemplate` | **Preview.** Optional egress policy for the golden actor during initialization. Requires at least one rule, using the same rule defaults and validation as `EgressPolicy`. See [Golden Egress Policy](#golden-egress-policy-goldenegresspolicy). |
 
 The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-compute-foundation) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the runtime it runs under is stamped onto the actor's assignment and snapshots (`sandboxRuntime`: the sandbox class and the runtime's compatibility version) so subsequent resumes prefer runtime-compatible workers.
+
+### Golden Egress Policy (`goldenEgressPolicy`)
+
+`goldenEgressPolicy` is a **preview** feature. Enable
+`--preview=GoldenEgressPolicy` on the server (or through
+ate-setup's `preview` setting), and opt in on the client with `kubectl ate --preview`
+or the `Ate-Preview-Allowed: true` gRPC metadata header. See [Preview gates](dev/preview-gates.md).
+
+Set `goldenEgressPolicy` on an ActorTemplate to give its golden actor network
+access during initialization. For example, this template field
+allows HTTPS to `api.example.com` on the default port, 443:
+
+```yaml
+goldenEgressPolicy:
+  rules:
+    - https:
+        hostnames: [api.example.com]
+```
+
+The template controller creates the golden actor suspended, then creates its
+`EgressPolicy` through `CreateActorEgressPolicy` before calling `ResumeActor`.
+The policy uses the actor's atespace and the name `default`, and receives its own
+UID, version, and timestamps. The template field contains only rules.
+
+If policy creation fails, the controller retries without resuming the actor.
+On a retry, an existing policy must match the template's rules. A mismatch stops
+golden initialization and records a `GoldenEgressPolicyConflict` error in the
+template's status. Actor and policy creation are separate operations: callers
+must leave golden startup to the controller, since a direct `ResumeActor` call
+can start it before its policy exists.
+
+Other actors created from the template do not inherit this policy, including
+actors restored from its golden snapshot. Configure their network access using
+`CreateActorEgressPolicy` before resuming them.
+
+The controller checks the policy before each resume it attempts during golden
+initialization; it does not continuously reconcile the policy after the actor is
+running. Updating or deleting that policy does not change the immutable template.
+Omitting `goldenEgressPolicy` creates no golden policy. When set, it must contain
+at least one rule.
+It cannot be set when `snapshotConfig.goldenSnapshotConfig.mode` is
+`GOLDEN_SNAPSHOT_MODE_DISABLED`.
+
+Turning the gate off prevents creating new templates with `goldenEgressPolicy`.
+Existing templates retain their configuration, including when their golden is
+created after the gate is turned off. Existing policies and resource cleanup
+continue to work.
 
 ### Sandbox Right-Sizing (`resources`)
 
@@ -379,9 +427,11 @@ a `Snapshot` with the following fields:
   see `ActorStatus.assigned_node` in the [API schema](../pkg/proto/ateapipb/ateapi.proto).
 - `durableSnapshot`: The copy in object storage, with its URI in
   `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
-  written and `COMPLETED` once it can be restored from. A pause records the copy
-  as `PENDING`, and atelet uploads it in the background. A tag's snapshot always
-  has one, and the tag can seed actors only once it is `COMPLETED`.
+  written and `COMPLETED` once it can be restored from. A synchronous suspend
+  uploads the copy before returning (`COMPLETED`); an asynchronous suspend
+  records the copy as `PENDING`, and atelet uploads it in the background. A
+  tag's snapshot always has one, and the tag can seed actors only once it is
+  `COMPLETED`.
 - `sandboxRuntime`: The sandbox runtime and hardware compatibility attributes the
   guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
   when the checkpoint is taken. A resume that restores memory state
@@ -404,7 +454,9 @@ a `Snapshot` with the following fields:
     restrictions. When that capacity exists, it detaches the checkpoint and
     retries placement. Detach uploads it if needed, deletes the local files,
     and releases the binding. The retry prefers compatible workers before
-    using the durable fallback above. A detach error leaves the actor attached.
+    using the durable fallback above. A detach error leaves the actor attached,
+    unless its node was deleted before the checkpoint finished uploading. See
+    [`ResumeActor`](#resumeactor) for that case.
 
   A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
   `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime placement constraint. Because a
@@ -450,7 +502,7 @@ Each entry of `versions` (`SandboxVersionConfig`):
 | :--- | :--- | :--- |
 | `name` | `string` | **Required.** Identifies the version within the config. A DNS label (lower-case alphanumerics and `-`, at most 63 characters). |
 | `state` | `string` | Optional. `Enabled` (default) or `Disabled`. The version named by `defaultVersion` cannot be `Disabled`. |
-| `assets` | `map[arch]map[name]AssetFile` | Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair; `url` is at most 2048 bytes. A `ValidatingAdmissionPolicy` enforces each class's required assets on every version. atelet holds no storage credentials: it fetches every URL through the node's object-store plugin (`AssetProvider`), with the plugin's credentials. Which schemes work depends on the plugin; the in-tree one serves only its storage backend's scheme, `gs://` on GCS and `s3://` on S3, as `<bucket>/<object>`, and rejects other schemes without reading them. A `gs://` URL the plugin cannot serve (it has no such object, rejects the URL, does not implement `AssetProvider`, is unreachable, or fails with an error it does not recognize, such as GCS refusing its credentials for a public bucket) is then read anonymously, which serves public buckets such as `gs://gvisor`; any other refusal by the plugin is final. The plugin returns an object only if its content matches `sha256`, and refuses any URL under a snapshot location (an `ActorTemplate`'s `snapshotConfig.location` followed by `/atespaces/`), so assets may share the snapshot bucket but must not be stored there. atelet verifies the sha256 again before using an asset. Its logs and errors show an asset URL as `scheme://host/path`. |
+| `assets` | `map[arch]map[name]AssetFile` | Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair; `url` is at most 2048 bytes. A `ValidatingAdmissionPolicy` enforces each class's required assets on every version. atelet holds no storage credentials: it fetches every URL through the node's object-store plugin (`AssetProvider`), with the plugin's credentials. Which schemes work depends on the plugin; the in-tree one serves only its storage backend's scheme, `gs://` on GCS and `s3://` on S3, as `<bucket>/<object>`, and rejects other schemes without reading them. A `gs://` URL the plugin cannot serve (it has no such object, rejects the URL, does not implement `AssetProvider`, is unreachable, or fails with an error it does not recognize, such as GCS refusing its credentials for a public bucket) is then read anonymously, which serves public buckets such as `gs://gvisor`; any other refusal by the plugin is final. The plugin returns an object only if its content matches `sha256`, and refuses any URL under a snapshot location (an `ActorTemplate`'s `snapshotConfig.location` followed by `/atespaces/`), so assets must not be stored there. On GKE, setup-gcp lets the plugin read only the asset bucket, `<BUCKET_NAME>-assets`, so keep assets there. atelet verifies the sha256 again before using an asset. Its logs and errors show an asset URL as `scheme://host/path`. |
 
 A cluster-wide gVisor `SandboxConfig` (`gvisor-default`, annotated as the class default) is installed with the platform, so gVisor `WorkerPool`s use it automatically without any extra setup.
 
@@ -521,7 +573,7 @@ Golden snapshot creation is enabled by default. To disable it, set
 template. Omitting the config or leaving `mode` unspecified defaults to
 `GOLDEN_SNAPSHOT_MODE_ENABLED`. A disabled template creates no
 golden actor or tag. Actors created without a `sourceTag` cold-boot and can still
-pause, suspend, and resume using their own snapshots.
+suspend and resume using their own snapshots.
 
 `kubectl ate get actor-templates` shows `DISABLED` in the `GOLDEN TAG` column
 for these templates.
@@ -605,25 +657,26 @@ Replaces the mutable fields of an existing actor with the ones in the request (`
     *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
     *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same location: its `snapshotConfig.storageLocation` with the `PerTemplateSnapshotLocation` preview gate, otherwise ate-api-server's `--snapshot-location` (see [Snapshot Storage Layout](#snapshot-storage-layout)).
     *   `worker_selector` may be updated or cleared (`nil`) in any state; the updated selector takes effect on the next `ResumeActor`.
-    *   A paused actor is initially pinned to its node (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). `ResumeActor` first looks for a worker there matching the template and actor selectors. If none is available but a worker satisfies the remaining constraints without node or runtime restrictions, resume detaches the checkpoint and retries placement. If no eligible worker has room, it returns `RESOURCE_EXHAUSTED`.
+    *   A suspended actor with a local snapshot is initially pinned to its node (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). `ResumeActor` first looks for a worker there matching the template and actor selectors. If none is available but a worker satisfies the remaining constraints without node or runtime restrictions, resume detaches the checkpoint and retries placement. If no eligible worker has room, it returns `RESOURCE_EXHAUSTED`.
 *   **Response:** the updated `Actor`.
 *   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `FAILED_PRECONDITION` if a change to `actor_template` breaks one of the rules above; `ABORTED` if either guard no longer matches the stored resource.
 
 Because the guards are required and only a read supplies them, an update is always a read-modify-write. To Update an `Actor`, you must first `GetActor`/`CreateActor`, instead of building a new one — see [§7.2 of the API style guide](api-style-guide.md#72-using-version-and-uid-to-guard-writes) for why reconstructing the message can silently drop data.
 
 #### `ResumeActor`
-Activates a suspended or paused actor by restoring it onto a physical worker.
+Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
+*   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`. A suspended actor loses its local snapshot when its node is deleted before that snapshot finishes uploading. Once another node has room, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot.
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
-    *   `options.mode`: (Optional) `DURABILITY_MODE_SYNCHRONOUS` returns once the snapshot is `COMPLETED` in object storage. `DURABILITY_MODE_ASYNCHRONOUS` (a pause) returns once the snapshot is captured on the worker's node, and atelet uploads it in the background. Unset runs an asynchronous suspend.
+    *   `options.mode`: (Optional) `DURABILITY_MODE_SYNCHRONOUS` returns once the snapshot is `COMPLETED` in object storage. `DURABILITY_MODE_ASYNCHRONOUS` returns once the snapshot is captured on the worker's node, and atelet uploads it in the background. Unset runs an asynchronous suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.snapshots`.
-*   Called on an actor that is already `ACTOR_STATE_SUSPENDED`, it returns the actor as it is, in either mode. atelet uploads a paused actor's node-local snapshot in the background, so `status.snapshots` may still show it with `locality` and a `PENDING` `durableSnapshot`.
+*   Called on an actor that is already `ACTOR_STATE_SUSPENDED`, it returns the actor as it is, in either mode. After an asynchronous suspend, atelet uploads the snapshot in the background, so `status.snapshots` may still show a `PENDING` `durableSnapshot`.
 *   A snapshot generation conflict returns `ABORTED` without crashing the actor. The actor can remain `ACTOR_STATE_SUSPENDING`, with its worker assignment and previous completed snapshot kept for recovery. Read the actor's latest state before retrying; repeating a stale request cannot resolve a persistent disagreement with atelet.
 *   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended. After an asynchronous suspend, `CreateTag` first has atelet upload the snapshot if it has not already, so the call can take as long as that upload. If the upload fails, so does `CreateTag`, and the actor is left as it was.
 
@@ -638,16 +691,16 @@ Every external snapshot has exactly one owner, and the control plane deletes it 
 
 An actor created from a tag borrows the tag's copy instead of taking one of its own. The borrowed URI sits under the tag's prefix, which the actor's own prefix does not cover, so neither suspending nor deleting the actor can reach it; its first own suspend writes a snapshot under the actor's prefix, and it owns its snapshots from then on.
 
-Deletion always runs before the database reference is dropped, and a failure fails the whole RPC. Clients are expected to retry with the same arguments: destinations are deterministic and every phase tolerates a partly-completed predecessor, so a retry resumes rather than duplicating work. The cost of that ordering is that a crash between the two can leave an external snapshot no row names; the reverse order would instead lose the handle needed to ever delete it.
+Deletion always runs before the database reference is dropped, and a failure fails the whole RPC. Clients are expected to retry: destinations are deterministic and every phase tolerates a partly-completed predecessor, so a retry resumes rather than duplicating work. The cost of that ordering is that a crash between the two can leave an external snapshot no row names; the reverse order would instead lose the handle needed to ever delete it.
 
 > **Do not delete a tag while actors created from it exist.** A clone borrows the tag's snapshot rather than copying it, and only stops borrowing at its own first suspend (its `status.snapshots` entry still names the tag's prefix while it is). Deleting the tag leaves such a clone unable to resume. This is not prevented today.
 
 #### `RevertActor`
 Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE_SUSPENDED` at its last completed external snapshot (`status.snapshots`).
 *   **Request:** `RevertActorRequest`
-    *   `actor`: `ObjectRef` of the actor to revert. Accepted from `ACTOR_STATE_RUNNING` and `ACTOR_STATE_CRASHED` (plus `ACTOR_STATE_REVERTING` for idempotent retries), and from a paused actor: `ACTOR_STATE_SUSPENDED` whose latest snapshot is node-local. Calling `RevertActor` on an `ACTOR_STATE_SUSPENDED` actor with no node-local snapshot returns `FAILED_PRECONDITION`.
+    *   `actor`: `ObjectRef` of the actor to revert. Accepted from `ACTOR_STATE_RUNNING` and `ACTOR_STATE_CRASHED` (plus `ACTOR_STATE_REVERTING` for idempotent retries), and from `ACTOR_STATE_SUSPENDED` when the actor's latest snapshot is node-local. Calling `RevertActor` on an `ACTOR_STATE_SUSPENDED` actor with no node-local snapshot returns `FAILED_PRECONDITION`.
 *   **Response:** `RevertActorResponse` containing the reverted `Actor` in `ACTOR_STATE_SUSPENDED`.
-*   Reverting terminates any bound worker sandbox, clears node-local pause checkpoints, and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed durable snapshot in `status.snapshots`.
+*   Reverting terminates any bound worker sandbox, clears node-local checkpoints, and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed durable snapshot in `status.snapshots`.
 *   External volumes are not reverted. Their contents are never part of a snapshot, so a reverted actor comes back with its memory and root filesystem rewound but its volumes exactly as the discarded execution left them.
 
 #### `DeleteActor`

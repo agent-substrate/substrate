@@ -202,6 +202,13 @@ const (
 	tunnelPortFilterStateKey   = "dev.ate.tunnel.port"
 )
 
+// connectPoolFilterStateKey is the only hashable value on the CONNECT chain.
+// Envoy keys main_internal's connection pool by it, so a connection never
+// carries another actor's or port's dev.ate.target.actor and
+// dev.ate.connect.authority into a new tunnel. It is the only hashable value so
+// Envoy has no order of hashes to split the pool on.
+const connectPoolFilterStateKey = "dev.ate.connect.pool"
+
 // upstreamSANsFilterStateKey is Envoy's list of SANs the upstream certificate
 // must carry, on top of the cluster's matchers. It does not split the tunnel pool.
 const upstreamSANsFilterStateKey = "envoy.network.upstream_subject_alt_names"
@@ -210,9 +217,13 @@ const upstreamSANsFilterStateKey = "envoy.network.upstream_subject_alt_names"
 // domain.
 const trustDomainSPIFFEPrefix = "spiffe://" + installdefaults.AteletTrustDomain + "/"
 
-// tunnelCircuitBreakerLimit lifts Envoy's default of 1024: there is a tunnel
-// per active actor and port, and idle ones count too.
-const tunnelCircuitBreakerLimit = 65536
+// tunnelCircuitBreakerLimit lifts Envoy's default of 1024 on the actor_tunnel
+// clusters.
+const tunnelCircuitBreakerLimit = 1048576
+
+// actorConnectCircuitBreakerLimit lifts Envoy's default of 1024 on
+// actor_connect.
+const actorConnectCircuitBreakerLimit = 1048576
 
 // tunnelIdleTimeout closes unused tunnels, which hold actor connections.
 const tunnelIdleTimeout = 60 * time.Second
@@ -932,7 +943,14 @@ func buildActorTunnelCluster(name string, http2 bool) *clusterv3.Cluster {
 				}),
 			},
 		},
-		CircuitBreakers: tunnelCircuitBreakers(),
+		CircuitBreakers: &clusterv3.CircuitBreakers{
+			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
+				Priority:           corev3.RoutingPriority_DEFAULT,
+				MaxConnections:     wrapperspb.UInt32(tunnelCircuitBreakerLimit),
+				MaxPendingRequests: wrapperspb.UInt32(tunnelCircuitBreakerLimit),
+				MaxRequests:        wrapperspb.UInt32(tunnelCircuitBreakerLimit),
+			}},
+		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
 			httpProtocolOptionsName: newAny(&httpv3.HttpProtocolOptions{
 				CommonHttpProtocolOptions: &corev3.HttpProtocolOptions{
@@ -963,7 +981,14 @@ func (x *XdsServer) buildActorConnectCluster() *clusterv3.Cluster {
 			},
 		},
 		TransportSocket: x.buildUpstreamTransportSocket(),
-		CircuitBreakers: tunnelCircuitBreakers(),
+		CircuitBreakers: &clusterv3.CircuitBreakers{
+			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
+				Priority:           corev3.RoutingPriority_DEFAULT,
+				MaxConnections:     wrapperspb.UInt32(actorConnectCircuitBreakerLimit),
+				MaxPendingRequests: wrapperspb.UInt32(actorConnectCircuitBreakerLimit),
+				MaxRequests:        wrapperspb.UInt32(actorConnectCircuitBreakerLimit),
+			}},
+		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
 			httpProtocolOptionsName: newAny(&httpv3.HttpProtocolOptions{
 				UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
@@ -975,17 +1000,6 @@ func (x *XdsServer) buildActorConnectCluster() *clusterv3.Cluster {
 				},
 			}),
 		},
-	}
-}
-
-func tunnelCircuitBreakers() *clusterv3.CircuitBreakers {
-	return &clusterv3.CircuitBreakers{
-		Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
-			Priority:           corev3.RoutingPriority_DEFAULT,
-			MaxConnections:     wrapperspb.UInt32(tunnelCircuitBreakerLimit),
-			MaxPendingRequests: wrapperspb.UInt32(tunnelCircuitBreakerLimit),
-			MaxRequests:        wrapperspb.UInt32(tunnelCircuitBreakerLimit),
-		}},
 	}
 }
 
@@ -1160,15 +1174,21 @@ func setFilterStateHTTPFilter(values ...*setfilterstatecommonv3.FilterStateValue
 }
 
 // actorRoutingFilterStateFilter captures the actor routing header so
-// main_internal can read it across the CONNECT internal-listener hop.
+// main_internal can read it across the CONNECT internal-listener hop. With
+// captureAuthority it also captures the authority, and pools the hop by both.
 func actorRoutingFilterStateFilter(captureAuthority bool) *hcmv3.HttpFilter {
 	once := setfilterstatecommonv3.FilterStateValue_ONCE
+	actor := "%CEL(request.headers['" + atenet.TargetActorHeader + "'])%"
 	values := []*setfilterstatecommonv3.FilterStateValue{
-		filterStateValue(extproc.TargetActorFilterStateKey, "envoy.string", "%CEL(request.headers['"+atenet.TargetActorHeader+"'])%", once),
+		filterStateValue(extproc.TargetActorFilterStateKey, "envoy.string", actor, once),
 	}
 	if captureAuthority {
+		authority := "%REQ(" + extproc.AuthorityHeader + ")%"
 		values = append(values,
-			filterStateValue(extproc.ConnectAuthorityFilterStateKey, "envoy.string", "%REQ("+extproc.AuthorityHeader+")%", once))
+			filterStateValue(extproc.ConnectAuthorityFilterStateKey, "envoy.string", authority, once),
+			// ParseTargetActor only accepts atespace/name labels, so the actor
+			// never contains "|" and the first "|" splits the key unambiguously.
+			filterStateValue(connectPoolFilterStateKey, "envoy.hashable_string", actor+"|"+authority, once))
 	}
 	return setFilterStateHTTPFilter(values...)
 }

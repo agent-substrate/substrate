@@ -26,6 +26,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecachegc"
@@ -73,7 +74,7 @@ func openSandboxAssetCache(ctx context.Context, dir string, minAge, fetchTimeout
 		// is fully usable: log and carry on rather than failing startup.
 		slog.WarnContext(ctx, "Sandbox asset cache debris sweep incomplete", slog.Any("err", err))
 	}
-	if err := resetDir("sandbox asset scratch dir", ateletpath.SandboxAssetScratchDir, os.RemoveAll, 0o700); err != nil {
+	if err := actordirs.ResetDir("sandbox asset scratch dir", ateletpath.SandboxAssetScratchDir, os.RemoveAll, 0o700); err != nil {
 		return nil, err
 	}
 	slog.InfoContext(ctx, "Sandbox asset cache open",

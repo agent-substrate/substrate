@@ -36,11 +36,15 @@ variable when deploying ATE.
 1. **Cluster with Agent Substrate deployed**:
    - **Existing cluster** (with `.ate-dev-env.sh` configured):
      ```bash
-     hack/install-ate.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
+     hack/install-ate.sh deploy ate-system \
+       --credential-provider='{"name":"k8s.io"}' \
+       --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/nighthawk/sa/default
      ```
    - **Local `kind` cluster**:
      ```bash
-     hack/install-ate-kind.sh deploy ate-system --credential-provider='{"enabled":false}'
+     hack/install-ate-kind.sh deploy ate-system \
+       --credential-provider='{"enabled":false}' \
+       --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/nighthawk/sa/default
      ```
    - To set the `atenet-egress` Envoy worker thread count (`--concurrency`), set `E2E_ATE_ENVOY_CONCURRENCY` when deploying:
      ```bash

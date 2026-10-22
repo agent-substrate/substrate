@@ -67,7 +67,7 @@ func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateap
 
 	// Validate the final value before storing it.
 	if errs := apivalidation.ValidateActorTemplateUpdate(ctx, field.NewPath("actor_template"), outTemplate, inTemplate); len(errs) > 0 {
-		return nil, toGRPCInternalError(errs)
+		return nil, resources.ToInternalError(errs)
 	}
 
 	// Reject a template whose actors could never be snapshotted, rather than
@@ -125,6 +125,10 @@ func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.Dele
 		return nil, resources.ToAPIError(errs)
 	}
 	return s.actorWorkflow.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate()), toDeletePreconditions(req.GetOptions()))
+}
+
+func (s *ServiceImpl) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+	return s.store.MarkActorTemplateForDeletion(ctx, templateRef, precondition, mutate)
 }
 
 func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error) {
