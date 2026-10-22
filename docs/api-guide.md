@@ -627,6 +627,9 @@ An actor still running when the 30 minutes are up is killed. Once the pod is gon
 
 The node can cut the 30 minutes short. GKE node upgrades and cluster autoscaler scale-downs wait up to an hour for a pod, so they leave the full 30 minutes. A reclaimed GKE [Spot VM](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/spot-vms) gives pods 15 seconds by default and at most 2 minutes, so an actor there has to be suspended in that time or it crashes.
 
+### Interrupted transitions
+`ResumeActor`, `SuspendActor`, `RevertActor` and `DeleteActor` hold the actor in `ACTOR_STATE_RESUMING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_REVERTING` or `ACTOR_STATE_DELETING` while they run, and no call but `DeleteActor` accepts an actor in those states. A call that stops part-way, for example because the ate-api-server replica running it died, would leave the actor there with its worker. ate-api-server sweeps for such actors every minute. One that has sat in `RESUMING`, `SUSPENDING` or `REVERTING` for 2 minutes with no operation in progress on it is moved to `ACTOR_STATE_CRASHED`, its sandbox terminated and its worker released. `RevertActor` then returns it to its last completed external snapshot, so a suspend interrupted this way loses its checkpoint. One left in `DELETING` has its delete resumed.
+
 ---
 
 ## 5. Best Practices
@@ -677,7 +680,7 @@ Hibernate a running actor, capturing its current RAM and disk state into a snaps
     *   `options.mode`: (Optional) `DURABILITY_MODE_SYNCHRONOUS` returns once the snapshot is `COMPLETED` in object storage. `DURABILITY_MODE_ASYNCHRONOUS` returns once the snapshot is captured on the worker's node, and atelet uploads it in the background. Unset runs an asynchronous suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.snapshots`.
 *   Called on an actor that is already `ACTOR_STATE_SUSPENDED`, it returns the actor as it is, in either mode. After an asynchronous suspend, atelet uploads the snapshot in the background, so `status.snapshots` may still show a `PENDING` `durableSnapshot`.
-*   A snapshot generation conflict returns `ABORTED` without crashing the actor. The actor can remain `ACTOR_STATE_SUSPENDING`, with its worker assignment and previous completed snapshot kept for recovery. Read the actor's latest state before retrying; repeating a stale request cannot resolve a persistent disagreement with atelet.
+*   A snapshot generation conflict returns `ABORTED` without crashing the actor. The actor can remain `ACTOR_STATE_SUSPENDING`, with its worker assignment and previous completed snapshot kept for recovery. Read the actor's latest state before retrying; repeating a stale request cannot resolve a persistent disagreement with atelet. An actor left `ACTOR_STATE_SUSPENDING` is crashed after 2 minutes (see [Interrupted transitions](#interrupted-transitions)).
 *   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended. After an asynchronous suspend, `CreateTag` first has atelet upload the snapshot if it has not already, so the call can take as long as that upload. If the upload fails, so does `CreateTag`, and the actor is left as it was.
 
 #### Snapshot lifetime

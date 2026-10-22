@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"sync"
+	"time"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
@@ -30,6 +31,10 @@ import (
 	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
+
+// MaxRPCDeadline is the cap main puts on every RPC's deadline. The reaper
+// gives each Actor the same budget.
+const MaxRPCDeadline = 10 * time.Minute
 
 // RPCService implements ateapipb.ControlServer and provides the implementation of
 // the RPC service.
