@@ -152,9 +152,9 @@ clusters. Agent Substrate leverages Kubernetes for infrastructure provisioning a
 
 ### Namespace-scoped Kubernetes watches
 
-By default, `atecontroller` and `ateapi` watch WorkerPools in all Kubernetes
+By default, `atecontroller`, `ateapi`, and `atelet` watch WorkerPools in all Kubernetes
 namespaces. To manage workloads in a single namespace, set the same flag on
-both binaries, for example:
+all three binaries, for example:
 
 ```text
 --watch-namespace=agent-workloads
@@ -162,14 +162,16 @@ both binaries, for example:
 
 This scopes the controller's WorkerPool, Deployment, NetworkPolicy, and worker
 Pod caches, including its separate worker syncer. It also scopes the API
-server's WorkerPool informer. An empty value watches all namespaces.
-Both binaries reject invalid namespace names at startup and log the effective
+server's WorkerPool informer and atelet's WorkerPool and worker Pod informers.
+The atelet stats poller limits its Pod LISTs to the same namespace. Both atelet
+Pod queries retain their node and worker-label selectors.
+An empty value watches all namespaces.
+All three binaries reject invalid namespace names at startup and log the effective
 scope. The API waits up to one minute for its required Kubernetes caches and
 reports any that fail to sync. Its WorkerPool informer only seeds worker-count
 metrics; it syncs in the background and warns after one minute if still unsynced.
-The controller's worker syncer gets the same one-minute diagnostic: if its
-caches have not synced it logs the pending ones and keeps waiting, so fixing
-the cause recovers without a restart.
+The controller's worker syncer also waits up to one minute. If its caches have
+not synced, it logs the pending ones and exits.
 The worker syncer's startup scan leaves registry entries from other namespaces
 alone, because a Pod absent from a scoped cache is not necessarily deleted.
 It logs a single warning with the skipped count and watched namespace when
@@ -188,7 +190,8 @@ Preserve the verbs from the existing role definitions:
 | Component | Namespace grants | Cluster grants still required |
 | --- | --- | --- |
 | `atecontroller` | WorkerPools and their status/finalizers, Deployments, NetworkPolicies, and Pods in the watched namespace; the CA pool Secret and API EndpointSlices in the system namespace | ClusterTrustBundles and the egress MITM signer attestation permission |
-| `ateapi` | WorkerPools in the watched namespace; atelet Pods in the system namespace | SandboxConfigs, CSIDriverConfigs, and StorageClasses |
+| `ateapi` | WorkerPools in the watched namespace; atelet Pods in the system namespace | CSIDriverConfigs and StorageClasses |
+| `atelet` | WorkerPools and worker Pods in the watched namespace; API EndpointSlices in the system namespace | SandboxConfigs, CSIDriverConfigs, and ClusterTrustBundles |
 
 A Role alone cannot grant the remaining cluster permissions. Keeping the
 default ClusterRoleBindings also keeps their broader access, regardless of the
@@ -198,8 +201,10 @@ This setting does not partition the PostgreSQL Worker registry, constrain API
 principals, or provide tenant isolation. Before narrowing an existing
 installation's scope, drain and retire workloads outside the new namespace;
 otherwise their registered Workers remain available to the API scheduler while
-this controller no longer manages their Pods. Configure RBAC before starting
-the scoped components, and use the same watch namespace on each replica.
+this controller no longer manages their Pods. The atelet also treats workers
+absent from its scoped Pod cache as deleted and removes their local runtime files.
+Configure RBAC before starting the scoped components, and use the same watch
+namespace on each replica.
 
 ### Why do we need a specialized control plane for Agent Substrate?
  * Idle Pods still consume resources.  While Kubernetes is very scalable,
