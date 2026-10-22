@@ -148,27 +148,22 @@ func (c *checkpointCgroup) remove() error {
 	return nil
 }
 
-// checkpointIsolated isolates the sentry into a sibling cgroup (when the
-// worker's cgroup is delegated), runs checkpoint, and tears down the workload
+// checkpointIsolated isolates the sentry into a sibling cgroup, runs
+// checkpoint, and tears down the workload
 // before removing the sibling cgroup so its page cache reparents cleanly. If
 // checkpoint fails, it moves the sentry back into its sandbox leaf (or terminates
 // the workload if that rollback fails).
 func checkpointIsolated(
 	ctx context.Context,
-	cgroupDelegated bool,
 	cgroupRoot, actorUID string,
 	actorDirs *ateworkerpb.ActorDirs,
 	checkpoint func(context.Context) error,
 	terminate func() error,
 ) error {
-	var ckptCgroup *checkpointCgroup
-	if cgroupDelegated {
-		var err error
-		ckptCgroup, err = isolateCheckpointCache(cgroupRoot, actorDirs, actorUID)
-		if err != nil {
-			slog.WarnContext(ctx, "Checkpointing without page cache isolation",
-				slog.String("actorUID", actorUID), slog.Any("err", err))
-		}
+	ckptCgroup, err := isolateCheckpointCache(cgroupRoot, actorDirs, actorUID)
+	if err != nil {
+		slog.WarnContext(ctx, "Checkpointing without page cache isolation",
+			slog.String("actorUID", actorUID), slog.Any("err", err))
 	}
 	terminateOnExit := true
 	defer func() {

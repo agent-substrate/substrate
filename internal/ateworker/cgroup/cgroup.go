@@ -20,6 +20,7 @@ package cgroup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -36,8 +37,9 @@ const Root = "/sys/fs/cgroup"
 const workerLeaf = "worker"
 
 // Delegate prepares the worker pod's cgroup so the runtime can create per-actor
-// leaves under it with real cpu/memory/pids accounting. It reports whether it
-// did: a worker outside a private cgroup namespace is left alone.
+// leaves under it with real cpu/memory/pids accounting. A worker outside a
+// private cgroup namespace fails here rather than running actors without their
+// cgroups.
 //
 // The unprivileged worker runs in a private cgroup namespace, so /sys/fs/cgroup
 // is the pod's own cgroup scope rather than the host root. Two things must be
@@ -54,21 +56,16 @@ const workerLeaf = "worker"
 // worker holds CAP_SYS_ADMIN with no user namespace, so the ro flag is not
 // locked: clear it and leave it writable (the runtime writes here on every
 // create/restore).
-func Delegate(ctx context.Context) (bool, error) {
+func Delegate(ctx context.Context) error {
 	const leaf = Root + "/" + workerLeaf
 
-	// Delegation only makes sense inside a private cgroup namespace, where
-	// /sys/fs/cgroup is the pod's own scope. A privileged worker instead inherits
-	// the host cgroup namespace, so /sys/fs/cgroup is the true host root: it holds
-	// unmovable kernel threads (cgroup.procs would never drain) and must not be
-	// carved up. Detect the namespace via /proc/self/cgroup, which reads "0::/"
-	// only at a cgroup-namespace root, and skip delegation otherwise (the runtime
-	// then falls back to its own cgroup handling).
+	// Outside a private cgroup namespace, as in a privileged pod, /sys/fs/cgroup
+	// is the host's root: it holds unmovable kernel threads and must not be
+	// carved up. /proc/self/cgroup reads "0::/" only at a namespace root.
 	if private, err := inPrivateCgroupNamespace(); err != nil {
-		return false, fmt.Errorf("while detecting cgroup namespace: %w", err)
+		return fmt.Errorf("while detecting cgroup namespace: %w", err)
 	} else if !private {
-		slog.InfoContext(ctx, "not in a private cgroup namespace; skipping cgroup delegation (worker is likely privileged)")
-		return false, nil
+		return errors.New("not in a private cgroup namespace: workers must run unprivileged")
 	}
 
 	if err := os.Mkdir(leaf, 0o755); err != nil && !os.IsExist(err) {
@@ -78,20 +75,20 @@ func Delegate(ctx context.Context) (bool, error) {
 		// runsc's own mounts require anyway; on nodes that do enforce the default
 		// profile (GKE COS) this mount is otherwise denied with EPERM.
 		if err := unix.Mount("none", Root, "", unix.MS_BIND|unix.MS_REMOUNT, ""); err != nil {
-			return false, fmt.Errorf("while remounting %q read-write: %w", Root, err)
+			return fmt.Errorf("while remounting %q read-write: %w", Root, err)
 		}
 		if err := os.Mkdir(leaf, 0o755); err != nil && !os.IsExist(err) {
-			return false, fmt.Errorf("while creating cgroup leaf %q: %w", leaf, err)
+			return fmt.Errorf("while creating cgroup leaf %q: %w", leaf, err)
 		}
 	}
 
 	if err := moveProcs(ctx, Root+"/cgroup.procs", leaf+"/cgroup.procs"); err != nil {
-		return false, fmt.Errorf("while moving worker processes into %q: %w", leaf, err)
+		return fmt.Errorf("while moving worker processes into %q: %w", leaf, err)
 	}
 
 	avail, err := os.ReadFile(Root + "/cgroup.controllers")
 	if err != nil {
-		return false, fmt.Errorf("while reading available cgroup controllers: %w", err)
+		return fmt.Errorf("while reading available cgroup controllers: %w", err)
 	}
 	// Enable controllers one at a time so a single controller the node cannot
 	// delegate (for example cpuset without an assigned cpu set) does not prevent
@@ -105,7 +102,7 @@ func Delegate(ctx context.Context) (bool, error) {
 		enabled = append(enabled, c)
 	}
 	slog.InfoContext(ctx, "cgroup delegation ready", slog.Any("controllers", enabled))
-	return true, nil
+	return nil
 }
 
 // inPrivateCgroupNamespace reports whether the process sits at the root of its

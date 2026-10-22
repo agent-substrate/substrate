@@ -205,13 +205,10 @@ func do(ctx context.Context) error {
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
 	// it with real accounting.
-	cgroupDelegated, err := cgroup.Delegate(ctx)
-	if err != nil {
+	if err := cgroup.Delegate(ctx); err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
 	}
-	if cgroupDelegated {
-		removeStaleCheckpointCgroups(ctx, defaultCgroupRoot)
-	}
+	removeStaleCheckpointCgroups(ctx, defaultCgroupRoot)
 
 	// Clean up any old socket.
 	sockPath := nodepath.WorkerSocketPath(*podUID)
@@ -240,7 +237,6 @@ func do(ctx context.Context) error {
 		return err
 	}
 	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags)
-	ateworkerService.cgroupDelegated = cgroupDelegated
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -364,10 +360,6 @@ type AteWorkerService struct {
 	// own cgroup scope, which cgroup.Delegate prepares. A field rather
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
 	cgroupRoot string
-
-	// cgroupDelegated is set when the worker's cgroup is delegated (false on
-	// privileged workers that inherit the host cgroup namespace).
-	cgroupDelegated bool
 
 	// readSandboxCgroup overrides cgroupstats.Read when set. Only tests set it:
 	// it is the seam that lets them interleave a lifecycle transition with the
@@ -901,7 +893,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	default:
 		return nil, fmt.Errorf("unsupported snapshot fidelity: %v", fidelity)
 	}
-	if err := checkpointIsolated(ctx, s.cgroupDelegated, s.cgroupRoot, req.GetActorUid(), req.GetActorDirs(), checkpointFn, terminate); err != nil {
+	if err := checkpointIsolated(ctx, s.cgroupRoot, req.GetActorUid(), req.GetActorDirs(), checkpointFn, terminate); err != nil {
 		return nil, err
 	}
 

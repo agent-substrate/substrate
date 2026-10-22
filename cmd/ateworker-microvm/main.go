@@ -225,8 +225,7 @@ func do(ctx context.Context) error {
 	actorLogger := actorlog.NewActorLogger(logWriter, metadata.OnGCE())
 	// Give each actor's VMM and virtiofsd a cgroup of their own, so one busy
 	// guest cannot starve the rest.
-	actorCgroups, err := cgroup.Delegate(ctx)
-	if err != nil {
+	if err := cgroup.Delegate(ctx); err != nil {
 		return fmt.Errorf("while delegating the worker cgroup: %w", err)
 	}
 
@@ -235,7 +234,6 @@ func do(ctx context.Context) error {
 		return err
 	}
 	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *vmmMemReserve, *maxActors, tunnel, actorLogger)
-	ateworkerService.actorCgroups = actorCgroups
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -397,9 +395,6 @@ type AteWorkerService struct {
 	// Actors undergoing network cleanup still count against capacity.
 	draining  int
 	maxActors int
-	// actorCgroups is set when the worker's cgroup is delegated, so each actor's
-	// VMM and virtiofsd run in a leaf of their own.
-	actorCgroups bool
 }
 
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
