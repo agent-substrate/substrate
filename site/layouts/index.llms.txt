@@ -15,7 +15,7 @@ limitations under the License.
 */ -}}
 # Agent Substrate
 
-> Agent Substrate is a secure-by-default execution runtime for Kubernetes engineered to run millions of stateful agent sandboxes (gVisor and Kata microVMs) with 10x+ higher density and sub-500ms checkpoint/restore latency.
+> Agent Substrate is an open source, secure-by-default agent execution runtime that runs millions of sandboxed agents (microVMs and gVisor) at up to 10x higher density than standard container runtimes. It runs on Kubernetes, which manages the machines, while its own control and data plane handle sub-500ms suspend and resume.
 
 Agent Substrate decouples the logical **Actor** (a stateful agent or workload instance addressed by `(atespace, name)` and instantiated from an `ActorTemplate`) from the physical **Worker** (a pre-warmed Kubernetes Pod in a `WorkerPool`). Idle actors are checkpointed to object storage (GCS or S3) and evicted from compute; when a request arrives with the `ate-target-actor: <atespace>/<actor>` header, the Substrate router (`atenet`) and control plane (`ate-api-server`) assign a ready worker and the node-level supervisor (`atelet`) coordinates with the in-pod sandbox herder (`ateom`) to restore the actor's memory and filesystem state in under 500ms—bypassing the Kubernetes control plane on the request path.
 

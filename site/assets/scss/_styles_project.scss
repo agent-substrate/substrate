@@ -1527,13 +1527,21 @@ footer {
 
 .as-cap-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
 
   @media (max-width: 900px) {
     grid-template-columns: minmax(0, 1fr);
     gap: 16px;
   }
+}
+
+.as-cap-footnote {
+  margin: 24px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #8c9c92;
+  max-width: 820px;
 }
 
 .as-cap-card {
@@ -1576,6 +1584,11 @@ footer {
     &--pink {
       background: #2e1624;
       color: #e87cb3;
+    }
+
+    &--green {
+      background: #142618;
+      color: #64d86b;
     }
   }
 
@@ -1627,6 +1640,10 @@ footer {
 
     &--pink {
       color: #e87cb3;
+    }
+
+    &--green {
+      color: #64d86b;
     }
 
     @media (max-width: 767px) {

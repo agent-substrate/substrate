@@ -33,11 +33,12 @@ limitations under the License.
       <div class="as-hero__copy">
         <div class="as-hero__eyebrow">
           <span class="as-hero__eyebrow-dot"></span>
-          <span class="as-hero__eyebrow-desktop">Open source · Kubernetes-native agent runtime</span>
-          <span class="as-hero__eyebrow-mobile">Open source · Kubernetes-native</span>
+          <span class="as-hero__eyebrow-desktop">Open source · Secure-by-default agent runtime</span>
+          <span class="as-hero__eyebrow-mobile">Open source · Secure-by-default</span>
         </div>
-        <h1 class="as-hero__title">Run millions of agents on <span class="as-accent">Kubernetes</span>.</h1>
-        <p class="as-hero__lead">A secure-by-default execution runtime. Idle agents suspend, resume in under a second on any ready worker, and keep their memory and filesystem state.</p>
+        <h1 class="as-hero__title">Run millions of agents, <span class="as-accent">securely</span>.</h1>
+        <p class="as-hero__lead">Every agent runs in its own microVM or gVisor sandbox. Idle agents suspend, resume in under
+          500ms on any ready worker, and keep their memory and filesystem state.</p>
         <div class="as-hero__actions">
           <a href="{{ "docs/get-started/quickstart/" | relURL }}" class="as-btn-primary">
             <span>Get started</span>
@@ -147,7 +148,7 @@ limitations under the License.
       </div>
       <div class="as-stats__item">
         <span class="as-stats__val">2<small> isolation modes</small></span>
-        <span class="as-stats__desc">gVisor and microVM sandboxes, one lifecycle</span>
+        <span class="as-stats__desc">microVM and gVisor sandboxes, one lifecycle</span>
       </div>
     </div>
   </section>
@@ -172,7 +173,7 @@ limitations under the License.
         </div>
         <div class="as-cap-card__body">
           <div class="as-cap-card__title">Actor Teleport</div>
-          <p class="as-cap-card__desc">Suspend an actor and resume it on any available worker in the pool, with sub-second activation.</p>
+          <p class="as-cap-card__desc">Suspend an actor and resume it on any available worker in the pool in under 500ms.</p>
         </div>
         <span class="as-cap-card__cta as-cap-card__cta--blue">
           <span>Suspend &amp; resume</span>
@@ -200,14 +201,34 @@ limitations under the License.
         </div>
         <div class="as-cap-card__body">
           <div class="as-cap-card__title">Agent Multiplexing</div>
-          <p class="as-cap-card__desc">Pack a large registry of stateful actors onto a small pool of shared Pods. The demo runs about 250 actors on 8.</p>
+          <p class="as-cap-card__desc">Pack a large registry of stateful actors onto a small pool of shared workers. The demo runs
+            about 250 actors on 8.</p>
         </div>
         <span class="as-cap-card__cta as-cap-card__cta--pink">
           <span>WorkerPools</span>
           <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
         </span>
       </a>
+      <a href="{{ "docs/security/security/" | relURL }}" class="as-cap-card card-h">
+        <div class="as-cap-card__icon as-cap-card__icon--green">
+          <svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+        </div>
+        <div class="as-cap-card__body">
+          <div class="as-cap-card__title">Isolated by Default</div>
+          <p class="as-cap-card__desc">Every actor runs in a microVM or gVisor sandbox with its own network namespace. Egress is
+            denied unless a policy allows it, and the egress gateway injects credentials so the agent never holds the secret.
+          </p>
+        </div>
+        <span class="as-cap-card__cta as-cap-card__cta--green">
+          <span>Security overview</span>
+          <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+        </span>
+      </a>
     </div>
+
+    <p class="as-cap-footnote">Runs on any Kubernetes cluster. Kubernetes handles nodes, autoscaling and recovery.
+      Substrate's own control and data plane handle agent scheduling and suspend/resume, so the Kubernetes API stays off the
+      request path.</p>
   </section>
 
   <!-- Get started + See it run -->
@@ -270,7 +291,7 @@ go run ./tools/setup-gcp bootstrap
         <a href="{{ "docs/tutorials/sandbox/" | relURL }}" class="as-example-pill">Sandbox</a>
         <a href="{{ "docs/tutorials/claude-code-multiplex/" | relURL }}" class="as-example-pill">Claude Code multiplex</a>
         <a href="{{ "docs/tutorials/parking/" | relURL }}" class="as-example-pill">Request parking</a>
-        <a href="{{ "docs/tutorials/" | relURL }}" class="as-example-more">All 8 examples →</a>
+        <a href="{{ "docs/tutorials/" | relURL }}" class="as-example-more">All 7 examples →</a>
       </div>
     </div>
   </section>
@@ -287,6 +308,8 @@ go run ./tools/setup-gcp bootstrap
       <span class="as-compat-pill">LangChain</span>
       <span class="as-compat-pill">Claude Code</span>
       <span class="as-compat-pill">Codex</span>
+      <span class="as-compat-pill">Hermes</span>
+      <span class="as-compat-pill">OpenClaw</span>
       <span class="as-compat-pill">Antigravity</span>
       <span class="as-compat-pill">MCP servers</span>
     </div>

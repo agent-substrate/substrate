@@ -5,12 +5,12 @@ weight: 1
 aliases:
   - "/docs/overview/"
 description: >
-  A high-density, low-latency execution runtime for stateful agent workloads on Kubernetes.
+  A high-density, low-latency execution runtime for stateful agent workloads.
 ---
 
-**Agent Substrate** (internally prefixed **`ATE`** across binaries and CRDs) is a secure-by-default execution runtime engineered to run millions of stateful sandboxes on Kubernetes at **10x+ higher density** than standard container runtimes. Because autonomous agents spend most of their lifecycle idle waiting on user input, model responses, or external events, dedicating a full Kubernetes Pod to every session leaves clusters heavily underutilized.
+**Agent Substrate** is a secure-by-default agent execution runtime engineered to run millions of stateful sandboxes at **10x+ higher density** than standard container runtimes. Autonomous agents spend most of their lifecycle idle waiting on user input, model responses, or external events; Substrate reclaims compute during those idle periods without losing session state.
 
-Substrate decouples the **Actor** (a stateful agent or workload instance addressed within an **atespace**) from the **Worker** (a pre-warmed Kubernetes Pod in a `WorkerPool`). Idle actors are checkpointed to object storage and evicted from compute; when a request arrives at **atenet**, the control plane assigns a ready worker and the node-level **atelet** supervisor coordinates with **ateom** inside the worker Pod to restore the actor's full memory and filesystem state in **under 500ms**—taking the Kubernetes control plane out of the critical path.
+Substrate decouples the **Actor** (a stateful agent or workload instance) from the **Worker** (a pre-warmed sandbox in a `WorkerPool`). Idle actors are checkpointed to object storage and evicted from compute; when a request arrives at the router, the control plane assigns a ready worker and the node-level supervisor restores the actor's full memory and filesystem state in **under 500ms**—taking the Kubernetes control plane out of the critical path.
 
 <figure class="as-diagram-card as-overview-arch">
   <div class="as-diagram-card__top">
@@ -39,7 +39,7 @@ Substrate decouples the **Actor** (a stateful agent or workload instance address
     <div class="as-diagram-node as-diagram-node--stack">
       <span class="as-diagram-node__tag">Pre-Warmed Worker Pod (WorkerPool)</span>
       <span class="mono as-diagram-node__title">Worker (ateom + Sandbox)</span>
-      <span class="mono as-diagram-node__sub">ateom herder · atunnel mTLS · gVisor / Kata microVM hosting Actor</span>
+      <span class="mono as-diagram-node__sub">ateom herder · atunnel mTLS · microVM / gVisor hosting Actor</span>
     </div>
   </div>
   <figcaption class="as-diagram-card__caption">
@@ -48,6 +48,6 @@ Substrate decouples the **Actor** (a stateful agent or workload instance address
   </figcaption>
 </figure>
 
-* **Core Platform Jargon at a Glance:** Each actor lives in an `atespace` (`<atespace>/<actor>`), traffic enters via `atenet`, node supervision and snapshot streaming are handled by `atelet`, and sandbox execution inside each warm `Worker` Pod is managed by `ateom`. See the **[Glossary](../../reference/glossary/)** for complete definitions.
-* **Framework Agnostic:** Runs standard OCI containers inside zero-trust sandboxes—supporting ADK, LangChain, MCP servers, and stateful coding environments out of the box.
+* **Core Platform Terms at a Glance:** Each actor lives in an `atespace` (`<atespace>/<actor>`), traffic enters via `atenet`, node supervision and snapshot streaming are handled by `atelet`, and sandbox execution inside each warm `Worker` is managed by `ateom` (internally prefixed `ate` across binaries and CRDs). See the **[Glossary](../../reference/glossary/)** for complete definitions.
+* **Framework Agnostic:** Runs standard OCI containers inside zero-trust sandboxes—supporting ADK, LangChain, Hermes, OpenClaw, MCP servers, and stateful coding environments out of the box.
 * **Ready to try it?** Jump straight to **[Quickstart](../quickstart/)** to launch your first actor on Kind or GKE, or explore the **[Architecture](../../concepts/architecture/)**.
