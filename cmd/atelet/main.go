@@ -2260,7 +2260,7 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 					Name:      volName,
 					MountPath: vm.GetMountPath(),
 				})
-			case vol.GetExternal() != nil:
+			case vol.GetExternal() != nil, vol.GetEmptyDir() != nil:
 				extMounts = append(extMounts, &ateworkerpb.VolumeMount{
 					Name:      volName,
 					MountPath: vm.GetMountPath(),
