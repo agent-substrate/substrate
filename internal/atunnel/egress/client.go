@@ -32,9 +32,10 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"go.ate.dev/substrate/internal/atenet"
 )
 
-// TODO(liorlieberman): support/use CONNECT on Ingress as well.
 // ClientConfig configures an egress CONNECT client.
 type ClientConfig struct {
 	GatewayAddress       string
@@ -137,7 +138,7 @@ func NewClient(cfg ClientConfig, opts ...clientOption) (*Client, error) {
 	return client, nil
 }
 
-// Close any pooled HTTP/2 connections to the egress gateway and cancels
+// Close closes any pooled HTTP/2 connections to the egress gateway and cancels
 // any in-flight connection dial.
 func (c *Client) Close() error {
 	c.mu.Lock()
@@ -158,7 +159,7 @@ func (c *Client) Close() error {
 	return err
 }
 
-// Open a CONNECT tunnel to destination. destination becomes the
+// DialContext opens a CONNECT tunnel to destination. destination becomes the
 // request authority, so it must include an explicit port.
 // TODO(yanavlasov): update .md file with the description of this machinery.
 // TODO(yanavlasov): consider simplifying this code by dropping support for H/1.
@@ -448,7 +449,7 @@ func (c *Client) connectH2(ctx context.Context, h2Conn *h2ClientConn, wasVerifie
 	})
 	stopCancel := context.AfterFunc(ctx, streamCancel)
 
-	// Roundrip the CONNECT request with provided body writer.
+	// Round-trip the CONNECT request with the provided body writer.
 	req := (&http.Request{
 		Method:        http.MethodConnect,
 		URL:           &url.URL{Host: destination},
@@ -1084,13 +1085,10 @@ func validateDestination(destination string) error {
 	if err != nil {
 		return fmt.Errorf("egress: invalid egress destination %q: %w", destination, err)
 	}
-	if host == "" {
-		return fmt.Errorf("egress: invalid egress destination %q: host is empty", destination)
-	}
 	if net.ParseIP(host) == nil {
 		return fmt.Errorf("egress: invalid egress destination %q: host must be an IP address", destination)
 	}
-	if _, ok := parsePort(port); !ok {
+	if _, ok := atenet.ParsePort(port); !ok {
 		return fmt.Errorf("egress: invalid egress destination %q: port must be between 1 and 65535", destination)
 	}
 	return nil

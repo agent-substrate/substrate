@@ -38,7 +38,6 @@ import (
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/atenet"
-	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -102,7 +101,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		targetAuthority = md.Host
 	}
 	if _, portStr, err := net.SplitHostPort(targetAuthority); err == nil {
-		if p, ok := atunnelingress.ParsePort(portStr); ok {
+		if p, ok := atenet.ParsePort(portStr); ok {
 			targetPort = p
 		}
 	}

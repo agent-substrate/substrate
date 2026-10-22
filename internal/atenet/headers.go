@@ -17,6 +17,7 @@ package atenet
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"go.ate.dev/substrate/internal/resources"
@@ -37,4 +38,14 @@ func ParseTargetActor(value string) (resources.ActorRef, error) {
 		return resources.ActorRef{}, fmt.Errorf("invalid actor reference %q", value)
 	}
 	return resources.ActorRef{Atespace: atespace, Name: actorName}, nil
+}
+
+// ParsePort parses s as a TCP port number, returning ok=false for anything
+// outside the valid 1-65535 range (including non-numeric input).
+func ParsePort(s string) (port int, ok bool) {
+	p, err := strconv.Atoi(s)
+	if err != nil || p < 1 || p > 65535 {
+		return 0, false
+	}
+	return p, true
 }

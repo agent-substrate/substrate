@@ -22,7 +22,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -40,9 +39,9 @@ import (
 	"testing"
 	"time"
 
-	"go.ate.dev/substrate/internal/resources"
-
 	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 func TestActivationDialerClosesLateConnection(t *testing.T) {
@@ -185,11 +184,7 @@ func TestRelayWithHalfClose(t *testing.T) {
 	if err := actor.Close(); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("relay did not finish after the actor response ended")
-	}
+	receiveWithin(t, done, "the relay to finish after the actor response ended")
 	if got := downstreamOutput.String(); got != "response" {
 		t.Errorf("downstream received %q, want response", got)
 	}
@@ -217,11 +212,7 @@ func TestRelayIngressClosesDownstreamWhenActorCloses(t *testing.T) {
 	if err := actor.Close(); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("relay kept the tunnel open after the actor closed its connection")
-	}
+	receiveWithin(t, done, "the relay to end the tunnel after the actor closed its connection")
 	if got := downstreamOutput.String(); got != "response" {
 		t.Errorf("downstream received %q, want response", got)
 	}
@@ -248,11 +239,7 @@ func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
 	}()
 
 	cancel(errActorDeactivated)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("relay did not return after cancellation")
-	}
+	receiveWithin(t, done, "the relay to return after cancellation")
 	// Deadline only guards against hanging; it fails once the relay closed the pipe.
 	_ = actor.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err := actor.Read(make([]byte, 1)); err == nil {
@@ -286,19 +273,12 @@ func (b *syncBuffer) String() string {
 
 func TestServeHTTP(t *testing.T) {
 	var upstreamHosts []string
-	upstreamURL, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
+	upstreamURL := actorUpstream()
 
 	s := newTestServer(t, upstreamURL)
 	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstreamHosts = append(upstreamHosts, r.Host)
-		return &http.Response{
-			StatusCode: http.StatusNoContent,
-			Header:     make(http.Header),
-			Body:       http.NoBody,
-		}, nil
+		return noContent(), nil
 	})
 	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
 		t.Fatal(err)
@@ -355,20 +335,13 @@ func TestServeHTTP(t *testing.T) {
 }
 
 func TestServerRejectsDuplicateOrCommaTargetActorHeaders(t *testing.T) {
-	upstreamURL, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
+	upstreamURL := actorUpstream()
 
 	s := newTestServer(t, upstreamURL)
 	var upstreamCalled bool
 	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstreamCalled = true
-		return &http.Response{
-			StatusCode: http.StatusNoContent,
-			Header:     make(http.Header),
-			Body:       http.NoBody,
-		}, nil
+		return noContent(), nil
 	})
 	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
 		t.Fatal(err)
@@ -422,10 +395,7 @@ func TestServerRejectsDuplicateOrCommaTargetActorHeaders(t *testing.T) {
 }
 
 func TestServeHTTPStripsStaleAssignmentHeaderFromActor(t *testing.T) {
-	upstreamURL, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
+	upstreamURL := actorUpstream()
 
 	s := newTestServer(t, upstreamURL)
 	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -456,10 +426,7 @@ func TestServeHTTPStripsStaleAssignmentHeaderFromActor(t *testing.T) {
 }
 
 func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
-	upstreamURL, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
+	upstreamURL := actorUpstream()
 
 	s := newTestServer(t, upstreamURL)
 	var gotURLHost, gotHost http.Header
@@ -467,11 +434,7 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 		gotURLHost = http.Header{"Host": []string{r.URL.Host}}
 		gotHost = r.Header.Clone()
 		gotHost.Set("Host", r.Host)
-		return &http.Response{
-			StatusCode: http.StatusNoContent,
-			Header:     make(http.Header),
-			Body:       http.NoBody,
-		}, nil
+		return noContent(), nil
 	})
 	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
 		t.Fatal(err)
@@ -517,10 +480,7 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 }
 
 func TestServeConnectHTTPValidatesMethodAndAuthority(t *testing.T) {
-	upstreamURL, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
+	upstreamURL := actorUpstream()
 	s := newTestServer(t, upstreamURL)
 	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
 		t.Fatal(err)
@@ -565,11 +525,7 @@ type idleClosingRoundTripper struct {
 }
 
 func (t *idleClosingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
-	return &http.Response{
-		StatusCode: http.StatusNoContent,
-		Header:     make(http.Header),
-		Body:       http.NoBody,
-	}, nil
+	return noContent(), nil
 }
 
 func (t *idleClosingRoundTripper) CloseIdleConnections() {
@@ -577,10 +533,7 @@ func (t *idleClosingRoundTripper) CloseIdleConnections() {
 }
 
 func TestDeactivateClosesIdleUpstreamConnections(t *testing.T) {
-	upstream, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
+	upstream := actorUpstream()
 	s := newTestServer(t, upstream)
 	transport := &idleClosingRoundTripper{}
 	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
@@ -634,31 +587,9 @@ func TestInactive(t *testing.T) {
 }
 
 func TestMutualTLSClientAuthentication(t *testing.T) {
-	dir := t.TempDir()
 	ca := newTestCA(t)
-	serverCert := ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
-	bundlePath := filepath.Join(dir, "server.pem")
-	trustPath := filepath.Join(dir, "trust.pem")
-	writeCredentialBundle(t, bundlePath, serverCert)
-	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	upstream, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s, err := NewServer(Config{
-		CredentialBundlePath: bundlePath,
-		TrustBundlePath:      trustPath,
-		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
-		Upstream:             upstream,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := s.tlsConfig.NextProtos; len(got) != 0 {
-		t.Fatalf("ordinary ingress ALPN protocols = %v, want none", got)
-	}
+	upstream := actorUpstream()
+	s, _ := newTestServerFromCA(t, ca, upstream)
 
 	untrustedCA := newTestCA(t)
 	tests := []struct {
@@ -701,15 +632,7 @@ func TestMutualTLSClientAuthentication(t *testing.T) {
 // HTTP/2 pool depends on the h2 side, which holds because the server offers
 // both protocols in NextProtos — this pins that.
 func TestServeNegotiatesH2(t *testing.T) {
-	dir := t.TempDir()
 	ca := newTestCA(t)
-	serverCert := ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
-	bundlePath := filepath.Join(dir, "server.pem")
-	trustPath := filepath.Join(dir, "trust.pem")
-	writeCredentialBundle(t, bundlePath, serverCert)
-	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	clientCert := ca.issue(t, "spiffe://cluster.local/ns/ate-system/sa/atenet-router", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
 
 	// The actor: an h2c-capable backend, so gRPC-shaped requests can arrive
@@ -719,16 +642,7 @@ func TestServeNegotiatesH2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	s, err := NewServer(Config{
-		CredentialBundlePath: bundlePath,
-		TrustBundlePath:      trustPath,
-		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
-		Upstream:             upstream,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s, _ := newTestServerFromCA(t, ca, upstream)
 	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
 		t.Fatal(err)
 	}
@@ -811,10 +725,7 @@ func TestServeNegotiatesH2(t *testing.T) {
 }
 
 func TestDeactivateCancelsInflightRequest(t *testing.T) {
-	upstream, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
+	upstream := actorUpstream()
 	s := newTestServer(t, upstream)
 	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
 		t.Fatal(err)
@@ -865,117 +776,78 @@ func setActorTransport(t *testing.T, s *Server, atespace, name string, rt http.R
 
 func newTestServer(t *testing.T, upstream *url.URL) *Server {
 	t.Helper()
+	s, _ := newTestServerFromCA(t, newTestCA(t), upstream)
+	return s
+}
+
+// newTestServerFromCA serves a certificate issued by ca and trusts ca's
+// clients, so a test can issue client certificates the server accepts. It also
+// returns the trust bundle's path, for a test to rotate.
+func newTestServerFromCA(t *testing.T, ca *testCA, upstream *url.URL) (*Server, string) {
+	t.Helper()
 	dir := t.TempDir()
-	bundle, trust := makeCertFiles(t, dir)
+	bundlePath := filepath.Join(dir, "server.pem")
+	trustPath := filepath.Join(dir, "trust.pem")
+	writeCredentialBundle(t, bundlePath, ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}))
+	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	s, err := NewServer(Config{
-		CredentialBundlePath: bundle,
-		TrustBundlePath:      trust,
+		CredentialBundlePath: bundlePath,
+		TrustBundlePath:      trustPath,
 		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
 		Upstream:             upstream,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return s, trustPath
 }
 
-func makeCertFiles(t *testing.T, dir string) (bundlePath, trustPath string) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "test"},
-		NotBefore:             now.Add(-time.Minute),
-		NotAfter:              now.Add(time.Hour),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	bundlePath = filepath.Join(dir, "bundle.pem")
-	trustPath = filepath.Join(dir, "trust.pem")
-	if err := os.WriteFile(bundlePath, append(certPEM, keyPEM...), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(trustPath, certPEM, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return bundlePath, trustPath
+// actorUpstream is the actor address the tests' servers proxy to.
+func actorUpstream() *url.URL { return &url.URL{Scheme: "http", Host: "actor.internal:80"} }
+
+// noContent is an empty answer from the actor.
+func noContent() *http.Response {
+	return &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: http.NoBody}
 }
 
+// testCA signs the throwaway certificates the tests present to each other.
 type testCA struct {
-	cert    *x509.Certificate
-	key     *ecdsa.PrivateKey
+	pool    *localca.ConcretePool
 	certPEM []byte
 }
 
 func newTestCA(t *testing.T) *testCA {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ca, err := localca.GenerateCA("test", localca.KeyTypeECDSAP256, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(now.UnixNano()),
-		Subject:               pkix.Name{CommonName: "test CA"},
-		NotBefore:             now.Add(-time.Minute),
-		NotAfter:              now.Add(time.Hour),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(der)
+	certPEM, err := ca.TLSCertificateChainPEM()
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &testCA{
-		cert:    cert,
-		key:     key,
-		certPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pool:    &localca.ConcretePool{CAs: []*localca.CA{ca}, ActiveForSigning: ca.ID},
+		certPEM: certPEM,
 	}
 }
 
-func (ca *testCA) issue(t *testing.T, spiffeID string, usages []x509.ExtKeyUsage) tls.Certificate {
+// sign issues template to a fresh key, valid for an hour, with the CA
+// certificate in the chain.
+func (ca *testCA) sign(t *testing.T, template *x509.Certificate) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(now.UnixNano()),
-		NotBefore:    now.Add(-time.Minute),
-		NotAfter:     now.Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  usages,
-	}
-	if spiffeID != "" {
-		uri, err := url.Parse(spiffeID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		template.URIs = []*url.URL{uri}
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
+	template.SerialNumber = big.NewInt(now.UnixNano())
+	template.NotBefore = now.Add(-time.Minute)
+	template.NotAfter = now.Add(time.Hour)
+	template.KeyUsage = x509.KeyUsageDigitalSignature
+	chain, err := ca.pool.CreateCertificate(template, &key.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -984,7 +856,7 @@ func (ca *testCA) issue(t *testing.T, spiffeID string, usages []x509.ExtKeyUsage
 		t.Fatal(err)
 	}
 	cert, err := tls.X509KeyPair(
-		append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), ca.certPEM...),
+		append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: chain[0]}), ca.certPEM...),
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
 	)
 	if err != nil {
@@ -993,13 +865,22 @@ func (ca *testCA) issue(t *testing.T, spiffeID string, usages []x509.ExtKeyUsage
 	return cert
 }
 
+func (ca *testCA) issue(t *testing.T, spiffeID string, usages []x509.ExtKeyUsage) tls.Certificate {
+	t.Helper()
+	template := &x509.Certificate{ExtKeyUsage: usages}
+	if spiffeID != "" {
+		uri, err := url.Parse(spiffeID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		template.URIs = []*url.URL{uri}
+	}
+	return ca.sign(t, template)
+}
+
 func writeCredentialBundle(t *testing.T, path string, cert tls.Certificate) {
 	t.Helper()
-	key, ok := cert.PrivateKey.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("private key has type %T", cert.PrivateKey)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1017,28 +898,8 @@ func writeCredentialBundle(t *testing.T, path string, cert tls.Certificate) {
 // certificate chaining to a CA added to the trust bundle after the server
 // started is accepted on the next handshake, without a restart.
 func TestMutualTLSClientAuthenticationReloadsTrustBundle(t *testing.T) {
-	dir := t.TempDir()
 	ca := newTestCA(t)
-	serverCert := ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
-	bundlePath := filepath.Join(dir, "server.pem")
-	trustPath := filepath.Join(dir, "trust.pem")
-	writeCredentialBundle(t, bundlePath, serverCert)
-	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	upstream, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s, err := NewServer(Config{
-		CredentialBundlePath: bundlePath,
-		TrustBundlePath:      trustPath,
-		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
-		Upstream:             upstream,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s, trustPath := newTestServerFromCA(t, ca, actorUpstream())
 
 	rotatedCA := newTestCA(t)
 	rotatedClientCert := rotatedCA.issue(t, "spiffe://cluster.local/ns/ate-system/sa/atenet-router", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
@@ -1230,22 +1091,9 @@ func TestServeConnectHTTPDialsTheSandbox(t *testing.T) {
 		_, _ = io.WriteString(conn, "hello from the sandbox")
 	}()
 
-	upstreamURL, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	bundle, trust := makeCertFiles(t, dir)
+	upstreamURL := actorUpstream()
+	s := newTestServer(t, upstreamURL)
 	var dialed string
-	s, err := NewServer(Config{
-		CredentialBundlePath: bundle,
-		TrustBundlePath:      trust,
-		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
-		Upstream:             upstreamURL,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
 		dialed = address
 		return (&net.Dialer{}).DialContext(ctx, network, actor.Addr().String())
@@ -1277,10 +1125,7 @@ func TestServeConnectHTTPDialsTheSandbox(t *testing.T) {
 // address, so the request's actor header picks between them and each is reached
 // through its own dialer.
 func TestIngressRoutesEachActorToItsOwnSandbox(t *testing.T) {
-	upstream, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
+	upstream := actorUpstream()
 	s := newTestServer(t, upstream)
 
 	served := make(chan string, 2)
@@ -1290,7 +1135,7 @@ func TestIngressRoutesEachActorToItsOwnSandbox(t *testing.T) {
 		}
 		setActorTransport(t, s, "team-a", name, roundTripFunc(func(*http.Request) (*http.Response, error) {
 			served <- name
-			return &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: http.NoBody}, nil
+			return noContent(), nil
 		}))
 	}
 
@@ -1311,17 +1156,14 @@ func TestIngressRoutesEachActorToItsOwnSandbox(t *testing.T) {
 
 // Deactivating one actor must not disturb another the worker still hosts.
 func TestDeactivateLeavesOtherActorsServing(t *testing.T) {
-	upstream, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
+	upstream := actorUpstream()
 	s := newTestServer(t, upstream)
 	for _, name := range []string{"actor-1", "actor-2"} {
 		if err := s.Activate("team-a", name, "uid-"+name, testDial); err != nil {
 			t.Fatal(err)
 		}
 		setActorTransport(t, s, "team-a", name, roundTripFunc(func(*http.Request) (*http.Response, error) {
-			return &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: http.NoBody}, nil
+			return noContent(), nil
 		}))
 	}
 
@@ -1350,10 +1192,7 @@ func TestDeactivateLeavesOtherActorsServing(t *testing.T) {
 // A deleted and recreated actor reuses its name. The new incarnation replaces
 // the old one, and the old one's late teardown must not remove it.
 func TestIngressReincarnationSurvivesStaleDeactivate(t *testing.T) {
-	upstream, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
+	upstream := actorUpstream()
 	s := newTestServer(t, upstream)
 	ref := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 

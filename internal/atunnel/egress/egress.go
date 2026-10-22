@@ -21,12 +21,13 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"go.ate.dev/substrate/internal/atenet"
 )
 
 // tunnelDialer opens an authenticated tunnel to an original destination.
@@ -116,17 +117,11 @@ func (e *Proxy) activationLocked(actorUID string) *activation {
 }
 
 func (e *Proxy) serve(ctx context.Context, listener net.Listener, active *activation) error {
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = listener.Close()
-		case <-active.ctx.Done():
-			_ = listener.Close()
-		case <-done:
-		}
-	}()
-	defer close(done)
+	closeListener := func() { _ = listener.Close() }
+	stop := context.AfterFunc(ctx, closeListener)
+	defer stop()
+	stopOnDeactivate := context.AfterFunc(active.ctx, closeListener)
+	defer stopOnDeactivate()
 
 	for {
 		conn, err := listener.Accept()
@@ -363,19 +358,9 @@ func PortFromListenAddr(listenAddress string) (uint16, error) {
 	if err != nil {
 		return 0, fmt.Errorf("egress: listen address %q: %w", listenAddress, err)
 	}
-	p, ok := parsePort(port)
+	p, ok := atenet.ParsePort(port)
 	if !ok {
 		return 0, fmt.Errorf("egress: listen address %q has no usable port", listenAddress)
 	}
 	return uint16(p), nil
-}
-
-// parsePort parses s as a TCP port number, returning ok=false for anything
-// outside the valid 1-65535 range (including non-numeric input).
-func parsePort(s string) (port int, ok bool) {
-	p, err := strconv.Atoi(s)
-	if err != nil || p < 1 || p > 65535 {
-		return 0, false
-	}
-	return p, true
 }
