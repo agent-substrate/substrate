@@ -4,6 +4,42 @@ An Envoy dynamic module, written in Rust, that runs as an HTTP filter ahead of
 `ext_proc` on the ingress router and caches `<atespace>/<actor>` to worker IP
 bindings in a process-wide `DashMap`.
 
+The cache is a preview feature and is **disabled by default**. Read the
+caveats below before enabling it.
+
+## Enabling
+
+The cache is controlled by the `IngressCache` preview gate on `atenet-router`
+and is only implemented by the Envoy dataplane (`--atenet-dataplane=envoy`, the
+default). Enable it at install time with:
+
+```bash
+ATE_PREVIEW=IngressCache go run ./cmd/ate-setup deploy ate-system
+```
+
+or pass `--preview=IngressCache` to the `atenet-router` container directly.
+
+With the gate off, the router installs neither this filter nor the cached
+routes that skip `ext_proc`, so every request is resolved through `ext_proc`.
+
+## Caveats
+
+- **Stale routing for up to the TTL.** A cache hit skips `ext_proc` and so does
+  not observe suspends, migrations, or reassignments made in the last
+  `cache_ttl_seconds` (default 5s). The first request to the old worker fails
+  and evicts the entry, as described below.
+- **Clients must retry some failures.** Only bodiless requests that failed
+  before reaching the actor are replayed by the router. A request with a body,
+  or one interrupted mid-flight (`503 UC` or `UR`), returns the error to the
+  client after evicting the entry; the client's retry is resolved through
+  `ext_proc`.
+- **gRPC clients need a retry policy for `UNAVAILABLE`.** A gRPC call that
+  fails with status `14` evicts the entry and is returned to the client. Standard
+  gRPC clients do not retry it automatically unless a retry policy is
+  configured.
+- **The cached route header is reserved.** A request that arrives with
+  `ate-endpoint-cached` set and no cache entry is rejected with `400 Bad Request`.
+
 ## How it works
 
 - **Cache hit (`on_request_headers`)**: When an unexpired binding exists for the
@@ -43,7 +79,6 @@ The filter accepts an optional JSON configuration object in `filter_config`
 | `cache_ttl_seconds` | `u64` | `5` | Time-to-live in seconds for cached actor -> worker bindings |
 | `atunnel_port` | `u16` | `443` | Port `atunnel` listens on at the worker |
 | `target_port_header` | `String` | `"x-ate-target-port"` | Request header carrying the actor's target port to `atunnel` |
-| `cache_enabled` | `bool` | `true` | Enables or disables reading from and writing to the cache |
 
 ## Metrics
 

@@ -136,12 +136,11 @@ func TestUpstreamConnectFlag(t *testing.T) {
 			for _, r := range rc.GetVirtualHosts()[0].GetRoutes() {
 				routed = append(routed, r.GetRoute().GetCluster())
 			}
-			want := []string{OriginalDstClusterName, OriginalDstClusterName}
+			// The IngressCache preview gate is off, so there are no cached routes.
+			want := []string{OriginalDstClusterName}
 			if tc.wantTunnels {
 				want = []string{
 					ActorTunnelHTTP2ClusterName,
-					ActorTunnelHTTP2ClusterName,
-					ActorTunnelHTTP1ClusterName,
 					ActorTunnelHTTP1ClusterName,
 				}
 			}
@@ -258,6 +257,7 @@ func TestActorTunnelFilterStateFilter(t *testing.T) {
 func TestXdsServer_ActorTunnelRoutes(t *testing.T) {
 	x := NewXdsServer(0)
 	x.SetUpstreamConnect(true)
+	x.SetIngressCache(true)
 	routes := x.buildRoutes().GetVirtualHosts()[0].GetRoutes()
 	if len(routes) != 4 {
 		t.Fatalf("got %d routes, want 4", len(routes))

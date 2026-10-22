@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -267,16 +268,11 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 			t.Errorf("Expected domain '*', got %v", vh.GetDomains())
 		}
 
-		if len(vh.GetRoutes()) != 2 {
-			t.Fatalf("Expected 2 routes in fallback VirtualHost, got %d", len(vh.GetRoutes()))
+		if len(vh.GetRoutes()) != 1 {
+			t.Fatalf("Expected 1 route in fallback VirtualHost, got %d", len(vh.GetRoutes()))
 		}
 
-		cachedRoute := vh.GetRoutes()[0]
-		if cachedRoute.GetMatch().GetPrefix() != "/" {
-			t.Errorf("Expected path mapping prefix '/', got '%s'", cachedRoute.GetMatch().GetPrefix())
-		}
-
-		fallbackRoute := vh.GetRoutes()[1]
+		fallbackRoute := vh.GetRoutes()[0]
 		if fallbackRoute.GetMatch().GetPrefix() != "/" {
 			t.Errorf("Expected path mapping prefix '/', got '%s'", fallbackRoute.GetMatch().GetPrefix())
 		}
@@ -1188,8 +1184,8 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 	routeAction := func(t *testing.T, x *XdsServer) *routev3.RouteAction {
 		t.Helper()
 		hosts := x.buildRoutes().GetVirtualHosts()
-		if len(hosts) != 1 || len(hosts[0].GetRoutes()) != 2 {
-			t.Fatalf("buildRoutes() = %d virtual hosts, want exactly 1 with 2 routes", len(hosts))
+		if len(hosts) != 1 || len(hosts[0].GetRoutes()) != 1 {
+			t.Fatalf("buildRoutes() = %d virtual hosts, want exactly 1 with 1 route", len(hosts))
 		}
 		for i, r := range hosts[0].GetRoutes() {
 			action := r.GetRoute()
@@ -1360,37 +1356,49 @@ func TestXdsServer_ActorClusterProtocolOptions(t *testing.T) {
 	}
 }
 
-// TestXdsServer_BuildRoutesWritesTargetPortHeader ensures both routes overwrite
-// the target-port header with the value from ext_proc's trusted metadata.
+// TestXdsServer_BuildRoutesWritesTargetPortHeader ensures every workload route,
+// cached or not, overwrites the target-port header with the value from
+// ext_proc's trusted metadata.
 func TestXdsServer_BuildRoutesWritesTargetPortHeader(t *testing.T) {
-	x := NewXdsServer(18000)
-	routes := x.buildRoutes().GetVirtualHosts()[0].GetRoutes()
-	if len(routes) != 2 {
-		t.Fatalf("buildRoutes() = %d routes, want 2", len(routes))
-	}
+	for _, ingressCache := range []bool{false, true} {
+		t.Run("ingressCache="+strconv.FormatBool(ingressCache), func(t *testing.T) {
+			x := NewXdsServer(18000)
+			x.SetIngressCache(ingressCache)
+			routes := x.buildRoutes().GetVirtualHosts()[0].GetRoutes()
+			want := 1
+			if ingressCache {
+				want = 2
+			}
+			if len(routes) != want {
+				t.Fatalf("buildRoutes() = %d routes, want %d", len(routes), want)
+			}
 
-	for i, route := range routes {
-		headers := route.GetRequestHeadersToAdd()
-		if len(headers) != 1 {
-			t.Fatalf("route[%d] adds request headers %v, want exactly one", i, headers)
-		}
-		header := headers[0]
-		if got, want := header.GetHeader().GetKey(), atunnelingress.TargetPortHeader; got != want {
-			t.Errorf("route[%d] header key = %q, want %q", i, got, want)
-		}
-		if got, want := header.GetHeader().GetValue(), "%DYNAMIC_METADATA(envoy.filters.listener.original_dst:port)%"; got != want {
-			t.Errorf("route[%d] header value = %q, want %q", i, got, want)
-		}
-		if got, want := header.GetAppendAction(), corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD; got != want {
-			t.Errorf("route[%d] append action = %v, want %v", i, got, want)
-		}
+			for i, route := range routes {
+				headers := route.GetRequestHeadersToAdd()
+				if len(headers) != 1 {
+					t.Fatalf("route[%d] adds request headers %v, want exactly one", i, headers)
+				}
+				header := headers[0]
+				if got, want := header.GetHeader().GetKey(), atunnelingress.TargetPortHeader; got != want {
+					t.Errorf("route[%d] header key = %q, want %q", i, got, want)
+				}
+				if got, want := header.GetHeader().GetValue(), "%DYNAMIC_METADATA(envoy.filters.listener.original_dst:port)%"; got != want {
+					t.Errorf("route[%d] header value = %q, want %q", i, got, want)
+				}
+				if got, want := header.GetAppendAction(), corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD; got != want {
+					t.Errorf("route[%d] append action = %v, want %v", i, got, want)
+				}
+			}
+		})
 	}
 }
 
-// TestXdsServer_BuildRoutes_EndpointCachedRoute verifies that the first route
-// matches on the ate-endpoint-cached header and disables ext_proc via per-route config.
+// TestXdsServer_BuildRoutes_EndpointCachedRoute verifies that, with the ingress
+// cache enabled, the first route matches on the ate-endpoint-cached header and
+// disables ext_proc via per-route config.
 func TestXdsServer_BuildRoutes_EndpointCachedRoute(t *testing.T) {
 	x := NewXdsServer(18000)
+	x.SetIngressCache(true)
 	routes := x.buildRoutes().GetVirtualHosts()[0].GetRoutes()
 	if len(routes) != 2 {
 		t.Fatalf("buildRoutes() = %d routes, want 2", len(routes))
@@ -1436,10 +1444,12 @@ func TestXdsServer_BuildRoutes_EndpointCachedRoute(t *testing.T) {
 	}
 }
 
-// TestXdsServer_BuildHcm_IngressCacheFilter verifies that the ingress cache dynamic
-// module filter is configured and inserted ahead of ext_proc in HCM.
+// TestXdsServer_BuildHcm_IngressCacheFilter verifies that, with the ingress
+// cache enabled, the dynamic module filter is configured and inserted ahead of
+// ext_proc in HCM.
 func TestXdsServer_BuildHcm_IngressCacheFilter(t *testing.T) {
 	x := NewXdsServer(18000)
+	x.SetIngressCache(true)
 	hcmAny := x.buildHcm("test_prefix", false)
 	hcm := &hcmv3.HttpConnectionManager{}
 	if err := hcmAny.UnmarshalTo(hcm); err != nil {
@@ -1479,6 +1489,41 @@ func TestXdsServer_BuildHcm_IngressCacheFilter(t *testing.T) {
 	}
 	if dmConfig.GetFilterName() != ingressCacheDynamicModuleName {
 		t.Errorf("filter name = %q, want %q", dmConfig.GetFilterName(), ingressCacheDynamicModuleName)
+	}
+}
+
+// TestXdsServer_IngressCacheDisabledByDefault verifies that without the
+// IngressCache preview gate the router installs neither the ingress-cache
+// filter nor any route that skips ext_proc, on either upstream transport. A
+// leftover cached route would let a client that forges ate-endpoint-cached
+// bypass ext_proc.
+func TestXdsServer_IngressCacheDisabledByDefault(t *testing.T) {
+	for _, upstreamConnect := range []bool{false, true} {
+		t.Run("upstreamConnect="+strconv.FormatBool(upstreamConnect), func(t *testing.T) {
+			x := NewXdsServer(18000)
+			x.SetUpstreamConnect(upstreamConnect)
+
+			hcm := &hcmv3.HttpConnectionManager{}
+			if err := x.buildHcm("test_prefix", false).UnmarshalTo(hcm); err != nil {
+				t.Fatalf("failed to unmarshal HCM: %v", err)
+			}
+			for _, f := range hcm.GetHttpFilters() {
+				if f.GetName() == httpDynamicModulesFilterName {
+					t.Errorf("HCM has %q filter with the ingress cache disabled", httpDynamicModulesFilterName)
+				}
+			}
+
+			for i, r := range x.buildRoutes().GetVirtualHosts()[0].GetRoutes() {
+				for _, h := range r.GetMatch().GetHeaders() {
+					if h.GetName() == endpointCachedHeader {
+						t.Errorf("route[%d] matches %q with the ingress cache disabled", i, endpointCachedHeader)
+					}
+				}
+				if _, ok := r.GetTypedPerFilterConfig()[httpExtProcFilterName]; ok {
+					t.Errorf("route[%d] overrides %q with the ingress cache disabled", i, httpExtProcFilterName)
+				}
+			}
+		})
 	}
 }
 

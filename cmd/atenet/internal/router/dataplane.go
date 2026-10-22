@@ -26,6 +26,7 @@ import (
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 type dataplaneHealthCheck struct {
@@ -118,6 +119,9 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 	}
 	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath)
 	xdsSrv.SetUpstreamConnect(s.cfg.UpstreamConnect)
+	ingressCache := preview.IsEnabled(preview.GateIngressCache)
+	xdsSrv.SetIngressCache(ingressCache)
+	slog.InfoContext(ctx, "Ingress cache", slog.Bool("enabled", ingressCache))
 
 	// The snapshot is a pure function of the configuration applied above, so it
 	// is built exactly once; an Envoy that connects later is served from the
