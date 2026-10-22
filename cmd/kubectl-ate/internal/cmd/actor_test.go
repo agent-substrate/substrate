@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -1330,7 +1331,7 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 // as --source=lifecycle a reconnect would replay everything since the last
 // match. Not the line's own time either: an actor's record keeps a time the
 // actor wrote, which can run ahead of the node's clock and would make a
-// reconnect skip lines. On reconnect, lines up to the cursor are dropped,
+// reconnect skip lines. Already-read records are dropped on reconnect,
 // since SinceTime only has second precision.
 func TestLogsActorRunner_Run_Follow_CursorIsKubeletTimestampOfLastLineRead(t *testing.T) {
 	actorName := "act-123"
@@ -1480,4 +1481,145 @@ func TestSplitKubeletTimestamp(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLogsActorRunner_FollowReplay(t *testing.T) {
+	line := func(stamp, actor, message string) string {
+		return fmt.Sprintf(`%s {"message":%q,"logging.googleapis.com/labels":{"ate.atespace":"space","ate.actor.name":%q}}`+"\n", stamp, message, actor)
+	}
+	const early = "2026-10-20T00:00:09Z"
+	const cursor = "2026-10-20T00:00:10.500Z"
+	const later = "2026-10-20T00:00:11Z"
+	old := line(cursor, "actor", "old")
+	a := line(later, "actor", "a")
+	b := line(later, "actor", "b")
+	type stream struct {
+		namespace, pod, data, since string
+		fail                        bool
+	}
+	for _, tc := range []struct {
+		name    string
+		streams []stream
+		want    string
+	}{
+		{
+			name:    "migration to earlier clock",
+			streams: []stream{{"ns", "pod1", old, "", false}, {"ns", "pod2", line(early, "actor", "new"), "", false}},
+			want:    `{"message":"old"}` + "\n" + `{"message":"new"}` + "\n",
+		},
+		{
+			name:    "same pod name in another namespace",
+			streams: []stream{{"ns1", "pod", old, "", false}, {"ns2", "pod", line(early, "actor", "new"), "", false}},
+			want:    `{"message":"old"}` + "\n" + `{"message":"new"}` + "\n",
+		},
+		{
+			name:    "failed first connection after migration",
+			streams: []stream{{"ns", "pod1", old, "", false}, {"ns", "pod2", "", "", true}, {"ns", "pod2", line(early, "actor", "new"), "", false}},
+			want:    `{"message":"old"}` + "\n" + `{"message":"new"}` + "\n",
+		},
+		{
+			name:    "new records share a timestamp",
+			streams: []stream{{"ns", "pod", old, "", false}, {"ns", "pod", old + a + b, cursor, false}},
+			want:    `{"message":"old"}` + "\n" + `{"message":"a"}` + "\n" + `{"message":"b"}` + "\n",
+		},
+		{
+			name:    "identical records at reconnect boundary",
+			streams: []stream{{"ns", "pod", old, "", false}, {"ns", "pod", old + old, cursor, false}, {"ns", "pod", old + old + old, cursor, false}},
+			want:    strings.Repeat(`{"message":"old"}`+"\n", 3),
+		},
+		{
+			name:    "filtered record at reconnect boundary",
+			streams: []stream{{"ns", "pod", line(cursor, "other", "hidden"), "", false}, {"ns", "pod", line(cursor, "other", "hidden") + old, cursor, false}},
+			want:    `{"message":"old"}` + "\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				next := 0
+				api := &mockAteAPIClient{GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+					if next == len(tc.streams) {
+						cancel()
+						return nil, ctx.Err()
+					}
+					s := tc.streams[next]
+					return &ateapipb.Actor{Status: &ateapipb.ActorStatus{
+						State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: s.namespace, WorkerPod: s.pod},
+					}}, nil
+				}}
+				streamer := &mockPodLogsStreamer{StreamLogsFunc: func(ctx context.Context, namespace, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+					s := tc.streams[next]
+					next++
+					if namespace != s.namespace || pod != s.pod {
+						t.Fatalf("pod = %s/%s, want %s/%s", namespace, pod, s.namespace, s.pod)
+					}
+					if s.since == "" {
+						if opts.SinceTime != nil {
+							t.Errorf("stream %d: unexpected cursor %v", next, opts.SinceTime)
+						}
+					} else {
+						want, err := time.Parse(time.RFC3339Nano, s.since)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if opts.SinceTime == nil || !opts.SinceTime.Time.Equal(want) {
+							t.Errorf("stream %d: cursor = %v, want %v", next, opts.SinceTime, want)
+						}
+					}
+					if s.fail {
+						return nil, fmt.Errorf("connection interrupted")
+					}
+					return io.NopCloser(strings.NewReader(s.data)), nil
+				}}
+				var out bytes.Buffer
+				ref := resources.ActorRef{Atespace: "space", Name: "actor"}
+				runner := &LogsActorRunner{
+					apiClient:         api,
+					streamer:          streamer,
+					actorRef:          ref,
+					filter:            logLineFilter{target: ref},
+					stdout:            &out,
+					stderr:            io.Discard,
+					follow:            true,
+					pollInterval:      time.Millisecond,
+					reconnectInterval: time.Millisecond,
+					tickerInterval:    time.Hour,
+				}
+				if err := runner.Run(ctx); err != context.Canceled {
+					t.Fatalf("Run() = %v, want context.Canceled", err)
+				}
+				if got := out.String(); got != tc.want {
+					t.Errorf("output = %q, want %q", got, tc.want)
+				}
+			})
+		})
+	}
+}
+
+func TestLogsActorRunner_MonitorNamespaceMigration(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		runner := &LogsActorRunner{
+			apiClient: &mockAteAPIClient{GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+				return &ateapipb.Actor{Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerNamespace: "new-namespace",
+						WorkerPod:       "pod",
+					},
+				}}, nil
+			}},
+			stderr:         io.Discard,
+			tickerInterval: time.Millisecond,
+		}
+		var wg sync.WaitGroup
+		runner.startMigrationMonitor(ctx, cancel, &wg, "old-namespace", "pod")
+		wg.Wait()
+		if err := ctx.Err(); err != context.Canceled {
+			t.Fatalf("stream context = %v, want cancellation on migration", err)
+		}
+	})
 }
