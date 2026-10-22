@@ -106,9 +106,10 @@ func TestSandboxRuntimeUpgrade(t *testing.T) {
 }
 
 // TestSandboxRuntimeDisableDropsToRootfs covers disabling a SandboxConfig
-// version after an actor has suspended on it:
+// version after an actor (and a Tag created from it) has suspended on it:
 //  1. An actor boots on v1, increments its memory, rootfs, and volume counters
-//     twice, and suspends; its snapshot is stamped with v1's runtime.
+//     twice, and suspends; its snapshot and a published Tag created from it are
+//     stamped with v1's runtime.
 //  2. The pool's SandboxConfig switches defaultVersion to v2 and marks v1
 //     Disabled; the worker re-registers with v2 as default_runtime and drops v1
 //     from restorable_runtimes.
@@ -117,9 +118,33 @@ func TestSandboxRuntimeUpgrade(t *testing.T) {
 //     WorkerAssignment.sandbox_runtime records v2.
 //  4. Suspending the actor re-stamps the new MEMORY snapshot with v2, and the
 //     next resume restores MEMORY on v2.
+//  5. An actor cloned from the v1-stamped Tag also drops to ROOTFS on v2
+//     (memory=1, file=3, rootfs=3).
 func TestSandboxRuntimeDisableDropsToRootfs(t *testing.T) {
 	t.Parallel()
 	f := setupSuspendedV1Actor(t, "runtime-disable", ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+
+	tagRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: "tag-" + f.actorName}
+	t.Cleanup(func() {
+		_, _ = f.clients.SubstrateAPI.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef})
+	})
+	tag, err := f.clients.SubstrateAPI.CreateTag(f.ctx, &ateapipb.CreateTagRequest{
+		Tag: &ateapipb.Tag{
+			Metadata:    &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: tagRef.GetName()},
+			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+			SourceActor: f.actorRef,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create Tag from v1 actor: %v", err)
+	}
+	if diff := cmp.Diff(f.v1Runtime, tag.GetStatus().GetSnapshot().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("tag snapshot stamp mismatch (-want v1 +got):\n%s", diff)
+	}
+	tag.Scope = ateapipb.TagScope_TAG_SCOPE_PUBLISHED
+	if _, err := f.clients.SubstrateAPI.UpdateTag(f.ctx, &ateapipb.UpdateTagRequest{Tag: tag}); err != nil {
+		t.Fatalf("failed to publish Tag: %v", err)
+	}
 
 	// 2. Switch defaultVersion to v2 and mark v1 Disabled.
 	disabled := atev1alpha1.SandboxVersionStateDisabled
@@ -184,6 +209,55 @@ func TestSandboxRuntimeDisableDropsToRootfs(t *testing.T) {
 	}
 	validateCounterResponse(t, resp, "after v2 MEMORY resume", 2, 4)
 	validateRootfsCounter(t, resp, "after v2 MEMORY resume", 4)
+
+	if _, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapipb.SuspendActorRequest{
+		Actor:   f.actorRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}); err != nil {
+		t.Fatalf("failed to suspend Actor before cloning from Tag: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	// 5. Clone an actor from the v1-stamped Tag and resume it on v2: it also
+	// drops from MEMORY to ROOTFS (C5).
+	cloneName := "clone-" + f.actorName
+	cloneRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _ = f.clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: cloneRef})
+		_, _ = f.clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: cloneRef})
+	})
+
+	cloned, err := f.clients.SubstrateAPI.CreateActor(f.ctx, &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
+			ActorTemplate: f.templateRef,
+			SourceTag:     tagRef,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create cloned Actor from Tag: %v", err)
+	}
+	if diff := cmp.Diff(f.v1Runtime, durableSnapshot(cloned.GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("cloned actor borrowed tag snapshot stamp (-want v1 +got):\n%s", diff)
+	}
+
+	cloneResumed, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapipb.ResumeActorRequest{Actor: cloneRef})
+	if err != nil {
+		t.Fatalf("failed to resume cloned Actor after v1 disabled: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, cloneName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	if diff := cmp.Diff(v2Runtime, cloneResumed.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("cloned actor assignment runtime after ROOTFS fallback (-want v2 +got):\n%s", diff)
+	}
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: cloneName})
+	if err != nil {
+		t.Fatalf("failed to call cloned actor after ROOTFS fallback: %v", err)
+	}
+	validateCounterResponse(t, resp, "cloned actor after ROOTFS fallback", 1, 3)
+	validateRootfsCounter(t, resp, "cloned actor after ROOTFS fallback", 3)
 }
 
 // TestWorkerPoolSwitchSandboxConfig covers switching a WorkerPool's configRef
@@ -481,15 +555,16 @@ func TestPausedActorSandboxRuntime(t *testing.T) {
 }
 
 type sandboxRuntimeFixture struct {
-	ctx        context.Context
-	clients    *e2e.Clients
-	configName string
-	v1, v2     atev1alpha1.SandboxVersionConfig
-	actorName  string
-	actorRef   *ateapipb.ObjectRef
-	workerRef  *ateapipb.ObjectRef
-	v1Runtime  *ateapipb.ActorSandboxRuntime
-	snap1      *ateapipb.Snapshot
+	ctx         context.Context
+	clients     *e2e.Clients
+	configName  string
+	v1, v2      atev1alpha1.SandboxVersionConfig
+	templateRef *ateapipb.ObjectRef
+	actorName   string
+	actorRef    *ateapipb.ObjectRef
+	workerRef   *ateapipb.ObjectRef
+	v1Runtime   *ateapipb.ActorSandboxRuntime
+	snap1       *ateapipb.Snapshot
 }
 
 // setupSuspendedV1Actor creates a per-test SandboxConfig (at v1), WorkerPool,
@@ -616,16 +691,17 @@ func setupSuspendedV1Actor(t *testing.T, prefix string, mode ateapipb.Durability
 	}
 
 	return &sandboxRuntimeFixture{
-		ctx:        ctx,
-		clients:    clients,
-		configName: configName,
-		v1:         v1,
-		v2:         v2,
-		actorName:  actorName,
-		actorRef:   actorRef,
-		workerRef:  workerRef,
-		v1Runtime:  v1Runtime,
-		snap1:      snap1,
+		ctx:         ctx,
+		clients:     clients,
+		configName:  configName,
+		v1:          v1,
+		v2:          v2,
+		templateRef: e2e.TemplateRef(tmpl),
+		actorName:   actorName,
+		actorRef:    actorRef,
+		workerRef:   workerRef,
+		v1Runtime:   v1Runtime,
+		snap1:       snap1,
 	}
 }
 
