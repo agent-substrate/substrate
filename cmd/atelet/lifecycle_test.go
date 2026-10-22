@@ -2220,6 +2220,71 @@ func TestFailedRestoreUnschedulesDetach(t *testing.T) {
 	}
 }
 
+// TestResetActorDirsFailureIsCanceled checks that Run and Restore report a
+// failed actordirs.ResetActorDirsKeepingVolumes as Canceled, which
+// ate-api-server retries instead of crashing the actor, and that the retry
+// succeeds once the reset can.
+func TestResetActorDirsFailureIsCanceled(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// prepare sets up the actor and returns the call to retry.
+		prepare func(t *testing.T, a *pluginActor) func() error
+	}{{
+		name: "Run",
+		prepare: func(t *testing.T, a *pluginActor) func() error {
+			return func() error {
+				_, err := a.s.Run(t.Context(), &ateletpb.RunRequest{
+					Atespace:              "ate-demo",
+					ActorName:             "counter",
+					ActorUid:              pluginActorUID,
+					ActorTemplateAtespace: "default",
+					ActorTemplateName:     "counter",
+					WorkerPodUid:          pluginWorkerPodUID,
+					SandboxRuntime:        runtimeFor(t, a.rec),
+					Spec:                  a.spec,
+				})
+				return err
+			}
+		},
+	}, {
+		name: "Restore",
+		prepare: func(t *testing.T, a *pluginActor) func() error {
+			req := a.restoreRequest(t, a.checkpointed(t, "pause-snap-1", 1))
+			return func() error {
+				_, err := a.s.Restore(t.Context(), req)
+				return err
+			}
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			call := tc.prepare(t, a)
+
+			// Replace the actor's empty volumes dir with a file. The reset keeps
+			// the volumes dir instead of recreating it, so its MkdirAll of that
+			// path fails with ENOTDIR.
+			volumesDir := ateletpath.ExternalVolumeMountsDir(pluginActorUID)
+			if err := os.Remove(volumesDir); err != nil {
+				t.Fatalf("removing volumes dir: %v", err)
+			}
+			if err := os.WriteFile(volumesDir, nil, 0o600); err != nil {
+				t.Fatalf("writing file at volumes dir: %v", err)
+			}
+			if err := call(); status.Code(err) != codes.Canceled {
+				t.Fatalf("%s = %v (code %s), want %s", tc.name, err, status.Code(err), codes.Canceled)
+			}
+
+			// Without the file, the reset recreates the volumes dir.
+			if err := os.Remove(volumesDir); err != nil {
+				t.Fatalf("removing file at volumes dir: %v", err)
+			}
+			if err := call(); err != nil {
+				t.Errorf("%s retry: %v", tc.name, err)
+			}
+		})
+	}
+}
+
 // TestRestoreAfterDetachReadsUpload resumes a suspended actor that atelet
 // detached before the control plane recorded the upload, so the control plane
 // still sends the Restore here: atelet restores the actor from the upload the
