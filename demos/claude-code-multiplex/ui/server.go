@@ -135,6 +135,7 @@ var (
 	ateapiAddr  = os.Getenv("ATEAPI_ADDR") // empty → auto port-forward to svc/api in ate-system
 	rootDir     = mustRootDir()
 	mu          sync.Mutex
+	lifecycleMu sync.Mutex
 	assignments = make([]*assignment, 0, maxAssignments) // newest first
 
 	ateClient  ateapipb.ControlClient
@@ -234,13 +235,16 @@ func listActorNames(ctx context.Context) []string {
 	}
 	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListActors(rctx, &ateapipb.ListActorsRequest{})
+	resp, err := ateClient.ListActors(rctx, &ateapipb.ListActorsRequest{Atespace: namespace})
 	if err != nil {
 		log.Printf("[ui] ListActors error: %v", err)
 		return nil
 	}
 	names := make([]string, 0, len(resp.GetActors()))
 	for _, a := range resp.GetActors() {
+		if namespace != "" && a.GetMetadata().GetAtespace() != "" && a.GetMetadata().GetAtespace() != namespace {
+			continue
+		}
 		if id := a.GetMetadata().GetName(); id != "" {
 			names = append(names, id)
 		}
@@ -263,24 +267,155 @@ func computeState(asg *assignment) string {
 	return stateCompleted
 }
 
-// applyComputedStates walks current assignments and stamps started_at /
-// completed_at as states advance. Caller must NOT hold mu.
+// applyComputedStates walks current assignments, stamps started_at /
+// completed_at as states advance, and triggers ResumeActor / SuspendActor
+// transitions on the control plane. Caller must NOT hold mu.
 func applyComputedStates() {
+	var toResume, toSuspend []string
+
 	mu.Lock()
-	defer mu.Unlock()
 	for _, asg := range assignments {
 		newState := computeState(asg)
 		if newState == asg.State {
 			continue
 		}
+		prevState := asg.State
 		asg.State = newState
 		if newState == stateRunning && asg.StartedAt == nil {
 			v := asg.CreatedAt + asg.QueueFor
 			asg.StartedAt = &v
+			toResume = append(toResume, asg.Agent)
 		} else if newState == stateCompleted && asg.CompletedAt == nil {
 			v := asg.CreatedAt + asg.QueueFor + asg.RunFor
 			asg.CompletedAt = &v
+			if prevState == stateRunning || prevState == stateQueued {
+				toSuspend = append(toSuspend, asg.Agent)
+			}
 		}
+	}
+	mu.Unlock()
+
+	if len(toResume) > 0 || len(toSuspend) > 0 {
+		go syncActorLifecycle(toResume, toSuspend)
+	}
+}
+
+func agentHasRunningAssignment(agent string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, asg := range assignments {
+		if asg.Agent == agent && computeState(asg) == stateRunning {
+			return true
+		}
+	}
+	return false
+}
+
+// syncActorLifecycle drives ResumeActor and SuspendActor calls in the
+// background as assignments transition between queued, running, and completed.
+// When resuming an actor onto a full worker pool, it first suspends a running
+// actor so the 3-actor / 2-worker multiplex rotation is exercised cleanly.
+func syncActorLifecycle(toResume, toSuspend []string) {
+	if ateClient == nil {
+		return
+	}
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
+
+	ctx := context.Background()
+	for _, agent := range toSuspend {
+		if agentHasRunningAssignment(agent) {
+			continue
+		}
+		suspendActorByName(ctx, agent)
+	}
+
+	for _, agent := range toResume {
+		ensureActorResumed(ctx, agent)
+	}
+}
+
+func ensureActorResumed(ctx context.Context, target string) {
+	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	actorsResp, err := ateClient.ListActors(rctx, &ateapipb.ListActorsRequest{Atespace: namespace})
+	cancel()
+	if err != nil {
+		log.Printf("[ui] ListActors before resume(%s) error: %v", target, err)
+		return
+	}
+
+	var running []string
+	for _, a := range actorsResp.GetActors() {
+		name := a.GetMetadata().GetName()
+		if a.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
+			if name == target {
+				return
+			}
+			running = append(running, name)
+		}
+	}
+
+	poolSize := countPoolWorkers(ctx)
+	for len(running) >= poolSize && len(running) > 0 {
+		victim := pickEvictionVictim(running)
+		log.Printf("[ui] pool full (%d/%d running); suspending %s before resuming %s", len(running), poolSize, victim, target)
+		suspendActorByName(ctx, victim)
+		for i, name := range running {
+			if name == victim {
+				running = append(running[:i], running[i+1:]...)
+				break
+			}
+		}
+	}
+
+	resumeCtx, resumeCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer resumeCancel()
+	if _, err := ateClient.ResumeActor(resumeCtx, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: target},
+	}); err != nil {
+		log.Printf("[ui] ResumeActor(%s/%s) error: %v", namespace, target, err)
+	} else {
+		log.Printf("[ui] resumed actor %s/%s", namespace, target)
+	}
+}
+
+func countPoolWorkers(ctx context.Context) int {
+	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
+	resp, err := ateClient.ListWorkers(rctx, &ateapipb.ListWorkersRequest{})
+	if err != nil {
+		return 2
+	}
+	count := 0
+	for _, w := range resp.GetWorkers() {
+		if namespace == "" || w.GetWorkerNamespace() == "" || w.GetWorkerNamespace() == namespace {
+			count++
+		}
+	}
+	if count <= 0 {
+		return 2
+	}
+	return count
+}
+
+func pickEvictionVictim(running []string) string {
+	for _, name := range running {
+		if !agentHasRunningAssignment(name) {
+			return name
+		}
+	}
+	return running[0]
+}
+
+func suspendActorByName(ctx context.Context, name string) {
+	sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if _, err := ateClient.SuspendActor(sctx, &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: name},
+	}); err != nil {
+		log.Printf("[ui] SuspendActor(%s/%s) error: %v", namespace, name, err)
+	} else {
+		log.Printf("[ui] suspended actor %s/%s", namespace, name)
 	}
 }
 
@@ -288,25 +423,44 @@ func nowSec() float64 {
 	return float64(time.Now().UnixNano()) / 1e9
 }
 
-// giveTask picks a random task + random agent and records the assignment.
-// Returns nil-string error if no agents.
+// giveTask picks a random task + idle agent (or any agent if all have active
+// assignments) and records the assignment. Returns non-empty error string if no
+// agents exist in the namespace.
 func giveTask(ctx context.Context) (*assignment, string) {
 	agents := listActorNames(ctx)
 	if len(agents) == 0 {
 		return nil, "no agents available in namespace"
 	}
 	now := nowSec()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	busy := make(map[string]bool, len(agents))
+	for _, a := range assignments {
+		if st := computeState(a); st == stateQueued || st == stateRunning {
+			busy[a.Agent] = true
+		}
+	}
+	candidates := make([]string, 0, len(agents))
+	for _, name := range agents {
+		if !busy[name] {
+			candidates = append(candidates, name)
+		}
+	}
+	if len(candidates) == 0 {
+		candidates = agents
+	}
+
 	asg := &assignment{
 		ID:        fmt.Sprintf("asg-%d", time.Now().UnixMilli()),
-		Agent:     agents[rand.Intn(len(agents))],
+		Agent:     candidates[rand.Intn(len(candidates))],
 		Task:      predefinedTasks[rand.Intn(len(predefinedTasks))],
 		State:     stateQueued,
 		CreatedAt: now,
 		QueueFor:  roundOne(2.0 + rand.Float64()*3.0), // 2.0–5.0
 		RunFor:    roundOne(9.0 + rand.Float64()*7.0), // 9.0–16.0
 	}
-	mu.Lock()
-	defer mu.Unlock()
 	assignments = append([]*assignment{asg}, assignments...)
 	if len(assignments) > maxAssignments {
 		assignments = assignments[:maxAssignments]
@@ -397,7 +551,7 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListActors(ctx, &ateapipb.ListActorsRequest{})
+	resp, err := ateClient.ListActors(ctx, &ateapipb.ListActorsRequest{Atespace: namespace})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ListActors: " + err.Error()})
 		return
@@ -513,6 +667,14 @@ func main() {
 		log.Printf("[ui] kube client init error (logs disabled): %v", kerr)
 	}
 	kubeClient = kc
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			applyComputedStates()
+		}
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleIndex)
