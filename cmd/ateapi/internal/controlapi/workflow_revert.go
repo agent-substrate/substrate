@@ -219,8 +219,8 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 
 // recordTerminatedUpload records the upload that Terminate reported in state,
 // as applyTerminatedUpload does. atelet may upload a snapshot without its
-// report landing, and a CRASHED actor refuses reports, so without this the
-// revert would delete the upload as in progress. It writes at once because atelet forgot the actor, so a retried
+// report landing, so without this the revert would delete the upload as in
+// progress. It writes at once because atelet forgot the actor, so a retried
 // Terminate returns nothing.
 func (w *ActorWorkflow) recordTerminatedUpload(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, state *ateletpb.ActorSnapshotState) (*ateapipb.Actor, error) {
 	node := actor.GetStatus().GetAssignedNode()
@@ -245,29 +245,12 @@ func (w *ActorWorkflow) recordTerminatedUpload(ctx context.Context, actorRef res
 	return stored, nil
 }
 
-// applyTerminatedUpload marks COMPLETED in status the snapshot that the atelet
-// on the actor's assigned node reported durable in state as it terminated the
-// actor, with the same rules as a report.
+// applyTerminatedUpload records in status the upload that the atelet on the
+// actor's assigned node reported durable in state as it terminated the actor,
+// as applyUploadOnNode does.
 func applyTerminatedUpload(ctx context.Context, actorRef resources.ActorRef, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState) error {
-	reported := state.GetLatestDurable().GetSnapshot()
-	if reported == nil {
-		return nil
-	}
 	node := status.GetAssignedNode()
-	// Only a finalized suspend places a snapshot on a node, so any other
-	// snapshot, such as one a crashed suspend created, stays PENDING and a
-	// revert deletes it with the rest of the discarded execution.
-	snap := findSnapshotByGeneration(status.GetSnapshots(), reported.GetGeneration())
-	if got := snap.GetLocality(); got != node {
-		slog.InfoContext(ctx, "Discarding an upload Terminate reported for a snapshot not on its node",
-			slog.Any("actor", actorRef),
-			slog.String("node", node),
-			slog.String("snapshot_locality", got),
-			slog.Int("generation", int(reported.GetGeneration())),
-			slog.String("uuid", reported.GetSnapshotUuid()))
-		return nil
-	}
-	if err := applyAteletResponseState(ctx, status, state); err != nil {
+	if err := applyUploadOnNode(ctx, actorRef, status, node, snapshotReportFromAtelet(state.GetLatestDurable())); err != nil {
 		return apierror.Internal("atelet on node %q reported a durable snapshot for Actor %s that conflicts with its record: %w", node, actorRef, err)
 	}
 	return nil

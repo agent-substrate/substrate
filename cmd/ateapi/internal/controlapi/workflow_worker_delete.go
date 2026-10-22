@@ -267,8 +267,8 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 
-	// atelet forgot the actor as it terminated it, and a CRASHED actor refuses
-	// reports, so the crash records the upload Terminate reported.
+	// atelet forgot the actor as it terminated it, so the crash records the
+	// upload Terminate reported.
 	applied := proto.CloneOf(actor.GetStatus())
 	if err := applyTerminatedUpload(ctx, actorRef, applied, state); err != nil {
 		return err
