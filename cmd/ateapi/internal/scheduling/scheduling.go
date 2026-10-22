@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"slices"
 
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/resources"
@@ -28,34 +27,86 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-// Constraints describes what a worker must satisfy to host an actor.
+// Constraints is a set of requirements a worker must meet to host an actor.
+// The zero Constraints admits any eligible worker. Each With method returns a
+// copy, so callers can build variants from a shared base. Constraints ignore
+// room: see HasRoom.
 type Constraints struct {
-	// SandboxClass, when set, is the sandbox class of the snapshot the actor
-	// restores from, and the worker's must equal it. A snapshot's files, its
-	// durable volumes included, are written by one class's worker and read
-	// back by the same, so unlike RequiredRuntime this holds for every
-	// fidelity and is never relaxed. Empty for an actor with no snapshot,
-	// which boots on whichever class its selectors pick.
-	SandboxClass string
+	sandboxClass string
+	runtime      hardware.Requirement
+	selectors    []labels.Selector
+	node         string
+}
 
-	// RequiredRuntime, when it names a runtime, restricts placement to
-	// workers whose DefaultRuntime or RestorableRuntimes can restore a
-	// snapshot stamped with it. Prepared once per Schedule, since Applies
-	// asks it of every candidate.
-	RequiredRuntime hardware.Requirement
+// WithSandboxClass requires the worker's sandbox class to equal class. A
+// snapshot's files, its durable volumes included, are written by one class's
+// worker and read back by the same, so a resume from a snapshot sets this for
+// every fidelity.
+func (c Constraints) WithSandboxClass(class string) Constraints {
+	c.sandboxClass = class
+	return c
+}
 
-	// TemplateSelector and ActorSelector must both match the worker's labels.
-	TemplateSelector labels.Selector
-	ActorSelector    labels.Selector
+// WithRuntime requires the worker's DefaultRuntime or one of its
+// RestorableRuntimes to restore a snapshot stamped with r's runtime.
+func (c Constraints) WithRuntime(r hardware.Requirement) Constraints {
+	c.runtime = r
+	return c
+}
 
-	// RequiredNodes, when non-empty, restricts placement to workers running
-	// on one of these nodes. Used when the actor's latest snapshot is local
-	// to specific node VMs.
-	RequiredNodes []string
+// WithWorkerSelectors requires the worker's labels to match every non-nil
+// selector in sels. It replaces any selectors set before.
+func (c Constraints) WithWorkerSelectors(sels ...labels.Selector) Constraints {
+	c.selectors = nil
+	for _, sel := range sels {
+		if sel != nil {
+			c.selectors = append(c.selectors, sel)
+		}
+	}
+	return c
+}
 
-	// Limits are the actor's declared resource limits, in the units a Worker
-	// reports its capacity in, so the two subtract.
-	Limits *ateapipb.Resources
+// WithNode requires the worker to run on node.
+func (c Constraints) WithNode(node string) Constraints {
+	c.node = node
+	return c
+}
+
+// Matches reports whether worker can host an actor and meets every
+// requirement set on c. A full worker still matches, so a worker that already
+// holds the actor does too.
+func (c Constraints) Matches(worker *ateapipb.Worker) bool {
+	// The class is the one the worker registered with WorkerService. Until
+	// that report lands the Worker has no class, and nothing is placed on it
+	// (see ServiceImpl.CreateWorker): the assignment records the runtime,
+	// and atelet requires it on Run and Restore.
+	workerClass := hardware.SandboxClass(worker.GetStatus())
+	if workerClass == "" {
+		return false
+	}
+	if c.sandboxClass != "" && workerClass != c.sandboxClass {
+		return false
+	}
+
+	if worker.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+		return false
+	}
+
+	if c.node != "" && worker.GetNodeName() != c.node {
+		return false
+	}
+
+	if !c.runtime.WorkerMatches(worker.GetStatus()) {
+		return false
+	}
+
+	set := labels.Set(worker.GetLabels())
+	for _, sel := range c.selectors {
+		if !sel.Matches(set) {
+			return false
+		}
+	}
+	return true
 }
 
 // ErrNoCapacity is returned by Schedule when no worker that meets the
@@ -65,17 +116,9 @@ var ErrNoCapacity = errors.New("no worker that meets the constraints has room")
 
 // Scheduler answers placement questions against the current worker fleet.
 type Scheduler interface {
-	// Schedule returns a worker that meets constraints and has room.
-	// Returns ErrNoCapacity when no worker that meets constraints has room.
-	Schedule(ctx context.Context, constraints Constraints) (*ateapipb.Worker, error)
-
-	// Applies reports whether worker satisfies non-capacity constraints. Capacity
-	// is excluded so an existing assignment does not make its Worker ineligible.
-	Applies(worker *ateapipb.Worker, constraints Constraints) bool
-
-	// HasRoom reports whether worker's remaining capacity admits one more actor
-	// of this size, in every dimension. Independent of Applies.
-	HasRoom(worker *ateapipb.Worker, constraints Constraints) bool
+	// Schedule returns a worker that meets c and has room for an actor with
+	// limits. Returns ErrNoCapacity when no worker that meets c has room.
+	Schedule(ctx context.Context, c Constraints, limits *ateapipb.Resources) (*ateapipb.Worker, error)
 }
 
 // WorkerSource provides the whole fleet of workers.
@@ -108,11 +151,12 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 	return s
 }
 
-// Schedule filters the fleet for eligible candidates with room, samples two at
-// random (power of two choices), and returns the less-loaded one, where load is
-// the higher of actor-slot and compute-resource utilization. Spreading across
-// the warm pool avoids hotspots until autoscaling reclaims idle workers.
-func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapipb.Worker, error) {
+// Schedule filters the fleet for workers that meet c and have room, samples
+// two at random (power of two choices), and returns the less-loaded one, where
+// load is the higher of actor-slot and compute-resource utilization. Spreading
+// across the warm pool avoids hotspots until autoscaling reclaims idle
+// workers.
+func (s *scheduler) Schedule(ctx context.Context, c Constraints, limits *ateapipb.Resources) (*ateapipb.Worker, error) {
 	workers, err := s.source.Workers()
 	if err != nil {
 		return nil, fmt.Errorf("while listing workers: %w", err)
@@ -120,10 +164,10 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 
 	var candidates []candidate
 	for _, worker := range workers {
-		if !s.Applies(worker, constraints) {
+		if !c.Matches(worker) {
 			continue
 		}
-		if cand, ok := checkRoom(worker, constraints.Limits); ok {
+		if cand, ok := checkRoom(worker, limits); ok {
 			candidates = append(candidates, cand)
 		}
 	}
@@ -212,46 +256,17 @@ func utilization(capacity, used *ateapipb.WorkerResources) float64 {
 	return maxRatio
 }
 
-func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bool {
-	// The class is the one the worker registered with WorkerService. Until
-	// that report lands the Worker has no class, and nothing is placed on it
-	// (see ServiceImpl.CreateWorker): the assignment records the runtime,
-	// and atelet requires it on Run and Restore.
-	workerClass := hardware.SandboxClass(worker.GetStatus())
-	if workerClass == "" {
-		return false
-	}
-	if constraints.SandboxClass != "" && workerClass != constraints.SandboxClass {
-		return false
-	}
-
-	if worker.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		return false
-	}
-
-	if len(constraints.RequiredNodes) > 0 && !slices.Contains(constraints.RequiredNodes, worker.GetNodeName()) {
-		return false
-	}
-
-	if !constraints.RequiredRuntime.WorkerMatches(worker.GetStatus()) {
-		return false
-	}
-
-	set := labels.Set(worker.GetLabels())
-	if constraints.TemplateSelector != nil && !constraints.TemplateSelector.Matches(set) {
-		return false
-	}
-	return constraints.ActorSelector == nil || constraints.ActorSelector.Matches(set)
-}
-
-// HasRoom reports whether what the worker has left admits one more actor of
-// this size. A dimension the worker does not report is unconstrained, so
-// placement is never blocked by missing data.
-func (s *scheduler) HasRoom(worker *ateapipb.Worker, constraints Constraints) bool {
-	_, ok := checkRoom(worker, constraints.Limits)
+// HasRoom reports whether what the worker has left admits one more actor with
+// limits, given in the units a Worker reports its capacity in, so the two
+// subtract. Empty limits check the actor slot alone.
+func HasRoom(worker *ateapipb.Worker, limits *ateapipb.Resources) bool {
+	_, ok := checkRoom(worker, limits)
 	return ok
 }
 
+// checkRoom reports whether what the worker has left admits one more actor of
+// this size. A dimension the worker does not report is unconstrained, so
+// placement is never blocked by missing data.
 func checkRoom(worker *ateapipb.Worker, want *ateapipb.Resources) (candidate, bool) {
 	capacity := worker.GetStatus().GetCapacity()
 	used := worker.GetStatus().GetAllocated()

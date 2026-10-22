@@ -276,7 +276,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 		// leaves a row nothing on the Actor names. Releasing by Actor UID is
 		// what recovers it; skipping would leave its share of the Worker's
 		// capacity booked until the Worker itself went away. The resume path
-		// recovers the same window through workerHoldingStaleClaim.
+		// recovers the same window through workerFromPreviousAttempt.
 		return actor, w.releaseAssignmentWithoutBacklink(ctx, actor)
 	}
 

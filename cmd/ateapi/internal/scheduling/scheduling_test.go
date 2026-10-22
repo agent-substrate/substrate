@@ -33,6 +33,7 @@ func TestSchedule(t *testing.T) {
 		name        string
 		fleet       fleet
 		constraints Constraints
+		limits      *ateapipb.Resources
 		wantPod     string // "" means ErrNoCapacity expected
 	}{
 		{
@@ -67,9 +68,8 @@ func TestSchedule(t *testing.T) {
 				worker("w-1", "gvisor", "node-a", tierTwo),
 				worker("w-2", "gvisor", "node-a", tierOne),
 			},
-			constraints: Constraints{
-				TemplateSelector: labels.SelectorFromSet(labels.Set{"tier": "1"})},
-			wantPod: "w-2",
+			constraints: Constraints{}.WithWorkerSelectors(labels.SelectorFromSet(labels.Set{"tier": "1"})),
+			wantPod:     "w-2",
 		},
 		{
 			name: "actor selector filters on top of template selector",
@@ -77,18 +77,18 @@ func TestSchedule(t *testing.T) {
 				worker("w-1", "gvisor", "node-a", map[string]string{"tier": "1", "worload": "a"}),
 				worker("w-2", "gvisor", "node-b", map[string]string{"tier": "1", "workload": "b"}),
 			},
-			constraints: Constraints{
-				TemplateSelector: labels.SelectorFromSet(labels.Set{"tier": "1"}),
-				ActorSelector:    labels.SelectorFromSet(labels.Set{"workload": "b"})},
+			constraints: Constraints{}.WithWorkerSelectors(
+				labels.SelectorFromSet(labels.Set{"tier": "1"}),
+				labels.SelectorFromSet(labels.Set{"workload": "b"})),
 			wantPod: "w-2",
 		},
 		{
-			name: "node restriction is a hard constraint",
+			name: "WithNode restricts the node",
 			fleet: fleet{
 				worker("w-a", "gvisor", "node-a", tierTwo),
 				worker("w-b", "gvisor", "node-b", tierTwo),
 			},
-			constraints: Constraints{RequiredNodes: []string{"node-b"}},
+			constraints: Constraints{}.WithNode("node-b"),
 			wantPod:     "w-b",
 		},
 		{
@@ -135,7 +135,8 @@ func TestSchedule(t *testing.T) {
 				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 8<<30)),
 				worker("w-big", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30)),
 			},
-			constraints: Constraints{Limits: resources.CPUMemory(2000, 0)},
+			constraints: Constraints{},
+			limits:      resources.CPUMemory(2000, 0),
 			wantPod:     "w-big",
 		},
 		{
@@ -144,7 +145,8 @@ func TestSchedule(t *testing.T) {
 				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(4000, 1<<30)),
 				worker("w-big", "gvisor", "node-a", tierTwo, withCapacity(4000, 4<<30)),
 			},
-			constraints: Constraints{Limits: resources.CPUMemory(0, 2<<30)},
+			constraints: Constraints{},
+			limits:      resources.CPUMemory(0, 2<<30),
 			wantPod:     "w-big",
 		},
 		{
@@ -152,7 +154,8 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30)),
 			},
-			constraints: Constraints{Limits: resources.CPUMemory(2000, 0)},
+			constraints: Constraints{},
+			limits:      resources.CPUMemory(2000, 0),
 		},
 		{
 			// A Worker reports everything it has, so one that has reported no
@@ -161,7 +164,8 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-unknown", "gvisor", "node-a", tierTwo),
 			},
-			constraints: Constraints{Limits: resources.CPUMemory(2000, 2<<30)},
+			constraints: Constraints{},
+			limits:      resources.CPUMemory(2000, 2<<30),
 		},
 		{
 			// An Actor that declares nothing still fits: it asks for no
@@ -174,7 +178,7 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-unknown",
 		},
 		{
-			name: "zero constraint ignores worker capacity",
+			name: "no limits ignores worker compute capacity",
 			fleet: fleet{
 				worker("w-tiny", "gvisor", "node-a", tierTwo, withCapacity(100, 1<<20)),
 			},
@@ -219,7 +223,8 @@ func TestSchedule(t *testing.T) {
 				worker("w-half", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "other", resources.CPUMemory(3000, 4<<30))),
 			},
-			constraints: Constraints{Limits: resources.CPUMemory(2000, 0)},
+			constraints: Constraints{},
+			limits:      resources.CPUMemory(2000, 0),
 		},
 		{
 			name: "what the residents left over is still placeable",
@@ -227,7 +232,8 @@ func TestSchedule(t *testing.T) {
 				worker("w-half", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "other", resources.CPUMemory(3000, 4<<30))),
 			},
-			constraints: Constraints{Limits: resources.CPUMemory(1000, 4<<30)},
+			constraints: Constraints{},
+			limits:      resources.CPUMemory(1000, 4<<30),
 			wantPod:     "w-half",
 		},
 		{
@@ -266,7 +272,8 @@ func TestSchedule(t *testing.T) {
 				worker("w-light", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "b", resources.CPUMemory(1000, 1<<30))),
 			},
-			constraints: Constraints{Limits: resources.CPUMemory(500, 1<<30)},
+			constraints: Constraints{},
+			limits:      resources.CPUMemory(500, 1<<30),
 			wantPod:     "w-light",
 		},
 		{
@@ -282,7 +289,8 @@ func TestSchedule(t *testing.T) {
 					assigned("demo", "b2"), assigned("demo", "b3"), assigned("demo", "b4"), assigned("demo", "b5"),
 					assigned("demo", "b6")),
 			},
-			constraints: Constraints{Limits: resources.CPUMemory(100, 512<<20)},
+			constraints: Constraints{},
+			limits:      resources.CPUMemory(100, 512<<20),
 			wantPod:     "w-cool",
 		},
 		{
@@ -314,7 +322,8 @@ func TestSchedule(t *testing.T) {
 				worker("w-busy-big", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "a", resources.CPUMemory(1000, 2<<30))),
 			},
-			constraints: Constraints{Limits: resources.CPUMemory(1000, 2<<30)},
+			constraints: Constraints{},
+			limits:      resources.CPUMemory(1000, 2<<30),
 			wantPod:     "w-busy-big",
 		},
 		{
@@ -323,7 +332,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
 				worker("w-amd", "gvisor", "node-b", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
 			},
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{}.WithRuntime(hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))),
 			wantPod:     "w-amd",
 		},
 		{
@@ -332,7 +341,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-upgraded", "gvisor", "node-a", tierTwo,
 					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
 			},
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{}.WithRuntime(hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))),
 			wantPod:     "w-upgraded",
 		},
 		{
@@ -340,14 +349,14 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
 			},
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{}.WithRuntime(hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))),
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := New(tc.fleet, WithIntn(firstIntn))
-			got, err := s.Schedule(context.Background(), tc.constraints)
+			got, err := s.Schedule(context.Background(), tc.constraints, tc.limits)
 
 			if tc.wantPod != "" {
 				if err != nil {
@@ -366,7 +375,7 @@ func TestSchedule(t *testing.T) {
 	}
 }
 
-func TestApplies(t *testing.T) {
+func TestMatches(t *testing.T) {
 	tierSel := labels.SelectorFromSet(labels.Set{"tier": "1"})
 	workloadSel := labels.SelectorFromSet(labels.Set{"workload": "a"})
 
@@ -377,15 +386,21 @@ func TestApplies(t *testing.T) {
 		want        bool
 	}{
 		{
-			name:   "satisfies all constraints",
-			worker: worker("w", "gvisor", "node-a", map[string]string{"tier": "1", "workload": "a"}),
-			constraints: Constraints{TemplateSelector: tierSel, RequiredNodes: []string{"node-a"},
-				ActorSelector: workloadSel},
-			want: true,
+			name:        "satisfies all requirements",
+			worker:      worker("w", "gvisor", "node-a", map[string]string{"tier": "1", "workload": "a"}),
+			constraints: Constraints{}.WithWorkerSelectors(tierSel, workloadSel).WithNode("node-a"),
+			want:        true,
 		},
 		{
 			name:        "assignment is ignored",
 			worker:      worker("w", "gvisor", "node-a", nil, assigned("demo", "someone-else")),
+			constraints: Constraints{},
+			want:        true,
+		},
+		{
+			// A worker that already holds the actor must still match it.
+			name:        "full worker matches",
+			worker:      worker("w", "gvisor", "node-a", nil, withMaxActors(1), assigned("demo", "resident")),
 			constraints: Constraints{},
 			want:        true,
 		},
@@ -398,13 +413,13 @@ func TestApplies(t *testing.T) {
 		{
 			name:        "snapshot class pins the worker class",
 			worker:      worker("w", "microvm", "node-a", nil),
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{}.WithSandboxClass("gvisor"),
 			want:        false,
 		},
 		{
 			name:        "snapshot class matches without a runtime requirement",
 			worker:      worker("w", "gvisor", "node-a", nil),
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{}.WithSandboxClass("gvisor"),
 			want:        true,
 		},
 		{
@@ -416,36 +431,32 @@ func TestApplies(t *testing.T) {
 		{
 			name:        "template selector mismatch",
 			worker:      worker("w", "gvisor", "node-a", map[string]string{"tier": "2"}),
-			constraints: Constraints{TemplateSelector: tierSel},
+			constraints: Constraints{}.WithWorkerSelectors(tierSel),
 			want:        false,
 		},
 		{
 			name:        "actor selector mismatch",
 			worker:      worker("w", "gvisor", "node-a", map[string]string{"workload": "b"}),
-			constraints: Constraints{ActorSelector: workloadSel},
+			constraints: Constraints{}.WithWorkerSelectors(workloadSel),
 			want:        false,
 		},
 		{
 			name:        "node restriction excludes",
 			worker:      worker("w", "gvisor", "node-b", nil),
-			constraints: Constraints{RequiredNodes: []string{"node-a"}},
+			constraints: Constraints{}.WithNode("node-a"),
 			want:        false,
 		},
 		{
-			name:   "AND of template and actor selectors match",
-			worker: worker("w", "gvisor", "node-a", map[string]string{"tier": "1", "workload": "a"}),
-			constraints: Constraints{
-				TemplateSelector: tierSel,
-				ActorSelector:    workloadSel},
-			want: true,
+			name:        "AND of template and actor selectors match",
+			worker:      worker("w", "gvisor", "node-a", map[string]string{"tier": "1", "workload": "a"}),
+			constraints: Constraints{}.WithWorkerSelectors(tierSel, workloadSel),
+			want:        true,
 		},
 		{
-			name:   "AND of two selectors, one fails",
-			worker: worker("w", "gvisor", "node-a", map[string]string{"tier": "1", "workload": "b"}),
-			constraints: Constraints{
-				TemplateSelector: tierSel,
-				ActorSelector:    workloadSel},
-			want: false,
+			name:        "AND of two selectors, one fails",
+			worker:      worker("w", "gvisor", "node-a", map[string]string{"tier": "1", "workload": "b"}),
+			constraints: Constraints{}.WithWorkerSelectors(tierSel, workloadSel),
+			want:        false,
 		},
 		{
 			name:        "skips draining worker",
@@ -474,29 +485,68 @@ func TestApplies(t *testing.T) {
 		{
 			name:        "matches required runtime via default runtime",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{}.WithRuntime(hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))),
 			want:        true,
 		},
 		{
 			name: "matches required runtime via restorable runtimes",
 			worker: worker("w", "gvisor", "node-a", nil,
 				withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{}.WithRuntime(hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))),
 			want:        true,
 		},
 		{
 			name:        "skips worker when required runtime does not match",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{}.WithRuntime(hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))),
 			want:        false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := New(fleet{})
-			if got := s.Applies(tc.worker, tc.constraints); got != tc.want {
-				t.Fatalf("Applies() = %v, want %v", got, tc.want)
+			if got := tc.constraints.Matches(tc.worker); got != tc.want {
+				t.Fatalf("Matches() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHasRoom(t *testing.T) {
+	tests := []struct {
+		name   string
+		worker *ateapipb.Worker
+		limits *ateapipb.Resources
+		want   bool
+	}{
+		{
+			name:   "free slot without limits",
+			worker: worker("w", "gvisor", "node-a", nil),
+			want:   true,
+		},
+		{
+			name:   "full worker without limits",
+			worker: worker("w", "gvisor", "node-a", nil, withMaxActors(1), assigned("demo", "resident")),
+			want:   false,
+		},
+		{
+			name:   "enough cpu",
+			worker: worker("w", "gvisor", "node-a", nil, withCapacity(4000, 8<<30)),
+			limits: resources.CPUMemory(2000, 0),
+			want:   true,
+		},
+		{
+			name:   "too little cpu",
+			worker: worker("w", "gvisor", "node-a", nil, withCapacity(1000, 8<<30)),
+			limits: resources.CPUMemory(2000, 0),
+			want:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HasRoom(tc.worker, tc.limits); got != tc.want {
+				t.Fatalf("HasRoom() = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -607,22 +657,6 @@ func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
 	}
 }
 
-// The two questions are separate because a caller re-validating a worker that
-// already holds the actor must not be told the placement is illegal just
-// because the actor it is asking about filled the worker up.
-func TestAppliesIgnoresRoom(t *testing.T) {
-	full := worker("w-full", "gvisor", "node-a", nil, withMaxActors(1), assigned("demo", "resident"))
-	constraints := Constraints{}
-	s := New(fleet{full})
-
-	if !s.Applies(full, constraints) {
-		t.Error("Applies() = false for a full but otherwise legal worker, want true")
-	}
-	if s.HasRoom(full, constraints) {
-		t.Error("HasRoom() = true for a worker at its actor ceiling, want false")
-	}
-}
-
 // firstIntn always returns 0, sampling candidates[0] and candidates[1] when >=2 exist.
 func firstIntn(int) int { return 0 }
 
@@ -632,8 +666,6 @@ func TestSchedulePowerOfTwoChoicesTieBreaking(t *testing.T) {
 		worker("w-1", "gvisor", "node-b", nil, withMaxActors(4), assigned("demo", "b")),
 		worker("w-2", "gvisor", "node-c", nil, withMaxActors(4), assigned("demo", "c")),
 	}
-	constraints := Constraints{}
-
 	// On equal utilization, Schedule must preserve the first sampled candidate so
 	// every tied worker remains reachable via the random source.
 	for wantIdx, wantPod := range []string{"w-0", "w-1", "w-2"} {
@@ -645,7 +677,7 @@ func TestSchedulePowerOfTwoChoicesTieBreaking(t *testing.T) {
 			}
 			return 0
 		}))
-		got, err := s.Schedule(context.Background(), constraints)
+		got, err := s.Schedule(context.Background(), Constraints{}, nil)
 		if err != nil {
 			t.Fatalf("Schedule() for index %d error = %v", wantIdx, err)
 		}
@@ -675,7 +707,7 @@ func TestSchedulePowerOfTwoChoicesShiftedSecondSample(t *testing.T) {
 		worker("w-2", "gvisor", "node-c", nil, withMaxActors(4)),
 	}
 	s := New(f, WithIntn(seqIntn(0, 1)))
-	got, err := s.Schedule(context.Background(), Constraints{})
+	got, err := s.Schedule(context.Background(), Constraints{}, nil)
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
 	}

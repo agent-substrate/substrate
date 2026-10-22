@@ -449,12 +449,14 @@ a `Snapshot` with the following fields:
     worker and downgrades the restore to `SNAPSHOT_FIDELITY_ROOTFS`, preserving
     the snapshot's rootfs and volume data while booting the guest fresh under the
     `defaultRuntime` of that class on the new worker.
-  - A local checkpoint first tries compatible workers on its attached node.
-    If that fails, `ResumeActor` checks capacity without the node and runtime
-    restrictions. When that capacity exists, it detaches the checkpoint and
-    retries placement. Detach uploads it if needed, deletes the local files,
-    and releases the binding. The retry prefers compatible workers before
-    using the durable fallback above. A detach error leaves the actor attached,
+  - A local checkpoint first tries compatible workers on its attached node,
+    then any eligible worker there, which restores at
+    `SNAPSHOT_FIDELITY_ROOTFS`. If the node has no eligible worker with room,
+    `ResumeActor` checks capacity without the node and runtime restrictions.
+    When that capacity exists, it detaches the checkpoint and retries
+    placement. Detach uploads it if needed, deletes the local files, and
+    releases the binding. The retry prefers compatible workers before using
+    the durable fallback above. A detach error leaves the actor attached,
     unless its node was deleted before the checkpoint finished uploading. See
     [`ResumeActor`](#resumeactor) for that case.
 
