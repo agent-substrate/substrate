@@ -149,6 +149,19 @@ func MustCreateTag(t *testing.T, ctx context.Context, s store.Interface, tag *at
 	return created
 }
 
+// MustCreateExternalVolume ensures volume's parent atespace exists, then stores volume as given.
+func MustCreateExternalVolume(t *testing.T, ctx context.Context, s store.Interface, volume *ateapipb.ExternalVolume) *ateapipb.ExternalVolume {
+	t.Helper()
+	atespace := volume.GetMetadata().GetAtespace()
+	name := volume.GetMetadata().GetName()
+	MustCreateAtespace(t, ctx, s, atespace)
+	created, err := s.CreateExternalVolume(ctx, volume)
+	if err != nil {
+		t.Fatalf("creating test external volume %q/%q: %v", atespace, name, err)
+	}
+	return created
+}
+
 // RunTests runs m and terminates the shared PostgreSQL container afterwards.
 // Packages with no other TestMain work should use it as their whole TestMain;
 // the rest must call [Shutdown] themselves.

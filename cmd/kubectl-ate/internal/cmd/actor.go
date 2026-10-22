@@ -50,6 +50,7 @@ var (
 	createActorAtespaceFlag       string
 	createActorTemplateFlag       string
 	createActorTagFlag            string
+	createActorVolumeFlag         map[string]string
 	updateActorAtespaceFlag       string
 	updateActorTemplateFlag       string
 	updateActorWorkerSelectorFlag string
@@ -123,7 +124,7 @@ var createActorCmd = &cobra.Command{
 	Short: "Create an actor",
 	Args:  exactlyOneArg("<actor-name>", "atespace", "template"),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag)
+		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag, createActorVolumeFlag)
 		if err != nil {
 			return wrapUsageError(err)
 		}
@@ -305,7 +306,7 @@ func buildSuspendActorRequest(actorRef resources.ActorRef, mode ateapipb.Durabil
 	}
 }
 
-func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapipb.CreateActorRequest, error) {
+func buildCreateActorRequest(actorName, atespace, template, tag string, volumes map[string]string) (*ateapipb.CreateActorRequest, error) {
 	templateRef, err := parseAtespacedName(template, atespace)
 	if err != nil {
 		return nil, err
@@ -316,6 +317,9 @@ func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapi
 			Name:     actorName,
 		},
 		ActorTemplate: templateRef,
+	}
+	if len(volumes) > 0 {
+		actor.ExternalVolumeBindings = volumes
 	}
 
 	if tag != "" {
@@ -850,6 +854,7 @@ func init() {
 	createActorCmd.Flags().StringVar(&createActorTemplateFlag, "template", "", "actor-template to derive the actor from, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")
 	createActorCmd.Flags().StringVarP(&createActorAtespaceFlag, "atespace", "a", "", "atespace to create the actor in")
 	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (see --atespace)")
+	createActorCmd.Flags().StringToStringVar(&createActorVolumeFlag, "volume", nil, "bind an unnamed external.ref in the template to an ExternalVolume, as <volume-name>=<external-volume-name>; repeatable")
 	createCmd.AddCommand(createActorCmd)
 
 	updateActorCmd.Flags().StringVarP(&updateActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
