@@ -686,3 +686,42 @@ func TestDetachActorVolumes(t *testing.T) {
 		})
 	}
 }
+
+func TestBorrowedVolumesAreNotProvisionedOrDeleted(t *testing.T) {
+	ctx := context.Background()
+	template := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{{Name: "shared-data", External: &ateapipb.ExternalVolumeSource{Ref: &ateapipb.ExternalVolumeRef{Name: "shared"}}}},
+	}
+	scLister := &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{}}
+
+	initial, err := initialExternalVolumes(ctx, scLister, template)
+	if err != nil {
+		t.Fatalf("initialExternalVolumes: %v", err)
+	}
+	if len(initial) != 0 {
+		t.Errorf("initialExternalVolumes() = %v, want no entry for a borrowed volume", initial)
+	}
+
+	borrowed := []*ateapipb.ExternalVolumeStatus{{
+		Name:               "shared-data",
+		ExternalVolumeName: "shared",
+		StorageVolumeId:    "disk/shared",
+		VolumeType:         "mock",
+	}}
+	plugin := &trackingVolumePlugin{}
+	registry := &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}}
+
+	got, err := createActorVolumes(ctx, registry, scLister, "actor-uid-123", template, borrowed)
+	if err != nil {
+		t.Fatalf("createActorVolumes: %v", err)
+	}
+	if diff := cmp.Diff(borrowed, got, protocmp.Transform()); diff != "" {
+		t.Errorf("createActorVolumes() mismatch (-want +got):\n%s", diff)
+	}
+	if err := deleteActorVolumes(ctx, registry, "actor-uid-123", borrowed); err != nil {
+		t.Fatalf("deleteActorVolumes: %v", err)
+	}
+	if len(plugin.deletedIDs) != 0 {
+		t.Errorf("deleted %v, want the borrowed volume left alone", plugin.deletedIDs)
+	}
+}
