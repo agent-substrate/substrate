@@ -518,10 +518,10 @@ func TestSNIRules(t *testing.T) {
 		{
 			name: "https rule with effects sets HasEffects",
 			policy: policy(
-				&ateapipb.EgressRule{Https: &ateapipb.HttpsRule{
+				&ateapi.EgressRule{Https: &ateapi.HttpsRule{
 					Hostnames: []string{"api.example.com", "auth.example.com"},
-					Effects: &ateapipb.HttpRuleEffects{
-						ReplaceHeaders: []*ateapipb.CredentialHeader{{
+					Effects: &ateapi.HttpRuleEffects{
+						ReplaceHeaders: []*ateapi.CredentialHeader{{
 							Header:        "authorization",
 							Prefix:        "Bearer ",
 							CredentialUri: "ate-secret://k8s/default/token",
