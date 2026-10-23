@@ -340,7 +340,7 @@ Each entry in `containers` may declare an optional **HTTP wakeup probe** so `Res
 
 How it behaves:
 
-- **When it runs.** On every `ResumeActor` that actually wakes the actor. A `ResumeActor` on an actor that is already `RUNNING` is a no-op and does not probe.
+- **When it runs.** On every `ResumeActor` that actually wakes the actor. A successful `ResumeActor` on an actor that is already `RUNNING` is a no-op and does not probe.
 - **Block-until-ready semantics.** `ResumeActor` returns successfully only after every container with a `wakeupProbe` has returned HTTP 200. If any container has not done so within `timeoutSeconds` (30s by default), `ResumeActor` fails and the actor moves to `ACTOR_STATE_CRASHED`, as it does for any other error while waking. A crashed actor cannot be resumed directly: `ResumeActor` rejects it with `FAILED_PRECONDITION`. Call `RevertActor` first, which returns it to `ACTOR_STATE_SUSPENDED` with its last snapshot, then resume it again.
 - **Aggressive polling.** The poll loop is tuned for single-millisecond detection latency: a keep-alive HTTP client with a 1ms interval and 250ms per-request timeout. While the workload is still booting, kernel `RST`s return in microseconds, so the loop spends almost no time blocked; once the listener is up, the next attempt completes on veth-local latency.
 - **Egress while waking.** The actor's egress is active before its containers start, so a workload can download what it needs to become ready (a model, a Git repository) before it answers the probe. A micro-VM restored from a memory snapshot is already past its boot, and gets egress just before the probe starts. Its EgressPolicy applies as it does once the actor is `RUNNING`; inbound traffic still waits for the probe. A wake that fails or is cut short after egress is active can be retried from the same snapshot, so outbound requests made while waking can be sent more than once.
@@ -379,6 +379,25 @@ resources:
 snapshotConfig:
   storageLocation: gs://my-bucket/secret-agent
 ```
+
+### Conditional Resume
+
+To resume a checkpoint recorded by a client, set `ResumeActorRequest.expected` with
+`actorUid`, `snapshotUuid`, and `generation` from the observed actor and snapshot.
+The actor's UID and newest held snapshot must match. An already `RUNNING` actor
+returns `resumed=false`, so retrying after a lost response is safe. A `SUSPENDED`
+or retryable `RESUMING` actor resumes only if the snapshot it would restore also
+matches and its durable copy is `COMPLETED`, even if a local copy exists.
+If the snapshot's node was deleted before reporting completion, resume attempts
+that snapshot's upload on another node. A successful restore records it as
+`COMPLETED`; a missing upload moves the actor to `CRASHED` and returns
+`FAILED_PRECONDITION` with the held and expected snapshot identities. Call
+`RevertActor` before resuming again. A matching pending upload on a node not known to
+be deleted returns `UNAVAILABLE`. A mismatched actor or checkpoint,
+or an invalid state, returns `FAILED_PRECONDITION` because the caller's view is
+stale. A concurrent template change returns `ABORTED`; retry the same request.
+The condition does not select an older checkpoint or change restore fidelity.
+Omit `expected` to retain unconditional resume behavior.
 
 ### Snapshot Storage Layout
 
@@ -668,7 +687,8 @@ Because the guards are required and only a read supplies them, an update is alwa
 Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
-*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
+    *   `expected`: (Optional) `ExpectedSnapshot` with the observed `actorUid`, `snapshotUuid`, and `generation`. See [Conditional Resume](#conditional-resume).
+*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`) and `resumed`, which is false if the actor was already `RUNNING`.
 *   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`. When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
 
 #### `SuspendActor`

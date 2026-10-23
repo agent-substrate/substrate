@@ -487,7 +487,7 @@ func TestAssignWorkerAttempt_LeavesWorkerEpochUnset(t *testing.T) {
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapi.ActorTemplate{}
-	stored, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+	stored, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl, nil)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt: %v", err)
 	}
