@@ -28,7 +28,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/cel-go/cel"
 	"github.com/google/go-cmp/cmp"
 	"github.com/tink-crypto/tink-go/v2/aead"
 	"github.com/tink-crypto/tink-go/v2/insecurecleartextkeyset"
@@ -73,6 +72,7 @@ type fakeSTS struct {
 	// closes held and waits for release before answering.
 	holdSubject   string
 	held, release chan struct{}
+	heldOnce      sync.Once
 
 	mu      sync.Mutex
 	calls   int
@@ -86,7 +86,9 @@ func (f *fakeSTS) handler(w http.ResponseWriter, r *http.Request) {
 		f.t.Errorf("parse form: %v", err)
 	}
 	if f.holdSubject != "" && r.PostForm.Get("subject_token") == f.holdSubject {
-		close(f.held)
+		// Once, so a second held request leaves the call counts to report it
+		// rather than panicking on a closed channel.
+		f.heldOnce.Do(func() { close(f.held) })
 		<-f.release
 	}
 	f.mu.Lock()
@@ -246,9 +248,9 @@ func TestIssue_MintsTheBoundaryIntoTheToken(t *testing.T) {
 	if len(got.GetAccessBoundaryRules()) != len(rules) {
 		t.Fatalf("boundary has %d rules, want %d", len(got.GetAccessBoundaryRules()), len(rules))
 	}
-	env, err := cel.NewEnv()
-	if err != nil {
-		t.Fatal(err)
+	wantPaths := []string{
+		"projects/_/buckets/snaps/objects/root/atespaces/team-a/actors/9f1e/",
+		"projects/_/buckets/snaps/objects/root/atespaces/ate-golden/tags/7a3c/",
 	}
 	for n, want := range rules {
 		rule := got.GetAccessBoundaryRules()[n]
@@ -258,21 +260,89 @@ func TestIssue_MintsTheBoundaryIntoTheToken(t *testing.T) {
 		if diff := cmp.Diff(want.Permissions, rule.GetAvailablePermissions()); diff != "" {
 			t.Errorf("rule %d permissions (-want +got):\n%s", n, diff)
 		}
-		ast, iss := env.Parse(want.Condition)
-		if iss.Err() != nil {
-			t.Fatal(iss.Err())
+		if got := conditionPrefix(t, rule.GetCompiledAvailabilityCondition()); got != wantPaths[n] {
+			t.Errorf("rule %d condition limits objects to %q, want %q", n, got, wantPaths[n])
 		}
-		parsed, err := cel.AstToParsedExpr(ast)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var cond exprpb.Expr
-		if err := proto.Unmarshal(rule.GetCompiledAvailabilityCondition(), &cond); err != nil {
-			t.Fatalf("rule %d condition is not an Expr: %v", n, err)
-		}
-		if !proto.Equal(parsed.GetExpr(), &cond) {
-			t.Errorf("rule %d condition does not parse from %q", n, want.Condition)
-		}
+	}
+}
+
+// conditionPrefix checks that raw is the parsed CEL expression
+// resource.name.startsWith(path) and returns path.
+func conditionPrefix(t *testing.T, raw []byte) string {
+	t.Helper()
+	var e exprpb.Expr
+	if err := proto.Unmarshal(raw, &e); err != nil {
+		t.Fatalf("condition is not an Expr: %v", err)
+	}
+	call := e.GetCallExpr()
+	sel := call.GetTarget().GetSelectExpr()
+	if call.GetFunction() != "startsWith" || sel.GetField() != "name" || sel.GetOperand().GetIdentExpr().GetName() != "resource" || len(call.GetArgs()) != 1 {
+		t.Fatalf("condition is %v, want resource.name.startsWith(path)", &e)
+	}
+	return call.GetArgs()[0].GetConstExpr().GetStringValue()
+}
+
+func TestIssue_ConditionKeepsAQuoteInThePath(t *testing.T) {
+	// Substrate accepts a quote in a storage location. gcsboundary escapes it
+	// in the CEL literal, and the parsed constant must hold the raw path.
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	sts := &fakeSTS{t: t}
+	i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return now })
+	grant := actorscope.Grant{Prefix: prefix("gs://snaps/tenant's/atespaces/team-a/actors/9f1e"), Access: actorscope.ReadWrite}
+	tok, err := i.Issue(t.Context(), "9f1e", []actorscope.Grant{grant}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, b := sts.open(t, tok.AccessToken)
+	want := "projects/_/buckets/snaps/objects/tenant's/atespaces/team-a/actors/9f1e/"
+	if got := conditionPrefix(t, b.GetAccessBoundaryRules()[0].GetCompiledAvailabilityCondition()); got != want {
+		t.Errorf("condition limits objects to %q, want %q", got, want)
+	}
+}
+
+func TestIssue_FallsBackToTheLatestIntermediaryWhenAnExchangeFails(t *testing.T) {
+	// The source token is refreshed and STS refuses the exchange. Mints use
+	// the previous intermediary while it has more than stsTimeout left.
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		later   time.Duration
+		wantErr bool
+	}{
+		{"the latest has 40 minutes left", 20 * time.Minute, false},
+		{"the latest has just over stsTimeout left", time.Hour - stsTimeout - time.Second, false},
+		{"the latest has stsTimeout left", time.Hour - stsTimeout, true},
+		{"the latest has expired", time.Hour + time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := now
+			src := &changingSource{tok: oauth2.Token{AccessToken: "source-1", Expiry: now.Add(time.Hour)}}
+			sts := &fakeSTS{t: t}
+			i := newTestIssuer(t, sts, src, func() time.Time { return clock })
+			if _, err := i.Issue(t.Context(), "a", testGrants, true); err != nil {
+				t.Fatal(err)
+			}
+			clock = now.Add(tc.later)
+			src.mu.Lock()
+			src.tok = oauth2.Token{AccessToken: "source-2", Expiry: clock.Add(time.Hour)}
+			src.mu.Unlock()
+			sts.mu.Lock()
+			sts.status, sts.body = http.StatusServiceUnavailable, `{"error":"unavailable"}`
+			sts.mu.Unlock()
+			tok, err := i.Issue(t.Context(), "b", testGrants, true)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("Issue fell back to an intermediary with stsTimeout or less left")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Issue: %v", err)
+			}
+			if inter, _ := sts.open(t, tok.AccessToken); inter != "intermediary-1" {
+				t.Errorf("token starts with %q, want the previous intermediary token", inter)
+			}
+		})
 	}
 }
 
@@ -607,8 +677,12 @@ func TestIssue_StopsWhenTheCallerGivesUp(t *testing.T) {
 	sts.hold(t, "source-token")
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
+	start := time.Now()
 	if _, err := i.Issue(ctx, "9f1e", testGrants, false); err == nil {
 		t.Fatal("Issue succeeded against a hanging STS")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("Issue took %v to notice the cancelled context", took)
 	}
 }
 

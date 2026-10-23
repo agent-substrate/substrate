@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -70,7 +71,10 @@ type intermediary struct {
 // source token until they expire, so a caller still holding a token that was
 // just replaced finds its intermediary too. Concurrent mints share one
 // exchange, which outlives a caller that gives up, so that caller does not
-// fail the mints waiting on it.
+// fail the mints waiting on it. If the exchange fails, the latest intermediary
+// is used while it has more than stsTimeout left, as the source token's own
+// fallback is, so an STS outage or refusal at a source token refresh does not
+// fail every mint.
 func (i *Issuer) currentIntermediary(ctx context.Context) (*intermediary, error) {
 	src, err := i.source.Token()
 	if err != nil {
@@ -83,11 +87,17 @@ func (i *Issuer) currentIntermediary(ctx context.Context) (*intermediary, error)
 		if in := i.stored(src); in != nil {
 			return in, nil
 		}
-		in, err := i.exchangeIntermediary(context.WithoutCancel(ctx), src)
+		// The caller's deadline is dropped with its cancellation, so the
+		// exchange gets its own.
+		xctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stsTimeout)
+		defer cancel()
+		in, err := i.exchangeIntermediary(xctx, src)
 		if err != nil {
 			return nil, err
 		}
 		i.intermediaries.Set(src.AccessToken, in, in.expiry.Sub(i.now()))
+		i.keepLatest(in)
+		slog.InfoContext(ctx, "Exchanged the source token for an intermediary token", "expiry", in.expiry)
 		return in, nil
 	})
 	select {
@@ -95,9 +105,27 @@ func (i *Issuer) currentIntermediary(ctx context.Context) (*intermediary, error)
 		return nil, ctx.Err()
 	case res := <-ch:
 		if res.Err != nil {
+			if last := i.latest.Load(); last != nil && last.expiry.Sub(i.now()) > stsTimeout {
+				slog.WarnContext(ctx, "STS exchange failed, minting with the latest intermediary token", "error", res.Err, "expiry", last.expiry)
+				return last, nil
+			}
 			return nil, res.Err
 		}
 		return res.Val.(*intermediary), nil
+	}
+}
+
+// keepLatest stores in as the fallback intermediary, unless one that expires
+// later is stored already.
+func (i *Issuer) keepLatest(in *intermediary) {
+	for {
+		last := i.latest.Load()
+		if last != nil && !in.expiry.After(last.expiry) {
+			return
+		}
+		if i.latest.CompareAndSwap(last, in) {
+			return
+		}
 	}
 }
 
@@ -166,7 +194,8 @@ func (i *Issuer) exchangeIntermediary(ctx context.Context, src *oauth2.Token) (*
 		// the token.
 		return nil, errors.New("intermediary token has no expiry")
 	}
-	rawKey, err := base64.StdEncoding.DecodeString(r.SessionKey)
+	// Java's decoder accepts the key with or without padding.
+	rawKey, err := base64.RawStdEncoding.DecodeString(strings.TrimRight(r.SessionKey, "="))
 	if err != nil {
 		return nil, fmt.Errorf("while decoding the session key: %w", err)
 	}

@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/cel-go/cel"
@@ -77,6 +78,9 @@ type Issuer struct {
 	// intermediaries maps a source token to its *intermediary until the
 	// intermediary expires.
 	intermediaries *cache.Expiring
+	// latest is the intermediary that expires last, minted with when an
+	// exchange fails.
+	latest atomic.Pointer[intermediary]
 }
 
 // entry is a cached token with the grants it was minted for, so a request can
@@ -141,7 +145,10 @@ func New(ctx context.Context, account string, opts ...Option) (*Issuer, error) {
 // Issue returns a token downscoped to grants for the actor. A cached token is
 // returned while it covers the grants and has at least minServeLifetime left,
 // unless force is set, which mints regardless and is what the node plugin
-// sends after GCS refused a token. A minted token expires no later than the
+// sends after GCS refused a token. A forced mint still uses the stored
+// intermediary token: a new one for the same source token carries the same
+// permissions, and an STS call on every refusal would bring back the per-actor
+// calls this package avoids. A minted token expires no later than the
 // source token, and STS gives it the source token's remaining life. The source
 // token is fetched again once less than sourceRefreshMargin is left, so a
 // minted token starts with about that long at least. If that fetch fails, the
