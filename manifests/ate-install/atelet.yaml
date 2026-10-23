@@ -44,6 +44,9 @@ rules:
 - apiGroups: ["ate.dev"]
   resources: ["workerpools"]
   verbs: ["get", "list", "watch"]
+- apiGroups: ["events.k8s.io"]
+  resources: ["events"]
+  verbs: ["create", "patch"]
 # ClusterTrustBundles referenced by SystemInfo trustBundle data sources are
 # resolved on the node: atelet reads them through an informer and projects
 # the sanitized PEM into actors (see cmd/atelet/trustbundle.go).
