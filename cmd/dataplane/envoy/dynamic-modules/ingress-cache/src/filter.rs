@@ -42,11 +42,15 @@ pub const CACHE_HIT_COUNTER: &str = "ate_ingress_cache.hit";
 /// Counter incremented when no valid cached binding exists for the target actor.
 pub const CACHE_MISS_COUNTER: &str = "ate_ingress_cache.miss";
 
+/// Counter incremented when a request with a body skips the cache lookup and is
+/// routed through `ext_proc`.
+pub const CACHE_BYPASS_COUNTER: &str = "ate_ingress_cache.bypass";
+
 /// Counter incremented when an expired or stale cache entry is evicted.
 pub const CACHE_EVICTION_COUNTER: &str = "ate_ingress_cache.eviction";
 
 /// Counter incremented when a stale fast-path request is replayed via `recreate_stream`.
-pub const RECREATE_STREAM_COUNTER: &str = "ate_ingress_cache.recreate_stream";
+pub const CACHE_REPLAY_COUNTER: &str = "ate_ingress_cache.replay";
 
 /// Envoy core response flag: No healthy upstream (UH = 1 << 1).
 pub const RESPONSE_FLAG_UH: i64 = 1 << 1;
@@ -88,11 +92,12 @@ pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter
   Some(Box::new(FilterConfig {
     cache_hit: envoy_filter_config.define_counter(CACHE_HIT_COUNTER).ok(),
     cache_miss: envoy_filter_config.define_counter(CACHE_MISS_COUNTER).ok(),
+    cache_bypass: envoy_filter_config.define_counter(CACHE_BYPASS_COUNTER).ok(),
     cache_eviction: envoy_filter_config
       .define_counter(CACHE_EVICTION_COUNTER)
       .ok(),
-    recreate_stream: envoy_filter_config
-      .define_counter(RECREATE_STREAM_COUNTER)
+    cache_replay: envoy_filter_config
+      .define_counter(CACHE_REPLAY_COUNTER)
       .ok(),
     settings: config,
   }))
@@ -105,18 +110,27 @@ pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter
 ///   and clears the route cache.
 /// * **On a miss**: lets `ext_proc` run normally, then learns the resolved worker IP
 ///   from dynamic metadata in `on_response_headers`.
+/// * **On a request with a body**: skips the cache lookup and routes through `ext_proc`,
+///   since a stale hit couldn't be replayed. Learns from the response like a miss.
 /// * **On upstream stale rejection (`421` or `503` on a cache hit)**: evicts the
 ///   stale cache entry, removes [`ROUTE_RESOLVED_HEADER`], and calls
 ///   `recreate_stream` (if replay-safe) so the request replays through `ext_proc`.
-/// * **On gRPC UNAVAILABLE (`grpc-status: 14` on a cache hit)**: evicts the stale
-///   cache entry and returns the error to the client without replaying.
+/// * **On gRPC UNAVAILABLE (`grpc-status: 14`)**: does not learn the binding, and removes
+///   it if it was learned from this response's headers. gRPC requests always have a body,
+///   so they never use the cache.
 
 pub struct CacheFilter {
   pub config: Config,
+  /// Counts bodiless requests served from an unexpired cache entry, skipping ext_proc.
   pub cache_hit: Option<EnvoyCounterId>,
+  /// Counts bodiless requests with no unexpired cache entry, resolved through ext_proc.
   pub cache_miss: Option<EnvoyCounterId>,
+  /// Counts requests with a body, which skip the cache lookup and go through ext_proc.
+  pub cache_bypass: Option<EnvoyCounterId>,
+  /// Counts cache entries removed because they expired or a cache hit found them stale.
   pub cache_eviction: Option<EnvoyCounterId>,
-  pub recreate_stream: Option<EnvoyCounterId>,
+  /// Counts stale cache hits replayed through ext_proc with `recreate_stream`.
+  pub cache_replay: Option<EnvoyCounterId>,
   pub learn_key: Option<String>,
   pub actor_key: Option<String>,
   pub was_cache_hit: bool,
@@ -142,8 +156,9 @@ impl CacheFilter {
       config,
       cache_hit: None,
       cache_miss: None,
+      cache_bypass: None,
       cache_eviction: None,
-      recreate_stream: None,
+      cache_replay: None,
       learn_key: None,
       actor_key: None,
       was_cache_hit: false,
@@ -182,6 +197,7 @@ fn is_stale_rejection<EHF: EnvoyHttpFilter>(
 /// Replay is safe if:
 /// 1. The request has no body (`!filter.has_request_body`). We do not buffer request
 ///    bodies in Envoy, so replaying a request with a body would drop or corrupt the payload.
+///    Requests with a body skip the cache, so this is a defensive check.
 /// 2. For 503 errors, response flags guarantee zero bytes reached the upstream worker (`UF` or `UH`).
 ///    Mid-stream disconnections (`UC`) or resets (`UR`) are never replayed to err on the side
 ///    of caution against unintended client side effects.
@@ -261,6 +277,29 @@ fn request_has_body<EHF: EnvoyHttpFilter>(envoy_filter: &EHF, end_of_stream: boo
   }
 }
 
+/// Rejects a request that arrives with [`ROUTE_RESOLVED_HEADER`] set when the filter
+/// didn't route it from the cache, and reports whether it did.
+///
+/// Envoy evaluated the route table before this filter ran, so a client-supplied header
+/// already selected the route with ext_proc disabled. Stripping the header alone does
+/// not restore ext_proc to the constructed filter chain, so the request gets a 400.
+fn reject_forged_route_header<EHF: EnvoyHttpFilter>(envoy_filter: &mut EHF) -> bool {
+  if envoy_filter
+    .get_request_header_value(ROUTE_RESOLVED_HEADER)
+    .is_none()
+  {
+    return false;
+  }
+  envoy_filter.remove_request_header(ROUTE_RESOLVED_HEADER);
+  envoy_filter.send_response(
+    400,
+    &[("content-type", b"text/plain")],
+    Some(b"forged ate-endpoint-cached header is not allowed\n"),
+    Some("untrusted_cached_header"),
+  );
+  true
+}
+
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
   fn on_request_headers(
     &mut self,
@@ -275,6 +314,18 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
 
     let key = actor.cache_key();
     self.actor_key = Some(key.clone());
+
+    // A stale hit can't be replayed for a request with a body, so the cache isn't worth
+    // the risk: route it through ext_proc. Its response still refreshes the cache.
+    if self.has_request_body {
+      increment_counter(envoy_filter, self.cache_bypass);
+      if reject_forged_route_header(envoy_filter) {
+        return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
+      }
+      self.was_cache_hit = false;
+      self.learn_key = Some(key);
+      return envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
+    }
 
     if let Some(entry) = cache().get(&key) {
       if entry.expires_at > Instant::now() {
@@ -299,21 +350,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
     }
 
     increment_counter(envoy_filter, self.cache_miss);
-    // If an untrusted downstream client forged the cache-bypass header on a cache miss,
-    // Envoy evaluated the route table before this filter ran and disabled ext_proc for this stream.
-    // Stripping the header alone does not restore ext_proc to an already-constructed filter chain.
-    // Reject untrusted requests with 400 Bad Request to prevent ext_proc bypass.
-    let had_route_header = envoy_filter
-      .get_request_header_value(ROUTE_RESOLVED_HEADER)
-      .is_some();
-    if had_route_header {
-      envoy_filter.remove_request_header(ROUTE_RESOLVED_HEADER);
-      envoy_filter.send_response(
-        400,
-        &[("content-type", b"text/plain")],
-        Some(b"forged ate-endpoint-cached header is not allowed\n"),
-        Some("untrusted_cached_header"),
-      );
+    if reject_forged_route_header(envoy_filter) {
       return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
     }
     self.was_cache_hit = false;
@@ -353,7 +390,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
           envoy_filter.set_request_header(TARGET_ACTOR_HEADER, key.as_bytes());
         }
         envoy_filter.remove_request_header(ROUTE_RESOLVED_HEADER);
-        increment_counter(envoy_filter, self.recreate_stream);
+        increment_counter(envoy_filter, self.cache_replay);
         if envoy_filter.recreate_stream(None) {
           return envoy_dynamic_module_type_on_http_filter_response_headers_status::StopIteration;
         }
@@ -425,7 +462,7 @@ mod tests {
     mock
       .expect_get_request_header_value()
       .withf(|key| key == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
+      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
     mock
       .expect_get_request_header_value()
       .withf(|key| key == "content-length")
@@ -535,6 +572,140 @@ mod tests {
   }
 
   #[test]
+  fn test_request_with_body_bypasses_cache_and_learns() {
+    // Each test uses its own actor: the cache is process-wide and tests run in parallel.
+    let key = "team-b/actor-body";
+    cache().insert(
+      key.to_string(),
+      Binding {
+        worker_ip: "10.244.9.1".to_string(),
+        worker_spiffe_id: None,
+        expires_at: Instant::now() + Duration::from_secs(5),
+      },
+    );
+
+    let mut filter = CacheFilter::new_test_filter(Config::default());
+    let bypass_id = EnvoyCounterId(7);
+    filter.cache_bypass = Some(bypass_id);
+
+    // The mock panics on any unexpected call, so a cache hit (route_to setting metadata
+    // and headers) would fail the test.
+    let mut mock = MockEnvoyHttpFilter::default();
+    mock
+      .expect_get_filter_state_bytes()
+      .withf(|k| k == TARGET_ACTOR_FILTER_STATE_KEY)
+      .returning(move |_| Some(EnvoyBuffer::new(key.as_bytes())));
+    mock
+      .expect_get_filter_state_bytes()
+      .withf(|k| k == CONNECT_AUTHORITY_FILTER_STATE_KEY)
+      .returning(|_| None);
+    mock
+      .expect_get_request_header_value()
+      .withf(|k| k == ":method")
+      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
+    mock
+      .expect_get_request_header_value()
+      .withf(|k| k == "content-length")
+      .returning(|_| Some(EnvoyBuffer::new(b"12")));
+    mock
+      .expect_get_request_header_value()
+      .withf(|k| k == ROUTE_RESOLVED_HEADER)
+      .returning(|_| None);
+    mock
+      .expect_increment_counter()
+      .withf(move |id, val| *id == bypass_id && *val == 1)
+      .times(1)
+      .returning(|_, _| Ok(()));
+
+    let status = filter.on_request_headers(&mut mock, false);
+    assert_eq!(
+      status,
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+    assert!(filter.has_request_body);
+    assert!(!filter.was_cache_hit);
+    assert_eq!(filter.learn_key.as_deref(), Some(key));
+
+    // ext_proc resolved a different worker: the response refreshes the cached binding.
+    mock
+      .expect_get_response_header_value()
+      .withf(|k| k == ":status")
+      .returning(|_| Some(EnvoyBuffer::new(b"200")));
+    mock
+      .expect_get_response_header_value()
+      .withf(|k| k == GRPC_STATUS_HEADER)
+      .returning(|_| None);
+    mock.expect_get_attribute_int().returning(|_| None);
+    mock
+      .expect_get_metadata_string()
+      .withf(|src, ns, k| {
+        *src == envoy_dynamic_module_type_metadata_source::Dynamic
+          && ns == ORIGINAL_DST_NAMESPACE
+          && k == ORIGINAL_DST_ADDRESS_KEY
+      })
+      .returning(|_, _, _| Some(EnvoyBuffer::new(b"10.244.9.2:443")));
+    mock
+      .expect_get_metadata_string()
+      .withf(|src, ns, k| {
+        *src == envoy_dynamic_module_type_metadata_source::Dynamic
+          && ns == ORIGINAL_DST_NAMESPACE
+          && k == WORKER_SPIFFE_ID_KEY
+      })
+      .returning(|_, _, _| None);
+
+    let resp_status = filter.on_response_headers(&mut mock, false);
+    assert_eq!(
+      resp_status,
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+    assert_eq!(cache().get(key).expect("should be cached").worker_ip, "10.244.9.2");
+  }
+
+  #[test]
+  fn test_request_with_body_and_forged_route_header_rejects_with_400() {
+    let mut filter = CacheFilter::new_test_filter(Config::default());
+    let target_actor = b"team-b/actor-body-forged";
+    let mut mock = MockEnvoyHttpFilter::default();
+    mock
+      .expect_get_filter_state_bytes()
+      .withf(|k| k == TARGET_ACTOR_FILTER_STATE_KEY)
+      .returning(move |_| Some(EnvoyBuffer::new(target_actor)));
+    mock
+      .expect_get_filter_state_bytes()
+      .withf(|k| k == CONNECT_AUTHORITY_FILTER_STATE_KEY)
+      .returning(|_| None);
+    mock
+      .expect_get_request_header_value()
+      .withf(|k| k == ":method")
+      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
+    mock
+      .expect_get_request_header_value()
+      .withf(|k| k == "content-length")
+      .returning(|_| Some(EnvoyBuffer::new(b"5")));
+    mock
+      .expect_get_request_header_value()
+      .withf(|k| k == ROUTE_RESOLVED_HEADER)
+      .returning(|_| Some(EnvoyBuffer::new(b"1")));
+    mock
+      .expect_remove_request_header()
+      .withf(|k| k == ROUTE_RESOLVED_HEADER)
+      .returning(|_| true);
+    mock
+      .expect_send_response()
+      .withf(|status_code, _, _, details| {
+        *status_code == 400 && details == &Some("untrusted_cached_header")
+      })
+      .times(1)
+      .returning(|_, _, _, _| ());
+
+    let status = filter.on_request_headers(&mut mock, false);
+    assert_eq!(
+      status,
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
+  }
+
+  #[test]
   fn test_cache_hit_populates_metadata_and_skips_extproc() {
     let config = Config::default();
     cache().insert(
@@ -565,7 +736,7 @@ mod tests {
     mock
       .expect_get_request_header_value()
       .withf(|key| key == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
+      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
     mock
       .expect_get_request_header_value()
       .withf(|key| key == "content-length")
@@ -1368,234 +1539,6 @@ mod tests {
       .returning(|_, _| true);
 
     config.route_to(&mut route_mock, &actor, "2001:db8::1", None);
-  }
-
-  #[test]
-  fn test_grpc_status_14_in_headers_evicts_cache_and_does_not_replay() {
-    let config = Config::default();
-    cache().insert(
-      "team-grpc/actor-h14".to_string(),
-      Binding {
-        worker_ip: "10.244.6.1".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
-
-    let mut filter = CacheFilter::new_test_filter(config);
-    filter.actor_key = Some("team-grpc/actor-h14".to_string());
-    filter.was_cache_hit = true;
-
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_response_header_value()
-      .withf(|key| key == ":status")
-      .returning(|_| Some(EnvoyBuffer::new(b"200")));
-    mock
-      .expect_get_response_header_value()
-      .withf(|key| key == GRPC_STATUS_HEADER)
-      .returning(|_| Some(EnvoyBuffer::new(b"14")));
-    mock.expect_get_attribute_int().returning(|_| None);
-
-    // Option A: recreate_stream must NOT be called, but cache must be evicted.
-    let resp_status = filter.on_response_headers(&mut mock, false);
-    assert_eq!(
-      resp_status,
-      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
-    );
-    assert!(cache().get("team-grpc/actor-h14").is_none());
-    assert!(!filter.was_cache_hit);
-  }
-
-  #[test]
-  fn test_grpc_status_14_in_trailers_evicts_cache_and_does_not_replay() {
-    let config = Config::default();
-    cache().insert(
-      "team-grpc/actor-t14".to_string(),
-      Binding {
-        worker_ip: "10.244.6.2".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
-
-    let mut filter = CacheFilter::new_test_filter(config);
-    filter.actor_key = Some("team-grpc/actor-t14".to_string());
-    filter.was_cache_hit = true;
-
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_response_header_value()
-      .withf(|key| key == ":status")
-      .returning(|_| Some(EnvoyBuffer::new(b"200")));
-    mock
-      .expect_get_response_header_value()
-      .withf(|key| key == GRPC_STATUS_HEADER)
-      .returning(|_| None);
-    mock.expect_get_attribute_int().returning(|_| None);
-
-    let resp_status = filter.on_response_headers(&mut mock, false);
-    assert_eq!(
-      resp_status,
-      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
-    );
-    assert!(filter.was_cache_hit);
-    assert!(cache().get("team-grpc/actor-t14").is_some());
-
-    // Response trailers arrive with grpc-status: 14 (UNAVAILABLE)
-    mock
-      .expect_get_response_trailer_value()
-      .withf(|key| key == GRPC_STATUS_HEADER)
-      .returning(|_| Some(EnvoyBuffer::new(b"14")));
-
-    let trailer_status = filter.on_response_trailers(&mut mock);
-    assert_eq!(
-      trailer_status,
-      envoy_dynamic_module_type_on_http_filter_response_trailers_status::Continue
-    );
-    assert!(cache().get("team-grpc/actor-t14").is_none());
-    assert!(!filter.was_cache_hit);
-  }
-
-  #[test]
-  fn test_grpc_status_14_increments_cache_eviction_counter() {
-    let config = Config::default();
-    cache().insert(
-      "team-grpc/actor-count".to_string(),
-      Binding {
-        worker_ip: "10.244.6.3".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
-
-    let mut filter = CacheFilter::new_test_filter(config);
-    filter.actor_key = Some("team-grpc/actor-count".to_string());
-    filter.was_cache_hit = true;
-    let eviction_id = EnvoyCounterId(99);
-    filter.cache_eviction = Some(eviction_id);
-
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_response_header_value()
-      .withf(|key| key == ":status")
-      .returning(|_| Some(EnvoyBuffer::new(b"200")));
-    mock
-      .expect_get_response_header_value()
-      .withf(|key| key == GRPC_STATUS_HEADER)
-      .returning(|_| Some(EnvoyBuffer::new(b"14")));
-    mock.expect_get_attribute_int().returning(|_| None);
-    mock
-      .expect_increment_counter()
-      .withf(move |id, val| *id == eviction_id && *val == 1)
-      .times(1)
-      .returning(|_, _| Ok(()));
-
-    let resp_status = filter.on_response_headers(&mut mock, false);
-    assert_eq!(
-      resp_status,
-      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
-    );
-    assert!(cache().get("team-grpc/actor-count").is_none());
-  }
-
-  #[test]
-  fn test_grpc_status_0_ok_does_not_evict() {
-    let config = Config::default();
-    cache().insert(
-      "team-grpc/actor-ok".to_string(),
-      Binding {
-        worker_ip: "10.244.6.4".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
-
-    let mut filter = CacheFilter::new_test_filter(config);
-    filter.actor_key = Some("team-grpc/actor-ok".to_string());
-    filter.was_cache_hit = true;
-
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_response_header_value()
-      .withf(|key| key == ":status")
-      .returning(|_| Some(EnvoyBuffer::new(b"200")));
-    mock
-      .expect_get_response_header_value()
-      .withf(|key| key == GRPC_STATUS_HEADER)
-      .returning(|_| Some(EnvoyBuffer::new(b"0")));
-    mock.expect_get_attribute_int().returning(|_| None);
-
-    let resp_status = filter.on_response_headers(&mut mock, false);
-    assert_eq!(
-      resp_status,
-      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
-    );
-    assert!(cache().get("team-grpc/actor-ok").is_some());
-    assert!(filter.was_cache_hit);
-
-    // Also verify trailers with grpc-status: 0 does not evict
-    mock
-      .expect_get_response_trailer_value()
-      .withf(|key| key == GRPC_STATUS_HEADER)
-      .returning(|_| Some(EnvoyBuffer::new(b"0")));
-    let trailer_status = filter.on_response_trailers(&mut mock);
-    assert_eq!(
-      trailer_status,
-      envoy_dynamic_module_type_on_http_filter_response_trailers_status::Continue
-    );
-    assert!(cache().get("team-grpc/actor-ok").is_some());
-    assert!(filter.was_cache_hit);
-  }
-
-  #[test]
-  fn test_grpc_other_error_status_does_not_evict() {
-    let config = Config::default();
-    cache().insert(
-      "team-grpc/actor-other-err".to_string(),
-      Binding {
-        worker_ip: "10.244.6.5".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
-
-    let mut filter = CacheFilter::new_test_filter(config);
-    filter.actor_key = Some("team-grpc/actor-other-err".to_string());
-    filter.was_cache_hit = true;
-
-    let mut mock = MockEnvoyHttpFilter::default();
-    // Test grpc-status: 3 (INVALID_ARGUMENT) in headers
-    mock
-      .expect_get_response_header_value()
-      .withf(|key| key == ":status")
-      .returning(|_| Some(EnvoyBuffer::new(b"200")));
-    mock
-      .expect_get_response_header_value()
-      .withf(|key| key == GRPC_STATUS_HEADER)
-      .returning(|_| Some(EnvoyBuffer::new(b"3")));
-    mock.expect_get_attribute_int().returning(|_| None);
-
-    let resp_status = filter.on_response_headers(&mut mock, false);
-    assert_eq!(
-      resp_status,
-      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
-    );
-    assert!(cache().get("team-grpc/actor-other-err").is_some());
-    assert!(filter.was_cache_hit);
-
-    // Test grpc-status: 5 (NOT_FOUND) in trailers
-    mock
-      .expect_get_response_trailer_value()
-      .withf(|key| key == GRPC_STATUS_HEADER)
-      .returning(|_| Some(EnvoyBuffer::new(b"5")));
-    let trailer_status = filter.on_response_trailers(&mut mock);
-    assert_eq!(
-      trailer_status,
-      envoy_dynamic_module_type_on_http_filter_response_trailers_status::Continue
-    );
-    assert!(cache().get("team-grpc/actor-other-err").is_some());
-    assert!(filter.was_cache_hit);
   }
 
   #[test]

@@ -28,17 +28,16 @@ routes that skip `ext_proc`, so every request is resolved through `ext_proc`.
   not observe suspends, migrations, or reassignments made in the last
   `cache_ttl_seconds` (default 5s). The first request to the old worker fails
   and evicts the entry, as described below.
+- **Only bodiless requests use the cache.** A request with a body, including
+  every gRPC call, always goes through `ext_proc`: if it hit a stale entry, the
+  router couldn't replay it. Its response still refreshes the cache.
 - **Clients must retry some failures.** Only bodiless requests that failed
-  before reaching the actor are replayed by the router. A request with a body,
-  or one interrupted mid-flight (`503 UC` or `UR`), returns the error to the
-  client after evicting the entry; the client's retry is resolved through
-  `ext_proc`.
-- **gRPC clients need a retry policy for `UNAVAILABLE`.** A gRPC call that
-  fails with status `14` evicts the entry and is returned to the client. Standard
-  gRPC clients do not retry it automatically unless a retry policy is
-  configured.
+  before reaching the actor are replayed by the router. One interrupted
+  mid-flight (`503 UC` or `UR`) returns the error to the client after evicting
+  the entry; the client's retry is resolved through `ext_proc`.
 - **The cached route header is reserved.** A request that arrives with
-  `ate-endpoint-cached` set and no cache entry is rejected with `400 Bad Request`.
+  `ate-endpoint-cached` set and isn't served from the cache (a miss, or any
+  request with a body) is rejected with `400 Bad Request`.
 
 ## How it works
 
@@ -51,15 +50,23 @@ routes that skip `ext_proc`, so every request is resolved through `ext_proc`.
   proceeds through `ext_proc`, which resolves or resumes the actor and populates
   the `ORIGINAL_DST` dynamic metadata. On response headers, the filter records
   the worker IP in the cache for `cache_ttl_seconds`.
+- **Request with a body (`on_request_headers`)**: The filter skips the cache
+  lookup and the request proceeds through `ext_proc`, then is learned from like a
+  miss. A request counts as having a body unless it ends with its headers, has
+  `content-length: 0`, or is a `GET` or `HEAD` without `content-length`.
+- **gRPC `UNAVAILABLE` (`on_response_headers` / `on_response_trailers`)**: A
+  response with gRPC status `14` is not learned from. If the status arrives in
+  the trailers, after the headers were learned from, the actor's binding is
+  removed.
 - **Stale binding eviction (`on_response_headers`)**: If a fast-path request
   fails with `421 Misdirected Request` (with `x-ate-assignment-stale: true`),
-  `503 Service Unavailable` with upstream transport failure response flags (`UF`,
-  `UH`, `UC`, `UR`), or gRPC status `14` (`UNAVAILABLE`), the filter immediately
-  evicts the cached binding so subsequent requests resolve through `ext_proc`.
+  or `503 Service Unavailable` with upstream transport failure response flags
+  (`UF`, `UH`, `UC`, `UR`), the filter immediately evicts the cached binding so
+  subsequent requests resolve through `ext_proc`.
 - **Stream replay (`recreate_stream`)**: To prevent duplicate execution of requests
-  with side effects, automatic replay is only performed for bodiless requests
-  (such as `GET` or `HEAD`) when failure is guaranteed to have occurred before any
-  request reached or executed on the upstream actor:
+  with side effects, automatic replay is only performed when failure is
+  guaranteed to have occurred before the request reached the upstream actor
+  (only bodiless requests are served from the cache):
   - `421 Misdirected Request` with `x-ate-assignment-stale: true` (rejected by
     worker `atunnel` prior to forwarding).
   - `503 Service Unavailable` with zero-byte upstream failure response flags:
@@ -85,9 +92,15 @@ The filter accepts an optional JSON configuration object in `filter_config`
 | Counter name | Description |
 |---|---|
 | `ate_ingress_cache.hit` | Incremented when an unexpired actor -> worker binding is served from cache |
-| `ate_ingress_cache.miss` | Incremented when no unexpired binding exists in the cache |
+| `ate_ingress_cache.miss` | Incremented when a bodiless request finds no unexpired binding in the cache |
+| `ate_ingress_cache.bypass` | Incremented when a request with a body skips the cache lookup and is routed through `ext_proc` |
 | `ate_ingress_cache.eviction` | Incremented when an expired or stale cache entry is evicted |
-| `ate_ingress_cache.recreate_stream` | Incremented when a stale fast-path request is replayed via `recreate_stream` |
+| `ate_ingress_cache.replay` | Incremented when a stale fast-path request is replayed via `recreate_stream` |
+
+`hit`, `miss`, and `bypass` partition the requests the filter resolves an actor
+for, so the hit rate among cacheable requests is `hit / (hit + miss)`. Envoy's
+Prometheus endpoint exports the counters with `.` replaced by `_`, e.g.
+`ate_ingress_cache_bypass`.
 
 ## Building and testing
 
