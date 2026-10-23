@@ -61,7 +61,7 @@ Standalone Substrate defaults to the `substrate` schema, including under Kagent'
 - Keep each startup migration short.
 - A database administrator must configure the owner role's default table and sequence privileges for the read/write role before migrations. These grants do not go to `PUBLIC` or Kagent's roles. In this first pass, migration ledgers receive the same table privileges as other objects.
 
-Migrations up to v0.5.0 were squashed into `000001_initial.sql`. A database created by v0.5.0 or earlier cannot be upgraded. Recreate it.
+Migrations up to v0.6.0 were squashed into `000001_initial.sql`. A database created before the squash cannot be upgraded. Recreate it.
 
 Do not change or delete a migration file after it merges. Add a new migration to correct it.
 
