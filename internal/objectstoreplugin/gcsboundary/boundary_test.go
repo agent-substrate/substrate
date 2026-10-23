@@ -16,6 +16,7 @@ package gcsboundary
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -69,6 +70,7 @@ func TestFromGrants_Refuses(t *testing.T) {
 		{"unknown access", []actorscope.Grant{{Prefix: prefix(t, "gs://b/p"), Access: 0}}},
 		{"no grants", nil},
 		{"more than ten grants", manyGrants(t, 11)},
+		{"a condition over 512 bytes", []actorscope.Grant{longGrant(t, 513)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := FromGrants(tc.grants); err == nil {
@@ -100,4 +102,21 @@ func manyGrants(t *testing.T, n int) []actorscope.Grant {
 		gs = append(gs, actorscope.Grant{Prefix: prefix(t, fmt.Sprintf("gs://b/p%d", i)), Access: actorscope.ReadOnly})
 	}
 	return gs
+}
+
+// longGrant is a grant whose condition literal is n bytes:
+// "projects/_/buckets/b/objects/" and the path with its trailing slash.
+func longGrant(t *testing.T, n int) actorscope.Grant {
+	path := strings.Repeat("p", n-len("projects/_/buckets/b/objects/")-1)
+	return actorscope.Grant{Prefix: prefix(t, "gs://b/"+path), Access: actorscope.ReadWrite}
+}
+
+func TestFromGrants_AcceptsA512ByteCondition(t *testing.T) {
+	rules, err := FromGrants([]actorscope.Grant{longGrant(t, 512)})
+	if err != nil {
+		t.Fatalf("FromGrants: %v", err)
+	}
+	if got := len(rules[0].Condition) - len("resource.name.startsWith('')"); got != 512 {
+		t.Fatalf("literal is %d bytes, want 512", got)
+	}
 }
