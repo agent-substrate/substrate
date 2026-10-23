@@ -42,6 +42,7 @@ import (
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorauthz"
 	"go.ate.dev/substrate/internal/objectstoreplugin/exchange"
 	"go.ate.dev/substrate/internal/portforward"
 	"go.ate.dev/substrate/internal/preview"
@@ -115,7 +116,7 @@ type claims struct {
 // forActor is the token ate-api-server would mint for the node hosting actor.
 func forActor(actor *ateapi.Actor) claims {
 	return claims{
-		kind: actoridjwt.KindWorkerForActor, audience: exchange.ActorJWTAudience,
+		kind: actoridjwt.KindWorkerForActor, audience: actorauthz.Audience,
 		actor: actor, uid: actor.GetMetadata().GetUid(), node: actor.GetStatus().GetAssignedNode(),
 	}
 }
@@ -337,7 +338,7 @@ func TestExchangeScopesTheTokenToTheActor(t *testing.T) {
 		jwt  string
 		want codes.Code
 	}{
-		{"the actor's own token", sign.jwt(t, claims{kind: actoridjwt.KindActor, audience: exchange.ActorJWTAudience, actor: alpha, uid: alpha.GetMetadata().GetUid()}), codes.PermissionDenied},
+		{"the actor's own token", sign.jwt(t, claims{kind: actoridjwt.KindActor, audience: actorauthz.Audience, actor: alpha, uid: alpha.GetMetadata().GetUid()}), codes.PermissionDenied},
 		{"another audience", sign.jwt(t, withAudience(forActor(alpha), "other")), codes.Unauthenticated},
 		{"a recreated actor's old uid", sign.jwt(t, withUID(forActor(alpha), "00000000-0000-4000-8000-000000000000")), codes.NotFound},
 		{"a node the actor is not on", sign.jwt(t, withNode(forActor(alpha), "not-the-node")), codes.PermissionDenied},
