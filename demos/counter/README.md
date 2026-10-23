@@ -48,11 +48,17 @@ Run it and follow the printed next steps:
 KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
 ```
 
-On a cluster that already has the microVM deps (`hack/install-microvm-deps.sh`),
-deploy directly instead:
+To deploy onto an existing cluster where `ate-system` is already installed:
 
 ```bash
 go run ./cmd/ate-setup deploy demo counter-microvm
+```
+
+Inspect the deployed template with:
+
+```bash
+kubectl ate get actor-templates -a ate-demo-counter-microvm
+kubectl ate get actor-template counter-microvm -a ate-demo-counter-microvm -o yaml
 ```
 </details>
 

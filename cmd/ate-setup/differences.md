@@ -1,13 +1,12 @@
 # ate-setup vs. the install shell scripts
 
 `ate-setup` is a Go port of `hack/install-ate.sh`, the seven
-`hack/install-demo-*.sh` scripts it sourced, and `hack/setup-csi-*-kind.sh`.
+`hack/install-demo-*.sh` scripts it sourced, `hack/setup-csi-*-kind.sh`, and
+`hack/install-microvm-deps.sh`.
 
-The port has replaced them. The demo scripts are deleted, and
-`hack/install-ate.sh` is a shim holding no install logic of its own: it
-translates the flags and environment variables the installer has always
-accepted onto `ate-setup` commands, so existing command lines keep working. See
-[`commands.md`](commands.md) for the flag-by-flag mapping.
+The port has replaced them. The demo, CSI, and microVM asset scripts are
+deleted, and `hack/install-ate.sh` forwards its arguments directly to
+`ate-setup`. See [`commands.md`](commands.md) for the historical flag mapping.
 
 This document covers what changed *behind* that mapping: the design decisions
 of the port, against the shell it replaced. For what a user of
@@ -85,15 +84,22 @@ Still required, and why:
 | `ko` | building and publishing images (`ko resolve` only); not used with `--image-repo` |
 | `go` | locating the pinned `ko` tool, exactly as `hack/run-tool.sh` does; not used with `--image-repo` |
 | `git` | the `git describe` version stamp passed to ko; not used with `--image-repo` |
-| `docker` | the kind CSI setup (`docker exec` into the node) and the claude-code-multiplex workload build |
-| `gcloud` | GKE `get-credentials`, only when `PROJECT_ID` is set and no context was given |
+| `docker` | the kind CSI setup (`docker exec` into the node), staging microVM assets into Kind's `rustfs`, and the claude-code-multiplex workload build |
+| `gcloud` | GKE `get-credentials` (when `PROJECT_ID` is set and no context was given) and `gcloud storage` when staging microVM assets on GKE |
 | `bash` | sourcing `.ate-dev-env.sh` |
 
-Two shell scripts are still invoked rather than reimplemented, because they
-orchestrate image builds, asset assembly, and object-store staging that are out
-of scope for an installer: `benchmarking/deploy_locust.sh` and
-`hack/install-microvm-deps.sh`. They receive `Config.ScriptEnv()`, which
-reconstructs the environment the shell installer would have exported to them.
+One shell script is still invoked rather than reimplemented, because it
+orchestrates benchmark image builds and Locust stack deployment:
+`benchmarking/deploy_locust.sh`. It receives `Config.ScriptEnv()`, which
+reconstructs the environment the shell installer would have exported to it, and
+is fronted by `deploy`/`delete benchmarks`.
+
+The microVM asset assembly (`kata-static` `.tar.zst` extraction and
+`cloud-hypervisor` download), object-store staging (`rustfs` on Kind,
+`<BUCKET_NAME>-assets` on GKE), and `microvm` `SandboxConfig` lifecycle now run
+in Go as part of `deploy ate-system` (and `deploy sandboxconfig`), with
+`delete ate-system` removing the `microvm` `SandboxConfig` alongside the rest
+of the control plane.
 
 `ko` is no longer asked to apply anything. The scripts ran `run_ko apply`, which
 made ko shell out to kubectl and forced the awkward `-- --context=` special case

@@ -18,8 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -37,7 +35,6 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
-	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
 )
@@ -188,92 +185,6 @@ func TestReleaseSandboxConfigs(t *testing.T) {
 			}
 			if tt.res.updates != tt.wantUpdates {
 				t.Errorf("updates = %d, want %d", tt.res.updates, tt.wantUpdates)
-			}
-		})
-	}
-}
-
-// recordingDeleter is a Deleter that appends its name to a log file shared
-// with the fake microvm script, so a test can read back the order of calls.
-type recordingDeleter struct {
-	name string
-	log  string
-	err  error
-}
-
-func (d recordingDeleter) Delete(context.Context, *Env) error {
-	appendLine(d.log, d.name)
-	return d.err
-}
-
-func appendLine(path, line string) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-	fmt.Fprintln(f, line)
-}
-
-func TestDeleteDemos(t *testing.T) {
-	demoErr := errors.New("demo failed")
-	tests := []struct {
-		name string
-		// demos are the deleters in order. A nil entry's err is nil.
-		demos []recordingDeleter
-		// scriptExit is the exit code of the fake install-microvm-deps.sh.
-		scriptExit int
-		wantCalls  []string
-		wantErr    error
-	}{
-		{
-			name:      "microvm SandboxConfig is deleted after every demo",
-			demos:     []recordingDeleter{{name: "demo-a"}, {name: "demo-b"}},
-			wantCalls: []string{"demo-a", "demo-b", "script --delete"},
-		},
-		{
-			name:       "script failure is logged, not returned",
-			demos:      []recordingDeleter{{name: "demo-a"}},
-			scriptExit: 1,
-			wantCalls:  []string{"demo-a", "script --delete"},
-		},
-		{
-			name:      "a failing demo stops before the script",
-			demos:     []recordingDeleter{{name: "demo-a", err: demoErr}, {name: "demo-b"}},
-			wantCalls: []string{"demo-a"},
-			wantErr:   demoErr,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			calls := filepath.Join(root, "calls.log")
-			script := filepath.Join(root, installMicrovmDepScript)
-			if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			body := fmt.Sprintf("#!/bin/sh\necho \"script $*\" >> %q\nexit %d\n", calls, tt.scriptExit)
-			if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			demos := make([]Deleter, 0, len(tt.demos))
-			for _, d := range tt.demos {
-				d.log = calls
-				demos = append(demos, d)
-			}
-			e := &Env{Cfg: &config.Config{Root: root}}
-
-			err := e.deleteDemos(t.Context(), demos)
-			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("deleteDemos() error = %v, want %v", err, tt.wantErr)
-			}
-			got, _ := os.ReadFile(calls)
-			gotCalls := strings.Fields(strings.ReplaceAll(strings.TrimSpace(string(got)), "script --delete", "script_--delete"))
-			for i := range gotCalls {
-				gotCalls[i] = strings.ReplaceAll(gotCalls[i], "script_--delete", "script --delete")
-			}
-			if !slices.Equal(gotCalls, tt.wantCalls) {
-				t.Errorf("calls = %q, want %q", gotCalls, tt.wantCalls)
 			}
 		})
 	}

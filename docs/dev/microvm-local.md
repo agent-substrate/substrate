@@ -13,8 +13,28 @@ Complete the
 [Quickstart (Development)](../../README.md#quickstart-development) in the
 README first — it covers the base tooling and the default (gVisor) path this
 guide builds on. For background on the runtime, see
-[architecture.md](../architecture.md) and
-[hack/microvm-assets/README.md](../../hack/microvm-assets/README.md).
+[architecture.md](../architecture.md).
+
+The `microvm` runtime (`cmd/ateworker-microvm`) fetches its guest toolchain at
+runtime rather than baking Kata into the worker image. Each actor container's
+rootfs is an overlay of a read-only lower (the OCI image, served into the guest
+over virtio-fs by `virtiofsd`) and a writable upper on a guest tmpfs, so the
+asset set is four files per architecture (`amd64` and `arm64`):
+
+- `cloud-hypervisor` — the VMM binary (from its release)
+- `virtiofsd` — the virtio-fs daemon serving the read-only lower (from `kata-static`)
+- `vmlinux` — the guest kernel (from `kata-static`)
+- `rootfs.img` — the guest rootfs image (from `kata-static`)
+
+`go run ./cmd/ate-setup deploy ate-system` (and `deploy sandboxconfig`)
+assembles both architectures into `bin/microvm-assets/v1/{amd64,arm64}/`, verifies
+their SHA-256 digests against `manifests/ate-install/sandboxconfig-microvm.yaml.tmpl`,
+stages them into the cluster's object store under `microvm-assets/<version>/<arch>/`
+(the shared `rustfs` bucket on kind, and `<BUCKET_NAME>-assets` on GKE, the only
+bucket `setup-gcp` lets nodes read), and applies the cluster-wide `microvm`
+`SandboxConfig`. Assets must not be stored under a snapshot location (an
+ActorTemplate's `snapshotConfig.location` followed by `/atespaces/`), as the
+node's object-store plugin refuses to serve anything there as an asset.
 
 ## Option A: Linux host with KVM
 
@@ -56,12 +76,11 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.c
 ./hack/run-microvm-demo-kind.sh
 ```
 
-This is a one-shot bring-up: it deploys the control plane, installs the
-cluster-wide microVM deps via `hack/install-microvm-deps.sh` — assembling the
-guest runtime assets for your architecture (skipped if already present under
-`bin/microvm-assets/`), staging them into the in-cluster rustfs bucket, and
-applying the `microvm` `SandboxConfig` — then deploys the demo worker pool +
-template.
+This is a one-shot bring-up: it deploys the control plane (which assembles the
+guest runtime assets for `amd64` and `arm64` if not already present under
+`bin/microvm-assets/`, stages them into the in-cluster rustfs bucket, and
+applies the cluster-wide `microvm` `SandboxConfig`), then deploys the demo
+worker pool + template.
 
 ### 4. Verify
 
@@ -147,23 +166,7 @@ limactl stop docker-nested
 limactl start docker-nested
 ```
 
-### 3. Assemble the arm64 assets inside the Lima VM
-
-Assemble the arm64 assets in the guest because macOS does not ship `zstd` by default:
-
-```sh
-limactl shell docker-nested
-
-cd <your substrate checkout>    # visible via the writable home mount
-./hack/microvm-assets/assemble.sh
-exit
-```
-
-The script downloads about 590 MB and takes a minute or two, leaving ~285 MB in
-`bin/microvm-assets/arm64/`. That directory is shared with the host through the
-home mount — the demo script will find the assets there and skip re-assembling.
-
-### 4. Point the Docker CLI at Lima and bring everything up (on macOS)
+### 3. Point the Docker CLI at Lima and bring everything up (on macOS)
 
 ```sh
 export DOCKER_HOST="unix://${HOME}/.lima/docker-nested/sock/docker.sock"
@@ -174,6 +177,10 @@ cd <your substrate checkout>
 ./hack/create-kind-cluster.sh
 ./hack/run-microvm-demo-kind.sh
 ```
+
+The first run of `run-microvm-demo-kind.sh` downloads the guest runtime
+releases and extracts them into `bin/microvm-assets/v1/{amd64,arm64}/`; later
+runs reuse those directories when the version stamps and SHA-256 digests match.
 
 Verify as in Option A, step 4.
 

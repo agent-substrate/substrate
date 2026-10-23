@@ -19,15 +19,13 @@
 # and calls this script), mirroring install-ate.sh / install-ate-kind.sh.
 #
 # Composes:
-#   1. hack/install-ate.sh --deploy-ate-system  (control plane)
-#   2. hack/install-microvm-deps.sh --install   (asset build/stage + cluster-wide
-#                                                microvm SandboxConfig)
-#   3. Deploy the counter-microvm demo (worker pool manifest, atespace, and
-#      ActorTemplate through the ate API).
+#   1. hack/install-ate.sh deploy ate-system            (control plane + microVM assets and SandboxConfig)
+#   2. hack/install-ate.sh deploy demo counter-microvm  (worker pool manifest, atespace, and
+#                                                        ActorTemplate through the ate API)
 #
 # Like the other hack scripts, this sources .ate-dev-env.sh for the cluster /
 # registry / bucket settings unless NO_DEV_ENV is set. The control plane deploy
-# requires a credential provider selection, which reaches it only through the
+# requires a credential provider selection, which reaches it through the
 # environment here: export ATE_CREDENTIAL_PROVIDER (e.g. '{"name":"k8s.io"}';
 # see hack/install-ate.sh --help) before running this, the kind wrapper
 # included.
@@ -35,12 +33,10 @@
 # Env (most come from .ate-dev-env.sh):
 #   KO_DOCKER_REPO   (required) image registry, e.g. gcr.io/PROJECT/ate-images for
 #                    GKE or localhost:5001 for kind.
-#   BUCKET_NAME      object store bucket for snapshots (default: ate-snapshots). On
-#                    GKE the assets go to BUCKET_NAME-assets, see install-microvm-deps.sh.
+#   BUCKET_NAME      object store bucket for snapshots (default: ate-snapshots on kind;
+#                    required on GKE, where ate-setup stages assets to BUCKET_NAME-assets).
 #   KUBECTL_CONTEXT  (optional) kube context; threaded into install + ko apply + kubectl.
 #   PROJECT_ID       (optional) GCP project for the GCS asset upload (GKE path).
-#   ARCH             target arch (default: from KO_DEFAULTPLATFORMS, else host arch).
-#   OUT              asset dir (default: $PWD/bin/microvm-assets/$ARCH, gitignored).
 #   ATE_INSTALL_KIND "true" for the kind path (stage assets to rustfs + install-ate-kind.sh);
 #                    default false uploads assets to GCS + uses install-ate.sh.
 
@@ -58,7 +54,6 @@ fi
 # --- env / defaults ---------------------------------------------------------
 KO_DOCKER_REPO="${KO_DOCKER_REPO:-}"
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-}"
-BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
 ATE_INSTALL_KIND="${ATE_INSTALL_KIND:-false}"
 if [[ $# -gt 0 ]]; then
   echo "Error: unknown argument $1" >&2
@@ -79,23 +74,17 @@ log() {
   echo -e "${COLOR_CYAN}[run-microvm-demo]: $*${COLOR_RESET}"
 }
 
-# --- 1. deploy the control plane -------------------------------------------
+# --- 1. deploy the control plane (includes microVM assets + SandboxConfig) -
 log "Deploying the ate control plane (deploy ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
-  # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
+  # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ATE_INSTALL_KIND itself.
   KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh deploy ate-system
 else
   # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
   KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh deploy ate-system
 fi
 
-# --- 2. install micro-VM deps (assets + cluster-wide SandboxConfig) --------
-# install-microvm-deps.sh handles the assemble/stage/apply flow. Ordering
-# matters: the control plane must be up so the SandboxConfig CRD exists.
-log "Installing micro-VM dependencies..."
-KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-microvm-deps.sh --install
-
-# --- 3. apply the demo ------------------------------------------------------
+# --- 2. apply the demo ------------------------------------------------------
 KCTX_FLAG=""
 if [[ -n "${KUBECTL_CONTEXT}" ]]; then
   KCTX_FLAG=" --context=${KUBECTL_CONTEXT}"
@@ -104,7 +93,7 @@ fi
 # The demo handler applies the worker pool, creates the atespace and the
 # ActorTemplate through the ate API, and waits for the golden snapshot;
 # dispatch through install-ate.sh like step 1.
-log "Deploying the counter-microvm demo (--deploy-demo-counter-microvm)..."
+log "Deploying the counter-microvm demo (deploy demo counter-microvm)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh deploy demo counter-microvm
 else

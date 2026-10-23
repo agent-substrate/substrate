@@ -20,17 +20,17 @@ the router capacity benchmark — see
    and/or `${KO_DOCKER_REPO}/nighthawk-ingress-test:<commit>`.
 5. `hack/install-ate.sh deploy ate-system` (with `ATE_CREDENTIAL_PROVIDER`
    in `.ate-dev-env.sh`, or `--credential-provider` in the test's
-   `ateArgs`) + `benchmarking/workloads/deploy.sh
+   `ateArgs`; passes `--skip-microvm-deps` unless `sandboxClass` is `microvm`,
+   in which case `deploy ate-system` also stages the microVM guest assets to
+   `<BUCKET_NAME>-assets` and applies the cluster-wide `microvm`
+   `SandboxConfig`) + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
    images via `ko` as part of their deploy steps — there's no separate
    image build step). The install sets `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` to
    the `ate-client` and `benchmarking/benchmark-runner` ServiceAccounts so the
    runner's calls pass [authorization](../../docs/authorization.md), and sets
    `ATE_INGRESS_ALLOWED_SPIFFE_IDS` to `benchmarking/benchmark-runner` for the
-   Envoy ingress router. For a `microvm` test the orchestrator also
-   runs `hack/install-microvm-deps.sh --install` between the two, which
-   stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
-   store bucket and applies the cluster-wide `microvm` SandboxConfig.
+   Envoy ingress router.
    For a `nighthawk-ingress` test the orchestrator additionally patches the
    `atenet-router` Deployment right after `deploy_substrate`: `envoyCpu`
    is the benchmark's independent variable and the shipped manifest sets
@@ -47,7 +47,7 @@ the router capacity benchmark — see
      variable (a JSON object) if set. A `--metadata` in the test's own
      `flags` is merged in too, its keys winning on conflict.
    - Polls until complete/failed/timeout; tails logs; deletes the Job.
-   - Tears down workloads + microVM deps (if any) + substrate.
+   - Tears down workloads + substrate.
    - If not the last test, redeploys them so the next run starts clean.
 
 ## Choosing a sandbox class
