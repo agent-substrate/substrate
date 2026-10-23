@@ -463,9 +463,10 @@ func TestPlugin_StagingDirStaysBelowPrefix(t *testing.T) {
 			if gotErr := err != nil; gotErr != tc.wantErr {
 				t.Fatalf("MountVolume() error = %v, wantErr %v", err, tc.wantErr)
 			}
-			err = plugin.UnmountVolume(ctx, tc.volumeID, filepath.Join(root, "target"))
-			if gotErr := err != nil; gotErr != tc.wantErr {
-				t.Fatalf("UnmountVolume() error = %v, wantErr %v", err, tc.wantErr)
+			// Nothing was staged for a rejected ID, so unmounting it must still
+			// succeed or the actor could never be terminated.
+			if err := plugin.UnmountVolume(ctx, tc.volumeID, filepath.Join(root, "target")); err != nil {
+				t.Fatalf("UnmountVolume() error = %v", err)
 			}
 
 			wantCalls := 1
