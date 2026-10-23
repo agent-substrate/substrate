@@ -30,6 +30,10 @@ var deployCmd = &cobra.Command{
 // deployAteSystemPath is the command path the ate-system settings bind to.
 const deployAteSystemPath = "deploy ate-system"
 
+// componentFlag names the repeatable flag that adds kustomize Components to
+// the deploy commands that render manifests.
+const componentFlag = "component"
+
 // deployOptions reads the settings deploy ate-system owns.
 //
 // It validates here rather than through steps.DeployOptions.Validate because
@@ -181,4 +185,21 @@ func init() {
 	})
 	config.BindCommandFlags(deployAteSystemPath, deployAteSystemCmd.Flags())
 	deployAteSystemCmd.Flags().Lookup("setup-csi").NoOptDefVal = "none"
+
+	// sandboxconfig applies its manifests as they are, so it takes no
+	// Components. The flag is outside the settings registry, which has no
+	// list kind, so the install record does not carry it.
+	for _, c := range []*cobra.Command{
+		deployAteSystemCmd,
+		deployAteletCmd,
+		deployAPIServerCmd,
+		deployControllerCmd,
+		deployAtenetCmd,
+		deployPodCertControllerCmd,
+		deployPostgresCmd,
+	} {
+		c.Flags().StringArray(componentFlag, nil,
+			"Directory of a kustomize Component to layer over the rendered manifests (alpha). "+
+				"Repeatable; later Components win on conflicting patches. Not applied to CRDs")
+	}
 }

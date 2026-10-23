@@ -17,6 +17,7 @@ package kustomize
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -153,5 +154,60 @@ func TestComposeReportsMissingComponent(t *testing.T) {
 
 	if _, err := Compose(deployment, filepath.Join(t.TempDir(), "absent")); err == nil {
 		t.Error("Compose() = nil error for a missing component, want one")
+	}
+}
+
+func TestComponentDirs(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"component/kustomization.yaml":     testComponent,
+		"kustomization/kustomization.yaml": "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n",
+		"invalid/kustomization.yaml":       "kind: [\n",
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	for _, tc := range []struct {
+		name  string
+		dirs  []string
+		want  []string
+		error string
+	}{
+		{name: "none"},
+		{
+			name: "relative paths become absolute, in order",
+			dirs: []string{"component", filepath.Join(root, "component")},
+			want: []string{filepath.Join(root, "component"), filepath.Join(root, "component")},
+		},
+		{name: "not a component", dirs: []string{"component", "kustomization"}, error: `kind "Kustomization", want Component`},
+		{name: "no kustomization.yaml", dirs: []string{"empty"}, error: "no such file"},
+		{name: "missing directory", dirs: []string{"absent"}, error: "no such file"},
+		{name: "invalid YAML", dirs: []string{"invalid"}, error: "while parsing kustomization.yaml"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ComponentDirs(tc.dirs)
+			if tc.error != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.error) {
+					t.Fatalf("ComponentDirs(%q) error = %v, want one containing %q", tc.dirs, err, tc.error)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ComponentDirs(%q): %v", tc.dirs, err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("ComponentDirs(%q) = %q, want %q", tc.dirs, got, tc.want)
+			}
+		})
 	}
 }
