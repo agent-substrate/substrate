@@ -54,6 +54,7 @@ const counterExtraPort = 9090
 // established tunnel and inspect *that* response, which is where actor
 // resolution and atunnel's dial to the actor's pod actually happen.
 func TestActorArbitraryPortAccess(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "arbitraryport", e2e.SubstrateCounterFixture())
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}

@@ -78,6 +78,7 @@ func connectProxySpec(port, tlsPort int) e2e.ServerPod {
 // conventional proxy port and one that is neither 80 nor 443, so the refusal
 // is shown not to depend on the port the actor dialed.
 func TestActorEgressConnect(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	_, proxy, _ := prepareProtocolOrigin(t, ctx, connectProxySpec(3128, 0), false)
 	_, router, actorRef := prepareProtocolActor(t, ctx, "connect")
@@ -95,6 +96,7 @@ func TestActorEgressConnect(t *testing.T) {
 // TLS under the actor's https rule, so the CONNECT is read and refused on the
 // decrypted leg, and the actor sees the 403 over a connection it verified.
 func TestActorEgressSecureConnect(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	_, proxy, _ := prepareProtocolOrigin(t, ctx, connectProxySpec(80, 443), true)
 	_, router, actorRef := prepareProtocolActor(t, ctx, "connect-tls")
