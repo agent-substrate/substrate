@@ -1,0 +1,151 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Upgrades a cluster running a release to this checkout, with actors on it,
+# following docs/upgrade.md, and checks that every actor survives (see
+# internal/e2e/upgrade). Two installs on one kind cluster take too long for
+# every PR, so this runs for every push to a release branch, before a patch
+# release is tagged from it, plus on demand for any branch.
+name: upgrade-e2e
+on:
+  push:
+    branches: ['release-[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      from:
+        description: 'Tag or commit to upgrade from. Required except on a release branch, which defaults to its newest earlier release'
+        required: false
+        default: ''
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    name: Upgrade e2e (gVisor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # Where the previous release's ate-setup writes its install record.
+      ATE_RECORD_DIR: ${{ github.workspace }}/ate-records
+      # deploy ate-system requires a credential provider selection. The
+      # record keeps it for the upgrade.
+      ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
+      ARTIFACTS: ${{ github.workspace }}/_artifacts
+    steps:
+    - name: Checkout the release under test
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        path: new
+        # Full history brings the release tags the next step picks from.
+        fetch-depth: 0
+    - name: Pick the release to upgrade from
+      id: from
+      working-directory: new
+      env:
+        FROM: ${{ inputs.from }}
+        TO: ${{ github.ref_name }}
+        EVENT: ${{ github.event_name }}
+      run: |
+        if [[ -z "${FROM}" && "${TO}" =~ ^release-[0-9]+\.[0-9]+$ ]]; then
+          # The newest earlier release of the branch's minor (release-0.4:
+          # v0.4.*): a release branch only takes patch releases. Release tags,
+          # newest first; versionsort.suffix sorts a pre-release (v0.2.0-rc1)
+          # below its release.
+          FROM="$(git -c versionsort.suffix=- tag -l 'v*' --merged HEAD --no-contains HEAD --sort=-v:refname \
+            | awk -v minor="v${TO#release-}." 'index($0, minor) == 1 {print; exit}')"
+        fi
+        if [[ -z "${FROM}" ]]; then
+          if [[ "${EVENT}" == workflow_dispatch ]]; then
+            echo "::error::Nothing to upgrade ${TO} from: set the from input."
+            exit 1
+          fi
+          echo "::notice::No earlier release on ${TO} to upgrade from yet."
+          echo "tag=" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        echo "Upgrading ${FROM} -> ${TO}"
+        echo "tag=${FROM}" >> "${GITHUB_OUTPUT}"
+    - name: Checkout ${{ steps.from.outputs.tag }}
+      if: steps.from.outputs.tag != ''
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        ref: ${{ steps.from.outputs.tag }}
+        path: old
+    - name: Setup Go
+      if: steps.from.outputs.tag != ''
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: new/go.mod
+        cache-dependency-path: |
+          new/go.sum
+          old/go.sum
+    - name: Create cluster
+      if: steps.from.outputs.tag != ''
+      working-directory: new
+      run: hack/create-kind-cluster.sh
+    - name: Install ${{ steps.from.outputs.tag }}
+      if: steps.from.outputs.tag != ''
+      # The old release's own installer, so the cluster starts out exactly as
+      # that release left it. The suite's actors run on the counter demo.
+      working-directory: old
+      run: |
+        go run ./cmd/ate-setup --kind deploy ate-system
+        go run ./cmd/ate-setup --kind deploy demo counter
+    - name: Upgrade to ${{ github.ref_name }}
+      if: steps.from.outputs.tag != ''
+      # The suite performs the upgrade with this checkout's ate-setup, in the
+      # runbook's order and from a copy of the install record, and checks the
+      # actors after every step.
+      working-directory: new
+      env:
+        E2E_ATE_SETUP_CONFIG: ${{ github.workspace }}/new.yaml
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-upgrade.xml
+      # The previous release is installed with no preview gates, and CI has to
+      # say so.
+      run: |
+        cp "${ATE_RECORD_DIR}"/installs/*.yaml "${E2E_ATE_SETUP_CONFIG}"
+        hack/run-e2e-kind.sh ./internal/e2e/upgrade -timeout 60m -v -args --no-color --preview=""
+    # A suite that stops matching would otherwise leave the run green and empty.
+    - name: Require the suite to have run tests
+      if: always() && steps.from.outputs.tag != ''
+      working-directory: new
+      run: go -C tools/junittool run . verify -manifest "${ARTIFACTS}/expected-junit.txt"
+    - name: Upload test results
+      if: always() && steps.from.outputs.tag != ''
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: test-results-upgrade-e2e
+        # The install records carry no secrets.
+        path: |
+          ${{ env.ARTIFACTS }}
+          ${{ env.ATE_RECORD_DIR }}
+        if-no-files-found: error
+    - name: Dump diagnostics on failure
+      if: failure() && steps.from.outputs.tag != ''
+      run: |
+        kubectl --context kind-kind get workerpool,pods -A -o wide || true
+        kubectl --context kind-kind get ds,deploy -n ate-system -o wide || true
+        dump() {
+          echo "=== logs: $1/$2 ==="
+          kubectl --context kind-kind logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true
+        }
+        for ns in ate-system podcertificate-controller-system; do
+          for p in $(kubectl --context kind-kind get pods -n "${ns}" -o name 2>/dev/null); do
+            dump "${ns}" "$p"
+          done
+        done
+        # The actors' worker pods are in the counter demo's pool; their worker
+        # logs say what happened to each actor.
+        kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
+          -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
+          | while read -r ns name; do dump "$ns" "$name"; done

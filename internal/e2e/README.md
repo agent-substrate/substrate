@@ -8,7 +8,9 @@ $ go test -v ./internal/e2e/suites/... -args --e2e
 ## Principles
 
 * Keep it simple -- use go test for the harness.
-* e2e tests live under `internal/e2e/suites/<suite>`
+* e2e tests live under `internal/e2e/suites/<suite>`. The upgrade suite lives in
+  `internal/e2e/upgrade` instead, so the default run leaves it out: it upgrades
+  the cluster it runs on. `.github/workflows/upgrade-e2e.yaml` runs it.
 * Each suite should implement TestMain using e2e.RunTestMain()
   * e2e tests will be skipped for ordinary unit tests unless the `--e2e` flag
     is set e.g. `go test ./internal/e2e/suites/... -args --e2e`
@@ -54,7 +56,9 @@ installs the fixtures elsewhere: `E2E_SUBSTRATE_TEMPLATE_ATESPACE` /
 `E2E_SUBSTRATE_POOL_NAME` point the counter fixture somewhere else, and
 `E2E_TEMPLATE_READY_TIMEOUT` replaces the golden-snapshot budget (90s on
 gVisor, 10m on micro-VM, where the golden is a cloud-hypervisor cold boot plus
-a checkpoint).
+a checkpoint). The upgrade suite runs `ate-setup` with `--config
+$E2E_ATE_SETUP_CONFIG` when it is set, and otherwise with `--kind`, which
+`E2E_ATE_SETUP_FLAGS` replaces.
 
 ## Settings
 
