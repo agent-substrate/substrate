@@ -115,6 +115,21 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 		}
 	})
 
+	t.Run("certificate for another host is rejected", func(t *testing.T) {
+		opts, err := DialOptions(ClientConfig{
+			K8sClient:        fake.NewSimpleClientset(),
+			CAFile:           caFile,
+			ServerName:       "not-the-api.invalid",
+			ClientCredBundle: clientBundle,
+		})
+		if err != nil {
+			t.Fatalf("DialOptions() error = %v", err)
+		}
+		if code := healthCheckCode(ctx, t, lis.Addr().String(), opts); code == codes.OK {
+			t.Fatalf("health check code = %v, want handshake failure", code)
+		}
+	})
+
 	t.Run("without client cert is rejected", func(t *testing.T) {
 		opts := []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 			RootCAs:    caPool,
