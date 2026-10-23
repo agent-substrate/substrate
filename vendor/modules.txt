@@ -1064,6 +1064,58 @@ github.com/testcontainers/testcontainers-go/wait
 # github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
 ## explicit; go 1.25.0
 github.com/testcontainers/testcontainers-go/modules/postgres
+# github.com/tink-crypto/tink-go/v2 v2.9.0
+## explicit; go 1.25.0
+github.com/tink-crypto/tink-go/v2/aead
+github.com/tink-crypto/tink-go/v2/aead/aesctrhmac
+github.com/tink-crypto/tink-go/v2/aead/aesgcm
+github.com/tink-crypto/tink-go/v2/aead/aesgcmsiv
+github.com/tink-crypto/tink-go/v2/aead/chacha20poly1305
+github.com/tink-crypto/tink-go/v2/aead/xaesgcm
+github.com/tink-crypto/tink-go/v2/aead/xchacha20poly1305
+github.com/tink-crypto/tink-go/v2/core/cryptofmt
+github.com/tink-crypto/tink-go/v2/core/registry
+github.com/tink-crypto/tink-go/v2/insecurecleartextkeyset
+github.com/tink-crypto/tink-go/v2/insecuresecretdataaccess
+github.com/tink-crypto/tink-go/v2/internal
+github.com/tink-crypto/tink-go/v2/internal/aead
+github.com/tink-crypto/tink-go/v2/internal/config
+github.com/tink-crypto/tink-go/v2/internal/factoryutil
+github.com/tink-crypto/tink-go/v2/internal/internalapi
+github.com/tink-crypto/tink-go/v2/internal/internalregistry
+github.com/tink-crypto/tink-go/v2/internal/keygenregistry
+github.com/tink-crypto/tink-go/v2/internal/legacykeymanager
+github.com/tink-crypto/tink-go/v2/internal/mac/aescmac
+github.com/tink-crypto/tink-go/v2/internal/mac/hmac
+github.com/tink-crypto/tink-go/v2/internal/monitoringutil
+github.com/tink-crypto/tink-go/v2/internal/outputprefix
+github.com/tink-crypto/tink-go/v2/internal/prefixmap
+github.com/tink-crypto/tink-go/v2/internal/primitiveregistry
+github.com/tink-crypto/tink-go/v2/internal/protoserialization
+github.com/tink-crypto/tink-go/v2/internal/random
+github.com/tink-crypto/tink-go/v2/internal/registryconfig
+github.com/tink-crypto/tink-go/v2/internal/registryconfig/legacyprimitive
+github.com/tink-crypto/tink-go/v2/internal/syncmap
+github.com/tink-crypto/tink-go/v2/internal/tinkerror
+github.com/tink-crypto/tink-go/v2/key
+github.com/tink-crypto/tink-go/v2/keyset
+github.com/tink-crypto/tink-go/v2/monitoring
+github.com/tink-crypto/tink-go/v2/prf/subtle
+github.com/tink-crypto/tink-go/v2/proto/aes_ctr_go_proto
+github.com/tink-crypto/tink-go/v2/proto/aes_ctr_hmac_aead_go_proto
+github.com/tink-crypto/tink-go/v2/proto/aes_gcm_go_proto
+github.com/tink-crypto/tink-go/v2/proto/aes_gcm_siv_go_proto
+github.com/tink-crypto/tink-go/v2/proto/chacha20_poly1305_go_proto
+github.com/tink-crypto/tink-go/v2/proto/common_go_proto
+github.com/tink-crypto/tink-go/v2/proto/hmac_go_proto
+github.com/tink-crypto/tink-go/v2/proto/kms_envelope_go_proto
+github.com/tink-crypto/tink-go/v2/proto/tink_go_proto
+github.com/tink-crypto/tink-go/v2/proto/x_aes_gcm_go_proto
+github.com/tink-crypto/tink-go/v2/proto/xchacha20_poly1305_go_proto
+github.com/tink-crypto/tink-go/v2/secretdata
+github.com/tink-crypto/tink-go/v2/subtle
+github.com/tink-crypto/tink-go/v2/subtle/random
+github.com/tink-crypto/tink-go/v2/tink
 # github.com/tklauser/go-sysconf v0.4.0
 ## explicit; go 1.25.0
 github.com/tklauser/go-sysconf
@@ -1290,7 +1342,6 @@ golang.org/x/net/websocket
 golang.org/x/oauth2
 golang.org/x/oauth2/authhandler
 golang.org/x/oauth2/google
-golang.org/x/oauth2/google/downscope
 golang.org/x/oauth2/google/externalaccount
 golang.org/x/oauth2/google/internal/externalaccountauthorizeduser
 golang.org/x/oauth2/google/internal/impersonate

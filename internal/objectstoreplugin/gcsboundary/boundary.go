@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"strings"
 
-	"golang.org/x/oauth2/google/downscope"
-
 	"go.ate.dev/substrate/internal/objectstore"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
 	"go.ate.dev/substrate/internal/resources"
@@ -33,16 +31,32 @@ const (
 	// objectAdmin, not objectCreator: an upload overwrites on retry and deletes
 	// parts after a compose.
 	roleObjectAdmin = "inRole:roles/storage.objectAdmin"
+	// maxRules is the most rules GCS accepts in one boundary.
+	maxRules = 10
+	// maxLiteral is the longest string literal in a condition that GCS
+	// accepts, in bytes. GCS refuses a token whose boundary holds a longer one
+	// with a 401 that does not say why. The limit is measured, not documented.
+	maxLiteral = 512
 )
+
+// Rule is one Credential Access Boundary rule: permissions on a bucket, limited
+// to the objects a CEL condition matches.
+type Rule struct {
+	Resource    string
+	Permissions []string
+	Condition   string
+}
 
 // FromGrants builds the rules. Each grant's prefix must be a gs:// prefix. The
 // condition's path ends in "/", so a match cannot spill into a sibling whose
 // name merely starts the same way. No objectListPrefix term is added: the node
-// plugin never lists objects. downscope.NewTokenSource enforces the rule
-// count, between one and ten, see
+// plugin never lists objects. A boundary takes one to ten rules, see
 // https://docs.cloud.google.com/iam/docs/downscoping-short-lived-credentials.
-func FromGrants(grants []actorscope.Grant) ([]downscope.AccessBoundaryRule, error) {
-	var rules []downscope.AccessBoundaryRule
+func FromGrants(grants []actorscope.Grant) ([]Rule, error) {
+	if len(grants) == 0 || len(grants) > maxRules {
+		return nil, fmt.Errorf("an access boundary takes 1 to %d rules, got %d", maxRules, len(grants))
+	}
+	var rules []Rule
 	for _, g := range grants {
 		bucket, path, err := splitGCS(g.Prefix)
 		if err != nil {
@@ -57,12 +71,14 @@ func FromGrants(grants []actorscope.Grant) ([]downscope.AccessBoundaryRule, erro
 		default:
 			return nil, fmt.Errorf("grant on %s has unknown access %v", g.Prefix, g.Access)
 		}
-		rules = append(rules, downscope.AccessBoundaryRule{
-			AvailableResource:    "//storage.googleapis.com/projects/_/buckets/" + bucket,
-			AvailablePermissions: []string{role},
-			Condition: &downscope.AvailabilityCondition{
-				Expression: fmt.Sprintf("resource.name.startsWith('projects/_/buckets/%s/objects/%s')", celEscape(bucket), celEscape(path)),
-			},
+		literal := "projects/_/buckets/" + bucket + "/objects/" + path
+		if len(literal) > maxLiteral {
+			return nil, fmt.Errorf("the condition for %s is %d bytes, more than the %d GCS accepts", g.Prefix, len(literal), maxLiteral)
+		}
+		rules = append(rules, Rule{
+			Resource:    "//storage.googleapis.com/projects/_/buckets/" + bucket,
+			Permissions: []string{role},
+			Condition:   fmt.Sprintf("resource.name.startsWith('%s')", celEscape(literal)),
 		})
 	}
 	return rules, nil

@@ -57,8 +57,10 @@ This binary's, GCS and S3:
   that is the seam between its backends.
 - `internal/objectstoreplugin/gcsboundary`: grants to Credential Access Boundary
   rules.
-- `internal/objectstoreplugin/gcsissuer`: the GCS `Issuer`, STS exchange and
-  token cache.
+- `internal/objectstoreplugin/gcsissuer`: the GCS `Issuer`, one STS exchange
+  per source token, local minting and the token cache.
+- `internal/proto/clientsideboundarypb`: the Credential Access Boundary
+  `gcsissuer` encrypts into each token, in Google's format.
 - `internal/objectstoreplugin/exchangeclient`: the node side on GCS, the
   exchange call and the cache of tokens and storage clients per JWT. The
   `Credentials` interface in `internal/objectstoreplugin` is its seam.
