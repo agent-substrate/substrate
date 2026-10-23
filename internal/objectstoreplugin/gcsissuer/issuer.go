@@ -78,9 +78,11 @@ type Issuer struct {
 	// intermediaries maps a source token to its *intermediary until the
 	// intermediary expires.
 	intermediaries *cache.Expiring
-	// latest is the intermediary that expires last, minted with when an
-	// exchange fails.
+	// latest is the intermediary that expires last, minted with while a
+	// refreshed source token's exchange runs or after it fails.
 	latest atomic.Pointer[intermediary]
+	// failure holds the last failed exchange while new ones are paused.
+	failure atomic.Pointer[failure]
 }
 
 // entry is a cached token with the grants it was minted for, so a request can
@@ -148,14 +150,17 @@ func New(ctx context.Context, account string, opts ...Option) (*Issuer, error) {
 // sends after GCS refused a token. A forced mint still uses the stored
 // intermediary token: a new one for the same source token carries the same
 // permissions, and an STS call on every refusal would bring back the per-actor
-// calls this package avoids. A minted token expires no later than the
-// source token, and STS gives it the source token's remaining life. The source
-// token is fetched again once less than sourceRefreshMargin is left, so a
-// minted token starts with about that long at least. If that fetch fails, the
-// previous source token is used until it expires. A minted token with less than
-// minServeLifetime left, which only that leaves behind, is handed out anyway,
-// since a short token beats a failed transfer, but it is not cached. Minting
-// calls STS only when the source token has changed.
+// calls this package avoids.
+//
+// A minted token expires with the intermediary token it was minted from, which
+// expires no later than its source token. Normally a minted token starts with
+// at least minServeLifetime: the source token is fetched again once less than
+// sourceRefreshMargin is left, and mints keep using the previous intermediary
+// until the new one is exchanged. When fetching or exchanging the source token
+// keeps failing, mints use what is left, so a token can start with as little
+// as stsTimeout. A minted token with less than minServeLifetime left is handed
+// out anyway, since a short token beats a failed transfer, but it is not
+// cached.
 //
 // The cache is keyed by actor UID and each entry remembers its grants. Grants
 // narrow when the tag an actor was created from drops out after its first
@@ -165,7 +170,8 @@ func New(ctx context.Context, account string, opts ...Option) (*Issuer, error) {
 // nothing and a repoint never hands out a token GCS would refuse.
 //
 // A grant set the access boundary cannot express fails with codes.Internal.
-// Every other failure is a source, STS or network error and carries no code.
+// The caller's own context error is returned as it is. Every other failure is
+// a source token, STS, network or encryption failure and carries no code.
 func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (credential.Token, error) {
 	if len(grants) == 0 {
 		// Checked before the cache: an empty set is covered by any cached

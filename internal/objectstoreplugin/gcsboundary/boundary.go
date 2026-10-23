@@ -31,7 +31,7 @@ const (
 	// objectAdmin, not objectCreator: an upload overwrites on retry and deletes
 	// parts after a compose.
 	roleObjectAdmin = "inRole:roles/storage.objectAdmin"
-	// maxRules is the most rules STS accepts in one boundary.
+	// maxRules is the most rules GCS accepts in one boundary.
 	maxRules = 10
 )
 
