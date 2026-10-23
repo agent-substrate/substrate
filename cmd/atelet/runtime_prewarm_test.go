@@ -317,7 +317,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if err := os.MkdirAll(stale, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.syncPod(context.Background(), pod); err != nil {
+	if _, err := s.syncPod(context.Background(), pod); err != nil {
 		t.Fatalf("syncPod: %v", err)
 	}
 	wr, ok := s.index.worker("pod-a")
@@ -345,7 +345,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if err := os.WriteFile(marker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.syncPod(context.Background(), pod); err != nil {
+	if _, err := s.syncPod(context.Background(), pod); err != nil {
 		t.Fatalf("syncPod again: %v", err)
 	}
 	if got := rec.items(); len(got) != 2 || got[1] != want[0] {
@@ -371,7 +371,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if err := os.MkdirAll(previous, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.syncPod(context.Background(), pod); err == nil {
+	if _, err := s.syncPod(context.Background(), pod); err == nil {
 		t.Fatal("syncPod with the default's probe failing = nil, want an error")
 	}
 	if got := rec.items(); len(got) != 0 {

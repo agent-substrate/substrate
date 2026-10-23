@@ -44,6 +44,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	coreinformers "k8s.io/client-go/informers/core/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
@@ -463,6 +464,7 @@ func (s *workerSandboxSyncer) run(ctx context.Context, synced ...cache.InformerS
 // it is gone.
 func (s *workerSandboxSyncer) process(ctx context.Context, uid string) {
 	defer s.queue.Done(uid)
+	var related k8sruntime.Object
 	pod, err := s.podByUID(uid)
 	switch {
 	case err != nil:
@@ -471,9 +473,9 @@ func (s *workerSandboxSyncer) process(ctx context.Context, uid string) {
 	case pod.DeletionTimestamp != nil:
 		// The Delete event removes the directory.
 	default:
-		err = s.syncPod(ctx, pod)
+		related, err = s.syncPod(ctx, pod)
 	}
-	s.finish(ctx, pod, uid, err)
+	s.finish(ctx, pod, related, uid, err)
 }
 
 // podByUID returns the cached pod with the given UID, or nil if there is none.
@@ -498,46 +500,49 @@ func (s *workerSandboxSyncer) podByUID(uid string) (*corev1.Pod, error) {
 // emits a Warning Event on pod for every failure except an unresolved pool
 // still being retried. A sync that fails before it writes leaves the existing
 // file in place.
-func (s *workerSandboxSyncer) finish(ctx context.Context, pod *corev1.Pod, uid string, err error) {
+func (s *workerSandboxSyncer) finish(ctx context.Context, pod *corev1.Pod, related k8sruntime.Object, uid string, err error) {
 	switch {
 	case err == nil:
 		s.queue.Forget(uid)
 	case errors.Is(err, errPermanent):
 		slog.WarnContext(ctx, "Cannot sync worker sandbox runtimes; not retrying until the pool's SandboxConfig changes or atelet restarts", slog.String("pod_uid", uid), slog.Any("err", err))
-		s.recordSyncFailure(pod, err)
+		s.recordSyncFailure(pod, related, err)
 		s.queue.Forget(uid)
 	case ctx.Err() != nil:
 		// Shutting down, not a sync failure.
 	case errors.Is(err, errIncomplete):
 		slog.WarnContext(ctx, "Worker sandbox runtimes file is missing a restorable version; will retry",
 			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
-		s.recordSyncFailure(pod, err)
+		s.recordSyncFailure(pod, related, err)
 		s.queue.AddRateLimited(uid)
 	case s.queue.NumRequeues(uid) < syncMaxRetries || !errors.Is(err, errUnresolved):
 		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; will retry",
 			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
 		if !errors.Is(err, errUnresolved) {
-			s.recordSyncFailure(pod, err)
+			s.recordSyncFailure(pod, related, err)
 		}
 		s.queue.AddRateLimited(uid)
 	default:
 		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; giving up until the pool's SandboxConfig changes or atelet restarts",
 			slog.String("pod_uid", uid), slog.Int("retries", syncMaxRetries), slog.Any("err", err))
-		s.recordSyncFailure(pod, err)
+		s.recordSyncFailure(pod, related, err)
 		s.queue.Forget(uid)
 	}
 }
 
 // recordSyncFailure emits a Warning event on pod when a sync fails. The
-// broadcaster's correlator aggregates repeated events with the same reason and
-// action on a pod into one series, so retries (such as an errIncomplete loop
-// while a restorable version stays broken) update the series count instead of
-// creating a new Event on each attempt.
-func (s *workerSandboxSyncer) recordSyncFailure(pod *corev1.Pod, err error) {
+// broadcaster keys its series cache by (regarding, related, reason, action),
+// including related's ResourceVersion, so retries against the same
+// SandboxConfig (or WorkerPool) revision update the series count instead of
+// creating a new Event on each attempt, while an edit or config switch starts
+// a new Event with the updated error message. A message that changes while
+// related's ResourceVersion stays the same still joins the open series and
+// keeps the first attempt's Note.
+func (s *workerSandboxSyncer) recordSyncFailure(pod *corev1.Pod, related k8sruntime.Object, err error) {
 	if pod == nil {
 		return
 	}
-	s.recorder.Eventf(pod, nil, corev1.EventTypeWarning, eventReasonSandboxRuntimeSyncFailed, eventActionSyncSandboxRuntimes, "%s", truncateEventNote(err.Error()))
+	s.recorder.Eventf(pod, related, corev1.EventTypeWarning, eventReasonSandboxRuntimeSyncFailed, eventActionSyncSandboxRuntimes, "%s", truncateEventNote(err.Error()))
 }
 
 // truncateEventNote caps msg at maxEventNoteBytes on a UTF-8 rune boundary,
