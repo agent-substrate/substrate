@@ -56,7 +56,8 @@ const agentgatewayStaticMTLSComponent = installDir + "/components/agentgateway-s
 // components lists the kustomize components every control plane apply is
 // composed with. Each patch targets its workloads by name, and kustomize leaves
 // a stream alone when nothing in it matches, so composing a manifest that
-// carries none of them is harmless.
+// carries none of them is harmless. The --component directories come last, so
+// their patches win over the built-in ones.
 func (e *Env) components() []string {
 	var components []string
 	// e2e must come before fake-data-plane: e2e appends to atelet's args,
@@ -73,7 +74,7 @@ func (e *Env) components() []string {
 	if e.Cfg.CordonSystemInfraComponents {
 		components = append(components, e.Cfg.Path(cordonSystemInfraComponent))
 	}
-	return components
+	return append(components, e.Cfg.Components...)
 }
 
 // SystemOverlay picks the kustomization for a full control plane install.
@@ -587,9 +588,9 @@ func (e *Env) applyAtenetEgress(ctx context.Context, providers []config.Credenti
 //
 // Every control plane component pulls this ConfigMap in via envFrom. A full
 // install gets it as part of the rendered bundle, but the single-component
-// redeploys apply raw manifests with no kustomize, so they have to select the
-// right copy themselves: applying the base file on a kind cluster would
-// overwrite it with the GKE endpoint and break telemetry everywhere at once.
+// redeploys apply it on its own, so they have to select the right copy
+// themselves: applying the base file on a kind cluster would overwrite it with
+// the GKE endpoint and break telemetry everywhere at once.
 func (e *Env) otelConfigPath() string {
 	if e.Cfg.Kind {
 		return e.Cfg.Manifest("kind", "ate-otel-config.yaml")
@@ -597,9 +598,15 @@ func (e *Env) otelConfigPath() string {
 	return e.Cfg.Manifest("ate-otel-config.yaml")
 }
 
-// applyOtelConfig applies the environment's ate-otel-config ConfigMap.
+// applyOtelConfig renders and applies the environment's ate-otel-config
+// ConfigMap. It is rendered like the bundle that also carries it, so a
+// redeploy does not revert what the Components changed.
 func (e *Env) applyOtelConfig(ctx context.Context) error {
-	return e.Kube.ApplyPath(ctx, e.otelConfigPath())
+	manifest, err := e.render(e.otelConfigPath())
+	if err != nil {
+		return err
+	}
+	return e.Kube.ApplyBytes(ctx, manifest)
 }
 
 // otelConfigMap is the ConfigMap every control plane component reads its

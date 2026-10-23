@@ -123,6 +123,13 @@ Kind, `<BUCKET_NAME>-assets` on GKE). It creates every `create` resource below
 on the way, so those subcommands are only needed to redo one on a running
 cluster.
 
+Every deploy command except `deploy sandboxconfig` takes `--component DIR`,
+which is repeatable. Each directory holds a kustomize Component that ate-setup
+layers over the manifests it renders, after the built-in Components, in flag
+order. The flag is alpha and is not stored in install records. See
+[Adding kustomize Components](../../docs/guides/operator-install.md#adding-kustomize-components)
+for the fields a Component may use.
+
 ## Publish
 
 - `publish worker-images`

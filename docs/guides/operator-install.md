@@ -330,6 +330,56 @@ demos, the [benchmarks](benchmarking.md#settings), and the
 | `storage.snapshotLocation`                   | `SNAPSHOT_LOCATION`                             | `--snapshot-location`                              | —                     | (global)                                 |
 | `storage.transferGSAName`                    | `SNAPSHOT_TRANSFER_GSA_NAME`                    | `--snapshot-transfer-gsa-name`                     | —                     | (global)                                 |
 
+## Adding kustomize Components
+
+`--component <dir>` layers a kustomize
+[Component](https://kubectl.docs.kubernetes.io/guides/config_management/components/)
+over the manifests a deploy command renders. The flag is alpha.
+
+```bash
+ate-setup deploy ate-system --component ./my-labels --component ./my-sizing
+```
+
+Each directory must hold one kustomization file, such as `kustomization.yaml`,
+with `kind: Component`. ate-setup composes each Component over every manifest
+it renders, and each manifest carries only part of the install. So a Component
+may only change objects that are already there. Components apply after the
+built-in ones, such as `--cordon-system-infra-components`, and in flag order, so a later
+Component wins on conflicting patches.
+
+A Component may use these fields:
+
+- `patches`, each with a `target`. An untargeted patch fails on a manifest
+  that lacks its object.
+- `labels` without `includeSelectors`.
+- `commonAnnotations`.
+- `images`, for third-party images. ate-setup sets the Substrate and Envoy
+  images itself, from `--image-repo` and `--image-tag` or a local build.
+- `components`, naming local directories that follow the same rules.
+
+ate-setup rejects these before it contacts the cluster. It also builds each
+Component once before then, so a missing patch file or an invalid patch fails
+early.
+
+- `resources`, `configMapGenerator` and `secretGenerator`. Every deploy path
+  would apply the objects, and `ate-setup delete` leaves behind any outside
+  the namespaces it deletes.
+- `namePrefix`, `nameSuffix` and `namespace`. They rename or move the
+  installed objects.
+- `labels` with `includeSelectors`. Selectors cannot change, so the deploy
+  fails on an existing install.
+- `replacements` and `replicas`. They fail on any manifest that lacks the
+  object they name. Set replicas with a targeted patch instead.
+- `generators`, `transformers` and `helmCharts`. They can add or rename
+  objects.
+- Fields kustomize marks deprecated, such as `patchesStrategicMerge`.
+
+The flag works on `deploy ate-system`, `atelet`, `apiserver`, `ate-controller`,
+`atenet`, `podcertificate-controller` and `postgres`. It does not reach CRDs,
+the SandboxConfig manifests, or the CSI drivers. It has no environment
+variable or configuration key, and install records do not store it, so pass it
+again when you replay a record.
+
 ## Snapshot storage
 
 ate-api-server stores every actor and tag snapshot under a cluster-wide
