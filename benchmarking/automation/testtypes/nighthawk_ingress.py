@@ -49,6 +49,10 @@ DEFAULTS = {
     "sendRateThreshold": 0.9,
     # Tail-latency SLO (mean+2stdev) in ms; 0 disables.
     "tailLatencySloMs": 0,
+    # Total rates to hold, one stage each, instead of the adaptive search;
+    # empty runs the search.
+    "fixedRps": [],
+    "fixedStageDuration": "90s",
 }
 
 
@@ -97,8 +101,22 @@ def validate(test: dict[str, Any]) -> None:
             f"benchmark warms one actor per worker, so it is also the "
             f"actor fleet size"
         )
-    for field in ("measuringPeriod", "convergenceDeadline", "testingStageDuration"):
+    for field in (
+        "measuringPeriod",
+        "convergenceDeadline",
+        "testingStageDuration",
+        "fixedStageDuration",
+    ):
         parse_duration_seconds(str(nh[field]))
+    fixed_rps = nh["fixedRps"]
+    if not isinstance(fixed_rps, list) or not all(
+        isinstance(r, int) and not isinstance(r, bool) and r >= 1
+        for r in fixed_rps
+    ):
+        raise ValueError(
+            f"nighthawk-ingress test {name!r} has invalid "
+            f"nighthawk-ingress.fixedRps {fixed_rps!r} (list of int >= 1)"
+        )
     if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", nh["atespace"]):
         raise ValueError(
             f"nighthawk-ingress test {name!r} atespace {nh['atespace']!r} "
@@ -198,6 +216,8 @@ def job_subs(test: dict[str, Any]) -> dict[str, Any]:
         "SUCCESS_RATE": nh["successRateThreshold"],
         "SEND_RATE": nh["sendRateThreshold"],
         "TAIL_LATENCY_SLO_MS": nh["tailLatencySloMs"],
+        "FIXED_RPS": ",".join(str(r) for r in nh["fixedRps"]),
+        "FIXED_STAGE_DURATION": nh["fixedStageDuration"],
         # One core per event loop + one for the python runner.
         "RUNNER_CPU": nh["clientConcurrency"] + 1,
     }

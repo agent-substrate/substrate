@@ -19,8 +19,11 @@ FileDescriptorSet built by protogen/generate_descriptor.sh — field names
 are checked against the real Nighthawk protos at spec-build time.
 """
 
+import json
+
 SPEC_MESSAGE = "nighthawk.adaptive_load.AdaptiveLoadSessionSpec"
 OUTPUT_MESSAGE = "nighthawk.adaptive_load.AdaptiveLoadSessionOutput"
+CLIENT_OUTPUT_MESSAGE = "nighthawk.client.Output"
 
 # Registered plugin names: adaptive-load plugins use underscores upstream,
 # request-source plugins use hyphens.
@@ -36,6 +39,10 @@ BUILTIN_METRICS_PLUGIN = "nighthawk.builtin"
 REQUEST_SOURCE_PLUGIN = "nighthawk.in-line-options-list-request-source-plugin"
 REQUEST_SOURCE_TYPE_URL = (
     "type.googleapis.com/nighthawk.request_source.InLineOptionsListRequestSourceConfig"
+)
+FILE_REQUEST_SOURCE_PLUGIN = "nighthawk.file-based-request-source-plugin"
+FILE_REQUEST_SOURCE_TYPE_URL = (
+    "type.googleapis.com/nighthawk.request_source.FileBasedOptionsListRequestSourceConfig"
 )
 
 # The default failure predicates (all 0) abort an execution on the first
@@ -83,6 +90,72 @@ def _binary_threshold(
     }
 
 
+# TODO: replace the per-actor options list with a dynamic request source
+# plugin that generates the ate-target-actor header itself, along the
+# lines of https://gist.github.com/bowei/96aab95f5ccaa95dedc80a3983c7b2cb.
+# Both the in-line and the file-based configs enumerate every actor, which
+# does not scale to large number of actors; a generator also allows
+# customizing the traffic distribution across actors.
+def request_variants(actor_names: list[str], atespace: str) -> list[dict]:
+    """One POST RequestOptions per actor.
+
+    request_options shares a oneof with the request-source plugin config:
+    method and headers must come from the per-variant RequestOptions.
+    """
+    return [
+        {
+            "request_method": "POST",
+            "request_headers": [
+                {
+                    "header": {
+                        "key": "ate-target-actor",
+                        "value": f"{atespace}/{actor_name}",
+                    },
+                    "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
+                },
+            ],
+        }
+        for actor_name in actor_names
+    ]
+
+
+def request_source_plugin_config(actor_names: list[str], atespace: str) -> dict:
+    """The request variants in-line, cycled indefinitely."""
+    return {
+        "name": REQUEST_SOURCE_PLUGIN,
+        "typed_config": {
+            "@type": REQUEST_SOURCE_TYPE_URL,
+            "options_list": {"options": request_variants(actor_names, atespace)},
+            # 0 = cycle through options_list indefinitely.
+            "num_requests": 0,
+        },
+    }
+
+
+def request_options_list_json(actor_names: list[str], atespace: str) -> str:
+    """A nighthawk.client.RequestOptionsList for the file-based plugin."""
+    return json.dumps({"options": request_variants(actor_names, atespace)})
+
+
+def file_request_source_plugin_config(options_path: str, options_size: int) -> dict:
+    """The request variants read from options_path, cycled indefinitely.
+
+    Used on the nighthawk_client command line, where the in-line config is
+    a single argument that grows with the actor count and Linux caps a
+    single argument at 128 KiB (about 750 actors).
+    """
+    return {
+        "name": FILE_REQUEST_SOURCE_PLUGIN,
+        "typed_config": {
+            "@type": FILE_REQUEST_SOURCE_TYPE_URL,
+            "file_path": options_path,
+            "num_requests": 0,
+            # The plugin rejects files over this size (default 1 MB).
+            "max_file_size": options_size,
+        },
+    }
+
+
 def build_spec_dict(
     *,
     uri: str,
@@ -108,21 +181,6 @@ def build_spec_dict(
     must not set duration (the controller rejects it); open_loop is forced
     true by the controller.
     """
-    request_variants = [
-        {
-            "request_method": "POST",
-            "request_headers": [
-                {
-                    "header": {
-                        "key": "ate-target-actor",
-                        "value": f"{atespace}/{actor_name}",
-                    },
-                    "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
-                },
-            ],
-        }
-        for actor_name in actor_names
-    ]
     # Threshold roles: tail latency (mean+2stdev, ~p95 proxy — no true
     # percentiles in the builtin adaptive metrics) is the SLO bound;
     # success-rate catches fast-error saturation (503/504) that latency and
@@ -151,17 +209,9 @@ def build_spec_dict(
             "max_pending_requests": max_pending_requests,
             "open_loop": True,
             "failure_predicates": dict(PERMISSIVE_FAILURE_PREDICATES),
-            # request_options shares a oneof with this field: method and
-            # headers must come from the per-variant RequestOptions.
-            "request_source_plugin_config": {
-                "name": REQUEST_SOURCE_PLUGIN,
-                "typed_config": {
-                    "@type": REQUEST_SOURCE_TYPE_URL,
-                    "options_list": {"options": request_variants},
-                    # 0 = cycle through options_list indefinitely.
-                    "num_requests": 0,
-                },
-            },
+            "request_source_plugin_config": request_source_plugin_config(
+                actor_names, atespace
+            ),
         },
         "metric_thresholds": thresholds,
         "informational_metric_specs": [
@@ -180,6 +230,59 @@ def build_spec_dict(
         "testing_stage_duration": f"{testing_stage_duration_s}s",
         "benchmark_cooldown_duration": f"{benchmark_cooldown_s}s",
     }
+
+
+def parse_rps_list(s: str) -> list[int]:
+    """'4000,8000' -> [4000, 8000]; '' -> [] (adaptive mode)."""
+    rates = [int(r) for r in s.split(",") if r.strip()]
+    if any(r < 1 for r in rates):
+        raise ValueError(f"rates must be positive: {s}")
+    return rates
+
+
+def per_worker_rps(total_rps: int, client_concurrency: int) -> int:
+    """nighthawk_client's --rps is per event loop; the attempted total is
+    per_worker_rps * client_concurrency."""
+    return max(1, round(total_rps / client_concurrency))
+
+
+def fixed_rps_client_args(
+    *,
+    uri: str,
+    options_path: str,
+    options_size: int,
+    client_concurrency: int,
+    connections: int,
+    max_pending_requests: int,
+    total_rps: int,
+    duration_s: int,
+) -> list[str]:
+    """nighthawk_client argv for one open-loop stage at a fixed rate.
+
+    options_path holds request_options_list_json(): the same traffic shape
+    as the adaptive template, so fixed-rate and adaptive stages are
+    comparable.
+    """
+    args = [
+        "--concurrency",
+        str(client_concurrency),
+        "--connections",
+        str(connections),
+        "--max-pending-requests",
+        str(max_pending_requests),
+        "--rps",
+        str(per_worker_rps(total_rps, client_concurrency)),
+        "--duration",
+        str(duration_s),
+        "--open-loop",
+        "--output-format",
+        "json",
+        "--request-source-plugin-config",
+        json.dumps(file_request_source_plugin_config(options_path, options_size)),
+    ]
+    for name, value in PERMISSIVE_FAILURE_PREDICATES.items():
+        args += ["--failure-predicate", f"{name}:{value}"]
+    return args + [uri]
 
 
 # protobuf imports are deferred: the dict builder above must work without
