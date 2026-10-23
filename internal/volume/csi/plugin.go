@@ -286,7 +286,10 @@ func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest)
 		return "", nil
 	}
 
-	stagingPath := filepath.Join(p.stagingDirPrefix, req.VolumeID)
+	stagingPath, err := p.stagingDir(req.VolumeID)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(stagingPath, 0750); err != nil {
 		return "", fmt.Errorf("failed to create staging directory %q: %w", stagingPath, err)
 	}
@@ -299,7 +302,7 @@ func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest)
 		PublishContext:    req.PublishContext,
 	}
 
-	_, err := p.client.NodeStageVolume(ctx, csiReq)
+	_, err = p.client.NodeStageVolume(ctx, csiReq)
 	if status.Code(err) == codes.Unimplemented {
 		slog.WarnContext(ctx, "CSI NodeStageVolume is unimplemented by driver; skipping staging", slog.String("volume_id", req.VolumeID))
 		p.disableNodeCap(csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME)
@@ -334,13 +337,16 @@ func (p *Plugin) unstageVolume(ctx context.Context, volumeID string) error {
 		return nil
 	}
 
-	stagingPath := filepath.Join(p.stagingDirPrefix, volumeID)
+	stagingPath, err := p.stagingDir(volumeID)
+	if err != nil {
+		return err
+	}
 	req := &csi.NodeUnstageVolumeRequest{
 		VolumeId:          volumeID,
 		StagingTargetPath: stagingPath,
 	}
 
-	_, err := p.client.NodeUnstageVolume(ctx, req)
+	_, err = p.client.NodeUnstageVolume(ctx, req)
 	if status.Code(err) == codes.Unimplemented {
 		slog.WarnContext(ctx, "CSI NodeUnstageVolume is unimplemented by driver; skipping unstaging", slog.String("volume_id", volumeID))
 		p.disableNodeCap(csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME)
@@ -350,6 +356,16 @@ func (p *Plugin) unstageVolume(ctx context.Context, volumeID string) error {
 
 	removeStagingDir(ctx, stagingPath)
 	return nil
+}
+
+// stagingDir returns the staging directory for volumeID. The ID is the
+// driver's own string and may contain slashes, but it must name a directory
+// below stagingDirPrefix.
+func (p *Plugin) stagingDir(volumeID string) (string, error) {
+	if !filepath.IsLocal(volumeID) || filepath.Clean(volumeID) == "." {
+		return "", fmt.Errorf("volume ID %q does not name a directory below the staging directory", volumeID)
+	}
+	return filepath.Join(p.stagingDirPrefix, volumeID), nil
 }
 
 // removeStagingDir removes an empty staging directory, logging any failure.
