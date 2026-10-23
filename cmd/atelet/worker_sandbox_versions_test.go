@@ -265,7 +265,7 @@ func wantVersions() *sandboxruntimes.File {
 
 // planAndBuild runs the plan and build steps of syncPod for pod.
 func planAndBuild(s *workerSandboxSyncer, pod *corev1.Pod) (*sandboxruntimes.File, error) {
-	plan, err := s.resolver.plan(pod)
+	plan, _, err := s.resolver.plan(pod)
 	if err != nil {
 		return nil, err
 	}
@@ -661,7 +661,7 @@ func TestSyncPodAdvertisesWhatItWrote(t *testing.T) {
 
 	t.Run("a failed sync keeps the entry of the file on disk", func(t *testing.T) {
 		s := newTestSyncer(t, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
-		if err := s.syncPod(ctx, pod); err != nil {
+		if _, err := s.syncPod(ctx, pod); err != nil {
 			t.Fatalf("syncPod: %v", err)
 		}
 		before := advertised(t, s)
@@ -674,7 +674,7 @@ func TestSyncPodAdvertisesWhatItWrote(t *testing.T) {
 		s.cpuFeatures = map[string]string{}
 		s.mu.Unlock()
 		s.runCPUFeatures = func(context.Context, string) ([]string, error) { return []string{"not_a_known_feature"}, nil }
-		if err := s.syncPod(ctx, pod); !errors.Is(err, errPermanent) {
+		if _, err := s.syncPod(ctx, pod); !errors.Is(err, errPermanent) {
 			t.Fatalf("syncPod with the default's probe failing = %v, want errPermanent", err)
 		}
 		if after := advertised(t, s); after.defaultHash != before.defaultHash || !slices.Equal(after.hashes, before.hashes) {
@@ -692,7 +692,7 @@ func TestSyncPodAdvertisesWhatItWrote(t *testing.T) {
 				return map[string]string{gvisorAssetName: "sha-v2"}, nil
 			},
 		}
-		if err := s.syncPod(ctx, pod); !errors.Is(err, errIncomplete) {
+		if _, err := s.syncPod(ctx, pod); !errors.Is(err, errIncomplete) {
 			t.Fatalf("syncPod with a restorable version failing = %v, want errIncomplete", err)
 		}
 		if cr := advertised(t, s); cr.defaultHash != hashOf("v2") || !slices.Equal(cr.hashes, []string{hashOf("v2")}) {

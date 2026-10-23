@@ -85,9 +85,11 @@ import (
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
@@ -495,7 +497,7 @@ func main() {
 		ateFactory.Ate().V1().SandboxConfigs(),
 		wmService,
 		nodepath.WorkersDir(), runtimes, prewarmer,
-		eventBroadcaster.NewRecorder(scheme.Scheme, "atelet"))
+		eventBroadcaster.NewRecorder(newEventScheme(), "atelet"))
 	if err != nil {
 		// Without the syncer no runtime is ever indexed, so no actor could run.
 		serverboot.Fatal(ctx, "Failed to start the worker sandbox runtimes syncer", err)
@@ -560,6 +562,16 @@ func main() {
 	}
 	cancelWait()
 	slog.InfoContext(ctx, "Shutdown complete")
+}
+
+// newEventScheme returns a Scheme with core Kubernetes and ATE CRD types
+// registered so the event recorder can resolve ObjectReferences for both
+// regarding (Pod) and related (SandboxConfig, WorkerPool).
+func newEventScheme() *k8sruntime.Scheme {
+	s := k8sruntime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(atev1.AddToScheme(s))
+	return s
 }
 
 // servingCheck is the readiness check that holds /readyz at 503 until served

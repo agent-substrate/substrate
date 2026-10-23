@@ -36,6 +36,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
@@ -174,7 +175,7 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
 		workerPools: atelisters.NewWorkerPoolLister(pools),
 		configs:     atelisters.NewSandboxConfigLister(configs),
-	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), nil, events.NewFakeRecorder(2))
+	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), nil, events.NewFakeRecorder(64))
 	// The queue starts a goroutine; stop it with the test.
 	t.Cleanup(s.queue.ShutDown)
 	s.scratchDir = t.TempDir() // the runsc probe stages the binary there
@@ -392,7 +393,7 @@ func TestWorkerSandboxSyncerRegistersAheadOfJitter(t *testing.T) {
 		s.sandboxConfigHandler().OnUpdate(multiVersionConfig(), cfg)
 		synctest.Wait()
 
-		plan, err := s.resolver.plan(pod)
+		plan, _, err := s.resolver.plan(pod)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -415,6 +416,18 @@ func TestWorkerSandboxSyncerRegistersAheadOfJitter(t *testing.T) {
 			t.Errorf("UIDs enqueued after the jitter mismatch (-want +got):\n%s", diff)
 		}
 	})
+}
+
+// testEventRecorder wraps FakeRecorder to capture the related object passed to
+// Eventf alongside the formatted event string.
+type testEventRecorder struct {
+	*events.FakeRecorder
+	related k8sruntime.Object
+}
+
+func (r *testEventRecorder) Eventf(regarding, related k8sruntime.Object, eventtype, reason, action, note string, args ...any) {
+	r.related = related
+	r.FakeRecorder.Eventf(regarding, related, eventtype, reason, action, note, args...)
 }
 
 func TestWorkerSandboxSyncerProcess(t *testing.T) {
@@ -443,8 +456,10 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		// earlier sync would have; wantIndexed is whether it is there after.
 		indexed, wantIndexed bool
 		// wantEvent is a substring of the Warning event emitted on pod-a, or ""
-		// when no event should be emitted.
-		wantEvent string
+		// when no event should be emitted. wantRelated is the secondary object
+		// attached to that event.
+		wantEvent   string
+		wantRelated k8sruntime.Object
 	}{{
 		name:        "writes the file",
 		wantIndexed: true,
@@ -506,6 +521,12 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		priorRetries: syncMaxRetries,
 		wantEvent:    "Warning SandboxRuntimeSyncFailed",
 	}, {
+		name:         "unresolved pool config gives up after syncMaxRetries",
+		objs:         []any{workerPod("pod-a", "pool"), resolvedPool("pool", "")},
+		priorRetries: syncMaxRetries,
+		wantEvent:    "Warning SandboxRuntimeSyncFailed",
+		wantRelated:  resolvedPool("pool", ""),
+	}, {
 		// A transient failure on the default version leaves the existing file
 		// in place and requeues without the syncMaxRetries cap, since no
 		// informer event enqueues the pod when an asset fetch recovers.
@@ -523,6 +544,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		wantUntouched: true,
 		wantRetries:   syncMaxRetries + 1,
 		wantEvent:     "temporary download failure on default version",
+		wantRelated:   multiVersionConfig(),
 	}, {
 		// A transient failure on a restorable version writes the default
 		// runtime right away and requeues without the syncMaxRetries cap.
@@ -542,6 +564,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		wantDir:      true,
 		wantRetries:  syncMaxRetries + 1,
 		wantEvent:    "temporary download failure on restorable version",
+		wantRelated:  multiVersionConfig(),
 	}, {
 		name:      "pod of no pool is not retried",
 		objs:      []any{workerPod("pod-a", ""), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
@@ -563,11 +586,13 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		wantUntouched: true,
 		wantRetries:   1,
 		wantEvent:     strings.Repeat("é", 487) + "...",
+		wantRelated:   multiVersionConfig(),
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestSyncer(t, tt.objs...)
-			recorder := s.recorder.(*events.FakeRecorder)
+			recorder := &testEventRecorder{FakeRecorder: s.recorder.(*events.FakeRecorder)}
+			s.recorder = recorder
 			if tt.assets != nil {
 				s.assets = tt.assets
 			}
@@ -618,6 +643,14 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 				note := strings.TrimPrefix(gotEvent, "Warning SandboxRuntimeSyncFailed ")
 				if len(note) > maxEventNoteBytes || !utf8.ValidString(note) {
 					t.Errorf("event note len = %d (max %d), valid UTF-8 = %v", len(note), maxEventNoteBytes, utf8.ValidString(note))
+				}
+			}
+			if diff := cmp.Diff(tt.wantRelated, recorder.related); diff != "" {
+				t.Errorf("event related mismatch (-want +got):\n%s", diff)
+			}
+			if recorder.related != nil {
+				if _, err := reference.GetReference(newEventScheme(), recorder.related); err != nil {
+					t.Errorf("reference.GetReference(%T) error = %v", recorder.related, err)
 				}
 			}
 			select {
