@@ -555,19 +555,6 @@ spec:
         gvisor:
           url: "gs://gvisor/releases/release/20261019.0/aarch64/gvisor.tar.zstd"
           sha256: "88556c21468a066d872a055425958c83fcbafc79c6477a195b18070c77f856d0"
-  # The previous version stays until it has a known vulnerability: a memory
-  # snapshot restores only on the version it was taken with.
-  - name: v4
-    state: Enabled
-    assets:
-      amd64:
-        gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-17/x86_64/gvisor.tar.zstd"
-          sha256: "fa72f0d45756c69a30beec21222c78241b0d330c36f4f2185648617cc23415c8"
-      arm64:
-        gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-17/aarch64/gvisor.tar.zstd"
-          sha256: "238634978d99f0dd3e631c4f88eae7b19fb36937065428467f0b6d6b10697689"
 ```
 
 ### MicroVM SandboxConfig
