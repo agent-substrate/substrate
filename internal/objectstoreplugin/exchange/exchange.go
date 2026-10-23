@@ -50,12 +50,6 @@ type Issuer interface {
 	Issue(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (credential.Token, error)
 }
 
-// Lookup resolves the actor a verified JWT names.
-type Lookup = actorauthz.Lookup
-
-// Verifier checks a JWT and returns its claims.
-type Verifier = actorauthz.Verifier
-
 // Server implements CredentialExchange.
 type Server struct {
 	exchangepb.UnimplementedCredentialExchangeServer
@@ -64,7 +58,7 @@ type Server struct {
 }
 
 // New returns a Server. The verifier must accept actorauthz.Audience.
-func New(verifier Verifier, lookup Lookup, issuer Issuer) *Server {
+func New(verifier actorauthz.Verifier, lookup actorauthz.Lookup, issuer Issuer) *Server {
 	return &Server{authorizer: actorauthz.New(verifier, lookup), issuer: issuer}
 }
 
