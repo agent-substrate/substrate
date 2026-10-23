@@ -17,154 +17,45 @@ package csi
 import (
 	"context"
 	"errors"
-	"net"
-	"path/filepath"
 	"slices"
-	"sync"
+	"strings"
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"go.ate.dev/substrate/internal/volume"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-// snapshotCSIController is a CSI controller that serves the capability and
-// snapshot RPCs, and counts the snapshot calls that reach it so a test can
-// tell a skipped call from a made one.
-type snapshotCSIController struct {
-	csi.UnimplementedControllerServer
+type controllerCapsFunc func(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error)
 
-	// capsErr fails ControllerGetCapabilities; otherwise caps is reported.
-	capsErr error
-	caps    []csi.ControllerServiceCapability_RPC_Type
-	// createErr, listErr and deleteErr fail CreateSnapshot, ListSnapshots and
-	// DeleteSnapshot.
-	createErr error
-	listErr   error
-	deleteErr error
-	// emptySnapshotID makes CreateSnapshot return a snapshot with no ID.
-	emptySnapshotID bool
-	// reportedSource, if set, replaces the content source CreateVolume
-	// reports; dropSource reports none, as a driver that ignores the
-	// requested source would.
-	reportedSource string
-	dropSource     bool
-
-	mu                sync.Mutex
-	createCalls       int
-	listCalls         int
-	deleteCalls       int
-	deletedVolumeIDs  []string
-	createVolumeCalls int
-}
-
-func (c *snapshotCSIController) ControllerGetCapabilities(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
-	if c.capsErr != nil {
-		return nil, c.capsErr
+// reportCaps returns a ControllerGetCapabilities handler that reports rpcs.
+func reportCaps(rpcs ...csi.ControllerServiceCapability_RPC_Type) controllerCapsFunc {
+	return func(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+		resp := &csi.ControllerGetCapabilitiesResponse{}
+		for _, rpc := range rpcs {
+			resp.Capabilities = append(resp.Capabilities, &csi.ControllerServiceCapability{
+				Type: &csi.ControllerServiceCapability_Rpc{Rpc: &csi.ControllerServiceCapability_RPC{Type: rpc}},
+			})
+		}
+		return resp, nil
 	}
-	resp := &csi.ControllerGetCapabilitiesResponse{}
-	for _, rpc := range c.caps {
-		resp.Capabilities = append(resp.Capabilities, &csi.ControllerServiceCapability{
-			Type: &csi.ControllerServiceCapability_Rpc{Rpc: &csi.ControllerServiceCapability_RPC{Type: rpc}},
-		})
-	}
-	return resp, nil
 }
 
-func (c *snapshotCSIController) CreateSnapshot(_ context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.createCalls++
-	if c.createErr != nil {
-		return nil, c.createErr
-	}
-	id := "snap-" + req.GetName()
-	if c.emptySnapshotID {
-		id = ""
-	}
-	return &csi.CreateSnapshotResponse{Snapshot: &csi.Snapshot{
-		SnapshotId:     id,
-		SourceVolumeId: req.GetSourceVolumeId(),
-		ReadyToUse:     true,
-	}}, nil
+// failCaps is a ControllerGetCapabilities handler that fails, so the plugin
+// assumes every RPC is supported.
+func failCaps(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+	return nil, status.Error(codes.Unavailable, "down")
 }
 
-func (c *snapshotCSIController) ListSnapshots(_ context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.listCalls++
-	if c.listErr != nil {
-		return nil, c.listErr
-	}
-	return &csi.ListSnapshotsResponse{Entries: []*csi.ListSnapshotsResponse_Entry{
-		{Snapshot: &csi.Snapshot{SnapshotId: req.GetSnapshotId(), ReadyToUse: true}},
-	}}, nil
-}
-
-func (c *snapshotCSIController) DeleteSnapshot(context.Context, *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.deleteCalls++
-	if c.deleteErr != nil {
-		return nil, c.deleteErr
-	}
-	return &csi.DeleteSnapshotResponse{}, nil
-}
-
-func (c *snapshotCSIController) CreateVolume(_ context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
-	c.mu.Lock()
-	c.createVolumeCalls++
-	c.mu.Unlock()
-	vol := &csi.Volume{VolumeId: "vol-" + req.GetName()}
-	source := req.GetVolumeContentSource().GetSnapshot().GetSnapshotId()
-	if c.reportedSource != "" {
-		source = c.reportedSource
-	}
-	if source != "" && !c.dropSource {
-		vol.ContentSource = &csi.VolumeContentSource{Type: &csi.VolumeContentSource_Snapshot{
-			Snapshot: &csi.VolumeContentSource_SnapshotSource{SnapshotId: source},
-		}}
-	}
-	return &csi.CreateVolumeResponse{Volume: vol}, nil
-}
-
-func (c *snapshotCSIController) DeleteVolume(_ context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.deletedVolumeIDs = append(c.deletedVolumeIDs, req.GetVolumeId())
-	return &csi.DeleteVolumeResponse{}, nil
-}
-
-func (c *snapshotCSIController) deletedVolumes() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]string(nil), c.deletedVolumeIDs...)
-}
-
-func (c *snapshotCSIController) calls() (create, list, del int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.createCalls, c.listCalls, c.deleteCalls
-}
-
-// newSnapshotTestPlugin serves controller on a unix socket and returns a
-// plugin for it whose controller capabilities have been initialized.
-func newSnapshotTestPlugin(t *testing.T, controller *snapshotCSIController) *Plugin {
+// newSnapshotTestPlugin serves driver on a unix socket and returns a plugin
+// for it whose controller capabilities have been initialized.
+func newSnapshotTestPlugin(t *testing.T, driver *mockCSIDriver) *Plugin {
 	t.Helper()
-	socketPath := filepath.Join(t.TempDir(), "csi.sock")
-	lis, err := net.Listen("unix", socketPath)
-	if err != nil {
-		t.Fatalf("failed to listen on socket %q: %v", socketPath, err)
-	}
-	s := grpc.NewServer()
-	csi.RegisterIdentityServer(s, &mockCSIDriver{})
-	csi.RegisterControllerServer(s, controller)
-	go func() { _ = s.Serve(lis) }()
-	t.Cleanup(s.Stop)
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	t.Cleanup(cleanup)
 
-	client, err := NewCSIClient("unix://"+socketPath, nil)
+	client, err := NewCSIClient(endpoint, nil)
 	if err != nil {
 		t.Fatalf("failed to create CSI client: %v", err)
 	}
@@ -177,49 +68,41 @@ func newSnapshotTestPlugin(t *testing.T, controller *snapshotCSIController) *Plu
 
 func TestPlugin_ControllerCapabilities(t *testing.T) {
 	tests := []struct {
-		name       string
-		controller *snapshotCSIController
-		want       volume.Capabilities
+		name string
+		caps controllerCapsFunc
+		want volume.Capabilities
 	}{
 		{
 			name: "create and delete only",
-			controller: &snapshotCSIController{caps: []csi.ControllerServiceCapability_RPC_Type{
-				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
-				csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
-			}},
+			caps: reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME, csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
 			want: volume.Capabilities{CreateDeleteSnapshot: true},
 		},
 		{
 			name: "create, delete and list",
-			controller: &snapshotCSIController{caps: []csi.ControllerServiceCapability_RPC_Type{
-				csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
-				csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
-			}},
+			caps: reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT, csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS),
 			want: volume.Capabilities{CreateDeleteSnapshot: true, ListSnapshots: true},
 		},
 		{
 			name: "no snapshot support",
-			controller: &snapshotCSIController{caps: []csi.ControllerServiceCapability_RPC_Type{
-				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
-			}},
+			caps: reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME),
 			want: volume.Capabilities{},
 		},
 		{
 			// Discovery is best-effort: a driver that cannot report its
 			// capabilities is assumed to support everything.
-			name:       "query fails",
-			controller: &snapshotCSIController{capsErr: status.Error(codes.Unavailable, "down")},
-			want:       volume.Capabilities{CreateDeleteSnapshot: true, ListSnapshots: true},
+			name: "query fails",
+			caps: failCaps,
+			want: volume.Capabilities{CreateDeleteSnapshot: true, ListSnapshots: true},
 		},
 		{
-			name:       "reports nothing",
-			controller: &snapshotCSIController{},
-			want:       volume.Capabilities{CreateDeleteSnapshot: true, ListSnapshots: true},
+			name: "reports nothing",
+			caps: reportCaps(),
+			want: volume.Capabilities{CreateDeleteSnapshot: true, ListSnapshots: true},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plugin := newSnapshotTestPlugin(t, tt.controller)
+			plugin := newSnapshotTestPlugin(t, &mockCSIDriver{controllerGetCapabilitiesFunc: tt.caps})
 			got, err := plugin.ControllerCapabilities(context.Background())
 			if err != nil {
 				t.Fatalf("ControllerCapabilities: %v", err)
@@ -241,223 +124,365 @@ func TestPlugin_ControllerCapabilities_Uninitialized(t *testing.T) {
 	}
 }
 
-func TestPlugin_CreateSnapshot_SkippedWhenUnsupported(t *testing.T) {
-	controller := &snapshotCSIController{caps: []csi.ControllerServiceCapability_RPC_Type{
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
-	}}
-	plugin := newSnapshotTestPlugin(t, controller)
-
-	if _, err := plugin.CreateSnapshot(context.Background(), volume.CreateSnapshotRequest{Name: "s", SourceVolumeID: "v"}); err == nil {
-		t.Fatal("CreateSnapshot succeeded on a driver that does not support snapshots")
-	}
-	if create, _, _ := controller.calls(); create != 0 {
-		t.Errorf("CreateSnapshot reached the driver %d times, want 0", create)
-	}
-}
-
-func TestPlugin_CreateSnapshot_UnimplementedDisablesCapability(t *testing.T) {
-	controller := &snapshotCSIController{
-		capsErr:   errors.New("no capabilities"),
-		createErr: status.Error(codes.Unimplemented, "unimplemented"),
-	}
-	plugin := newSnapshotTestPlugin(t, controller)
-	ctx := context.Background()
-	req := volume.CreateSnapshotRequest{Name: "s", SourceVolumeID: "v"}
-
-	if _, err := plugin.CreateSnapshot(ctx, req); err == nil {
-		t.Fatal("CreateSnapshot succeeded, want the driver's Unimplemented")
-	}
-	if caps, _ := plugin.ControllerCapabilities(ctx); caps.CreateDeleteSnapshot {
-		t.Error("CreateDeleteSnapshot still reported after the driver returned Unimplemented")
-	}
-	if _, err := plugin.CreateSnapshot(ctx, req); err == nil {
-		t.Fatal("second CreateSnapshot succeeded, want it refused")
-	}
-	if create, _, _ := controller.calls(); create != 1 {
-		t.Errorf("CreateSnapshot reached the driver %d times, want 1", create)
-	}
-}
-
 func TestPlugin_CreateSnapshot(t *testing.T) {
-	controller := &snapshotCSIController{caps: []csi.ControllerServiceCapability_RPC_Type{
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
-	}}
-	plugin := newSnapshotTestPlugin(t, controller)
+	tests := []struct {
+		name string
+		caps controllerCapsFunc
+		// driverID is the snapshot ID the driver returns.
+		driverID  string
+		driverErr error
+		wantErr   bool
+		wantCalls int
+		// wantCap is whether CreateDeleteSnapshot is reported afterwards.
+		wantCap bool
+	}{
+		{
+			name:      "creates",
+			caps:      reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
+			driverID:  "snap-s",
+			wantCalls: 1,
+			wantCap:   true,
+		},
+		{
+			name:    "refused without the capability",
+			caps:    reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME),
+			wantErr: true,
+		},
+		{
+			name:      "empty ID from the driver",
+			caps:      reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
+			wantErr:   true,
+			wantCalls: 1,
+			wantCap:   true,
+		},
+		{
+			name:      "Unimplemented disables the capability",
+			caps:      failCaps,
+			driverErr: status.Error(codes.Unimplemented, "unimplemented"),
+			wantErr:   true,
+			wantCalls: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls int
+			plugin := newSnapshotTestPlugin(t, &mockCSIDriver{
+				controllerGetCapabilitiesFunc: tt.caps,
+				createSnapshotFunc: func(_ context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+					calls++
+					if tt.driverErr != nil {
+						return nil, tt.driverErr
+					}
+					return &csi.CreateSnapshotResponse{Snapshot: &csi.Snapshot{
+						SnapshotId:     tt.driverID,
+						SourceVolumeId: req.GetSourceVolumeId(),
+						ReadyToUse:     true,
+					}}, nil
+				},
+			})
+			ctx := context.Background()
 
-	snap, err := plugin.CreateSnapshot(context.Background(), volume.CreateSnapshotRequest{Name: "s", SourceVolumeID: "v"})
-	if err != nil {
-		t.Fatalf("CreateSnapshot: %v", err)
-	}
-	if snap.SnapshotID != "snap-s" || snap.SourceVolumeID != "v" || !snap.ReadyToUse {
-		t.Errorf("CreateSnapshot = %+v, want snap-s of v, ready", snap)
-	}
-}
-
-func TestPlugin_GetSnapshot_SkippedWhenUnsupported(t *testing.T) {
-	controller := &snapshotCSIController{caps: []csi.ControllerServiceCapability_RPC_Type{
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
-	}}
-	plugin := newSnapshotTestPlugin(t, controller)
-
-	_, found, err := plugin.GetSnapshot(context.Background(), "snap-1")
-	if err != nil || found {
-		t.Fatalf("GetSnapshot = (found %v, %v), want not found and no error", found, err)
-	}
-	if _, list, _ := controller.calls(); list != 0 {
-		t.Errorf("ListSnapshots reached the driver %d times, want 0", list)
-	}
-}
-
-func TestPlugin_GetSnapshot_UnimplementedDisablesCapability(t *testing.T) {
-	controller := &snapshotCSIController{
-		capsErr: errors.New("no capabilities"),
-		listErr: status.Error(codes.Unimplemented, "unimplemented"),
-	}
-	plugin := newSnapshotTestPlugin(t, controller)
-	ctx := context.Background()
-
-	for range 2 {
-		if _, found, err := plugin.GetSnapshot(ctx, "snap-1"); err != nil || found {
-			t.Fatalf("GetSnapshot = (found %v, %v), want not found and no error", found, err)
-		}
-	}
-	if caps, _ := plugin.ControllerCapabilities(ctx); caps.ListSnapshots {
-		t.Error("ListSnapshots still reported after the driver returned Unimplemented")
-	}
-	if _, list, _ := controller.calls(); list != 1 {
-		t.Errorf("ListSnapshots reached the driver %d times, want 1", list)
+			snap, err := plugin.CreateSnapshot(ctx, volume.CreateSnapshotRequest{Name: "s", SourceVolumeID: "v"})
+			if gotErr := err != nil; gotErr != tt.wantErr {
+				t.Fatalf("CreateSnapshot error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if want := (volume.Snapshot{SnapshotID: "snap-s", SourceVolumeID: "v", ReadyToUse: true}); !tt.wantErr && snap != want {
+				t.Errorf("CreateSnapshot = %+v, want %+v", snap, want)
+			}
+			if calls != tt.wantCalls {
+				t.Errorf("CreateSnapshot reached the driver %d times, want %d", calls, tt.wantCalls)
+			}
+			if caps, _ := plugin.ControllerCapabilities(ctx); caps.CreateDeleteSnapshot != tt.wantCap {
+				t.Errorf("CreateDeleteSnapshot = %v afterwards, want %v", caps.CreateDeleteSnapshot, tt.wantCap)
+			}
+		})
 	}
 }
 
 func TestPlugin_GetSnapshot(t *testing.T) {
-	controller := &snapshotCSIController{caps: []csi.ControllerServiceCapability_RPC_Type{
-		csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
-	}}
-	plugin := newSnapshotTestPlugin(t, controller)
-
-	snap, found, err := plugin.GetSnapshot(context.Background(), "snap-1")
-	if err != nil || !found {
-		t.Fatalf("GetSnapshot = (found %v, %v), want found", found, err)
-	}
-	if snap.SnapshotID != "snap-1" || !snap.ReadyToUse {
-		t.Errorf("GetSnapshot = %+v, want snap-1, ready", snap)
-	}
-}
-
-func TestPlugin_CreateSnapshot_EmptyIDRejected(t *testing.T) {
-	controller := &snapshotCSIController{
-		caps:            []csi.ControllerServiceCapability_RPC_Type{csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT},
-		emptySnapshotID: true,
-	}
-	plugin := newSnapshotTestPlugin(t, controller)
-
-	if _, err := plugin.CreateSnapshot(context.Background(), volume.CreateSnapshotRequest{Name: "s", SourceVolumeID: "v"}); err == nil {
-		t.Fatal("CreateSnapshot succeeded with an empty snapshot ID from the driver")
-	}
-}
-
-func TestPlugin_GetSnapshot_EmptyIDRejected(t *testing.T) {
-	controller := &snapshotCSIController{caps: []csi.ControllerServiceCapability_RPC_Type{
-		csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
-	}}
-	plugin := newSnapshotTestPlugin(t, controller)
-
-	if _, _, err := plugin.GetSnapshot(context.Background(), ""); err == nil {
-		t.Fatal("GetSnapshot succeeded with an empty snapshot ID")
-	}
-	if _, list, _ := controller.calls(); list != 0 {
-		t.Errorf("ListSnapshots reached the driver %d times, want 0", list)
-	}
-}
-
-func TestPlugin_GetSnapshot_NotFoundFromDriver(t *testing.T) {
-	controller := &snapshotCSIController{
-		caps:    []csi.ControllerServiceCapability_RPC_Type{csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS},
-		listErr: status.Error(codes.NotFound, "no such snapshot"),
-	}
-	plugin := newSnapshotTestPlugin(t, controller)
-
-	_, found, err := plugin.GetSnapshot(context.Background(), "snap-1")
-	if err != nil || found {
-		t.Fatalf("GetSnapshot = (found %v, %v), want not found and no error", found, err)
-	}
-}
-
-func TestPlugin_GetSnapshot_DriverError(t *testing.T) {
-	controller := &snapshotCSIController{
-		caps:    []csi.ControllerServiceCapability_RPC_Type{csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS},
-		listErr: status.Error(codes.Unavailable, "down"),
-	}
-	plugin := newSnapshotTestPlugin(t, controller)
-
-	if _, _, err := plugin.GetSnapshot(context.Background(), "snap-1"); err == nil {
-		t.Fatal("GetSnapshot succeeded, want the driver's error")
-	}
-}
-
-func TestPlugin_DeleteSnapshot_Errors(t *testing.T) {
 	tests := []struct {
-		name    string
-		err     error
-		wantErr bool
+		name       string
+		caps       controllerCapsFunc
+		snapshotID string
+		listErr    error
+		// emptyList makes ListSnapshots return no entries.
+		emptyList       bool
+		wantFound       bool
+		wantErr         bool
+		wantUnsupported bool
+		wantCalls       int
+		// wantCap is whether ListSnapshots is reported afterwards.
+		wantCap bool
 	}{
-		{name: "not found is success", err: status.Error(codes.NotFound, "gone")},
-		{name: "other errors are returned", err: status.Error(codes.Internal, "boom"), wantErr: true},
+		{
+			name:       "found",
+			caps:       reportCaps(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS),
+			snapshotID: "snap-1",
+			wantFound:  true,
+			wantCalls:  1,
+			wantCap:    true,
+		},
+		{
+			name:       "empty list is not found",
+			caps:       reportCaps(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS),
+			snapshotID: "snap-1",
+			emptyList:  true,
+			wantCalls:  1,
+			wantCap:    true,
+		},
+		{
+			name:       "NotFound from the driver is not found",
+			caps:       reportCaps(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS),
+			snapshotID: "snap-1",
+			listErr:    status.Error(codes.NotFound, "no such snapshot"),
+			wantCalls:  1,
+			wantCap:    true,
+		},
+		{
+			name:       "other driver errors are returned",
+			caps:       reportCaps(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS),
+			snapshotID: "snap-1",
+			listErr:    status.Error(codes.Unavailable, "down"),
+			wantErr:    true,
+			wantCalls:  1,
+			wantCap:    true,
+		},
+		{
+			name:            "unsupported without the capability",
+			caps:            reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
+			snapshotID:      "snap-1",
+			wantErr:         true,
+			wantUnsupported: true,
+		},
+		{
+			name:            "Unimplemented is unsupported and disables the capability",
+			caps:            failCaps,
+			snapshotID:      "snap-1",
+			listErr:         status.Error(codes.Unimplemented, "unimplemented"),
+			wantErr:         true,
+			wantUnsupported: true,
+			wantCalls:       1,
+		},
+		{
+			name:    "empty ID is rejected",
+			caps:    reportCaps(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS),
+			wantErr: true,
+			wantCap: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			controller := &snapshotCSIController{
-				caps:      []csi.ControllerServiceCapability_RPC_Type{csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT},
-				deleteErr: tt.err,
-			}
-			plugin := newSnapshotTestPlugin(t, controller)
+			var calls int
+			plugin := newSnapshotTestPlugin(t, &mockCSIDriver{
+				controllerGetCapabilitiesFunc: tt.caps,
+				listSnapshotsFunc: func(_ context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+					calls++
+					if tt.listErr != nil {
+						return nil, tt.listErr
+					}
+					if tt.emptyList {
+						return &csi.ListSnapshotsResponse{}, nil
+					}
+					return &csi.ListSnapshotsResponse{Entries: []*csi.ListSnapshotsResponse_Entry{
+						{Snapshot: &csi.Snapshot{SnapshotId: req.GetSnapshotId(), ReadyToUse: true}},
+					}}, nil
+				},
+			})
+			ctx := context.Background()
 
-			err := plugin.DeleteSnapshot(context.Background(), "snap-1")
+			snap, found, err := plugin.GetSnapshot(ctx, tt.snapshotID)
+			if gotErr := err != nil; gotErr != tt.wantErr {
+				t.Fatalf("GetSnapshot error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got := errors.Is(err, errors.ErrUnsupported); got != tt.wantUnsupported {
+				t.Errorf("GetSnapshot error = %v, want ErrUnsupported %v", err, tt.wantUnsupported)
+			}
+			if found != tt.wantFound {
+				t.Errorf("GetSnapshot found = %v, want %v", found, tt.wantFound)
+			}
+			if want := (volume.Snapshot{SnapshotID: tt.snapshotID, ReadyToUse: true}); found && snap != want {
+				t.Errorf("GetSnapshot = %+v, want %+v", snap, want)
+			}
+			if calls != tt.wantCalls {
+				t.Errorf("ListSnapshots reached the driver %d times, want %d", calls, tt.wantCalls)
+			}
+			if caps, _ := plugin.ControllerCapabilities(ctx); caps.ListSnapshots != tt.wantCap {
+				t.Errorf("ListSnapshots = %v afterwards, want %v", caps.ListSnapshots, tt.wantCap)
+			}
+		})
+	}
+}
+
+func TestPlugin_DeleteSnapshot(t *testing.T) {
+	tests := []struct {
+		name       string
+		caps       controllerCapsFunc
+		snapshotID string
+		driverErr  error
+		wantErr    bool
+		wantCalls  int
+	}{
+		{
+			name:       "deletes",
+			caps:       reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
+			snapshotID: "snap-1",
+			wantCalls:  1,
+		},
+		{
+			name:       "not found is success",
+			caps:       reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
+			snapshotID: "snap-1",
+			driverErr:  status.Error(codes.NotFound, "gone"),
+			wantCalls:  1,
+		},
+		{
+			name:       "other errors are returned",
+			caps:       reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
+			snapshotID: "snap-1",
+			driverErr:  status.Error(codes.Internal, "boom"),
+			wantErr:    true,
+			wantCalls:  1,
+		},
+		{
+			// The caller holds a handle the driver issued, and skipping the
+			// call would leak it.
+			name:       "sent without the capability",
+			caps:       reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME),
+			snapshotID: "snap-1",
+			wantCalls:  1,
+		},
+		{
+			name:    "empty ID is rejected",
+			caps:    reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls int
+			plugin := newSnapshotTestPlugin(t, &mockCSIDriver{
+				controllerGetCapabilitiesFunc: tt.caps,
+				deleteSnapshotFunc: func(context.Context, *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+					calls++
+					if tt.driverErr != nil {
+						return nil, tt.driverErr
+					}
+					return &csi.DeleteSnapshotResponse{}, nil
+				},
+			})
+
+			err := plugin.DeleteSnapshot(context.Background(), tt.snapshotID)
 			if gotErr := err != nil; gotErr != tt.wantErr {
 				t.Errorf("DeleteSnapshot error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if calls != tt.wantCalls {
+				t.Errorf("DeleteSnapshot reached the driver %d times, want %d", calls, tt.wantCalls)
 			}
 		})
 	}
 }
 
 func TestPlugin_CreateVolume_RestoreSource(t *testing.T) {
+	snapshotCaps := reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT)
 	tests := []struct {
-		name        string
-		controller  *snapshotCSIController
-		source      string
-		wantErr     bool
-		wantSource  string
-		wantDeleted []string
+		name   string
+		caps   controllerCapsFunc
+		source string
+		// reportedSource, if set, replaces the content source the driver
+		// reports. dropSource reports none, as a driver that ignores the
+		// requested source would.
+		reportedSource string
+		dropSource     bool
+		deleteErr      error
+		wantErr        bool
+		// wantErrContains is a substring the error must contain.
+		wantErrContains string
+		wantSource      string
+		wantCreateCalls int
+		wantDeleted     []string
 	}{
 		{
-			name:       "no source",
-			controller: &snapshotCSIController{},
+			name:            "no source",
+			caps:            snapshotCaps,
+			wantCreateCalls: 1,
 		},
 		{
-			name:       "driver reports the requested source",
-			controller: &snapshotCSIController{},
-			source:     "snap-1",
-			wantSource: "snap-1",
+			name:            "driver reports the requested source",
+			caps:            snapshotCaps,
+			source:          "snap-1",
+			wantSource:      "snap-1",
+			wantCreateCalls: 1,
 		},
 		{
-			name:        "driver reports no source",
-			controller:  &snapshotCSIController{dropSource: true},
-			source:      "snap-1",
-			wantErr:     true,
-			wantDeleted: []string{"vol-v"},
+			name:            "driver reports no source",
+			caps:            snapshotCaps,
+			source:          "snap-1",
+			dropSource:      true,
+			wantErr:         true,
+			wantCreateCalls: 1,
+			wantDeleted:     []string{"vol-v"},
+		},
+		{
+			name:            "deleting the unrestored volume fails",
+			caps:            snapshotCaps,
+			source:          "snap-1",
+			dropSource:      true,
+			deleteErr:       status.Error(codes.Internal, "boom"),
+			wantErr:         true,
+			wantErrContains: "vol-v",
+			wantCreateCalls: 1,
+			wantDeleted:     []string{"vol-v"},
 		},
 		{
 			// Drivers may report the source in their own format, as GCE PD
 			// reports a numeric ID for a projects/.../snapshots/... handle.
-			name:       "driver reports the source in its own format",
-			controller: &snapshotCSIController{reportedSource: "8123456789012345678"},
-			source:     "projects/p/global/snapshots/snap-1",
-			wantSource: "8123456789012345678",
+			name:            "driver reports the source in its own format",
+			caps:            snapshotCaps,
+			source:          "projects/p/global/snapshots/snap-1",
+			reportedSource:  "8123456789012345678",
+			wantSource:      "8123456789012345678",
+			wantCreateCalls: 1,
+		},
+		{
+			name:    "restore refused without snapshot support",
+			caps:    reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME),
+			source:  "snap-1",
+			wantErr: true,
+		},
+		{
+			name:            "empty volume needs no snapshot support",
+			caps:            reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME),
+			wantCreateCalls: 1,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plugin := newSnapshotTestPlugin(t, tt.controller)
+			var createCalls int
+			var deleted []string
+			plugin := newSnapshotTestPlugin(t, &mockCSIDriver{
+				controllerGetCapabilitiesFunc: tt.caps,
+				createVolumeFunc: func(_ context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+					createCalls++
+					vol := &csi.Volume{VolumeId: "vol-" + req.GetName()}
+					source := req.GetVolumeContentSource().GetSnapshot().GetSnapshotId()
+					if tt.reportedSource != "" {
+						source = tt.reportedSource
+					}
+					if source != "" && !tt.dropSource {
+						vol.ContentSource = &csi.VolumeContentSource{Type: &csi.VolumeContentSource_Snapshot{
+							Snapshot: &csi.VolumeContentSource_SnapshotSource{SnapshotId: source},
+						}}
+					}
+					return &csi.CreateVolumeResponse{Volume: vol}, nil
+				},
+				deleteVolumeFunc: func(_ context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
+					deleted = append(deleted, req.GetVolumeId())
+					if tt.deleteErr != nil {
+						return nil, tt.deleteErr
+					}
+					return &csi.DeleteVolumeResponse{}, nil
+				},
+			})
 
 			resp, err := plugin.CreateVolume(context.Background(), volume.CreateVolumeRequest{
 				Name:             "v",
@@ -467,52 +492,18 @@ func TestPlugin_CreateVolume_RestoreSource(t *testing.T) {
 			if gotErr := err != nil; gotErr != tt.wantErr {
 				t.Fatalf("CreateVolume error = %v, wantErr %v", err, tt.wantErr)
 			}
+			if tt.wantErrContains != "" && !strings.Contains(err.Error(), tt.wantErrContains) {
+				t.Errorf("CreateVolume error = %v, want it to contain %q", err, tt.wantErrContains)
+			}
 			if resp.ContentSourceSnapshotID != tt.wantSource {
 				t.Errorf("ContentSourceSnapshotID = %q, want %q", resp.ContentSourceSnapshotID, tt.wantSource)
 			}
-			if got := tt.controller.deletedVolumes(); !slices.Equal(got, tt.wantDeleted) {
-				t.Errorf("deleted volumes = %v, want %v", got, tt.wantDeleted)
+			if createCalls != tt.wantCreateCalls {
+				t.Errorf("CreateVolume reached the driver %d times, want %d", createCalls, tt.wantCreateCalls)
+			}
+			if !slices.Equal(deleted, tt.wantDeleted) {
+				t.Errorf("deleted volumes = %v, want %v", deleted, tt.wantDeleted)
 			}
 		})
-	}
-}
-
-func TestPlugin_CreateVolume_RestoreRefusedWhenUnsupported(t *testing.T) {
-	controller := &snapshotCSIController{caps: []csi.ControllerServiceCapability_RPC_Type{
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
-	}}
-	plugin := newSnapshotTestPlugin(t, controller)
-	ctx := context.Background()
-
-	if _, err := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{Name: "v", CapacityBytes: 1 << 30, SourceSnapshotID: "snap-1"}); err == nil {
-		t.Fatal("CreateVolume restored from a snapshot on a driver that does not support snapshots")
-	}
-	controller.mu.Lock()
-	calls := controller.createVolumeCalls
-	controller.mu.Unlock()
-	if calls != 0 {
-		t.Errorf("CreateVolume reached the driver %d times, want 0", calls)
-	}
-
-	// An empty volume needs no snapshot support.
-	if _, err := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{Name: "v", CapacityBytes: 1 << 30}); err != nil {
-		t.Fatalf("CreateVolume without a source: %v", err)
-	}
-}
-
-// TestPlugin_DeleteSnapshot_NotSkipped verifies a delete always reaches the
-// driver, even when the cached capabilities say it cannot snapshot: the
-// caller holds a handle the driver issued, and skipping would leak it.
-func TestPlugin_DeleteSnapshot_NotSkipped(t *testing.T) {
-	controller := &snapshotCSIController{caps: []csi.ControllerServiceCapability_RPC_Type{
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
-	}}
-	plugin := newSnapshotTestPlugin(t, controller)
-
-	if err := plugin.DeleteSnapshot(context.Background(), "snap-1"); err != nil {
-		t.Fatalf("DeleteSnapshot: %v", err)
-	}
-	if _, _, del := controller.calls(); del != 1 {
-		t.Errorf("DeleteSnapshot reached the driver %d times, want 1", del)
 	}
 }

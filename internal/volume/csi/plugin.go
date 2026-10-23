@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -214,7 +215,7 @@ func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeReques
 		// the driver issued, so delete it here rather than leak it.
 		volumeID := resp.GetVolume().GetVolumeId()
 		if delErr := p.DeleteVolume(ctx, volumeID); delErr != nil {
-			slog.WarnContext(ctx, "failed to delete volume not restored from the requested snapshot", slog.String("volume_id", volumeID), slog.Any("error", delErr))
+			return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume did not report restoring from requested snapshot %q, and deleting volume %q failed: %w", req.SourceSnapshotID, volumeID, delErr)
 		}
 		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume did not report restoring from requested snapshot %q", req.SourceSnapshotID)
 	}
@@ -314,25 +315,23 @@ func (p *Plugin) CreateSnapshot(ctx context.Context, req volume.CreateSnapshotRe
 
 // GetSnapshot maps to CSI Controller ListSnapshots filtered to one handle.
 // ListSnapshots is used rather than the newer GetSnapshot RPC because far more
-// drivers implement it. A driver that does not implement ListSnapshots cannot
-// report readiness, so treat that as "not found" rather than an error: the
-// caller decides whether an unobservable snapshot is acceptable.
+// drivers implement it. A driver without ListSnapshots returns an error
+// wrapping errors.ErrUnsupported.
 func (p *Plugin) GetSnapshot(ctx context.Context, snapshotID string) (volume.Snapshot, bool, error) {
 	if snapshotID == "" {
 		// An empty filter would list every snapshot the driver holds.
 		return volume.Snapshot{}, false, fmt.Errorf("snapshot ID is required")
 	}
 	if !p.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS) {
-		return volume.Snapshot{}, false, nil
+		return volume.Snapshot{}, false, fmt.Errorf("CSI driver does not support ListSnapshots: %w", errors.ErrUnsupported)
 	}
 	resp, err := p.client.ListSnapshots(ctx, &csi.ListSnapshotsRequest{
 		SnapshotId: snapshotID,
 	})
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
-			slog.WarnContext(ctx, "CSI ListSnapshots is unimplemented by driver; cannot observe snapshot readiness", slog.String("snapshot_id", snapshotID))
 			p.disableControllerCap(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS)
-			return volume.Snapshot{}, false, nil
+			return volume.Snapshot{}, false, fmt.Errorf("CSI ListSnapshots is unimplemented by driver: %w", errors.ErrUnsupported)
 		}
 		// Some drivers answer NotFound for an unknown snapshot_id filter
 		// instead of an empty list.
@@ -357,6 +356,9 @@ func (p *Plugin) GetSnapshot(ctx context.Context, snapshotID string) (volume.Sna
 // the driver cannot snapshot: the caller holds a handle the driver issued, and
 // skipping the call would leak it.
 func (p *Plugin) DeleteSnapshot(ctx context.Context, snapshotID string) error {
+	if snapshotID == "" {
+		return fmt.Errorf("snapshot ID is required")
+	}
 	// The CSI spec requires DeleteSnapshot to succeed for a snapshot that does
 	// not exist, but not every driver honors that, and cleanup must stay
 	// retryable either way.

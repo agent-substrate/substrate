@@ -133,7 +133,8 @@ type VolumePluginControlPlane interface {
 	CreateSnapshot(ctx context.Context, req CreateSnapshotRequest) (Snapshot, error)
 	// GetSnapshot looks a snapshot up by handle, reporting whether the storage
 	// system still has it. A snapshot deleted out from under us is a missing
-	// snapshot, not an error.
+	// snapshot, not an error. A driver that cannot look snapshots up returns
+	// an error wrapping errors.ErrUnsupported.
 	GetSnapshot(ctx context.Context, snapshotID string) (snapshot Snapshot, found bool, err error)
 	// DeleteSnapshot releases a snapshot. Deleting one that is already gone
 	// succeeds, so that cleanup can be retried.
