@@ -557,6 +557,10 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 //     local checkpoint, so ResumeActor detaches the checkpoint to durable
 //     storage first and then restores at ROOTFS fidelity on v2 (memory=1,
 //     file=4, rootfs=4).
+//  5. The actor pauses on v2 and its worker pod is deleted; because a paused
+//     checkpoint is pinned to the node (Locality) rather than the worker pod,
+//     the paused actor stays intact and warm-restores MEMORY on the pool's
+//     replacement worker pod (memory=2, file=5, rootfs=5).
 func TestPausedActorSandboxRuntime(t *testing.T) {
 	t.Parallel()
 	f := setupSuspendedV1Actor(t, "runtime-paused", ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS)
@@ -639,6 +643,63 @@ func TestPausedActorSandboxRuntime(t *testing.T) {
 	}
 	validateCounterResponse(t, resp, "after paused detach and ROOTFS fallback", 1, 4)
 	validateRootfsCounter(t, resp, "after paused detach and ROOTFS fallback", 4)
+
+	// 5. Pause the actor on v2, delete the worker pod, wait for the pool's
+	// Deployment to register a replacement worker pod, and verify the paused
+	// actor warm-restores MEMORY on the replacement worker pod (§6 F.2).
+	paused3, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapi.SuspendActorRequest{
+		Actor:   f.actorRef,
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to pause Actor on v2: %v", err)
+	}
+	waitForActorPaused(f.ctx, t, f.clients, f.actorName)
+
+	snap3 := localSnapshot(paused3.GetActor().GetStatus())
+	if snap3.GetGeneration() <= snap2.GetGeneration() {
+		t.Fatalf("third local snapshot generation = %d, want > %d", snap3.GetGeneration(), snap2.GetGeneration())
+	}
+	if diff := cmp.Diff(v2Runtime, snap3.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("third local snapshot sandbox_runtime mismatch (-want v2 +got):\n%s", diff)
+	}
+
+	if err := f.clients.K8s.CoreV1().Pods(f.namespace).Delete(f.ctx, f.workerRef.GetName(), metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("failed to delete worker pod %s/%s: %v", f.namespace, f.workerRef.GetName(), err)
+	}
+	replacementWorker := waitForReplacementPoolWorkerActive(t, f.ctx, f.clients, f.namespace, f.poolName, f.workerRef.GetName(), v2Runtime)
+
+	afterPodDelete, err := f.clients.SubstrateAPI.GetActor(f.ctx, &ateapi.GetActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to get paused Actor after worker pod deletion: %v", err)
+	}
+	if got := afterPodDelete.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Fatalf("paused Actor state after worker pod deletion = %v, want SUSPENDED", got)
+	}
+	if !hasLocalSnapshot(afterPodDelete.GetStatus()) {
+		t.Fatalf("paused Actor lost its node-local snapshot when worker pod was deleted: %v", afterPodDelete.GetStatus().GetSnapshots())
+	}
+
+	resumed4, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapi.ResumeActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to resume paused Actor on replacement worker pod: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapi.ActorState_ACTOR_STATE_RUNNING)
+
+	assignment4 := resumed4.GetActor().GetStatus().GetWorkerAssignment()
+	if got := assignment4.GetWorker().GetName(); got != replacementWorker.GetName() {
+		t.Fatalf("workerAssignment.worker after replacement resume = %q, want %q", got, replacementWorker.GetName())
+	}
+	if diff := cmp.Diff(v2Runtime, assignment4.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("workerAssignment.sandbox_runtime on replacement worker (-want v2 +got):\n%s", diff)
+	}
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: f.actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after replacement worker resume: %v", err)
+	}
+	validateCounterResponse(t, resp, "after replacement worker resume", 2, 5)
+	validateRootfsCounter(t, resp, "after replacement worker resume", 5)
 }
 
 // TestSchedulerPrefersCompatibleWorkerPool covers runtime-aware placement across
@@ -1306,6 +1367,43 @@ func waitForPoolWorkerActive(t *testing.T, ctx context.Context, clients *e2e.Cli
 			raw, _ := json.Marshal(lastWorker)
 			t.Fatalf("timed out after %v waiting for pool %s/%s to have an ACTIVE worker on v2 (last worker=%s, err=%v)",
 				timeout, namespace, poolName, raw, err)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// waitForReplacementPoolWorkerActive polls ListWorkers until an ACTIVE worker
+// in namespace/poolName other than oldWorkerName advertises wantRuntime.
+func waitForReplacementPoolWorkerActive(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, poolName, oldWorkerName string, wantRuntime *ateapi.ActorSandboxRuntime) *ateapi.ObjectRef {
+	t.Helper()
+	const timeout = 2 * time.Minute
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var lastWorker *ateapi.Worker
+	for {
+		resp, err := clients.SubstrateAPI.ListWorkers(ctx, &ateapi.ListWorkersRequest{})
+		if err == nil {
+			for _, w := range resp.GetWorkers() {
+				if w.GetWorkerNamespace() != namespace || w.GetWorkerPool() != poolName || w.GetMetadata().GetName() == oldWorkerName {
+					continue
+				}
+				lastWorker = w
+				status := w.GetStatus()
+				if status.GetState() != ateapi.WorkerState_WORKER_STATE_ACTIVE {
+					continue
+				}
+				if hardware.WorkerMatches(status, wantRuntime) {
+					t.Logf("Pool %s/%s replacement Worker %s active (replaced %s)", namespace, poolName, w.GetMetadata().GetName(), oldWorkerName)
+					return &ateapi.ObjectRef{Name: w.GetMetadata().GetName()}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			raw, _ := json.Marshal(lastWorker)
+			t.Fatalf("timed out after %v waiting for replacement worker in pool %s/%s (old=%s, last=%s, err=%v)",
+				timeout, namespace, poolName, oldWorkerName, raw, err)
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
