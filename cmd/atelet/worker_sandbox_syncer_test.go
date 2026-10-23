@@ -75,8 +75,7 @@ func (f *fakeAssetFetcher) stageSandboxAssets(ctx context.Context, rec *sandboxA
 }
 
 // newTestAssetFetcher returns a sandboxAssetFetcher that maps every asset of
-// a record to a path under its digest without fetching anything, for syncers
-// whose runsc probe is faked.
+// a record to a path under its digest without fetching anything.
 func newTestAssetFetcher() sandboxAssetFetcher {
 	return &fakeAssetFetcher{
 		fn: func(_ context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
@@ -175,7 +174,7 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), nil)
 	// The queue starts a goroutine; stop it with the test.
 	t.Cleanup(s.queue.ShutDown)
-	s.scratchDir = t.TempDir() // the runsc probe stages the binary there
+	s.scratchDir = t.TempDir() // buildFile stages assets there
 	s.probeCPUIdentity = func() (string, string, error) { return testCPUVendor, testCPUModel, nil }
 	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return testCPUFeatures(), nil }
 	// Tests that check the jitter set it.

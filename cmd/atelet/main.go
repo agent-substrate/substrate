@@ -472,8 +472,9 @@ func main() {
 			o.FieldSelector = "spec.nodeName=" + ateletIdentity.NodeName
 			o.LabelSelector = workerPoolLabel
 		}))
-	// Pre-download each local worker's default runtime, as the syncer plans
-	// the worker, so the first Run/Restore on this node hits the cache.
+	// Link each local worker's default runtime under the worker's directory
+	// as the syncer plans the worker, so it stays cached while no actor runs
+	// it.
 	// Best-effort: on failure the on-demand fetch in ensureSandboxAssets
 	// still covers correctness.
 	prewarmer := newRuntimePrewarmer(runtimes, wmService)
