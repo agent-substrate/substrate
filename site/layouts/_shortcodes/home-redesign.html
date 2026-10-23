@@ -177,7 +177,7 @@ limitations under the License.
         </div>
         <div class="as-cap-card__body">
           <div class="as-cap-card__title">Distinct Workload Identity</div>
-          <p class="as-cap-card__desc">Every actor gets a short-lived (1h) SPIFFE X.509 certificate and on-demand JWTs bound to its UID, distinguishing recreated actors with the same name while keeping private keys in <code class="mono">atunnel</code> outside the guest.</p>
+          <p class="as-cap-card__desc">Every actor gets a short-lived SPIFFE X.509 certificate and on-demand JWTs that are injected on egress and federate with every cloud provider and external service.</p>
         </div>
         <span class="as-cap-card__cta as-cap-card__cta--blue">
           <span>Authentication guide</span>
@@ -194,7 +194,7 @@ limitations under the License.
         </div>
         <div class="as-cap-card__body">
           <div class="as-cap-card__title">Zero Ambient Credentials</div>
-          <p class="as-cap-card__desc">Default actor sandboxes execute completely credential-free. The egress gateway hydrates and injects API keys and tokens out-of-band on authorized outbound calls, so the agent never holds the secret.</p>
+          <p class="as-cap-card__desc">Actor sandboxes execute credential-free. The egress gateway pulls secrets from pluggable secret stores and injects API keys and tokens out-of-band on authorized outbound calls. The agent never holds a secret.</p>
         </div>
         <span class="as-cap-card__cta as-cap-card__cta--yellow">
           <span>Credential injection</span>
@@ -228,7 +228,7 @@ limitations under the License.
         </div>
         <div class="as-cap-card__body">
           <div class="as-cap-card__title">Always Sandboxed Multi-Tenancy</div>
-          <p class="as-cap-card__desc">Standard Linux containers are not sufficient or supported. Every actor runs inside a Cloud Hypervisor microVM or <code class="mono">gVisor</code> sandbox with segregated storage and scrubbed worker state between runs.</p>
+          <p class="as-cap-card__desc">Every actor runs inside a Cloud Hypervisor microVM or <code class="mono">gVisor</code> sandbox with segregated compute, network, and storage. Actor state is removed between runs.</p>
         </div>
         <span class="as-cap-card__cta as-cap-card__cta--green">
           <span>Threat model</span>
@@ -330,15 +330,18 @@ limitations under the License.
         </div>
         <pre class="as-term-card__pre mono is-active" data-term-pane="kind" id="term-pane-kind"><span class="as-term-comment"># 1 · create a cluster and install the system</span>
 hack/create-kind-cluster.sh
-hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
+hack/install-ate-kind.sh deploy ate-system \
+  --credential-provider='{"name":"k8s.io"}'
 hack/install-ate-kind.sh deploy demo-counter
 
 <span class="as-term-comment"># 2 · create an actor</span>
 go install ./cmd/kubectl-ate
-kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
+kubectl ate create actor my-counter-1 \
+  -a ate-demo-counter --template counter
 
 <span class="as-term-comment"># 3 · send it a request (it resumes on demand)</span>
-curl -X POST -H <span class="as-term-str">"ate-target-actor: ate-demo-counter/my-counter-1"</span> \
+curl -X POST \
+  -H <span class="as-term-str">"ate-target-actor: ate-demo-counter/my-counter-1"</span> \
   http://localhost:8000/</pre>
       </div>
       <a href="{{ "docs/get-started/quickstart/" | relURL }}" class="as-arrow-link">
