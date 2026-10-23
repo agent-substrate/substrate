@@ -63,7 +63,7 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 		return nil, fmt.Errorf("ateapiauth: a client credential bundle (mTLS) is required")
 	}
 	if cfg.ServerName == "" {
-		return nil, fmt.Errorf("ateapiauth: ServerName is required")
+		return nil, fmt.Errorf("ateapiauth: a DNS name to verify the server certificate against is required")
 	}
 	loadRootCAs := credbundle.PoolLoader(cfg.CAFile)
 	if _, err := loadRootCAs(); err != nil {
