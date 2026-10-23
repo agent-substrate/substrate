@@ -18,39 +18,39 @@ import (
 	"context"
 	"fmt"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func ValidateCreateActorTemplateRequest(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) field.ErrorList {
+func ValidateCreateActorTemplateRequest(ctx context.Context, req *ateapi.CreateActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_CreateActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateGetActorTemplateRequest(ctx context.Context, req *ateapipb.GetActorTemplateRequest) field.ErrorList {
+func ValidateGetActorTemplateRequest(ctx context.Context, req *ateapi.GetActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_GetActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateListActorTemplatesRequest(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) field.ErrorList {
+func ValidateListActorTemplatesRequest(ctx context.Context, req *ateapi.ListActorTemplatesRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_ListActorTemplatesRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateDeleteActorTemplateRequest(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
+func ValidateDeleteActorTemplateRequest(ctx context.Context, req *ateapi.DeleteActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_DeleteActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.ActorTemplate) field.ErrorList {
+func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.ActorTemplate) field.ErrorList {
 	// Call the generated validation.
 	op := MakeUpdateOp(ctx)
 	return Validate_ActorTemplate(ctx, op, fldPath, newVal, oldVal)
@@ -58,9 +58,9 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 
 // ValidateCustom_CreateActorTemplateRequest_ActorTemplate holds the rules
 // that span more than one field of a template.
-func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
+func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.ActorTemplate) field.ErrorList {
 	var errs field.ErrorList
-	if value.GetGoldenEgressPolicy() != nil && value.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+	if value.GetGoldenEgressPolicy() != nil && value.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 		errs = append(errs, field.Forbidden(fldPath.Child("golden_egress_policy"), "requires golden snapshots to be enabled"))
 	}
 	declared := make(map[string]bool, len(value.GetVolumes()))
@@ -85,7 +85,7 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 
 // ValidateCustom_ActorTemplate_Resources requires both a cpu and a memory
 // limit, which the scheduler books against worker capacity.
-func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ResourceRequirements) field.ErrorList {
+func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.ResourceRequirements) field.ErrorList {
 	var errs field.ErrorList
 	if value.GetLimits().GetCpuMillicores() == 0 {
 		errs = append(errs, field.Required(fldPath.Child("limits", "cpu_millicores"), ""))
@@ -106,7 +106,7 @@ func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operati
 
 // ValidateCustom_Container_VolumeMounts rejects mounts that nest under one
 // another. Mount-path uniqueness is enforced by the list key.
-func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.VolumeMount) field.ErrorList {
+func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapi.VolumeMount) field.ErrorList {
 	paths := make([]string, len(value))
 	for i, m := range value {
 		paths[i] = m.GetMountPath()
@@ -126,7 +126,7 @@ func ValidateCustom_TrustBundleDataSource_Path(_ context.Context, _ operation.Op
 // actor_metadata entry and requires every projected file path to be unique
 // across all data sources: atelet writes them in order into one tree, so a
 // repeated path silently clobbers the earlier file.
-func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.SystemInfoDataSource) field.ErrorList {
+func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapi.SystemInfoDataSource) field.ErrorList {
 	var errs field.ErrorList
 	seen := sets.New[string]()
 	sawMetadata := false

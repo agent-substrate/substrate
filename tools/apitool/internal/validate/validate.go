@@ -25,7 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/tools/apitool/internal/exemption"
 	"go.ate.dev/substrate/tools/apitool/internal/lint"
 	"go.ate.dev/substrate/tools/apitool/internal/model"
@@ -40,7 +40,7 @@ const serviceName = "Control"
 // from, so which service and proto file that is stays this package's own
 // concern.
 func API(ctx context.Context) (*model.API, error) {
-	api, err := model.Build(ctx, ateapipb.Source)
+	api, err := model.Build(ctx, ateapi.Source)
 	if err != nil {
 		return nil, fmt.Errorf("while building API model: %w", err)
 	}

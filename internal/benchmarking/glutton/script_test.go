@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -122,58 +123,72 @@ func TestRunScriptRunsStepsInOrderAndSumsStats(t *testing.T) {
 	}
 }
 
-// Requests in one operation overlap: two sleeps of 100ms take about 100ms,
+// The timing tests run on a synctest bubble. Its clock advances only when
+// every goroutine is blocked on a timer, and then by exactly the timer's
+// duration, so a pass costs its sleep and nothing else, and the pass
+// counts and elapsed times are exact instead of depending on how fast the
+// machine runs the disk writes between sleeps.
+
+// Requests in one operation overlap: three sleeps of 100ms take 100ms,
 // and the operation's elapsed is its longest request, not their sum.
 func TestRunScriptOperationRunsRequestsTogether(t *testing.T) {
-	svc := newTestService(t)
-	start := time.Now()
-	result := run(t, svc, script(op(sleepFor(100), sleepFor(100), sleepFor(100))))
-	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
-		t.Errorf("three parallel 100ms sleeps took %v", elapsed)
-	}
-	stats := result.GetChildren()[0].GetStats()
-	if stats.GetSleptMs() < 300 || stats.GetElapsedMs() > 250 {
-		t.Errorf("operation slept_ms=%d elapsed_ms=%d, want ~300 summed and ~100 wall", stats.GetSleptMs(), stats.GetElapsedMs())
-	}
+	synctest.Test(t, func(t *testing.T) {
+		svc := newTestService(t)
+		start := time.Now()
+		result := run(t, svc, script(op(sleepFor(100), sleepFor(100), sleepFor(100))))
+		if elapsed := time.Since(start); elapsed != 100*time.Millisecond {
+			t.Errorf("three parallel 100ms sleeps took %v", elapsed)
+		}
+		stats := result.GetChildren()[0].GetStats()
+		if stats.GetSleptMs() != 300 || stats.GetElapsedMs() != 100 {
+			t.Errorf("operation slept_ms=%d elapsed_ms=%d, want 300 summed and 100 wall", stats.GetSleptMs(), stats.GetElapsedMs())
+		}
+	})
 }
 
 // A looped block cycles until its budget and finishes the pass it is in:
-// every pass is whole, the loop overruns by at most one pass, and the
-// stats count every pass.
+// every pass is whole, the loop overruns its budget by at most one pass,
+// and the stats count every pass. Three 30ms passes end at 90ms, inside
+// the 100ms budget, so a fourth runs and the loop ends at 120ms.
 func TestRunScriptLoopsUntilTheBudget(t *testing.T) {
-	svc := newTestService(t)
-	start := time.Now()
-	result := run(t, svc, script(loop(100, op(sleepFor(30)), op(writeDisk("churn", 16)))))
-	elapsed := time.Since(start)
-	if elapsed < 100*time.Millisecond || elapsed > 300*time.Millisecond {
-		t.Errorf("a 100ms loop returned after %v", elapsed)
-	}
-	looped := result.GetChildren()[0].GetStats()
-	if looped.GetPasses() < 4 || looped.GetPasses() > 5 {
-		t.Errorf("passes = %d, want 4 whole 30ms passes to cover 100ms", looped.GetPasses())
-	}
-	// Whole passes: as many writes as sleeps, and the sleeps complete.
-	if looped.GetDiskBytesWritten() != 16*looped.GetPasses() || looped.GetSleptMs() < 30*(looped.GetPasses()-1) {
-		t.Errorf("loop stats = %v, want %d whole passes", looped, looped.GetPasses())
-	}
-	if root := result.GetStats(); root.GetPasses() != 1 || root.GetDiskBytesWritten() != looped.GetDiskBytesWritten() {
-		t.Errorf("root = %v, want one pass and the loop's totals", root)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		svc := newTestService(t)
+		start := time.Now()
+		result := run(t, svc, script(loop(100, op(sleepFor(30)), op(writeDisk("churn", 16)))))
+		if elapsed := time.Since(start); elapsed != 120*time.Millisecond {
+			t.Errorf("a 100ms loop of 30ms passes returned after %v, want 120ms", elapsed)
+		}
+		looped := result.GetChildren()[0].GetStats()
+		if looped.GetPasses() != 4 {
+			t.Errorf("passes = %d, want 4", looped.GetPasses())
+		}
+		// Whole passes: as many writes as sleeps, and the sleeps complete.
+		if looped.GetDiskBytesWritten() != 16*4 || looped.GetSleptMs() != 30*4 || looped.GetElapsedMs() != 120 {
+			t.Errorf("loop stats = %v, want 4 whole passes", looped)
+		}
+		if root := result.GetStats(); root.GetPasses() != 1 || root.GetDiskBytesWritten() != looped.GetDiskBytesWritten() {
+			t.Errorf("root = %v, want one pass and the loop's totals", root)
+		}
+	})
 }
 
 // An inner loop stops cycling once the outer one's budget has elapsed,
-// finishing its pass; that is not an error.
+// finishing its pass; that is not an error. Five 20ms passes reach the
+// outer 100ms budget exactly, so neither loop starts a sixth.
 func TestRunScriptNestedLoopsShareTheBudget(t *testing.T) {
-	svc := newTestService(t)
-	start := time.Now()
-	result := run(t, svc, script(loop(100, loop(5000, op(sleepFor(20))))))
-	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
-		t.Errorf("a 5s loop inside a 100ms loop ran for %v", elapsed)
-	}
-	inner := result.GetChildren()[0].GetChildren()[0].GetStats()
-	if inner.GetPasses() < 5 || inner.GetSleptMs() < 20*inner.GetPasses() {
-		t.Errorf("inner loop = %v, want ~5 whole 20ms passes", inner)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		svc := newTestService(t)
+		start := time.Now()
+		result := run(t, svc, script(loop(100, loop(5000, op(sleepFor(20))))))
+		if elapsed := time.Since(start); elapsed != 100*time.Millisecond {
+			t.Errorf("a 5s loop inside a 100ms loop ran for %v", elapsed)
+		}
+		outer := result.GetChildren()[0].GetStats()
+		inner := result.GetChildren()[0].GetChildren()[0].GetStats()
+		if outer.GetPasses() != 1 || inner.GetPasses() != 5 || inner.GetSleptMs() != 100 {
+			t.Errorf("outer = %v inner = %v, want one outer pass and 5 whole 20ms inner passes", outer, inner)
+		}
+	})
 }
 
 // Shape problems are rejected before any step runs, with the node named.

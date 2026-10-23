@@ -22,9 +22,9 @@ import (
 	"slices"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // defaultCapabilities mirrors atelet's default set (cmd/atelet/oci.go). It is
@@ -144,20 +144,20 @@ func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients, buck
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, template, id string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: namespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: namespace, Name: template},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: namespace, Name: id},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: namespace, Name: template},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
 	t.Cleanup(func() {
 		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id}})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id}})
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: &ateapi.ObjectRef{Atespace: namespace, Name: id}})
+		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: &ateapi.ObjectRef{Atespace: namespace, Name: id}})
 	})
 
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id},
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: namespace, Name: id},
 	}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}

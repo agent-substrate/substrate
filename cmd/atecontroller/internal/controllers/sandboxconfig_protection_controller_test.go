@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 )
 
 // TestSandboxConfigProtectionReconcile checks that the reconciler never adds
@@ -39,18 +39,18 @@ import (
 func TestSandboxConfigProtectionReconcile(t *testing.T) {
 	t.Parallel()
 	scheme := runtime.NewScheme()
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	now := metav1.Now()
 	// using returns a pool whose status has one sandbox class per name, each
 	// using the named config, or no config when the name is "".
-	using := func(names ...string) *atev1alpha1.WorkerPool {
+	using := func(names ...string) *atev1.WorkerPool {
 		wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 		for _, name := range names {
-			s := atev1alpha1.WorkerPoolSandboxClassStatus{Name: atev1alpha1.SandboxClassGvisor}
+			s := atev1.WorkerPoolSandboxClassStatus{Name: atev1.SandboxClassGvisor}
 			if name != "" {
-				s.ConfigRef = &atev1alpha1.SandboxConfigReference{Name: name}
+				s.ConfigRef = &atev1.SandboxConfigReference{Name: name}
 			}
 			wp.Status.SandboxClasses = append(wp.Status.SandboxClasses, s)
 		}
@@ -58,18 +58,18 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 	}
 	// claiming returns a pool whose one sandbox class uses "other" and is
 	// switching to the named config.
-	claiming := func(name string) *atev1alpha1.WorkerPool {
+	claiming := func(name string) *atev1.WorkerPool {
 		wp := using("other")
-		wp.Status.SandboxClasses[0].PendingConfigRef = &atev1alpha1.SandboxConfigReference{Name: name}
+		wp.Status.SandboxClasses[0].PendingConfigRef = &atev1.SandboxConfigReference{Name: name}
 		return wp
 	}
 	// config builds a SandboxConfig that has the protection finalizer if
 	// protected. A deleting one carries another finalizer too, as the fake
 	// client, like the API server, keeps no deleting object without one.
-	config := func(protected, deleting bool) *atev1alpha1.SandboxConfig {
-		sc := makeSandboxConfig("sc", atev1alpha1.SandboxClassGvisor, true)
+	config := func(protected, deleting bool) *atev1.SandboxConfig {
+		sc := makeSandboxConfig("sc", atev1.SandboxClassGvisor, true)
 		if protected {
-			controllerutil.AddFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+			controllerutil.AddFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 		}
 		if deleting {
 			controllerutil.AddFinalizer(sc, testHoldFinalizer)
@@ -80,8 +80,8 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 	// newClient returns a client whose List fails with listErr, if set.
 	newClient := func(listErr error, objs ...client.Object) client.Client {
 		return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
-			WithIndex(&atev1alpha1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
-				return sandboxConfigsInUse(obj.(*atev1alpha1.WorkerPool))
+			WithIndex(&atev1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
+				return sandboxConfigsInUse(obj.(*atev1.WorkerPool))
 			}).
 			WithInterceptorFuncs(interceptor.Funcs{
 				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
@@ -96,7 +96,7 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		sc     *atev1alpha1.SandboxConfig
+		sc     *atev1.SandboxConfig
 		cached []client.Object
 		live   []client.Object
 		// cachedErr and liveErr fail the cached and the live WorkerPool list.
@@ -202,11 +202,11 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("Reconcile error = %v, want %v", err, tc.wantErr)
 			}
-			got := &atev1alpha1.SandboxConfig{}
+			got := &atev1.SandboxConfig{}
 			if err := c.Get(t.Context(), types.NamespacedName{Name: tc.sc.Name}, got); err != nil {
 				t.Fatalf("get SandboxConfig: %v", err)
 			}
-			if has := controllerutil.ContainsFinalizer(got, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer); has != tc.want {
+			if has := controllerutil.ContainsFinalizer(got, atev1.SandboxConfigWorkerPoolProtectionFinalizer); has != tc.want {
 				t.Errorf("has protection finalizer = %v, want %v", has, tc.want)
 			}
 			if controllerutil.ContainsFinalizer(tc.sc, testHoldFinalizer) && !controllerutil.ContainsFinalizer(got, testHoldFinalizer) {
@@ -222,7 +222,7 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 func TestSandboxConfigProtectionReconcileGet(t *testing.T) {
 	t.Parallel()
 	scheme := runtime.NewScheme()
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	errGet := errors.New("get failed")
@@ -270,8 +270,8 @@ func TestSandboxConfigProtectionReconcileGet(t *testing.T) {
 // addProtectionFinalizer or removeProtectionFinalizer to a SandboxConfig.
 type protectionFinalizerCase struct {
 	name string
-	op   func(context.Context, client.Client, *atev1alpha1.SandboxConfig) error
-	sc   *atev1alpha1.SandboxConfig
+	op   func(context.Context, client.Client, *atev1.SandboxConfig) error
+	sc   *atev1.SandboxConfig
 	// stale changes the stored config after it is read, so the patch
 	// carries an outdated resourceVersion.
 	stale       bool
@@ -283,11 +283,11 @@ type protectionFinalizerCase struct {
 // protectedSandboxConfig builds a SandboxConfig for a protectionFinalizerCase.
 // It always carries testHoldFinalizer, so it stays readable while deleting,
 // and the protection finalizer if protected.
-func protectedSandboxConfig(protected, deleting bool) *atev1alpha1.SandboxConfig {
-	sc := makeSandboxConfig("sc", atev1alpha1.SandboxClassGvisor, false)
+func protectedSandboxConfig(protected, deleting bool) *atev1.SandboxConfig {
+	sc := makeSandboxConfig("sc", atev1.SandboxClassGvisor, false)
 	controllerutil.AddFinalizer(sc, testHoldFinalizer)
 	if protected {
-		controllerutil.AddFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+		controllerutil.AddFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 	}
 	if deleting {
 		now := metav1.Now()
@@ -302,7 +302,7 @@ func protectedSandboxConfig(protected, deleting bool) *atev1alpha1.SandboxConfig
 func runProtectionFinalizerCases(t *testing.T, tests []protectionFinalizerCase) {
 	t.Helper()
 	scheme := runtime.NewScheme()
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	for _, tc := range tests {
@@ -317,7 +317,7 @@ func runProtectionFinalizerCases(t *testing.T, tests []protectionFinalizerCase) 
 					},
 				}).Build()
 			key := types.NamespacedName{Name: tc.sc.Name}
-			read := &atev1alpha1.SandboxConfig{}
+			read := &atev1.SandboxConfig{}
 			if err := c.Get(t.Context(), key, read); err != nil {
 				t.Fatalf("get SandboxConfig: %v", err)
 			}
@@ -339,11 +339,11 @@ func runProtectionFinalizerCases(t *testing.T, tests []protectionFinalizerCase) 
 			if patches != tc.wantPatches {
 				t.Errorf("patches = %d, want %d", patches, tc.wantPatches)
 			}
-			got := &atev1alpha1.SandboxConfig{}
+			got := &atev1.SandboxConfig{}
 			if err := c.Get(t.Context(), key, got); err != nil {
 				t.Fatalf("get SandboxConfig: %v", err)
 			}
-			if has := controllerutil.ContainsFinalizer(got, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer); has != tc.want {
+			if has := controllerutil.ContainsFinalizer(got, atev1.SandboxConfigWorkerPoolProtectionFinalizer); has != tc.want {
 				t.Errorf("has protection finalizer = %v, want %v", has, tc.want)
 			}
 			if !controllerutil.ContainsFinalizer(got, testHoldFinalizer) {

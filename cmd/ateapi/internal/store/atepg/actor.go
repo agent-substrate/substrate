@@ -20,13 +20,13 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 )
 
-func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
+func (p *Persistence) CreateActor(ctx context.Context, actor *ateapi.Actor) (*ateapi.Actor, error) {
 	atespace := actor.GetMetadata().GetAtespace()
 	name := actor.GetMetadata().GetName()
 
@@ -34,8 +34,11 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	// make modifications to the actor before passing it in, so we can safely
 	// mutate it in place.  This breaks some of the contract tests, so we can
 	// fix it later.
-	dbActor := proto.Clone(actor).(*ateapipb.Actor)
+	dbActor := proto.Clone(actor).(*ateapi.Actor)
 	setCreateMetadata(dbActor.Metadata)
+	if err := validateSnapshotURIs("actor "+resources.ActorRefFromActor(dbActor).String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
+		return nil, err
+	}
 
 	protoBytes, err := proto.Marshal(dbActor)
 	if err != nil {
@@ -60,7 +63,7 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	return dbActor, nil
 }
 
-func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error) {
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, actorRef.Atespace, actorRef.Name).Scan(&protoBytes)
 	if err != nil {
@@ -69,25 +72,25 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 		}
 		return nil, fmt.Errorf("getting actor %s/%s: %w", actorRef.Atespace, actorRef.Name, err)
 	}
-	out := &ateapipb.Actor{}
+	out := &ateapi.Actor{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor: %w", err)
 	}
 	return out, nil
 }
 
-func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
 	return p.updateActor(ctx, actorRef, store.DeletePreconditions(precondition), mutate, false)
 }
 
-func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	return p.updateActor(ctx, actorRef, precondition, mutate, true)
 }
 
-func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapipb.Actor) error, markForDeletion bool) (*ateapipb.Actor, error) {
+func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
 	var currentUID string
 	var currentVersion int64
@@ -101,7 +104,7 @@ func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, fmt.Errorf("getting actor %s/%s for update: %w", atespace, name, err)
 	}
 
-	dbActor := &ateapipb.Actor{}
+	dbActor := &ateapi.Actor{}
 	if err := unmarshalStored(currentBytes, dbActor); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
 	}
@@ -116,6 +119,9 @@ func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorR
 		if err := mutate(dbActor); err != nil {
 			return nil, err
 		}
+	}
+	if err := validateSnapshotURIs("actor "+actorRef.String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
+		return nil, err
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
@@ -145,7 +151,7 @@ func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorR
 	return dbActor, nil
 }
 
-func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
+func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `
@@ -163,19 +169,19 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	if err != nil {
 		return nil, fmt.Errorf("deleting actor %s/%s: %w", atespace, name, err)
 	}
-	out := &ateapipb.Actor{}
+	out := &ateapi.Actor{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted actor: %w", err)
 	}
 	return out, nil
 }
 
-func (p *Persistence) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
+func (p *Persistence) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.Actor], error) {
 	opts, err := store.NormalizeListOptions(opts)
 	if err != nil {
-		return store.ListResponse[*ateapipb.Actor]{}, err
+		return store.ListResponse[*ateapi.Actor]{}, err
 	}
-	var items []*ateapipb.Actor
+	var items []*ateapi.Actor
 	var nextToken string
 	if atespace != "" {
 		items, nextToken, err = p.listActorsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
@@ -183,12 +189,12 @@ func (p *Persistence) ListActors(ctx context.Context, atespace string, opts stor
 		items, nextToken, err = p.listActorsGlobal(ctx, opts.PageSize, opts.PageToken)
 	}
 	if err != nil {
-		return store.ListResponse[*ateapipb.Actor]{}, err
+		return store.ListResponse[*ateapi.Actor]{}, err
 	}
-	return store.ListResponse[*ateapipb.Actor]{Items: items, NextPageToken: nextToken}, nil
+	return store.ListResponse[*ateapi.Actor]{Items: items, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapi.Actor, string, error) {
 	token, err := decodePageToken(pageTokenStr, kindActor, atespace, 1)
 	if err != nil {
 		return nil, "", err
@@ -209,14 +215,14 @@ func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pag
 	defer rows.Close()
 
 	var names []string
-	var result []*ateapipb.Actor
+	var result []*ateapi.Actor
 	for rows.Next() {
 		var name string
 		var protoBytes []byte
 		if err := rows.Scan(&name, &protoBytes); err != nil {
 			return nil, "", fmt.Errorf("scanning actor row: %w", err)
 		}
-		a := &ateapipb.Actor{}
+		a := &ateapi.Actor{}
 		if err := unmarshalRow(protoBytes, a, "actor", atespace, name); err != nil {
 			return nil, "", err
 		}
@@ -235,7 +241,7 @@ func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pag
 	return result, nextToken, nil
 }
 
-func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapi.Actor, string, error) {
 	token, err := decodePageToken(pageTokenStr, kindActor, "", 2)
 	if err != nil {
 		return nil, "", err
@@ -257,14 +263,14 @@ func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, page
 
 	type key struct{ atespace, name string }
 	var keys []key
-	var result []*ateapipb.Actor
+	var result []*ateapi.Actor
 	for rows.Next() {
 		var k key
 		var protoBytes []byte
 		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
 			return nil, "", fmt.Errorf("scanning actor row: %w", err)
 		}
-		a := &ateapipb.Actor{}
+		a := &ateapi.Actor{}
 		if err := unmarshalRow(protoBytes, a, "actor", k.atespace, k.name); err != nil {
 			return nil, "", err
 		}

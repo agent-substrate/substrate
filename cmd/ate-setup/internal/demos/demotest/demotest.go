@@ -71,7 +71,7 @@ func AssertRendered(t *testing.T, manifest []byte) {
 
 // AssertRenderedActorTemplate checks that a rendered protojson ActorTemplate
 // manifest has every placeholder resolved and strictly parses into the
-// ateapipb.ActorTemplate it will be created as, and that it names the given
+// ateapi.ActorTemplate it will be created as, and that it names the given
 // (atespace, name). ko:// image references are left as written: they are
 // plain strings to the proto, resolved only at deploy time.
 func AssertRenderedActorTemplate(t *testing.T, manifest []byte, want resources.ActorTemplateRef) {

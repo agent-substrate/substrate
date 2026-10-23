@@ -29,9 +29,9 @@ import (
 	"syscall"
 
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -49,7 +49,7 @@ type ProcessResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
-func dialAteAPI(endpoint string) (ateapipb.ControlClient, *grpc.ClientConn, error) {
+func dialAteAPI(endpoint string) (ateapi.ControlClient, *grpc.ClientConn, error) {
 	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
 
 	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(creds))
@@ -57,7 +57,7 @@ func dialAteAPI(endpoint string) (ateapipb.ControlClient, *grpc.ClientConn, erro
 		return nil, nil, err
 	}
 
-	return ateapipb.NewControlClient(conn), conn, nil
+	return ateapi.NewControlClient(conn), conn, nil
 }
 
 func main() {
@@ -96,7 +96,7 @@ func main() {
 	defer conn.Close()
 
 	log.Printf("Resuming actor %s...", actorRef.Name)
-	_, err = cli.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()})
+	_, err = cli.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef.ToObjectRef()})
 	if err != nil {
 		log.Fatalf("Failed to resume actor: %v", err)
 	}
@@ -106,7 +106,7 @@ func main() {
 	defer func() {
 		log.Printf("Suspending actor %s...", actorRef.Name)
 		suspendCtx := context.Background()
-		_, err := cli.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
+		_, err := cli.SuspendActor(suspendCtx, &ateapi.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
 		if err != nil {
 			log.Printf("Failed to suspend actor: %v", err)
 		} else {

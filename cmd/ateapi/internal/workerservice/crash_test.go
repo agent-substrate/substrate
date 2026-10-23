@@ -22,17 +22,17 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
-func crashRequest(actorUID string) *ateapipb.ReportActorCrashedRequest {
-	return &ateapipb.ReportActorCrashedRequest{
-		Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
-		Actor:    &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+func crashRequest(actorUID string) *ateapi.ReportActorCrashedRequest {
+	return &ateapi.ReportActorCrashedRequest{
+		Worker:   &ateapi.ObjectRef{Name: testWorkerName},
+		Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
 		ActorUid: actorUID,
 		Message:  "cloud-hypervisor exited: signal: killed",
 	}
@@ -41,7 +41,7 @@ func crashRequest(actorUID string) *ateapipb.ReportActorCrashedRequest {
 func TestReportActorCrashed(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 	actor := seedHostedActor(t, st, testWorkerName)
 	uid := actor.GetMetadata().GetUid()
 	control := &fakeControl{crashResp: actor}
@@ -64,7 +64,7 @@ func TestReportActorCrashed(t *testing.T) {
 func TestReportActorCrashed_Refused(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
 	actor := seedHostedActor(t, st, testWorkerName)
 	uid := actor.GetMetadata().GetUid()
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
@@ -77,7 +77,7 @@ func TestReportActorCrashed_Refused(t *testing.T) {
 	tests := []struct {
 		name string
 		ctx  context.Context
-		req  *ateapipb.ReportActorCrashedRequest
+		req  *ateapi.ReportActorCrashedRequest
 		want codes.Code
 	}{
 		{"unauthenticated", ateletauthtest.ContextWith(nil), crashRequest(uid), codes.Unauthenticated},

@@ -19,12 +19,12 @@ import (
 	"errors"
 	"fmt"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -53,7 +53,7 @@ import (
 // dies after it leaves a pending tag and every later create under that name is
 // AlreadyExists. To retry, delete the tag, which collects whatever the failed
 // attempt stranded, and create it again.
-func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error) {
+func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (*ateapi.Tag, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	actorRef := resources.ActorRefFromObjectRef(tag.GetSourceActor())
 
@@ -126,7 +126,7 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 // Note that this destroys the external snapshot: an Actor created from the tag
 // and never suspended is still borrowing it and becomes unrecoverable. Do not
 // delete a tag while clones of it exist.
-func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
+func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapi.Tag, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	// Serializes against a create of the same tag, whose copy would otherwise
 	// keep writing into the prefix this is collecting.
@@ -149,12 +149,12 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, 
 // ensureTagMarkedForDeletion sets the tag's delete_time, checking precondition,
 // and returns the stored copy. Skips when a previous attempt already marked the
 // tag.
-func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (_ *ateapipb.Tag, err error) {
+func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (_ *ateapi.Tag, err error) {
 	ctx, done := stepSpan(ctx, "MarkTagForDeletion")
 	defer func() { err = done(err) }()
 
-	var alreadyDeleting *ateapipb.Tag
-	marked, err := w.store.MarkTagForDeletion(ctx, tagRef, precondition, func(toUpdate *ateapipb.Tag) error {
+	var alreadyDeleting *ateapi.Tag
+	marked, err := w.store.MarkTagForDeletion(ctx, tagRef, precondition, func(toUpdate *ateapi.Tag) error {
 		if toUpdate.GetMetadata().GetDeleteTime() != nil {
 			alreadyDeleting = toUpdate
 			return errAlreadyMarked
@@ -185,7 +185,7 @@ func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef r
 // cleanly. It collects the in-progress snapshot of a pending tag too, and
 // skips a tag whose create died before recording its snapshot: nothing is
 // copied until the URI is recorded, so such a tag stranded nothing.
-func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *ateapipb.Tag) (err error) {
+func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *ateapi.Tag) (err error) {
 	ctx, done := stepSpan(ctx, "ReleaseTagSnapshot")
 	defer func() { err = done(err) }()
 
@@ -194,7 +194,7 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 		return nil
 	}
 	tagRef := resources.TagRefFromTag(tag)
-	snapshotURI := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED)
+	snapshotURI := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED)
 	if snapshotURI == "" {
 		markSkipped(ctx, "the tag records no snapshot")
 		return nil
@@ -210,7 +210,7 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 }
 
 // finalizeTagDeleted drops the row, once nothing it names is left behind.
-func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
+func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tag *ateapi.Tag) (_ *ateapi.Tag, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeTagDeleted")
 	defer func() { err = done(err) }()
 
@@ -234,7 +234,7 @@ func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tag *ateapipb.Ta
 
 // loadActorForTag fetches the actor to tag and its template, and checks that
 // the actor is suspended.
-func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, err error) {
+func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForTag")
 	defer func() { err = done(err) }()
 
@@ -244,8 +244,8 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	}
 	// Only a suspended actor's snapshot is complete. A running or
 	// suspending actor's is either stale or still being written.
-	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		return nil, nil, apierror.FailedPrecondition("Actor %s must be %s to be tagged (got: %v)", actorRef, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, got)
+	if got := actor.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		return nil, nil, apierror.FailedPrecondition("Actor %s must be %s to be tagged (got: %v)", actorRef, ateapi.ActorState_ACTOR_STATE_SUSPENDED, got)
 	}
 	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
 	if err != nil {
@@ -258,7 +258,7 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 // uploaded: a name already taken, or a storage location the copy cannot use.
 // The tag lease is held, so no other create or delete of the name races the
 // lookup.
-func (w *ActorWorkflow) checkTagCreatable(ctx context.Context, tagRef resources.TagRef, actorTemplate *ateapipb.ActorTemplate) (err error) {
+func (w *ActorWorkflow) checkTagCreatable(ctx context.Context, tagRef resources.TagRef, actorTemplate *ateapi.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "CheckTagCreatable")
 	defer func() { err = done(err) }()
 
@@ -288,12 +288,12 @@ func (w *ActorWorkflow) checkTagCreatable(ctx context.Context, tagRef resources.
 //
 // A failed upload does not crash the actor: the tag fails and the actor is
 // left as it was.
-func (w *ActorWorkflow) ensureTagSourceSnapshotDurable(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensureTagSourceSnapshotDurable(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "PromoteTagSourceSnapshot")
 	defer func() { err = done(err) }()
 
-	snap := latestSnapshot(actor.GetStatus(), func(*ateapipb.Snapshot) bool { return true })
-	if snap.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+	snap := latestSnapshot(actor.GetStatus(), func(*ateapi.Snapshot) bool { return true })
+	if snap.GetDurableSnapshot().GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 		markSkipped(ctx, "the actor's latest snapshot is already durable")
 		return actor, nil
 	}
@@ -351,7 +351,7 @@ func (w *ActorWorkflow) ensureTagSourceSnapshotDurable(ctx context.Context, acto
 	if err := applyAteletResponseState(ctx, applied, resp.GetState()); err != nil {
 		return nil, apierror.Internal("atelet on node %q reported a state for Actor %s that conflicts with its record: %w", snap.GetLocality(), actorRef, err)
 	}
-	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 		// The precondition makes toUpdate the version applied was built from.
 		toUpdate.Status.Snapshots = applied.GetSnapshots()
 		return nil
@@ -386,8 +386,8 @@ func promoteSnapshotError(ctx context.Context, err error) error {
 
 // sourceSnapshotForTag returns the actor's latest COMPLETED external snapshot,
 // the one a tag copies.
-func sourceSnapshotForTag(actorRef resources.ActorRef, actor *ateapipb.Actor) (*ateapipb.Snapshot, error) {
-	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+func sourceSnapshotForTag(actorRef resources.ActorRef, actor *ateapi.Actor) (*ateapi.Snapshot, error) {
+	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	if snap == nil {
 		return nil, apierror.FailedPrecondition("Actor %s holds no external snapshot to tag", actorRef)
 	}
@@ -411,15 +411,15 @@ func sourceSnapshotForTag(actorRef resources.ActorRef, actor *ateapipb.Actor) (*
 // deciding whether the objects under it still belong to the snapshot being
 // tagged, and the row may not even be this actor's; deleting the tag collects
 // them and frees the name, so a retry is a delete followed by a create.
-func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.TagRef, actor *ateapipb.Actor, snapshot *ateapipb.Snapshot, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
+func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.TagRef, actor *ateapi.Actor, snapshot *ateapi.Snapshot, tag *ateapi.Tag) (_ *ateapi.Tag, err error) {
 	ctx, done := stepSpan(ctx, "ReserveTag")
 	defer func() { err = done(err) }()
 
-	tagToCreate := &ateapipb.Tag{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
+	tagToCreate := &ateapi.Tag{
+		Metadata:    &ateapi.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
 		Scope:       tag.GetScope(),
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
-		Status: &ateapipb.TagStatus{
+		Status: &ateapi.TagStatus{
 			// The tag records the template the snapshot's guest state was built under, not
 			// the one the actor currently points at. A suspended actor can be repointed,
 			// and a tag that claimed the new template would hand clones the old template's
@@ -445,7 +445,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 // a copy of snapshot under the tag's own prefix, keyed on the UID the store
 // assigned when the tag was reserved. It lands before anything is copied, so a
 // tag whose create fails later still names the objects it stranded.
-func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *ateapipb.Tag, actorTemplate *ateapipb.ActorTemplate, snapshot *ateapipb.Snapshot) (_ *ateapipb.Tag, _ resources.SnapshotURI, err error) {
+func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *ateapi.Tag, actorTemplate *ateapi.ActorTemplate, snapshot *ateapi.Snapshot) (_ *ateapi.Tag, _ resources.SnapshotURI, err error) {
 	ctx, done := stepSpan(ctx, "RecordTagSnapshot")
 	defer func() { err = done(err) }()
 
@@ -460,15 +460,15 @@ func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *atea
 	}
 	pending := newDurableSnapshot(
 		1,
-		ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
+		ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG,
 		snapshot.GetFidelity(),
 		"",
 		dst.Name(),
 		dst.String(),
-		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+		ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
 	)
 	pending.SandboxRuntime = proto.CloneOf(snapshot.GetSandboxRuntime())
-	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
+	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapi.Tag) error {
 		toUpdate.Status.Snapshot = pending
 		return nil
 	})
@@ -487,7 +487,7 @@ func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *atea
 // ensureTagSnapshotCopied copies the actor's external snapshot to the tag's own
 // prefix. The prefix is empty by construction, so the copy never blends with
 // another attempt's objects.
-func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapipb.Tag, snapshot *ateapipb.Snapshot, dst resources.SnapshotURI) (err error) {
+func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi.Tag, snapshot *ateapi.Snapshot, dst resources.SnapshotURI) (err error) {
 	ctx, done := stepSpan(ctx, "CopyTagSnapshot")
 	defer func() { err = done(err) }()
 
@@ -510,7 +510,7 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 // ensureTagFinalized publishes the copy by marking status.snapshot COMPLETED.
 // Until this lands the tag is pending and unusable; deleting it collects any
 // partial copy.
-func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Tag, snapshot *ateapipb.Snapshot, dst resources.SnapshotURI) (_ *ateapipb.Tag, err error) {
+func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapi.Tag, snapshot *ateapi.Snapshot, dst resources.SnapshotURI) (_ *ateapi.Tag, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeTag")
 	defer func() { err = done(err) }()
 
@@ -518,15 +518,15 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 	// The copy is byte-identical to the source, so it carries the same content.
 	finalSnapshot := newDurableSnapshot(
 		1,
-		ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
+		ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG,
 		snapshot.GetFidelity(),
 		"",
 		dst.Name(),
 		dst.String(),
-		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+		ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
 	)
 	finalSnapshot.SandboxRuntime = proto.CloneOf(snapshot.GetSandboxRuntime())
-	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
+	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapi.Tag) error {
 		toUpdate.Status.Snapshot = finalSnapshot
 		return nil
 	})

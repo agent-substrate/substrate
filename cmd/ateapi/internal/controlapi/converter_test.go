@@ -22,8 +22,8 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestFidelityToAtelet pins the level-by-level mapping onto the atelet enum:
@@ -31,32 +31,32 @@ import (
 func TestFidelityToAtelet(t *testing.T) {
 	tests := []struct {
 		name     string
-		in       ateapipb.SnapshotFidelity
+		in       ateapi.SnapshotFidelity
 		expected ateletpb.SnapshotFidelity
 	}{
 		{
 			name:     "memory",
-			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			in:       ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		{
 			name:     "rootfs",
-			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			in:       ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 		},
 		{
 			name:     "volumes",
-			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			in:       ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		},
 		{
 			name:     "unspecified stays unspecified",
-			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
+			in:       ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 		},
 		{
 			name:     "value outside the enum",
-			in:       ateapipb.SnapshotFidelity(99),
+			in:       ateapi.SnapshotFidelity(99),
 			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 		},
 	}
@@ -77,13 +77,13 @@ func TestFidelityFromAtelet(t *testing.T) {
 	tests := []struct {
 		name string
 		in   ateletpb.SnapshotFidelity
-		want ateapipb.SnapshotFidelity
+		want ateapi.SnapshotFidelity
 	}{
-		{"memory", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
-		{"rootfs", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
-		{"volumes", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
-		{"unspecified stays unspecified", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
-		{"value outside the enum", ateletpb.SnapshotFidelity(99), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+		{"memory", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{"rootfs", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
+		{"volumes", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{"unspecified stays unspecified", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+		{"value outside the enum", ateletpb.SnapshotFidelity(99), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -100,7 +100,7 @@ func TestSnapshotReportFromAtelet(t *testing.T) {
 	tests := []struct {
 		name string
 		in   *ateletpb.SnapshotReport
-		want *ateapipb.SnapshotReport
+		want *ateapi.SnapshotReport
 	}{{
 		name: "every field",
 		in: &ateletpb.SnapshotReport{
@@ -113,11 +113,11 @@ func TestSnapshotReportFromAtelet(t *testing.T) {
 			LocalCommitTime:     committed,
 			DurableCompleteTime: uploaded,
 		},
-		want: &ateapipb.SnapshotReport{
+		want: &ateapi.SnapshotReport{
 			Uuid:                "snap-2",
 			Generation:          2,
-			Fidelity:            ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
-			Object:              &ateapipb.ObjectSnapshot{SnapshotUri: "gs://snapshots/snap-2"},
+			Fidelity:            ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			Object:              &ateapi.ObjectSnapshot{SnapshotUri: "gs://snapshots/snap-2"},
 			LocalCommitTime:     committed,
 			DurableCompleteTime: uploaded,
 		},
@@ -127,10 +127,10 @@ func TestSnapshotReportFromAtelet(t *testing.T) {
 			Snapshot:        &ateletpb.Snapshot{SnapshotUuid: "snap-3", Generation: 3, Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
 			LocalCommitTime: committed,
 		},
-		want: &ateapipb.SnapshotReport{
+		want: &ateapi.SnapshotReport{
 			Uuid:            "snap-3",
 			Generation:      3,
-			Fidelity:        ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			Fidelity:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			LocalCommitTime: committed,
 		},
 	}, {

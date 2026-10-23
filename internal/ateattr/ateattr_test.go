@@ -24,8 +24,8 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 )
 
 func toMap(kvs []attribute.KeyValue) map[attribute.Key]attribute.Value {
@@ -68,14 +68,14 @@ func assertAttrs(t *testing.T, got map[attribute.Key]attribute.Value, want map[a
 func TestActorAttributes(t *testing.T) {
 	tests := []struct {
 		name  string
-		actor *ateapipb.Actor
+		actor *ateapi.Actor
 		want  map[attribute.Key]any
 	}{
 		{
 			name: "full actor",
-			actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "support-agent-42", Uid: "uid-abc", Version: 7},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"},
+			actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "support-agent-42", Uid: "uid-abc", Version: 7},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "ate-agents", Name: "support-agent"},
 			},
 			want: map[attribute.Key]any{
 				AtespaceKey:         "team-a",
@@ -429,10 +429,10 @@ func TestMetricLabelValues(t *testing.T) {
 }
 
 func TestActorMetricAttributes(t *testing.T) {
-	actor := &ateapipb.Actor{
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "counter-template"},
-		Status: &ateapipb.ActorStatus{
-			WorkerAssignment: &ateapipb.WorkerAssignment{
+	actor := &ateapi.Actor{
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "counter-template"},
+		Status: &ateapi.ActorStatus{
+			WorkerAssignment: &ateapi.WorkerAssignment{
 				WorkerNamespace: "ate-workers",
 				WorkerPool:      "default-pool",
 			},
@@ -498,9 +498,9 @@ func TestActorMetricAttributes(t *testing.T) {
 	})
 
 	t.Run("empty template ref reports empty labels", func(t *testing.T) {
-		noTemplate := &ateapipb.Actor{
-			Status: &ateapipb.ActorStatus{
-				WorkerAssignment: &ateapipb.WorkerAssignment{
+		noTemplate := &ateapi.Actor{
+			Status: &ateapi.ActorStatus{
+				WorkerAssignment: &ateapi.WorkerAssignment{
 					WorkerNamespace: "ate-workers",
 					WorkerPool:      "default-pool",
 				},
@@ -523,8 +523,8 @@ func TestActorMetricAttributes(t *testing.T) {
 	// one key of the pair, or an empty-string name, would put that crash in a
 	// series that looks like a real pool.
 	t.Run("unassigned actor omits both pool keys", func(t *testing.T) {
-		unassigned := &ateapipb.Actor{
-			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "counter-template"},
+		unassigned := &ateapi.Actor{
+			ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "counter-template"},
 		}
 		got := toMap(ActorMetricAttributes(unassigned, "gvisor", OperationCreate))
 		want := map[attribute.Key]any{
@@ -622,18 +622,18 @@ func TestActorStateValues(t *testing.T) {
 func TestActorStateValue(t *testing.T) {
 	tests := []struct {
 		name  string
-		state ateapipb.ActorState
+		state ateapi.ActorState
 		want  string
 	}{
-		{name: "resuming", state: ateapipb.ActorState_ACTOR_STATE_RESUMING, want: ActorStateResuming},
-		{name: "running", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, want: ActorStateRunning},
-		{name: "suspending", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, want: ActorStateSuspending},
-		{name: "suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, want: ActorStateSuspended},
-		{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, want: ActorStateCrashed},
-		{name: "deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING, want: ActorStateDeleting},
-		{name: "reverting", state: ateapipb.ActorState_ACTOR_STATE_REVERTING, want: ActorStateReverting},
-		{name: "unspecified", state: ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED, want: ActorStateUnknown},
-		{name: "value outside the enum", state: ateapipb.ActorState(9999), want: ActorStateUnknown},
+		{name: "resuming", state: ateapi.ActorState_ACTOR_STATE_RESUMING, want: ActorStateResuming},
+		{name: "running", state: ateapi.ActorState_ACTOR_STATE_RUNNING, want: ActorStateRunning},
+		{name: "suspending", state: ateapi.ActorState_ACTOR_STATE_SUSPENDING, want: ActorStateSuspending},
+		{name: "suspended", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, want: ActorStateSuspended},
+		{name: "crashed", state: ateapi.ActorState_ACTOR_STATE_CRASHED, want: ActorStateCrashed},
+		{name: "deleting", state: ateapi.ActorState_ACTOR_STATE_DELETING, want: ActorStateDeleting},
+		{name: "reverting", state: ateapi.ActorState_ACTOR_STATE_REVERTING, want: ActorStateReverting},
+		{name: "unspecified", state: ateapi.ActorState_ACTOR_STATE_UNSPECIFIED, want: ActorStateUnknown},
+		{name: "value outside the enum", state: ateapi.ActorState(9999), want: ActorStateUnknown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -669,8 +669,8 @@ func TestActorStateValuesMirrorActorState(t *testing.T) {
 	}
 
 	want := map[string]bool{}
-	for value, name := range ateapipb.ActorState_name {
-		if ateapipb.ActorState(value) == ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED {
+	for value, name := range ateapi.ActorState_name {
+		if ateapi.ActorState(value) == ateapi.ActorState_ACTOR_STATE_UNSPECIFIED {
 			continue
 		}
 		want[strings.ToLower(strings.TrimPrefix(name, "ACTOR_STATE_"))] = true
@@ -678,12 +678,12 @@ func TestActorStateValuesMirrorActorState(t *testing.T) {
 
 	for state := range want {
 		if !got[state] {
-			t.Errorf("ateapipb.ActorState has %q with no ateattr constant", state)
+			t.Errorf("ateapi.ActorState has %q with no ateattr constant", state)
 		}
 	}
 	for state := range got {
 		if !want[state] && !noEnumCounterpart[state] {
-			t.Errorf("ateattr has state %q that ateapipb.ActorState does not", state)
+			t.Errorf("ateattr has state %q that ateapi.ActorState does not", state)
 		}
 	}
 }
@@ -697,8 +697,8 @@ func TestNormalizeSandboxClass(t *testing.T) {
 		class string
 		want  string
 	}{
-		{name: "gvisor", class: string(atev1alpha1.SandboxClassGvisor), want: string(atev1alpha1.SandboxClassGvisor)},
-		{name: "microvm", class: string(atev1alpha1.SandboxClassMicroVM), want: string(atev1alpha1.SandboxClassMicroVM)},
+		{name: "gvisor", class: string(atev1.SandboxClassGvisor), want: string(atev1.SandboxClassGvisor)},
+		{name: "microvm", class: string(atev1.SandboxClassMicroVM), want: string(atev1.SandboxClassMicroVM)},
 		{name: "empty", class: "", want: SandboxClassUnknown},
 		{name: "unknown runtime", class: "kvm", want: SandboxClassUnknown},
 		{name: "casing is not normalized away", class: "GVISOR", want: SandboxClassUnknown},

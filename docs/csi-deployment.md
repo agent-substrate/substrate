@@ -274,7 +274,7 @@ spec:
 #### 4. Corresponding `CSIDriverConfig`
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: nfs.csi.k8s.io

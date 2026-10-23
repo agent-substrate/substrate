@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"time"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
@@ -31,7 +32,6 @@ import (
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // defaultCgroupRoot is the worker pod's own cgroup scope. The worker runs in a
@@ -239,7 +239,7 @@ func pendingSample(active *resources.ActorAttribution) *ateworkerpb.WorkloadStat
 		ActorTemplateAtespace: active.TemplateAtespace,
 		ActorTemplateName:     active.TemplateName,
 
-		SandboxClass: string(atev1alpha1.SandboxClassGvisor),
+		SandboxClass: string(atev1.SandboxClassGvisor),
 
 		ObservedAtUnixNano: time.Now().UnixNano(),
 	}
@@ -282,7 +282,7 @@ func (s *AteWorkerService) sampleSandbox(active *resources.ActorAttribution) (*a
 		ActorTemplateAtespace: active.TemplateAtespace,
 		ActorTemplateName:     active.TemplateName,
 
-		SandboxClass: string(atev1alpha1.SandboxClassGvisor),
+		SandboxClass: string(atev1.SandboxClassGvisor),
 		Source:       ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
 
 		MemoryCurrentBytes:    sample.MemoryCurrentBytes,

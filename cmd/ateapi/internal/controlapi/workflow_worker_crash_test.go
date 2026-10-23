@@ -21,11 +21,11 @@ import (
 
 	"google.golang.org/grpc/codes"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func TestCrashActorReportedByWorker(t *testing.T) {
@@ -34,7 +34,7 @@ func TestCrashActorReportedByWorker(t *testing.T) {
 	tests := []struct {
 		name string
 		// mutate edits the seeded RUNNING actor before the report.
-		mutate func(*ateapipb.Actor)
+		mutate func(*ateapi.Actor)
 		// uid and worker the report names; empty means the real ones.
 		uid, worker string
 		wantCode    codes.Code
@@ -44,7 +44,7 @@ func TestCrashActorReportedByWorker(t *testing.T) {
 		{name: "hosted by another worker", worker: "other-worker", wantCode: codes.NotFound},
 		{
 			name:     "operation in flight",
-			mutate:   func(a *ateapipb.Actor) { a.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING },
+			mutate:   func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDING },
 			wantCode: codes.FailedPrecondition,
 		},
 	}
@@ -60,7 +60,7 @@ func TestCrashActorReportedByWorker(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.mutate != nil {
-				if actor, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(a *ateapipb.Actor) error {
+				if actor, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
 					tc.mutate(a)
 					return nil
 				}); err != nil {
@@ -85,7 +85,7 @@ func TestCrashActorReportedByWorker(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if after.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				if after.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_CRASHED {
 					t.Errorf("actor crashed by a refused report")
 				}
 				return

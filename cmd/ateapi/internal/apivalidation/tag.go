@@ -17,28 +17,28 @@ package apivalidation
 import (
 	"context"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func ValidateCreateTagRequest(ctx context.Context, req *ateapipb.CreateTagRequest) field.ErrorList {
+func ValidateCreateTagRequest(ctx context.Context, req *ateapi.CreateTagRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_CreateTagRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateGetTagRequest(ctx context.Context, req *ateapipb.GetTagRequest) field.ErrorList {
+func ValidateGetTagRequest(ctx context.Context, req *ateapi.GetTagRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_GetTagRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateListTagsRequest(ctx context.Context, req *ateapipb.ListTagsRequest) field.ErrorList {
+func ValidateListTagsRequest(ctx context.Context, req *ateapi.ListTagsRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_ListTagsRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateUpdateTagRequest(ctx context.Context, req *ateapipb.UpdateTagRequest) field.ErrorList {
+func ValidateUpdateTagRequest(ctx context.Context, req *ateapi.UpdateTagRequest) field.ErrorList {
 	// We model this as a create rather than an update because updates assume
 	// the existence of a "current" value, which we do not have yet.  This is
 	// validating the request itself. The result will be validated later, after
@@ -47,17 +47,17 @@ func ValidateUpdateTagRequest(ctx context.Context, req *ateapipb.UpdateTagReques
 	return Validate_UpdateTagRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateDeleteTagRequest(ctx context.Context, req *ateapipb.DeleteTagRequest) field.ErrorList {
+func ValidateDeleteTagRequest(ctx context.Context, req *ateapi.DeleteTagRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_DeleteTagRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateTagUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Tag) field.ErrorList {
+func ValidateTagUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.Tag) field.ErrorList {
 	op := MakeUpdateOp(ctx)
 	return Validate_Tag(ctx, op, fldPath, newVal, oldVal)
 }
 
-func ValidateCustom_CreateTagRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateTagRequest) field.ErrorList {
+func ValidateCustom_CreateTagRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapi.CreateTagRequest) field.ErrorList {
 	tag := req.GetTag()
 	sourceActorAtespace := tag.GetSourceActor().GetAtespace()
 	tagAtespace := tag.GetMetadata().GetAtespace()
@@ -73,7 +73,7 @@ func ValidateCustom_CreateTagRequest(_ context.Context, _ operation.Operation, p
 }
 
 // This exists only because nested subfield tags are not supported yet.
-func ValidateCustom_UpdateTagRequest_Tag(ctx context.Context, op operation.Operation, fldPath *field.Path, tag, _ *ateapipb.Tag) field.ErrorList {
+func ValidateCustom_UpdateTagRequest_Tag(ctx context.Context, op operation.Operation, fldPath *field.Path, tag, _ *ateapi.Tag) field.ErrorList {
 	if tag == nil || tag.Metadata == nil {
 		return nil // handled by DV
 	}

@@ -21,11 +21,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // testSecurityRegression checks one case per threat, each in a subtest
@@ -86,23 +86,23 @@ func testTenantCrossing(t *testing.T, ctx context.Context, f *fixture) {
 func testPrivilegeEscalation(t *testing.T, ctx context.Context, f *fixture) {
 	owner := newPrincipal(t, ctx, f.clients, f.atespace, "escalate-owner")
 	editor := newPrincipal(t, ctx, f.clients, f.atespace, "escalate-editor")
-	current := []*ateapipb.Binding{binding("owner", owner), binding("editor", editor)}
+	current := []*ateapi.Binding{binding("owner", owner), binding("editor", editor)}
 	setAtespacePolicy(t, ctx, f.clients, f.atespace, current...)
 	cleanupAtespacePolicy(t, f.clients, f.atespace)
 
 	// updatePolicy rewrites the policy's bindings, guarded by the uid and
 	// version the bootstrap owner reads just before, so the update is
 	// otherwise valid.
-	ref := &ateapipb.ObjectRef{Name: f.atespace}
-	updatePolicy := func(bindings ...*ateapipb.Binding) rpc {
+	ref := &ateapi.ObjectRef{Name: f.atespace}
+	updatePolicy := func(bindings ...*ateapi.Binding) rpc {
 		return func(ctx context.Context, api *ateclient.Client) error {
-			cur, err := f.clients.SubstrateAPI.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
+			cur, err := f.clients.SubstrateAPI.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 			if err != nil {
 				return err
 			}
-			_, err = api.UpdateAtespaceAccessPolicy(ctx, &ateapipb.UpdateAtespaceAccessPolicyRequest{
+			_, err = api.UpdateAtespaceAccessPolicy(ctx, &ateapi.UpdateAtespaceAccessPolicyRequest{
 				Atespace:     ref,
-				AccessPolicy: &ateapipb.AccessPolicy{Metadata: cur.GetMetadata(), Bindings: bindings},
+				AccessPolicy: &ateapi.AccessPolicy{Metadata: cur.GetMetadata(), Bindings: bindings},
 			})
 			return err
 		}
@@ -230,17 +230,17 @@ func testAccessPolicyRecreated(t *testing.T, ctx context.Context, f *fixture) {
 		return
 	}
 
-	ref := &ateapipb.ObjectRef{Name: f.atespace}
-	old, err := f.clients.SubstrateAPI.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
+	ref := &ateapi.ObjectRef{Name: f.atespace}
+	old, err := f.clients.SubstrateAPI.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("GetAtespaceAccessPolicy: %v", err)
 	}
 	if err := deleteAtespacePolicy(ctx, f.clients, f.atespace); err != nil {
 		t.Fatalf("DeleteAtespaceAccessPolicy: %v", err)
 	}
-	if _, err := f.clients.SubstrateAPI.CreateAtespaceAccessPolicy(ctx, &ateapipb.CreateAtespaceAccessPolicyRequest{
+	if _, err := f.clients.SubstrateAPI.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{
 		Atespace:     ref,
-		AccessPolicy: &ateapipb.AccessPolicy{Metadata: &ateapipb.ResourceMetadata{Name: resources.SingletonName}},
+		AccessPolicy: &ateapi.AccessPolicy{Metadata: &ateapi.ResourceMetadata{Name: resources.SingletonName}},
 	}); err != nil {
 		t.Fatalf("CreateAtespaceAccessPolicy: %v", err)
 	}
@@ -250,14 +250,14 @@ func testAccessPolicyRecreated(t *testing.T, ctx context.Context, f *fixture) {
 
 	// An update guarded by the old policy's uid and version must not apply
 	// to the new one.
-	_, err = f.clients.SubstrateAPI.UpdateAtespaceAccessPolicy(ctx, &ateapipb.UpdateAtespaceAccessPolicyRequest{
+	_, err = f.clients.SubstrateAPI.UpdateAtespaceAccessPolicy(ctx, &ateapi.UpdateAtespaceAccessPolicyRequest{
 		Atespace:     ref,
-		AccessPolicy: &ateapipb.AccessPolicy{Metadata: old.GetMetadata(), Bindings: []*ateapipb.Binding{binding("owner", gina)}},
+		AccessPolicy: &ateapi.AccessPolicy{Metadata: old.GetMetadata(), Bindings: []*ateapi.Binding{binding("owner", gina)}},
 	})
 	if status.Code(err) != codes.Aborted {
 		t.Errorf("UpdateAtespaceAccessPolicy with the deleted policy's uid: got %v, want %v", err, codes.Aborted)
 	}
-	cur, err := f.clients.SubstrateAPI.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
+	cur, err := f.clients.SubstrateAPI.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("GetAtespaceAccessPolicy: %v", err)
 	}
@@ -283,20 +283,20 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 
 	// The worker named is never created: a handler that let the caller
 	// through would answer NotFound, not reject it.
-	worker := &ateapipb.ObjectRef{Name: "authz-missing"}
+	worker := &ateapi.ObjectRef{Name: "authz-missing"}
 	registerWorker := func(ctx context.Context, api *ateclient.Client) error {
-		_, err := api.WorkerService().RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{Worker: worker})
+		_, err := api.WorkerService().RegisterWorker(ctx, &ateapi.RegisterWorkerRequest{Worker: worker})
 		return err
 	}
 	requestSuspend := func(ctx context.Context, api *ateclient.Client) error {
-		_, err := api.WorkerService().RequestActorSuspend(ctx, &ateapipb.RequestActorSuspendRequest{Worker: worker, Actor: f.actor})
+		_, err := api.WorkerService().RequestActorSuspend(ctx, &ateapi.RequestActorSuspendRequest{Worker: worker, Actor: f.actor})
 		return err
 	}
 	// This handler validates the request before authenticating the caller,
 	// so the request must be valid. The CSR is parsed only after
 	// authentication, so it needn't be a real one.
 	mintWorkerCert := func(ctx context.Context, api *ateclient.Client) error {
-		_, err := api.WorkerService().MintWorkerActorCertificate(ctx, &ateapipb.MintWorkerActorCertificateRequest{
+		_, err := api.WorkerService().MintWorkerActorCertificate(ctx, &ateapi.MintWorkerActorCertificateRequest{
 			Worker:                    worker,
 			Actor:                     f.actor,
 			ActorUid:                  "00000000-0000-4000-8000-000000000000",
@@ -307,7 +307,7 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 	// This handler also validates the request before authenticating the
 	// caller, so the request must be valid.
 	mintWorkerJWT := func(ctx context.Context, api *ateclient.Client) error {
-		_, err := api.WorkerService().MintWorkerActorJwt(ctx, &ateapipb.MintWorkerActorJwtRequest{
+		_, err := api.WorkerService().MintWorkerActorJwt(ctx, &ateapi.MintWorkerActorJwtRequest{
 			Actor:     f.actor,
 			ActorUid:  "00000000-0000-4000-8000-000000000000",
 			Audiences: []string{"authz-e2e"},
@@ -315,10 +315,10 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 		return err
 	}
 	reportSnapshotState := func(ctx context.Context, api *ateclient.Client) error {
-		_, err := api.WorkerService().ReportActorSnapshotState(ctx, &ateapipb.ReportActorSnapshotStateRequest{
+		_, err := api.WorkerService().ReportActorSnapshotState(ctx, &ateapi.ReportActorSnapshotStateRequest{
 			Actor:    f.actor,
 			ActorUid: "00000000-0000-4000-8000-000000000000",
-			State:    &ateapipb.ActorSnapshotState{},
+			State:    &ateapi.ActorSnapshotState{},
 		})
 		return err
 	}

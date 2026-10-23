@@ -34,6 +34,7 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/spf13/pflag"
+	objectstorev1 "go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/objectstore"
@@ -44,7 +45,6 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"

@@ -17,8 +17,8 @@ package steps
 import (
 	"context"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateclient"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TemplateRef identifies a demo's ActorTemplate. Actors are deleted by matching
@@ -33,13 +33,13 @@ type TemplateRef struct {
 }
 
 // listAllActors pages through every actor in every atespace.
-func listAllActors(ctx context.Context, client *ateclient.Client) ([]*ateapipb.Actor, error) {
-	var all []*ateapipb.Actor
+func listAllActors(ctx context.Context, client *ateclient.Client) ([]*ateapi.Actor, error) {
+	var all []*ateapi.Actor
 	pageToken := ""
 	for {
 		// An empty Atespace lists across all atespaces.
-		resp, err := client.ListActors(ctx, &ateapipb.ListActorsRequest{
-			Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
+		resp, err := client.ListActors(ctx, &ateapi.ListActorsRequest{
+			Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
 		})
 		if err != nil {
 			return nil, err

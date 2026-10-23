@@ -24,11 +24,11 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/volume"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -514,11 +514,11 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 }
 
 func TestDirectCSIDriverConfigGetter(t *testing.T) {
-	fakeClient := fake.NewSimpleClientset(&v1alpha1.CSIDriverConfig{
+	fakeClient := fake.NewSimpleClientset(&atev1.CSIDriverConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test.csi.k8s.io",
 		},
-		Spec: v1alpha1.CSIDriverConfigSpec{
+		Spec: atev1.CSIDriverConfigSpec{
 			DriverName:         "test.csi.k8s.io",
 			ControllerEndpoint: "tcp://127.0.0.1:9000",
 		},

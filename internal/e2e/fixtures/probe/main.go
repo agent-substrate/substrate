@@ -35,6 +35,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -472,7 +473,120 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 }
 
+// bootFetchURLEnv names a URL the probe must fetch, through the egress gateway
+// and with the projected trust bundle, before it listens. A probe that cannot
+// fetch it exits and never answers its wakeup probe, so a golden snapshot of
+// it proves the actor had egress while it booted.
+const bootFetchURLEnv = "PROBE_BOOT_FETCH_URL"
+
+// bootFetchTimeout bounds the boot fetch, inside the template's wakeupProbe
+// timeout.
+const bootFetchTimeout = 30 * time.Second
+
+// bootFetch GETs url once, trusting only trustBundle, and fails unless it
+// answers 200. It does not retry: the actor's EgressPolicy exists before the
+// actor resumes, so a failure is the finding.
+func bootFetch(ctx context.Context, url, trustBundle string) error {
+	b, err := os.ReadFile(trustBundle)
+	if err != nil {
+		return fmt.Errorf("reading trust bundle: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(b) {
+		return fmt.Errorf("no certificates parsed from %s", trustBundle)
+	}
+	client := &http.Client{
+		Timeout:   bootFetchTimeout,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}},
+	}
+	defer client.CloseIdleConnections()
+	if err := fetchOnce(ctx, client, url); err != nil {
+		return fmt.Errorf("boot fetch of %s: %w", url, err)
+	}
+	return nil
+}
+
+// restoreFetch answers the wakeup probe once the actor named in its identity
+// file has fetched url. A restore from the golden snapshot resumes past main's
+// boot fetch with the restored actor's identity, so its wakeup probe passes
+// only if the restored actor reaches url too. The prober times out each request
+// after wakeupprobe.RequestTimeout, so the fetch runs in the background while
+// /healthz answers 503.
+type restoreFetch struct {
+	url, identityFile, trustBundle string
+
+	mu       sync.Mutex
+	fetched  string
+	fetching string
+}
+
+func (f *restoreFetch) healthz(w http.ResponseWriter, _ *http.Request) {
+	b, err := os.ReadFile(f.identityFile)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	id := string(b)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id == f.fetched {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if f.fetching != id {
+		f.fetching = id
+		go f.fetch(id)
+	}
+	http.Error(w, "fetching "+f.url+" as "+id, http.StatusServiceUnavailable)
+}
+
+func (f *restoreFetch) fetch(id string) {
+	err := bootFetch(context.Background(), f.url, f.trustBundle)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fetching == id {
+		f.fetching = ""
+	}
+	if err != nil {
+		log.Printf("probe: restore fetch as %s: %v", id, err)
+		return
+	}
+	log.Printf("probe: restore fetch of %s as %s succeeded", f.url, id)
+	f.fetched = id
+}
+
+func fetchOnce(ctx context.Context, client *http.Client, url string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, maxFetchBody))
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d", res.StatusCode)
+	}
+	return nil
+}
+
 func main() {
+	healthz := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+	if url := os.Getenv(bootFetchURLEnv); url != "" {
+		booted, err := os.ReadFile(identityFile)
+		if err != nil {
+			log.Fatalf("probe: reading %s: %v", identityFile, err)
+		}
+		if err := bootFetch(context.Background(), url, trustFile); err != nil {
+			log.Fatalf("probe: %v", err)
+		}
+		log.Printf("probe: boot fetch of %s succeeded", url)
+		f := &restoreFetch{url: url, identityFile: identityFile, trustBundle: trustFile, fetched: string(booted)}
+		healthz = f.healthz
+	}
+
 	// Hold the identity file open before serving: every snapshot of this actor
 	// then contains an open guest handle on a system-info file (see
 	// heldIdentity).
@@ -490,7 +604,7 @@ func main() {
 	mux.HandleFunc("/lookup", lookup)
 	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/capabilities", capabilities)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/healthz", healthz)
 
 	const addr = ":80"
 	log.Printf("probe listening on %s", addr)

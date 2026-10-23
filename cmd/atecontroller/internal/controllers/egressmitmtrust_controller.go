@@ -57,7 +57,12 @@ func EgressMITMCAPoolRef(systemNamespace string) types.NamespacedName {
 	return types.NamespacedName{Namespace: systemNamespace, Name: egressMITMCAPoolSecret}
 }
 
-//+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+// resourceNames covers list and watch because the manager's cache selects the
+// Secret by metadata.name (managerOptions in main.go), which the apiserver
+// authorizes as a request for that one name. Without the selector the grant
+// would deny them.
+//
+//+kubebuilder:rbac:groups=core,resources=secrets,resourceNames=egress-mitm-ca-pool,verbs=get;list;watch,namespace=ate-system
 //+kubebuilder:rbac:groups=certificates.k8s.io,resources=clustertrustbundles,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=certificates.k8s.io,resources=signers,resourceNames=egress-mitm.ate.dev/*,verbs=attest
 

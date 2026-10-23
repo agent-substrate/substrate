@@ -21,9 +21,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -361,5 +365,124 @@ func TestCapabilityNamesTable(t *testing.T) {
 		if name == "" {
 			t.Errorf("capabilityNames[%d] is empty", i)
 		}
+	}
+}
+
+// writeServerTrustBundle writes the TLS test server's certificate as the only
+// anchor of a trust bundle and returns its path.
+func writeServerTrustBundle(t *testing.T, server *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "trust-bundle.pem")
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(path, block, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The actor's EgressPolicy exists before it resumes, so the boot fetch makes
+// one request and reports its failure.
+func TestBootFetch(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		wantErr string
+	}{
+		{name: "origin answers 200", status: http.StatusOK},
+		{name: "origin denies", status: http.StatusForbidden, wantErr: "status 403"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(tt.status)
+			}))
+			defer origin.Close()
+
+			err := bootFetch(t.Context(), origin.URL, writeServerTrustBundle(t, origin))
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("bootFetch() error = %v, want nil", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("bootFetch() error = %v, want %q", err, tt.wantErr)
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("origin saw %d requests, want 1", got)
+			}
+		})
+	}
+}
+
+// A restored actor resumes past the boot fetch with its own identity, so its
+// wakeup probe fails until that identity has fetched.
+func TestRestoreFetchGatesHealthzOnIdentity(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+	identity := filepath.Join(t.TempDir(), "actor-id")
+	writeIdentity := func(id string) {
+		t.Helper()
+		if err := os.WriteFile(identity, []byte(id), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := &restoreFetch{url: origin.URL, identityFile: identity, trustBundle: writeServerTrustBundle(t, origin), fetched: "golden"}
+	healthz := func() int {
+		rec := httptest.NewRecorder()
+		f.healthz(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		return rec.Code
+	}
+
+	writeIdentity("golden")
+	if got := healthz(); got != http.StatusOK {
+		t.Fatalf("healthz as the actor that booted = %d, want 200", got)
+	}
+	writeIdentity("restored")
+	if got := healthz(); got != http.StatusServiceUnavailable {
+		t.Fatalf("healthz as a restored actor before it fetched = %d, want 503", got)
+	}
+	f.fetch("restored")
+	if got := healthz(); got != http.StatusOK {
+		t.Fatalf("healthz as a restored actor after it fetched = %d, want 200", got)
+	}
+}
+
+// A failed restore fetch leaves healthz at 503, and the next wakeup probe
+// starts another fetch.
+func TestRestoreFetchRetriesOnNextProbe(t *testing.T) {
+	var deny atomic.Bool
+	deny.Store(true)
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if deny.Load() {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+	identity := filepath.Join(t.TempDir(), "actor-id")
+	if err := os.WriteFile(identity, []byte("restored"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &restoreFetch{url: origin.URL, identityFile: identity, trustBundle: writeServerTrustBundle(t, origin), fetched: "golden"}
+	healthz := func() int {
+		rec := httptest.NewRecorder()
+		f.healthz(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		return rec.Code
+	}
+
+	f.fetch("restored")
+	if got := healthz(); got != http.StatusServiceUnavailable {
+		t.Fatalf("healthz after a failed fetch = %d, want 503", got)
+	}
+	deny.Store(false)
+	deadline := time.Now().Add(10 * time.Second)
+	for healthz() != http.StatusOK {
+		if time.Now().After(deadline) {
+			t.Fatal("healthz did not answer 200 after the origin allowed the fetch")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

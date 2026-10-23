@@ -38,6 +38,7 @@ import (
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/spf13/pflag"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/actorlog"
 	"go.ate.dev/substrate/internal/apierror"
@@ -55,7 +56,6 @@ import (
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/workerstats"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -65,6 +65,7 @@ import (
 
 var (
 	podUID        = pflag.String("pod-uid", "", "The UID of the current pod")
+	podIPs        = pflag.String("pod-ips", "", "The comma-separated IPs of the current pod")
 	chBinary      = pflag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
 	guestDebug    = pflag.Bool("guest-debug", false, "enable guest debugging (agent debug logs, debug console, and early serial console)")
 	vmmMemReserve = pflag.Int("vmm-mem-reserve-mib", vmmMemReserveMiB, "Guest RAM (MiB) held back from the pod's memory limit for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the pod cgroup alongside the guest RAM. Prevents the pod OOMing when the VM is sized to the pod's memory limit.")
@@ -252,6 +253,7 @@ func do(ctx context.Context) error {
 	ateworkerpb.RegisterWorkerServer(svr, ateworkerService)
 	reflection.Register(svr)
 	readiness := &serverboot.Readiness{}
+	readiness.AddCheck("registered", ateworkerService.epoch.Registered)
 
 	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination grace
 	// period) and propagate it into the guest so the actor can save its state and
@@ -285,7 +287,8 @@ func do(ctx context.Context) error {
 		TrustBundlePath:      tunnelConfig.TrustBundle,
 		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 		Actors:               *maxActors,
-		SandboxClass:         string(atev1alpha1.SandboxClassMicroVM),
+		PodIPs:               register.ParsePodIPs(*podIPs),
+		SandboxClass:         string(atev1.SandboxClassMicroVM),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 	}
 	if reporter, err := register.NewCrashReporter(reportConfig); err != nil {
@@ -294,7 +297,7 @@ func do(ctx context.Context) error {
 		ateworkerService.crashReporter = reporter
 	}
 	go func() {
-		err := register.Report(ctx, reportConfig)
+		err := register.Report(ctx, reportConfig, &ateworkerService.epoch)
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
@@ -362,6 +365,10 @@ type AteWorkerService struct {
 	// take lock, precisely so an RPC that arrives while it is still waiting is
 	// turned away instead of queueing behind it.
 	shuttingDown atomic.Bool
+
+	// epoch is the epoch this process registered with. It starts no workload
+	// before registering.
+	epoch register.Epoch
 
 	podUID     string
 	chBinary   string
@@ -457,7 +464,7 @@ func validateRuntimeAssetPaths(actorUID string, actorDirs *ateworkerpb.ActorDirs
 }
 
 // rejectIfDraining returns a codes.Unavailable error if ateworker has begun graceful
-// shutdown, so the control plane reschedules the actor onto a live worker.
+// shutdown.
 func (s *AteWorkerService) rejectIfDraining() error {
 	if s.shuttingDown.Load() {
 		return apierror.Unavailable("worker draining: not accepting new workloads")

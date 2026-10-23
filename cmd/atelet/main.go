@@ -34,6 +34,9 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
@@ -65,12 +68,9 @@ import (
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/internal/volume/csi"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
@@ -378,7 +378,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
 	}
 	defer ateapiConn.Close()
-	workerService := ateapipb.NewWorkerServiceClient(ateapiConn)
+	workerService := ateapi.NewWorkerServiceClient(ateapiConn)
 
 	bootID, err := readBootID(bootIDPath)
 	if err != nil {
@@ -413,8 +413,8 @@ func main() {
 		ctx,
 		workerDialer,
 		wrappedAnonGCS,
-		objectstorev1.NewNodeProviderClient(objectStorePluginConn),
-		objectstorev1.NewAssetProviderClient(objectStorePluginConn),
+		objectstore.NewNodeProviderClient(objectStorePluginConn),
+		objectstore.NewAssetProviderClient(objectStorePluginConn),
 		*objectStorePluginSocket,
 		imageCache,
 		sandboxAssetCache,
@@ -483,8 +483,8 @@ func main() {
 	// rewritten when the config changes.
 	_, err = startWorkerSandboxSyncer(ctx,
 		workerPodFactory.Core().V1().Pods(),
-		ateFactory.Api().V1alpha1().WorkerPools(),
-		ateFactory.Api().V1alpha1().SandboxConfigs(),
+		ateFactory.Ate().V1().WorkerPools(),
+		ateFactory.Ate().V1().SandboxConfigs(),
 		wmService,
 		nodepath.WorkersDir(), runtimes, prewarmer)
 	if err != nil {
@@ -516,7 +516,7 @@ func main() {
 
 	ateletpb.RegisterWorkerSupportServer(workerFacingSrv, &workerSupportServer{
 		workers: workerService,
-		control: ateapipb.NewControlClient(ateapiConn),
+		control: ateapi.NewControlClient(ateapiConn),
 	})
 	go func() {
 		if err := workerFacingSrv.Serve(workerFacingLis); err != nil {
@@ -676,8 +676,8 @@ type directCSIDriverConfigGetter struct {
 	client versioned.Interface
 }
 
-func (g *directCSIDriverConfigGetter) Get(name string) (*atev1alpha1.CSIDriverConfig, error) {
-	return g.client.ApiV1alpha1().CSIDriverConfigs().Get(context.Background(), name, metav1.GetOptions{})
+func (g *directCSIDriverConfigGetter) Get(name string) (*atev1.CSIDriverConfig, error) {
+	return g.client.AteV1().CSIDriverConfigs().Get(context.Background(), name, metav1.GetOptions{})
 }
 
 // Atelet is a service that allows controlling workloads on individual
@@ -704,10 +704,10 @@ type Atelet struct {
 	// anonGCSClient reads gs:// assets the plugin cannot serve, without credentials.
 	anonGCSClient objectstorage.ObjectStorage
 	// objectStorePlugin moves external snapshot files between the node and storage.
-	objectStorePlugin objectstorev1.NodeProviderClient
+	objectStorePlugin objectstore.NodeProviderClient
 	// assetPlugin fetches every sandbox asset first; anonGCSClient reads a gs://
 	// asset it cannot serve.
-	assetPlugin objectstorev1.AssetProviderClient
+	assetPlugin objectstore.AssetProviderClient
 	// pluginSocket is the object-store plugin's socket, for error messages.
 	pluginSocket string
 	// snapshotScratchDir holds short-lived manifest directories; it must be
@@ -734,7 +734,14 @@ type Atelet struct {
 	// of each local snapshot. A local snapshot recording another, or none,
 	// was written before the node last rebooted.
 	bootID string
+	// checkpointTimeout is defaultCheckpointTimeout. Shortened in tests.
+	checkpointTimeout time.Duration
 }
+
+// defaultCheckpointTimeout bounds a Checkpoint once it detaches from the
+// caller's context, so a hung worker or object-store upload cannot hold the
+// actor's lock forever.
+const defaultCheckpointTimeout = 5 * time.Minute
 
 var _ ateletpb.AteletServer = (*Atelet)(nil)
 
@@ -752,8 +759,8 @@ func NewService(
 	ctx context.Context,
 	workerDialer *WorkerDialer,
 	anonGCSClient objectstorage.ObjectStorage,
-	objectStorePlugin objectstorev1.NodeProviderClient,
-	assetPlugin objectstorev1.AssetProviderClient,
+	objectStorePlugin objectstore.NodeProviderClient,
+	assetPlugin objectstore.AssetProviderClient,
 	pluginSocket string,
 	imageCache *imagecache.Store,
 	sandboxAssetCache *filecache.Store,
@@ -764,7 +771,7 @@ func NewService(
 	csiDriverConfigGetter csi.CSIDriverConfigGetter,
 	systemInfoVolumes *systemInfoVolumeRefresher,
 	snapshots *snapshottracker.Tracker,
-	workers ateapipb.WorkerServiceClient,
+	workers ateapi.WorkerServiceClient,
 	bootID string,
 ) *Atelet {
 	wms := &Atelet{
@@ -785,6 +792,7 @@ func NewService(
 		snapshots:             snapshots,
 		workerActorJWTs:       newWorkerActorJWTs(workers),
 		bootID:                bootID,
+		checkpointTimeout:     defaultCheckpointTimeout,
 	}
 	return wms
 }
@@ -842,7 +850,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 
 	s.systemInfoVolumes.Deregister(actorUID)
 	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
-		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
+		return nil, status.Errorf(codes.Canceled, "while resetting actor dirs: %v", err)
 	}
 
 	if err := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
@@ -886,7 +894,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 
 	// Tell worker to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
-	if _, err := client.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{
+	workerResp, err := client.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -898,11 +906,12 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		ActorDirs:             ateletpath.ActorDirs(actorUID),
 		EgressGateway:         toWorkerEgressGateway(req.GetEgressGateway()),
 		Resources:             toAteworkerResources(req.GetResources()),
-	}); err != nil {
-		return nil, fmt.Errorf("while calling worker RunWorkload: %w", err)
+	})
+	if err != nil {
+		return nil, workerCallError("RunWorkload", err)
 	}
 
-	return &ateletpb.RunResponse{}, nil
+	return &ateletpb.RunResponse{WorkerEpoch: workerResp.GetWorkerEpoch()}, nil
 }
 
 var snapshotSizeBytes metric.Int64Histogram
@@ -1020,6 +1029,19 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		return &ateletpb.CheckpointResponse{State: state}, nil
 	}
 
+	// Detach from caller cancellation once the checkpoint is underway so a
+	// caller timeout does not abort the checkpoint after the worker has
+	// started stopping the workload; a retry waits on lockActor for this
+	// attempt to finish and commit. Keep the later of the caller's deadline
+	// and checkpointTimeout so a hung worker or upload cannot hold the
+	// actor's lock forever without shortening a longer caller deadline.
+	deadline := time.Now().Add(s.checkpointTimeout)
+	if d, ok := ctx.Deadline(); ok && d.After(deadline) {
+		deadline = d
+	}
+	opCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	defer cancel()
+
 	// Checkpoint requests no longer carry the sandbox config; recover the
 	// version this actor was started with from the on-node record and re-fetch
 	// it (a cache hit) so worker can drive runsc, and so we can pin it into the
@@ -1031,7 +1053,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	op.sandboxClass = sandboxRec.SandboxClass
 
 	tAssets := time.Now()
-	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec, ateletpath.SandboxAssetsDir(actorUID))
+	assetPaths, err := s.ensureSandboxAssets(opCtx, sandboxRec, ateletpath.SandboxAssetsDir(actorUID))
 	dAssets = time.Since(tAssets)
 	if err != nil {
 		return nil, err
@@ -1039,7 +1061,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 
 	checkpointDir := ateletpath.CheckpointStateDir(actorUID)
 
-	client, err := s.dialWorker(ctx, req.GetWorkerPodUid())
+	client, err := s.dialWorker(opCtx, req.GetWorkerPodUid())
 	if err != nil {
 		return nil, err
 	}
@@ -1053,7 +1075,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	}
 
 	tWorker := time.Now()
-	resp, err := client.CheckpointWorkload(ctx, &ateworkerpb.CheckpointWorkloadRequest{
+	resp, err := client.CheckpointWorkload(opCtx, &ateworkerpb.CheckpointWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -1091,7 +1113,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	var state *ateletpb.ActorSnapshotState
 	switch mode := req.GetUploadConfig().GetMode(); mode {
 	case ateletpb.UploadMode_UPLOAD_MODE_DEFERRED:
-		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
+		if err := s.moveLocalCheckpoint(opCtx, req, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while moving to local snapshot: %w", err)
 		}
@@ -1099,10 +1121,10 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	case ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE:
 		// CheckpointWorkload has already deleted the workload, so a retried
 		// Checkpoint cannot redo this upload. It waits for the object-store plugin
-		// as long as ctx allows, and a plugin error reaches the control plane as
+		// as long as opCtx allows, and a plugin error reaches the control plane as
 		// Internal, which crashes the actor.
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
-		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
+		if err := s.uploadExternalCheckpoint(opCtx, req, checkpointDir, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while uploading external snapshot: %w", err)
 		}
@@ -1112,8 +1134,8 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		// The snapshot is durable now, so the local copy only saves a
 		// download: failing to keep it must not fail the checkpoint.
 		// RemoveActorFilesExceptState cleans up checkpointDir if the move fails.
-		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
-			slog.WarnContext(ctx, "Failed to keep a local copy of the uploaded snapshot", slog.Any("actor", actorRef), slog.Any("err", err))
+		if err := s.moveLocalCheckpoint(opCtx, req, sandboxRec); err != nil {
+			slog.WarnContext(opCtx, "Failed to keep a local copy of the uploaded snapshot", slog.Any("actor", actorRef), slog.Any("err", err))
 		} else {
 			state = s.snapshots.CommitLocal(actorUID, snap)
 		}
@@ -1123,7 +1145,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	dPersist = time.Since(tPersist)
 
 	tCleanup := time.Now()
-	err = s.cleanUpAfterCheckpoint(ctx, req, state.GetLatestLocal() != nil)
+	err = s.cleanUpAfterCheckpoint(opCtx, req, state.GetLatestLocal() != nil)
 	dCleanup = time.Since(tCleanup)
 	if err != nil {
 		return nil, err
@@ -1631,11 +1653,11 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	}
 	defer endStart()
 
-	// Not crashing the actor, because terminal errors here indicate problems with atelet,
-	// node or the disk itself.
+	// Canceled so ate-api-server retries instead of crashing the actor. A
+	// failure here points at atelet or the node's disk, not the actor.
 	s.systemInfoVolumes.Deregister(actorUID)
 	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
-		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
+		return nil, status.Errorf(codes.Canceled, "while resetting actor dirs: %v", err)
 	}
 	// A restore may bring another runtime than the one staged here before,
 	// so the assets dir is emptied for it; Run swaps a staged set in
@@ -1808,7 +1830,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// The worker_restore phase is opaque from here; worker logs its own breakdown of
 	// this call as "Actor restore phases".
 	tWorker := time.Now()
-	_, err = client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{
+	workerResp, err := client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -1828,7 +1850,18 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		return nil, s.boundRetryableRestoreError(actorUID, req.GetSnapshot().GetSnapshotUuid(), workerRestoreError(ctx, err))
 	}
 
-	return &ateletpb.RestoreResponse{}, nil
+	return &ateletpb.RestoreResponse{WorkerEpoch: workerResp.GetWorkerEpoch()}, nil
+}
+
+// workerCallError is atelet's error for a failed call to the worker's rpc. A
+// worker that is unavailable, refusing workloads until it registers or gone
+// with a restart, is reported as Unavailable, so the caller retries once the
+// worker process has registered. Anything else reaches the caller as Internal.
+func workerCallError(rpc string, err error) error {
+	if status.Code(err) == codes.Unavailable {
+		return apierror.Unavailable("worker %s: the worker is unavailable: %s", rpc, status.Convert(err).Message())
+	}
+	return fmt.Errorf("while calling worker %s: %w", rpc, err)
 }
 
 // DetachActor makes the actor's latest local snapshot durable, then deletes the

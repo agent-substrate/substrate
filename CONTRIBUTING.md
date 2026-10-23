@@ -70,7 +70,8 @@ down, small PRs get merged.
 * **Large PRs**: split huge changes into a series of smaller PRs, each a
   logically distinct feature. When the intermediate steps are not useful
   on their own, keep the change as one PR split into commits at logical
-  break points, and preserve those commits on merge.
+  break points for review. PRs are squash-merged, so only the branch
+  `HEAD` needs to build and pass tests.
 * **Small and bulk PRs**: if you find a typo, review the whole file and
   fix everything in one pass rather than sending the single edit. Group
   related typo, doc, and single-line cleanup fixes into one PR rather

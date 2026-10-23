@@ -18,7 +18,7 @@ import (
 	"errors"
 	"testing"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 
 // storedMetadata is the metadata of the object the transaction reads, which a
 // precondition is checked against.
-var storedMetadata = &ateapipb.ResourceMetadata{
+var storedMetadata = &ateapi.ResourceMetadata{
 	Atespace: "test-atespace",
 	Name:     "actor-1",
 	Uid:      storedUID,
@@ -116,31 +116,31 @@ func TestPreconditionValidate(t *testing.T) {
 func TestPreconditionFrom(t *testing.T) {
 	tests := []struct {
 		name            string
-		observed        *ateapipb.Actor
+		observed        *ateapi.Actor
 		want            Precondition
 		wantValidateErr error
 	}{
 		{
 			name:            "the observed object supplies its uid and version as guards",
-			observed:        &ateapipb.Actor{Metadata: storedMetadata},
+			observed:        &ateapi.Actor{Metadata: storedMetadata},
 			want:            Precondition{UID: storedUID, Version: storedVer},
 			wantValidateErr: nil,
 		},
 		{
 			name:            "an unguarded object with no uid or version is rejected",
-			observed:        &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "test-atespace", Name: "actor-1"}},
+			observed:        &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: "test-atespace", Name: "actor-1"}},
 			want:            Precondition{},
 			wantValidateErr: ErrPreconditionRequired,
 		},
 		{
 			name:            "an object carrying only a uid is rejected",
-			observed:        &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Uid: storedUID}},
+			observed:        &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Uid: storedUID}},
 			want:            Precondition{UID: storedUID},
 			wantValidateErr: ErrPreconditionRequired,
 		},
 		{
 			name:            "an object carrying only a version is rejected",
-			observed:        &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Version: storedVer}},
+			observed:        &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Version: storedVer}},
 			want:            Precondition{Version: storedVer},
 			wantValidateErr: ErrPreconditionRequired,
 		},

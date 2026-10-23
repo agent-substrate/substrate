@@ -62,7 +62,7 @@ var unadmittedPorts = map[string][]string{
 	// The provider ships its own policy admitting only the egress gateway's
 	// gRPC, and docs/egress-credential-injection.md promises nothing else
 	// gets in; its probes come from the node.
-	"k8s-credential-provider": {"statusz", "metrics", "health"},
+	"k8s-credential-provider": {"metrics", "health"},
 	// kind only: the rustfs web console.
 	"rustfs": {"console"},
 }

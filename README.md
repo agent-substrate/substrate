@@ -11,7 +11,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-[Quickstart](#quickstart-development) · [Security](docs/security.md) · [Architecture](docs/architecture.md) · [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md)
+[Quickstart](#quickstart-development) · [Security](docs/security.md) · [Architecture](docs/architecture.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -260,7 +260,6 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Upgrade Runbook](docs/upgrade.md): Upgrade a running install to a newer supported release, and roll back if needed.
 * [Node Storage](docs/node-storage.md): How to give snapshot I/O its own disk.
 * [Security Guide](docs/security.md): Security overview, security principles, and threat modeling.
-* [Roadmap](docs/roadmap.md): Current limitations and what is planned next.
 * [Benchmarking Guide](benchmarking/README.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.
 
 ## Tour

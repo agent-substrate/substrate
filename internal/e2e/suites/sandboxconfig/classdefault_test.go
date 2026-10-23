@@ -36,8 +36,8 @@ import (
 	"testing"
 	"time"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/e2e"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	eventsv1 "k8s.io/api/events/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -67,9 +67,9 @@ func TestWorkerPoolFollowsClassDefault(t *testing.T) {
 	ctx := t.Context()
 	clients := e2e.GetClients()
 
-	class := atev1alpha1.SandboxClassGvisor
+	class := atev1.SandboxClassGvisor
 	if e2e.IsMicroVM() {
-		class = atev1alpha1.SandboxClassMicroVM
+		class = atev1.SandboxClassMicroVM
 	}
 	base := newestClassDefault(t, ctx, clients, class)
 	t.Logf("Class %q default as installed: %s", class, base.Name)
@@ -80,13 +80,13 @@ func TestWorkerPoolFollowsClassDefault(t *testing.T) {
 
 	// 1. A pool with no configRef resolves to the installed default.
 	ns := e2e.CreateNamespace(t).Name
-	pool, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(ns).Create(ctx, &atev1alpha1.WorkerPool{
+	pool, err := clients.SubstrateK8s.AteV1().WorkerPools(ns).Create(ctx, &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "follows-default", Namespace: ns},
-		Spec: atev1alpha1.WorkerPoolSpec{
+		Spec: atev1.WorkerPoolSpec{
 			Replicas: 0,
 			// Never pulled: the pool runs no workers.
 			WorkerImage:    "worker:unused",
-			SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: class}},
+			SandboxClasses: []atev1.WorkerPoolSandboxClass{{Name: class}},
 		},
 	}, metav1.CreateOptions{})
 	if err != nil {
@@ -99,10 +99,10 @@ func TestWorkerPoolFollowsClassDefault(t *testing.T) {
 	// before the installed default's, which is the tie-break should both
 	// carry the same creation second.
 	v2Name := fmt.Sprintf("e2e-%s-default-%s", class, ns)
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Create(ctx, &atev1alpha1.SandboxConfig{
+	if _, err := clients.SubstrateK8s.AteV1().SandboxConfigs().Create(ctx, &atev1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        v2Name,
-			Annotations: map[string]string{atev1alpha1.SandboxConfigClassDefaultAnnotation: "true"},
+			Annotations: map[string]string{atev1.SandboxConfigClassDefaultAnnotation: "true"},
 		},
 		Spec: *base.Spec.DeepCopy(),
 	}, metav1.CreateOptions{}); err != nil {
@@ -113,7 +113,7 @@ func TestWorkerPoolFollowsClassDefault(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Delete(cleanupCtx, v2Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		if err := clients.SubstrateK8s.AteV1().SandboxConfigs().Delete(cleanupCtx, v2Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			t.Errorf("failed to delete SandboxConfig %s: %v", v2Name, err)
 		}
 	})
@@ -132,7 +132,7 @@ func TestWorkerPoolFollowsClassDefault(t *testing.T) {
 	waitForSandboxConfig(t, ctx, clients, pool, v2Name)
 	waitForEvent(t, ctx, clients, pool, switched(base.Name, v2Name))
 
-	if err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Delete(ctx, v2Name, metav1.DeleteOptions{}); err != nil {
+	if err := clients.SubstrateK8s.AteV1().SandboxConfigs().Delete(ctx, v2Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("failed to delete SandboxConfig %s: %v", v2Name, err)
 	}
 	waitForSandboxConfig(t, ctx, clients, pool, base.Name)
@@ -173,16 +173,16 @@ func TestWorkerPoolFollowsClassDefault(t *testing.T) {
 // configRef resolves to when the test starts: the newest of the class
 // annotated as its default, by creation time and then by name, the same rule
 // atecontroller applies. The test cannot start without one.
-func newestClassDefault(t *testing.T, ctx context.Context, clients *e2e.Clients, class atev1alpha1.SandboxClass) *atev1alpha1.SandboxConfig {
+func newestClassDefault(t *testing.T, ctx context.Context, clients *e2e.Clients, class atev1.SandboxClass) *atev1.SandboxConfig {
 	t.Helper()
-	list, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().List(ctx, metav1.ListOptions{})
+	list, err := clients.SubstrateK8s.AteV1().SandboxConfigs().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		t.Fatalf("failed to list SandboxConfigs: %v", err)
 	}
-	var best *atev1alpha1.SandboxConfig
+	var best *atev1.SandboxConfig
 	for i := range list.Items {
 		sc := &list.Items[i]
-		if sc.Spec.SandboxClass != class || sc.Annotations[atev1alpha1.SandboxConfigClassDefaultAnnotation] != "true" || !sc.DeletionTimestamp.IsZero() {
+		if sc.Spec.SandboxClass != class || sc.Annotations[atev1.SandboxConfigClassDefaultAnnotation] != "true" || !sc.DeletionTimestamp.IsZero() {
 			continue
 		}
 		if best == nil || best.CreationTimestamp.Before(&sc.CreationTimestamp) ||
@@ -191,7 +191,7 @@ func newestClassDefault(t *testing.T, ctx context.Context, clients *e2e.Clients,
 		}
 	}
 	if best == nil {
-		t.Fatalf("no SandboxConfig of class %q is annotated %s=true; the install ships one, see manifests/ate-install", class, atev1alpha1.SandboxConfigClassDefaultAnnotation)
+		t.Fatalf("no SandboxConfig of class %q is annotated %s=true; the install ships one, see manifests/ate-install", class, atev1.SandboxConfigClassDefaultAnnotation)
 	}
 	return best
 }
@@ -205,28 +205,28 @@ func setClassDefault(t *testing.T, ctx context.Context, clients *e2e.Clients, na
 		value = "true"
 	}
 	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{
-		atev1alpha1.SandboxConfigClassDefaultAnnotation: value,
+		atev1.SandboxConfigClassDefaultAnnotation: value,
 	}}})
 	if err != nil {
 		t.Fatalf("failed to marshal patch: %v", err)
 	}
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+	if _, err := clients.SubstrateK8s.AteV1().SandboxConfigs().Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		t.Fatalf("failed to patch SandboxConfig %s: %v", name, err)
 	}
-	t.Logf("SandboxConfig %s: %s=%v", name, atev1alpha1.SandboxConfigClassDefaultAnnotation, value)
+	t.Logf("SandboxConfig %s: %s=%v", name, atev1.SandboxConfigClassDefaultAnnotation, value)
 }
 
 // waitForSandboxConfig blocks until pool's status reports its sandbox class
 // Resolved, using the SandboxConfig named want, with no switch pending.
-func waitForSandboxConfig(t *testing.T, ctx context.Context, clients *e2e.Clients, pool *atev1alpha1.WorkerPool, want string) {
+func waitForSandboxConfig(t *testing.T, ctx context.Context, clients *e2e.Clients, pool *atev1.WorkerPool, want string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(ctx, stepTimeout)
 	defer cancel()
 
 	class := pool.Spec.DefaultSandboxClass()
-	var last *atev1alpha1.WorkerPoolSandboxClassStatus
+	var last *atev1.WorkerPoolSandboxClassStatus
 	for {
-		wp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(pool.Namespace).Get(ctx, pool.Name, metav1.GetOptions{})
+		wp, err := clients.SubstrateK8s.AteV1().WorkerPools(pool.Namespace).Get(ctx, pool.Name, metav1.GetOptions{})
 		if err == nil {
 			last = nil
 			for i := range wp.Status.SandboxClasses {
@@ -235,7 +235,7 @@ func waitForSandboxConfig(t *testing.T, ctx context.Context, clients *e2e.Client
 				}
 			}
 			if last != nil && last.ConfigRef != nil && last.ConfigRef.Name == want && last.PendingConfigRef == nil &&
-				meta.IsStatusConditionTrue(last.Conditions, atev1alpha1.WorkerPoolSandboxClassConditionResolved) {
+				meta.IsStatusConditionTrue(last.Conditions, atev1.WorkerPoolSandboxClassConditionResolved) {
 				t.Logf("WorkerPool %s/%s uses SandboxConfig %s", pool.Namespace, pool.Name, want)
 				return
 			}
@@ -258,7 +258,7 @@ func waitForSandboxConfigGone(t *testing.T, ctx context.Context, clients *e2e.Cl
 	defer cancel()
 
 	for {
-		sc, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Get(ctx, name, metav1.GetOptions{})
+		sc, err := clients.SubstrateK8s.AteV1().SandboxConfigs().Get(ctx, name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
 			t.Logf("SandboxConfig %s is gone", name)
 			return
@@ -279,7 +279,7 @@ func waitForSandboxConfigGone(t *testing.T, ctx context.Context, clients *e2e.Cl
 
 // waitForEvent blocks until an event regarding pool carries note. Events are
 // recorded asynchronously, so one can trail the status write it reports.
-func waitForEvent(t *testing.T, ctx context.Context, clients *e2e.Clients, pool *atev1alpha1.WorkerPool, note string) {
+func waitForEvent(t *testing.T, ctx context.Context, clients *e2e.Clients, pool *atev1.WorkerPool, note string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(ctx, stepTimeout)
 	defer cancel()
@@ -306,7 +306,7 @@ func waitForEvent(t *testing.T, ctx context.Context, clients *e2e.Clients, pool 
 }
 
 // poolEvents returns the events regarding pool, oldest first.
-func poolEvents(ctx context.Context, clients *e2e.Clients, pool *atev1alpha1.WorkerPool) ([]eventsv1.Event, error) {
+func poolEvents(ctx context.Context, clients *e2e.Clients, pool *atev1.WorkerPool) ([]eventsv1.Event, error) {
 	list, err := clients.K8s.EventsV1().Events(pool.Namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err

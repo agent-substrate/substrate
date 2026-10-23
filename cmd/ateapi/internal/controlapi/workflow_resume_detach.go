@@ -20,14 +20,13 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -35,16 +34,17 @@ import (
 
 // shouldDetachFromNode reports whether a SUSPENDED actor's assignment failed
 // for lack of room on the node it is pinned to.
-func shouldDetachFromNode(actor *ateapipb.Actor, assignErr error) bool {
+func shouldDetachFromNode(actor *ateapi.Actor, assignErr error) bool {
 	return errors.Is(assignErr, errNoWorkerRoom) &&
-		actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED &&
+		actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED &&
 		actor.GetStatus().GetAssignedNode() != ""
 }
 
 // detachFromFullNode releases the node binding so scheduling can retry.
 // Unreachable nodes can be forgotten when the latest local snapshot is durable.
-// A deleted node crashes the actor when that snapshot is not durable.
-func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, assignErr error) (_ *ateapipb.Actor, err error) {
+// A deleted node is released even when that snapshot is not durable, so resume
+// tries its upload.
+func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, assignErr error) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "DetachFromFullNode")
 	defer func() { err = done(err) }()
 
@@ -115,13 +115,13 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 
 // loadPinnedActor reads the actor, and fails with Aborted unless it is still
 // the SUSPENDED incarnation uid, pinned to node.
-func (w *ActorWorkflow) loadPinnedActor(ctx context.Context, actorRef resources.ActorRef, uid, node string) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) loadPinnedActor(ctx context.Context, actorRef resources.ActorRef, uid, node string) (*ateapi.Actor, error) {
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, fmt.Errorf("while reading Actor %s: %w", actorRef, err)
 	}
 	if actor.GetMetadata().GetUid() != uid ||
-		actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED ||
+		actor.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED ||
 		actor.GetStatus().GetAssignedNode() != node {
 		return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef)
 	}
@@ -130,7 +130,7 @@ func (w *ActorWorkflow) loadPinnedActor(ctx context.Context, actorRef resources.
 
 // recordDetach forgets local copies after the latest local generation is durable.
 // state may be nil when atelet is unreachable.
-func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, node string, state *ateletpb.ActorSnapshotState) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, node string, state *ateletpb.ActorSnapshotState) (*ateapi.Actor, error) {
 	applied := proto.CloneOf(actor.GetStatus())
 	if err := applyLatestDurable(ctx, applied, snapshotReportFromAtelet(state.GetLatestDurable())); err != nil {
 		return nil, apierror.Internal("atelet on node %q reported a state for Actor %s that conflicts with its record: %w", node, actorRef, err)
@@ -139,10 +139,10 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 	if err := applyDetach(applied, node, applied.GetLastAssignedGeneration()); err != nil {
 		return nil, err
 	}
-	if applied.GetState() == ateapipb.ActorState_ACTOR_STATE_REVERTING && applied.GetWorkerAssignment() == nil {
+	if applied.GetState() == ateapi.ActorState_ACTOR_STATE_REVERTING && applied.GetWorkerAssignment() == nil {
 		applied.AssignedNode = ""
 	}
-	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 		// The precondition makes toUpdate the version applied was built from.
 		toUpdate.Status.Snapshots = applied.GetSnapshots()
 		toUpdate.Status.AssignedNode = applied.GetAssignedNode()
@@ -157,10 +157,12 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 	return stored, nil
 }
 
-// recordGoneNode crashes an actor whose latest snapshot went with its deleted
-// node. It reads the actor again first, so an upload recorded during the node
-// lookup detaches it instead, and it crashes only the version it checked.
-func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, node string) (*ateapipb.Actor, error) {
+// recordGoneNode releases an actor from its deleted node when its latest
+// snapshot is not recorded durable. atelet may have uploaded it without
+// reporting, so the snapshot keeps its locality and resume restores it from
+// the upload on another node. It reads the actor again first, so an upload
+// recorded during the node lookup detaches it instead.
+func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, node string) (*ateapi.Actor, error) {
 	actor, err := w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), node)
 	if err != nil {
 		return nil, err
@@ -168,23 +170,38 @@ func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.A
 	if !latestLocalNotDurable(actor) {
 		return w.recordDetach(ctx, actorRef, actor, node, nil)
 	}
-	if err := crashActorVersion(ctx, w.store, actorRef, actor, ateattr.OperationResume, crashMessageLocalSnapshotNodeGone); err != nil {
+	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+		toUpdate.Status.AssignedNode = ""
+		return nil
+	})
+	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef)
 		}
-		return nil, err
+		return nil, fmt.Errorf("while releasing Actor %s from deleted node %q: %w", actorRef, node, err)
 	}
-	return nil, apierror.FailedPrecondition("actor %s is CRASHED: %s", actorRef, crashMessageLocalSnapshotNodeGone)
+	slog.InfoContext(ctx, "Released actor from its deleted node to restore its snapshot's upload on another node",
+		slog.Any("actor", actorRef),
+		slog.String("node", node),
+		slog.Int("generation", int(findLatestLocalSnapshot(stored.GetStatus()).GetGeneration())))
+	return stored, nil
+}
+
+// localElsewhere reports whether snap is recorded local on a node other than
+// node. Resume restores such a snapshot from its upload after recordGoneNode
+// released its deleted node.
+func localElsewhere(snap *ateapi.Snapshot, node string) bool {
+	return snap.GetLocality() != "" && snap.GetLocality() != node
 }
 
 // latestLocalNotDurable reports whether the actor's latest local snapshot has
 // no completed durable copy.
-func latestLocalNotDurable(actor *ateapipb.Actor) bool {
+func latestLocalNotDurable(actor *ateapi.Actor) bool {
 	local := findLatestLocalSnapshot(actor.GetStatus())
-	return local != nil && local.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	return local != nil && local.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 }
 
-func canDetachWithoutAtelet(ctx context.Context, actor *ateapipb.Actor, err error) bool {
+func canDetachWithoutAtelet(ctx context.Context, actor *ateapi.Actor, err error) bool {
 	if ctx.Err() != nil || actor.GetStatus().GetWorkerAssignment() != nil {
 		return false
 	}
@@ -200,7 +217,7 @@ func canDetachWithoutAtelet(ctx context.Context, actor *ateapipb.Actor, err erro
 		return false
 	}
 	local := findLatestLocalSnapshot(actor.GetStatus())
-	return local != nil && local.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	return local != nil && local.GetDurableSnapshot().GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 }
 
 // detachActorError maps a DetachActor error to the one the resume fails with.

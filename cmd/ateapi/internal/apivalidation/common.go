@@ -20,9 +20,9 @@ import (
 	"net/netip"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -71,7 +71,7 @@ func optionsFor(ctx context.Context) map[string]bool {
 // not precede create_time. Both fields are scrubbed from input, so a
 // violation here is a server stamping bug surfaced by the final-object
 // validation pass, not a client error.
-func ValidateCustom_ResourceMetadata(_ context.Context, _ operation.Operation, fldPath *field.Path, obj, _ *ateapipb.ResourceMetadata) field.ErrorList {
+func ValidateCustom_ResourceMetadata(_ context.Context, _ operation.Operation, fldPath *field.Path, obj, _ *ateapi.ResourceMetadata) field.ErrorList {
 	var errs field.ErrorList
 	createTimeValid := false
 	if ct := obj.GetCreateTime(); ct != nil {

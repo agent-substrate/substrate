@@ -22,26 +22,26 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const reportActorUID = "5f2c1a90-7b34-4e6d-8a11-0c3e9d5b7f42"
 
-func reportRequest() *ateapipb.ReportActorSnapshotStateRequest {
-	durable := &ateapipb.SnapshotReport{
+func reportRequest() *ateapi.ReportActorSnapshotStateRequest {
+	durable := &ateapi.SnapshotReport{
 		Uuid:            "snap-1",
 		Generation:      1,
-		Fidelity:        ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		Object:          &ateapipb.ObjectSnapshot{SnapshotUri: "gs://bucket/actors/a/snap-1"},
+		Fidelity:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Object:          &ateapi.ObjectSnapshot{SnapshotUri: "gs://bucket/actors/a/snap-1"},
 		LocalCommitTime: timestamppb.Now(),
 	}
-	return &ateapipb.ReportActorSnapshotStateRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+	return &ateapi.ReportActorSnapshotStateRequest{
+		Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
 		ActorUid: reportActorUID,
-		State:    &ateapipb.ActorSnapshotState{LatestDurable: durable},
+		State:    &ateapi.ActorSnapshotState{LatestDurable: durable},
 	}
 }
 
@@ -80,7 +80,7 @@ func TestReportActorSnapshotState_Refused(t *testing.T) {
 	tests := []struct {
 		name        string
 		ctx         context.Context
-		req         *ateapipb.ReportActorSnapshotStateRequest
+		req         *ateapi.ReportActorSnapshotStateRequest
 		controlErr  error
 		want        codes.Code
 		wantApplied bool

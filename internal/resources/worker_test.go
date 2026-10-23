@@ -17,15 +17,15 @@ package resources
 import (
 	"testing"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/google/go-cmp/cmp"
 )
 
-func assignment(uid string, cpu, mem int64) *ateapipb.ActorAssignment {
-	return &ateapipb.ActorAssignment{
-		Actor:     &ateapipb.ObjectRef{Atespace: "demo", Name: uid},
+func assignment(uid string, cpu, mem int64) *ateapi.ActorAssignment {
+	return &ateapi.ActorAssignment{
+		Actor:     &ateapi.ObjectRef{Atespace: "demo", Name: uid},
 		ActorUid:  uid,
 		Resources: CPUMemory(cpu, mem),
 	}
@@ -35,17 +35,17 @@ func assignment(uid string, cpu, mem int64) *ateapipb.ActorAssignment {
 // back to holding nothing carries no allocation at all rather than a zeroed
 // message: emptied and never-filled have to be the same record.
 func TestAddToAllocated(t *testing.T) {
-	var total *ateapipb.WorkerResources
+	var total *ateapi.WorkerResources
 	total = AddToAllocated(total, assignment("a", 1000, 1<<30), +1)
 	total = AddToAllocated(total, assignment("b", 500, 2<<30), +1)
 
-	want := &ateapipb.WorkerResources{Actors: 2, CpuMillicores: 1500, MemoryBytes: 3 << 30}
+	want := &ateapi.WorkerResources{Actors: 2, CpuMillicores: 1500, MemoryBytes: 3 << 30}
 	if diff := cmp.Diff(want, total, protocmp.Transform()); diff != "" {
 		t.Errorf("allocated mismatch (-want +got):\n%s", diff)
 	}
 
 	total = AddToAllocated(total, assignment("b", 500, 2<<30), -1)
-	want = &ateapipb.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 1 << 30}
+	want = &ateapi.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 1 << 30}
 	if diff := cmp.Diff(want, total, protocmp.Transform()); diff != "" {
 		t.Errorf("allocated after release mismatch (-want +got):\n%s", diff)
 	}
@@ -57,8 +57,8 @@ func TestAddToAllocated(t *testing.T) {
 
 // An Actor that declared no limits reserves nothing but still costs a slot.
 func TestAddToAllocatedCountsAnActorWithoutResources(t *testing.T) {
-	total := AddToAllocated(nil, &ateapipb.ActorAssignment{ActorUid: "a"}, +1)
-	want := &ateapipb.WorkerResources{Actors: 1}
+	total := AddToAllocated(nil, &ateapi.ActorAssignment{ActorUid: "a"}, +1)
+	want := &ateapi.WorkerResources{Actors: 1}
 	if diff := cmp.Diff(want, total, protocmp.Transform()); diff != "" {
 		t.Errorf("allocated mismatch (-want +got):\n%s", diff)
 	}
@@ -71,8 +71,8 @@ func TestSumAllocated(t *testing.T) {
 		t.Errorf("SumAllocated(nil) = %v, want nil", got)
 	}
 
-	got := SumAllocated([]*ateapipb.ActorAssignment{assignment("a", 1000, 1<<30), assignment("b", 500, 0)})
-	want := &ateapipb.WorkerResources{Actors: 2, CpuMillicores: 1500, MemoryBytes: 1 << 30}
+	got := SumAllocated([]*ateapi.ActorAssignment{assignment("a", 1000, 1<<30), assignment("b", 500, 0)})
+	want := &ateapi.WorkerResources{Actors: 2, CpuMillicores: 1500, MemoryBytes: 1 << 30}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("SumAllocated() mismatch (-want +got):\n%s", diff)
 	}

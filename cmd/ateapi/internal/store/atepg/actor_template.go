@@ -20,17 +20,17 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 )
 
-func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapi.ActorTemplate) (*ateapi.ActorTemplate, error) {
 	atespace, name := template.GetMetadata().GetAtespace(), template.GetMetadata().GetName()
-	dbTemplate := proto.Clone(template).(*ateapipb.ActorTemplate)
+	dbTemplate := proto.Clone(template).(*ateapi.ActorTemplate)
 	if dbTemplate.Metadata == nil {
-		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
+		dbTemplate.Metadata = &ateapi.ResourceMetadata{}
 	}
 	setCreateMetadata(dbTemplate.Metadata)
 	protoBytes, err := proto.Marshal(dbTemplate)
@@ -53,7 +53,7 @@ func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapip
 	return dbTemplate, nil
 }
 
-func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapi.ActorTemplate, error) {
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
 	if err != nil {
@@ -62,14 +62,14 @@ func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resource
 		}
 		return nil, fmt.Errorf("getting actor template %s: %w", templateRef, err)
 	}
-	out := &ateapipb.ActorTemplate{}
+	out := &ateapi.ActorTemplate{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor template: %w", err)
 	}
 	return out, nil
 }
 
-func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapipb.ActorTemplate) error {
+func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapi.ActorTemplate) error {
 	if stored, mutated := storedTemplate.GetMetadata().GetAtespace(), mutatedTemplate.GetMetadata().GetAtespace(); stored != mutated {
 		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
@@ -79,18 +79,18 @@ func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapi
 	return nil
 }
 
-func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
 	return p.updateActorTemplate(ctx, templateRef, store.DeletePreconditions(precondition), mutate, false)
 }
 
-func (p *Persistence) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
 	return p.updateActorTemplate(ctx, templateRef, precondition, mutate, true)
 }
 
-func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapipb.ActorTemplate) error, markForDeletion bool) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error, markForDeletion bool) (*ateapi.ActorTemplate, error) {
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
@@ -103,7 +103,7 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 		return nil, fmt.Errorf("getting actor template %s for update: %w", templateRef, err)
 	}
 
-	dbTemplate := &ateapipb.ActorTemplate{}
+	dbTemplate := &ateapi.ActorTemplate{}
 	if err := unmarshalStored(currentBytes, dbTemplate); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
 	}
@@ -113,7 +113,7 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 	if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
 		return nil, err
 	}
-	templateBeforeMutation := proto.Clone(dbTemplate).(*ateapipb.ActorTemplate)
+	templateBeforeMutation := proto.Clone(dbTemplate).(*ateapi.ActorTemplate)
 	if mutate != nil {
 		if err := mutate(dbTemplate); err != nil {
 			return nil, err
@@ -123,7 +123,7 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 		return nil, err
 	}
 	if dbTemplate.Metadata == nil {
-		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
+		dbTemplate.Metadata = &ateapi.ResourceMetadata{}
 	}
 	setUpdateMetadata(dbTemplate.Metadata, templateBeforeMutation.GetMetadata())
 	if markForDeletion && dbTemplate.Metadata.DeleteTime == nil {
@@ -149,10 +149,10 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 	return dbTemplate, nil
 }
 
-func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
+func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorTemplate], error) {
 	opts, err := store.NormalizeListOptions(opts)
 	if err != nil {
-		return store.ListResponse[*ateapipb.ActorTemplate]{}, err
+		return store.ListResponse[*ateapi.ActorTemplate]{}, err
 	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	keyParts := 2
@@ -161,7 +161,7 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 	}
 	token, err := decodePageToken(pageTokenStr, kindActorTemplate, atespace, keyParts)
 	if err != nil {
-		return store.ListResponse[*ateapipb.ActorTemplate]{}, err
+		return store.ListResponse[*ateapi.ActorTemplate]{}, err
 	}
 
 	var rows pgx.Rows
@@ -185,28 +185,28 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 			ORDER BY atespace, name LIMIT $3`, lastAtespace, lastName, int64(pageSize)+1)
 	}
 	if err != nil {
-		return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("listing actor templates: %w", err)
+		return store.ListResponse[*ateapi.ActorTemplate]{}, fmt.Errorf("listing actor templates: %w", err)
 	}
 	defer rows.Close()
 
 	type key struct{ atespace, name string }
 	var keys []key
-	var result []*ateapipb.ActorTemplate
+	var result []*ateapi.ActorTemplate
 	for rows.Next() {
 		var k key
 		var protoBytes []byte
 		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
-			return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("scanning actor template row: %w", err)
+			return store.ListResponse[*ateapi.ActorTemplate]{}, fmt.Errorf("scanning actor template row: %w", err)
 		}
-		template := &ateapipb.ActorTemplate{}
+		template := &ateapi.ActorTemplate{}
 		if err := unmarshalRow(protoBytes, template, "actor template", k.atespace, k.name); err != nil {
-			return store.ListResponse[*ateapipb.ActorTemplate]{}, err
+			return store.ListResponse[*ateapi.ActorTemplate]{}, err
 		}
 		keys = append(keys, k)
 		result = append(result, template)
 	}
 	if err := rows.Err(); err != nil {
-		return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("listing actor templates: %w", err)
+		return store.ListResponse[*ateapi.ActorTemplate]{}, fmt.Errorf("listing actor templates: %w", err)
 	}
 	var nextToken string
 	if len(result) > int(pageSize) {
@@ -218,10 +218,10 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 		}
 		nextToken = encodePageToken(kindActorTemplate, atespace, lastParts)
 	}
-	return store.ListResponse[*ateapipb.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
+	return store.ListResponse[*ateapi.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapi.ActorTemplate, error) {
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `
 		DELETE FROM actor_templates AS t
@@ -238,7 +238,7 @@ func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 	if err != nil {
 		return nil, fmt.Errorf("deleting actor template %s: %w", templateRef, err)
 	}
-	out := &ateapipb.ActorTemplate{}
+	out := &ateapi.ActorTemplate{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted actor template: %w", err)
 	}

@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -37,7 +37,7 @@ import (
 // newWorkerCountReader registers ate.workerpool.workers against a local
 // ManualReader-backed provider so tests stay parallel-safe and never touch the
 // global meter provider.
-func newWorkerCountReader(t *testing.T, workers func() ([]*ateapipb.Worker, error), listPools func(labels.Selector) ([]*atev1alpha1.WorkerPool, error)) *sdkmetric.ManualReader {
+func newWorkerCountReader(t *testing.T, workers func() ([]*ateapi.Worker, error), listPools func(labels.Selector) ([]*atev1.WorkerPool, error)) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -47,7 +47,7 @@ func newWorkerCountReader(t *testing.T, workers func() ([]*ateapipb.Worker, erro
 	return reader
 }
 
-func noPools(labels.Selector) ([]*atev1alpha1.WorkerPool, error) { return nil, nil }
+func noPools(labels.Selector) ([]*atev1.WorkerPool, error) { return nil, nil }
 
 func collectMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) (metricdata.Metrics, bool) {
 	t.Helper()
@@ -75,18 +75,18 @@ func mustMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metri
 }
 
 // worker builds an ACTIVE worker holding allocated of capacity actor slots.
-func worker(namespace, pool, class string, allocated, capacity int32) *ateapipb.Worker {
-	w := &ateapipb.Worker{
+func worker(namespace, pool, class string, allocated, capacity int32) *ateapi.Worker {
+	w := &ateapi.Worker{
 		WorkerNamespace: namespace,
 		WorkerPool:      pool,
-		Status: &ateapipb.WorkerStatus{
-			State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:  &ateapipb.WorkerResources{Actors: capacity},
-			Allocated: &ateapipb.WorkerResources{Actors: allocated},
+		Status: &ateapi.WorkerStatus{
+			State:     ateapi.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:  &ateapi.WorkerResources{Actors: capacity},
+			Allocated: &ateapi.WorkerResources{Actors: allocated},
 		},
 	}
 	if class != "" {
-		w.Status.SandboxClasses = []*ateapipb.WorkerSandboxClass{{SandboxClass: class}}
+		w.Status.SandboxClasses = []*ateapi.WorkerSandboxClass{{SandboxClass: class}}
 	}
 	return w
 }
@@ -129,8 +129,8 @@ func seriesCounts(sum metricdata.Sum[int64]) map[series]int64 {
 // TestWorkerCountTally covers the tally, including two pools that share a name in
 // different namespaces: a WorkerPool is namespaced, so those must stay two series.
 func TestWorkerCountTally(t *testing.T) {
-	workers := func() ([]*ateapipb.Worker, error) {
-		return []*ateapipb.Worker{
+	workers := func() ([]*ateapi.Worker, error) {
+		return []*ateapi.Worker{
 			worker("ns-1", "pool-a", "gvisor", 0, 1),
 			worker("ns-1", "pool-a", "gvisor", 0, 1),
 			worker("ns-1", "pool-a", "gvisor", 1, 1),
@@ -174,7 +174,7 @@ func TestWorkerCountTally(t *testing.T) {
 // TestWorkerCountSkipsWhenCacheNotReady asserts the callback emits nothing while
 // the cache is warming up, so we never publish misleading zero-valued points.
 func TestWorkerCountSkipsWhenCacheNotReady(t *testing.T) {
-	notReady := func() ([]*ateapipb.Worker, error) {
+	notReady := func() ([]*ateapi.Worker, error) {
 		return nil, context.DeadlineExceeded
 	}
 	reader := newWorkerCountReader(t, notReady, noPools)
@@ -242,13 +242,13 @@ func attrString(dp metricdata.HistogramDataPoint[float64], k attribute.Key) (str
 func TestLifecycleOpDurationShape(t *testing.T) {
 	inst, reader := newTestInstruments(t)
 
-	actor := &ateapipb.Actor{
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"},
-		Status: &ateapipb.ActorStatus{
-			WorkerAssignment: &ateapipb.WorkerAssignment{
+	actor := &ateapi.Actor{
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "ate-agents", Name: "support-agent"},
+		Status: &ateapi.ActorStatus{
+			WorkerAssignment: &ateapi.WorkerAssignment{
 				WorkerNamespace: "ate-workers",
 				WorkerPool:      "pool-a",
-				SandboxRuntime:  &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
+				SandboxRuntime:  &ateapi.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 	}
@@ -289,7 +289,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 // series would be indistinguishable from a real one. The unassigned actor also
 // pins the pool pair: a failure before the assign step emits neither key.
 func TestLifecycleOpAttrsOmitsUnknownScope(t *testing.T) {
-	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"}}
+	actor := &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: "ate-agents", Name: "support-agent"}}
 	for _, kv := range lifecycleOpAttrs(actor, "", "") {
 		switch kv.Key {
 		case ateattr.SnapshotFidelityKey, ateattr.SnapshotKindKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey, ateattr.SandboxClassKey:
@@ -411,10 +411,10 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 	}
 }
 
-func workerPool(namespace, name string, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPool {
-	return &atev1alpha1.WorkerPool{
+func workerPool(namespace, name string, class atev1.SandboxClass) *atev1.WorkerPool {
+	return &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
-		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: class}}},
+		Spec:       atev1.WorkerPoolSpec{SandboxClasses: []atev1.WorkerPoolSandboxClass{{Name: class}}},
 	}
 }
 
@@ -422,14 +422,14 @@ func workerPool(namespace, name string, class atev1alpha1.SandboxClass) *atev1al
 // only state has no workers, and a pool with no workers at all, both report 0
 // rather than an absent series. Empty pool class defaults to gvisor.
 func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
-	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
-		return []*atev1alpha1.WorkerPool{
+	pools := func(labels.Selector) ([]*atev1.WorkerPool, error) {
+		return []*atev1.WorkerPool{
 			workerPool("ns-1", "pool-a", ""),
-			workerPool("ns-2", "pool-a", atev1alpha1.SandboxClassMicroVM),
+			workerPool("ns-2", "pool-a", atev1.SandboxClassMicroVM),
 		}, nil
 	}
-	workers := func() ([]*ateapipb.Worker, error) {
-		return []*ateapipb.Worker{worker("ns-1", "pool-a", "gvisor", 1, 1)}, nil
+	workers := func() ([]*ateapi.Worker, error) {
+		return []*ateapi.Worker{worker("ns-1", "pool-a", "gvisor", 1, 1)}, nil
 	}
 	reader := newWorkerCountReader(t, workers, pools)
 
@@ -455,19 +455,19 @@ func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
 // an idle==0 alert on it still fires.
 func TestWorkerCountEmptyClassWorker(t *testing.T) {
 	const (
-		gvisor  = string(atev1alpha1.SandboxClassGvisor)
-		microvm = string(atev1alpha1.SandboxClassMicroVM)
+		gvisor  = string(atev1.SandboxClassGvisor)
+		microvm = string(atev1.SandboxClassMicroVM)
 	)
 	tests := []struct {
 		name    string
-		pools   []*atev1alpha1.WorkerPool
-		workers []*ateapipb.Worker
+		pools   []*atev1.WorkerPool
+		workers []*ateapi.Worker
 		want    map[series]int64
 	}{
 		{
 			name:  "gvisor pool",
-			pools: []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-empty", "")},
-			workers: []*ateapipb.Worker{
+			pools: []*atev1.WorkerPool{workerPool("ns-1", "pool-empty", "")},
+			workers: []*ateapi.Worker{
 				worker("ns-1", "pool-empty", "", 0, 1),
 				worker("ns-1", "pool-empty", "", 0, 1),
 				worker("ns-1", "pool-empty", "", 0, 1),
@@ -478,8 +478,8 @@ func TestWorkerCountEmptyClassWorker(t *testing.T) {
 		{
 			// No gvisor series shows for a pool that runs no gvisor.
 			name:    "microvm pool",
-			pools:   []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-micro", atev1alpha1.SandboxClassMicroVM)},
-			workers: []*ateapipb.Worker{worker("ns-1", "pool-micro", "", 0, 1)},
+			pools:   []*atev1.WorkerPool{workerPool("ns-1", "pool-micro", atev1.SandboxClassMicroVM)},
+			workers: []*ateapi.Worker{worker("ns-1", "pool-micro", "", 0, 1)},
 			want: withCount(seeded(nil, "ns-1", "pool-micro", microvm),
 				series{"ns-1", "pool-micro", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}, 1),
 		},
@@ -487,7 +487,7 @@ func TestWorkerCountEmptyClassWorker(t *testing.T) {
 			// A worker that matches no pool has no class to fall back to.
 			name:    "orphan worker",
 			pools:   nil,
-			workers: []*ateapipb.Worker{worker("ns-1", "pool-orphan", "", 0, 1)},
+			workers: []*ateapi.Worker{worker("ns-1", "pool-orphan", "", 0, 1)},
 			want: map[series]int64{
 				{"ns-1", "pool-orphan", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 1,
 			},
@@ -496,8 +496,8 @@ func TestWorkerCountEmptyClassWorker(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) { return tt.pools, nil }
-			workers := func() ([]*ateapipb.Worker, error) { return tt.workers, nil }
+			pools := func(labels.Selector) ([]*atev1.WorkerPool, error) { return tt.pools, nil }
+			workers := func() ([]*ateapi.Worker, error) { return tt.workers, nil }
 			reader := newWorkerCountReader(t, workers, pools)
 
 			sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
@@ -517,27 +517,27 @@ func TestWorkerCountEmptyClassWorker(t *testing.T) {
 func TestWorkerState(t *testing.T) {
 	tests := []struct {
 		name      string
-		state     ateapipb.WorkerState
-		capacity  *ateapipb.WorkerResources
-		allocated *ateapipb.WorkerResources
+		state     ateapi.WorkerState
+		capacity  *ateapi.WorkerResources
+		allocated *ateapi.WorkerResources
 		want      string
 	}{
-		{"empty", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 20}, nil, ateattr.WorkerStateIdle},
-		{"some slots used", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 20}, &ateapipb.WorkerResources{Actors: 3}, ateattr.WorkerStatePartial},
-		{"one below capacity", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 20}, &ateapipb.WorkerResources{Actors: 19}, ateattr.WorkerStatePartial},
-		{"all slots used", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 20}, &ateapipb.WorkerResources{Actors: 20}, ateattr.WorkerStateAtCapacity},
-		{"single slot used", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 1}, &ateapipb.WorkerResources{Actors: 1}, ateattr.WorkerStateAtCapacity},
+		{"empty", ateapi.WorkerState_WORKER_STATE_ACTIVE, &ateapi.WorkerResources{Actors: 20}, nil, ateattr.WorkerStateIdle},
+		{"some slots used", ateapi.WorkerState_WORKER_STATE_ACTIVE, &ateapi.WorkerResources{Actors: 20}, &ateapi.WorkerResources{Actors: 3}, ateattr.WorkerStatePartial},
+		{"one below capacity", ateapi.WorkerState_WORKER_STATE_ACTIVE, &ateapi.WorkerResources{Actors: 20}, &ateapi.WorkerResources{Actors: 19}, ateattr.WorkerStatePartial},
+		{"all slots used", ateapi.WorkerState_WORKER_STATE_ACTIVE, &ateapi.WorkerResources{Actors: 20}, &ateapi.WorkerResources{Actors: 20}, ateattr.WorkerStateAtCapacity},
+		{"single slot used", ateapi.WorkerState_WORKER_STATE_ACTIVE, &ateapi.WorkerResources{Actors: 1}, &ateapi.WorkerResources{Actors: 1}, ateattr.WorkerStateAtCapacity},
 		// Capacity can shrink below the allocation on a later report.
-		{"over capacity", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 2}, &ateapipb.WorkerResources{Actors: 5}, ateattr.WorkerStateAtCapacity},
-		{"capacity not reported yet", ateapipb.WorkerState_WORKER_STATE_ACTIVE, nil, nil, ateattr.WorkerStateUnschedulable},
-		{"zero capacity", ateapipb.WorkerState_WORKER_STATE_ACTIVE, &ateapipb.WorkerResources{Actors: 0}, nil, ateattr.WorkerStateUnschedulable},
-		{"draining and empty", ateapipb.WorkerState_WORKER_STATE_DRAINING, &ateapipb.WorkerResources{Actors: 20}, nil, ateattr.WorkerStateUnschedulable},
-		{"draining with actors", ateapipb.WorkerState_WORKER_STATE_DRAINING, &ateapipb.WorkerResources{Actors: 20}, &ateapipb.WorkerResources{Actors: 3}, ateattr.WorkerStateUnschedulable},
-		{"state unspecified", ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED, &ateapipb.WorkerResources{Actors: 20}, nil, ateattr.WorkerStateUnschedulable},
+		{"over capacity", ateapi.WorkerState_WORKER_STATE_ACTIVE, &ateapi.WorkerResources{Actors: 2}, &ateapi.WorkerResources{Actors: 5}, ateattr.WorkerStateAtCapacity},
+		{"capacity not reported yet", ateapi.WorkerState_WORKER_STATE_ACTIVE, nil, nil, ateattr.WorkerStateUnschedulable},
+		{"zero capacity", ateapi.WorkerState_WORKER_STATE_ACTIVE, &ateapi.WorkerResources{Actors: 0}, nil, ateattr.WorkerStateUnschedulable},
+		{"draining and empty", ateapi.WorkerState_WORKER_STATE_DRAINING, &ateapi.WorkerResources{Actors: 20}, nil, ateattr.WorkerStateUnschedulable},
+		{"draining with actors", ateapi.WorkerState_WORKER_STATE_DRAINING, &ateapi.WorkerResources{Actors: 20}, &ateapi.WorkerResources{Actors: 3}, ateattr.WorkerStateUnschedulable},
+		{"state unspecified", ateapi.WorkerState_WORKER_STATE_UNSPECIFIED, &ateapi.WorkerResources{Actors: 20}, nil, ateattr.WorkerStateUnschedulable},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := &ateapipb.Worker{Status: &ateapipb.WorkerStatus{State: tt.state, Capacity: tt.capacity, Allocated: tt.allocated}}
+			w := &ateapi.Worker{Status: &ateapi.WorkerStatus{State: tt.state, Capacity: tt.capacity, Allocated: tt.allocated}}
 			if got := workerState(w); got != tt.want {
 				t.Errorf("workerState = %q, want %q", got, tt.want)
 			}
@@ -549,20 +549,20 @@ func TestWorkerState(t *testing.T) {
 // state, so the sum over the states stays the size of the pool.
 func TestWorkerCountSumsToPool(t *testing.T) {
 	draining := worker("ns-1", "pool-a", "gvisor", 2, 4)
-	draining.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+	draining.Status.State = ateapi.WorkerState_WORKER_STATE_DRAINING
 	unreported := worker("ns-1", "pool-a", "gvisor", 0, 0)
 	unreported.Status.Capacity = nil
-	ws := []*ateapipb.Worker{
+	ws := []*ateapi.Worker{
 		worker("ns-1", "pool-a", "gvisor", 0, 4),
 		worker("ns-1", "pool-a", "gvisor", 2, 4),
 		worker("ns-1", "pool-a", "gvisor", 4, 4),
 		draining,
 		unreported,
 	}
-	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
-		return []*atev1alpha1.WorkerPool{workerPool("ns-1", "pool-a", "")}, nil
+	pools := func(labels.Selector) ([]*atev1.WorkerPool, error) {
+		return []*atev1.WorkerPool{workerPool("ns-1", "pool-a", "")}, nil
 	}
-	reader := newWorkerCountReader(t, func() ([]*ateapipb.Worker, error) { return ws, nil }, pools)
+	reader := newWorkerCountReader(t, func() ([]*ateapi.Worker, error) { return ws, nil }, pools)
 
 	got := seriesCounts(mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64]))
 	want := seeded(nil, "ns-1", "pool-a", "gvisor")

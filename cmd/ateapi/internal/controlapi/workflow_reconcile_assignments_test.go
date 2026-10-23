@@ -20,48 +20,37 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
-	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
 )
 
-// withEpoch returns a modifier func (see validWorker) which sets the worker's
-// epoch.
-func withEpoch(epoch int64) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) { w.Epoch = epoch }
-}
-
-// seedEpochWorker stores apiWorkerName at epoch, with observed as the epoch
-// its earlier Actors were last released for.
+// seedEpochWorker stores apiWorkerName with epoch active, and observed as the
+// epoch its earlier Actors were last released for.
 func seedEpochWorker(t *testing.T, ctx context.Context, persistence store.Interface, epoch, observed int64) {
 	t.Helper()
-	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName, withEpoch(epoch), func(w *ateapipb.Worker) {
-		w.Status = &ateapipb.WorkerStatus{
-			State:         ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			ObservedEpoch: observed,
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName, func(w *ateapi.Worker) {
+		w.Status = &ateapi.WorkerStatus{
+			State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
+			RegisteredEpoch: epoch,
+			ObservedEpoch:   observed,
 		}
 	}))
 }
 
-// raiseEpoch sends the UpdateWorker the syncer sends when the worker pod's
-// worker restarts.
-func raiseEpoch(t *testing.T, ctx context.Context, svc *RPCService, persistence store.Interface, epoch int64) (*ateapipb.Worker, error) {
+// mustRaiseEpoch activates epoch, as WorkerService.RegisterWorker does when a
+// new worker process registers with it.
+func mustRaiseEpoch(t *testing.T, ctx context.Context, persistence store.Interface, epoch int64) {
 	t.Helper()
-	return svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-		Worker: updateFrom(mustGetWorker(t, ctx, persistence), func(w *ateapipb.Worker) { w.Epoch = epoch }),
-	})
-}
-
-// mustRaiseEpoch is raiseEpoch for a raise the test expects to succeed.
-func mustRaiseEpoch(t *testing.T, ctx context.Context, svc *RPCService, persistence store.Interface, epoch int64) {
-	t.Helper()
-	if _, err := raiseEpoch(t, ctx, svc, persistence, epoch); err != nil {
-		t.Fatalf("UpdateWorker() raising epoch to %d failed: %v", epoch, err)
+	worker := mustGetWorker(t, ctx, persistence)
+	if _, err := persistence.UpdateWorker(ctx, apiWorkerName, store.PreconditionFrom(worker), func(toUpdate *ateapi.Worker) error {
+		toUpdate.Status.RegisteredEpoch = epoch
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateWorker() activating epoch %d failed: %v", epoch, err)
 	}
 }
 
@@ -72,7 +61,7 @@ func mustReconcileAssignments(t *testing.T, ctx context.Context, persistence sto
 	}
 }
 
-func mustGetWorker(t *testing.T, ctx context.Context, persistence store.Interface) *ateapipb.Worker {
+func mustGetWorker(t *testing.T, ctx context.Context, persistence store.Interface) *ateapi.Worker {
 	t.Helper()
 	got, err := persistence.GetWorker(ctx, apiWorkerName)
 	if err != nil {
@@ -81,7 +70,7 @@ func mustGetWorker(t *testing.T, ctx context.Context, persistence store.Interfac
 	return got
 }
 
-func mustGetActor(t *testing.T, ctx context.Context, persistence store.Interface) *ateapipb.Actor {
+func mustGetActor(t *testing.T, ctx context.Context, persistence store.Interface) *ateapi.Actor {
 	t.Helper()
 	got, err := persistence.GetActor(ctx, apiActorRef)
 	if err != nil {
@@ -93,97 +82,22 @@ func mustGetActor(t *testing.T, ctx context.Context, persistence store.Interface
 // seedRunningActor stores a RUNNING Actor assigned to apiWorkerName.
 func seedRunningActor(t *testing.T, ctx context.Context, persistence store.Interface) {
 	t.Helper()
-	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
-}
-
-func TestBindActorToWorker_StampsWorkerEpoch(t *testing.T) {
-	ctx := context.Background()
-	_, persistence := newWorkerAPIService(t)
-	seedEpochWorker(t, ctx, persistence, 4, 4)
-
-	assignment := newAPIAssignment("uid-1")
-	assignment.WorkerEpoch = 99
-	if err := persistence.BindActorToWorker(ctx, apiWorkerName, assignment, nil); err != nil {
-		t.Fatalf("BindActorToWorker() failed: %v", err)
-	}
-	if got := assignment.GetWorkerEpoch(); got != 4 {
-		t.Errorf("assignment worker_epoch read back = %d, want 4", got)
-	}
-	if got := firstAssignment(t, persistence, apiWorkerName).GetWorkerEpoch(); got != 4 {
-		t.Errorf("stored worker_epoch = %d, want 4", got)
-	}
-}
-
-// A new Worker hosts nothing, so its first epoch is observed from the start.
-func TestCreateWorker_ObservesInitialEpoch(t *testing.T) {
-	ctx := context.Background()
-	svc, _ := newWorkerAPIService(t)
-
-	got, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: validWorker(apiWorkerName, withEpoch(3))})
-	if err != nil {
-		t.Fatalf("CreateWorker() failed: %v", err)
-	}
-	if got.GetEpoch() != 3 || got.GetStatus().GetObservedEpoch() != 3 {
-		t.Errorf("epoch = %d, observed_epoch = %d, want both 3", got.GetEpoch(), got.GetStatus().GetObservedEpoch())
-	}
-}
-
-// Raising the epoch only records it; the release is the reconciler's.
-func TestUpdateWorker_RaisedEpochLeavesActors(t *testing.T) {
-	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
-	seedEpochWorker(t, ctx, persistence, 1, 1)
-	seedRunningActor(t, ctx, persistence)
-
-	updated, err := raiseEpoch(t, ctx, svc, persistence, 2)
-	if err != nil {
-		t.Fatalf("UpdateWorker() failed: %v", err)
-	}
-	if updated.GetEpoch() != 2 || updated.GetStatus().GetObservedEpoch() != 1 {
-		t.Errorf("epoch = %d, observed_epoch = %d, want 2 and 1", updated.GetEpoch(), updated.GetStatus().GetObservedEpoch())
-	}
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("actor state = %v, want RUNNING", got)
-	}
-}
-
-func TestUpdateWorker_EpochCannotDecrease(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		to   int64
-	}{
-		{name: "lowered", to: 2},
-		{name: "cleared", to: 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			svc, persistence := newWorkerAPIService(t)
-			seedEpochWorker(t, ctx, persistence, 3, 3)
-
-			_, err := raiseEpoch(t, ctx, svc, persistence, tc.to)
-			if got := apierror.Code(err); got != codes.InvalidArgument {
-				t.Fatalf("UpdateWorker() = %v (err %v), want %v", got, err, codes.InvalidArgument)
-			}
-			if got := mustGetWorker(t, ctx, persistence).GetEpoch(); got != 3 {
-				t.Errorf("worker epoch = %d, want 3", got)
-			}
-		})
-	}
 }
 
 func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
-	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
+	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING, func(a *ateapi.Actor) {
 		a.Status.LastAssignedGeneration = 1
-		a.Status.Snapshots = []*ateapipb.Snapshot{
-			newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", ""),
+		a.Status.Snapshots = []*ateapi.Snapshot{
+			newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", ""),
 		}
 	})
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	mustReconcileAssignments(t, ctx, persistence)
 
@@ -191,14 +105,14 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	if worker.GetStatus().GetObservedEpoch() != 2 {
 		t.Errorf("observed_epoch = %d, want 2", worker.GetStatus().GetObservedEpoch())
 	}
-	if worker.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+	if worker.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_ACTIVE {
 		t.Errorf("worker state = %v, want it left ACTIVE", worker.GetStatus().GetState())
 	}
 	if worker.GetStatus().GetAllocated().GetActors() != 0 {
 		t.Errorf("worker allocated = %v, want the crashed actor's share freed", worker.GetStatus().GetAllocated())
 	}
 	got := mustGetActor(t, ctx, persistence)
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state = %v, want CRASHED: its sandbox died with the worker", got.GetStatus().GetState())
 	}
 	if msg := got.GetStatus().GetCrash().GetMessage(); msg != crashMessageWorkerRestarted {
@@ -215,18 +129,21 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	}
 }
 
-// An Actor placed after the raise was stamped with the new epoch, so it runs on
-// the restarted worker and is kept.
-func TestReconcileAssignments_KeepsActorsPlacedAfterRaise(t *testing.T) {
+// An Actor restored on the new worker process records that process's epoch
+// when it becomes RUNNING, so it is kept.
+func TestReconcileAssignments_KeepsActorRestoredOnNewProcess(t *testing.T) {
 	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
 	seedRunningActor(t, ctx, persistence)
+	mustRaiseEpoch(t, ctx, persistence, 2)
+	mustUpdateActorStatus(t, ctx, persistence, mustGetActor(t, ctx, persistence), func(s *ateapi.ActorStatus) {
+		s.WorkerAssignment.WorkerEpoch = 2
+	})
 
 	mustReconcileAssignments(t, ctx, persistence)
 
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state = %v, want RUNNING", got)
 	}
 	if firstAssignment(t, persistence, apiWorkerName) == nil {
@@ -234,31 +151,6 @@ func TestReconcileAssignments_KeepsActorsPlacedAfterRaise(t *testing.T) {
 	}
 	if got := mustGetWorker(t, ctx, persistence).GetStatus().GetObservedEpoch(); got != 2 {
 		t.Errorf("observed_epoch = %d, want 2", got)
-	}
-}
-
-// A Worker registered before epochs were reported has observed_epoch 0. Its
-// first epoch is recorded without crashing anything, and a later restart
-// treats its unstamped assignments as older.
-func TestReconcileAssignments_FirstEpochCrashesNothing(t *testing.T) {
-	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
-	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-	seedRunningActor(t, ctx, persistence)
-
-	mustRaiseEpoch(t, ctx, svc, persistence, 3)
-	mustReconcileAssignments(t, ctx, persistence)
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		t.Fatalf("actor state after the first epoch = %v, want RUNNING", got)
-	}
-	if got := mustGetWorker(t, ctx, persistence).GetStatus().GetObservedEpoch(); got != 3 {
-		t.Fatalf("observed_epoch = %d, want 3", got)
-	}
-
-	mustRaiseEpoch(t, ctx, svc, persistence, 4)
-	mustReconcileAssignments(t, ctx, persistence)
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("actor state after a restart = %v, want CRASHED", got)
 	}
 }
 
@@ -274,7 +166,7 @@ func TestReconcileAssignments_AlreadyObservedWritesNothing(t *testing.T) {
 	if got := mustGetWorker(t, ctx, persistence).GetMetadata().GetVersion(); got != version {
 		t.Errorf("worker version = %d, want %d: nothing to write", got, version)
 	}
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state = %v, want RUNNING", got)
 	}
 }
@@ -289,29 +181,30 @@ func TestReconcileAssignments_ReleasesByActorState(t *testing.T) {
 	)
 	tests := []struct {
 		name        string
-		state       ateapipb.ActorState
+		state       ateapi.ActorState
 		pointsAt    int
-		wantState   ateapipb.ActorState
+		wantState   ateapi.ActorState
 		wantRelease bool
 	}{
 		// Suspended cleanly before the restart: still resumable.
-		{name: "suspended stays suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
-		{name: "crashed is released", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
-		// Left behind by an operation that failed partway: released without
-		// touching the Actor.
-		{name: "crashed unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
-		{name: "suspended unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
-		{name: "running elsewhere is released", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, pointsAt: otherWorker, wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantRelease: true},
-		{name: "suspended elsewhere is released", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: otherWorker, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
-		{name: "resuming crashes", state: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
-		{name: "deleting stays deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING, wantState: ateapipb.ActorState_ACTOR_STATE_DELETING, wantRelease: true},
+		{name: "suspended stays suspended", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, wantState: ateapi.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
+		{name: "crashed is released", state: ateapi.ActorState_ACTOR_STATE_CRASHED, wantState: ateapi.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
+		// Nothing it ran on the Worker: a claim a resume is still recording,
+		// or one its next resume recovers. Left alone.
+		{name: "crashed unassigned is left", state: ateapi.ActorState_ACTOR_STATE_CRASHED, pointsAt: unassigned, wantState: ateapi.ActorState_ACTOR_STATE_CRASHED},
+		{name: "suspended unassigned is left", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: unassigned, wantState: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+		{name: "running elsewhere is left", state: ateapi.ActorState_ACTOR_STATE_RUNNING, pointsAt: otherWorker, wantState: ateapi.ActorState_ACTOR_STATE_RUNNING},
+		{name: "suspended elsewhere is left", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: otherWorker, wantState: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+		// Nothing it ran is kept: its resume restores it on the new process.
+		{name: "resuming is left to its resume", state: ateapi.ActorState_ACTOR_STATE_RESUMING, wantState: ateapi.ActorState_ACTOR_STATE_RESUMING},
+		{name: "deleting stays deleting", state: ateapi.ActorState_ACTOR_STATE_DELETING, wantState: ateapi.ActorState_ACTOR_STATE_DELETING, wantRelease: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			svc, persistence := newWorkerAPIService(t)
+			_, persistence := newWorkerAPIService(t)
 			seedEpochWorker(t, ctx, persistence, 1, 1)
-			actor := seedAPIActor(t, ctx, persistence, tc.state, func(a *ateapipb.Actor) {
+			actor := seedAPIActor(t, ctx, persistence, tc.state, func(a *ateapi.Actor) {
 				switch tc.pointsAt {
 				case unassigned:
 					a.Status.WorkerAssignment = nil
@@ -320,7 +213,7 @@ func TestReconcileAssignments_ReleasesByActorState(t *testing.T) {
 				}
 			})
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
-			mustRaiseEpoch(t, ctx, svc, persistence, 2)
+			mustRaiseEpoch(t, ctx, persistence, 2)
 
 			mustReconcileAssignments(t, ctx, persistence)
 
@@ -339,20 +232,20 @@ func TestReconcileAssignments_ReleasesByActorState(t *testing.T) {
 // running, so it is released without touching the live Actor.
 func TestReconcileAssignments_ReleasesOrphanedAssignments(t *testing.T) {
 	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
-	seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, "11111111-1111-1111-1111-111111111111")
 	orphan := newAPIAssignment("22222222-2222-2222-2222-222222222222")
-	orphan.Actor = &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone"}
+	orphan.Actor = &ateapi.ObjectRef{Atespace: "team-a", Name: "gone"}
 	if err := persistence.BindActorToWorker(ctx, apiWorkerName, orphan, nil); err != nil {
 		t.Fatalf("BindActorToWorker() failed: %v", err)
 	}
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	mustReconcileAssignments(t, ctx, persistence)
 
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state = %v, want RUNNING: the assignment named another incarnation of it", got)
 	}
 	if a := firstAssignment(t, persistence, apiWorkerName); a != nil {
@@ -364,15 +257,15 @@ func TestReconcileAssignments_ReleasesOrphanedAssignments(t *testing.T) {
 // are released, but observed_epoch stays put until a pass gets the Actor too.
 func TestReconcileAssignments_WaitsForBusyActor(t *testing.T) {
 	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	seedRunningActor(t, ctx, persistence)
 	orphan := newAPIAssignment("22222222-2222-2222-2222-222222222222")
-	orphan.Actor = &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone"}
+	orphan.Actor = &ateapi.ObjectRef{Atespace: "team-a", Name: "gone"}
 	if err := persistence.BindActorToWorker(ctx, apiWorkerName, orphan, nil); err != nil {
 		t.Fatalf("BindActorToWorker() failed: %v", err)
 	}
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	lease, err := persistence.AcquireLease(ctx, actorLeaseKey(apiActorRef))
 	if err != nil {
@@ -382,7 +275,7 @@ func TestReconcileAssignments_WaitsForBusyActor(t *testing.T) {
 	if !errors.Is(err, errActorBusy) {
 		t.Fatalf("ReconcileAssignments() = %v, want errActorBusy", err)
 	}
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state = %v, want RUNNING while its lease is held", got)
 	}
 	if _, err := persistence.GetWorkerAssignment(ctx, apiWorkerName, orphan.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
@@ -394,7 +287,7 @@ func TestReconcileAssignments_WaitsForBusyActor(t *testing.T) {
 
 	lease.Close()
 	mustReconcileAssignments(t, ctx, persistence)
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state = %v, want CRASHED once the lease is free", got)
 	}
 	if got := mustGetWorker(t, ctx, persistence).GetStatus().GetObservedEpoch(); got != 2 {
@@ -425,7 +318,7 @@ func (s *hookedStore) AcquireLease(ctx context.Context, key string) (*store.Leas
 	return s.Interface.AcquireLease(ctx, key)
 }
 
-func (s *hookedStore) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+func (s *hookedStore) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
 	runOnce(&s.beforeUpdateWorker)
 	return s.Interface.UpdateWorker(ctx, name, precondition, mutate)
 }
@@ -434,10 +327,10 @@ func (s *hookedStore) UpdateWorker(ctx context.Context, name string, preconditio
 // assignment runs on the restarted worker, so it is kept.
 func TestReconcileAssignments_KeepsActorReboundSinceList(t *testing.T) {
 	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	seedRunningActor(t, ctx, persistence)
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	actorUID := mustGetActor(t, ctx, persistence).GetMetadata().GetUid()
 	rebinding := &hookedStore{Interface: persistence, beforeLease: func() {
@@ -445,10 +338,10 @@ func TestReconcileAssignments_KeepsActorReboundSinceList(t *testing.T) {
 			t.Fatalf("ReleaseActorFromWorker() failed: %v", err)
 		}
 		assignAPIWorker(t, ctx, persistence, apiWorkerName, actorUID)
-		// As assignWorkerAttempt does, the Actor records the epoch it was
-		// bound in.
+		// As finalizeRunning does, the Actor records the epoch of the
+		// process it was restored on.
 		actor := mustGetActor(t, ctx, persistence)
-		if _, err := persistence.UpdateActor(ctx, apiActorRef, store.PreconditionFrom(actor), func(a *ateapipb.Actor) error {
+		if _, err := persistence.UpdateActor(ctx, apiActorRef, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
 			a.Status.WorkerAssignment.WorkerEpoch = 2
 			return nil
 		}); err != nil {
@@ -459,11 +352,11 @@ func TestReconcileAssignments_KeepsActorReboundSinceList(t *testing.T) {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state = %v, want RUNNING", got)
 	}
-	if a := firstAssignment(t, persistence, apiWorkerName); a.GetWorkerEpoch() != 2 {
-		t.Errorf("assignment = %v, want the epoch 2 binding kept", a)
+	if firstAssignment(t, persistence, apiWorkerName) == nil {
+		t.Error("assignment released, want the new binding kept")
 	}
 	if got := mustGetWorker(t, ctx, persistence).GetStatus().GetObservedEpoch(); got != 2 {
 		t.Errorf("observed_epoch = %d, want 2", got)
@@ -471,14 +364,14 @@ func TestReconcileAssignments_KeepsActorReboundSinceList(t *testing.T) {
 }
 
 // A bind that moves the Worker on after the pass read it only makes recording
-// observed_epoch read the Worker again: the bind is stamped with the current
-// epoch, so it is kept.
+// observed_epoch read the Worker again: the bind came after the sweep, so it is
+// kept.
 func TestReconcileAssignments_RetriesRecordAfterConcurrentBind(t *testing.T) {
 	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	seedRunningActor(t, ctx, persistence)
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	const boundUID = "33333333-3333-3333-3333-333333333333"
 	binding := &hookedStore{Interface: persistence, beforeUpdateWorker: func() {
@@ -491,15 +384,11 @@ func TestReconcileAssignments_RetriesRecordAfterConcurrentBind(t *testing.T) {
 	if got := mustGetWorker(t, ctx, persistence).GetStatus().GetObservedEpoch(); got != 2 {
 		t.Errorf("observed_epoch = %d, want 2", got)
 	}
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state = %v, want CRASHED", got)
 	}
-	a, err := persistence.GetWorkerAssignment(ctx, apiWorkerName, boundUID)
-	if err != nil {
+	if _, err := persistence.GetWorkerAssignment(ctx, apiWorkerName, boundUID); err != nil {
 		t.Fatalf("GetWorkerAssignment() = %v, want the concurrent bind kept", err)
-	}
-	if a.GetWorkerEpoch() != 2 {
-		t.Errorf("concurrent bind epoch = %d, want 2", a.GetWorkerEpoch())
 	}
 }
 
@@ -508,9 +397,9 @@ func TestReconcileAssignments_RetriesRecordAfterConcurrentBind(t *testing.T) {
 // own restarts would then look already observed.
 func TestReconcileAssignments_LeavesReplacedWorker(t *testing.T) {
 	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
-	mustRaiseEpoch(t, ctx, svc, persistence, 5)
+	mustRaiseEpoch(t, ctx, persistence, 5)
 
 	replacing := &hookedStore{Interface: persistence, beforeUpdateWorker: func() {
 		if _, err := persistence.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
@@ -531,10 +420,10 @@ func TestReconcileAssignments_LeavesReplacedWorker(t *testing.T) {
 // redoes it.
 func TestReconcileAssignments_FailureKeepsObservedEpoch(t *testing.T) {
 	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	seedRunningActor(t, ctx, persistence)
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	failing := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("crash failed")}, nil)
 	if err := failing.ReconcileAssignments(ctx, apiWorkerName); err == nil {
@@ -548,7 +437,7 @@ func TestReconcileAssignments_FailureKeepsObservedEpoch(t *testing.T) {
 	}
 
 	mustReconcileAssignments(t, ctx, persistence)
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state after the retry = %v, want CRASHED", got)
 	}
 	if got := mustGetWorker(t, ctx, persistence).GetStatus().GetObservedEpoch(); got != 2 {
@@ -562,32 +451,32 @@ func TestReconcileAssignments_WorkerGone(t *testing.T) {
 	mustReconcileAssignments(t, ctx, persistence)
 }
 
-// The Actor's assignment carries the epoch the bind read under the Worker's
-// row lock, not the one in the scheduler's cache.
-func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
+// Placing an Actor records no epoch: only the worker process that restores it
+// knows which epoch it runs under.
+func TestAssignWorkerAttempt_LeavesWorkerEpochUnset(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	name := testWorkerUID("pod-1")
-	created, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: name},
+	_, err := persistence.CreateWorker(ctx, &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: name},
 		WorkerNamespace: "worker-ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    name,
 		NodeName:        "node-1",
-		Epoch:           1,
-		Status: &ateapipb.WorkerStatus{
-			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapipb.WorkerResources{Actors: 1},
-			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
+		Status: &ateapi.WorkerStatus{
+			State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
+			RegisteredEpoch: 1,
+			Capacity:        &ateapi.WorkerResources{Actors: 1},
+			SandboxClasses:  workerSandboxClasses(testSandboxRuntime()),
 		},
 	})
 	if err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
-		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 	cacheCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -596,28 +485,13 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 		t.Fatalf("workercache.Start: %v", err)
 	}
 
-	precondition := store.Precondition{UID: created.GetMetadata().GetUid(), Version: created.GetMetadata().GetVersion()}
-	if _, err := persistence.UpdateWorker(ctx, name, precondition, func(w *ateapipb.Worker) error {
-		w.Epoch = 2
-		return nil
-	}); err != nil {
-		t.Fatalf("UpdateWorker: %v", err)
-	}
-
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{}
+	tmpl := &ateapi.ActorTemplate{}
 	stored, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt: %v", err)
 	}
-	if got := stored.GetStatus().GetWorkerAssignment().GetWorkerEpoch(); got != 2 {
-		t.Errorf("actor worker_epoch = %d, want 2", got)
-	}
-	assignment, err := persistence.GetWorkerAssignment(ctx, name, actor.GetMetadata().GetUid())
-	if err != nil {
-		t.Fatalf("GetWorkerAssignment: %v", err)
-	}
-	if got := assignment.GetWorkerEpoch(); got != 2 {
-		t.Errorf("assignment worker_epoch = %d, want 2", got)
+	if got := stored.GetStatus().GetWorkerAssignment().GetWorkerEpoch(); got != 0 {
+		t.Errorf("actor worker_epoch = %d, want 0 until the Actor is RUNNING", got)
 	}
 }

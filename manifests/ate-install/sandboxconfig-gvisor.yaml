@@ -23,7 +23,7 @@
 # A bump adds a version and points defaultVersion at it. Keep the
 # previous version unless it has a known vulnerability: an actor restores its
 # memory only on the version its snapshot was taken with.
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: SandboxConfig
 metadata:
   name: gvisor-default

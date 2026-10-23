@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
@@ -28,7 +29,6 @@ import (
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
@@ -50,9 +50,9 @@ func testWorkerUID(podName string) string {
 func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplName string) *ActorWorkflow {
 	t.Helper()
 	storetest.MustCreateAtespace(t, context.Background(), st, tmplAtespace)
-	if _, err := st.CreateActorTemplate(context.Background(), &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: tmplAtespace, Name: tmplName},
-		SnapshotConfig: &ateapipb.SnapshotConfig{
+	if _, err := st.CreateActorTemplate(context.Background(), &ateapi.ActorTemplate{
+		Metadata: &ateapi.ResourceMetadata{Atespace: tmplAtespace, Name: tmplName},
+		SnapshotConfig: &ateapi.SnapshotConfig{
 			StorageLocation: "gs://snapshots",
 		},
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
@@ -82,7 +82,7 @@ func newWireFinalizeWorkflow(t *testing.T, persistence store.Interface) (*ActorW
 
 // mustActorSnapshotURI builds the URI of a snapshot the actor took under
 // template's storage location, the way the suspend workflow does.
-func mustActorSnapshotURI(t *testing.T, template *ateapipb.ActorTemplate, actor *ateapipb.Actor, name string) resources.SnapshotURI {
+func mustActorSnapshotURI(t *testing.T, template *ateapi.ActorTemplate, actor *ateapi.Actor, name string) resources.SnapshotURI {
 	t.Helper()
 	atespace, uid := actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetUid()
 	uri, err := resources.NewActorSnapshotURI(template.GetSnapshotConfig().GetStorageLocation(), atespace, uid, name)
@@ -116,7 +116,7 @@ func someActorSnapshotURI(t *testing.T, location, atespace, name string) string 
 
 // mustTagSnapshotURI builds the URI of the one snapshot a tag owns, the way the
 // tag workflow does.
-func mustTagSnapshotURI(t *testing.T, template *ateapipb.ActorTemplate, atespace, name string) resources.SnapshotURI {
+func mustTagSnapshotURI(t *testing.T, template *ateapi.ActorTemplate, atespace, name string) resources.SnapshotURI {
 	t.Helper()
 	uri, err := resources.NewTagSnapshotURI(template.GetSnapshotConfig().GetStorageLocation(), atespace, name)
 	if err != nil {
@@ -128,10 +128,10 @@ func mustTagSnapshotURI(t *testing.T, template *ateapipb.ActorTemplate, atespace
 // mustUpdateActorStatus mutates a stored actor's status. Tests reach for it to
 // record snapshot URIs: an actor's prefix is keyed on the UID the store
 // assigns, so its URIs cannot be written until the row exists.
-func mustUpdateActorStatus(t *testing.T, ctx context.Context, persistence store.Interface, actor *ateapipb.Actor, mutate func(*ateapipb.ActorStatus)) *ateapipb.Actor {
+func mustUpdateActorStatus(t *testing.T, ctx context.Context, persistence store.Interface, actor *ateapi.Actor, mutate func(*ateapi.ActorStatus)) *ateapi.Actor {
 	t.Helper()
 	actorRef := resources.ActorRefFromActor(actor)
-	updated, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	updated, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 		mutate(toUpdate.Status)
 		return nil
 	})
@@ -144,13 +144,13 @@ func mustUpdateActorStatus(t *testing.T, ctx context.Context, persistence store.
 // seedWorkflowActor stores an actor with the given state, bound to the given
 // template (pass the same tmplAtespace/tmplName as newTestActorWorkflow).
 // opts mutate the actor before it is stored.
-func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, tmplAtespace, tmplName string, actorState ateapipb.ActorState, opts ...func(*ateapipb.Actor)) {
+func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, tmplAtespace, tmplName string, actorState ateapi.ActorState, opts ...func(*ateapi.Actor)) {
 	t.Helper()
 
-	actor := &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status:        &ateapipb.ActorStatus{State: actorState},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: tmplAtespace, Name: tmplName},
+	actor := &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
+		Status:        &ateapi.ActorStatus{State: actorState},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: tmplAtespace, Name: tmplName},
 	}
 	for _, opt := range opts {
 		opt(actor)
@@ -162,41 +162,41 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 // node-local snapshot at the latest generation with a PENDING durable copy,
 // pinned to node. Pair it with ACTOR_STATE_SUSPENDED to seed an asynchronously
 // suspended actor.
-func withPausedShape(t *testing.T, node string) func(*ateapipb.Actor) {
+func withPausedShape(t *testing.T, node string) func(*ateapi.Actor) {
 	t.Helper()
-	snap := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node)
-	return func(a *ateapipb.Actor) {
+	snap := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node)
+	return func(a *ateapi.Actor) {
 		a.Status.AssignedNode = node
 		a.Status.LastAssignedGeneration = 1
-		a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(snap)}
+		a.Status.Snapshots = []*ateapi.Snapshot{proto.CloneOf(snap)}
 	}
 }
 
 // withUploadedPausedShape seeds an asynchronously suspended actor whose
 // snapshot atelet has since uploaded: the local-snapshot shape, with its
 // durable copy COMPLETED.
-func withUploadedPausedShape(t *testing.T, node string) func(*ateapipb.Actor) {
+func withUploadedPausedShape(t *testing.T, node string) func(*ateapi.Actor) {
 	t.Helper()
 	paused := withPausedShape(t, node)
-	return func(a *ateapipb.Actor) {
+	return func(a *ateapi.Actor) {
 		paused(a)
-		a.Status.Snapshots[0].DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		a.Status.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	}
 }
 
 // newInProgressSnapshot builds the snapshot a suspend of either mode marks at
 // generation gen: a PENDING durable copy at a URI named uuid, and no locality
 // yet.
-func newInProgressSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, uuid string) *ateapipb.Snapshot {
+func newInProgressSnapshot(t *testing.T, gen int32, fidelity ateapi.SnapshotFidelity, uuid string) *ateapi.Snapshot {
 	t.Helper()
-	return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", uuid, someActorSnapshotURI(t, testStorageLocation, "team-a", uuid), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	return newDurableSnapshot(gen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", uuid, someActorSnapshotURI(t, testStorageLocation, "team-a", uuid), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
 }
 
 // newPausedSnapshot builds the snapshot an asynchronous suspend leaves on node
 // locality at generation gen: a node-local checkpoint whose PENDING durable
 // copy atelet uploads in the background. With no locality it is the in-progress
 // mark.
-func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
+func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapi.SnapshotFidelity, templateUID, uuid, locality string) *ateapi.Snapshot {
 	t.Helper()
 	snap := newInProgressSnapshot(t, gen, fidelity, uuid)
 	snap.ActorTemplateUid = templateUID
@@ -208,33 +208,33 @@ func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFideli
 // marking the actor SUSPENDING and finalizing it: a snapshot at the latest
 // generation with a PENDING durable copy and no locality yet. Pair it with
 // ACTOR_STATE_SUSPENDING.
-func withPauseInProgress(t *testing.T) func(*ateapipb.Actor) {
-	snap := newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "pause-snap")
-	return func(a *ateapipb.Actor) {
+func withPauseInProgress(t *testing.T) func(*ateapi.Actor) {
+	snap := newInProgressSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "pause-snap")
+	return func(a *ateapi.Actor) {
 		a.Status.LastAssignedGeneration = 1
-		a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(snap)}
+		a.Status.Snapshots = []*ateapi.Snapshot{proto.CloneOf(snap)}
 	}
 }
 
 // allActorStates enumerates every ActorState value, for exhaustive
 // CheckPrerequisite table tests. It is derived from the generated enum map so
 // states added to the proto are covered automatically.
-var allActorStates = func() []ateapipb.ActorState {
-	nums := make([]int32, 0, len(ateapipb.ActorState_name))
-	for n := range ateapipb.ActorState_name {
+var allActorStates = func() []ateapi.ActorState {
+	nums := make([]int32, 0, len(ateapi.ActorState_name))
+	for n := range ateapi.ActorState_name {
 		nums = append(nums, n)
 	}
 	slices.Sort(nums)
-	states := make([]ateapipb.ActorState, 0, len(nums))
+	states := make([]ateapi.ActorState, 0, len(nums))
 	for _, n := range nums {
-		states = append(states, ateapipb.ActorState(n))
+		states = append(states, ateapi.ActorState(n))
 	}
 	return states
 }()
 
 // assertPrerequisiteResult verifies a CheckPrerequisite outcome for one
 // state: nil when allowed, FailedPrecondition otherwise.
-func assertPrerequisiteResult(t *testing.T, st ateapipb.ActorState, err error, wantAllowed bool) {
+func assertPrerequisiteResult(t *testing.T, st ateapi.ActorState, err error, wantAllowed bool) {
 	t.Helper()
 	if wantAllowed {
 		if err != nil {
@@ -252,26 +252,26 @@ func assertPrerequisiteResult(t *testing.T, st ateapipb.ActorState, err error, w
 }
 
 // suspendTestTemplateRef names the template seedSuspendTemplate stores.
-func suspendTestTemplateRef() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: "ns", Name: "tmpl1"}
+func suspendTestTemplateRef() *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: "ns", Name: "tmpl1"}
 }
 
 // seedSuspendTemplate stores the ActorTemplate the suspend workflow tests run
 // their actors from, with the given snapshot config, and returns it as stored.
-func seedSuspendTemplate(t *testing.T, ctx context.Context, st store.Interface, snapshotConfig *ateapipb.SnapshotConfig) *ateapipb.ActorTemplate {
+func seedSuspendTemplate(t *testing.T, ctx context.Context, st store.Interface, snapshotConfig *ateapi.SnapshotConfig) *ateapi.ActorTemplate {
 	t.Helper()
 	ref := suspendTestTemplateRef()
 	storetest.MustCreateAtespace(t, ctx, st, ref.GetAtespace())
 	if snapshotConfig.GetStorageLocation() == "" {
 		if snapshotConfig == nil {
-			snapshotConfig = &ateapipb.SnapshotConfig{}
+			snapshotConfig = &ateapi.SnapshotConfig{}
 		} else {
 			snapshotConfig = proto.CloneOf(snapshotConfig)
 		}
 		snapshotConfig.StorageLocation = testStorageLocation
 	}
-	created, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata:       &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
+	created, err := st.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+		Metadata:       &ateapi.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
 		SnapshotConfig: snapshotConfig,
 	})
 	if err != nil {
@@ -284,20 +284,42 @@ func seedSuspendTemplate(t *testing.T, ctx context.Context, st store.Interface, 
 	return stored
 }
 
+// registeredEpoch is the epoch registered sets, and the one the fake atelets
+// report their workloads ran under.
+const registeredEpoch = 1
+
+// registered fills in what a Worker's worker process reports when it
+// registers, which the scheduler requires: a registered epoch and, unless
+// status names them, sandbox classes with a default runtime no snapshot
+// requires.
+func registered(status *ateapi.WorkerStatus) *ateapi.WorkerStatus {
+	status.RegisteredEpoch = max(status.RegisteredEpoch, registeredEpoch)
+	if len(status.SandboxClasses) == 0 {
+		status.SandboxClasses = workerSandboxClasses(&ateapi.ActorSandboxRuntime{
+			SandboxClass: "gvisor",
+			Version: &ateapi.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes:    []*ateapi.AttributeEntry{{Key: "architecture", Value: "fixture"}},
+			},
+		})
+	}
+	return status
+}
+
 // seedWireWorker stores the Worker wireTestAssignment names and places
 // assignment on it (none when nil), so a finalize step has a real assignment
 // to release.
-func seedWireWorker(t *testing.T, ctx context.Context, st store.Interface, assignment *ateapipb.ActorAssignment) {
+func seedWireWorker(t *testing.T, ctx context.Context, st store.Interface, assignment *ateapi.ActorAssignment) {
 	t.Helper()
 	wa := wireTestAssignment()
-	if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: wa.GetWorker().GetName()},
+	if _, err := st.CreateWorker(ctx, &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: wa.GetWorker().GetName()},
 		WorkerNamespace: wa.GetWorkerNamespace(),
 		WorkerPool:      wa.GetWorkerPool(),
 		WorkerPod:       wa.GetWorkerPod(),
 		WorkerPodUid:    wa.GetWorkerPodUid(),
 		NodeName:        wa.GetNodeName(),
-		Status:          &ateapipb.WorkerStatus{},
+		Status:          &ateapi.WorkerStatus{},
 	}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
@@ -305,9 +327,9 @@ func seedWireWorker(t *testing.T, ctx context.Context, st store.Interface, assig
 }
 
 // assignmentOf is the worker assignment that places actor on a worker.
-func assignmentOf(actor *ateapipb.Actor) *ateapipb.ActorAssignment {
-	return &ateapipb.ActorAssignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()},
+func assignmentOf(actor *ateapi.Actor) *ateapi.ActorAssignment {
+	return &ateapi.ActorAssignment{
+		Actor:    &ateapi.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()},
 		ActorUid: actor.GetMetadata().GetUid(),
 	}
 }
@@ -341,14 +363,14 @@ func assertLifecycleFidelity(t *testing.T, reader *sdkmetric.ManualReader, want 
 // updateDuringCheckpoint makes atelet's Checkpoint mutate the stored actor
 // before it returns, standing in for a writer that lands between a workflow's
 // atelet call and its finalize step.
-func updateDuringCheckpoint(t *testing.T, atelet *capturingAtelet, st store.Interface, actorRef resources.ActorRef, mutate func(*ateapipb.ActorStatus)) {
+func updateDuringCheckpoint(t *testing.T, atelet *capturingAtelet, st store.Interface, actorRef resources.ActorRef, mutate func(*ateapi.ActorStatus)) {
 	atelet.onCheckpoint = func(ctx context.Context) error {
 		actor, err := st.GetActor(ctx, actorRef)
 		if err != nil {
 			t.Errorf("GetActor during Checkpoint: %v", err)
 			return err
 		}
-		if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 			mutate(toUpdate.Status)
 			return nil
 		}); err != nil {
@@ -360,7 +382,7 @@ func updateDuringCheckpoint(t *testing.T, atelet *capturingAtelet, st store.Inte
 }
 
 // mustReadActor reads the stored actor.
-func mustReadActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) *ateapipb.Actor {
+func mustReadActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) *ateapi.Actor {
 	t.Helper()
 	actor, err := st.GetActor(ctx, actorRef)
 	if err != nil {
@@ -383,7 +405,7 @@ func (s workerDeletedDuringReleaseStore) AcquireLease(ctx context.Context, _ str
 	return store.NewLease(ctx, func() {}), nil
 }
 
-func (s workerDeletedDuringReleaseStore) ReleaseActorFromWorker(ctx context.Context, workerName, actorUID string) (*ateapipb.Worker, error) {
+func (s workerDeletedDuringReleaseStore) ReleaseActorFromWorker(ctx context.Context, workerName, actorUID string) (*ateapi.Worker, error) {
 	worker, err := s.Interface.GetWorker(ctx, workerName)
 	if err != nil {
 		return nil, err
@@ -415,8 +437,8 @@ func assertConcurrentCrashKept(t *testing.T, ctx context.Context, st store.Inter
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
 	}
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_CRASHED)
 	}
 	if msg := got.GetStatus().GetCrash().GetMessage(); msg != wantCrash {
 		t.Errorf("crash message = %q, want %q", msg, wantCrash)

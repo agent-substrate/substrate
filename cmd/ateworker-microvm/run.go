@@ -239,6 +239,10 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := ateworkervalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
+	epoch, err := s.epoch.Require()
+	if err != nil {
+		return nil, err
+	}
 	if err := validateRuntimeAssetPaths(req.GetActorUid(), req.GetActorDirs(), req.GetRuntimeAssetPaths()); err != nil {
 		return nil, err
 	}
@@ -295,7 +299,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", p.actorUID))
-	return &ateworkerpb.RunWorkloadResponse{}, nil
+	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch}, nil
 }
 
 // actorBootParams is what a cold boot needs about an actor. It comes from a Run
@@ -440,6 +444,12 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 			<-upperDone
 		}
 	}()
+
+	// Egress before the guest boots, ingress after the wakeup probe (see
+	// tunnel.Tunnel.ActivateEgress).
+	if err := s.tunnel.ActivateEgress(p.attribution(), egress); err != nil {
+		return err
+	}
 
 	kparams := s.kernelParams()
 
@@ -604,7 +614,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("since_boot", time.Since(tBooted)))
 
 	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
-	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
+	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}
 	s.setRunningVM(actorUID, ra)

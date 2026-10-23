@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
@@ -44,7 +45,6 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -90,6 +90,8 @@ type fakeWorker struct {
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
 	// recent RestoreWorkload request.
 	preserveRestoreDir bool
+	// workerEpoch is the epoch RunWorkload and RestoreWorkload report.
+	workerEpoch int64
 	// fidelities records the fidelity each checkpoint or restore arrived
 	// with, by RPC name.
 	fidelities map[string]ateworkerpb.SnapshotFidelity
@@ -126,10 +128,10 @@ func (f *fakeWorker) recordActorDirs(rpc string, actorDirs *ateworkerpb.ActorDir
 
 func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkloadRequest) (*ateworkerpb.RunWorkloadResponse, error) {
 	f.recordActorDirs("RunWorkload", req.GetActorDirs())
-	return &ateworkerpb.RunWorkloadResponse{}, nil
+	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: f.workerEpoch}, nil
 }
 
-func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
+func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
 	f.recordFidelity("CheckpointWorkload", req.GetFidelity())
 	dir := req.GetActorDirs().GetCheckpointDir()
@@ -142,6 +144,9 @@ func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.Chec
 	}
 	if f.onCheckpoint != nil {
 		f.onCheckpoint()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
 }
@@ -165,7 +170,7 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 		}
 		f.restored[name] = string(body)
 	}
-	return &ateworkerpb.RestoreWorkloadResponse{}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: f.workerEpoch}, nil
 }
 
 func (f *fakeWorker) TerminateWorkload(_ context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
@@ -247,7 +252,8 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		snapshotName2 = "pause-snap-2"
 	)
 
-	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}}
+	const workerEpoch = 7
+	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}, workerEpoch: workerEpoch}
 	serveFakeWorker(t, worker)
 
 	host := imageVolumeTestRegistry(t)
@@ -262,6 +268,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		anonGCSClient:     fakeObjectStorage{data: release.tarball},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+		checkpointTimeout: defaultCheckpointTimeout,
 	}
 	sandboxRec := testSandboxRecord(release)
 	spec := &ateletpb.WorkloadSpec{
@@ -269,7 +276,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 	}
 
 	advertiseRuntime(t, s, sandboxRec)
-	if _, err := s.Run(ctx, &ateletpb.RunRequest{
+	runResp, err := s.Run(ctx, &ateletpb.RunRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -278,8 +285,14 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		WorkerPodUid:          workerPodUID,
 		SandboxRuntime:        runtimeFor(t, sandboxRec),
 		Spec:                  spec,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+	// The control plane stamps the Actor with the epoch of the worker process
+	// that started it.
+	if got := runResp.GetWorkerEpoch(); got != workerEpoch {
+		t.Errorf("Run worker_epoch = %d, want %d", got, workerEpoch)
 	}
 
 	// Async suspend: a deferred checkpoint, which leaves the snapshot on this node.
@@ -316,7 +329,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 
 	// Resume: atelet must restore from that local snapshot, not from
 	// Snapshot.Object.
-	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
+	restoreResp, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -326,8 +339,12 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		SandboxRuntime:        runtimeFor(t, sandboxRec),
 		Spec:                  spec,
 		Snapshot:              lifecycleSnapshot(actorUID, snapshotName, 1, fidelity),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Restore: %v", err)
+	}
+	if got := restoreResp.GetWorkerEpoch(); got != workerEpoch {
+		t.Errorf("Restore worker_epoch = %d, want %d", got, workerEpoch)
 	}
 	if got := worker.restored["checkpoint.img"]; got != "guest-memory" {
 		t.Fatalf("restore staged %q for worker, want the pause snapshot's %q", got, "guest-memory")
@@ -445,6 +462,7 @@ func TestRestoreUsesRequestSandboxRuntime(t *testing.T) {
 		anonGCSClient:     fakeObjectStorage{data: checkpointRelease.tarball},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+		checkpointTimeout: defaultCheckpointTimeout,
 	}
 	checkpointRec, restoreRec := testSandboxRecord(checkpointRelease), testSandboxRecord(restoreRelease)
 	spec := &ateletpb.WorkloadSpec{
@@ -2207,6 +2225,71 @@ func TestFailedRestoreUnschedulesDetach(t *testing.T) {
 	}
 }
 
+// TestResetActorDirsFailureIsCanceled checks that Run and Restore report a
+// failed actordirs.ResetActorDirsKeepingVolumes as Canceled, which
+// ate-api-server retries instead of crashing the actor, and that the retry
+// succeeds once the reset can.
+func TestResetActorDirsFailureIsCanceled(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// prepare sets up the actor and returns the call to retry.
+		prepare func(t *testing.T, a *pluginActor) func() error
+	}{{
+		name: "Run",
+		prepare: func(t *testing.T, a *pluginActor) func() error {
+			return func() error {
+				_, err := a.s.Run(t.Context(), &ateletpb.RunRequest{
+					Atespace:              "ate-demo",
+					ActorName:             "counter",
+					ActorUid:              pluginActorUID,
+					ActorTemplateAtespace: "default",
+					ActorTemplateName:     "counter",
+					WorkerPodUid:          pluginWorkerPodUID,
+					SandboxRuntime:        runtimeFor(t, a.rec),
+					Spec:                  a.spec,
+				})
+				return err
+			}
+		},
+	}, {
+		name: "Restore",
+		prepare: func(t *testing.T, a *pluginActor) func() error {
+			req := a.restoreRequest(t, a.checkpointed(t, "pause-snap-1", 1))
+			return func() error {
+				_, err := a.s.Restore(t.Context(), req)
+				return err
+			}
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			call := tc.prepare(t, a)
+
+			// Replace the actor's empty volumes dir with a file. The reset keeps
+			// the volumes dir instead of recreating it, so its MkdirAll of that
+			// path fails with ENOTDIR.
+			volumesDir := ateletpath.ExternalVolumeMountsDir(pluginActorUID)
+			if err := os.Remove(volumesDir); err != nil {
+				t.Fatalf("removing volumes dir: %v", err)
+			}
+			if err := os.WriteFile(volumesDir, nil, 0o600); err != nil {
+				t.Fatalf("writing file at volumes dir: %v", err)
+			}
+			if err := call(); status.Code(err) != codes.Canceled {
+				t.Fatalf("%s = %v (code %s), want %s", tc.name, err, status.Code(err), codes.Canceled)
+			}
+
+			// Without the file, the reset recreates the volumes dir.
+			if err := os.Remove(volumesDir); err != nil {
+				t.Fatalf("removing file at volumes dir: %v", err)
+			}
+			if err := call(); err != nil {
+				t.Errorf("%s retry: %v", tc.name, err)
+			}
+		})
+	}
+}
+
 // TestRestoreAfterDetachReadsUpload resumes a suspended actor that atelet
 // detached before the control plane recorded the upload, so the control plane
 // still sends the Restore here: atelet restores the actor from the upload the
@@ -2607,7 +2690,7 @@ func advertiseRuntime(t *testing.T, s *Atelet, rec *sandboxAssetsRecord) {
 	}
 	hash := bundleHash(rec)
 	s.runtimes.register("test-worker-pod", advertisedClass{
-		class:  v1alpha1.SandboxClass(rec.SandboxClass),
+		class:  atev1.SandboxClass(rec.SandboxClass),
 		config: "test-config",
 		hashed: []hashedVersion{{versionPlan: versionPlan{name: "v1", isDefault: true, rec: rec}, hash: hash}},
 	})
@@ -3641,5 +3724,150 @@ func TestRestoreLocalSnapshotFromEarlierBoot(t *testing.T) {
 		if !errors.Is(err, errUnusableLocalSnapshot) {
 			t.Errorf("Restore error = %v, want it to wrap %v", err, errUnusableLocalSnapshot)
 		}
+	})
+}
+
+// TestCheckpointFinishesWhenCallerCancels verifies that once Checkpoint has
+// acquired the actor's lock and begun the checkpoint, canceling the caller's
+// context mid-flight does not abort the worker checkpoint or snapshot commit,
+// a longer caller deadline is preserved past checkpointTimeout, and a retry
+// waits on the actor lock and answers from the committed snapshot.
+func TestCheckpointFinishesWhenCallerCancels(t *testing.T) {
+	for _, mode := range []ateletpb.UploadMode{
+		ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
+		ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE,
+	} {
+		t.Run(mode.String(), func(t *testing.T) {
+			a := runPluginActor(t)
+			a.s.checkpointTimeout = 10 * time.Millisecond
+			snap := a.snapshot("snap-1", 1)
+
+			var workerCheckpoints atomic.Int32
+			started := make(chan struct{})
+			release := make(chan struct{})
+			a.worker.onCheckpoint = func() {
+				if workerCheckpoints.Add(1) == 1 {
+					close(started)
+					<-release
+				}
+			}
+
+			// Give the caller a deadline longer than checkpointTimeout so the
+			// detached context keeps the caller's longer deadline.
+			callerCtx, cancelCaller := context.WithTimeout(t.Context(), time.Minute)
+			defer cancelCaller()
+
+			type cpResult struct {
+				resp *ateletpb.CheckpointResponse
+				err  error
+			}
+			resCh := make(chan cpResult, 1)
+			go func() {
+				resp, err := a.s.Checkpoint(callerCtx, &ateletpb.CheckpointRequest{
+					Atespace:              "ate-demo",
+					ActorName:             "counter",
+					ActorUid:              pluginActorUID,
+					ActorTemplateAtespace: "default",
+					ActorTemplateName:     "counter",
+					WorkerPodUid:          pluginWorkerPodUID,
+					Spec:                  a.spec,
+					Snapshot:              snap,
+					UploadConfig:          &ateletpb.UploadConfig{Mode: mode},
+				})
+				resCh <- cpResult{resp, err}
+			}()
+
+			select {
+			case <-started:
+			case <-time.After(10 * time.Second):
+				t.Fatal("timed out waiting for Checkpoint to reach worker")
+			}
+
+			cancelCaller()
+
+			retryCh := make(chan cpResult, 1)
+			go func() {
+				resp, err := a.checkpoint(t, snap, mode)
+				retryCh <- cpResult{resp, err}
+			}()
+			// Wait past checkpointTimeout while the retry is queued behind the
+			// first call's actor lock, verifying both that the retry blocks and
+			// that the caller's 1-minute deadline was not shortened to 10ms.
+			select {
+			case res := <-retryCh:
+				t.Fatalf("retried Checkpoint returned (%v, %v) while first Checkpoint was still in flight", res.resp, res.err)
+			case <-time.After(25 * time.Millisecond):
+			}
+
+			close(release)
+
+			for _, call := range []struct {
+				name string
+				ch   <-chan cpResult
+			}{
+				{name: "first", ch: resCh},
+				{name: "retry", ch: retryCh},
+			} {
+				res := <-call.ch
+				if res.err != nil {
+					t.Fatalf("%s Checkpoint: %v", call.name, res.err)
+				}
+				st := res.resp.GetState()
+				if got := st.GetLatestLocal().GetSnapshot(); !proto.Equal(got, snap) {
+					t.Errorf("%s latest_local = %v, want %v", call.name, got, snap)
+				}
+				if mode == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+					if got := st.GetLatestDurable().GetSnapshot(); !proto.Equal(got, snap) {
+						t.Errorf("%s latest_durable = %v, want %v", call.name, got, snap)
+					}
+				}
+			}
+			if n := workerCheckpoints.Load(); n != 1 {
+				t.Errorf("worker checkpointed the actor %d times, want once", n)
+			}
+		})
+	}
+
+	t.Run("bounded_by_checkpoint_timeout", func(t *testing.T) {
+		a := runPluginActor(t)
+		a.s.checkpointTimeout = 100 * time.Millisecond
+
+		started := make(chan struct{})
+		release := make(chan struct{})
+		defer close(release)
+		a.worker.onCheckpoint = func() {
+			close(started)
+			<-release
+		}
+
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := a.checkpoint(t, a.snapshot("snap-timeout", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+			errCh <- err
+		}()
+
+		select {
+		case <-started:
+		case err := <-errCh:
+			t.Fatalf("Checkpoint returned before reaching worker: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for Checkpoint to reach worker")
+		}
+
+		var err error
+		select {
+		case err = <-errCh:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for Checkpoint to fail after checkpointTimeout")
+		}
+		if !errors.Is(err, context.DeadlineExceeded) && status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("Checkpoint err = %v, want DeadlineExceeded", err)
+		}
+
+		unlock, err := a.s.lockActor(t.Context(), pluginActorUID)
+		if err != nil {
+			t.Fatalf("lockActor after timed-out Checkpoint: %v", err)
+		}
+		unlock()
 	})
 }

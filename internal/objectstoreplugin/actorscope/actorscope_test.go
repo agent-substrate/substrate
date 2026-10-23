@@ -19,8 +19,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -34,20 +34,20 @@ func actorURI(location, name string) string {
 	return location + "/atespaces/" + atespace + "/actors/" + uid + "/snapshots/" + name
 }
 
-func gen(n int32, owner ateapipb.SnapshotOwner, status ateapipb.SnapshotStorageStatus, uri string) *ateapipb.Snapshot {
-	s := &ateapipb.Snapshot{Generation: n, Owner: owner}
+func gen(n int32, owner ateapi.SnapshotOwner, status ateapi.SnapshotStorageStatus, uri string) *ateapi.Snapshot {
+	s := &ateapi.Snapshot{Generation: n, Owner: owner}
 	if uri != "" {
-		s.DurableSnapshot = &ateapipb.SnapshotStorage{Status: status, Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri}}
+		s.DurableSnapshot = &ateapi.SnapshotStorage{Status: status, Object: &ateapi.ObjectSnapshot{SnapshotUri: uri}}
 	} else {
 		s.Locality = "node-1"
 	}
 	return s
 }
 
-func actorWith(snaps ...*ateapipb.Snapshot) *ateapipb.Actor {
-	return &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: "bot", Uid: uid},
-		Status:   &ateapipb.ActorStatus{Snapshots: snaps},
+func actorWith(snaps ...*ateapi.Snapshot) *ateapi.Actor {
+	return &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Atespace: atespace, Name: "bot", Uid: uid},
+		Status:   &ateapi.ActorStatus{Snapshots: snaps},
 	}
 }
 
@@ -65,16 +65,16 @@ var (
 	tagURI     = loc + "/atespaces/ate-golden/tags/" + tagUID
 	tagGrant   = Grant{Prefix: prefix(tagURI), Access: ReadOnly}
 	actorGrant = Grant{Prefix: prefix(loc + "/atespaces/" + atespace + "/actors/" + uid), Access: ReadWrite}
-	completed  = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	pending    = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-	ownerActor = ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR
-	ownerTag   = ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG
+	completed  = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	pending    = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	ownerActor = ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR
+	ownerTag   = ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG
 )
 
 func TestFromActor(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		actor *ateapipb.Actor
+		actor *ateapi.Actor
 		want  []Grant
 	}{
 		{
@@ -146,7 +146,7 @@ func TestFromActor(t *testing.T) {
 }
 
 func TestFromActor_RefusesUnknownOwner(t *testing.T) {
-	if _, err := FromActor(actorWith(gen(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_UNSPECIFIED, completed, tagURI))); err == nil {
+	if _, err := FromActor(actorWith(gen(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_UNSPECIFIED, completed, tagURI))); err == nil {
 		t.Fatal("a generation with an unspecified owner was accepted")
 	}
 }

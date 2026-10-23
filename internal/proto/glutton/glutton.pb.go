@@ -16,7 +16,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11-devel
 // 	protoc        v4.25.3
-// source: glutton.proto
+// source: internal/proto/glutton/glutton.proto
 
 package glutton
 
@@ -73,11 +73,11 @@ func (x WriteMode) String() string {
 }
 
 func (WriteMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_glutton_proto_enumTypes[0].Descriptor()
+	return file_internal_proto_glutton_glutton_proto_enumTypes[0].Descriptor()
 }
 
 func (WriteMode) Type() protoreflect.EnumType {
-	return &file_glutton_proto_enumTypes[0]
+	return &file_internal_proto_glutton_glutton_proto_enumTypes[0]
 }
 
 func (x WriteMode) Number() protoreflect.EnumNumber {
@@ -86,7 +86,7 @@ func (x WriteMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WriteMode.Descriptor instead.
 func (WriteMode) EnumDescriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{0}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{0}
 }
 
 // ReadMode selects how much of the file ReadDisk sends back.
@@ -123,11 +123,11 @@ func (x ReadMode) String() string {
 }
 
 func (ReadMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_glutton_proto_enumTypes[1].Descriptor()
+	return file_internal_proto_glutton_glutton_proto_enumTypes[1].Descriptor()
 }
 
 func (ReadMode) Type() protoreflect.EnumType {
-	return &file_glutton_proto_enumTypes[1]
+	return &file_internal_proto_glutton_glutton_proto_enumTypes[1]
 }
 
 func (x ReadMode) Number() protoreflect.EnumNumber {
@@ -136,7 +136,7 @@ func (x ReadMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ReadMode.Descriptor instead.
 func (ReadMode) EnumDescriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{1}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{1}
 }
 
 type WriteRAMRequest struct {
@@ -152,7 +152,7 @@ type WriteRAMRequest struct {
 
 func (x *WriteRAMRequest) Reset() {
 	*x = WriteRAMRequest{}
-	mi := &file_glutton_proto_msgTypes[0]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -164,7 +164,7 @@ func (x *WriteRAMRequest) String() string {
 func (*WriteRAMRequest) ProtoMessage() {}
 
 func (x *WriteRAMRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[0]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -177,7 +177,7 @@ func (x *WriteRAMRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteRAMRequest.ProtoReflect.Descriptor instead.
 func (*WriteRAMRequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{0}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *WriteRAMRequest) GetKey() string {
@@ -209,7 +209,7 @@ type WriteRAMResponse struct {
 
 func (x *WriteRAMResponse) Reset() {
 	*x = WriteRAMResponse{}
-	mi := &file_glutton_proto_msgTypes[1]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -221,7 +221,7 @@ func (x *WriteRAMResponse) String() string {
 func (*WriteRAMResponse) ProtoMessage() {}
 
 func (x *WriteRAMResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[1]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -234,7 +234,7 @@ func (x *WriteRAMResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteRAMResponse.ProtoReflect.Descriptor instead.
 func (*WriteRAMResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{1}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{1}
 }
 
 type ReadRAMRequest struct {
@@ -250,7 +250,7 @@ type ReadRAMRequest struct {
 
 func (x *ReadRAMRequest) Reset() {
 	*x = ReadRAMRequest{}
-	mi := &file_glutton_proto_msgTypes[2]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -262,7 +262,7 @@ func (x *ReadRAMRequest) String() string {
 func (*ReadRAMRequest) ProtoMessage() {}
 
 func (x *ReadRAMRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[2]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -275,7 +275,7 @@ func (x *ReadRAMRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadRAMRequest.ProtoReflect.Descriptor instead.
 func (*ReadRAMRequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{2}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ReadRAMRequest) GetKey() string {
@@ -304,7 +304,7 @@ type ReadRAMResponse struct {
 
 func (x *ReadRAMResponse) Reset() {
 	*x = ReadRAMResponse{}
-	mi := &file_glutton_proto_msgTypes[3]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -316,7 +316,7 @@ func (x *ReadRAMResponse) String() string {
 func (*ReadRAMResponse) ProtoMessage() {}
 
 func (x *ReadRAMResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[3]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -329,7 +329,7 @@ func (x *ReadRAMResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadRAMResponse.ProtoReflect.Descriptor instead.
 func (*ReadRAMResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{3}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ReadRAMResponse) GetSize() int64 {
@@ -359,7 +359,7 @@ type WriteDiskRequest struct {
 
 func (x *WriteDiskRequest) Reset() {
 	*x = WriteDiskRequest{}
-	mi := &file_glutton_proto_msgTypes[4]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -371,7 +371,7 @@ func (x *WriteDiskRequest) String() string {
 func (*WriteDiskRequest) ProtoMessage() {}
 
 func (x *WriteDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[4]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -384,7 +384,7 @@ func (x *WriteDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteDiskRequest.ProtoReflect.Descriptor instead.
 func (*WriteDiskRequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{4}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *WriteDiskRequest) GetKey() string {
@@ -420,7 +420,7 @@ type WriteDiskResponse struct {
 
 func (x *WriteDiskResponse) Reset() {
 	*x = WriteDiskResponse{}
-	mi := &file_glutton_proto_msgTypes[5]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -432,7 +432,7 @@ func (x *WriteDiskResponse) String() string {
 func (*WriteDiskResponse) ProtoMessage() {}
 
 func (x *WriteDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[5]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -445,7 +445,7 @@ func (x *WriteDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteDiskResponse.ProtoReflect.Descriptor instead.
 func (*WriteDiskResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{5}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *WriteDiskResponse) GetSize() int64 {
@@ -473,7 +473,7 @@ type ReadDiskRequest struct {
 
 func (x *ReadDiskRequest) Reset() {
 	*x = ReadDiskRequest{}
-	mi := &file_glutton_proto_msgTypes[6]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -485,7 +485,7 @@ func (x *ReadDiskRequest) String() string {
 func (*ReadDiskRequest) ProtoMessage() {}
 
 func (x *ReadDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[6]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -498,7 +498,7 @@ func (x *ReadDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadDiskRequest.ProtoReflect.Descriptor instead.
 func (*ReadDiskRequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{6}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ReadDiskRequest) GetKey() string {
@@ -529,7 +529,7 @@ type ReadDiskResponse struct {
 
 func (x *ReadDiskResponse) Reset() {
 	*x = ReadDiskResponse{}
-	mi := &file_glutton_proto_msgTypes[7]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -541,7 +541,7 @@ func (x *ReadDiskResponse) String() string {
 func (*ReadDiskResponse) ProtoMessage() {}
 
 func (x *ReadDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[7]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -554,7 +554,7 @@ func (x *ReadDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadDiskResponse.ProtoReflect.Descriptor instead.
 func (*ReadDiskResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{7}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ReadDiskResponse) GetSize() int64 {
@@ -588,7 +588,7 @@ type OpenFDRequest struct {
 
 func (x *OpenFDRequest) Reset() {
 	*x = OpenFDRequest{}
-	mi := &file_glutton_proto_msgTypes[8]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -600,7 +600,7 @@ func (x *OpenFDRequest) String() string {
 func (*OpenFDRequest) ProtoMessage() {}
 
 func (x *OpenFDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[8]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -613,7 +613,7 @@ func (x *OpenFDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenFDRequest.ProtoReflect.Descriptor instead.
 func (*OpenFDRequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{8}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *OpenFDRequest) GetCount() int32 {
@@ -631,7 +631,7 @@ type OpenFDResponse struct {
 
 func (x *OpenFDResponse) Reset() {
 	*x = OpenFDResponse{}
-	mi := &file_glutton_proto_msgTypes[9]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -643,7 +643,7 @@ func (x *OpenFDResponse) String() string {
 func (*OpenFDResponse) ProtoMessage() {}
 
 func (x *OpenFDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[9]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -656,7 +656,7 @@ func (x *OpenFDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenFDResponse.ProtoReflect.Descriptor instead.
 func (*OpenFDResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{9}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{9}
 }
 
 type PingRequest struct {
@@ -669,7 +669,7 @@ type PingRequest struct {
 
 func (x *PingRequest) Reset() {
 	*x = PingRequest{}
-	mi := &file_glutton_proto_msgTypes[10]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -681,7 +681,7 @@ func (x *PingRequest) String() string {
 func (*PingRequest) ProtoMessage() {}
 
 func (x *PingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[10]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -694,7 +694,7 @@ func (x *PingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
 func (*PingRequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{10}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PingRequest) GetMessage() string {
@@ -714,7 +714,7 @@ type PingResponse struct {
 
 func (x *PingResponse) Reset() {
 	*x = PingResponse{}
-	mi := &file_glutton_proto_msgTypes[11]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -726,7 +726,7 @@ func (x *PingResponse) String() string {
 func (*PingResponse) ProtoMessage() {}
 
 func (x *PingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[11]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -739,7 +739,7 @@ func (x *PingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingResponse.ProtoReflect.Descriptor instead.
 func (*PingResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{11}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *PingResponse) GetMessage() string {
@@ -758,7 +758,7 @@ type GossipRequest struct {
 
 func (x *GossipRequest) Reset() {
 	*x = GossipRequest{}
-	mi := &file_glutton_proto_msgTypes[12]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -770,7 +770,7 @@ func (x *GossipRequest) String() string {
 func (*GossipRequest) ProtoMessage() {}
 
 func (x *GossipRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[12]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -783,7 +783,7 @@ func (x *GossipRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GossipRequest.ProtoReflect.Descriptor instead.
 func (*GossipRequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{12}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GossipRequest) GetPeers() []*Peer {
@@ -801,7 +801,7 @@ type GossipResponse struct {
 
 func (x *GossipResponse) Reset() {
 	*x = GossipResponse{}
-	mi := &file_glutton_proto_msgTypes[13]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -813,7 +813,7 @@ func (x *GossipResponse) String() string {
 func (*GossipResponse) ProtoMessage() {}
 
 func (x *GossipResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[13]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -826,7 +826,7 @@ func (x *GossipResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GossipResponse.ProtoReflect.Descriptor instead.
 func (*GossipResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{13}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{13}
 }
 
 type Peer struct {
@@ -839,7 +839,7 @@ type Peer struct {
 
 func (x *Peer) Reset() {
 	*x = Peer{}
-	mi := &file_glutton_proto_msgTypes[14]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -851,7 +851,7 @@ func (x *Peer) String() string {
 func (*Peer) ProtoMessage() {}
 
 func (x *Peer) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[14]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -864,7 +864,7 @@ func (x *Peer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Peer.ProtoReflect.Descriptor instead.
 func (*Peer) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{14}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Peer) GetHost() string {
@@ -893,7 +893,7 @@ type BurnCPURequest struct {
 
 func (x *BurnCPURequest) Reset() {
 	*x = BurnCPURequest{}
-	mi := &file_glutton_proto_msgTypes[15]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -905,7 +905,7 @@ func (x *BurnCPURequest) String() string {
 func (*BurnCPURequest) ProtoMessage() {}
 
 func (x *BurnCPURequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[15]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -918,7 +918,7 @@ func (x *BurnCPURequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BurnCPURequest.ProtoReflect.Descriptor instead.
 func (*BurnCPURequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{15}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *BurnCPURequest) GetDurationMs() int64 {
@@ -946,7 +946,7 @@ type BurnCPUResponse struct {
 
 func (x *BurnCPUResponse) Reset() {
 	*x = BurnCPUResponse{}
-	mi := &file_glutton_proto_msgTypes[16]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -958,7 +958,7 @@ func (x *BurnCPUResponse) String() string {
 func (*BurnCPUResponse) ProtoMessage() {}
 
 func (x *BurnCPUResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[16]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -971,7 +971,7 @@ func (x *BurnCPUResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BurnCPUResponse.ProtoReflect.Descriptor instead.
 func (*BurnCPUResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{16}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *BurnCPUResponse) GetIterations() int64 {
@@ -995,7 +995,7 @@ type IngestRequest struct {
 
 func (x *IngestRequest) Reset() {
 	*x = IngestRequest{}
-	mi := &file_glutton_proto_msgTypes[17]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1007,7 +1007,7 @@ func (x *IngestRequest) String() string {
 func (*IngestRequest) ProtoMessage() {}
 
 func (x *IngestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[17]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1020,7 +1020,7 @@ func (x *IngestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestRequest.ProtoReflect.Descriptor instead.
 func (*IngestRequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{17}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *IngestRequest) GetKey() string {
@@ -1056,7 +1056,7 @@ type IngestResponse struct {
 
 func (x *IngestResponse) Reset() {
 	*x = IngestResponse{}
-	mi := &file_glutton_proto_msgTypes[18]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1068,7 +1068,7 @@ func (x *IngestResponse) String() string {
 func (*IngestResponse) ProtoMessage() {}
 
 func (x *IngestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[18]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1081,7 +1081,7 @@ func (x *IngestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestResponse.ProtoReflect.Descriptor instead.
 func (*IngestResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{18}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *IngestResponse) GetSize() int64 {
@@ -1120,7 +1120,7 @@ type UseCPURequest struct {
 
 func (x *UseCPURequest) Reset() {
 	*x = UseCPURequest{}
-	mi := &file_glutton_proto_msgTypes[19]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1132,7 +1132,7 @@ func (x *UseCPURequest) String() string {
 func (*UseCPURequest) ProtoMessage() {}
 
 func (x *UseCPURequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[19]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1145,7 +1145,7 @@ func (x *UseCPURequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UseCPURequest.ProtoReflect.Descriptor instead.
 func (*UseCPURequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{19}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *UseCPURequest) GetNumCores() int32 {
@@ -1187,7 +1187,7 @@ type UseCPUResponse struct {
 
 func (x *UseCPUResponse) Reset() {
 	*x = UseCPUResponse{}
-	mi := &file_glutton_proto_msgTypes[20]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1199,7 +1199,7 @@ func (x *UseCPUResponse) String() string {
 func (*UseCPUResponse) ProtoMessage() {}
 
 func (x *UseCPUResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[20]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1212,7 +1212,7 @@ func (x *UseCPUResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UseCPUResponse.ProtoReflect.Descriptor instead.
 func (*UseCPUResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{20}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *UseCPUResponse) GetNumCores() int32 {
@@ -1241,7 +1241,7 @@ type Block struct {
 
 func (x *Block) Reset() {
 	*x = Block{}
-	mi := &file_glutton_proto_msgTypes[21]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1253,7 +1253,7 @@ func (x *Block) String() string {
 func (*Block) ProtoMessage() {}
 
 func (x *Block) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[21]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1266,7 +1266,7 @@ func (x *Block) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Block.ProtoReflect.Descriptor instead.
 func (*Block) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{21}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Block) GetSteps() []*Step {
@@ -1297,7 +1297,7 @@ type Step struct {
 
 func (x *Step) Reset() {
 	*x = Step{}
-	mi := &file_glutton_proto_msgTypes[22]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1309,7 +1309,7 @@ func (x *Step) String() string {
 func (*Step) ProtoMessage() {}
 
 func (x *Step) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[22]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1322,7 +1322,7 @@ func (x *Step) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Step.ProtoReflect.Descriptor instead.
 func (*Step) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{22}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Step) GetKind() isStep_Kind {
@@ -1380,7 +1380,7 @@ type Operation struct {
 
 func (x *Operation) Reset() {
 	*x = Operation{}
-	mi := &file_glutton_proto_msgTypes[23]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1392,7 +1392,7 @@ func (x *Operation) String() string {
 func (*Operation) ProtoMessage() {}
 
 func (x *Operation) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[23]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1405,7 +1405,7 @@ func (x *Operation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Operation.ProtoReflect.Descriptor instead.
 func (*Operation) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{23}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *Operation) GetRequests() []*Request {
@@ -1436,7 +1436,7 @@ type Request struct {
 
 func (x *Request) Reset() {
 	*x = Request{}
-	mi := &file_glutton_proto_msgTypes[24]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1448,7 +1448,7 @@ func (x *Request) String() string {
 func (*Request) ProtoMessage() {}
 
 func (x *Request) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[24]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1461,7 +1461,7 @@ func (x *Request) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Request.ProtoReflect.Descriptor instead.
 func (*Request) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{24}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *Request) GetKind() isRequest_Kind {
@@ -1591,7 +1591,7 @@ type SleepRequest struct {
 
 func (x *SleepRequest) Reset() {
 	*x = SleepRequest{}
-	mi := &file_glutton_proto_msgTypes[25]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1603,7 +1603,7 @@ func (x *SleepRequest) String() string {
 func (*SleepRequest) ProtoMessage() {}
 
 func (x *SleepRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[25]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1616,7 +1616,7 @@ func (x *SleepRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SleepRequest.ProtoReflect.Descriptor instead.
 func (*SleepRequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{25}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SleepRequest) GetDurationMs() int64 {
@@ -1635,7 +1635,7 @@ type RunScriptRequest struct {
 
 func (x *RunScriptRequest) Reset() {
 	*x = RunScriptRequest{}
-	mi := &file_glutton_proto_msgTypes[26]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1647,7 +1647,7 @@ func (x *RunScriptRequest) String() string {
 func (*RunScriptRequest) ProtoMessage() {}
 
 func (x *RunScriptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[26]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1660,7 +1660,7 @@ func (x *RunScriptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunScriptRequest.ProtoReflect.Descriptor instead.
 func (*RunScriptRequest) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{26}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *RunScriptRequest) GetScript() *Block {
@@ -1680,7 +1680,7 @@ type RunScriptResponse struct {
 
 func (x *RunScriptResponse) Reset() {
 	*x = RunScriptResponse{}
-	mi := &file_glutton_proto_msgTypes[27]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1692,7 +1692,7 @@ func (x *RunScriptResponse) String() string {
 func (*RunScriptResponse) ProtoMessage() {}
 
 func (x *RunScriptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[27]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1705,7 +1705,7 @@ func (x *RunScriptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunScriptResponse.ProtoReflect.Descriptor instead.
 func (*RunScriptResponse) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{27}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *RunScriptResponse) GetResult() *StepResult {
@@ -1730,7 +1730,7 @@ type StepResult struct {
 
 func (x *StepResult) Reset() {
 	*x = StepResult{}
-	mi := &file_glutton_proto_msgTypes[28]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1742,7 +1742,7 @@ func (x *StepResult) String() string {
 func (*StepResult) ProtoMessage() {}
 
 func (x *StepResult) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[28]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1755,7 +1755,7 @@ func (x *StepResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StepResult.ProtoReflect.Descriptor instead.
 func (*StepResult) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{28}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *StepResult) GetStats() *Stats {
@@ -1801,7 +1801,7 @@ type Stats struct {
 
 func (x *Stats) Reset() {
 	*x = Stats{}
-	mi := &file_glutton_proto_msgTypes[29]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1813,7 +1813,7 @@ func (x *Stats) String() string {
 func (*Stats) ProtoMessage() {}
 
 func (x *Stats) ProtoReflect() protoreflect.Message {
-	mi := &file_glutton_proto_msgTypes[29]
+	mi := &file_internal_proto_glutton_glutton_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1826,7 +1826,7 @@ func (x *Stats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Stats.ProtoReflect.Descriptor instead.
 func (*Stats) Descriptor() ([]byte, []int) {
-	return file_glutton_proto_rawDescGZIP(), []int{29}
+	return file_internal_proto_glutton_glutton_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *Stats) GetElapsedMs() int64 {
@@ -1892,11 +1892,11 @@ func (x *Stats) GetSleptMs() int64 {
 	return 0
 }
 
-var File_glutton_proto protoreflect.FileDescriptor
+var File_internal_proto_glutton_glutton_proto protoreflect.FileDescriptor
 
-const file_glutton_proto_rawDesc = "" +
+const file_internal_proto_glutton_glutton_proto_rawDesc = "" +
 	"\n" +
-	"\rglutton.proto\x12\aglutton\"j\n" +
+	"$internal/proto/glutton/glutton.proto\x12\aglutton\"j\n" +
 	"\x0fWriteRAMRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\tR\x04size\x121\n" +
@@ -2023,20 +2023,20 @@ const file_glutton_proto_rawDesc = "" +
 	"\tRunScript\x12\x19.glutton.RunScriptRequest\x1a\x1a.glutton.RunScriptResponse\"\x00B-Z+go.ate.dev/substrate/internal/proto/gluttonb\x06proto3"
 
 var (
-	file_glutton_proto_rawDescOnce sync.Once
-	file_glutton_proto_rawDescData []byte
+	file_internal_proto_glutton_glutton_proto_rawDescOnce sync.Once
+	file_internal_proto_glutton_glutton_proto_rawDescData []byte
 )
 
-func file_glutton_proto_rawDescGZIP() []byte {
-	file_glutton_proto_rawDescOnce.Do(func() {
-		file_glutton_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_glutton_proto_rawDesc), len(file_glutton_proto_rawDesc)))
+func file_internal_proto_glutton_glutton_proto_rawDescGZIP() []byte {
+	file_internal_proto_glutton_glutton_proto_rawDescOnce.Do(func() {
+		file_internal_proto_glutton_glutton_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_internal_proto_glutton_glutton_proto_rawDesc), len(file_internal_proto_glutton_glutton_proto_rawDesc)))
 	})
-	return file_glutton_proto_rawDescData
+	return file_internal_proto_glutton_glutton_proto_rawDescData
 }
 
-var file_glutton_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_glutton_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
-var file_glutton_proto_goTypes = []any{
+var file_internal_proto_glutton_glutton_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_internal_proto_glutton_glutton_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_internal_proto_glutton_glutton_proto_goTypes = []any{
 	(WriteMode)(0),            // 0: glutton.WriteMode
 	(ReadMode)(0),             // 1: glutton.ReadMode
 	(*WriteRAMRequest)(nil),   // 2: glutton.WriteRAMRequest
@@ -2070,7 +2070,7 @@ var file_glutton_proto_goTypes = []any{
 	(*StepResult)(nil),        // 30: glutton.StepResult
 	(*Stats)(nil),             // 31: glutton.Stats
 }
-var file_glutton_proto_depIdxs = []int32{
+var file_internal_proto_glutton_glutton_proto_depIdxs = []int32{
 	0,  // 0: glutton.WriteRAMRequest.write_mode:type_name -> glutton.WriteMode
 	0,  // 1: glutton.WriteDiskRequest.write_mode:type_name -> glutton.WriteMode
 	1,  // 2: glutton.ReadDiskRequest.read_mode:type_name -> glutton.ReadMode
@@ -2119,17 +2119,17 @@ var file_glutton_proto_depIdxs = []int32{
 	0,  // [0:19] is the sub-list for field type_name
 }
 
-func init() { file_glutton_proto_init() }
-func file_glutton_proto_init() {
-	if File_glutton_proto != nil {
+func init() { file_internal_proto_glutton_glutton_proto_init() }
+func file_internal_proto_glutton_glutton_proto_init() {
+	if File_internal_proto_glutton_glutton_proto != nil {
 		return
 	}
-	file_glutton_proto_msgTypes[19].OneofWrappers = []any{}
-	file_glutton_proto_msgTypes[22].OneofWrappers = []any{
+	file_internal_proto_glutton_glutton_proto_msgTypes[19].OneofWrappers = []any{}
+	file_internal_proto_glutton_glutton_proto_msgTypes[22].OneofWrappers = []any{
 		(*Step_Block)(nil),
 		(*Step_Operation)(nil),
 	}
-	file_glutton_proto_msgTypes[24].OneofWrappers = []any{
+	file_internal_proto_glutton_glutton_proto_msgTypes[24].OneofWrappers = []any{
 		(*Request_WriteRam)(nil),
 		(*Request_ReadRam)(nil),
 		(*Request_WriteDisk)(nil),
@@ -2142,18 +2142,18 @@ func file_glutton_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_glutton_proto_rawDesc), len(file_glutton_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_proto_glutton_glutton_proto_rawDesc), len(file_internal_proto_glutton_glutton_proto_rawDesc)),
 			NumEnums:      2,
 			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_glutton_proto_goTypes,
-		DependencyIndexes: file_glutton_proto_depIdxs,
-		EnumInfos:         file_glutton_proto_enumTypes,
-		MessageInfos:      file_glutton_proto_msgTypes,
+		GoTypes:           file_internal_proto_glutton_glutton_proto_goTypes,
+		DependencyIndexes: file_internal_proto_glutton_glutton_proto_depIdxs,
+		EnumInfos:         file_internal_proto_glutton_glutton_proto_enumTypes,
+		MessageInfos:      file_internal_proto_glutton_glutton_proto_msgTypes,
 	}.Build()
-	File_glutton_proto = out.File
-	file_glutton_proto_goTypes = nil
-	file_glutton_proto_depIdxs = nil
+	File_internal_proto_glutton_glutton_proto = out.File
+	file_internal_proto_glutton_glutton_proto_goTypes = nil
+	file_internal_proto_glutton_glutton_proto_depIdxs = nil
 }

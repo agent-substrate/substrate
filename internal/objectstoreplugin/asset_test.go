@@ -26,9 +26,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/internal/pluginsocket"
 	"go.ate.dev/substrate/pkg/assetfetch"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -66,7 +66,7 @@ func (r *sizedReader) ObjectSize() int64 { return r.size }
 // assetFixture is an AssetProvider served on a real Unix socket, as the
 // sidecar serves it, with a write root and a separate staging directory.
 type assetFixture struct {
-	client  objectstorev1.AssetProviderClient
+	client  objectstore.AssetProviderClient
 	backend *countingObjects
 	root    string
 	staging string
@@ -95,7 +95,7 @@ func newAssetFixture(t *testing.T, scheme string) *assetFixture {
 		t.Fatal(err)
 	}
 	srv := grpc.NewServer()
-	objectstorev1.RegisterAssetProviderServer(srv, plugin)
+	objectstore.RegisterAssetProviderServer(srv, plugin)
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 	conn, err := pluginsocket.Dial(sock, pluginsocket.ReadyWait)
@@ -103,7 +103,7 @@ func newAssetFixture(t *testing.T, scheme string) *assetFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	f.client = objectstorev1.NewAssetProviderClient(conn)
+	f.client = objectstore.NewAssetProviderClient(conn)
 	return f
 }
 
@@ -164,7 +164,7 @@ func TestFetchAsset(t *testing.T) {
 			f := newAssetFixture(t, scheme)
 			sum := f.put(t, "kata-assets/vmlinux", content)
 			dst := f.writeFile(t, untouched)
-			_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+			_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 				AssetUri:  scheme + "://" + testBucket + "/kata-assets/vmlinux",
 				Sha256:    sum,
 				WritePath: dst,
@@ -182,7 +182,7 @@ func TestFetchAsset(t *testing.T) {
 		f := newAssetFixture(t, "gs")
 		f.put(t, "kata-assets/vmlinux", content)
 		dst := f.writeFile(t, untouched)
-		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+		_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 			AssetUri:  "gs://" + testBucket + "/kata-assets/vmlinux",
 			Sha256:    strings.Repeat("a", 64),
 			WritePath: dst,
@@ -199,7 +199,7 @@ func TestFetchAsset(t *testing.T) {
 		f := newAssetFixture(t, "gs")
 		sum := f.put(t, "kata-assets/vmlinux", content)
 		dst := f.writeFile(t, untouched)
-		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+		_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 			AssetUri:  "gs://" + testBucket + "/kata-assets/vmlinux",
 			Sha256:    sum,
 			WritePath: dst,
@@ -217,7 +217,7 @@ func TestFetchAsset(t *testing.T) {
 			f := newAssetFixture(t, tc.plugin)
 			sum := f.put(t, "kata-assets/vmlinux", content)
 			dst := f.writeFile(t, untouched)
-			_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+			_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 				AssetUri:  tc.asset + "://" + testBucket + "/kata-assets/vmlinux",
 				Sha256:    sum,
 				WritePath: dst,
@@ -238,7 +238,7 @@ func TestFetchAsset(t *testing.T) {
 		f.backend.reportSize = true
 		sum := f.put(t, "kata-assets/vmlinux", content)
 		dst := f.writeFile(t, untouched)
-		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+		_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 			AssetUri:  "gs://" + testBucket + "/kata-assets/vmlinux",
 			Sha256:    sum,
 			WritePath: dst,
@@ -255,7 +255,7 @@ func TestFetchAsset(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		f := newAssetFixture(t, "gs")
 		dst := f.writeFile(t, untouched)
-		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+		_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 			AssetUri:  "gs://" + testBucket + "/kata-assets/missing",
 			Sha256:    strings.Repeat("a", 64),
 			WritePath: dst,
@@ -294,7 +294,7 @@ func TestFetchAsset(t *testing.T) {
 			{"directory", dir, codes.FailedPrecondition},
 			{"symlink to a file outside root", link, codes.FailedPrecondition},
 		} {
-			_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+			_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 				AssetUri:  "gs://" + testBucket + "/kata-assets/vmlinux",
 				Sha256:    sum,
 				WritePath: tc.path,
@@ -337,7 +337,7 @@ func TestFetchAsset(t *testing.T) {
 			{"zero max_bytes", "gs://" + testBucket + "/kata-assets/vmlinux", sum, 0},
 			{"over-long URI", "gs://" + testBucket + "/" + strings.Repeat("x/", assetfetch.MaxURIBytes/2) + "vmlinux", sum, 1 << 20},
 		} {
-			_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+			_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 				AssetUri: tc.uri, Sha256: tc.sum, WritePath: dst, MaxBytes: tc.max,
 			})
 			if status.Code(err) != codes.InvalidArgument {
@@ -387,7 +387,7 @@ func testFetchAssetRefusesSnapshots(t *testing.T, scheme string) {
 	dst := f.writeFile(t, untouched)
 	for _, object := range snapshotObjects {
 		uri := scheme + "://" + testBucket + "/" + object
-		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+		_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 			AssetUri:  uri,
 			Sha256:    sums[object],
 			WritePath: dst,
@@ -409,7 +409,7 @@ func testFetchAssetRefusesSnapshots(t *testing.T, scheme string) {
 		if object != "kata-assets/vmlinux" {
 			sum = f.put(t, object, []byte("asset "+object))
 		}
-		if _, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+		if _, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 			AssetUri:  scheme + "://" + testBucket + "/" + object,
 			Sha256:    sum,
 			WritePath: dst,
@@ -441,7 +441,7 @@ func TestFetchAssetManySegmentURIs(t *testing.T) {
 	served := pad("x/", "/vmlinux")
 	object := strings.TrimPrefix(served, "s3://"+testBucket+"/")
 	sum := f.put(t, object, []byte("kernel"))
-	if _, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+	if _, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 		AssetUri: served, Sha256: sum, WritePath: dst, MaxBytes: 1 << 20,
 	}); err != nil {
 		t.Fatalf("FetchAsset(%d segments) = %v, want success", strings.Count(served, "/")-2, err)
@@ -457,7 +457,7 @@ func TestFetchAssetManySegmentURIs(t *testing.T) {
 		{"tag after many owner-like segments", pad("atespaces/team-a/actors/", "/atespaces/team-a/tags/tag1/manifest.json"), codes.PermissionDenied},
 		{"one byte over the limit", served + "x", codes.InvalidArgument},
 	} {
-		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+		_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 			AssetUri: tc.uri, Sha256: sum, WritePath: dst, MaxBytes: 1 << 20,
 		})
 		if status.Code(err) != tc.want {

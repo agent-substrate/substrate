@@ -239,7 +239,7 @@ kubectl rollout status daemonset/csi-nfs-node -n kube-system --timeout=120s
 # 8. Create the CSIDriverConfig for Substrate
 echo "Creating nfs.csi.k8s.io CSIDriverConfig..."
 cat <<EOF | kubectl apply -f -
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: nfs.csi.k8s.io

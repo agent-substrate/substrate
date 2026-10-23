@@ -37,10 +37,10 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -179,7 +179,7 @@ func storageClassOrEmpty(ctx context.Context, t *testing.T, clients *e2e.Clients
 // The template's name is suffixed per test run: it lives in the suite's
 // shared atespace, which outlives the per-test k8s namespace. A non-empty
 // storageClass adds the external volume.
-func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, fixtureImage, storageClass string) *ateapipb.ActorTemplate {
+func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, fixtureImage, storageClass string) *ateapi.ActorTemplate {
 	t.Helper()
 
 	env, err := e2e.CheckEnv("BUCKET_NAME")
@@ -205,36 +205,36 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 		// The pool is labeled uniquely to this namespace so the cluster-wide
 		// scheduler cannot hand its workers to another suite's actors.
 		Labels: map[string]string{"combinedvolumes": ns.Name},
-		SnapshotConfig: &ateapipb.SnapshotConfig{
+		SnapshotConfig: &ateapi.SnapshotConfig{
 			StorageLocation: fmt.Sprintf("gs://%s/%s/", env["BUCKET_NAME"], ns.Name),
 		},
-		Modify: func(tmpl *ateapipb.ActorTemplate) {
+		Modify: func(tmpl *ateapi.ActorTemplate) {
 			// Every volume is mounted at two paths, covering the read-only
 			// (image), writable (durable-dir) and per-actor provisioned
 			// (external) multi-path cases.
 			tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts,
-				&ateapipb.VolumeMount{Name: "fixture", MountPath: mountPath},
-				&ateapipb.VolumeMount{Name: "fixture", MountPath: mountPathAlias},
-				&ateapipb.VolumeMount{Name: "scratch", MountPath: scratchPathA},
-				&ateapipb.VolumeMount{Name: "scratch", MountPath: scratchPathB})
+				&ateapi.VolumeMount{Name: "fixture", MountPath: mountPath},
+				&ateapi.VolumeMount{Name: "fixture", MountPath: mountPathAlias},
+				&ateapi.VolumeMount{Name: "scratch", MountPath: scratchPathA},
+				&ateapi.VolumeMount{Name: "scratch", MountPath: scratchPathB})
 			tmpl.Volumes = append(tmpl.Volumes,
-				&ateapipb.Volume{
+				&ateapi.Volume{
 					Name:  "fixture",
-					Image: &ateapipb.ImageVolumeSource{Reference: fixtureImage},
+					Image: &ateapi.ImageVolumeSource{Reference: fixtureImage},
 				},
-				&ateapipb.Volume{
+				&ateapi.Volume{
 					Name:       "scratch",
-					DurableDir: &ateapipb.DurableDirVolumeSource{},
+					DurableDir: &ateapi.DurableDirVolumeSource{},
 				})
 			if storageClass == "" {
 				return
 			}
 			tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts,
-				&ateapipb.VolumeMount{Name: extVolume, MountPath: extPathA},
-				&ateapipb.VolumeMount{Name: extVolume, MountPath: extPathB})
-			tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{
+				&ateapi.VolumeMount{Name: extVolume, MountPath: extPathA},
+				&ateapi.VolumeMount{Name: extVolume, MountPath: extPathB})
+			tmpl.Volumes = append(tmpl.Volumes, &ateapi.Volume{
 				Name: extVolume,
-				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
 					CapacityBytes:    extCapacity,
 					StorageClassName: storageClass,
 				}},
@@ -326,7 +326,7 @@ func requireSharedWrite(ctx context.Context, t *testing.T, router *e2e.RouterCli
 
 // requireAssignedNode fails unless the actor's status records want as its
 // assigned_node. An empty want means no node is recorded.
-func requireAssignedNode(t *testing.T, actor *ateapipb.Actor, want string) {
+func requireAssignedNode(t *testing.T, actor *ateapi.Actor, want string) {
 	t.Helper()
 
 	if got := actor.GetStatus().GetAssignedNode(); got != want {
@@ -339,7 +339,7 @@ func requireAssignedNode(t *testing.T, actor *ateapipb.Actor, want string) {
 func requireAssignedToWorkerNode(ctx context.Context, t *testing.T, clients *e2e.Clients, actorRef resources.ActorRef) string {
 	t.Helper()
 
-	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: actorRef.ToObjectRef()})
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
 	}
@@ -367,9 +367,9 @@ func TestCombinedVolumes(t *testing.T) {
 	tmpl := createTemplate(ctx, t, clients, ns, fixtureImage, storageClass)
 
 	actorRef := resources.ActorRef{Atespace: atespace, Name: "cv-" + ns.Name}
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 			ActorTemplate: e2e.TemplateRef(tmpl),
 		},
 	}); err != nil {
@@ -377,11 +377,11 @@ func TestCombinedVolumes(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
-		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef.ToObjectRef()})
+		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapi.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
+		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{Actor: actorRef.ToObjectRef()})
 	})
 
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}
 	requireAssignedToWorkerNode(ctx, t, clients, actorRef)
@@ -433,7 +433,7 @@ func TestCombinedVolumes(t *testing.T) {
 
 	t.Run("SurvivesSuspendResume", func(t *testing.T) {
 		runningNode := requireAssignedToWorkerNode(ctx, t, clients, actorRef)
-		suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
+		suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef.ToObjectRef(), Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
 		if err != nil {
 			t.Fatalf("SuspendActor: %v", err)
 		}
@@ -446,7 +446,7 @@ func TestCombinedVolumes(t *testing.T) {
 		// plane before checking the mounts and their shared writes.
 		resumeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
-		if _, err := e2e.ResumeActorAwaitCapacity(t, resumeCtx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+		if _, err := e2e.ResumeActorAwaitCapacity(t, resumeCtx, clients, &ateapi.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
 			t.Fatalf("ResumeActor after suspend: %v", err)
 		}
 		requireContentAtBoth(resumeCtx, t, router, actorRef, payloadPath, mountPathAlias+"/"+payloadName, payloadContent)
@@ -470,18 +470,18 @@ func TestCombinedVolumes(t *testing.T) {
 			requireWrite(ctx, t, router, actorRef, extPathA+"/"+postSnapshotName)
 		}
 
-		reverted, err := clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef.ToObjectRef()})
+		reverted, err := clients.SubstrateAPI.RevertActor(ctx, &ateapi.RevertActorRequest{Actor: actorRef.ToObjectRef()})
 		if err != nil {
 			t.Fatalf("RevertActor: %v", err)
 		}
-		if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		if got := reverted.GetActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 			t.Fatalf("state after revert = %v, want SUSPENDED", got)
 		}
 		requireAssignedNode(t, reverted.GetActor(), "")
 
 		resumeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
-		if _, err := e2e.ResumeActorAwaitCapacity(t, resumeCtx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+		if _, err := e2e.ResumeActorAwaitCapacity(t, resumeCtx, clients, &ateapi.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
 			t.Fatalf("ResumeActor after revert: %v", err)
 		}
 

@@ -36,11 +36,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/sandboxruntimes"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
-	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
+	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
 )
 
 const (
@@ -122,20 +122,20 @@ func workerPod(uid, pool string) *corev1.Pod {
 
 // resolvedPool is a gVisor WorkerPool whose class resolved to config, or has
 // not resolved when config is "".
-func resolvedPool(name, config string) *v1alpha1.WorkerPool {
-	return resolvedPoolOf(v1alpha1.SandboxClassGvisor, name, config)
+func resolvedPool(name, config string) *atev1.WorkerPool {
+	return resolvedPoolOf(atev1.SandboxClassGvisor, name, config)
 }
 
 // resolvedPoolOf is a WorkerPool of the given sandbox class whose class
 // resolved to config, or has not resolved when config is "".
-func resolvedPoolOf(class v1alpha1.SandboxClass, name, config string) *v1alpha1.WorkerPool {
-	pool := &v1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "workers", Name: name}}
-	pool.Spec.SandboxClasses = []v1alpha1.WorkerPoolSandboxClass{{Name: class}}
-	status := v1alpha1.WorkerPoolSandboxClassStatus{Name: class}
+func resolvedPoolOf(class atev1.SandboxClass, name, config string) *atev1.WorkerPool {
+	pool := &atev1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "workers", Name: name}}
+	pool.Spec.SandboxClasses = []atev1.WorkerPoolSandboxClass{{Name: class}}
+	status := atev1.WorkerPoolSandboxClassStatus{Name: class}
 	if config != "" {
-		status.ConfigRef = &v1alpha1.SandboxConfigReference{Name: config}
+		status.ConfigRef = &atev1.SandboxConfigReference{Name: config}
 	}
-	pool.Status.SandboxClasses = []v1alpha1.WorkerPoolSandboxClassStatus{status}
+	pool.Status.SandboxClasses = []atev1.WorkerPoolSandboxClassStatus{status}
 	return pool
 }
 
@@ -158,9 +158,9 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 		switch obj.(type) {
 		case *corev1.Pod:
 			err = pods.Add(obj)
-		case *v1alpha1.WorkerPool:
+		case *atev1.WorkerPool:
 			err = pools.Add(obj)
-		case *v1alpha1.SandboxConfig:
+		case *atev1.SandboxConfig:
 			err = configs.Add(obj)
 		default:
 			t.Fatalf("unexpected object %T", obj)
@@ -170,8 +170,8 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 		}
 	}
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
-		workerPools: listersv1alpha1.NewWorkerPoolLister(pools),
-		configs:     listersv1alpha1.NewSandboxConfigLister(configs),
+		workerPools: atelisters.NewWorkerPoolLister(pools),
+		configs:     atelisters.NewSandboxConfigLister(configs),
 	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), nil)
 	// The queue starts a goroutine; stop it with the test.
 	t.Cleanup(s.queue.ShutDown)
@@ -202,12 +202,12 @@ func TestWorkerSandboxSyncerEvents(t *testing.T) {
 	// one of a same-named pool in another namespace.
 	pods := []any{workerPod("pod-a", "pool"), workerPod("pod-b", "pool"), workerPod("pod-c", "pool-b"), otherNSPod}
 	pools := []any{resolvedPool("pool", "gvisor-release"), resolvedPool("pool-b", "gvisor-other")}
-	withConfig := func(pool *v1alpha1.WorkerPool, config string) *v1alpha1.WorkerPool {
+	withConfig := func(pool *atev1.WorkerPool, config string) *atev1.WorkerPool {
 		pool = pool.DeepCopy()
-		pool.Status.SandboxClasses[0].ConfigRef = &v1alpha1.SandboxConfigReference{Name: config}
+		pool.Status.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: config}
 		return pool
 	}
-	withGeneration := func(cfg *v1alpha1.SandboxConfig, gen int64) *v1alpha1.SandboxConfig {
+	withGeneration := func(cfg *atev1.SandboxConfig, gen int64) *atev1.SandboxConfig {
 		cfg = cfg.DeepCopy()
 		cfg.Generation = gen
 		return cfg
@@ -259,7 +259,7 @@ func TestWorkerSandboxSyncerEvents(t *testing.T) {
 		event: func(s *workerSandboxSyncer) {
 			changed := resolvedPool("pool", "gvisor-release")
 			changed.Status.Replicas = 3
-			changed.Status.SandboxClasses[0].PendingConfigRef = &v1alpha1.SandboxConfigReference{Name: "gvisor-next"}
+			changed.Status.SandboxClasses[0].PendingConfigRef = &atev1.SandboxConfigReference{Name: "gvisor-next"}
 			s.workerPoolHandler().OnUpdate(resolvedPool("pool", "gvisor-release"), changed)
 		},
 	}, {
@@ -311,7 +311,7 @@ func TestWorkerSandboxSyncerEvents(t *testing.T) {
 func TestWorkerSandboxSyncerJitter(t *testing.T) {
 	pods := []any{workerPod("pod-a", "pool"), workerPod("pod-b", "pool")}
 	pool := resolvedPool("pool", "gvisor-release")
-	withGeneration := func(gen int64) *v1alpha1.SandboxConfig {
+	withGeneration := func(gen int64) *atev1.SandboxConfig {
 		cfg := multiVersionConfig()
 		cfg.Generation = gen
 		return cfg
@@ -849,8 +849,8 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 			useTempAssetScratch(t)
 			s, err := startWorkerSandboxSyncer(ctx,
 				podFactory.Core().V1().Pods(),
-				ateFactory.Api().V1alpha1().WorkerPools(),
-				ateFactory.Api().V1alpha1().SandboxConfigs(),
+				ateFactory.Ate().V1().WorkerPools(),
+				ateFactory.Ate().V1().SandboxConfigs(),
 				newScriptAssetFetcher(t),
 				dir, newRuntimeIndex(), nil)
 			if err != nil {
@@ -899,7 +899,7 @@ func TestWorkerSandboxSyncerRunIndexesExistingPods(t *testing.T) {
 
 	waitFor(t, "pod-live to be indexed", func() bool { _, ok := s.index.worker("pod-live"); return ok })
 	wr, _ := s.index.worker("pod-live")
-	cr, ok := wr.class(v1alpha1.SandboxClassGvisor)
+	cr, ok := wr.class(atev1.SandboxClassGvisor)
 	if !ok || cr.config != "gvisor-release" || cr.defaultHash == "" {
 		t.Errorf("index.worker(pod-live).class(gvisor) = %+v, %v; want gvisor-release with a default runtime", cr, ok)
 	}

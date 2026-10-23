@@ -54,7 +54,7 @@ func findingf(subject protoreflect.FullName, format string, args ...any) Finding
 	return Finding{Subject: string(subject), Message: fmt.Sprintf(format, args...)}
 }
 
-// subjectOf names m in findings. For example, "ateapi.Control.GetActor".
+// subjectOf names m in findings. For example, "substrate.ateapi.v1.Control.GetActor".
 func subjectOf(m model.Method) protoreflect.FullName {
 	return m.ServiceFullName.Append(m.Name)
 }

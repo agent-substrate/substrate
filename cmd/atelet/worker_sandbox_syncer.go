@@ -47,11 +47,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
-	informersv1alpha1 "go.ate.dev/substrate/pkg/client/informers/externalversions/api/v1alpha1"
+	ateinformers "go.ate.dev/substrate/pkg/client/informers/externalversions/ate/v1"
 )
 
 // podUIDIndex indexes this node's worker pods by UID, the syncer's queue key.
@@ -225,7 +225,7 @@ func (s *workerSandboxSyncer) syncDefaultRuntimeDirs(uid string, defaults []stri
 // or a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
 // binary), existing files and index entries stay as they are and only
 // changes wait.
-func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) (*workerSandboxSyncer, error) {
+func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools ateinformers.WorkerPoolInformer, configs ateinformers.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok {
@@ -289,13 +289,13 @@ func (s *workerSandboxSyncer) podHandler() cache.ResourceEventHandler {
 func (s *workerSandboxSyncer) workerPoolHandler() cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
-			if pool, ok := obj.(*v1alpha1.WorkerPool); ok {
+			if pool, ok := obj.(*atev1.WorkerPool); ok {
 				s.enqueuePool(pool, 0)
 			}
 		},
 		UpdateFunc: func(oldObj, newObj any) {
-			oldPool, oldOK := oldObj.(*v1alpha1.WorkerPool)
-			newPool, newOK := newObj.(*v1alpha1.WorkerPool)
+			oldPool, oldOK := oldObj.(*atev1.WorkerPool)
+			newPool, newOK := newObj.(*atev1.WorkerPool)
 			if oldOK && newOK && oldPool.ResolvedSandboxConfig() != newPool.ResolvedSandboxConfig() {
 				s.enqueuePool(newPool, s.maxJitter)
 			}
@@ -306,7 +306,7 @@ func (s *workerSandboxSyncer) workerPoolHandler() cache.ResourceEventHandler {
 // sandboxConfigHandler enqueues the local pods of every pool that runs the
 // config, when it appears and when its spec changes.
 func (s *workerSandboxSyncer) sandboxConfigHandler() cache.ResourceEventHandler {
-	enqueue := func(cfg *v1alpha1.SandboxConfig) {
+	enqueue := func(cfg *atev1.SandboxConfig) {
 		pools, err := s.resolver.workerPools.List(labels.Everything())
 		if err != nil {
 			return
@@ -319,13 +319,13 @@ func (s *workerSandboxSyncer) sandboxConfigHandler() cache.ResourceEventHandler 
 	}
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
-			if cfg, ok := obj.(*v1alpha1.SandboxConfig); ok {
+			if cfg, ok := obj.(*atev1.SandboxConfig); ok {
 				enqueue(cfg)
 			}
 		},
 		UpdateFunc: func(oldObj, newObj any) {
-			oldCfg, oldOK := oldObj.(*v1alpha1.SandboxConfig)
-			newCfg, newOK := newObj.(*v1alpha1.SandboxConfig)
+			oldCfg, oldOK := oldObj.(*atev1.SandboxConfig)
+			newCfg, newOK := newObj.(*atev1.SandboxConfig)
 			// Generation moves on spec changes only.
 			if oldOK && newOK && oldCfg.Generation != newCfg.Generation {
 				enqueue(newCfg)
@@ -341,7 +341,7 @@ func (s *workerSandboxSyncer) sandboxConfigHandler() cache.ResourceEventHandler 
 // config's runtimes as soon as the listers do rather than once the files
 // are rewritten. A request for a runtime the index does not know fails the
 // actor, and the registration costs no IO.
-func (s *workerSandboxSyncer) enqueuePool(pool *v1alpha1.WorkerPool, maxDelay time.Duration) {
+func (s *workerSandboxSyncer) enqueuePool(pool *atev1.WorkerPool, maxDelay time.Duration) {
 	pods, err := corelisters.NewPodLister(s.pods).Pods(pool.Namespace).List(labels.SelectorFromSet(labels.Set{workerPoolLabel: pool.Name}))
 	if err != nil || len(pods) == 0 {
 		return
@@ -364,7 +364,7 @@ func (s *workerSandboxSyncer) enqueuePool(pool *v1alpha1.WorkerPool, maxDelay ti
 // is cheap enough for an event handler. Only the hashes are registered; what
 // a pod advertises changes when its sync writes the file. A pool that does
 // not plan is left to the syncs, which report and retry it.
-func (s *workerSandboxSyncer) registerAhead(pool *v1alpha1.WorkerPool) {
+func (s *workerSandboxSyncer) registerAhead(pool *atev1.WorkerPool) {
 	plan, err := s.resolver.planPool(pool)
 	if err != nil {
 		return

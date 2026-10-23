@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorlookup"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
@@ -39,7 +40,6 @@ import (
 	"go.ate.dev/substrate/internal/oidcjwt"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // DefaultPort is the port the control sidecar serves the exchange on and the
@@ -64,7 +64,7 @@ type Issuer interface {
 
 // Lookup resolves the actor a verified JWT names. actorlookup implements it.
 type Lookup interface {
-	Actor(ctx context.Context, claims *actoridjwt.WireSubstrateClaims) (*ateapipb.Actor, error)
+	Actor(ctx context.Context, claims *actoridjwt.WireSubstrateClaims) (*ateapi.Actor, error)
 }
 
 // Verifier checks a JWT and returns its claims. oidcjwt.Verifier implements
@@ -161,7 +161,7 @@ func issueCode(err error) codes.Code {
 // detaches the actor, by a revert and by a delete, or replaced by a resume
 // onto another node. So a token from a node the actor moved away from, or
 // one kept past the actor's last transfer there, no longer matches.
-func actorStillOnNode(actor *ateapipb.Actor, node string) error {
+func actorStillOnNode(actor *ateapi.Actor, node string) error {
 	st := actor.GetStatus()
 	if !slices.Contains(resources.TransferStates, st.GetState()) {
 		return status.Errorf(codes.PermissionDenied, "actor is %s, no transfer is due", st.GetState())

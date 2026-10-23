@@ -21,12 +21,12 @@ import (
 	"log/slog"
 	"strings"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/actorevent"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -128,13 +128,8 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
-	return crashActorVersion(ctx, st, actorRef, actor, opName, message)
-}
 
-// crashActorVersion is crashActor for actor as already read. It fails with
-// store.ErrVersionConflict if the actor changed since.
-func crashActorVersion(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, actor *ateapipb.Actor, opName, message string) error {
-	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
+	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_CRASHED
 	opName = ateattr.NormalizeOperationName(opName)
 
 	// Release the worker before moving the actor to CRASHED state.
@@ -154,8 +149,8 @@ func crashActorVersion(ctx context.Context, st crashActorStore, actorRef resourc
 	sandboxClass := actor.GetStatus().GetWorkerAssignment().GetSandboxRuntime().GetSandboxClass()
 	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName)
 
-	if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+	if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 		// An actor crashed concurrently, e.g. by worker deletion, keeps its first crash.
 		if !wasAlreadyCrashed {
 			toUpdate.Status.Crash = newActorCrash(opName, message)
@@ -182,11 +177,11 @@ func crashActorVersion(ctx context.Context, st crashActorStore, actorRef resourc
 
 // newActorCrash records a crash that happens now, prefixing message with the
 // operation that failed when it is known.
-func newActorCrash(opName, message string) *ateapipb.ActorCrash {
+func newActorCrash(opName, message string) *ateapi.ActorCrash {
 	if opName = ateattr.NormalizeOperationName(opName); opName != ateattr.OperationUnknown {
 		message = opName + " failed: " + message
 	}
-	return &ateapipb.ActorCrash{
+	return &ateapi.ActorCrash{
 		Message:   truncateUTF8(strings.ToValidUTF8(message, "�"), maxCrashMessageBytes),
 		CrashTime: timestamppb.Now(),
 	}
@@ -199,7 +194,7 @@ func newActorCrash(opName, message string) *ateapipb.ActorCrash {
 // It names ate.actor.state for the same reason worker's lifecycle records do: a
 // crash is the one transition worker never observes, so a consumer taking the
 // last state an actor reached has to see this record to reach "crashed" at all.
-func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName string) {
+func logActorCrashed(ctx context.Context, actor *ateapi.Actor, opName string) {
 	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))
 	attrs = append(attrs, slog.String(string(ateattr.ActorOperationNameKey), ateattr.NormalizeOperationName(opName)))
 	attrs = append(attrs, slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateCrashed))
@@ -209,17 +204,17 @@ func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName string) 
 // crashActorStore encapsulates the subset of store operations needed to crash
 // an actor.
 type crashActorStore interface {
-	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
-	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
-	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
-	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
+	GetWorker(ctx context.Context, name string) (*ateapi.Worker, error)
+	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapi.Worker, error)
 }
 
 // releaseWorker clears the worker's assignment if it still points at the given
 // actor. A missing worker or an already-cleared assignment is not an error.
 // It returns the worker as it stands after the release, which callers holding
 // a cache of workers hand to it.
-func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Actor) (*ateapipb.Worker, error) {
+func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapi.Actor) (*ateapi.Worker, error) {
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.WarnContext(ctx, "Actor's worker assignment is already cleared")

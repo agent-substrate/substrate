@@ -77,8 +77,8 @@ Which subcommand runs where:
 same order:
 - at startup: `tunnel.Start` with the worker's own flags, through
   `tunnel.RegisterFlags`;
-- per actor: `tunnel.PrepareEgress`, `actornet.ServeSandbox`, and
-  `tunnel.Activate`;
+- per actor: `tunnel.PrepareEgress`, `actornet.ServeSandbox`,
+  `tunnel.ActivateEgress`, and `tunnel.ActivateIngress`;
 - at teardown: `tunnel.Deactivate`, then closing the sandbox network.
 
 Each actor gets real network namespaces, the nftables redirect, an egress

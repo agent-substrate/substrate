@@ -233,10 +233,11 @@ func waitForTunneledRouteReady(t *testing.T, ctx context.Context, router *e2e.Ro
 // from the first bytes.
 func dialConnectH2(t *testing.T, ctx context.Context, router *e2e.RouterClient) *http.ClientConn {
 	t.Helper()
-	address, err := router.ConnectAddress(ctx)
+	address, stop, err := router.ConnectPortForward(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(stop)
 	protocols := new(http.Protocols)
 	protocols.SetUnencryptedHTTP2(true)
 	transport := &http.Transport{

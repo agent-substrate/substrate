@@ -16,7 +16,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.25.3
-// source: exchange.proto
+// source: internal/proto/objectstoreexchangepb/exchange.proto
 
 package objectstoreexchangepb
 
@@ -169,5 +169,5 @@ var CredentialExchange_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "exchange.proto",
+	Metadata: "internal/proto/objectstoreexchangepb/exchange.proto",
 }

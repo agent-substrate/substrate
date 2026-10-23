@@ -21,16 +21,16 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
 func createTestActorTemplate(t *testing.T, s *Persistence, atespace, name string) {
 	t.Helper()
-	if _, err := s.CreateActorTemplate(context.Background(), &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+	if _, err := s.CreateActorTemplate(context.Background(), &ateapi.ActorTemplate{
+		Metadata: &ateapi.ResourceMetadata{Atespace: atespace, Name: name},
 	}); err != nil {
 		t.Fatalf("CreateActorTemplate(%q/%q) failed: %v", atespace, name, err)
 	}
@@ -48,15 +48,15 @@ func TestUpdateActorTemplate_ConcurrentWriteReturnsConflict(t *testing.T) {
 	}
 
 	mutations := 0
-	_, err = s.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.ActorTemplate) error {
+	_, err = s.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(created), func(toUpdate *ateapi.ActorTemplate) error {
 		mutations++
-		if _, err := s.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(created), func(concurrent *ateapipb.ActorTemplate) error {
-			concurrent.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+		if _, err := s.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(created), func(concurrent *ateapi.ActorTemplate) error {
+			concurrent.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 			return nil
 		}); err != nil {
 			return fmt.Errorf("concurrent actor template update: %w", err)
 		}
-		toUpdate.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+		toUpdate.Status = &ateapi.ActorTemplateStatus{GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{
 			ErrorMessage: "LosingUpdate",
 		}}
 		return nil
@@ -84,9 +84,9 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
 
-	if _, err := s.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "template-a"},
-		SnapshotConfig: &ateapipb.SnapshotConfig{},
+	if _, err := s.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+		Metadata:       &ateapi.ResourceMetadata{Atespace: "team-a", Name: "template-a"},
+		SnapshotConfig: &ateapi.SnapshotConfig{},
 	}); err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
@@ -96,9 +96,9 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActorTemplate failed: %v", err)
 	}
-	want := &ateapipb.SnapshotConfig{
-		PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+	want := &ateapi.SnapshotConfig{
+		PreferredFidelity:    ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 	}
 	if diff := cmp.Diff(want, got.GetSnapshotConfig(), protocmp.Transform()); diff != "" {
 		t.Errorf("GetActorTemplate did not backfill snapshot_config defaults (-want +got):\n%s", diff)

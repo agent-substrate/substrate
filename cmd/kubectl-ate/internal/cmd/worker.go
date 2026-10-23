@@ -20,10 +20,10 @@ import (
 	"io"
 
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/hardware"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -62,18 +62,18 @@ var topWorkersCmd = &cobra.Command{
 
 // WorkerLister abstracts ListWorkers RPC calls.
 type WorkerLister interface {
-	ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest, opts ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error)
+	ListWorkers(ctx context.Context, req *ateapi.ListWorkersRequest, opts ...grpc.CallOption) (*ateapi.ListWorkersResponse, error)
 }
 
 // ActorLister abstracts ListActors RPC calls, which is how the worker commands
 // resolve an atespace filter.
 type ActorLister interface {
-	ListActors(ctx context.Context, req *ateapipb.ListActorsRequest, opts ...grpc.CallOption) (*ateapipb.ListActorsResponse, error)
+	ListActors(ctx context.Context, req *ateapi.ListActorsRequest, opts ...grpc.CallOption) (*ateapi.ListActorsResponse, error)
 }
 
 // WorkerGetter abstracts GetWorker RPC calls.
 type WorkerGetter interface {
-	GetWorker(ctx context.Context, req *ateapipb.GetWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
+	GetWorker(ctx context.Context, req *ateapi.GetWorkerRequest, opts ...grpc.CallOption) (*ateapi.Worker, error)
 }
 
 // workersHostingAtespace names the Workers hosting an Actor in atespace. Asked
@@ -83,8 +83,8 @@ func workersHostingAtespace(ctx context.Context, lister ActorLister, atespace st
 	hosting := map[string]bool{}
 	pageToken := ""
 	for {
-		resp, err := lister.ListActors(ctx, &ateapipb.ListActorsRequest{
-			Options:  &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
+		resp, err := lister.ListActors(ctx, &ateapi.ListActorsRequest{
+			Options:  &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
 			Atespace: atespace,
 		})
 		if err != nil {
@@ -103,12 +103,12 @@ func workersHostingAtespace(ctx context.Context, lister ActorLister, atespace st
 }
 
 // listAllWorkers pages through ListWorkers and returns all workers.
-func listAllWorkers(ctx context.Context, lister WorkerLister) ([]*ateapipb.Worker, error) {
-	var workers []*ateapipb.Worker
+func listAllWorkers(ctx context.Context, lister WorkerLister) ([]*ateapi.Worker, error) {
+	var workers []*ateapi.Worker
 	pageToken := ""
 	for {
-		resp, err := lister.ListWorkers(ctx, &ateapipb.ListWorkersRequest{
-			Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
+		resp, err := lister.ListWorkers(ctx, &ateapi.ListWorkersRequest{
+			Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to list workers: %w", err)
@@ -125,7 +125,7 @@ func listAllWorkers(ctx context.Context, lister WorkerLister) ([]*ateapipb.Worke
 // filterWorkers filters workers by Kubernetes namespace, assigned-actor
 // atespace, worker pool label selector, and sandbox class. Empty values match
 // everything; an atespace filter only matches workers with an assigned actor.
-func filterWorkers(ctx context.Context, actors ActorLister, workers []*ateapipb.Worker, namespace, atespace, selector, sandboxClass string) ([]*ateapipb.Worker, error) {
+func filterWorkers(ctx context.Context, actors ActorLister, workers []*ateapi.Worker, namespace, atespace, selector, sandboxClass string) ([]*ateapi.Worker, error) {
 	var labelSel labels.Selector
 	if selector != "" {
 		var err error
@@ -144,7 +144,7 @@ func filterWorkers(ctx context.Context, actors ActorLister, workers []*ateapipb.
 		}
 	}
 
-	var filtered []*ateapipb.Worker
+	var filtered []*ateapi.Worker
 	for _, w := range workers {
 		if namespace != "" && w.GetWorkerNamespace() != namespace {
 			continue
@@ -182,9 +182,9 @@ func (r *GetWorkersRunner) Run(ctx context.Context) error {
 		if err := validateWorkerFlags(r.names, r.namespace, r.atespace, r.selector, r.sandboxClass); err != nil {
 			return err
 		}
-		workers := make([]*ateapipb.Worker, 0, len(r.names))
+		workers := make([]*ateapi.Worker, 0, len(r.names))
 		for _, name := range r.names {
-			worker, err := r.workerGetter.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: &ateapipb.ObjectRef{Name: name}})
+			worker, err := r.workerGetter.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{Name: name}})
 			if err != nil {
 				return fmt.Errorf("failed to get worker %q: %w", name, err)
 			}

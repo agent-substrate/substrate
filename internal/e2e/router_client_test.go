@@ -122,16 +122,17 @@ func TestRouterClientConnectTLS(t *testing.T) {
 		ServerName:   "example.com",
 	}
 	tlsConfig.RootCAs.AddCert(server.Certificate())
-	client := &RouterClient{tlsConfig: tlsConfig, connectAddr: server.Listener.Addr().String()}
-	client.connectOnce.Do(func() {})
+	client := &RouterClient{tlsConfig: tlsConfig}
 
-	conn, err := client.Connect(context.Background(), resources.ActorRef{Atespace: "demo", Name: "fetcher"}, 9090)
+	conn, err := client.connect(context.Background(), server.Listener.Addr().String(), resources.ActorRef{Atespace: "demo", Name: "fetcher"}, 9090, http.Header{
+		atenet.TargetActorHeader: []string{"demo/fetcher"},
+	})
 	if err != nil {
-		t.Fatalf("Connect: %v", err)
+		t.Fatalf("connect: %v", err)
 	}
 	defer conn.Close()
-	if _, ok := conn.(*bufferedConn).Conn.(*tls.Conn); !ok {
-		t.Errorf("Connect returned a %T tunnel, want one over TLS", conn.(*bufferedConn).Conn)
+	if _, ok := conn.Conn.(*tls.Conn); !ok {
+		t.Errorf("connect returned a %T tunnel, want one over TLS", conn.Conn)
 	}
 	got, err := io.ReadAll(conn)
 	if err != nil {

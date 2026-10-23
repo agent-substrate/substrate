@@ -26,7 +26,7 @@ import (
 	"testing"
 	"testing/synctest"
 
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -80,10 +80,10 @@ func snapshotUploadFiles(t *testing.T, dir string, n int) []string {
 func TestUploadBudgetSharedAcrossSnapshots(t *testing.T) {
 	root := t.TempDir()
 	const snapshots, filesPerSnapshot = 10, 8
-	requests := make([]*objectstorev1.UploadSnapshotRequest, snapshots)
+	requests := make([]*objectstore.UploadSnapshotRequest, snapshots)
 	for i := range snapshots {
 		dir := filepath.Join(root, fmt.Sprintf("src%d", i))
-		requests[i] = &objectstorev1.UploadSnapshotRequest{
+		requests[i] = &objectstore.UploadSnapshotRequest{
 			SnapshotUri: fmt.Sprintf("%s%d", testURI, i), LocalPath: dir,
 			Files: snapshotUploadFiles(t, dir, filesPerSnapshot),
 		}
@@ -127,7 +127,7 @@ func TestUploadBudgetSharedAcrossSnapshots(t *testing.T) {
 		if err := os.Mkdir(dst, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := node.FetchSnapshot(t.Context(), &objectstorev1.FetchSnapshotRequest{
+		if _, err := node.FetchSnapshot(t.Context(), &objectstore.FetchSnapshotRequest{
 			SnapshotUri: requests[0].SnapshotUri, WritePath: dst, Files: requests[0].Files,
 		}); err != nil {
 			t.Fatal(err)
@@ -152,7 +152,7 @@ func TestUploadFailureDoesNotCommitManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := node.UploadSnapshot(t.Context(), &objectstorev1.UploadSnapshotRequest{
+	if _, err := node.UploadSnapshot(t.Context(), &objectstore.UploadSnapshotRequest{
 		SnapshotUri: testURI, LocalPath: dir, Files: files,
 	}); status.Code(err) != codes.Internal {
 		t.Fatalf("got %v, want upload error", err)
@@ -161,7 +161,7 @@ func TestUploadFailureDoesNotCommitManifest(t *testing.T) {
 		t.Fatalf("committed %d manifests after data failed", got)
 	}
 	store.fail = false
-	if _, err := node.UploadSnapshot(t.Context(), &objectstorev1.UploadSnapshotRequest{
+	if _, err := node.UploadSnapshot(t.Context(), &objectstore.UploadSnapshotRequest{
 		SnapshotUri: testURI, LocalPath: dir, Files: files,
 	}); err != nil {
 		t.Fatalf("retry after failure: %v", err)
@@ -179,7 +179,7 @@ func TestUploadCanceledWaiterReturnsCanceled(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		req := &objectstorev1.UploadSnapshotRequest{SnapshotUri: testURI, LocalPath: dir, Files: files}
+		req := &objectstore.UploadSnapshotRequest{SnapshotUri: testURI, LocalPath: dir, Files: files}
 		first := make(chan error, 1)
 		go func() { _, err := node.UploadSnapshot(t.Context(), req); first <- err }()
 		synctest.Wait()

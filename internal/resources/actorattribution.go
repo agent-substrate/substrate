@@ -14,7 +14,7 @@
 
 package resources
 
-import "go.ate.dev/substrate/pkg/proto/ateapipb"
+import "go.ate.dev/substrate/api/ateapi/v1"
 
 // ActorAttribution is what telemetry about an actor is attributed to: an
 // ActorRef plus the two things a ref does not carry, the server-assigned uid and
@@ -33,7 +33,7 @@ type ActorAttribution struct {
 
 // ActorAttributionFromActor builds the attribution for a loaded Actor. Nil-safe;
 // a nil Actor yields zero-valued fields.
-func ActorAttributionFromActor(a *ateapipb.Actor) ActorAttribution {
+func ActorAttributionFromActor(a *ateapi.Actor) ActorAttribution {
 	return ActorAttribution{
 		Ref:              ActorRefFromActor(a),
 		UID:              a.GetMetadata().GetUid(),

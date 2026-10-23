@@ -154,10 +154,10 @@ func mountImageVolume(mountpoint string, layers []string) error {
 // An empty upper mounts the overlay without a writable layer, which overlayfs
 // makes read-only.
 //
-// Minimum supported kernel: Linux 6.5, where overlayfs gained the
-// incremental "lowerdir+" option. Every current GKE channel is at or above
-// it (Stable runs COS 121 LTS on kernel 6.6; Regular and Rapid run COS
-// 125/129 on 6.12).
+// Requires overlayfs's "lowerdir+" option: Linux 6.7+, or 6.6.23+ where it was
+// backported.
+// https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=24e16e385f2272b1a9df51337a5c32d28a29c7ad
+// https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/commit/?id=cc0918b3582c98f12cfb30bf7496496d14bff3e9
 func mountOverlay(mountpoint string, lowers []string, upper, work string) error {
 	fsfd, err := unix.Fsopen("overlay", unix.FSOPEN_CLOEXEC)
 	if err != nil {

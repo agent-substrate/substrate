@@ -21,17 +21,17 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // ApplyActorSnapshotState records the snapshot state that the atelet on node
 // reports for the Actor. The caller has authenticated that atelet.
-func (s *RPCService) ApplyActorSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error {
+func (s *RPCService) ApplyActorSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapi.ActorSnapshotState) error {
 	setSpanActorRefAttributes(ctx, actorRef)
 	return s.actorWorkflow.ApplyReportedSnapshotState(ctx, actorRef, actorUID, node, state)
 }
@@ -40,7 +40,7 @@ func (s *RPCService) ApplyActorSnapshotState(ctx context.Context, actorRef resou
 // Actor. It holds the Actor's lease and applies reports only to a SUSPENDED or
 // RUNNING Actor, so a report never interleaves with a workflow. A report that
 // changes nothing writes nothing.
-func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error {
+func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapi.ActorSnapshotState) error {
 	ctx = preview.ContextWithOptIn(ctx)
 	// Check before taking the lease, so an atelet can't hold the lease of an
 	// Actor that isn't on its node. Check again under the lease.
@@ -60,24 +60,24 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 	// A workflow owns a transitioning Actor's snapshots, even after its lease
 	// lapses. A crashed Actor's snapshots wait for a revert.
 	switch st := before.GetStatus().GetState(); st {
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_RUNNING:
-	case ateapipb.ActorState_ACTOR_STATE_CRASHED:
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDED, ateapi.ActorState_ACTOR_STATE_RUNNING:
+	case ateapi.ActorState_ACTOR_STATE_CRASHED:
 		return apierror.FailedPrecondition("actor %s is %s; revert it first", actorRef, st)
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING, ateapipb.ActorState_ACTOR_STATE_RESUMING,
-		ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDING, ateapi.ActorState_ACTOR_STATE_RESUMING,
+		ateapi.ActorState_ACTOR_STATE_DELETING, ateapi.ActorState_ACTOR_STATE_REVERTING:
 		return apierror.Aborted("actor %s is %s; retry once that finishes", actorRef, st)
 	default:
 		return apierror.Internal("actor %s has unexpected state %s", actorRef, st)
 	}
 
-	applied := proto.Clone(before).(*ateapipb.Actor)
+	applied := proto.Clone(before).(*ateapi.Actor)
 	if err := applyActorSnapshotState(leaseCtx, applied.GetStatus(), node, state); err != nil {
 		return err
 	}
 	if proto.Equal(applied.GetStatus(), before.GetStatus()) {
 		return nil
 	}
-	if _, err := w.store.UpdateActor(leaseCtx, actorRef, store.PreconditionFrom(before), func(toUpdate *ateapipb.Actor) error {
+	if _, err := w.store.UpdateActor(leaseCtx, actorRef, store.PreconditionFrom(before), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status = applied.GetStatus()
 		return nil
 	}); err != nil {
@@ -92,7 +92,7 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 // loadReportedActor returns the Actor if it is the incarnation actorUID names
 // and is on node. Otherwise it returns NotFound, so an atelet learns nothing
 // about Actors on other nodes.
-func (w *ActorWorkflow) loadReportedActor(ctx context.Context, actorRef resources.ActorRef, actorUID, node string) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) loadReportedActor(ctx context.Context, actorRef resources.ActorRef, actorUID, node string) (*ateapi.Actor, error) {
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -122,7 +122,7 @@ func (w *ActorWorkflow) loadReportedActor(ctx context.Context, actorRef resource
 // snapshot there. Unlike HostingNode, it includes a node that holds only
 // older snapshots of an Actor placed elsewhere, since that node's atelet
 // reports them.
-func actorOnNode(actor *ateapipb.Actor, node string) bool {
+func actorOnNode(actor *ateapi.Actor, node string) bool {
 	if actor.GetStatus().GetAssignedNode() == node {
 		return true
 	}
@@ -143,7 +143,7 @@ const (
 // applyActorSnapshotState applies the two facts a report carries: an upload
 // finished, and the atelet on node detached the Actor. A report with neither
 // latest_local nor uploading is a detach.
-func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, node string, state *ateapipb.ActorSnapshotState) error {
+func applyActorSnapshotState(ctx context.Context, status *ateapi.ActorStatus, node string, state *ateapi.ActorSnapshotState) error {
 	if err := applyLatestDurable(ctx, status, state.GetLatestDurable()); err != nil {
 		return err
 	}
@@ -158,7 +158,7 @@ func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, 
 // report. It records the fidelity atelet reports, which for both RPCs is the
 // one requested. Unlike a report, a state with no local snapshot is not a
 // detach. The workflow that made the call records where its snapshot lives.
-func applyAteletResponseState(ctx context.Context, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState) error {
+func applyAteletResponseState(ctx context.Context, status *ateapi.ActorStatus, state *ateletpb.ActorSnapshotState) error {
 	return applyLatestDurable(ctx, status, snapshotReportFromAtelet(state.GetLatestDurable()))
 }
 
@@ -171,11 +171,11 @@ func applyAteletResponseState(ctx context.Context, status *ateapipb.ActorStatus,
 // its generation is older than the latest COMPLETED one, or is no longer in
 // status.snapshots, for example because a revert removed it. A repeat of the
 // latest COMPLETED generation also changes nothing, and isn't logged.
-func applyLatestDurable(ctx context.Context, status *ateapipb.ActorStatus, reported *ateapipb.SnapshotReport) error {
+func applyLatestDurable(ctx context.Context, status *ateapi.ActorStatus, reported *ateapi.SnapshotReport) error {
 	if reported == nil {
 		return nil
 	}
-	if latest := findLatestDurableSnapshot(status, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); latest.GetGeneration() >= reported.GetGeneration() {
+	if latest := findLatestDurableSnapshot(status, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); latest.GetGeneration() >= reported.GetGeneration() {
 		if latest.GetGeneration() > reported.GetGeneration() {
 			slog.InfoContext(ctx, msgDurableOlder,
 				slog.Int("generation", int(reported.GetGeneration())),
@@ -204,11 +204,11 @@ func applyLatestDurable(ctx context.Context, status *ateapipb.ActorStatus, repor
 	if got := reported.GetObject().GetSnapshotUri(); got != want {
 		return apierror.InvalidArgument("snapshot generation %d was uploaded to %q, want %q", reported.GetGeneration(), got, want)
 	}
-	if reported.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+	if reported.GetFidelity() == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		return apierror.InvalidArgument("snapshot generation %d reports no fidelity", reported.GetGeneration())
 	}
 	snap.Fidelity = reported.GetFidelity()
-	snap.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	snap.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	return nil
 }
 
@@ -218,10 +218,10 @@ func applyLatestDurable(ctx context.Context, status *ateapipb.ActorStatus, repor
 // SUSPENDED Actor is released from node once none of its snapshots are there.
 // It refuses if the latest deleted snapshot isn't durable, so the Actor can't
 // resume from an older one.
-func applyDetach(status *ateapipb.ActorStatus, node string, upTo int32) error {
-	deleted := func(s *ateapipb.Snapshot) bool { return s.GetLocality() == node && s.GetGeneration() <= upTo }
+func applyDetach(status *ateapi.ActorStatus, node string, upTo int32) error {
+	deleted := func(s *ateapi.Snapshot) bool { return s.GetLocality() == node && s.GetGeneration() <= upTo }
 	if latest := latestSnapshot(status, deleted); latest != nil &&
-		latest.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		latest.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 		return apierror.FailedPrecondition("snapshot generation %d on node %s is not durable", latest.GetGeneration(), node)
 	}
 	for _, snap := range status.GetSnapshots() {
@@ -229,8 +229,8 @@ func applyDetach(status *ateapipb.ActorStatus, node string, upTo int32) error {
 			snap.Locality = ""
 		}
 	}
-	onNode := latestSnapshot(status, func(s *ateapipb.Snapshot) bool { return s.GetLocality() == node })
-	if status.GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && status.GetAssignedNode() == node && onNode == nil {
+	onNode := latestSnapshot(status, func(s *ateapi.Snapshot) bool { return s.GetLocality() == node })
+	if status.GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED && status.GetAssignedNode() == node && onNode == nil {
 		status.AssignedNode = ""
 	}
 	return nil

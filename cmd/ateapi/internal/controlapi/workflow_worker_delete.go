@@ -21,13 +21,13 @@ import (
 	"log/slog"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -70,7 +70,7 @@ func (w *WorkerWorkflow) giveUpOnNode(nodeName string) {
 // record in place, and a retry fast-forwards past whatever the previous attempt
 // already did. An absent Worker is NOT_FOUND rather than success; idempotency
 // belongs to the caller, which knows whether that is the state it wanted.
-func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
+func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.Worker, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	worker, err := w.ensureMarkedForDeletion(ctx, name, precondition)
 	if err != nil {
@@ -90,12 +90,12 @@ func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondi
 // ensureMarkedForDeletion sets the Worker's delete_time, checking
 // precondition, and drains it, returning the stored copy. Skips when a
 // previous attempt already marked the Worker.
-func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions) (_ *ateapipb.Worker, err error) {
+func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions) (_ *ateapi.Worker, err error) {
 	ctx, done := stepSpan(ctx, "MarkWorkerForDeletion")
 	defer func() { err = done(err) }()
 
-	var alreadyDeleting *ateapipb.Worker
-	marked, err := w.store.MarkWorkerForDeletion(ctx, name, precondition, func(toUpdate *ateapipb.Worker) error {
+	var alreadyDeleting *ateapi.Worker
+	marked, err := w.store.MarkWorkerForDeletion(ctx, name, precondition, func(toUpdate *ateapi.Worker) error {
 		if toUpdate.GetMetadata().GetDeleteTime() != nil {
 			alreadyDeleting = toUpdate
 			return errAlreadyMarked
@@ -105,9 +105,9 @@ func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name strin
 		// The delete would cascade that assignment away and leave the Actor
 		// pointing at a Worker that is gone.
 		if toUpdate.Status == nil {
-			toUpdate.Status = &ateapipb.WorkerStatus{}
+			toUpdate.Status = &ateapi.WorkerStatus{}
 		}
-		toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+		toUpdate.Status.State = ateapi.WorkerState_WORKER_STATE_DRAINING
 		return nil
 	})
 	if errors.Is(err, errAlreadyMarked) {
@@ -136,7 +136,7 @@ func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name strin
 // where this left off. An Actor with an operation in progress is skipped
 // instead, so the others are still released, and the call then fails as
 // ABORTED for the caller to retry once that operation is done.
-func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *ateapipb.Worker) (err error) {
+func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *ateapi.Worker) (err error) {
 	ctx, done := stepSpan(ctx, "ReleaseBoundActors")
 	defer func() { err = done(err) }()
 
@@ -188,7 +188,7 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 // the reclaim below runs, nor lose a checkpoint it is still uploading. An Actor
 // whose lease is held is left for a retry (errActorBusy). A write that still
 // races this one fails the version check as ABORTED.
-func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment) error {
+func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapi.Worker, assignment *ateapi.ActorAssignment) error {
 	if assignment.GetActor() == nil {
 		markSkipped(ctx, "assignment names no actor")
 		return nil
@@ -224,7 +224,7 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		return nil
 	}
 	// If the actor is suspended, it's already been released.
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		markSkipped(ctx, "actor suspended cleanly before the pod went away")
 		return nil
 	}
@@ -244,11 +244,11 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 // untouched. The Actor's assignment row in the worker is left for the caller to
 // release.
 // A concurrent write to the Actor fails this as ABORTED.
-func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.Worker, actorRef resources.ActorRef, actor *ateapipb.Actor, logMsg, crashMsg string) error {
+func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Worker, actorRef resources.ActorRef, actor *ateapi.Actor, logMsg, crashMsg string) error {
 	// DELETING is final. A CRASHED actor can be reverted and resumed, and the
 	// delete may already have collected its volumes and snapshots. The delete's
 	// retry clears the actor's pointers.
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_DELETING {
+	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_DELETING {
 		markSkipped(ctx, "actor is DELETING")
 		return nil
 	}
@@ -256,15 +256,15 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 	name := worker.GetMetadata().GetName()
 	opName := ateattr.OperationUnknown
 	switch actor.GetStatus().GetState() {
-	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
+	case ateapi.ActorState_ACTOR_STATE_RESUMING:
 		opName = ateattr.OperationResume
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDING:
 		opName = ateattr.OperationSuspend
-	case ateapipb.ActorState_ACTOR_STATE_REVERTING:
+	case ateapi.ActorState_ACTOR_STATE_REVERTING:
 		opName = ateattr.OperationRevert
 	}
 
-	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
+	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_CRASHED
 
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
 	sandboxClass := actor.GetStatus().GetWorkerAssignment().GetSandboxRuntime().GetSandboxClass()
@@ -273,8 +273,8 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 	slog.LogAttrs(ctx, slog.LevelInfo, logMsg,
 		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),
 			slog.String("worker", name))...)
-	_, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+	_, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 		if !wasAlreadyCrashed {
 			toUpdate.Status.Crash = newActorCrash(opName, crashMsg)
 		}
@@ -312,7 +312,7 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 // on its assigned node. Each Terminate gets w.reclaimTimeout so a hung unmount,
 // such as against a dead NFS server, cannot run out the delete's own deadline
 // and fail the release after it.
-func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *ateapipb.Worker, actor *ateapipb.Actor) {
+func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *ateapi.Worker, actor *ateapi.Actor) {
 	ctx, done := stepSpan(ctx, "ReclaimActorStateOnNode")
 	defer func() { _ = done(nil) }()
 
@@ -370,7 +370,7 @@ func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *at
 
 // finalizeDeleted removes the worker from the store and returns the deleted
 // record.
-func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, worker *ateapipb.Worker) (_ *ateapipb.Worker, err error) {
+func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, worker *ateapi.Worker) (_ *ateapi.Worker, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeDeleted")
 	defer func() { err = done(err) }()
 

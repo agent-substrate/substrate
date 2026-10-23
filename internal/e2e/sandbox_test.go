@@ -15,47 +15,58 @@
 package e2e
 
 import (
+	"bytes"
+	"maps"
 	"os"
 	"strings"
 	"testing"
 
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"sigs.k8s.io/yaml"
 )
 
 // substrateFixtures are every fixture DeploySubstrateFixture is asked to
 // deploy: the pool half rendered by RenderFixtureManifest and the substrate
 // ActorTemplate half rendered with substrateTemplateSubstitutions, plus how
-// many template documents the latter must yield.
+// many template documents the latter must yield. values fills the template's
+// own placeholders, as the suite deploying it does through WithTemplateValue.
 var substrateFixtures = []struct {
 	manifests SubstrateFixtureManifests
 	templates int
+	values    map[string]string
 }{
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-template.yaml.tmpl",
-	}, 1},
+	}, 1, nil},
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/probe/probe.yaml.tmpl",
+		Template: "internal/e2e/fixtures/probe/probe-bootfetch-template.yaml.tmpl",
+	}, 1, map[string]string{
+		"${BOOT_FETCH_HOST}": "origin.example",
+		"${BOOT_FETCH_URL}":  "https://origin.example/healthz",
+	}},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe-sized.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-sized-template.yaml.tmpl",
-	}, 1},
+	}, 1, nil},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/security/atespace-a-pool.yaml.tmpl",
 		Template: "internal/e2e/fixtures/security/atespace-template.yaml.tmpl",
-	}, 1},
+	}, 1, nil},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
-	}, 2},
+	}, 2, nil},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/testserver/websocket.yaml.tmpl",
 		Template: "internal/e2e/fixtures/testserver/websocket-template.yaml.tmpl",
-	}, 1},
+	}, 1, nil},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/testserver/grpcecho.yaml.tmpl",
 		Template: "internal/e2e/fixtures/testserver/grpcecho-template.yaml.tmpl",
-	}, 1},
+	}, 1, nil},
 }
 
 // renderPool renders a fixture's pool manifest and strict-decodes its
@@ -66,14 +77,14 @@ var substrateFixtures = []struct {
 // depth yields YAML that still parses but hangs the field off the wrong parent
 // — which strict mode reports as an unknown field instead of silently applying
 // a WorkerPool that never gets a micro-VM worker.
-func renderPool(t *testing.T, relPath string) *v1alpha1.WorkerPool {
+func renderPool(t *testing.T, relPath string) *atev1.WorkerPool {
 	t.Helper()
 	raw, err := os.ReadFile(RenderFixtureManifest(t, relPath, "test-bucket", "render"))
 	if err != nil {
 		t.Fatalf("reading the rendered %s: %v", relPath, err)
 	}
 
-	pool := &v1alpha1.WorkerPool{}
+	pool := &atev1.WorkerPool{}
 	for doc := range strings.SplitSeq(string(raw), "\n---\n") {
 		if strings.TrimSpace(doc) == "" {
 			continue
@@ -99,13 +110,20 @@ func renderPool(t *testing.T, relPath string) *v1alpha1.WorkerPool {
 
 // renderTemplates renders a fixture's substrate template manifest and
 // strict-decodes its ActorTemplate documents; the protojson decode plays the
-// same misplaced-placeholder tripwire renderPool's strict mode does.
-func renderTemplates(t *testing.T, relPath string) []*ateapipb.ActorTemplate {
+// same misplaced-placeholder tripwire renderPool's strict mode does. A
+// placeholder that values does not fill fails the test, since it would reach
+// the cluster as literal text.
+func renderTemplates(t *testing.T, relPath string, values map[string]string) []*ateapi.ActorTemplate {
 	t.Helper()
 	inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", nil)
+	maps.Copy(inline, values)
 	rendered, err := os.ReadFile(renderManifest(t, relPath, inline, blocks))
 	if err != nil {
 		t.Fatalf("reading the rendered %s: %v", relPath, err)
+	}
+	if i := bytes.Index(rendered, []byte("${")); i >= 0 {
+		end := min(len(rendered), i+40)
+		t.Fatalf("rendered %s keeps a placeholder: %q", relPath, rendered[i:end])
 	}
 	return decodeSubstrateTemplates(t, rendered)
 }
@@ -121,11 +139,11 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateworker-gvisor") {
 				t.Errorf("WorkerPool workerImage = %q, want the gVisor worker", pool.Spec.WorkerImage)
 			}
-			if pool.Spec.DefaultSandboxClass() != v1alpha1.SandboxClassGvisor {
+			if pool.Spec.DefaultSandboxClass() != atev1.SandboxClassGvisor {
 				t.Errorf("WorkerPool runtime = class %q, want gvisor", pool.Spec.DefaultSandboxClass())
 			}
 
-			templates := renderTemplates(t, fixture.manifests.Template)
+			templates := renderTemplates(t, fixture.manifests.Template, fixture.values)
 			if len(templates) != fixture.templates {
 				t.Fatalf("rendered %s yields %d templates, want %d", fixture.manifests.Template, len(templates), fixture.templates)
 			}
@@ -165,7 +183,7 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 				t.Errorf("WorkerPool runtime = class %q, want microvm", pool.Spec.DefaultSandboxClass())
 			}
 
-			templates := renderTemplates(t, fixture.manifests.Template)
+			templates := renderTemplates(t, fixture.manifests.Template, fixture.values)
 			if len(templates) != fixture.templates {
 				t.Fatalf("rendered %s yields %d templates, want %d", fixture.manifests.Template, len(templates), fixture.templates)
 			}

@@ -18,9 +18,9 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var revertAtespaceFlag string
@@ -44,7 +44,7 @@ already at its durable snapshot, so there is nothing to revert.`,
 		defer apiClient.Close()
 
 		actorRef := resources.ActorRef{Atespace: revertAtespaceFlag, Name: args[0]}
-		resp, err := apiClient.RevertActor(ctx, &ateapipb.RevertActorRequest{
+		resp, err := apiClient.RevertActor(ctx, &ateapi.RevertActorRequest{
 			Actor: actorRef.ToObjectRef(),
 		})
 		if err != nil {

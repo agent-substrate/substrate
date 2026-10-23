@@ -41,12 +41,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/api/credprovider/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/egress/actorjwt"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 const (
@@ -77,7 +77,7 @@ const deniedBody = "egress denied"
 // Handler authenticates the actor behind each egress CONNECT and authorizes
 // the traffic inside the tunnel against the actor's EgressPolicy.
 type Handler struct {
-	apiClient ateapipb.ControlClient
+	apiClient ateapi.ControlClient
 	// loadActorIdentityRoots yields the actor-identity CA bundle every actor
 	// certificate must chain to. An error fails the CONNECT closed.
 	loadActorIdentityRoots func() (*x509.CertPool, error)
@@ -87,7 +87,7 @@ type Handler struct {
 	actorJWTs *actorjwt.Minter
 	// provider resolves an egress policy's credential_uri injections. Nil
 	// means none are configured, and a request that needs one is denied.
-	provider credproviderpb.CredentialProviderClient
+	provider credprovider.CredentialProviderClient
 	// providerName, when set, is the provider this gateway serves (the host of
 	// its ate-secret:// credential URIs); a credential URI naming another
 	// provider is refused.
@@ -105,7 +105,7 @@ type Handler struct {
 // denied. Actor JWT injections need no provider. providerName, when set, is
 // the provider this gateway serves; a credential URI naming another provider
 // is refused.
-func New(apiClient ateapipb.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
+func New(apiClient ateapi.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, provider credprovider.CredentialProviderClient, providerName string) *Handler {
 	if loadActorIdentityRoots == nil {
 		loadActorIdentityRoots = func() (*x509.CertPool, error) {
 			return nil, errors.New("no actor-identity CA configured")
@@ -171,7 +171,7 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress denied: invalid actor certificate")
 	}
 
-	if err := h.validateActor(ctx, actorRef); err != nil {
+	if err := h.validateActor(ctx, actorRef, md.Host); err != nil {
 		return extproc.Result{}, err
 	}
 
@@ -276,24 +276,32 @@ func (h *Handler) lookupPolicy(ctx context.Context, leg string, ref resources.Ac
 }
 
 // validateActor checks the actor certified by the certificate against the control
-// plane's current view of that actor: it still exists and it is running. Every
-// error it returns is already a client-facing ext_proc denial.
-func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef) error {
+// plane's current view of that actor: it still exists and it is placed on a
+// worker. A refusal is logged with destination. Every error it returns is
+// already a client-facing ext_proc denial.
+func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef, destination string) error {
 	// Confirm the certified actor still exists.
 	// TODO: this can cause heavy load on ate api server. Change it based on https://github.com/agent-substrate/substrate/issues/592.
-	actor, err := h.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+	actor, err := h.apiClient.GetActor(ctx, &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 	})
 	if err != nil {
 		return mapEgressIdentityError(actorRef.Atespace, actorRef.Name, err)
 	}
 
-	// The actor performing egress must actually be running.
-	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	// The actor performing egress must be placed on a worker. RESUMING is
+	// saved together with the worker assignment, so a booting workload can
+	// reach the network before it answers its wakeup probe. Every other state
+	// has left its worker or is leaving it.
+	switch state := actor.GetStatus().GetState(); state {
+	case ateapi.ActorState_ACTOR_STATE_RUNNING, ateapi.ActorState_ACTOR_STATE_RESUMING:
+		return nil
+	default:
+		slog.WarnContext(ctx, "egress denied: actor is not placed on a worker",
+			slog.Any("actor", actorRef), slog.String("state", state.String()), slog.String("destination", destination))
 		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
-			"egress denied: actor %q/%q is %s, not running", actorRef.Atespace, actorRef.Name, actor.GetStatus().GetState())
+			"egress denied: actor %q/%q is %s, not placed on a worker", actorRef.Atespace, actorRef.Name, state)
 	}
-	return nil
 }
 
 // authenticateActorCertificate turns the mTLS peer certificate Envoy recorded

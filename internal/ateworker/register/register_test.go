@@ -27,8 +27,10 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
@@ -105,8 +107,168 @@ func gvisorFile(def sandboxruntimes.Attributes, restorable ...sandboxruntimes.At
 	return &sandboxruntimes.File{SandboxClasses: []sandboxruntimes.Class{c}}
 }
 
-func TestReconcilerSync(t *testing.T) {
+func TestParsePodIPs(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  []string
+	}{
+		{value: "", want: nil},
+		{value: "10.0.0.1", want: []string{"10.0.0.1"}},
+		{value: "10.0.0.1,fd00::1", want: []string{"10.0.0.1", "fd00::1"}},
+		{value: " 10.0.0.1 , ,fd00::1,", want: []string{"10.0.0.1", "fd00::1"}},
+	} {
+		if diff := cmp.Diff(tc.want, ParsePodIPs(tc.value)); diff != "" {
+			t.Errorf("ParsePodIPs(%q) mismatch (-want +got):\n%s", tc.value, diff)
+		}
+	}
+}
+
+func TestEpochRequire(t *testing.T) {
+	var e Epoch
+	if _, err := e.Require(); apierror.Code(err) != codes.Unavailable {
+		t.Errorf("Require() before registration = %v, want Unavailable", err)
+	}
+	e.Store(3)
+	if got, err := e.Require(); err != nil || got != 3 {
+		t.Errorf("Require() after registration = (%d, %v), want (3, nil)", got, err)
+	}
+}
+
+// The readiness check holds the pod not Ready until the worker process has
+// registered, so a restarted one takes no placements before it can serve them.
+func TestEpochRegistered(t *testing.T) {
+	var e Epoch
+	if err := e.Registered(context.Background()); err == nil {
+		t.Error("Registered() before registration = nil, want an error")
+	}
+	e.Store(3)
+	if err := e.Registered(context.Background()); err != nil {
+		t.Errorf("Registered() after registration = %v, want nil", err)
+	}
+}
+
+// fakeSupport is a supportClient that fails the first acquireFails acquires
+// and fails registration with registerErrs in turn.
+type fakeSupport struct {
+	acquireFails int
+	acquires     int
+	registerErrs []error
+	registered   []*ateletpb.RegisterWorkerRequest
+}
+
+func (f *fakeSupport) AcquireWorkerEpoch(context.Context) (int64, error) {
+	f.acquires++
+	if f.acquires <= f.acquireFails {
+		return 0, status.Error(codes.NotFound, "worker record does not exist yet")
+	}
+	return int64(f.acquires), nil
+}
+
+func (f *fakeSupport) RegisterWorker(_ context.Context, req *ateletpb.RegisterWorkerRequest) error {
+	f.registered = append(f.registered, proto.Clone(req).(*ateletpb.RegisterWorkerRequest))
+	if len(f.registerErrs) > 0 {
+		err := f.registerErrs[0]
+		f.registerErrs = f.registerErrs[1:]
+		return err
+	}
+	return nil
+}
+
+func (f *fakeSupport) SetWorkerSandboxRuntimes(context.Context, *ateletpb.SetWorkerSandboxRuntimesRequest) error {
+	return nil
+}
+
+// immediately fires every timer, recording the durations armed.
+func immediately(waits *[]time.Duration) func(time.Duration) <-chan time.Time {
+	return func(d time.Duration) <-chan time.Time {
+		*waits = append(*waits, d)
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+}
+
+func TestRegisterOnce(t *testing.T) {
 	capacity := &ateletpb.WorkerResources{Actors: testActors}
+	ips := []string{"10.0.0.1"}
+
+	t.Run("retries acquire and register, resending the same epoch", func(t *testing.T) {
+		client := &fakeSupport{
+			acquireFails: 2,
+			registerErrs: []error{status.Error(codes.DeadlineExceeded, "timed out"), status.Error(codes.Aborted, "conflict")},
+		}
+		var waits []time.Duration
+		epoch, err := registerOnce(context.Background(), client, &ateletpb.RegisterWorkerRequest{Ips: ips, Capacity: capacity}, 10*time.Millisecond, 25*time.Millisecond, immediately(&waits))
+		if err != nil {
+			t.Fatalf("registerOnce() = %v, want nil", err)
+		}
+		if epoch != 3 {
+			t.Errorf("epoch = %d, want 3 (the first acquire that succeeded)", epoch)
+		}
+		if client.acquires != 3 {
+			t.Errorf("acquires = %d, want 3", client.acquires)
+		}
+		want := &ateletpb.RegisterWorkerRequest{Epoch: 3, Ips: ips, Capacity: capacity}
+		if diff := cmp.Diff([]*ateletpb.RegisterWorkerRequest{want, want, want}, client.registered, protocmp.Transform()); diff != "" {
+			t.Errorf("register calls mismatch (-want +got):\n%s", diff)
+		}
+		wantWaits := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 25 * time.Millisecond, 25 * time.Millisecond}
+		if diff := cmp.Diff(wantWaits, waits); diff != "" {
+			t.Errorf("backoff mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	for _, code := range []codes.Code{codes.FailedPrecondition, codes.InvalidArgument} {
+		t.Run(code.String()+" is fatal", func(t *testing.T) {
+			client := &fakeSupport{registerErrs: []error{status.Error(code, "refused")}}
+			var waits []time.Duration
+			_, err := registerOnce(context.Background(), client, &ateletpb.RegisterWorkerRequest{Ips: ips, Capacity: capacity}, time.Millisecond, time.Millisecond, immediately(&waits))
+			if status.Code(err) != code {
+				t.Errorf("registerOnce() = %v, want %v", err, code)
+			}
+			if len(client.registered) != 1 {
+				t.Errorf("register calls = %d, want 1", len(client.registered))
+			}
+		})
+	}
+}
+
+func TestRunStoresEpochBeforeReportingRuntimes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	path := filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName)
+	if _, err := sandboxruntimes.Write(path, gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"})); err != nil {
+		t.Fatal(err)
+	}
+	var epoch Epoch
+	client := &runtimesRecorder{fakeSupport: &fakeSupport{}, onReport: func(req *ateletpb.SetWorkerSandboxRuntimesRequest) {
+		if got := epoch.Load(); got != req.GetEpoch() {
+			t.Errorf("epoch stored = %d when runtimes were reported with %d", got, req.GetEpoch())
+		}
+		cancel()
+	}}
+	err := run(ctx, ReportConfig{SandboxClass: "gvisor", RuntimesFile: path, PodIPs: []string{"10.0.0.1"}}, &ateletpb.WorkerResources{Actors: testActors}, client, &epoch, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run() = %v, want context.Canceled", err)
+	}
+	if epoch.Load() != 1 {
+		t.Errorf("epoch = %d, want 1", epoch.Load())
+	}
+}
+
+type runtimesRecorder struct {
+	*fakeSupport
+	onReport func(*ateletpb.SetWorkerSandboxRuntimesRequest)
+}
+
+func (r *runtimesRecorder) SetWorkerSandboxRuntimes(_ context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
+	r.onReport(req)
+	return nil
+}
+
+func TestReconcilerSync(t *testing.T) {
+	const epoch = 4
 	v1 := gvisorFile(sandboxruntimes.Attributes{
 		hardware.AttrArchitecture:      runtime.GOARCH,
 		hardware.AttrCPUFeatures:       "3",
@@ -117,17 +279,18 @@ func TestReconcilerSync(t *testing.T) {
 		hardware.AttrCPUFeatures:       "7",
 		hardware.AttrSandboxBundleHash: "sha256:v2",
 	}, v1.SandboxClasses[0].DefaultRuntime.Version)
-	reqV1 := buildRequest(capacity, &v1.SandboxClasses[0])
-	reqV2 := buildRequest(capacity, &v2.SandboxClasses[0])
+	reqV1 := buildRuntimesRequest(epoch, &v1.SandboxClasses[0])
+	reqV2 := buildRuntimesRequest(epoch, &v2.SandboxClasses[0])
 
 	tests := []struct {
 		name           string
 		setupFile      func(t *testing.T, path string)
-		registered     *ateletpb.RegisterWorkerRequest
+		registered     *ateletpb.SetWorkerSandboxRuntimesRequest
 		registerErr    error
 		wantRetry      bool
-		wantCalls      []*ateletpb.RegisterWorkerRequest
-		wantRegistered *ateletpb.RegisterWorkerRequest
+		wantErr        bool
+		wantCalls      []*ateletpb.SetWorkerSandboxRuntimesRequest
+		wantRegistered *ateletpb.SetWorkerSandboxRuntimesRequest
 	}{
 		{
 			// File not written yet: waits for fsnotify rather than spinning in backoff.
@@ -192,13 +355,24 @@ func TestReconcilerSync(t *testing.T) {
 			wantRetry:   false,
 		},
 		{
+			// Another worker process registered since: this one must stop.
+			name: "FailedPrecondition from report is an error",
+			setupFile: func(t *testing.T, path string) {
+				if _, err := sandboxruntimes.Write(path, v1); err != nil {
+					t.Fatal(err)
+				}
+			},
+			registerErr: status.Error(codes.FailedPrecondition, "epoch superseded"),
+			wantErr:     true,
+		},
+		{
 			name: "first success registers and records request",
 			setupFile: func(t *testing.T, path string) {
 				if _, err := sandboxruntimes.Write(path, v1); err != nil {
 					t.Fatal(err)
 				}
 			},
-			wantCalls:      []*ateletpb.RegisterWorkerRequest{reqV1},
+			wantCalls:      []*ateletpb.SetWorkerSandboxRuntimesRequest{reqV1},
 			wantRegistered: reqV1,
 		},
 		{
@@ -219,7 +393,7 @@ func TestReconcilerSync(t *testing.T) {
 				}
 			},
 			registered:     reqV1,
-			wantCalls:      []*ateletpb.RegisterWorkerRequest{reqV2},
+			wantCalls:      []*ateletpb.SetWorkerSandboxRuntimesRequest{reqV2},
 			wantRegistered: reqV2,
 		},
 	}
@@ -229,12 +403,12 @@ func TestReconcilerSync(t *testing.T) {
 			path := filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName)
 			tc.setupFile(t, path)
 
-			var calls []*ateletpb.RegisterWorkerRequest
+			var calls []*ateletpb.SetWorkerSandboxRuntimesRequest
 			r := newReconciler(
 				ReportConfig{SandboxClass: "gvisor", RuntimesFile: path},
-				capacity,
+				epoch,
 				func() (*sandboxruntimes.File, error) { return sandboxruntimes.Read(path) },
-				func(_ context.Context, req *ateletpb.RegisterWorkerRequest) error {
+				func(_ context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
 					if tc.registerErr != nil {
 						return tc.registerErr
 					}
@@ -242,16 +416,19 @@ func TestReconcilerSync(t *testing.T) {
 					return nil
 				},
 			)
-			r.registered = tc.registered
+			r.reported = tc.registered
 
-			gotRetry := r.sync(context.Background())
+			gotRetry, err := r.sync(context.Background())
 			if gotRetry != tc.wantRetry {
 				t.Errorf("sync() retry = %v, want %v", gotRetry, tc.wantRetry)
+			}
+			if (err != nil) != tc.wantErr {
+				t.Errorf("sync() err = %v, want error %v", err, tc.wantErr)
 			}
 			if diff := cmp.Diff(tc.wantCalls, calls, protocmp.Transform()); diff != "" {
 				t.Errorf("register calls mismatch (-want +got):\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.wantRegistered, r.registered, protocmp.Transform()); diff != "" {
+			if diff := cmp.Diff(tc.wantRegistered, r.reported, protocmp.Transform()); diff != "" {
 				t.Errorf("registered state mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -277,9 +454,9 @@ func TestReconcilerRunBackoff(t *testing.T) {
 	)
 	r := newReconciler(
 		ReportConfig{SandboxClass: "gvisor", RuntimesFile: "sandbox-runtimes.json"},
-		&ateletpb.WorkerResources{Actors: testActors},
+		1,
 		func() (*sandboxruntimes.File, error) { return file, nil },
-		func(_ context.Context, _ *ateletpb.RegisterWorkerRequest) error {
+		func(_ context.Context, _ *ateletpb.SetWorkerSandboxRuntimesRequest) error {
 			attempts++
 			switch attempts {
 			case 1, 2, 3:
@@ -346,9 +523,9 @@ func TestReconcilerIgnoresChangesDuringBackoff(t *testing.T) {
 	attempts := 0
 	r := newReconciler(
 		ReportConfig{SandboxClass: "gvisor", RuntimesFile: "sandbox-runtimes.json"},
-		&ateletpb.WorkerResources{Actors: testActors},
+		1,
 		func() (*sandboxruntimes.File, error) { return file, nil },
-		func(context.Context, *ateletpb.RegisterWorkerRequest) error {
+		func(context.Context, *ateletpb.SetWorkerSandboxRuntimesRequest) error {
 			attempts++
 			started <- attempts
 			if attempts == 1 {
@@ -417,7 +594,7 @@ func TestReconcilerRunResync(t *testing.T) {
 	var reads int
 	r := newReconciler(
 		ReportConfig{SandboxClass: "gvisor", RuntimesFile: "sandbox-runtimes.json"},
-		&ateletpb.WorkerResources{Actors: testActors},
+		1,
 		func() (*sandboxruntimes.File, error) {
 			reads++
 			if reads >= 2 {
@@ -425,7 +602,7 @@ func TestReconcilerRunResync(t *testing.T) {
 			}
 			return gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"}), nil
 		},
-		func(context.Context, *ateletpb.RegisterWorkerRequest) error { return nil },
+		func(context.Context, *ateletpb.SetWorkerSandboxRuntimesRequest) error { return nil },
 	)
 	var armed []time.Duration
 	r.after = func(d time.Duration) <-chan time.Time {
@@ -540,12 +717,12 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	defer cancel()
 
 	path := filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName)
-	got := make(chan *ateletpb.RegisterWorkerRequest, 4)
+	got := make(chan *ateletpb.SetWorkerSandboxRuntimesRequest, 4)
 	r := newReconciler(
 		ReportConfig{SandboxClass: "gvisor", RuntimesFile: path},
-		&ateletpb.WorkerResources{Actors: testActors},
+		1,
 		func() (*sandboxruntimes.File, error) { return sandboxruntimes.Read(path) },
-		func(_ context.Context, req *ateletpb.RegisterWorkerRequest) error {
+		func(_ context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
 			got <- req
 			return nil
 		},
@@ -569,7 +746,7 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	}
 	select {
 	case req := <-got:
-		if diff := cmp.Diff(buildRequest(r.capacity, &v1.SandboxClasses[0]), req, protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(buildRuntimesRequest(r.epoch, &v1.SandboxClasses[0]), req, protocmp.Transform()); diff != "" {
 			t.Errorf("initial registration mismatch (-want +got):\n%s", diff)
 		}
 	case <-ctx.Done():
@@ -588,7 +765,7 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	}
 	select {
 	case req := <-got:
-		if diff := cmp.Diff(buildRequest(r.capacity, &v2.SandboxClasses[0]), req, protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(buildRuntimesRequest(r.epoch, &v2.SandboxClasses[0]), req, protocmp.Transform()); diff != "" {
 			t.Errorf("updated registration mismatch (-want +got):\n%s", diff)
 		}
 	case <-ctx.Done():
@@ -612,9 +789,10 @@ func TestReportFailsFastOnBadCredentials(t *testing.T) {
 		SocketPath:           filepath.Join(t.TempDir(), "atelet.sock"),
 		CredentialBundlePath: filepath.Join(t.TempDir(), "does-not-exist.pem"),
 		TrustBundlePath:      filepath.Join(t.TempDir(), "also-missing.pem"),
+		PodIPs:               []string{"10.0.0.1"},
 		SandboxClass:         "gvisor",
 		RuntimesFile:         filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName),
-	})
+	}, &Epoch{})
 	if err == nil {
 		t.Fatal("Report() with unreadable credentials succeeded, want an error the caller can exit on")
 	}
@@ -647,9 +825,17 @@ func TestReportFailsFastOnMissingConfig(t *testing.T) {
 				SandboxClass: "gvisor",
 			},
 		},
+		{
+			name: "missing PodIPs",
+			cfg: ReportConfig{
+				SocketPath:   filepath.Join(t.TempDir(), "atelet.sock"),
+				SandboxClass: "gvisor",
+				RuntimesFile: filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName),
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := Report(ctx, tc.cfg)
+			err := Report(ctx, tc.cfg, &Epoch{})
 			if err == nil {
 				t.Fatal("Report() succeeded, want an error the caller can exit on")
 			}

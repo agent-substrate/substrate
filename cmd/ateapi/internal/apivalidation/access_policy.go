@@ -18,8 +18,8 @@ import (
 	"context"
 	"slices"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -34,18 +34,18 @@ var (
 	bindingsPath = field.NewPath("access_policy", "bindings")
 )
 
-func ValidateCreateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.CreateGlobalAccessPolicyRequest) field.ErrorList {
+func ValidateCreateGlobalAccessPolicyRequest(ctx context.Context, req *ateapi.CreateGlobalAccessPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	errs := Validate_CreateGlobalAccessPolicyRequest(ctx, op, nil, req, nil)
 	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validGlobalRoles)...)
 }
 
-func ValidateGetGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.GetGlobalAccessPolicyRequest) field.ErrorList {
+func ValidateGetGlobalAccessPolicyRequest(ctx context.Context, req *ateapi.GetGlobalAccessPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_GetGlobalAccessPolicyRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateUpdateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.UpdateGlobalAccessPolicyRequest) field.ErrorList {
+func ValidateUpdateGlobalAccessPolicyRequest(ctx context.Context, req *ateapi.UpdateGlobalAccessPolicyRequest) field.ErrorList {
 	// Modeled as a create: this validates the request itself. The result is
 	// validated against the stored value by ValidateGlobalAccessPolicyUpdate.
 	op := MakeCreateOp(ctx)
@@ -55,24 +55,24 @@ func ValidateUpdateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.
 
 // ValidateGlobalAccessPolicyUpdate validates an updated global policy against
 // the stored one.
-func ValidateGlobalAccessPolicyUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.AccessPolicy) field.ErrorList {
+func ValidateGlobalAccessPolicyUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.AccessPolicy) field.ErrorList {
 	op := MakeUpdateOp(ctx)
 	errs := Validate_AccessPolicy(ctx, op, fldPath, newVal, oldVal)
 	return append(errs, validateBindings(fldPath.Child("bindings"), newVal, validGlobalRoles)...)
 }
 
-func ValidateCreateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapipb.CreateAtespaceAccessPolicyRequest) field.ErrorList {
+func ValidateCreateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapi.CreateAtespaceAccessPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	errs := Validate_CreateAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
 	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validAtespaceRoles)...)
 }
 
-func ValidateGetAtespaceAccessPolicyRequest(ctx context.Context, req *ateapipb.GetAtespaceAccessPolicyRequest) field.ErrorList {
+func ValidateGetAtespaceAccessPolicyRequest(ctx context.Context, req *ateapi.GetAtespaceAccessPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_GetAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateUpdateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapipb.UpdateAtespaceAccessPolicyRequest) field.ErrorList {
+func ValidateUpdateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapi.UpdateAtespaceAccessPolicyRequest) field.ErrorList {
 	// Modeled as a create: this validates the request itself. The result is
 	// validated against the stored value by ValidateAtespaceAccessPolicyUpdate.
 	op := MakeCreateOp(ctx)
@@ -82,20 +82,20 @@ func ValidateUpdateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapip
 
 // ValidateAtespaceAccessPolicyUpdate validates an updated atespace policy
 // against the stored one.
-func ValidateAtespaceAccessPolicyUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.AccessPolicy) field.ErrorList {
+func ValidateAtespaceAccessPolicyUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.AccessPolicy) field.ErrorList {
 	op := MakeUpdateOp(ctx)
 	errs := Validate_AccessPolicy(ctx, op, fldPath, newVal, oldVal)
 	return append(errs, validateBindings(fldPath.Child("bindings"), newVal, validAtespaceRoles)...)
 }
 
-func ValidateDeleteAtespaceAccessPolicyRequest(ctx context.Context, req *ateapipb.DeleteAtespaceAccessPolicyRequest) field.ErrorList {
+func ValidateDeleteAtespaceAccessPolicyRequest(ctx context.Context, req *ateapi.DeleteAtespaceAccessPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_DeleteAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
 }
 
 // ValidateCustom_AccessPolicy_Metadata requires an access policy to be the
 // unatespaced singleton named "default".
-func ValidateCustom_AccessPolicy_Metadata(_ context.Context, _ operation.Operation, root *field.Path, meta, _ *ateapipb.ResourceMetadata) field.ErrorList {
+func ValidateCustom_AccessPolicy_Metadata(_ context.Context, _ operation.Operation, root *field.Path, meta, _ *ateapi.ResourceMetadata) field.ErrorList {
 	var errs field.ErrorList
 	if meta.GetAtespace() != "" {
 		errs = append(errs, field.Forbidden(root.Child("atespace"), "must not be set"))
@@ -118,7 +118,7 @@ func ValidateCustom_DeleteAtespaceAccessPolicyRequest_Name(_ context.Context, _ 
 // validateBindings checks that each binding names an allowed role at most once,
 // that every member is a valid OpenFGA user, and that the policy stays within
 // maxMembersPerPolicy.
-func validateBindings(fldPath *field.Path, policy *ateapipb.AccessPolicy, allowedRoles []string) field.ErrorList {
+func validateBindings(fldPath *field.Path, policy *ateapi.AccessPolicy, allowedRoles []string) field.ErrorList {
 	if policy == nil {
 		return nil
 	}

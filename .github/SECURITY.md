@@ -6,26 +6,31 @@
 vulnerabilities.**
 
 Use [GitHub Private Vulnerability Reporting](https://github.com/agent-substrate/substrate/security/advisories/new)
-to report security vulnerabilities privately. Note that this project is not
-eligible for the
-[Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security).
+to report security vulnerabilities privately. Verify that there is no existing
+open GitHub issue covering the problem before creating a report.
 
-Please include:
+Please ensure your report is concise and clearly articulates the bug. It should
+include:
 
+- How the issue is reachable and exploitable by untrusted code running inside an
+  actor sandbox. Or a statement that it isn't exploitable from inside an actor
+  sandbox.
+- The security impact resulting from exploitation of the bug.
 - The affected component and version or commit SHA.
-- Steps to reproduce, or a proof of concept.
-- The potential impact, and mitigations if known.
+- Detailed steps to fully reproduce, or a proof of concept.
+- Mitigations if known.
 
 ### When to report
 
 - You found a potential security vulnerability in Agent Substrate.
-- You are unsure whether a security issue affects Agent Substrate.
 - You found a vulnerability in a project Agent Substrate depends on and it
   is exploitable through Agent Substrate. If that project has its own
   disclosure process, please report it there as well.
 
 ### When not to report
 
+- Theoretical bugs from static analysis without demonstration of an exploitable
+  security issue.
 - You need help securing or tuning a deployment (open a regular issue or
   discussion).
 - The issue is not security related.
@@ -76,8 +81,7 @@ from most to least severe:
 - Sample applications under `demos/` and load-testing harnesses under
   `benchmarking/`.
 - Documented scope boundaries and future capabilities listed in
-  [docs/security.md](../docs/security.md) and
-  [docs/roadmap.md](../docs/roadmap.md) at the time of your report. If you are
+  [docs/security.md](../docs/security.md) at the time of your report. If you are
   unsure whether a finding is covered by a documented limitation, report it
   privately anyway and let a maintainer make the call.
 

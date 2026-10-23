@@ -21,39 +21,39 @@ package defaults
 import (
 	"fmt"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/proto"
 )
 
 // Apply set default values to Substrate resource proto messages.
 func Apply(m proto.Message) {
 	switch v := m.(type) {
-	case *ateapipb.AccessPolicy:
+	case *ateapi.AccessPolicy:
 		applyAccessPolicyDefaults(v)
-	case *ateapipb.Actor:
+	case *ateapi.Actor:
 		applyActorDefaults(v)
-	case *ateapipb.ActorTemplate:
+	case *ateapi.ActorTemplate:
 		applyActorTemplateDefaults(v)
-	case *ateapipb.Atespace:
+	case *ateapi.Atespace:
 		applyAtespaceDefaults(v)
-	case *ateapipb.EgressPolicy:
+	case *ateapi.EgressPolicy:
 		applyEgressPolicyDefaults(v)
-	case *ateapipb.Tag:
+	case *ateapi.Tag:
 		applyTagDefaults(v)
-	case *ateapipb.Worker:
+	case *ateapi.Worker:
 		applyWorkerDefaults(v)
 	default:
 		panic(fmt.Sprintf("unknown resource message %T", m))
 	}
 }
 
-func applyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
+func applyActorTemplateDefaults(t *ateapi.ActorTemplate) {
 	if t == nil {
 		return
 	}
 	// snapshot_config is optional; an omitted one takes every default.
 	if t.SnapshotConfig == nil {
-		t.SnapshotConfig = &ateapipb.SnapshotConfig{}
+		t.SnapshotConfig = &ateapi.SnapshotConfig{}
 	}
 	applySnapshotConfigDefaults(t.SnapshotConfig)
 	applyEgressRuleDefaults(t.GetGoldenEgressPolicy().GetRules())
@@ -62,22 +62,22 @@ func applyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
 	}
 }
 
-func applySnapshotConfigDefaults(sc *ateapipb.SnapshotConfig) {
+func applySnapshotConfigDefaults(sc *ateapi.SnapshotConfig) {
 	if sc == nil {
 		return
 	}
-	if sc.PreferredFidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
-		sc.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	if sc.PreferredFidelity == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+		sc.PreferredFidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	}
 	if sc.GoldenSnapshotConfig == nil {
-		sc.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{}
+		sc.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{}
 	}
-	if sc.GoldenSnapshotConfig.Mode == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_UNSPECIFIED {
-		sc.GoldenSnapshotConfig.Mode = ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED
+	if sc.GoldenSnapshotConfig.Mode == ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_UNSPECIFIED {
+		sc.GoldenSnapshotConfig.Mode = ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED
 	}
 }
 
-func applyContainerDefaults(c *ateapipb.Container) {
+func applyContainerDefaults(c *ateapi.Container) {
 	const (
 		defaultWakeupProbeTimeoutSeconds int32 = 30
 		defaultWakeupProbePath                 = "/"
@@ -93,30 +93,30 @@ func applyContainerDefaults(c *ateapipb.Container) {
 	}
 }
 
-func applyAccessPolicyDefaults(*ateapipb.AccessPolicy) {}
+func applyAccessPolicyDefaults(*ateapi.AccessPolicy) {}
 
-func applyActorDefaults(*ateapipb.Actor) {}
+func applyActorDefaults(*ateapi.Actor) {}
 
-func applyAtespaceDefaults(*ateapipb.Atespace) {}
+func applyAtespaceDefaults(*ateapi.Atespace) {}
 
-func applyEgressPolicyDefaults(p *ateapipb.EgressPolicy) {
+func applyEgressPolicyDefaults(p *ateapi.EgressPolicy) {
 	applyEgressRuleDefaults(p.GetRules())
 }
 
 // applyEgressRuleDefaults fills the port of an http or https rule that
 // names none: the protocol's well-known port. A tls_passthrough rule has no
 // default; validation requires its ports.
-func applyEgressRuleDefaults(rules []*ateapipb.EgressRule) {
+func applyEgressRuleDefaults(rules []*ateapi.EgressRule) {
 	for _, r := range rules {
 		switch {
 		case r.GetHttp() != nil && r.Http.Ports == nil:
-			r.Http.Ports = &ateapipb.Ports{Numbers: []int32{80}}
+			r.Http.Ports = &ateapi.Ports{Numbers: []int32{80}}
 		case r.GetHttps() != nil && r.Https.Ports == nil:
-			r.Https.Ports = &ateapipb.Ports{Numbers: []int32{443}}
+			r.Https.Ports = &ateapi.Ports{Numbers: []int32{443}}
 		}
 	}
 }
 
-func applyTagDefaults(*ateapipb.Tag) {}
+func applyTagDefaults(*ateapi.Tag) {}
 
-func applyWorkerDefaults(*ateapipb.Worker) {}
+func applyWorkerDefaults(*ateapi.Worker) {}

@@ -57,7 +57,9 @@ const containerCountKey = "ate.actor.container.count"
 
 // restoreTiming is the elapsed time of each RestoreWorkload phase. A phase
 // left at zero never ran. Under VOLUMES and ROOTFS fidelity, sandboxRestore and
-// appRestore time the cold start that stands in for the restore.
+// appRestore time the cold start that stands in for the restore. activate is
+// the total time spent activating the tunnel: egress is activated before the
+// containers restore and ingress after the wakeup probe, and both are counted.
 type restoreTiming struct {
 	prep, egressPrepare, netSetup    time.Duration
 	sandboxCreate, sandboxRestore    time.Duration

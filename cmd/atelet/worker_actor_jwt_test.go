@@ -25,9 +25,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/internal/objectstoreplugin/exchange"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 )
 
 // testActor is the actor the transfer tests act for.
@@ -37,23 +37,23 @@ var testActor = actorRef{atespace: "ate-demo", name: "bot", uid: "9f1e0b2a-9e4f-
 // what it was asked for. A restore fetches its files in parallel, and each
 // fetch mints while the cache is cold, so the record is locked.
 type fakeJWTMinter struct {
-	ateapipb.WorkerServiceClient
+	ateapi.WorkerServiceClient
 	jwt    string
 	expiry time.Time
 	err    error
 
 	mu  sync.Mutex
-	got []*ateapipb.MintWorkerActorJwtRequest
+	got []*ateapi.MintWorkerActorJwtRequest
 }
 
-func (m *fakeJWTMinter) MintWorkerActorJwt(_ context.Context, in *ateapipb.MintWorkerActorJwtRequest, _ ...grpc.CallOption) (*ateapipb.MintWorkerActorJwtResponse, error) {
+func (m *fakeJWTMinter) MintWorkerActorJwt(_ context.Context, in *ateapi.MintWorkerActorJwtRequest, _ ...grpc.CallOption) (*ateapi.MintWorkerActorJwtResponse, error) {
 	m.mu.Lock()
 	m.got = append(m.got, in)
 	m.mu.Unlock()
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &ateapipb.MintWorkerActorJwtResponse{ActorJwt: m.jwt, ExpireTime: timestamppb.New(m.expiry)}, nil
+	return &ateapi.MintWorkerActorJwtResponse{ActorJwt: m.jwt, ExpireTime: timestamppb.New(m.expiry)}, nil
 }
 
 // testWorkerActorJWTs is the JWT source transfer tests give an Atelet.
@@ -134,19 +134,19 @@ func TestWorkerActorJWTs_Errors(t *testing.T) {
 
 // recordingNodePlugin captures the transfer requests atelet sends.
 type recordingNodePlugin struct {
-	objectstorev1.NodeProviderClient
-	fetches []*objectstorev1.FetchSnapshotRequest
-	uploads []*objectstorev1.UploadSnapshotRequest
+	objectstore.NodeProviderClient
+	fetches []*objectstore.FetchSnapshotRequest
+	uploads []*objectstore.UploadSnapshotRequest
 }
 
-func (p *recordingNodePlugin) FetchSnapshot(_ context.Context, in *objectstorev1.FetchSnapshotRequest, _ ...grpc.CallOption) (*objectstorev1.FetchSnapshotResponse, error) {
+func (p *recordingNodePlugin) FetchSnapshot(_ context.Context, in *objectstore.FetchSnapshotRequest, _ ...grpc.CallOption) (*objectstore.FetchSnapshotResponse, error) {
 	p.fetches = append(p.fetches, in)
-	return &objectstorev1.FetchSnapshotResponse{}, nil
+	return &objectstore.FetchSnapshotResponse{}, nil
 }
 
-func (p *recordingNodePlugin) UploadSnapshot(_ context.Context, in *objectstorev1.UploadSnapshotRequest, _ ...grpc.CallOption) (*objectstorev1.UploadSnapshotResponse, error) {
+func (p *recordingNodePlugin) UploadSnapshot(_ context.Context, in *objectstore.UploadSnapshotRequest, _ ...grpc.CallOption) (*objectstore.UploadSnapshotResponse, error) {
 	p.uploads = append(p.uploads, in)
-	return &objectstorev1.UploadSnapshotResponse{}, nil
+	return &objectstore.UploadSnapshotResponse{}, nil
 }
 
 func TestTransfersCarryTheActorJWT(t *testing.T) {

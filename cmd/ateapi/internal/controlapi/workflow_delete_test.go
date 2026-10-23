@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
@@ -29,7 +30,6 @@ import (
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -37,36 +37,36 @@ import (
 func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 	tests := []struct {
 		name        string
-		seedState   ateapipb.ActorState
+		seedState   ateapi.ActorState
 		missingTmpl bool
 		// markActorForDeletion marks the actor before the call, as a failed delete would.
 		markActorForDeletion bool
 	}{
 		{
 			name:      "delete suspended actor succeeds",
-			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			seedState: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 		{
 			name:      "delete crashed actor succeeds",
-			seedState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			seedState: ateapi.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
 			name:                 "delete deleting actor succeeds",
-			seedState:            ateapipb.ActorState_ACTOR_STATE_DELETING,
+			seedState:            ateapi.ActorState_ACTOR_STATE_DELETING,
 			markActorForDeletion: true,
 		},
 		{
 			name:      "delete running actor succeeds",
-			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			seedState: ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
 			name:        "delete suspended actor with missing template succeeds",
-			seedState:   ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			seedState:   ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			missingTmpl: true,
 		},
 		{
 			name:        "delete running actor with missing template succeeds",
-			seedState:   ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			seedState:   ateapi.ActorState_ACTOR_STATE_RUNNING,
 			missingTmpl: true,
 		},
 	}
@@ -109,7 +109,7 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 // atelet back, and a failed lookup proves nothing, so both stay retryable.
 func TestEnsureAteletTerminated_NodeGone(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{AssignedNode: "node1"}}
+	actor := &ateapi.Actor{Status: &ateapi.ActorStatus{AssignedNode: "node1"}}
 	for _, tc := range []struct {
 		name      string
 		nodes     []string
@@ -152,11 +152,11 @@ func (*detachDeletePlugin) DeleteVolume(context.Context, string) error { return 
 // A volume detach on the gone node still runs: OK and NotFound from the plugin
 // count as detached, and any other error fails the step as before.
 func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
-	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	for _, tc := range []struct {
 		name      string
-		state     ateapipb.ActorState
+		state     ateapi.ActorState
 		paused    bool
 		nodeKept  bool
 		volume    bool
@@ -165,13 +165,13 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 		// wantDetachErr expects the plugin's detach error back.
 		wantDetachErr bool
 	}{
-		{name: "paused, node gone", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, paused: true},
-		{name: "crashed, node gone", state: ateapipb.ActorState_ACTOR_STATE_CRASHED},
-		{name: "paused, node kept", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, paused: true, nodeKept: true, wantErr: ErrNoAteletOnNode},
-		{name: "crashed, node kept", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, nodeKept: true, wantErr: ErrNoAteletOnNode},
-		{name: "node gone, volume detach OK", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, volume: true},
-		{name: "node gone, volume detach NotFound", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, volume: true, detachErr: status.Error(codes.NotFound, "no such node")},
-		{name: "node gone, volume detach fails", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, volume: true, detachErr: status.Error(codes.Internal, "instance not found"), wantDetachErr: true},
+		{name: "paused, node gone", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, paused: true},
+		{name: "crashed, node gone", state: ateapi.ActorState_ACTOR_STATE_CRASHED},
+		{name: "paused, node kept", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, paused: true, nodeKept: true, wantErr: ErrNoAteletOnNode},
+		{name: "crashed, node kept", state: ateapi.ActorState_ACTOR_STATE_CRASHED, nodeKept: true, wantErr: ErrNoAteletOnNode},
+		{name: "node gone, volume detach OK", state: ateapi.ActorState_ACTOR_STATE_CRASHED, volume: true},
+		{name: "node gone, volume detach NotFound", state: ateapi.ActorState_ACTOR_STATE_CRASHED, volume: true, detachErr: status.Error(codes.NotFound, "no such node")},
+		{name: "node gone, volume detach fails", state: ateapi.ActorState_ACTOR_STATE_CRASHED, volume: true, detachErr: status.Error(codes.Internal, "instance not found"), wantDetachErr: true},
 	} {
 		for _, verb := range []string{"revert", "delete"} {
 			t.Run(tc.name+"/"+verb, func(t *testing.T) {
@@ -187,11 +187,11 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 					WithNodeGetter(nodeGetter(nil, nodes...)))
 				plugin := &detachDeletePlugin{mockDetachVolumePlugin{detachErrs: map[string]error{"storage-vol-1": tc.detachErr}}}
 				w.pluginRegistry = &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}}
-				tmpl := &ateapipb.ActorTemplate{
-					Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl-vol"},
-					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"},
-					Volumes:        []*ateapipb.Volume{{Name: "vol1"}},
-					Containers:     []*ateapipb.Container{{VolumeMounts: []*ateapipb.VolumeMount{{Name: "vol1"}}}},
+				tmpl := &ateapi.ActorTemplate{
+					Metadata:       &ateapi.ResourceMetadata{Atespace: "ns", Name: "tmpl-vol"},
+					SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://snapshots"},
+					Volumes:        []*ateapi.Volume{{Name: "vol1"}},
+					Containers:     []*ateapi.Container{{VolumeMounts: []*ateapi.VolumeMount{{Name: "vol1"}}}},
 				}
 				if _, err := st.CreateActorTemplate(ctx, tmpl); err != nil {
 					t.Fatalf("create ActorTemplate: %v", err)
@@ -203,10 +203,10 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 				if err != nil {
 					t.Fatalf("get seeded actor: %v", err)
 				}
-				mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
+				mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapi.ActorStatus) {
 					s.AssignedNode = "node-1"
 					s.LastAssignedGeneration = 1
-					s.Snapshots = []*ateapipb.Snapshot{newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "kept",
+					s.Snapshots = []*ateapi.Snapshot{newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "kept",
 						mustActorSnapshotURI(t, tmpl, actor, "kept").String(), completed)}
 					if tc.paused {
 						local := newPausedSnapshot(t, 2, memory, "", "local", "node-1")
@@ -215,16 +215,16 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 						s.Snapshots = append(s.Snapshots, local)
 					}
 					if tc.volume {
-						s.ExternalVolumes = &ateapipb.ExternalVolumes{Volumes: []*ateapipb.ExternalVolumeStatus{
+						s.ExternalVolumes = &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
 							{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"}}}
 					}
 				})
 
-				wantState := ateapipb.ActorState_ACTOR_STATE_REVERTING
+				wantState := ateapi.ActorState_ACTOR_STATE_REVERTING
 				if verb == "revert" {
 					_, err = w.RevertActor(ctx, actorRef)
 				} else {
-					wantState = ateapipb.ActorState_ACTOR_STATE_DELETING
+					wantState = ateapi.ActorState_ACTOR_STATE_DELETING
 					_, err = w.DeleteActor(ctx, actorRef, store.DeletePreconditions{})
 				}
 				switch {
@@ -258,7 +258,7 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 					if getErr != nil {
 						t.Fatalf("get actor after revert: %v", getErr)
 					}
-					if s := got.GetStatus(); s.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || s.GetAssignedNode() != "" {
+					if s := got.GetStatus(); s.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED || s.GetAssignedNode() != "" {
 						t.Errorf("after revert: state %v, assigned node %q, want SUSPENDED with no node", s.GetState(), s.GetAssignedNode())
 					}
 					if snaps := got.GetStatus().GetSnapshots(); len(snaps) != 1 || snaps[0].GetGeneration() != 1 || snaps[0].GetDurableSnapshot().GetStatus() != completed {
@@ -295,7 +295,7 @@ func TestEnsureMarkedDeleting_AllStates(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ensureMarkedDeleting failed: %v", err)
 			}
-			if got := updated.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+			if got := updated.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_DELETING {
 				t.Errorf("ensureMarkedDeleting returned actor in %v, want DELETING", got)
 			}
 			if updated.GetMetadata().GetDeleteTime() == nil {
@@ -362,30 +362,30 @@ func TestEnsureExternalSnapshotsReleased(t *testing.T) {
 			template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 			w, objects := newFinalizeWorkflow(persistence)
 
-			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_DELETING},
 			})
 
 			// The actor's prefix is keyed on the UID the store just assigned, so
 			// its snapshots can only be placed now.
 			current := mustActorSnapshotURI(t, template, actor, "current")
-			currentType := ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR
+			currentType := ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR
 			if tt.tagOwnedSnapshot {
 				current = mustTagSnapshotURI(t, template, "team-a", "v1-snapshot")
-				currentType = ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG
+				currentType = ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG
 			}
 			objects.PutSnapshot(t, current, "manifest.json")
 			inFlight := mustActorSnapshotURI(t, template, actor, inFlightSnapshotName)
 			if tt.inFlight != "" {
 				objects.PutSnapshot(t, inFlight, "manifest.json")
 			}
-			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.LastAssignedGeneration = 2
-				s.Snapshots = []*ateapipb.Snapshot{
-					newDurableSnapshot(1, currentType, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+				s.Snapshots = []*ateapi.Snapshot{
+					newDurableSnapshot(1, currentType, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 				}
 			})
 
@@ -413,15 +413,15 @@ func TestEnsureExternalSnapshotsReleased_CollectsStrandedSnapshots(t *testing.T)
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	w, objects := newFinalizeWorkflow(persistence)
 
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_DELETING},
 	})
-	otherActor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-2"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	otherActor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-2"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 
 	currentSnapshot := mustActorSnapshotURI(t, template, actor, "current")
@@ -430,10 +430,10 @@ func TestEnsureExternalSnapshotsReleased_CollectsStrandedSnapshots(t *testing.T)
 	for _, uri := range []resources.SnapshotURI{currentSnapshot, strandedSnapshot, otherActorsSnapshot} {
 		objects.PutSnapshot(t, uri, "manifest.json")
 	}
-	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 1
-		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", currentSnapshot.Name(), currentSnapshot.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		s.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", currentSnapshot.Name(), currentSnapshot.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		}
 	})
 
@@ -458,22 +458,22 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone-tmpl"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "gone-tmpl"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_CRASHED},
 	})
 
 	// The template that holds the storage location is gone (was never written to storage).
 	// We should still be able to access/delete the current snapshot for this actor.
-	inFlight := mustActorSnapshotURI(t, &ateapipb.ActorTemplate{
-		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	inFlight := mustActorSnapshotURI(t, &ateapi.ActorTemplate{
+		SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: testStorageLocation},
 	}, actor, "abandoned")
 	objects.PutSnapshot(t, inFlight, "manifest.json")
-	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 1
-		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		s.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 		}
 	})
 
@@ -495,18 +495,18 @@ func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	w, objects := newFinalizeWorkflow(persistence)
 
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_DELETING},
 	})
 
 	current := mustActorSnapshotURI(t, template, actor, "current")
 	objects.PutSnapshot(t, current, "manifest.json", "memory.zst")
-	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 1
-		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		s.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		}
 	})
 
@@ -568,11 +568,11 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 			workerName := wireTestAssignment().GetWorker().GetName()
-			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-				Status: &ateapipb.ActorStatus{
-					State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status: &ateapi.ActorStatus{
+					State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
 					WorkerAssignment: wireTestAssignment(),
 				},
 			})
@@ -581,10 +581,10 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 			if tt.hasBeenSuspended {
 				previous := mustActorSnapshotURI(t, template, actor, "old")
 				objects.PutSnapshot(t, previous, "manifest.json")
-				mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 					s.LastAssignedGeneration = 1
-					s.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					s.Snapshots = []*ateapi.Snapshot{
+						newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					}
 				})
 			}
@@ -620,7 +620,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
-			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+			if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 				t.Fatalf("state = %v, want CRASHED", got)
 			}
 			if _, err := actorWorkflow.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
@@ -644,19 +644,19 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone-tmpl"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "gone-tmpl"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_CRASHED},
 	})
-	inFlight := mustActorSnapshotURI(t, &ateapipb.ActorTemplate{
-		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	inFlight := mustActorSnapshotURI(t, &ateapi.ActorTemplate{
+		SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: testStorageLocation},
 	}, actor, "abandoned")
 	objects.PutSnapshot(t, inFlight, "manifest.json")
-	observed := mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+	observed := mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 1
-		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		s.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 		}
 	})
 	// The guards a client sends after reading the actor.
@@ -673,7 +673,7 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 	if admitted.GetMetadata().GetDeleteTime() == nil {
 		t.Fatal("a failed delete left delete_time unset")
 	}
-	if got := admitted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+	if got := admitted.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_DELETING {
 		t.Fatalf("state after the failure = %v, want DELETING", got)
 	}
 

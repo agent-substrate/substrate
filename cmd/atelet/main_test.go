@@ -1654,3 +1654,25 @@ func TestServingCheck(t *testing.T) {
 		t.Errorf("servingCheck after the port opened = %v, want nil", err)
 	}
 }
+
+// A worker that is unavailable, whether refusing workloads until it registers
+// or unreachable after a restart, reaches atelet's caller as Unavailable so the
+// resume is retried. Any other worker failure is Internal.
+func TestWorkerCallError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{name: "worker refuses", err: status.Error(codes.Unavailable, "worker has not registered yet"), want: codes.Unavailable},
+		{name: "worker unreachable", err: fmt.Errorf("dial: %w", status.Error(codes.Unavailable, "connection refused")), want: codes.Unavailable},
+		{name: "worker fails", err: status.Error(codes.Internal, "sandbox would not start"), want: codes.Internal},
+		{name: "plain error", err: errors.New("boom"), want: codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := apierror.Code(workerCallError("RestoreWorkload", tc.err)); got != tc.want {
+				t.Errorf("workerCallError() code = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

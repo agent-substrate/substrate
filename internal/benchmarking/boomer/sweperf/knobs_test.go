@@ -33,7 +33,7 @@ func TestKnobsCodec(t *testing.T) {
 		"sweperf_total_steps": 21,
 		"sweperf_num_cycles": 4,
 		"sweperf_poll_interval_ms": 100,
-		"lifecycle_mode": "pause",
+		"lifecycle_mode": "async",
 		"resume_mode": "explicit"
 	}`)); err != nil {
 		t.Fatalf("Apply(valid): %v", err)
@@ -44,7 +44,7 @@ func TestKnobsCodec(t *testing.T) {
 		TotalSteps:     21,
 		NumCycles:      4,
 		PollIntervalMs: 100,
-		Lifecycle:      dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause, ResumeMode: dynconfig.ResumeModeExplicit},
+		Lifecycle:      dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeAsync, ResumeMode: dynconfig.ResumeModeExplicit},
 	}
 	if got := dynconfig.Get[knobs](h); got != want {
 		t.Errorf("decoded =\n %+v, want\n %+v", got, want)

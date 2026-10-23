@@ -28,13 +28,13 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/actorevent"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/global"
@@ -51,12 +51,12 @@ import (
 func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 
-	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			WorkerAssignment: &ateapipb.WorkerAssignment{
-				Worker:          &ateapipb.ObjectRef{Name: "uid"},
+	storetest.MustCreateActor(t, ctx, st, &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
+		Status: &ateapi.ActorStatus{
+			State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapi.WorkerAssignment{
+				Worker:          &ateapi.ObjectRef{Name: "uid"},
 				WorkerNamespace: "ns",
 				WorkerPool:      "pool",
 				WorkerPod:       "pod",
@@ -64,8 +64,8 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 				WorkerPodIps:    []string{"1.2.3.4"},
 			},
 			LastAssignedGeneration: 1,
-			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			Snapshots: []*ateapi.Snapshot{
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 			},
 		},
 	})
@@ -75,13 +75,13 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 // assigned to the given actor (unassigned if assigned is the zero ActorRef).
 func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
-	worker := &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: "uid"},
+	worker := &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: "uid"},
 		WorkerNamespace: "ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "pod",
 		WorkerPodUid:    "uid",
-		Status:          &ateapipb.WorkerStatus{},
+		Status:          &ateapi.WorkerStatus{},
 	}
 	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("seed worker: %v", err)
@@ -89,13 +89,13 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 	if actorRef == (resources.ActorRef{}) {
 		return
 	}
-	assignment := &ateapipb.ActorAssignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+	assignment := &ateapi.ActorAssignment{
+		Actor:    &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		ActorUid: "synthetic-" + actorRef.Name,
 	}
 	if actor, err := st.GetActor(ctx, actorRef); err == nil {
-		assignment = &ateapipb.ActorAssignment{
-			Actor:    &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()},
+		assignment = &ateapi.ActorAssignment{
+			Actor:    &ateapi.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()},
 			ActorUid: actor.GetMetadata().GetUid(),
 		}
 	}
@@ -106,13 +106,13 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 // already cleared, e.g. by a prior release.
 func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
-	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
+	storetest.MustCreateActor(t, ctx, st, &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
+		Status: &ateapi.ActorStatus{
+			State:                  ateapi.ActorState_ACTOR_STATE_RUNNING,
 			LastAssignedGeneration: 1,
-			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			Snapshots: []*ateapi.Snapshot{
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 			},
 		},
 	})
@@ -126,11 +126,11 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorR
 	if err != nil {
 		t.Fatalf("GetActor(%v) = %v, want nil", actorRef, err)
 	}
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("status = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("status = %v, want %v", got.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_CRASHED)
 	}
 	// Keep the snapshot uri for debugging.
-	if findLatestDurableSnapshot(got.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING) == nil {
+	if findLatestDurableSnapshot(got.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING) == nil {
 		t.Error(`in-progress durable snapshot URI = "", want preserved`)
 	}
 	if got.GetStatus().GetWorkerAssignment() != nil {
@@ -203,19 +203,19 @@ func TestCrashActor(t *testing.T) {
 			seed: true,
 			setup: func(t *testing.T, ctx context.Context, st store.Interface) {
 				// Create a worker assigned to the same actorRef, but with a stale UID
-				worker := &ateapipb.Worker{
-					Metadata:        &ateapipb.ResourceMetadata{Name: "uid"},
+				worker := &ateapi.Worker{
+					Metadata:        &ateapi.ResourceMetadata{Name: "uid"},
 					WorkerNamespace: "ns",
 					WorkerPool:      "pool",
 					WorkerPod:       "pod",
 					WorkerPodUid:    "uid",
-					Status:          &ateapipb.WorkerStatus{},
+					Status:          &ateapi.WorkerStatus{},
 				}
 				if _, err := st.CreateWorker(ctx, worker); err != nil {
 					t.Fatalf("CreateWorker: %v", err)
 				}
-				seedAssignment(t, st, "uid", &ateapipb.ActorAssignment{
-					Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				seedAssignment(t, st, "uid", &ateapi.ActorAssignment{
+					Actor:    &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 					ActorUid: "stale-incarnation-uid",
 				})
 			},
@@ -370,7 +370,7 @@ func TestHandleAteletError(t *testing.T) {
 		isTerminateRPC bool
 		err            error
 		wantCode       codes.Code
-		wantState      ateapipb.ActorState
+		wantState      ateapi.ActorState
 	}{
 		{
 			name:      "Unavailable leaves the actor as it was",
@@ -378,7 +378,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       status.Error(codes.Unavailable, "connection refused"),
 			wantCode:  codes.Unavailable,
-			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantState: ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
 			name:      "Canceled leaves the actor as it was",
@@ -386,7 +386,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       status.Error(codes.Canceled, "grpc: the client connection is closing"),
 			wantCode:  codes.Internal,
-			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantState: ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
 			name:      "DeadlineExceeded leaves the actor as it was",
@@ -394,7 +394,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
 			wantCode:  codes.Internal,
-			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantState: ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
 			name:      "wrapped Unavailable leaves the actor as it was",
@@ -402,7 +402,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.Unavailable, "connection refused")),
 			wantCode:  codes.Unavailable,
-			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantState: ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
 			name:      "cancelled caller gets Canceled and leaves the actor as it was",
@@ -410,7 +410,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.Canceled, "connection closing")),
 			wantCode:  codes.Canceled,
-			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantState: ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
 			name:      "expired caller deadline gets DeadlineExceeded and leaves the actor as it was",
@@ -418,7 +418,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.DeadlineExceeded, "restore reply timed out")),
 			wantCode:  codes.DeadlineExceeded,
-			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantState: ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
 			name:      "ended workflow context leaves the actor as it was",
@@ -426,7 +426,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       status.Error(codes.Internal, "context canceled"),
 			wantCode:  codes.Canceled,
-			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantState: ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
 			name:      "Internal crashes the actor",
@@ -434,7 +434,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       status.Error(codes.Internal, "while reading local snapshot manifest"),
 			wantCode:  codes.Internal,
-			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantState: ateapi.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
 			name:      "FailedPrecondition crashes the actor",
@@ -442,7 +442,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       status.Error(codes.FailedPrecondition, "invalid checkpoint result"),
 			wantCode:  codes.Internal,
-			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantState: ateapi.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
 			name:      "plain error crashes the actor",
@@ -450,7 +450,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       errors.New("while getting atelet conn"),
 			wantCode:  codes.Internal,
-			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantState: ateapi.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
 			name:           "Terminate leaves the actor as it was",
@@ -459,7 +459,7 @@ func TestHandleAteletError(t *testing.T) {
 			isTerminateRPC: true,
 			err:            status.Error(codes.Internal, "while unmounting volumes"),
 			wantCode:       codes.Internal,
-			wantState:      ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantState:      ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
 	}
 	for _, tt := range tests {
@@ -493,7 +493,7 @@ func TestHandleAteletError(t *testing.T) {
 			if got := actor.GetStatus().GetState(); got != tt.wantState {
 				t.Errorf("state = %v, want %v", got, tt.wantState)
 			}
-			if tt.wantState != ateapipb.ActorState_ACTOR_STATE_CRASHED && actor.GetStatus().GetWorkerAssignment() == nil {
+			if tt.wantState != ateapi.ActorState_ACTOR_STATE_CRASHED && actor.GetStatus().GetWorkerAssignment() == nil {
 				t.Error("worker assignment was cleared, want it kept for the retry")
 			}
 		})
@@ -561,34 +561,34 @@ func TestCrashActor_Metrics(t *testing.T) {
 	defer cleanup()
 
 	actorRef := resources.ActorRef{Atespace: "demo-ns", Name: "counter-actor"}
-	worker := &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: "pod-uid-1"},
+	worker := &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: "pod-uid-1"},
 		WorkerNamespace: "demo-ns",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    "pod-uid-1",
-		Status:          &ateapipb.WorkerStatus{},
+		Status:          &ateapi.WorkerStatus{},
 	}
 	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
 
-	actor := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{
+	actor := &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace: "demo-ns",
 			Name:     "counter-actor",
 			Uid:      "actor-uid-1",
 		},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo-ns", Name: "counter-template"},
-		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			WorkerAssignment: &ateapipb.WorkerAssignment{
-				Worker:          &ateapipb.ObjectRef{Name: "pod-uid-1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "demo-ns", Name: "counter-template"},
+		Status: &ateapi.ActorStatus{
+			State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapi.WorkerAssignment{
+				Worker:          &ateapi.ObjectRef{Name: "pod-uid-1"},
 				WorkerNamespace: "demo-ns",
 				WorkerPool:      "pool-1",
 				WorkerPod:       "pod-1",
 				WorkerPodUid:    "pod-uid-1",
-				SandboxRuntime:  &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"},
+				SandboxRuntime:  &ateapi.ActorSandboxRuntime{SandboxClass: "gvisor"},
 			},
 		},
 	}
@@ -674,7 +674,7 @@ type failingReleaseStore struct {
 	err error
 }
 
-func (f failingReleaseStore) ReleaseActorFromWorker(context.Context, string, string) (*ateapipb.Worker, error) {
+func (f failingReleaseStore) ReleaseActorFromWorker(context.Context, string, string) (*ateapi.Worker, error) {
 	return nil, f.err
 }
 
@@ -708,8 +708,8 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 	if gerr != nil {
 		t.Fatalf("GetActor() = %v, want nil", gerr)
 	}
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("status = %v, want %v (actor must not be crashed when the release fails)", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("status = %v, want %v (actor must not be crashed when the release fails)", got.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_RUNNING)
 	}
 	if got.GetStatus().GetWorkerAssignment() == nil {
 		t.Error("WorkerAssignment cleared, want preserved so the release can be retried")
@@ -761,8 +761,8 @@ func TestCrashActorAndFail(t *testing.T) {
 		if gerr != nil {
 			t.Fatalf("GetActor() = %v, want nil", gerr)
 		}
-		if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-			t.Errorf("status = %v, want %v (the crash did not commit)", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
+			t.Errorf("status = %v, want %v (the crash did not commit)", got.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_RUNNING)
 		}
 	})
 }
@@ -925,10 +925,10 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 	defer cleanup()
 
 	actorRef := resources.ActorRef{Atespace: "demo-ns", Name: "counter-actor"}
-	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo-ns", Name: "counter-template"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+	storetest.MustCreateActor(t, ctx, st, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "demo-ns", Name: "counter-template"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING},
 	})
 
 	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {

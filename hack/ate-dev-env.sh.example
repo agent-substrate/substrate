@@ -25,9 +25,9 @@ export NETWORK=default
 export SUBNETWORK=default
 
 export CLUSTER_NAME=substrate-poc
-# Supported: 1.36 (needs the beta APIs enabled at cluster creation, which
-# setup-gcp does) or 1.37+ (APIs served by default). Anything below 1.36 does
-# not work. GKE retires patch versions over time — if cluster creation rejects
+# Supported: 1.36 with the v1beta1 PodCertificate APIs enabled, which setup-gcp
+# does, or 1.37+, which serves them under v1. Anything below 1.36 does not
+# work. GKE retires patch versions over time — if cluster creation rejects
 # this pin, pick a current one from:
 #   gcloud container get-server-config --zone ${CLUSTER_LOCATION} --format="value(defaultClusterVersion)"
 # See tools/setup-gcp/README.md ("Create Cluster") for the full constraint.

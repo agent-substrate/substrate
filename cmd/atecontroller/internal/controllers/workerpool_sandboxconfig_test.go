@@ -42,7 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 )
 
 // testGvisorDefault is the gvisor class default TestMain creates.
@@ -56,7 +56,7 @@ func TestResolveSandboxConfig(t *testing.T) {
 	t.Parallel()
 	t0 := metav1.NewTime(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
 	t1 := metav1.NewTime(t0.Add(time.Minute))
-	sc := func(name string, class atev1alpha1.SandboxClass, isDefault bool, created metav1.Time, mutate ...func(*atev1alpha1.SandboxConfig)) atev1alpha1.SandboxConfig {
+	sc := func(name string, class atev1.SandboxClass, isDefault bool, created metav1.Time, mutate ...func(*atev1.SandboxConfig)) atev1.SandboxConfig {
 		c := *makeSandboxConfig(name, class, isDefault)
 		c.CreationTimestamp = created
 		for _, m := range mutate {
@@ -64,25 +64,25 @@ func TestResolveSandboxConfig(t *testing.T) {
 		}
 		return c
 	}
-	deleting := func(c *atev1alpha1.SandboxConfig) { c.DeletionTimestamp = &t1 }
-	protected := func(c *atev1alpha1.SandboxConfig) {
-		controllerutil.AddFinalizer(c, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+	deleting := func(c *atev1.SandboxConfig) { c.DeletionTimestamp = &t1 }
+	protected := func(c *atev1.SandboxConfig) {
+		controllerutil.AddFinalizer(c, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 	}
-	gvisor := func(ref string) atev1alpha1.WorkerPoolSandboxClass {
-		e := atev1alpha1.WorkerPoolSandboxClass{Name: atev1alpha1.SandboxClassGvisor}
+	gvisor := func(ref string) atev1.WorkerPoolSandboxClass {
+		e := atev1.WorkerPoolSandboxClass{Name: atev1.SandboxClassGvisor}
 		if ref != "" {
-			e.ConfigRef = &atev1alpha1.SandboxConfigReference{Name: ref}
+			e.ConfigRef = &atev1.SandboxConfigReference{Name: ref}
 		}
 		return e
 	}
 
-	gv := atev1alpha1.SandboxClassGvisor
+	gv := atev1.SandboxClassGvisor
 
 	tests := []struct {
 		name    string
-		entry   atev1alpha1.WorkerPoolSandboxClass
+		entry   atev1.WorkerPoolSandboxClass
 		inUse   string
-		configs []atev1alpha1.SandboxConfig
+		configs []atev1.SandboxConfig
 		// want is the config the class uses, or "" for none.
 		want string
 		// wantReason is the False condition's reason, or "" for True.
@@ -92,134 +92,134 @@ func TestResolveSandboxConfig(t *testing.T) {
 		{
 			name:        "explicit ref resolves even when another config is the default",
 			entry:       gvisor("custom"),
-			configs:     []atev1alpha1.SandboxConfig{sc("custom", gv, false, t0), sc("def", gv, true, t1)},
+			configs:     []atev1.SandboxConfig{sc("custom", gv, false, t0), sc("def", gv, true, t1)},
 			want:        "custom",
 			wantMessage: `resolved to SandboxConfig "custom"`,
 		},
 		{
 			name:        "explicit ref not found",
 			entry:       gvisor("missing"),
-			configs:     []atev1alpha1.SandboxConfig{sc("def", gv, true, t0)},
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
+			configs:     []atev1.SandboxConfig{sc("def", gv, true, t0)},
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigNotFound,
 			wantMessage: `SandboxConfig "missing" not found`,
 		},
 		{
 			name:        "explicit ref not found keeps the config in use",
 			entry:       gvisor("missing"),
 			inUse:       "old",
-			configs:     []atev1alpha1.SandboxConfig{sc("old", gv, false, t0)},
+			configs:     []atev1.SandboxConfig{sc("old", gv, false, t0)},
 			want:        "old",
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigNotFound,
 			wantMessage: `SandboxConfig "missing" not found; keeping "old"`,
 		},
 		{
 			name:        "explicit ref of another class",
 			entry:       gvisor("vm"),
-			configs:     []atev1alpha1.SandboxConfig{sc("vm", atev1alpha1.SandboxClassMicroVM, false, t0)},
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxClassMismatch,
+			configs:     []atev1.SandboxConfig{sc("vm", atev1.SandboxClassMicroVM, false, t0)},
+			wantReason:  atev1.WorkerPoolReasonSandboxClassMismatch,
 			wantMessage: `SandboxConfig "vm" is for sandbox class "microvm", not "gvisor"`,
 		},
 		{
 			name:        "explicit ref of another class keeps the config in use",
 			entry:       gvisor("vm"),
 			inUse:       "old",
-			configs:     []atev1alpha1.SandboxConfig{sc("vm", atev1alpha1.SandboxClassMicroVM, false, t0), sc("old", gv, false, t0)},
+			configs:     []atev1.SandboxConfig{sc("vm", atev1.SandboxClassMicroVM, false, t0), sc("old", gv, false, t0)},
 			want:        "old",
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxClassMismatch,
+			wantReason:  atev1.WorkerPoolReasonSandboxClassMismatch,
 			wantMessage: `SandboxConfig "vm" is for sandbox class "microvm", not "gvisor"; keeping "old"`,
 		},
 		{
 			name:        "explicit ref being deleted takes no new users",
 			entry:       gvisor("dying"),
-			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, false, t0, deleting)},
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			configs:     []atev1.SandboxConfig{sc("dying", gv, false, t0, deleting)},
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `SandboxConfig "dying" is being deleted`,
 		},
 		{
 			name:        "explicit ref being deleted is kept but reported by a pool already using it",
 			entry:       gvisor("dying"),
 			inUse:       "dying",
-			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, false, t0, deleting, protected)},
+			configs:     []atev1.SandboxConfig{sc("dying", gv, false, t0, deleting, protected)},
 			want:        "dying",
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `SandboxConfig "dying" is being deleted; keeping "dying"`,
 		},
 		{
 			name:        "explicit ref being deleted and released is not kept by a pool using it",
 			entry:       gvisor("dying"),
 			inUse:       "dying",
-			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, false, t0, deleting)},
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			configs:     []atev1.SandboxConfig{sc("dying", gv, false, t0, deleting)},
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `SandboxConfig "dying" is being deleted`,
 		},
 		{
 			name:        "explicit ref being deleted keeps the previous config in use",
 			entry:       gvisor("dying"),
 			inUse:       "old",
-			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, false, t0, deleting), sc("old", gv, false, t0)},
+			configs:     []atev1.SandboxConfig{sc("dying", gv, false, t0, deleting), sc("old", gv, false, t0)},
 			want:        "old",
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `SandboxConfig "dying" is being deleted; keeping "old"`,
 		},
 		{
 			name:        "no default",
 			entry:       gvisor(""),
-			configs:     []atev1alpha1.SandboxConfig{sc("plain", gv, false, t0)},
-			wantReason:  atev1alpha1.WorkerPoolReasonDefaultConfigNotFound,
+			configs:     []atev1.SandboxConfig{sc("plain", gv, false, t0)},
+			wantReason:  atev1.WorkerPoolReasonDefaultConfigNotFound,
 			wantMessage: `no SandboxConfig of sandbox class "gvisor" is annotated sandboxconfig.ate.dev/is-class-default=true`,
 		},
 		{
 			name:        "default of another class is ignored",
 			entry:       gvisor(""),
-			configs:     []atev1alpha1.SandboxConfig{sc("vm", atev1alpha1.SandboxClassMicroVM, true, t0)},
-			wantReason:  atev1alpha1.WorkerPoolReasonDefaultConfigNotFound,
+			configs:     []atev1.SandboxConfig{sc("vm", atev1.SandboxClassMicroVM, true, t0)},
+			wantReason:  atev1.WorkerPoolReasonDefaultConfigNotFound,
 			wantMessage: `no SandboxConfig of sandbox class "gvisor" is annotated sandboxconfig.ate.dev/is-class-default=true`,
 		},
 		{
 			name:  "annotation must be exactly true",
 			entry: gvisor(""),
-			configs: []atev1alpha1.SandboxConfig{sc("no", gv, false, t0, func(c *atev1alpha1.SandboxConfig) {
-				c.Annotations = map[string]string{atev1alpha1.SandboxConfigClassDefaultAnnotation: "True"}
+			configs: []atev1.SandboxConfig{sc("no", gv, false, t0, func(c *atev1.SandboxConfig) {
+				c.Annotations = map[string]string{atev1.SandboxConfigClassDefaultAnnotation: "True"}
 			})},
-			wantReason:  atev1alpha1.WorkerPoolReasonDefaultConfigNotFound,
+			wantReason:  atev1.WorkerPoolReasonDefaultConfigNotFound,
 			wantMessage: `no SandboxConfig of sandbox class "gvisor" is annotated sandboxconfig.ate.dev/is-class-default=true`,
 		},
 		{
 			name:        "default being deleted takes no new users",
 			entry:       gvisor(""),
-			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, true, t0, deleting)},
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			configs:     []atev1.SandboxConfig{sc("dying", gv, true, t0, deleting)},
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `the default SandboxConfig for sandbox class "gvisor" is being deleted`,
 		},
 		{
 			name:        "several defaults being deleted are reported",
 			entry:       gvisor(""),
-			configs:     []atev1alpha1.SandboxConfig{sc("dying-new", gv, true, t1, deleting), sc("dying-old", gv, true, t0, deleting)},
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			configs:     []atev1.SandboxConfig{sc("dying-new", gv, true, t1, deleting), sc("dying-old", gv, true, t0, deleting)},
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `the default SandboxConfig for sandbox class "gvisor" is being deleted`,
 		},
 		{
 			name:        "default being deleted is kept but reported by a pool already using it",
 			entry:       gvisor(""),
 			inUse:       "dying",
-			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, true, t0, deleting, protected)},
+			configs:     []atev1.SandboxConfig{sc("dying", gv, true, t0, deleting, protected)},
 			want:        "dying",
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `the default SandboxConfig for sandbox class "gvisor" is being deleted; keeping "dying"`,
 		},
 		{
 			name:        "default being deleted and released is not kept by a pool using it",
 			entry:       gvisor(""),
 			inUse:       "dying",
-			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, true, t0, deleting)},
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			configs:     []atev1.SandboxConfig{sc("dying", gv, true, t0, deleting)},
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `the default SandboxConfig for sandbox class "gvisor" is being deleted`,
 		},
 		{
 			name:        "a live default replaces the deleting one in use, even when older",
 			entry:       gvisor(""),
 			inUse:       "dying",
-			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, true, t1, deleting), sc("old", gv, true, t0)},
+			configs:     []atev1.SandboxConfig{sc("dying", gv, true, t1, deleting), sc("old", gv, true, t0)},
 			want:        "old",
 			wantMessage: `resolved to SandboxConfig "old"`,
 		},
@@ -227,45 +227,45 @@ func TestResolveSandboxConfig(t *testing.T) {
 			name:        "config in use that lost the default annotation is kept but reported",
 			entry:       gvisor(""),
 			inUse:       "plain",
-			configs:     []atev1alpha1.SandboxConfig{sc("plain", gv, false, t0)},
+			configs:     []atev1.SandboxConfig{sc("plain", gv, false, t0)},
 			want:        "plain",
-			wantReason:  atev1alpha1.WorkerPoolReasonDefaultConfigNotFound,
+			wantReason:  atev1.WorkerPoolReasonDefaultConfigNotFound,
 			wantMessage: `no SandboxConfig of sandbox class "gvisor" is annotated sandboxconfig.ate.dev/is-class-default=true; keeping "plain"`,
 		},
 		{
 			name:        "config in use that no longer exists is not kept",
 			entry:       gvisor(""),
 			inUse:       "gone",
-			configs:     []atev1alpha1.SandboxConfig{sc("plain", gv, false, t0)},
-			wantReason:  atev1alpha1.WorkerPoolReasonDefaultConfigNotFound,
+			configs:     []atev1.SandboxConfig{sc("plain", gv, false, t0)},
+			wantReason:  atev1.WorkerPoolReasonDefaultConfigNotFound,
 			wantMessage: `no SandboxConfig of sandbox class "gvisor" is annotated sandboxconfig.ate.dev/is-class-default=true`,
 		},
 		{
 			name:        "config in use of another class is not kept",
 			entry:       gvisor(""),
 			inUse:       "vm",
-			configs:     []atev1alpha1.SandboxConfig{sc("vm", atev1alpha1.SandboxClassMicroVM, true, t0)},
-			wantReason:  atev1alpha1.WorkerPoolReasonDefaultConfigNotFound,
+			configs:     []atev1.SandboxConfig{sc("vm", atev1.SandboxClassMicroVM, true, t0)},
+			wantReason:  atev1.WorkerPoolReasonDefaultConfigNotFound,
 			wantMessage: `no SandboxConfig of sandbox class "gvisor" is annotated sandboxconfig.ate.dev/is-class-default=true`,
 		},
 		{
 			name:        "newest default wins",
 			entry:       gvisor(""),
-			configs:     []atev1alpha1.SandboxConfig{sc("a-old", gv, true, t0), sc("z-new", gv, true, t1), sc("plain", gv, false, t1)},
+			configs:     []atev1.SandboxConfig{sc("a-old", gv, true, t0), sc("z-new", gv, true, t1), sc("plain", gv, false, t1)},
 			want:        "z-new",
 			wantMessage: `resolved to SandboxConfig "z-new"`,
 		},
 		{
 			name:        "newest default wins regardless of list order",
 			entry:       gvisor(""),
-			configs:     []atev1alpha1.SandboxConfig{sc("z-new", gv, true, t1), sc("a-old", gv, true, t0)},
+			configs:     []atev1.SandboxConfig{sc("z-new", gv, true, t1), sc("a-old", gv, true, t0)},
 			want:        "z-new",
 			wantMessage: `resolved to SandboxConfig "z-new"`,
 		},
 		{
 			name:        "creation time tie goes to the first name",
 			entry:       gvisor(""),
-			configs:     []atev1alpha1.SandboxConfig{sc("b", gv, true, t0), sc("a", gv, true, t0)},
+			configs:     []atev1.SandboxConfig{sc("b", gv, true, t0), sc("a", gv, true, t0)},
 			want:        "a",
 			wantMessage: `resolved to SandboxConfig "a"`,
 		},
@@ -279,9 +279,9 @@ func TestResolveSandboxConfig(t *testing.T) {
 				gotName = got.Name
 			}
 			want := metav1.Condition{
-				Type:    atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+				Type:    atev1.WorkerPoolSandboxClassConditionResolved,
 				Status:  metav1.ConditionTrue,
-				Reason:  atev1alpha1.WorkerPoolReasonResolved,
+				Reason:  atev1.WorkerPoolReasonResolved,
 				Message: tc.wantMessage,
 			}
 			if tc.wantReason != "" {
@@ -306,16 +306,16 @@ func TestReconcileProtectsBeforeRecording(t *testing.T) {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatalf("add client-go scheme: %v", err)
 	}
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
-	protected := func(sc *atev1alpha1.SandboxConfig) *atev1alpha1.SandboxConfig {
-		controllerutil.AddFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+	protected := func(sc *atev1.SandboxConfig) *atev1.SandboxConfig {
+		controllerutil.AddFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 		return sc
 	}
 	tests := []struct {
 		name   string
-		config *atev1alpha1.SandboxConfig
+		config *atev1.SandboxConfig
 		// ref is the pool's configRef. "" follows the class default.
 		ref string
 		// wantResolved is whether the pool must end up using config.
@@ -325,26 +325,26 @@ func TestReconcileProtectsBeforeRecording(t *testing.T) {
 	}{
 		{
 			name:          "unprotected class default",
-			config:        makeSandboxConfig("fresh-default", atev1alpha1.SandboxClassGvisor, true),
+			config:        makeSandboxConfig("fresh-default", atev1.SandboxClassGvisor, true),
 			wantResolved:  true,
 			wantProtected: true,
 		},
 		{
 			name:          "unprotected configRef target",
-			config:        makeSandboxConfig("fresh-ref", atev1alpha1.SandboxClassGvisor, false),
+			config:        makeSandboxConfig("fresh-ref", atev1.SandboxClassGvisor, false),
 			ref:           "fresh-ref",
 			wantResolved:  true,
 			wantProtected: true,
 		},
 		{
 			name:          "already protected config",
-			config:        protected(makeSandboxConfig("held", atev1alpha1.SandboxClassGvisor, true)),
+			config:        protected(makeSandboxConfig("held", atev1.SandboxClassGvisor, true)),
 			wantResolved:  true,
 			wantProtected: true,
 		},
 		{
 			name:          "unresolved pool protects nothing",
-			config:        makeSandboxConfig("other-class", atev1alpha1.SandboxClassMicroVM, false),
+			config:        makeSandboxConfig("other-class", atev1.SandboxClassMicroVM, false),
 			ref:           "other-class",
 			wantResolved:  false,
 			wantProtected: false,
@@ -355,7 +355,7 @@ func TestReconcileProtectsBeforeRecording(t *testing.T) {
 			t.Parallel()
 			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			if tc.ref != "" {
-				wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.ref}
+				wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: tc.ref}
 			}
 			// protectedAtWrite records whether config carried the finalizer
 			// at the moment the pool's status was written.
@@ -363,12 +363,12 @@ func TestReconcileProtectsBeforeRecording(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(wp, tc.config).WithStatusSubresource(wp).
 				WithInterceptorFuncs(interceptor.Funcs{
 					SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
-						sc := &atev1alpha1.SandboxConfig{}
+						sc := &atev1.SandboxConfig{}
 						if err := c.Get(ctx, types.NamespacedName{Name: tc.config.Name}, sc); err != nil {
 							return err
 						}
 						wroteStatus = true
-						protectedAtWrite = controllerutil.ContainsFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+						protectedAtWrite = controllerutil.ContainsFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 						return c.SubResource(sub).Update(ctx, obj, opts...)
 					},
 				}).Build()
@@ -377,18 +377,18 @@ func TestReconcileProtectsBeforeRecording(t *testing.T) {
 				t.Fatalf("Reconcile: %v", err)
 			}
 
-			sc := &atev1alpha1.SandboxConfig{}
+			sc := &atev1.SandboxConfig{}
 			if err := c.Get(t.Context(), types.NamespacedName{Name: tc.config.Name}, sc); err != nil {
 				t.Fatalf("get SandboxConfig: %v", err)
 			}
-			if got := controllerutil.ContainsFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer); got != tc.wantProtected {
+			if got := controllerutil.ContainsFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer); got != tc.wantProtected {
 				t.Errorf("config protected = %v, want %v", got, tc.wantProtected)
 			}
-			got := &atev1alpha1.WorkerPool{}
+			got := &atev1.WorkerPool{}
 			if err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), got); err != nil {
 				t.Fatalf("get WorkerPool: %v", err)
 			}
-			if resolved := statusConfig(got, atev1alpha1.SandboxClassGvisor) == tc.config.Name; resolved != tc.wantResolved {
+			if resolved := statusConfig(got, atev1.SandboxClassGvisor) == tc.config.Name; resolved != tc.wantResolved {
 				t.Errorf("status names config = %v, want %v (status %+v)", resolved, tc.wantResolved, got.Status)
 			}
 			if !wroteStatus {
@@ -415,33 +415,33 @@ func TestReconcileConfigDeletedBeforeClaim(t *testing.T) {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	t0 := metav1.NewTime(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
 	// newDefault is the newest gvisor default, so the pool resolves to it
 	// first. oldDefault is the one it must fall back to.
-	config := func(name string, created metav1.Time, finalizers ...string) *atev1alpha1.SandboxConfig {
-		sc := makeSandboxConfig(name, atev1alpha1.SandboxClassGvisor, true)
+	config := func(name string, created metav1.Time, finalizers ...string) *atev1.SandboxConfig {
+		sc := makeSandboxConfig(name, atev1.SandboxClassGvisor, true)
 		sc.CreationTimestamp = created
 		sc.Finalizers = finalizers
 		return sc
 	}
-	using := func(name string) []atev1alpha1.WorkerPoolSandboxClassStatus {
-		return []atev1alpha1.WorkerPoolSandboxClassStatus{{
-			Name:      atev1alpha1.SandboxClassGvisor,
-			ConfigRef: &atev1alpha1.SandboxConfigReference{Name: name},
+	using := func(name string) []atev1.WorkerPoolSandboxClassStatus {
+		return []atev1.WorkerPoolSandboxClassStatus{{
+			Name:      atev1.SandboxClassGvisor,
+			ConfigRef: &atev1.SandboxConfigReference{Name: name},
 		}}
 	}
 
 	tests := []struct {
 		name string
 		// newDefault is the config the pool resolves to from the cache.
-		newDefault *atev1alpha1.SandboxConfig
+		newDefault *atev1.SandboxConfig
 		// pinned sets the pool's configRef to newDefault.
 		pinned bool
 		// status is the pool's status before the reconcile.
-		status []atev1alpha1.WorkerPoolSandboxClassStatus
+		status []atev1.WorkerPoolSandboxClassStatus
 		// deletedBefore marks newDefault for deletion before the reconcile.
 		deletedBefore bool
 		// deleteDuringWrite deletes newDefault just before the first status
@@ -515,7 +515,7 @@ func TestReconcileConfigDeletedBeforeClaim(t *testing.T) {
 			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			wp.Status.SandboxClasses = tc.status
 			if tc.pinned {
-				wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.newDefault.Name}
+				wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: tc.newDefault.Name}
 			}
 			newDefault := tc.newDefault.DeepCopy()
 			if tc.deletedBefore {
@@ -525,8 +525,8 @@ func TestReconcileConfigDeletedBeforeClaim(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(scheme).
 				WithObjects(wp, newDefault, config("old-default", t0)).
 				WithStatusSubresource(wp).
-				WithIndex(&atev1alpha1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
-					return sandboxConfigsInUse(obj.(*atev1alpha1.WorkerPool))
+				WithIndex(&atev1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
+					return sandboxConfigsInUse(obj.(*atev1.WorkerPool))
 				}).
 				WithInterceptorFuncs(interceptor.Funcs{
 					SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
@@ -553,11 +553,11 @@ func TestReconcileConfigDeletedBeforeClaim(t *testing.T) {
 				if tc.deleteDuringWrite && !deleted {
 					t.Fatalf("status was never written, so nothing was deleted")
 				}
-				got := &atev1alpha1.WorkerPool{}
+				got := &atev1.WorkerPool{}
 				if err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), got); err != nil {
 					t.Fatalf("get WorkerPool: %v", err)
 				}
-				if name := statusConfig(got, atev1alpha1.SandboxClassGvisor); name != want {
+				if name := statusConfig(got, atev1.SandboxClassGvisor); name != want {
 					t.Errorf("after reconcile %d, status names %q, want %q", i+1, name, want)
 				}
 				for _, class := range got.Status.SandboxClasses {
@@ -609,15 +609,15 @@ func TestSandboxConfigReleasedWhenUnused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			for _, name := range tc.configs {
-				createSandboxConfig(t, makeSandboxConfig(name, atev1alpha1.SandboxClassGvisor, false))
+				createSandboxConfig(t, makeSandboxConfig(name, atev1.SandboxClassGvisor, false))
 			}
 			wp := makeWorkerPool(tc.pool, "default", 1, "worker:v1")
-			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.ref}
+			wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: tc.ref}
 			createWorkerPool(t, wp)
 			waitResolvedAndDeployed(t, wp, tc.ref)
 
 			if tc.switchTo != "" {
-				updateWorkerPoolSpec(t, t.Context(), wp, "switch configRef", func(wp *atev1alpha1.WorkerPool) {
+				updateWorkerPoolSpec(t, t.Context(), wp, "switch configRef", func(wp *atev1.WorkerPool) {
 					wp.Spec.SandboxClasses[0].ConfigRef.Name = tc.switchTo
 				})
 				waitResolved(t, wp, tc.switchTo)
@@ -625,15 +625,15 @@ func TestSandboxConfigReleasedWhenUnused(t *testing.T) {
 			}
 			if tc.release != tc.ref {
 				// Never used, so never protected.
-				got := &atev1alpha1.SandboxConfig{}
+				got := &atev1.SandboxConfig{}
 				if err := k8sClient.Get(t.Context(), types.NamespacedName{Name: tc.release}, got); err != nil {
 					t.Fatalf("get SandboxConfig: %v", err)
 				}
-				if controllerutil.ContainsFinalizer(got, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer) {
+				if controllerutil.ContainsFinalizer(got, atev1.SandboxConfigWorkerPoolProtectionFinalizer) {
 					t.Fatalf("unused SandboxConfig %s carries the protection finalizer", tc.release)
 				}
 			}
-			deleteAndWait(t, &atev1alpha1.SandboxConfig{ObjectMeta: metav1.ObjectMeta{Name: tc.release}})
+			deleteAndWait(t, &atev1.SandboxConfig{ObjectMeta: metav1.ObjectMeta{Name: tc.release}})
 		})
 	}
 }
@@ -648,7 +648,7 @@ func TestWorkerPoolConfigRef(t *testing.T) {
 	tests := []struct {
 		name string
 		// config is created before the pool. nil creates none.
-		config *atev1alpha1.SandboxConfig
+		config *atev1.SandboxConfig
 		// deleting marks config for deletion before the pool is created.
 		deleting bool
 		ref      string
@@ -657,31 +657,31 @@ func TestWorkerPoolConfigRef(t *testing.T) {
 		wantReason string
 		// late is created once the pool reports wantReason. The pool must
 		// then resolve to it.
-		late *atev1alpha1.SandboxConfig
+		late *atev1.SandboxConfig
 	}{
 		{
 			name:   "existing config of the same class",
-			config: makeSandboxConfig("ref-ok", atev1alpha1.SandboxClassGvisor, false),
+			config: makeSandboxConfig("ref-ok", atev1.SandboxClassGvisor, false),
 			ref:    "ref-ok",
 		},
 		{
 			name:       "missing config, created later",
 			ref:        "ref-late",
-			wantReason: atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
-			late:       makeSandboxConfig("ref-late", atev1alpha1.SandboxClassGvisor, false),
+			wantReason: atev1.WorkerPoolReasonSandboxConfigNotFound,
+			late:       makeSandboxConfig("ref-late", atev1.SandboxClassGvisor, false),
 		},
 		{
 			name:       "config of another class",
-			config:     makeSandboxConfig("ref-vm", atev1alpha1.SandboxClassMicroVM, false),
+			config:     makeSandboxConfig("ref-vm", atev1.SandboxClassMicroVM, false),
 			ref:        "ref-vm",
-			wantReason: atev1alpha1.WorkerPoolReasonSandboxClassMismatch,
+			wantReason: atev1.WorkerPoolReasonSandboxClassMismatch,
 		},
 		{
 			name:       "config being deleted",
-			config:     makeSandboxConfig("ref-dying", atev1alpha1.SandboxClassGvisor, false),
+			config:     makeSandboxConfig("ref-dying", atev1.SandboxClassGvisor, false),
 			deleting:   true,
 			ref:        "ref-dying",
-			wantReason: atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantReason: atev1.WorkerPoolReasonSandboxConfigDeleting,
 		},
 	}
 	for _, tc := range tests {
@@ -700,7 +700,7 @@ func TestWorkerPoolConfigRef(t *testing.T) {
 				}
 			}
 			wp := makeWorkerPool("test-configref-"+tc.ref, "default", 1, "worker:v1")
-			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.ref}
+			wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: tc.ref}
 			createWorkerPool(t, wp)
 
 			if tc.wantReason == "" {
@@ -708,7 +708,7 @@ func TestWorkerPoolConfigRef(t *testing.T) {
 				return
 			}
 			current := waitUnresolved(t, wp, tc.wantReason)
-			if got := statusConfig(current, atev1alpha1.SandboxClassGvisor); got != "" {
+			if got := statusConfig(current, atev1.SandboxClassGvisor); got != "" {
 				t.Errorf("status.sandboxClasses names %q, want no config for a pool that never resolved", got)
 			}
 			assertNoDeployment(t, wp)
@@ -723,7 +723,7 @@ func TestWorkerPoolConfigRef(t *testing.T) {
 
 // waitResolvedAndDeployed waits for wp to resolve to config, for config to
 // carry the protection finalizer, and for wp's Deployment to exist.
-func waitResolvedAndDeployed(t *testing.T, wp *atev1alpha1.WorkerPool, config string) {
+func waitResolvedAndDeployed(t *testing.T, wp *atev1.WorkerPool, config string) {
 	t.Helper()
 	waitResolved(t, wp, config)
 	waitProtectionFinalizer(t, config, true)
@@ -734,7 +734,7 @@ func waitResolvedAndDeployed(t *testing.T, wp *atev1alpha1.WorkerPool, config st
 }
 
 // waitWarningEvent waits for a Warning event with reason about wp.
-func waitWarningEvent(t *testing.T, wp *atev1alpha1.WorkerPool, reason string) {
+func waitWarningEvent(t *testing.T, wp *atev1.WorkerPool, reason string) {
 	t.Helper()
 	eventually(t, func(ctx context.Context) (bool, error) {
 		var evs eventsv1.EventList
@@ -761,7 +761,7 @@ func TestWorkerPoolUnresolvedKeepsConfigInUse(t *testing.T) {
 		pool string
 		// config is created with testHoldFinalizer and named by the pool's
 		// configRef. nil leaves the pool on the class default.
-		config *atev1alpha1.SandboxConfig
+		config *atev1.SandboxConfig
 		// missingRef, if set, breaks resolution by pointing configRef at a
 		// config that does not exist, in the same update that scales the
 		// pool. Otherwise config is deleted and the pool scaled afterwards.
@@ -774,14 +774,14 @@ func TestWorkerPoolUnresolvedKeepsConfigInUse(t *testing.T) {
 			pool:       "test-unresolved-keeps",
 			missingRef: "never-created",
 			replicas:   5,
-			wantReason: atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
+			wantReason: atev1.WorkerPoolReasonSandboxConfigNotFound,
 		},
 		{
 			name:       "config in use marked for deletion",
 			pool:       "test-ref-deleting-in-use",
-			config:     makeSandboxConfig("dying-in-use", atev1alpha1.SandboxClassGvisor, false),
+			config:     makeSandboxConfig("dying-in-use", atev1.SandboxClassGvisor, false),
 			replicas:   3,
-			wantReason: atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantReason: atev1.WorkerPoolReasonSandboxConfigDeleting,
 		},
 	}
 	for _, tc := range tests {
@@ -795,28 +795,28 @@ func TestWorkerPoolUnresolvedKeepsConfigInUse(t *testing.T) {
 				createSandboxConfig(t, tc.config)
 				t.Cleanup(func() { removeFinalizer(t, tc.config.Name, testHoldFinalizer) })
 				inUse = tc.config.Name
-				wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: inUse}
+				wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: inUse}
 			}
 			createWorkerPool(t, wp)
 			waitResolvedAndDeployed(t, wp, inUse)
 
 			if tc.missingRef != "" {
-				updateWorkerPoolSpec(t, ctx, wp, "point WorkerPool at a missing SandboxConfig and scale it", func(wp *atev1alpha1.WorkerPool) {
+				updateWorkerPoolSpec(t, ctx, wp, "point WorkerPool at a missing SandboxConfig and scale it", func(wp *atev1.WorkerPool) {
 					wp.Spec.Replicas = tc.replicas
-					wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.missingRef}
+					wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: tc.missingRef}
 				})
 			} else if err := k8sClient.Delete(ctx, tc.config); err != nil {
 				t.Fatalf("delete SandboxConfig: %v", err)
 			}
 			current := waitUnresolved(t, wp, tc.wantReason)
-			if got := statusConfig(current, atev1alpha1.SandboxClassGvisor); got != inUse {
+			if got := statusConfig(current, atev1.SandboxClassGvisor); got != inUse {
 				t.Errorf("status.sandboxClasses names %q, want the config in use %q", got, inUse)
 			}
 			waitWarningEvent(t, wp, tc.wantReason)
 			waitProtectionFinalizer(t, inUse, true)
 
 			if tc.missingRef == "" {
-				updateWorkerPoolSpec(t, ctx, wp, "scale WorkerPool", func(wp *atev1alpha1.WorkerPool) {
+				updateWorkerPoolSpec(t, ctx, wp, "scale WorkerPool", func(wp *atev1.WorkerPool) {
 					wp.Spec.Replicas = tc.replicas
 				})
 			}
@@ -826,7 +826,7 @@ func TestWorkerPoolUnresolvedKeepsConfigInUse(t *testing.T) {
 }
 
 // waitDeploymentReplicas waits for wp's Deployment to ask for replicas pods.
-func waitDeploymentReplicas(t *testing.T, wp *atev1alpha1.WorkerPool, replicas int32) {
+func waitDeploymentReplicas(t *testing.T, wp *atev1.WorkerPool, replicas int32) {
 	t.Helper()
 	eventually(t, func(ctx context.Context) (bool, error) {
 		dep, err := getDeployment(ctx, wp)
@@ -868,18 +868,18 @@ func TestSandboxConfigInUseProtection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			sc := makeSandboxConfig(tc.config, atev1alpha1.SandboxClassGvisor, false)
+			sc := makeSandboxConfig(tc.config, atev1.SandboxClassGvisor, false)
 			createSandboxConfig(t, sc)
-			sentinel := makeSandboxConfig(tc.sentinel, atev1alpha1.SandboxClassGvisor, false)
+			sentinel := makeSandboxConfig(tc.sentinel, atev1.SandboxClassGvisor, false)
 			createSandboxConfig(t, sentinel)
-			newPool := func(name, config string) *atev1alpha1.WorkerPool {
+			newPool := func(name, config string) *atev1.WorkerPool {
 				wp := makeWorkerPool(name, "default", 1, "worker:v1")
-				wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: config}
+				wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: config}
 				createWorkerPool(t, wp)
 				waitResolved(t, wp, config)
 				return wp
 			}
-			var users []*atev1alpha1.WorkerPool
+			var users []*atev1.WorkerPool
 			for _, name := range tc.users {
 				users = append(users, newPool(name, sc.Name))
 			}
@@ -887,7 +887,7 @@ func TestSandboxConfigInUseProtection(t *testing.T) {
 			waitProtectionFinalizer(t, sc.Name, true)
 			waitProtectionFinalizer(t, sentinel.Name, true)
 
-			for _, c := range []*atev1alpha1.SandboxConfig{sc, sentinel} {
+			for _, c := range []*atev1.SandboxConfig{sc, sentinel} {
 				if err := k8sClient.Delete(ctx, c); err != nil {
 					t.Fatalf("delete SandboxConfig %s: %v", c.Name, err)
 				}
@@ -900,7 +900,7 @@ func TestSandboxConfigInUseProtection(t *testing.T) {
 			waitGone(t, sentinel)
 			// The shared config has been reconciled for every other user's
 			// deletion. It must stay for the last one.
-			got := &atev1alpha1.SandboxConfig{}
+			got := &atev1.SandboxConfig{}
 			if err := k8sClient.Get(ctx, types.NamespacedName{Name: sc.Name}, got); err != nil {
 				t.Fatalf("SandboxConfig still used by %s: get: %v", last.Name, err)
 			}
@@ -920,19 +920,19 @@ func TestSandboxConfigInUseProtection(t *testing.T) {
 // defaults and checks the pool's resolution afterwards. It is not parallel
 // because it owns the microvm class default.
 func TestWorkerPoolDefaultNewestWins(t *testing.T) {
-	mvdefA := makeSandboxConfig("mvdef-a", atev1alpha1.SandboxClassMicroVM, true)
-	mvdefB := makeSandboxConfig("mvdef-b", atev1alpha1.SandboxClassMicroVM, true)
+	mvdefA := makeSandboxConfig("mvdef-a", atev1.SandboxClassMicroVM, true)
+	mvdefB := makeSandboxConfig("mvdef-b", atev1.SandboxClassMicroVM, true)
 	// The steps create the configs, but they outlive each step.
 	deleteOnCleanup(t, mvdefA)
 	deleteOnCleanup(t, mvdefB)
-	create := func(t *testing.T, sc *atev1alpha1.SandboxConfig) {
+	create := func(t *testing.T, sc *atev1.SandboxConfig) {
 		t.Helper()
 		if err := k8sClient.Create(t.Context(), sc); err != nil {
 			t.Fatalf("create SandboxConfig %s: %v", sc.Name, err)
 		}
 	}
 	wp := makeWorkerPool("test-default-newest", "default", 1, "worker:v1")
-	wp.Spec.SandboxClasses[0].Name = atev1alpha1.SandboxClassMicroVM
+	wp.Spec.SandboxClasses[0].Name = atev1.SandboxClassMicroVM
 	createWorkerPool(t, wp)
 
 	steps := []struct {
@@ -947,7 +947,7 @@ func TestWorkerPoolDefaultNewestWins(t *testing.T) {
 	}{
 		{
 			name:       "no class default",
-			wantReason: atev1alpha1.WorkerPoolReasonDefaultConfigNotFound,
+			wantReason: atev1.WorkerPoolReasonDefaultConfigNotFound,
 		},
 		{
 			name:       "a class default appears",
@@ -978,17 +978,17 @@ func TestWorkerPoolDefaultNewestWins(t *testing.T) {
 				}
 			},
 			wantConfig: "mvdef-b",
-			wantReason: atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantReason: atev1.WorkerPoolReasonSandboxConfigDeleting,
 		},
 		{
 			name: "no default left: the config in use is kept",
 			act: func(t *testing.T) {
 				err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-					sc := &atev1alpha1.SandboxConfig{}
+					sc := &atev1.SandboxConfig{}
 					if err := k8sClient.Get(t.Context(), types.NamespacedName{Name: "mvdef-b"}, sc); err != nil {
 						return err
 					}
-					delete(sc.Annotations, atev1alpha1.SandboxConfigClassDefaultAnnotation)
+					delete(sc.Annotations, atev1.SandboxConfigClassDefaultAnnotation)
 					return k8sClient.Update(t.Context(), sc)
 				})
 				if err != nil {
@@ -996,7 +996,7 @@ func TestWorkerPoolDefaultNewestWins(t *testing.T) {
 				}
 			},
 			wantConfig: "mvdef-b",
-			wantReason: atev1alpha1.WorkerPoolReasonDefaultConfigNotFound,
+			wantReason: atev1.WorkerPoolReasonDefaultConfigNotFound,
 		},
 	}
 	for _, step := range steps {
@@ -1010,7 +1010,7 @@ func TestWorkerPoolDefaultNewestWins(t *testing.T) {
 				return
 			}
 			current := waitUnresolved(t, wp, step.wantReason)
-			if got := statusConfig(current, atev1alpha1.SandboxClassMicroVM); got != step.wantConfig {
+			if got := statusConfig(current, atev1.SandboxClassMicroVM); got != step.wantConfig {
 				t.Errorf("status.sandboxClasses names %q, want %q", got, step.wantConfig)
 			}
 			waitWarningEvent(t, wp, step.wantReason)
@@ -1031,64 +1031,64 @@ func TestWorkerPoolDefaultNewestWins(t *testing.T) {
 // event can concern a WorkerPool.
 func TestWorkerPoolMayUseSandboxConfig(t *testing.T) {
 	t.Parallel()
-	sc := makeSandboxConfig("sc", atev1alpha1.SandboxClassGvisor, false)
-	gvisor := atev1alpha1.WorkerPoolSandboxClass{Name: atev1alpha1.SandboxClassGvisor}
-	microvm := atev1alpha1.WorkerPoolSandboxClass{Name: atev1alpha1.SandboxClassMicroVM}
-	withRef := func(e atev1alpha1.WorkerPoolSandboxClass, name string) atev1alpha1.WorkerPoolSandboxClass {
-		e.ConfigRef = &atev1alpha1.SandboxConfigReference{Name: name}
+	sc := makeSandboxConfig("sc", atev1.SandboxClassGvisor, false)
+	gvisor := atev1.WorkerPoolSandboxClass{Name: atev1.SandboxClassGvisor}
+	microvm := atev1.WorkerPoolSandboxClass{Name: atev1.SandboxClassMicroVM}
+	withRef := func(e atev1.WorkerPoolSandboxClass, name string) atev1.WorkerPoolSandboxClass {
+		e.ConfigRef = &atev1.SandboxConfigReference{Name: name}
 		return e
 	}
-	using := func(name string) atev1alpha1.WorkerPoolSandboxClassStatus {
-		return atev1alpha1.WorkerPoolSandboxClassStatus{Name: atev1alpha1.SandboxClassMicroVM, ConfigRef: &atev1alpha1.SandboxConfigReference{Name: name}}
+	using := func(name string) atev1.WorkerPoolSandboxClassStatus {
+		return atev1.WorkerPoolSandboxClassStatus{Name: atev1.SandboxClassMicroVM, ConfigRef: &atev1.SandboxConfigReference{Name: name}}
 	}
 
 	tests := []struct {
 		name   string
-		spec   []atev1alpha1.WorkerPoolSandboxClass
-		status []atev1alpha1.WorkerPoolSandboxClassStatus
+		spec   []atev1.WorkerPoolSandboxClass
+		status []atev1.WorkerPoolSandboxClassStatus
 		want   bool
 	}{
 		{
 			name: "runs the config's class",
-			spec: []atev1alpha1.WorkerPoolSandboxClass{gvisor},
+			spec: []atev1.WorkerPoolSandboxClass{gvisor},
 			want: true,
 		},
 		{
 			name: "runs the config's class with another ref",
-			spec: []atev1alpha1.WorkerPoolSandboxClass{withRef(gvisor, "other")},
+			spec: []atev1.WorkerPoolSandboxClass{withRef(gvisor, "other")},
 			want: true,
 		},
 		{
 			name: "spec names the config",
-			spec: []atev1alpha1.WorkerPoolSandboxClass{withRef(microvm, "sc")},
+			spec: []atev1.WorkerPoolSandboxClass{withRef(microvm, "sc")},
 			want: true,
 		},
 		{
 			name:   "status names the config",
-			spec:   []atev1alpha1.WorkerPoolSandboxClass{microvm},
-			status: []atev1alpha1.WorkerPoolSandboxClassStatus{using("sc")},
+			spec:   []atev1.WorkerPoolSandboxClass{microvm},
+			status: []atev1.WorkerPoolSandboxClassStatus{using("sc")},
 			want:   true,
 		},
 		{
 			name: "status claims the config",
-			spec: []atev1alpha1.WorkerPoolSandboxClass{microvm},
-			status: []atev1alpha1.WorkerPoolSandboxClassStatus{{
-				Name:             atev1alpha1.SandboxClassMicroVM,
-				ConfigRef:        &atev1alpha1.SandboxConfigReference{Name: "other"},
-				PendingConfigRef: &atev1alpha1.SandboxConfigReference{Name: "sc"},
+			spec: []atev1.WorkerPoolSandboxClass{microvm},
+			status: []atev1.WorkerPoolSandboxClassStatus{{
+				Name:             atev1.SandboxClassMicroVM,
+				ConfigRef:        &atev1.SandboxConfigReference{Name: "other"},
+				PendingConfigRef: &atev1.SandboxConfigReference{Name: "sc"},
 			}},
 			want: true,
 		},
 		{
 			name:   "another class, another config",
-			spec:   []atev1alpha1.WorkerPoolSandboxClass{withRef(microvm, "other")},
-			status: []atev1alpha1.WorkerPoolSandboxClassStatus{using("other")},
+			spec:   []atev1.WorkerPoolSandboxClass{withRef(microvm, "other")},
+			status: []atev1.WorkerPoolSandboxClassStatus{using("other")},
 			want:   false,
 		},
 		{
 			name:   "another class, no config in use",
-			spec:   []atev1alpha1.WorkerPoolSandboxClass{withRef(microvm, "other")},
-			status: []atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassMicroVM}},
+			spec:   []atev1.WorkerPoolSandboxClass{withRef(microvm, "other")},
+			status: []atev1.WorkerPoolSandboxClassStatus{{Name: atev1.SandboxClassMicroVM}},
 			want:   false,
 		},
 		{
@@ -1113,13 +1113,13 @@ func TestWorkerPoolMayUseSandboxConfig(t *testing.T) {
 func TestWorkerPoolsForSandboxConfig(t *testing.T) {
 	t.Parallel()
 	scheme := runtime.NewScheme()
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
-	gvisor := []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}}
-	microvm := []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassMicroVM}}
-	microvmRef := []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassMicroVM, ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "sc"}}}
-	usingSC := []atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassMicroVM, ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "sc"}}}
+	gvisor := []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassGvisor}}
+	microvm := []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassMicroVM}}
+	microvmRef := []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassMicroVM, ConfigRef: &atev1.SandboxConfigReference{Name: "sc"}}}
+	usingSC := []atev1.WorkerPoolSandboxClassStatus{{Name: atev1.SandboxClassMicroVM, ConfigRef: &atev1.SandboxConfigReference{Name: "sc"}}}
 	// newReconciler returns a reconciler whose List fails with listErr, if set.
 	newReconciler := func(listErr error) *WorkerPoolReconciler {
 		return &WorkerPoolReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(
@@ -1149,12 +1149,12 @@ func TestWorkerPoolsForSandboxConfig(t *testing.T) {
 	}{
 		{
 			name: "gvisor config: its class and the pools naming it",
-			obj:  makeSandboxConfig("sc", atev1alpha1.SandboxClassGvisor, false),
+			obj:  makeSandboxConfig("sc", atev1.SandboxClassGvisor, false),
 			want: []reconcile.Request{req("a", "gv"), req("b", "vm-ref"), req("b", "vm-status")},
 		},
 		{
 			name: "microvm config: every microvm pool",
-			obj:  makeSandboxConfig("other", atev1alpha1.SandboxClassMicroVM, false),
+			obj:  makeSandboxConfig("other", atev1.SandboxClassMicroVM, false),
 			want: []reconcile.Request{req("b", "vm"), req("b", "vm-ref"), req("b", "vm-status")},
 		},
 		{
@@ -1163,7 +1163,7 @@ func TestWorkerPoolsForSandboxConfig(t *testing.T) {
 		},
 		{
 			name:    "list fails: nothing",
-			obj:     makeSandboxConfig("sc", atev1alpha1.SandboxClassGvisor, false),
+			obj:     makeSandboxConfig("sc", atev1.SandboxClassGvisor, false),
 			listErr: errors.New("list failed"),
 		},
 	}
@@ -1187,27 +1187,27 @@ func TestWorkerPoolsForSandboxConfig(t *testing.T) {
 func TestRecordSandboxConfigEvents(t *testing.T) {
 	t.Parallel()
 	failed := metav1.Condition{
-		Type:    atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+		Type:    atev1.WorkerPoolSandboxClassConditionResolved,
 		Status:  metav1.ConditionFalse,
-		Reason:  atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
+		Reason:  atev1.WorkerPoolReasonSandboxConfigNotFound,
 		Message: `SandboxConfig "x" not found`,
 	}
 	resolved := func(config string) metav1.Condition {
 		return metav1.Condition{
-			Type:    atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+			Type:    atev1.WorkerPoolSandboxClassConditionResolved,
 			Status:  metav1.ConditionTrue,
-			Reason:  atev1alpha1.WorkerPoolReasonResolved,
+			Reason:  atev1.WorkerPoolReasonResolved,
 			Message: fmt.Sprintf("resolved to SandboxConfig %q", config),
 		}
 	}
 	// class builds a gvisor status entry using config ("" for none) with
 	// cond.
-	class := func(config string, cond metav1.Condition) []atev1alpha1.WorkerPoolSandboxClassStatus {
-		status := atev1alpha1.WorkerPoolSandboxClassStatus{Name: atev1alpha1.SandboxClassGvisor, Conditions: []metav1.Condition{cond}}
+	class := func(config string, cond metav1.Condition) []atev1.WorkerPoolSandboxClassStatus {
+		status := atev1.WorkerPoolSandboxClassStatus{Name: atev1.SandboxClassGvisor, Conditions: []metav1.Condition{cond}}
 		if config != "" {
-			status.ConfigRef = &atev1alpha1.SandboxConfigReference{Name: config}
+			status.ConfigRef = &atev1.SandboxConfigReference{Name: config}
 		}
-		return []atev1alpha1.WorkerPoolSandboxClassStatus{status}
+		return []atev1.WorkerPoolSandboxClassStatus{status}
 	}
 	with := func(reason, message string) metav1.Condition {
 		c := failed
@@ -1220,8 +1220,8 @@ func TestRecordSandboxConfigEvents(t *testing.T) {
 	tests := []struct {
 		name string
 		// prev is the pool's status before the reconcile.
-		prev    []atev1alpha1.WorkerPoolSandboxClassStatus
-		classes []atev1alpha1.WorkerPoolSandboxClassStatus
+		prev    []atev1.WorkerPoolSandboxClassStatus
+		classes []atev1.WorkerPoolSandboxClassStatus
 		want    []string
 	}{
 		{
@@ -1269,7 +1269,7 @@ func TestRecordSandboxConfigEvents(t *testing.T) {
 		},
 		{
 			name:    "another reason",
-			prev:    class("", with(atev1alpha1.WorkerPoolReasonSandboxClassMismatch, failed.Message)),
+			prev:    class("", with(atev1.WorkerPoolReasonSandboxClassMismatch, failed.Message)),
 			classes: class("", failed),
 			want:    []string{warning},
 		},
@@ -1314,7 +1314,7 @@ func TestReconcileReportsSwitchOnceWritten(t *testing.T) {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatalf("add client-go scheme: %v", err)
 	}
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	tests := []struct {
@@ -1331,19 +1331,19 @@ func TestReconcileReportsSwitchOnceWritten(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			wp := makeWorkerPoolClasses("default", "pool",
-				[]atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "y"}}},
-				[]atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "x"}}})
+				[]atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassGvisor, ConfigRef: &atev1.SandboxConfigReference{Name: "y"}}},
+				[]atev1.WorkerPoolSandboxClassStatus{{Name: atev1.SandboxClassGvisor, ConfigRef: &atev1.SandboxConfigReference{Name: "x"}}})
 			objs := []client.Object{wp,
-				makeSandboxConfig("x", atev1alpha1.SandboxClassGvisor, false),
-				makeSandboxConfig("y", atev1alpha1.SandboxClassGvisor, false),
+				makeSandboxConfig("x", atev1.SandboxClassGvisor, false),
+				makeSandboxConfig("y", atev1.SandboxClassGvisor, false),
 			}
 			rejected := 0
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(wp).
 				WithInterceptorFuncs(interceptor.Funcs{
 					SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
-						if pool, ok := obj.(*atev1alpha1.WorkerPool); ok && rejected < tc.rejected && statusConfig(pool, atev1alpha1.SandboxClassGvisor) == "y" {
+						if pool, ok := obj.(*atev1.WorkerPool); ok && rejected < tc.rejected && statusConfig(pool, atev1.SandboxClassGvisor) == "y" {
 							rejected++
-							return k8errors.NewConflict(atev1alpha1.GroupVersion.WithResource("workerpools").GroupResource(), pool.Name, errors.New("stale"))
+							return k8errors.NewConflict(atev1.GroupVersion.WithResource("workerpools").GroupResource(), pool.Name, errors.New("stale"))
 						}
 						return c.SubResource(sub).Update(ctx, obj, opts...)
 					},
@@ -1371,11 +1371,11 @@ func TestReconcileReportsSwitchOnceWritten(t *testing.T) {
 			if !slices.Equal(got, want) {
 				t.Errorf("events = %q, want %q", got, want)
 			}
-			current := &atev1alpha1.WorkerPool{}
+			current := &atev1.WorkerPool{}
 			if err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), current); err != nil {
 				t.Fatalf("get WorkerPool: %v", err)
 			}
-			if name := statusConfig(current, atev1alpha1.SandboxClassGvisor); name != "y" {
+			if name := statusConfig(current, atev1.SandboxClassGvisor); name != "y" {
 				t.Errorf("status names %q, want %q", name, "y")
 			}
 		})
@@ -1390,16 +1390,16 @@ func TestResolveSandboxClasses(t *testing.T) {
 	t.Parallel()
 	const generation = 3
 	earlier := metav1.NewTime(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
-	configs := []atev1alpha1.SandboxConfig{*makeSandboxConfig("def", atev1alpha1.SandboxClassGvisor, true)}
-	ref := func(name string) *atev1alpha1.SandboxConfigReference {
+	configs := []atev1.SandboxConfig{*makeSandboxConfig("def", atev1.SandboxClassGvisor, true)}
+	ref := func(name string) *atev1.SandboxConfigReference {
 		if name == "" {
 			return nil
 		}
-		return &atev1alpha1.SandboxConfigReference{Name: name}
+		return &atev1.SandboxConfigReference{Name: name}
 	}
 	cond := func(status metav1.ConditionStatus, reason, message string, gen int64, at metav1.Time) metav1.Condition {
 		return metav1.Condition{
-			Type:               atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+			Type:               atev1.WorkerPoolSandboxClassConditionResolved,
 			Status:             status,
 			Reason:             reason,
 			Message:            message,
@@ -1408,10 +1408,10 @@ func TestResolveSandboxClasses(t *testing.T) {
 		}
 	}
 	resolvedDef := func(gen int64, at metav1.Time) metav1.Condition {
-		return cond(metav1.ConditionTrue, atev1alpha1.WorkerPoolReasonResolved, `resolved to SandboxConfig "def"`, gen, at)
+		return cond(metav1.ConditionTrue, atev1.WorkerPoolReasonResolved, `resolved to SandboxConfig "def"`, gen, at)
 	}
 	notFound := func(message string, gen int64, at metav1.Time) metav1.Condition {
-		return cond(metav1.ConditionFalse, atev1alpha1.WorkerPoolReasonSandboxConfigNotFound, message, gen, at)
+		return cond(metav1.ConditionFalse, atev1.WorkerPoolReasonSandboxConfigNotFound, message, gen, at)
 	}
 	// now stands for a lastTransitionTime set during the call.
 	var now metav1.Time
@@ -1420,32 +1420,32 @@ func TestResolveSandboxClasses(t *testing.T) {
 		name string
 		// specRef is the pool's configRef. "" follows the class default.
 		specRef string
-		prev    []atev1alpha1.WorkerPoolSandboxClassStatus
-		want    []atev1alpha1.WorkerPoolSandboxClassStatus
+		prev    []atev1.WorkerPoolSandboxClassStatus
+		want    []atev1.WorkerPoolSandboxClassStatus
 		// wantResolved is the second return value.
 		wantResolved bool
 	}{
 		{
 			name:         "first resolve",
-			want:         []atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: ref("def"), Conditions: []metav1.Condition{resolvedDef(generation, now)}}},
+			want:         []atev1.WorkerPoolSandboxClassStatus{{Name: atev1.SandboxClassGvisor, ConfigRef: ref("def"), Conditions: []metav1.Condition{resolvedDef(generation, now)}}},
 			wantResolved: true,
 		},
 		{
 			name:         "still resolved keeps lastTransitionTime",
-			prev:         []atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: ref("def"), Conditions: []metav1.Condition{resolvedDef(generation-1, earlier)}}},
-			want:         []atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: ref("def"), Conditions: []metav1.Condition{resolvedDef(generation, earlier)}}},
+			prev:         []atev1.WorkerPoolSandboxClassStatus{{Name: atev1.SandboxClassGvisor, ConfigRef: ref("def"), Conditions: []metav1.Condition{resolvedDef(generation-1, earlier)}}},
+			want:         []atev1.WorkerPoolSandboxClassStatus{{Name: atev1.SandboxClassGvisor, ConfigRef: ref("def"), Conditions: []metav1.Condition{resolvedDef(generation, earlier)}}},
 			wantResolved: true,
 		},
 		{
 			name:    "never resolved records no config",
 			specRef: "missing",
-			want:    []atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassGvisor, Conditions: []metav1.Condition{notFound(`SandboxConfig "missing" not found`, generation, now)}}},
+			want:    []atev1.WorkerPoolSandboxClassStatus{{Name: atev1.SandboxClassGvisor, Conditions: []metav1.Condition{notFound(`SandboxConfig "missing" not found`, generation, now)}}},
 		},
 		{
 			name:    "stops resolving keeps the config and moves lastTransitionTime",
 			specRef: "missing",
-			prev:    []atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: ref("def"), Conditions: []metav1.Condition{resolvedDef(generation-1, earlier)}}},
-			want:    []atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: ref("def"), Conditions: []metav1.Condition{notFound(`SandboxConfig "missing" not found; keeping "def"`, generation, now)}}},
+			prev:    []atev1.WorkerPoolSandboxClassStatus{{Name: atev1.SandboxClassGvisor, ConfigRef: ref("def"), Conditions: []metav1.Condition{resolvedDef(generation-1, earlier)}}},
+			want:    []atev1.WorkerPoolSandboxClassStatus{{Name: atev1.SandboxClassGvisor, ConfigRef: ref("def"), Conditions: []metav1.Condition{notFound(`SandboxConfig "missing" not found; keeping "def"`, generation, now)}}},
 		},
 	}
 	for _, tc := range tests {
@@ -1481,21 +1481,21 @@ func TestResolveSandboxClasses(t *testing.T) {
 // class switches.
 func TestClaimSandboxConfigs(t *testing.T) {
 	t.Parallel()
-	ref := func(name string) *atev1alpha1.SandboxConfigReference {
+	ref := func(name string) *atev1.SandboxConfigReference {
 		if name == "" {
 			return nil
 		}
-		return &atev1alpha1.SandboxConfigReference{Name: name}
+		return &atev1.SandboxConfigReference{Name: name}
 	}
 	resolved := metav1.Condition{
-		Type:   atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+		Type:   atev1.WorkerPoolSandboxClassConditionResolved,
 		Status: metav1.ConditionTrue,
-		Reason: atev1alpha1.WorkerPoolReasonResolved,
+		Reason: atev1.WorkerPoolReasonResolved,
 	}
 	// status builds the pool's single gvisor status entry.
-	status := func(configRef, pending string, conds ...metav1.Condition) []atev1alpha1.WorkerPoolSandboxClassStatus {
-		return []atev1alpha1.WorkerPoolSandboxClassStatus{{
-			Name:             atev1alpha1.SandboxClassGvisor,
+	status := func(configRef, pending string, conds ...metav1.Condition) []atev1.WorkerPoolSandboxClassStatus {
+		return []atev1.WorkerPoolSandboxClassStatus{{
+			Name:             atev1.SandboxClassGvisor,
 			ConfigRef:        ref(configRef),
 			PendingConfigRef: ref(pending),
 			Conditions:       conds,
@@ -1504,10 +1504,10 @@ func TestClaimSandboxConfigs(t *testing.T) {
 
 	tests := []struct {
 		name string
-		prev []atev1alpha1.WorkerPoolSandboxClassStatus
+		prev []atev1.WorkerPoolSandboxClassStatus
 		// classes is the status resolveSandboxClasses built.
-		classes []atev1alpha1.WorkerPoolSandboxClassStatus
-		want    []atev1alpha1.WorkerPoolSandboxClassStatus
+		classes []atev1.WorkerPoolSandboxClassStatus
+		want    []atev1.WorkerPoolSandboxClassStatus
 	}{
 		{
 			name:    "same config: no claim",
@@ -1571,33 +1571,33 @@ func TestConfirmSandboxConfigSwitch(t *testing.T) {
 	const generation = 3
 	now := metav1.Now()
 	resolvedX := metav1.Condition{
-		Type:               atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+		Type:               atev1.WorkerPoolSandboxClassConditionResolved,
 		Status:             metav1.ConditionTrue,
-		Reason:             atev1alpha1.WorkerPoolReasonResolved,
+		Reason:             atev1.WorkerPoolReasonResolved,
 		Message:            `resolved to SandboxConfig "x"`,
 		ObservedGeneration: generation,
 	}
 	// class is the entry resolveSandboxClasses built: switching to x.
-	class := atev1alpha1.WorkerPoolSandboxClassStatus{
-		Name:       atev1alpha1.SandboxClassGvisor,
-		ConfigRef:  &atev1alpha1.SandboxConfigReference{Name: "x"},
+	class := atev1.WorkerPoolSandboxClassStatus{
+		Name:       atev1.SandboxClassGvisor,
+		ConfigRef:  &atev1.SandboxConfigReference{Name: "x"},
 		Conditions: []metav1.Condition{resolvedX},
 	}
-	onY := []atev1alpha1.WorkerPoolSandboxClassStatus{{
-		Name:             atev1alpha1.SandboxClassGvisor,
-		ConfigRef:        &atev1alpha1.SandboxConfigReference{Name: "y"},
-		PendingConfigRef: &atev1alpha1.SandboxConfigReference{Name: "x"},
+	onY := []atev1.WorkerPoolSandboxClassStatus{{
+		Name:             atev1.SandboxClassGvisor,
+		ConfigRef:        &atev1.SandboxConfigReference{Name: "y"},
+		PendingConfigRef: &atev1.SandboxConfigReference{Name: "x"},
 	}}
-	x := makeSandboxConfig("x", atev1alpha1.SandboxClassGvisor, false)
+	x := makeSandboxConfig("x", atev1.SandboxClassGvisor, false)
 	deletingX := x.DeepCopy()
 	deletingX.DeletionTimestamp = &now
-	configs := []atev1alpha1.SandboxConfig{*makeSandboxConfig("y", atev1alpha1.SandboxClassGvisor, false), *x}
+	configs := []atev1.SandboxConfig{*makeSandboxConfig("y", atev1.SandboxClassGvisor, false), *x}
 
 	tests := []struct {
 		name string
-		prev []atev1alpha1.WorkerPoolSandboxClassStatus
+		prev []atev1.WorkerPoolSandboxClassStatus
 		// live is x as read from the API server. nil means not found.
-		live *atev1alpha1.SandboxConfig
+		live *atev1.SandboxConfig
 		// wantConfig is the config the class must end up using.
 		wantConfig  string
 		wantReason  string
@@ -1608,14 +1608,14 @@ func TestConfirmSandboxConfigSwitch(t *testing.T) {
 			prev:        onY,
 			live:        x,
 			wantConfig:  "x",
-			wantReason:  atev1alpha1.WorkerPoolReasonResolved,
+			wantReason:  atev1.WorkerPoolReasonResolved,
 			wantMessage: `resolved to SandboxConfig "x"`,
 		},
 		{
 			name:        "not found: keeps the config in use",
 			prev:        onY,
 			wantConfig:  "y",
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigNotFound,
 			wantMessage: `SandboxConfig "x" not found; keeping "y"`,
 		},
 		{
@@ -1623,21 +1623,21 @@ func TestConfirmSandboxConfigSwitch(t *testing.T) {
 			prev:        onY,
 			live:        deletingX,
 			wantConfig:  "y",
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `SandboxConfig "x" is being deleted; keeping "y"`,
 		},
 		{
 			name:        "now of another class: keeps the config in use",
 			prev:        onY,
-			live:        makeSandboxConfig("x", atev1alpha1.SandboxClassMicroVM, false),
+			live:        makeSandboxConfig("x", atev1.SandboxClassMicroVM, false),
 			wantConfig:  "y",
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxClassMismatch,
+			wantReason:  atev1.WorkerPoolReasonSandboxClassMismatch,
 			wantMessage: `SandboxConfig "x" is for sandbox class "microvm", not "gvisor"; keeping "y"`,
 		},
 		{
 			name:        "being deleted, new pool: no config",
 			live:        deletingX,
-			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantReason:  atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `SandboxConfig "x" is being deleted`,
 		},
 	}
@@ -1648,13 +1648,13 @@ func TestConfirmSandboxConfigSwitch(t *testing.T) {
 			wp.Generation = generation
 			wp.Status.SandboxClasses = tc.prev
 			got := confirmSandboxConfigSwitch(wp, *class.DeepCopy(), tc.live, configs)
-			if name := ptr.Deref(got.ConfigRef, atev1alpha1.SandboxConfigReference{}).Name; name != tc.wantConfig {
+			if name := ptr.Deref(got.ConfigRef, atev1.SandboxConfigReference{}).Name; name != tc.wantConfig {
 				t.Errorf("configRef = %q, want %q", name, tc.wantConfig)
 			}
 			if got.PendingConfigRef != nil {
 				t.Errorf("pendingConfigRef = %q, want none", got.PendingConfigRef.Name)
 			}
-			cond := meta.FindStatusCondition(got.Conditions, atev1alpha1.WorkerPoolSandboxClassConditionResolved)
+			cond := meta.FindStatusCondition(got.Conditions, atev1.WorkerPoolSandboxClassConditionResolved)
 			if cond == nil {
 				t.Fatalf("no Resolved condition in %+v", got.Conditions)
 			}
@@ -1677,20 +1677,20 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatalf("add client-go scheme: %v", err)
 	}
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	now := metav1.Now()
-	protected := func(sc *atev1alpha1.SandboxConfig) *atev1alpha1.SandboxConfig {
-		controllerutil.AddFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+	protected := func(sc *atev1.SandboxConfig) *atev1.SandboxConfig {
+		controllerutil.AddFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 		return sc
 	}
-	deleting := func(sc *atev1alpha1.SandboxConfig) *atev1alpha1.SandboxConfig {
+	deleting := func(sc *atev1.SandboxConfig) *atev1.SandboxConfig {
 		sc.DeletionTimestamp = &now
 		return sc
 	}
-	x := func() *atev1alpha1.SandboxConfig {
-		return protected(makeSandboxConfig("x", atev1alpha1.SandboxClassGvisor, false))
+	x := func() *atev1.SandboxConfig {
+		return protected(makeSandboxConfig("x", atev1.SandboxClassGvisor, false))
 	}
 
 	tests := []struct {
@@ -1699,7 +1699,7 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 		// "" for a new pool.
 		inUse string
 		// liveX is x on the API server. nil means it is gone.
-		liveX *atev1alpha1.SandboxConfig
+		liveX *atev1.SandboxConfig
 		// wantRead is whether x must be read from the API server.
 		wantRead       bool
 		wantConfig     string
@@ -1712,7 +1712,7 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 			liveX:          x(),
 			wantRead:       true,
 			wantConfig:     "x",
-			wantReason:     atev1alpha1.WorkerPoolReasonResolved,
+			wantReason:     atev1.WorkerPoolReasonResolved,
 			wantDeployment: true,
 		},
 		{
@@ -1721,7 +1721,7 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 			liveX:          deleting(x()),
 			wantRead:       true,
 			wantConfig:     "y",
-			wantReason:     atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantReason:     atev1.WorkerPoolReasonSandboxConfigDeleting,
 			wantDeployment: true,
 		},
 		{
@@ -1729,7 +1729,7 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 			inUse:          "y",
 			wantRead:       true,
 			wantConfig:     "y",
-			wantReason:     atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
+			wantReason:     atev1.WorkerPoolReasonSandboxConfigNotFound,
 			wantDeployment: true,
 		},
 		{
@@ -1737,21 +1737,21 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 			liveX:          x(),
 			wantRead:       true,
 			wantConfig:     "x",
-			wantReason:     atev1alpha1.WorkerPoolReasonResolved,
+			wantReason:     atev1.WorkerPoolReasonResolved,
 			wantDeployment: true,
 		},
 		{
 			name:       "being deleted, new pool: no config, no Deployment",
 			liveX:      deleting(x()),
 			wantRead:   true,
-			wantReason: atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantReason: atev1.WorkerPoolReasonSandboxConfigDeleting,
 		},
 		{
 			name:           "already in use: not read again",
 			inUse:          "x",
 			liveX:          deleting(x()),
 			wantConfig:     "x",
-			wantReason:     atev1alpha1.WorkerPoolReasonResolved,
+			wantReason:     atev1.WorkerPoolReasonResolved,
 			wantDeployment: true,
 		},
 	}
@@ -1759,12 +1759,12 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
-			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: "x"}
-			objs := []client.Object{wp, x(), protected(makeSandboxConfig("y", atev1alpha1.SandboxClassGvisor, false))}
+			wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: "x"}
+			objs := []client.Object{wp, x(), protected(makeSandboxConfig("y", atev1.SandboxClassGvisor, false))}
 			if tc.inUse != "" {
-				wp.Status.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClassStatus{{
-					Name:      atev1alpha1.SandboxClassGvisor,
-					ConfigRef: &atev1alpha1.SandboxConfigReference{Name: tc.inUse},
+				wp.Status.SandboxClasses = []atev1.WorkerPoolSandboxClassStatus{{
+					Name:      atev1.SandboxClassGvisor,
+					ConfigRef: &atev1.SandboxConfigReference{Name: tc.inUse},
 				}}
 				objs = append(objs, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: wp.Name, Namespace: wp.Namespace}})
 			}
@@ -1781,7 +1781,7 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 				WithInterceptorFuncs(interceptor.Funcs{
 					Get: func(ctx context.Context, lc client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 						read = true
-						pool := &atev1alpha1.WorkerPool{}
+						pool := &atev1.WorkerPool{}
 						if err := c.Get(ctx, client.ObjectKeyFromObject(wp), pool); err != nil {
 							return err
 						}
@@ -1801,21 +1801,21 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 			if read && !claimedAtRead {
 				t.Errorf("x was read from the API server before the pool's status claimed it")
 			}
-			got := &atev1alpha1.WorkerPool{}
+			got := &atev1.WorkerPool{}
 			if err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), got); err != nil {
 				t.Fatalf("get WorkerPool: %v", err)
 			}
-			if name := statusConfig(got, atev1alpha1.SandboxClassGvisor); name != tc.wantConfig {
+			if name := statusConfig(got, atev1.SandboxClassGvisor); name != tc.wantConfig {
 				t.Errorf("status names %q, want %q", name, tc.wantConfig)
 			}
-			class := sandboxClassStatus(got, atev1alpha1.SandboxClassGvisor)
+			class := sandboxClassStatus(got, atev1.SandboxClassGvisor)
 			if class == nil {
 				t.Fatalf("no gvisor status entry in %+v", got.Status)
 			}
 			if class.PendingConfigRef != nil {
 				t.Errorf("pendingConfigRef = %q, want none", class.PendingConfigRef.Name)
 			}
-			if cond := meta.FindStatusCondition(class.Conditions, atev1alpha1.WorkerPoolSandboxClassConditionResolved); cond == nil || cond.Reason != tc.wantReason {
+			if cond := meta.FindStatusCondition(class.Conditions, atev1.WorkerPoolSandboxClassConditionResolved); cond == nil || cond.Reason != tc.wantReason {
 				t.Errorf("Resolved condition = %+v, want reason %s", cond, tc.wantReason)
 			}
 			err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), &appsv1.Deployment{})
@@ -1839,7 +1839,7 @@ func TestSwitchInterleavings(t *testing.T) {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatalf("add client-go scheme: %v", err)
 	}
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	// The points in a switch where the deletion and the protection reconcile
@@ -1944,22 +1944,22 @@ func TestSwitchInterleavings(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
-			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: "x"}
-			wp.Status.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClassStatus{{
-				Name:      atev1alpha1.SandboxClassGvisor,
-				ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "y"},
+			wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: "x"}
+			wp.Status.SandboxClasses = []atev1.WorkerPoolSandboxClassStatus{{
+				Name:      atev1.SandboxClassGvisor,
+				ConfigRef: &atev1.SandboxConfigReference{Name: "y"},
 			}}
-			x := makeSandboxConfig("x", atev1alpha1.SandboxClassGvisor, false)
+			x := makeSandboxConfig("x", atev1.SandboxClassGvisor, false)
 			if !tc.unprotected {
-				controllerutil.AddFinalizer(x, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+				controllerutil.AddFinalizer(x, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 			}
-			y := makeSandboxConfig("y", atev1alpha1.SandboxClassGvisor, false)
-			controllerutil.AddFinalizer(y, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+			y := makeSandboxConfig("y", atev1.SandboxClassGvisor, false)
+			controllerutil.AddFinalizer(y, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 			// base is the cluster itself: the hooks and the protection
 			// reconciler use it, so only the pool's reconcile is intercepted.
 			base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(wp, x, y).WithStatusSubresource(wp).
-				WithIndex(&atev1alpha1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
-					return sandboxConfigsInUse(obj.(*atev1alpha1.WorkerPool))
+				WithIndex(&atev1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
+					return sandboxConfigsInUse(obj.(*atev1.WorkerPool))
 				}).Build()
 			protection := &SandboxConfigProtectionReconciler{Client: base, APIReader: base}
 			protect := func(ctx context.Context) error {
@@ -1971,7 +1971,7 @@ func TestSwitchInterleavings(t *testing.T) {
 				return nil
 			}
 			exists := func(ctx context.Context, name string) (bool, error) {
-				err := base.Get(ctx, types.NamespacedName{Name: name}, &atev1alpha1.SandboxConfig{})
+				err := base.Get(ctx, types.NamespacedName{Name: name}, &atev1.SandboxConfig{})
 				if k8errors.IsNotFound(err) {
 					return false, nil
 				}
@@ -1980,7 +1980,7 @@ func TestSwitchInterleavings(t *testing.T) {
 			// checkConfigRef fails the test if status names a config in
 			// configRef that does not exist.
 			checkConfigRef := func(ctx context.Context, when string) error {
-				pool := &atev1alpha1.WorkerPool{}
+				pool := &atev1.WorkerPool{}
 				if err := base.Get(ctx, client.ObjectKeyFromObject(wp), pool); err != nil {
 					return err
 				}
@@ -2007,7 +2007,7 @@ func TestSwitchInterleavings(t *testing.T) {
 					return nil
 				}
 				hit = true
-				sc := &atev1alpha1.SandboxConfig{}
+				sc := &atev1.SandboxConfig{}
 				if err := base.Get(ctx, types.NamespacedName{Name: tc.deleted}, sc); err != nil {
 					return err
 				}
@@ -2048,7 +2048,7 @@ func TestSwitchInterleavings(t *testing.T) {
 					if err := c.Get(ctx, key, obj, opts...); err != nil {
 						return err
 					}
-					if _, ok := obj.(*atev1alpha1.SandboxConfig); ok {
+					if _, ok := obj.(*atev1.SandboxConfig); ok {
 						return interleave(ctx, afterRead)
 					}
 					return nil
@@ -2067,11 +2067,11 @@ func TestSwitchInterleavings(t *testing.T) {
 			if statusWrites != 2 {
 				t.Errorf("status writes = %d, want 2: the claim and the final write", statusWrites)
 			}
-			got := &atev1alpha1.WorkerPool{}
+			got := &atev1.WorkerPool{}
 			if err := base.Get(t.Context(), req.NamespacedName, got); err != nil {
 				t.Fatalf("get WorkerPool: %v", err)
 			}
-			if name := statusConfig(got, atev1alpha1.SandboxClassGvisor); name != tc.wantFirst {
+			if name := statusConfig(got, atev1.SandboxClassGvisor); name != tc.wantFirst {
 				t.Errorf("after the reconcile, status names %q, want %q", name, tc.wantFirst)
 			}
 			if err := checkConfigRef(t.Context(), "after the reconcile"); err != nil {
@@ -2092,7 +2092,7 @@ func TestSwitchInterleavings(t *testing.T) {
 			if err := base.Get(t.Context(), req.NamespacedName, got); err != nil {
 				t.Fatalf("get WorkerPool: %v", err)
 			}
-			if name := statusConfig(got, atev1alpha1.SandboxClassGvisor); name != tc.wantSettled {
+			if name := statusConfig(got, atev1.SandboxClassGvisor); name != tc.wantSettled {
 				t.Errorf("once settled, status names %q, want %q", name, tc.wantSettled)
 			}
 			if err := checkConfigRef(t.Context(), "once settled"); err != nil {
@@ -2115,19 +2115,19 @@ func TestEveryClassHasConfig(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name    string
-		classes []atev1alpha1.WorkerPoolSandboxClassStatus
+		classes []atev1.WorkerPoolSandboxClassStatus
 		want    bool
 	}{
 		{
 			name:    "every class has a config",
-			classes: []atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "def"}}},
+			classes: []atev1.WorkerPoolSandboxClassStatus{{Name: atev1.SandboxClassGvisor, ConfigRef: &atev1.SandboxConfigReference{Name: "def"}}},
 			want:    true,
 		},
 		{
 			name: "one class has no config",
-			classes: []atev1alpha1.WorkerPoolSandboxClassStatus{
-				{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "def"}},
-				{Name: atev1alpha1.SandboxClassMicroVM},
+			classes: []atev1.WorkerPoolSandboxClassStatus{
+				{Name: atev1.SandboxClassGvisor, ConfigRef: &atev1.SandboxConfigReference{Name: "def"}},
+				{Name: atev1.SandboxClassMicroVM},
 			},
 			want: false,
 		},
@@ -2156,13 +2156,13 @@ func TestReconcileAppliesExistingDeploymentFirst(t *testing.T) {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatalf("add client-go scheme: %v", err)
 	}
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	errInjected := errors.New("injected")
 	failList := interceptor.Funcs{
 		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-			if _, ok := list.(*atev1alpha1.SandboxConfigList); ok {
+			if _, ok := list.(*atev1.SandboxConfigList); ok {
 				return errInjected
 			}
 			return c.List(ctx, list, opts...)
@@ -2170,7 +2170,7 @@ func TestReconcileAppliesExistingDeploymentFirst(t *testing.T) {
 	}
 	failProtect := interceptor.Funcs{
 		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			if _, ok := obj.(*atev1alpha1.SandboxConfig); ok {
+			if _, ok := obj.(*atev1.SandboxConfig); ok {
 				return errInjected
 			}
 			return c.Patch(ctx, obj, patch, opts...)
@@ -2226,7 +2226,7 @@ func TestReconcileAppliesExistingDeploymentFirst(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			wp := makeWorkerPool("pool", "default", 3, "worker:v1")
-			objs := []client.Object{wp, makeSandboxConfig("def", atev1alpha1.SandboxClassGvisor, true)}
+			objs := []client.Object{wp, makeSandboxConfig("def", atev1.SandboxClassGvisor, true)}
 			if tc.hasDeployment {
 				objs = append(objs, &appsv1.Deployment{
 					ObjectMeta: metav1.ObjectMeta{Name: wp.Name, Namespace: wp.Namespace},
@@ -2261,24 +2261,24 @@ func TestReconcileAppliesExistingDeploymentFirst(t *testing.T) {
 func TestSyncStatus(t *testing.T) {
 	t.Parallel()
 	scheme := runtime.NewScheme()
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
-	classes := func(config string) []atev1alpha1.WorkerPoolSandboxClassStatus {
-		return []atev1alpha1.WorkerPoolSandboxClassStatus{{
-			Name:      atev1alpha1.SandboxClassGvisor,
-			ConfigRef: &atev1alpha1.SandboxConfigReference{Name: config},
+	classes := func(config string) []atev1.WorkerPoolSandboxClassStatus {
+		return []atev1.WorkerPoolSandboxClassStatus{{
+			Name:      atev1.SandboxClassGvisor,
+			ConfigRef: &atev1.SandboxConfigReference{Name: config},
 			Conditions: []metav1.Condition{{
-				Type:               atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+				Type:               atev1.WorkerPoolSandboxClassConditionResolved,
 				Status:             metav1.ConditionTrue,
-				Reason:             atev1alpha1.WorkerPoolReasonResolved,
+				Reason:             atev1.WorkerPoolReasonResolved,
 				Message:            "resolved to SandboxConfig " + config,
 				ObservedGeneration: 2,
 				LastTransitionTime: metav1.NewTime(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)),
 			}},
 		}}
 	}
-	before := atev1alpha1.WorkerPoolStatus{
+	before := atev1.WorkerPoolStatus{
 		Replicas:       3,
 		ReadyReplicas:  2,
 		Selector:       "app=old",
@@ -2292,14 +2292,14 @@ func TestSyncStatus(t *testing.T) {
 	tests := []struct {
 		name      string
 		dep       *appsv1.Deployment
-		classes   []atev1alpha1.WorkerPoolSandboxClassStatus
-		want      atev1alpha1.WorkerPoolStatus
+		classes   []atev1.WorkerPoolSandboxClassStatus
+		want      atev1.WorkerPoolStatus
 		wantWrite bool
 	}{
 		{
 			name:    "nil Deployment keeps the replica fields",
 			classes: classes("new"),
-			want: atev1alpha1.WorkerPoolStatus{
+			want: atev1.WorkerPoolStatus{
 				Replicas: 3, ReadyReplicas: 2, Selector: "app=old",
 				SandboxClasses: classes("new"),
 			},
@@ -2309,7 +2309,7 @@ func TestSyncStatus(t *testing.T) {
 			name:    "Deployment replaces the replica fields",
 			dep:     dep,
 			classes: classes("new"),
-			want: atev1alpha1.WorkerPoolStatus{
+			want: atev1.WorkerPoolStatus{
 				Replicas: 5, ReadyReplicas: 4, Selector: "app=new",
 				SandboxClasses: classes("new"),
 			},
@@ -2328,7 +2328,7 @@ func TestSyncStatus(t *testing.T) {
 			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			wp.Status = *before.DeepCopy()
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(wp).WithStatusSubresource(wp).Build()
-			stored := &atev1alpha1.WorkerPool{}
+			stored := &atev1.WorkerPool{}
 			if err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), stored); err != nil {
 				t.Fatalf("get WorkerPool: %v", err)
 			}
@@ -2339,7 +2339,7 @@ func TestSyncStatus(t *testing.T) {
 			if err := r.syncStatus(t.Context(), stored, tc.dep, tc.classes); err != nil {
 				t.Fatalf("syncStatus: %v", err)
 			}
-			got := &atev1alpha1.WorkerPool{}
+			got := &atev1.WorkerPool{}
 			if err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), got); err != nil {
 				t.Fatalf("get WorkerPool: %v", err)
 			}
@@ -2393,23 +2393,23 @@ func TestAddProtectionFinalizer(t *testing.T) {
 
 // --- helpers ---
 
-func makeSandboxConfig(name string, class atev1alpha1.SandboxClass, isDefault bool) *atev1alpha1.SandboxConfig {
-	v := atev1alpha1.SandboxVersionConfig{Name: "v1"}
-	sc := &atev1alpha1.SandboxConfig{
+func makeSandboxConfig(name string, class atev1.SandboxClass, isDefault bool) *atev1.SandboxConfig {
+	v := atev1.SandboxVersionConfig{Name: "v1"}
+	sc := &atev1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: atev1alpha1.SandboxConfigSpec{
+		Spec: atev1.SandboxConfigSpec{
 			SandboxClass:   class,
 			DefaultVersion: v.Name,
-			Versions:       []atev1alpha1.SandboxVersionConfig{v},
+			Versions:       []atev1.SandboxVersionConfig{v},
 		},
 	}
 	if isDefault {
-		sc.Annotations = map[string]string{atev1alpha1.SandboxConfigClassDefaultAnnotation: "true"}
+		sc.Annotations = map[string]string{atev1.SandboxConfigClassDefaultAnnotation: "true"}
 	}
 	return sc
 }
 
-func createSandboxConfig(t *testing.T, sc *atev1alpha1.SandboxConfig) {
+func createSandboxConfig(t *testing.T, sc *atev1.SandboxConfig) {
 	t.Helper()
 	if err := k8sClient.Create(t.Context(), sc); err != nil {
 		t.Fatalf("create SandboxConfig %s: %v", sc.Name, err)
@@ -2417,7 +2417,7 @@ func createSandboxConfig(t *testing.T, sc *atev1alpha1.SandboxConfig) {
 	deleteOnCleanup(t, sc)
 }
 
-func createWorkerPool(t *testing.T, wp *atev1alpha1.WorkerPool) {
+func createWorkerPool(t *testing.T, wp *atev1.WorkerPool) {
 	t.Helper()
 	if err := k8sClient.Create(t.Context(), wp); err != nil {
 		t.Fatalf("create WorkerPool %s: %v", wp.Name, err)
@@ -2427,9 +2427,9 @@ func createWorkerPool(t *testing.T, wp *atev1alpha1.WorkerPool) {
 
 // waitResolved waits for wp's sandbox class to report Resolved=True for its
 // current generation and to use config.
-func waitResolved(t *testing.T, wp *atev1alpha1.WorkerPool, config string) *atev1alpha1.WorkerPool {
+func waitResolved(t *testing.T, wp *atev1.WorkerPool, config string) *atev1.WorkerPool {
 	t.Helper()
-	return waitCondition(t, wp, func(current *atev1alpha1.WorkerPool, cond *metav1.Condition) bool {
+	return waitCondition(t, wp, func(current *atev1.WorkerPool, cond *metav1.Condition) bool {
 		return cond.Status == metav1.ConditionTrue &&
 			statusConfig(current, current.Spec.DefaultSandboxClass()) == config
 	})
@@ -2437,16 +2437,16 @@ func waitResolved(t *testing.T, wp *atev1alpha1.WorkerPool, config string) *atev
 
 // waitUnresolved waits for wp's sandbox class to report Resolved=False with
 // reason for its current generation.
-func waitUnresolved(t *testing.T, wp *atev1alpha1.WorkerPool, reason string) *atev1alpha1.WorkerPool {
+func waitUnresolved(t *testing.T, wp *atev1.WorkerPool, reason string) *atev1.WorkerPool {
 	t.Helper()
-	return waitCondition(t, wp, func(_ *atev1alpha1.WorkerPool, cond *metav1.Condition) bool {
+	return waitCondition(t, wp, func(_ *atev1.WorkerPool, cond *metav1.Condition) bool {
 		return cond.Status == metav1.ConditionFalse && cond.Reason == reason
 	})
 }
 
-func waitCondition(t *testing.T, wp *atev1alpha1.WorkerPool, ok func(*atev1alpha1.WorkerPool, *metav1.Condition) bool) *atev1alpha1.WorkerPool {
+func waitCondition(t *testing.T, wp *atev1.WorkerPool, ok func(*atev1.WorkerPool, *metav1.Condition) bool) *atev1.WorkerPool {
 	t.Helper()
-	current := &atev1alpha1.WorkerPool{}
+	current := &atev1.WorkerPool{}
 	eventually(t, func(ctx context.Context) (bool, error) {
 		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(wp), current); err != nil {
 			return false, nil
@@ -2455,7 +2455,7 @@ func waitCondition(t *testing.T, wp *atev1alpha1.WorkerPool, ok func(*atev1alpha
 		if status == nil {
 			return false, nil
 		}
-		cond := meta.FindStatusCondition(status.Conditions, atev1alpha1.WorkerPoolSandboxClassConditionResolved)
+		cond := meta.FindStatusCondition(status.Conditions, atev1.WorkerPoolSandboxClassConditionResolved)
 		return cond != nil && cond.ObservedGeneration == current.Generation && ok(current, cond), nil
 	})
 	return current
@@ -2466,11 +2466,11 @@ func waitCondition(t *testing.T, wp *atev1alpha1.WorkerPool, ok func(*atev1alpha
 func waitProtectionFinalizer(t *testing.T, name string, want bool) {
 	t.Helper()
 	eventually(t, func(ctx context.Context) (bool, error) {
-		sc := &atev1alpha1.SandboxConfig{}
+		sc := &atev1.SandboxConfig{}
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, sc); err != nil {
 			return false, nil
 		}
-		return controllerutil.ContainsFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer) == want, nil
+		return controllerutil.ContainsFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer) == want, nil
 	})
 }
 
@@ -2486,7 +2486,7 @@ func waitGone(t *testing.T, obj client.Object) {
 // assertNoDeployment fails if a Deployment controlled by wp exists. envtest
 // runs no garbage collector, so a same-named Deployment left by a pool from an
 // earlier -count iteration does not count.
-func assertNoDeployment(t *testing.T, wp *atev1alpha1.WorkerPool) {
+func assertNoDeployment(t *testing.T, wp *atev1.WorkerPool) {
 	t.Helper()
 	dep, err := getDeployment(t.Context(), wp)
 	if k8errors.IsNotFound(err) {
@@ -2515,7 +2515,7 @@ func removeFinalizer(t *testing.T, name, finalizer string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		sc := &atev1alpha1.SandboxConfig{}
+		sc := &atev1.SandboxConfig{}
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, sc); err != nil {
 			return client.IgnoreNotFound(err)
 		}
@@ -2531,7 +2531,7 @@ func removeFinalizer(t *testing.T, name, finalizer string) {
 
 // makeWorkerPoolClasses returns a pool in ns with the given spec and status
 // sandbox classes.
-func makeWorkerPoolClasses(ns, name string, spec []atev1alpha1.WorkerPoolSandboxClass, status []atev1alpha1.WorkerPoolSandboxClassStatus) *atev1alpha1.WorkerPool {
+func makeWorkerPoolClasses(ns, name string, spec []atev1.WorkerPoolSandboxClass, status []atev1.WorkerPoolSandboxClassStatus) *atev1.WorkerPool {
 	wp := makeWorkerPool(name, ns, 1, "worker:v1")
 	wp.Spec.SandboxClasses = spec
 	wp.Status.SandboxClasses = status
@@ -2539,7 +2539,7 @@ func makeWorkerPoolClasses(ns, name string, spec []atev1alpha1.WorkerPoolSandbox
 }
 
 // statusConfig returns the SandboxConfig wp's status uses for class, or "".
-func statusConfig(wp *atev1alpha1.WorkerPool, class atev1alpha1.SandboxClass) string {
+func statusConfig(wp *atev1.WorkerPool, class atev1.SandboxClass) string {
 	if s := sandboxClassStatus(wp, class); s != nil && s.ConfigRef != nil {
 		return s.ConfigRef.Name
 	}

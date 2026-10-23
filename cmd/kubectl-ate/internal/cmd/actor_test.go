@@ -25,8 +25,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -49,43 +49,43 @@ func TestBuildCreateActorRequest(t *testing.T) {
 		name        string
 		templateRef string
 		tag         string
-		want        *ateapipb.Actor
+		want        *ateapi.Actor
 		wantErr     bool
 	}{
 		{
 			name:        "bare template name defaults to the actor's atespace",
 			templateRef: "counter",
-			want: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
+			want: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter"},
 			},
 		},
 		{
 			name:        "bare tag name defaults to the actor's atespace",
 			templateRef: "counter",
 			tag:         "before-upgrade",
-			want: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
-				SourceTag:     &ateapipb.ObjectRef{Atespace: "demo", Name: "before-upgrade"},
+			want: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter"},
+				SourceTag:     &ateapi.ObjectRef{Atespace: "demo", Name: "before-upgrade"},
 			},
 		},
 		{
 			name:        "qualified tag in a different atespace",
 			templateRef: "counter",
 			tag:         "other-atespace/before-upgrade",
-			want: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
-				SourceTag:     &ateapipb.ObjectRef{Atespace: "other-atespace", Name: "before-upgrade"},
+			want: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter"},
+				SourceTag:     &ateapi.ObjectRef{Atespace: "other-atespace", Name: "before-upgrade"},
 			},
 		},
 		{
 			name:        "qualified template in a different atespace",
 			templateRef: "shared-templates/counter",
-			want: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "shared-templates", Name: "counter"},
+			want: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "shared-templates", Name: "counter"},
 			},
 		},
 		{name: "malformed template ref", templateRef: "a/b/c", wantErr: true},
@@ -101,7 +101,7 @@ func TestBuildCreateActorRequest(t *testing.T) {
 			if test.wantErr {
 				return
 			}
-			want := &ateapipb.CreateActorRequest{Actor: test.want}
+			want := &ateapi.CreateActorRequest{Actor: test.want}
 			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 				t.Errorf("request mismatch (-want +got):\n%s", diff)
 			}
@@ -112,18 +112,18 @@ func TestBuildCreateActorRequest(t *testing.T) {
 func TestBuildSuspendActorRequest(t *testing.T) {
 	tests := []struct {
 		name string
-		mode ateapipb.DurabilityMode
+		mode ateapi.DurabilityMode
 	}{
-		{name: "async", mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
-		{name: "sync", mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		{name: "async", mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		{name: "sync", mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := buildSuspendActorRequest(resources.ActorRef{Atespace: "demo", Name: "my-counter"}, test.mode)
-			want := &ateapipb.SuspendActorRequest{
-				Actor:   &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"},
-				Options: &ateapipb.SuspendOptions{Mode: test.mode},
+			want := &ateapi.SuspendActorRequest{
+				Actor:   &ateapi.ObjectRef{Atespace: "demo", Name: "my-counter"},
+				Options: &ateapi.SuspendOptions{Mode: test.mode},
 			}
 			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 				t.Errorf("request mismatch (-want +got):\n%s", diff)
@@ -136,11 +136,11 @@ func TestParseSuspendMode(t *testing.T) {
 	tests := []struct {
 		name    string
 		mode    string
-		want    ateapipb.DurabilityMode
+		want    ateapi.DurabilityMode
 		wantErr string
 	}{
-		{name: "async", mode: "async", want: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
-		{name: "sync", mode: "sync", want: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		{name: "async", mode: "async", want: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		{name: "sync", mode: "sync", want: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 		{name: "empty", mode: "", wantErr: `invalid --mode "": must be one of async, sync`},
 		{name: "unknown", mode: "durable", wantErr: `invalid --mode "durable": must be one of async, sync`},
 	}
@@ -178,7 +178,7 @@ func TestParseWorkerSelector(t *testing.T) {
 	tests := []struct {
 		name    string
 		raw     string
-		want    *ateapipb.Selector
+		want    *ateapi.Selector
 		wantErr string
 	}{
 		{
@@ -189,12 +189,12 @@ func TestParseWorkerSelector(t *testing.T) {
 		{
 			name: "single label",
 			raw:  "tier=paid",
-			want: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			want: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 		},
 		{
 			name: "multiple labels with prefixed key and empty value",
 			raw:  "ate.dev/pool=fast,tier=paid,empty=",
-			want: &ateapipb.Selector{MatchLabels: map[string]string{
+			want: &ateapi.Selector{MatchLabels: map[string]string{
 				"ate.dev/pool": "fast",
 				"tier":         "paid",
 				"empty":        "",
@@ -203,7 +203,7 @@ func TestParseWorkerSelector(t *testing.T) {
 		{
 			name: "exactly 10 labels is allowed",
 			raw:  "k1=v1,k2=v2,k3=v3,k4=v4,k5=v5,k6=v6,k7=v7,k8=v8,k9=v9,k10=v10",
-			want: &ateapipb.Selector{MatchLabels: map[string]string{
+			want: &ateapi.Selector{MatchLabels: map[string]string{
 				"k1": "v1", "k2": "v2", "k3": "v3", "k4": "v4", "k5": "v5",
 				"k6": "v6", "k7": "v7", "k8": "v8", "k9": "v9", "k10": "v10",
 			}},
@@ -260,91 +260,91 @@ func TestParseWorkerSelector(t *testing.T) {
 }
 
 type fakeActorUpdater struct {
-	actor     *ateapipb.Actor
+	actor     *ateapi.Actor
 	getErr    error
 	updateErr error
 
 	getCalls  int
-	updateReq *ateapipb.UpdateActorRequest
+	updateReq *ateapi.UpdateActorRequest
 }
 
-func (f *fakeActorUpdater) GetActor(_ context.Context, _ *ateapipb.GetActorRequest, _ ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeActorUpdater) GetActor(_ context.Context, _ *ateapi.GetActorRequest, _ ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.getCalls++
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	return proto.Clone(f.actor).(*ateapipb.Actor), nil
+	return proto.Clone(f.actor).(*ateapi.Actor), nil
 }
 
-func (f *fakeActorUpdater) UpdateActor(_ context.Context, in *ateapipb.UpdateActorRequest, _ ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeActorUpdater) UpdateActor(_ context.Context, in *ateapi.UpdateActorRequest, _ ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.updateReq = in
 	if f.updateErr != nil {
 		return nil, f.updateErr
 	}
-	updated := proto.Clone(in.GetActor()).(*ateapipb.Actor)
+	updated := proto.Clone(in.GetActor()).(*ateapi.Actor)
 	updated.Metadata.Version++
 	return updated, nil
 }
 
 func TestUpdateActor(t *testing.T) {
-	baseActor := func() *ateapipb.Actor {
-		return &ateapipb.Actor{
-			Metadata: &ateapipb.ResourceMetadata{
+	baseActor := func() *ateapi.Actor {
+		return &ateapi.Actor{
+			Metadata: &ateapi.ResourceMetadata{
 				Atespace: "demo",
 				Name:     "my-counter",
 				Uid:      "8ba9b6ee-2e1a-4c0f-9f4e-2f0a0f1c3d55",
 				Version:  3,
 			},
-			ActorTemplate:  &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v1"},
-			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
-			SourceTag:      &ateapipb.ObjectRef{Atespace: "demo", Name: "seed-tag"},
-			Status:         &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			ActorTemplate:  &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "free"}},
+			SourceTag:      &ateapi.ObjectRef{Atespace: "demo", Name: "seed-tag"},
+			Status:         &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 	}
 
 	tests := []struct {
 		name         string
-		mutate       func(*ateapipb.Actor)
-		wantTemplate *ateapipb.ObjectRef
-		wantSelector *ateapipb.Selector
+		mutate       func(*ateapi.Actor)
+		wantTemplate *ateapi.ObjectRef
+		wantSelector *ateapi.Selector
 	}{
 		{
 			name: "repoint template keeps worker selector",
-			mutate: func(a *ateapipb.Actor) {
-				a.ActorTemplate = &ateapipb.ObjectRef{Atespace: "shared", Name: "counter-v2"}
+			mutate: func(a *ateapi.Actor) {
+				a.ActorTemplate = &ateapi.ObjectRef{Atespace: "shared", Name: "counter-v2"}
 			},
-			wantTemplate: &ateapipb.ObjectRef{Atespace: "shared", Name: "counter-v2"},
-			wantSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
+			wantTemplate: &ateapi.ObjectRef{Atespace: "shared", Name: "counter-v2"},
+			wantSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "free"}},
 		},
 		{
 			name: "update worker selector keeps template",
-			mutate: func(a *ateapipb.Actor) {
-				a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}}
+			mutate: func(a *ateapi.Actor) {
+				a.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}}
 			},
-			wantTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v1"},
-			wantSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}},
+			wantTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			wantSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}},
 		},
 		{
 			name:         "nil worker selector clears existing selector",
-			mutate:       func(a *ateapipb.Actor) { a.WorkerSelector = nil },
-			wantTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			mutate:       func(a *ateapi.Actor) { a.WorkerSelector = nil },
+			wantTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v1"},
 			wantSelector: nil,
 		},
 		{
 			name: "update both template and worker selector",
-			mutate: func(a *ateapipb.Actor) {
-				a.ActorTemplate = &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v2"}
-				a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+			mutate: func(a *ateapi.Actor) {
+				a.ActorTemplate = &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v2"}
+				a.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 			},
-			wantTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v2"},
-			wantSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			wantTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v2"},
+			wantSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &fakeActorUpdater{actor: baseActor()}
-			ref := &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"}
+			ref := &ateapi.ObjectRef{Atespace: "demo", Name: "my-counter"}
 
 			got, err := updateActor(context.Background(), client, ref, tc.mutate)
 			if err != nil {
@@ -366,8 +366,8 @@ func TestUpdateActor(t *testing.T) {
 
 	t.Run("GetActor error is propagated", func(t *testing.T) {
 		client := &fakeActorUpdater{getErr: status.Error(codes.NotFound, "not found")}
-		ref := &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"}
-		_, err := updateActor(context.Background(), client, ref, func(*ateapipb.Actor) {})
+		ref := &ateapi.ObjectRef{Atespace: "demo", Name: "my-counter"}
+		_, err := updateActor(context.Background(), client, ref, func(*ateapi.Actor) {})
 		if status.Code(err) != codes.NotFound {
 			t.Fatalf("updateActor() error = %v, want NotFound", err)
 		}
@@ -381,8 +381,8 @@ func TestUpdateActor(t *testing.T) {
 			actor:     baseActor(),
 			updateErr: status.Error(codes.FailedPrecondition, "actor must be SUSPENDED"),
 		}
-		ref := &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"}
-		_, err := updateActor(context.Background(), client, ref, func(*ateapipb.Actor) {})
+		ref := &ateapi.ObjectRef{Atespace: "demo", Name: "my-counter"}
+		_, err := updateActor(context.Background(), client, ref, func(*ateapi.Actor) {})
 		if status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("updateActor() error = %v, want FailedPrecondition", err)
 		}
@@ -687,11 +687,11 @@ func TestNewLogLineFilter(t *testing.T) {
 }
 
 type mockAteAPIClient struct {
-	GetActorFunc func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
+	GetActorFunc func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error)
 	CloseCalls   int
 }
 
-func (m *mockAteAPIClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (m *mockAteAPIClient) GetActor(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	if m.GetActorFunc != nil {
 		return m.GetActorFunc(ctx, in, opts...)
 	}
@@ -719,15 +719,15 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 	namespace := "ns-abc"
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+		GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 			if in.GetActor().GetName() != actorName {
 				return nil, fmt.Errorf("unexpected actor name: %s", in.GetActor().GetName())
 			}
-			return &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{
+			return &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Name: actorName},
+				Status: &ateapi.ActorStatus{
+					State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapi.WorkerAssignment{
 						WorkerPod:       podName,
 						WorkerNamespace: namespace,
 					},
@@ -841,12 +841,12 @@ func TestLogsActorRunner_Run_OneShot_SourceFilter(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			mockAPI := &mockAteAPIClient{
-				GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
-					return &ateapipb.Actor{
-						Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-						Status: &ateapipb.ActorStatus{
-							State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-							WorkerAssignment: &ateapipb.WorkerAssignment{
+				GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
+					return &ateapi.Actor{
+						Metadata: &ateapi.ResourceMetadata{Name: actorName},
+						Status: &ateapi.ActorStatus{
+							State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+							WorkerAssignment: &ateapi.WorkerAssignment{
 								WorkerPod:       "pod-xyz",
 								WorkerNamespace: "ns-abc",
 							},
@@ -903,10 +903,10 @@ func TestLogsActorRunner_Run_OneShot_ActorNotRunning(t *testing.T) {
 	actorName := "act-123"
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
-			return &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}, // not running
+		GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
+			return &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Name: actorName},
+				Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED}, // not running
 			}, nil
 		},
 	}
@@ -952,25 +952,25 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 	var getActorMu sync.Mutex
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+		GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 			getActorMu.Lock()
 			defer getActorMu.Unlock()
 			getActorCalls++
 
 			if getActorCalls == 1 {
 				// First call: suspended
-				return &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+				return &ateapi.Actor{
+					Metadata: &ateapi.ResourceMetadata{Name: actorName},
+					Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 				}, nil
 			}
 
 			// Subsequent calls: running
-			return &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{
+			return &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Name: actorName},
+				Status: &ateapi.ActorStatus{
+					State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapi.WorkerAssignment{
 						WorkerPod:       podName,
 						WorkerNamespace: namespace,
 					},
@@ -1048,7 +1048,7 @@ func TestLogsActorRunner_Run_Follow_NotFoundActor(t *testing.T) {
 	actorName := "act-notfound"
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+		GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 			return nil, status.Error(codes.NotFound, "actor not found")
 		},
 	}
@@ -1093,18 +1093,18 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 	lineRead := make(chan struct{})
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+		GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 			getActorMu.Lock()
 			defer getActorMu.Unlock()
 			getActorCalls++
 
 			if getActorCalls == 1 {
 				// 1. Initial call for stream 1: pod-1
-				return &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status: &ateapipb.ActorStatus{
-						State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-						WorkerAssignment: &ateapipb.WorkerAssignment{
+				return &ateapi.Actor{
+					Metadata: &ateapi.ResourceMetadata{Name: actorName},
+					Status: &ateapi.ActorStatus{
+						State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+						WorkerAssignment: &ateapi.WorkerAssignment{
 							WorkerPod:       "pod-1",
 							WorkerNamespace: "ns",
 						},
@@ -1120,11 +1120,11 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 				return nil, ctx.Err()
 			}
 
-			return &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{
+			return &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Name: actorName},
+				Status: &ateapi.ActorStatus{
+					State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapi.WorkerAssignment{
 						WorkerPod:       "pod-2",
 						WorkerNamespace: "ns",
 					},
@@ -1212,18 +1212,18 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 	lineRead := make(chan struct{})
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+		GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 			getActorMu.Lock()
 			defer getActorMu.Unlock()
 			getActorCalls++
 
 			// 1. Initial call: running on pod-1
 			if getActorCalls == 1 {
-				return &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status: &ateapipb.ActorStatus{
-						State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-						WorkerAssignment: &ateapipb.WorkerAssignment{
+				return &ateapi.Actor{
+					Metadata: &ateapi.ResourceMetadata{Name: actorName},
+					Status: &ateapi.ActorStatus{
+						State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+						WorkerAssignment: &ateapi.WorkerAssignment{
 							WorkerPod:       "pod-1",
 							WorkerNamespace: "ns",
 						},
@@ -1239,26 +1239,26 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				}
-				return &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+				return &ateapi.Actor{
+					Metadata: &ateapi.ResourceMetadata{Name: actorName},
+					Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 				}, nil
 			}
 
 			// 3. Loop reconnection call: suspended (still suspended, so it will wait)
 			if getActorCalls == 3 {
-				return &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+				return &ateapi.Actor{
+					Metadata: &ateapi.ResourceMetadata{Name: actorName},
+					Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 				}, nil
 			}
 
 			// 4. Subsequent loop reconnection call: running again on pod-1
-			return &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{
+			return &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Name: actorName},
+				Status: &ateapi.ActorStatus{
+					State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapi.WorkerAssignment{
 						WorkerPod:       "pod-1",
 						WorkerNamespace: "ns",
 					},
@@ -1336,12 +1336,12 @@ func TestLogsActorRunner_Run_Follow_CursorIsKubeletTimestampOfLastLineRead(t *te
 	actorName := "act-123"
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
-			return &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{
+		GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
+			return &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Name: actorName},
+				Status: &ateapi.ActorStatus{
+					State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapi.WorkerAssignment{
 						WorkerPod:       "pod-xyz",
 						WorkerNamespace: "ns-abc",
 					},

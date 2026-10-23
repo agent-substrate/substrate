@@ -44,11 +44,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/sandboxruntimes"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
+	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
 )
 
 // errPermanent marks a failure that retrying cannot fix, so the syncer drops
@@ -79,8 +79,8 @@ var errUnresolved = errors.New("unresolved sandbox config")
 // sandboxPlan is what one worker's sandbox runtimes file is built from.
 type sandboxPlan struct {
 	config       string
-	sandboxClass v1alpha1.SandboxClass // the config's; decides which attributes its runtimes report
-	versions     []versionPlan         // the default first
+	sandboxClass atev1.SandboxClass // the config's; decides which attributes its runtimes report
+	versions     []versionPlan      // the default first
 }
 
 // versionPlan is one SandboxConfig version projected onto this node's
@@ -95,14 +95,14 @@ type versionPlan struct {
 // the worker pod's WorkerPool, and the config the atecontroller resolved for
 // the pool's sandbox class into the pool's status.
 type workerSandboxResolver struct {
-	workerPools listersv1alpha1.WorkerPoolLister
-	configs     listersv1alpha1.SandboxConfigLister
+	workerPools atelisters.WorkerPoolLister
+	configs     atelisters.SandboxConfigLister
 }
 
 // resolve returns the SandboxConfig of a worker pod on this node. Apart from
 // a pod in no pool, every failure can succeed once an informer catches up or
 // the atecontroller resolves the pool.
-func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfig, error) {
+func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*atev1.SandboxConfig, error) {
 	pool, err := r.pool(pod)
 	if err != nil {
 		return nil, err
@@ -111,7 +111,7 @@ func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfi
 }
 
 // pool returns the WorkerPool a worker pod on this node belongs to.
-func (r *workerSandboxResolver) pool(pod *corev1.Pod) (*v1alpha1.WorkerPool, error) {
+func (r *workerSandboxResolver) pool(pod *corev1.Pod) (*atev1.WorkerPool, error) {
 	poolName := pod.Labels[workerPoolLabel]
 	if poolName == "" {
 		return nil, fmt.Errorf("%w: worker pod %s/%s has no %s label", errPermanent, pod.Namespace, pod.Name, workerPoolLabel)
@@ -124,7 +124,7 @@ func (r *workerSandboxResolver) pool(pod *corev1.Pod) (*v1alpha1.WorkerPool, err
 }
 
 // config returns the SandboxConfig the workers of pool run.
-func (r *workerSandboxResolver) config(pool *v1alpha1.WorkerPool) (*v1alpha1.SandboxConfig, error) {
+func (r *workerSandboxResolver) config(pool *atev1.WorkerPool) (*atev1.SandboxConfig, error) {
 	configName := pool.ResolvedSandboxConfig()
 	if configName == "" {
 		return nil, fmt.Errorf("%w: WorkerPool %s/%s has not resolved a SandboxConfig for sandbox class %q", errUnresolved, pool.Namespace, pool.Name, pool.Spec.DefaultSandboxClass())
@@ -147,7 +147,7 @@ func (r *workerSandboxResolver) plan(pod *corev1.Pod) (*sandboxPlan, error) {
 
 // planPool is plan for a pool already in hand: the config its workers run
 // and the versions of it this node can run.
-func (r *workerSandboxResolver) planPool(pool *v1alpha1.WorkerPool) (*sandboxPlan, error) {
+func (r *workerSandboxResolver) planPool(pool *atev1.WorkerPool) (*sandboxPlan, error) {
 	cfg, err := r.config(pool)
 	if err != nil {
 		return nil, err
@@ -163,7 +163,7 @@ func (r *workerSandboxResolver) planPool(pool *v1alpha1.WorkerPool) (*sandboxPla
 // default version first, then the other Enabled versions in spec order.
 // Versions with no assets for this node's architecture are left out, except
 // the default, which every worker of the pool must be able to start actors on.
-func planVersions(cfg *v1alpha1.SandboxConfig) ([]versionPlan, error) {
+func planVersions(cfg *atev1.SandboxConfig) ([]versionPlan, error) {
 	def, ok := cfg.Spec.DefaultVersionConfig()
 	if !ok {
 		// The CRD rejects this shape, so this should not be reachable.
@@ -176,7 +176,7 @@ func planVersions(cfg *v1alpha1.SandboxConfig) ([]versionPlan, error) {
 	vers := []versionPlan{{name: def.Name, isDefault: true, rec: defRec}}
 	for i := range cfg.Spec.Versions {
 		v := &cfg.Spec.Versions[i]
-		if v.Name == def.Name || (v.State != nil && *v.State == v1alpha1.SandboxVersionStateDisabled) {
+		if v.Name == def.Name || (v.State != nil && *v.State == atev1.SandboxVersionStateDisabled) {
 			continue
 		}
 		if rec, ok := recordForArch(cfg, v); ok {
@@ -189,7 +189,7 @@ func planVersions(cfg *v1alpha1.SandboxConfig) ([]versionPlan, error) {
 // recordForArch projects the assets of one version of a SandboxConfig onto
 // this node's architecture. It reports false when the version lists no assets
 // for this architecture.
-func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConfig) (*sandboxAssetsRecord, bool) {
+func recordForArch(cfg *atev1.SandboxConfig, ver *atev1.SandboxVersionConfig) (*sandboxAssetsRecord, bool) {
 	files := ver.Assets[runtime.GOARCH]
 	if len(files) == 0 {
 		return nil, false
@@ -282,19 +282,19 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, 
 // sandbox_bundle_hash is hash: architecture and the hash for every class,
 // the host CPU identity for a microVM runtime, and the runsc binary's
 // cpu_features for a gVisor one.
-func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class v1alpha1.SandboxClass, rec *sandboxAssetsRecord, hash string) (sandboxruntimes.Attributes, error) {
+func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.SandboxClass, rec *sandboxAssetsRecord, hash string) (sandboxruntimes.Attributes, error) {
 	attrs := sandboxruntimes.Attributes{
 		hardware.AttrArchitecture:      runtime.GOARCH,
 		hardware.AttrSandboxBundleHash: hash,
 	}
 	switch class {
-	case v1alpha1.SandboxClassMicroVM:
+	case atev1.SandboxClassMicroVM:
 		vendor, model, err := s.hostCPUIdentity()
 		if err != nil {
 			return nil, fmt.Errorf("while probing host CPU identity: %w", err)
 		}
 		attrs[hardware.AttrCPUVendor], attrs[hardware.AttrCPUModel] = vendor, model
-	case v1alpha1.SandboxClassGvisor:
+	case atev1.SandboxClassGvisor:
 		mask, err := s.gvisorCPUFeatures(ctx, rec)
 		if err != nil {
 			return nil, err

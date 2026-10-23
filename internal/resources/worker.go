@@ -15,14 +15,14 @@
 package resources
 
 import (
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // AddToAllocated adjusts allocation by an assignment; sign is 1 or -1.
 // It returns nil when allocation reaches zero.
-func AddToAllocated(total *ateapipb.WorkerResources, assignment *ateapipb.ActorAssignment, sign int64) *ateapipb.WorkerResources {
+func AddToAllocated(total *ateapi.WorkerResources, assignment *ateapi.ActorAssignment, sign int64) *ateapi.WorkerResources {
 	booked := assignment.GetResources()
-	out := &ateapipb.WorkerResources{
+	out := &ateapi.WorkerResources{
 		CpuMillicores: total.GetCpuMillicores() + sign*booked.GetCpuMillicores(),
 		MemoryBytes:   total.GetMemoryBytes() + sign*booked.GetMemoryBytes(),
 		Actors:        total.GetActors() + int32(sign),
@@ -36,11 +36,11 @@ func AddToAllocated(total *ateapipb.WorkerResources, assignment *ateapipb.ActorA
 // SumAllocated is what a set of assignments takes from a Worker, or nil for
 // none. Rebuilds the total rather than adjusting it, which is what the checks
 // holding AddToAllocated to the assignments it counts compare against.
-func SumAllocated(assignments []*ateapipb.ActorAssignment) *ateapipb.WorkerResources {
+func SumAllocated(assignments []*ateapi.ActorAssignment) *ateapi.WorkerResources {
 	if len(assignments) == 0 {
 		return nil
 	}
-	total := &ateapipb.WorkerResources{Actors: int32(len(assignments))}
+	total := &ateapi.WorkerResources{Actors: int32(len(assignments))}
 	for _, assignment := range assignments {
 		total.CpuMillicores += assignment.GetResources().GetCpuMillicores()
 		total.MemoryBytes += assignment.GetResources().GetMemoryBytes()
@@ -50,8 +50,8 @@ func SumAllocated(assignments []*ateapipb.ActorAssignment) *ateapipb.WorkerResou
 
 // Free is what a Worker has left after what its Actors hold. It goes negative
 // once a Worker is overcommitted.
-func Free(capacity, allocated *ateapipb.WorkerResources) *ateapipb.Resources {
-	return &ateapipb.Resources{
+func Free(capacity, allocated *ateapi.WorkerResources) *ateapi.Resources {
+	return &ateapi.Resources{
 		CpuMillicores: capacity.GetCpuMillicores() - allocated.GetCpuMillicores(),
 		MemoryBytes:   capacity.GetMemoryBytes() - allocated.GetMemoryBytes(),
 	}

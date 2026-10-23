@@ -35,7 +35,7 @@ func TestAteEnvCodec(t *testing.T) {
 	valid := `{
 		"min_wait_time": 0.2, "max_wait_time": 1.0,
 		"min_live_time": 9, "max_live_time": 14,
-		"resume_mode": "explicit", "lifecycle_mode": "pause",
+		"resume_mode": "explicit", "lifecycle_mode": "async",
 		"max_pings_per_wake": 2
 	}`
 	if _, _, err := h.Apply([]byte(valid)); err != nil {
@@ -43,7 +43,7 @@ func TestAteEnvCodec(t *testing.T) {
 	}
 	want := ateEnvKnobs{
 		WaitTime:        dynconfig.WaitTime{MinWait: dynconfig.Seconds(200 * time.Millisecond), MaxWait: dynconfig.Seconds(time.Second)},
-		Lifecycle:       dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModePause},
+		Lifecycle:       dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModeAsync},
 		MinLive:         dynconfig.Seconds(9 * time.Second),
 		MaxLive:         dynconfig.Seconds(14 * time.Second),
 		MaxPingsPerWake: 2,

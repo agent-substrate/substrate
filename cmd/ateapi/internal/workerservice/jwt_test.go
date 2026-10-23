@@ -25,11 +25,11 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/localjwtauthority"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
 
@@ -69,8 +69,8 @@ func TestMintWorkerActorJwt(t *testing.T) {
 
 	ctx := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))
 	before := time.Now().Truncate(time.Second)
-	resp, err := s.MintWorkerActorJwt(ctx, &ateapipb.MintWorkerActorJwtRequest{
-		Actor:     &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"},
+	resp, err := s.MintWorkerActorJwt(ctx, &ateapi.MintWorkerActorJwtRequest{
+		Actor:     &ateapi.ObjectRef{Atespace: "team-a", Name: "my-actor"},
 		ActorUid:  actor.GetMetadata().GetUid(),
 		Audiences: []string{"snapshot-plugin"},
 	})
@@ -117,23 +117,23 @@ func TestMintWorkerActorJwt(t *testing.T) {
 // worker, assigned_node on the node holding its local snapshot, and a latest
 // generation that is local-only. The latest generation is the one
 // last_assigned_generation names.
-func pausedStatus(state ateapipb.ActorState, node string) *ateapipb.ActorStatus {
-	return &ateapipb.ActorStatus{
+func pausedStatus(state ateapi.ActorState, node string) *ateapi.ActorStatus {
+	return &ateapi.ActorStatus{
 		State:                  state,
 		AssignedNode:           node,
 		LastAssignedGeneration: 1,
-		Snapshots:              []*ateapipb.Snapshot{{Uuid: "snap-1", Generation: 1, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, Locality: node}},
+		Snapshots:              []*ateapi.Snapshot{{Uuid: "snap-1", Generation: 1, Owner: ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, Locality: node}},
 	}
 }
 
 // uploadPendingStatus is how an asynchronously suspended actor looks until
 // atelet's background upload of its local snapshot is recorded: SUSPENDED, no
 // worker, and the latest generation's durable copy PENDING.
-func uploadPendingStatus(node string) *ateapipb.ActorStatus {
-	status := pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, node)
-	status.Snapshots[0].DurableSnapshot = &ateapipb.SnapshotStorage{
-		Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
-		Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://snaps/root/atespaces/team-a/actors/uid/snap-1"},
+func uploadPendingStatus(node string) *ateapi.ActorStatus {
+	status := pausedStatus(ateapi.ActorState_ACTOR_STATE_SUSPENDED, node)
+	status.Snapshots[0].DurableSnapshot = &ateapi.SnapshotStorage{
+		Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+		Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://snaps/root/atespaces/team-a/actors/uid/snap-1"},
 	}
 	return status
 }
@@ -143,25 +143,25 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, nil, testActorJWTIssuer, newTestJWTPool(t))
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))
 
-	valid := func() *ateapipb.MintWorkerActorJwtRequest {
-		return &ateapipb.MintWorkerActorJwtRequest{
-			Actor:     &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"},
+	valid := func() *ateapi.MintWorkerActorJwtRequest {
+		return &ateapi.MintWorkerActorJwtRequest{
+			Actor:     &ateapi.ObjectRef{Atespace: "team-a", Name: "my-actor"},
 			ActorUid:  actor.GetMetadata().GetUid(),
 			Audiences: []string{"snapshot-plugin"},
 		}
 	}
 	const otherActorUID = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
 	// onWorker is an actor status naming worker-1, which runs on node-1.
-	onWorker := func(state ateapipb.ActorState) *ateapipb.ActorStatus {
-		return &ateapipb.ActorStatus{State: state, WorkerAssignment: &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: "worker-1"}}}
+	onWorker := func(state ateapi.ActorState) *ateapi.ActorStatus {
+		return &ateapi.ActorStatus{State: state, WorkerAssignment: &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: "worker-1"}}}
 	}
 	// pausingOnWorker is an async suspend in progress: SUSPENDING on worker-1
 	// with a latest snapshot that is not yet captured.
-	pausingOnWorker := func() *ateapipb.ActorStatus {
-		status := onWorker(ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
+	pausingOnWorker := func() *ateapi.ActorStatus {
+		status := onWorker(ateapi.ActorState_ACTOR_STATE_SUSPENDING)
 		status.AssignedNode = "node-1"
 		status.LastAssignedGeneration = 1
-		status.Snapshots = []*ateapipb.Snapshot{{Uuid: "snap-1", Generation: 1, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR}}
+		status.Snapshots = []*ateapi.Snapshot{{Uuid: "snap-1", Generation: 1, Owner: ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR}}
 		return status
 	}
 	released := map[string]string{}
@@ -169,9 +169,9 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 	tests := []struct {
 		name   string
 		ctx    context.Context
-		mutate func(*ateapipb.MintWorkerActorJwtRequest)
+		mutate func(*ateapi.MintWorkerActorJwtRequest)
 		// status, when set, replaces the actor's status for the case.
-		status *ateapipb.ActorStatus
+		status *ateapi.ActorStatus
 		// assignments, when set, replaces the store's worker assignments
 		// (actor UID to worker) for the case. By default worker-1 holds the
 		// actor.
@@ -184,20 +184,20 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 		{
 			name:   "running actor on its worker's node",
 			ctx:    authed,
-			status: onWorker(ateapipb.ActorState_ACTOR_STATE_RUNNING),
+			status: onWorker(ateapi.ActorState_ACTOR_STATE_RUNNING),
 			want:   codes.OK,
 		},
 		{
 			name:   "resuming actor on its worker's node",
 			ctx:    authed,
-			status: onWorker(ateapipb.ActorState_ACTOR_STATE_RESUMING),
+			status: onWorker(ateapi.ActorState_ACTOR_STATE_RESUMING),
 			want:   codes.OK,
 		},
 		{
 			// Suspending a running actor uploads its checkpoint from its worker.
 			name:   "running actor being suspended on its worker's node",
 			ctx:    authed,
-			status: onWorker(ateapipb.ActorState_ACTOR_STATE_SUSPENDING),
+			status: onWorker(ateapi.ActorState_ACTOR_STATE_SUSPENDING),
 			want:   codes.OK,
 		},
 		{
@@ -211,7 +211,7 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// actor's status, which keeps naming the worker until they do.
 			name:        "running actor whose worker was released",
 			ctx:         authed,
-			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_RUNNING),
+			status:      onWorker(ateapi.ActorState_ACTOR_STATE_RUNNING),
 			assignments: released,
 			want:        codes.NotFound,
 		},
@@ -220,14 +220,14 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// crashes the actor.
 			name:        "resuming actor whose worker was released",
 			ctx:         authed,
-			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_RESUMING),
+			status:      onWorker(ateapi.ActorState_ACTOR_STATE_RESUMING),
 			assignments: released,
 			want:        codes.NotFound,
 		},
 		{
 			name:        "suspending actor whose worker was released",
 			ctx:         authed,
-			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_SUSPENDING),
+			status:      onWorker(ateapi.ActorState_ACTOR_STATE_SUSPENDING),
 			assignments: released,
 			want:        codes.NotFound,
 		},
@@ -243,21 +243,21 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// not this one.
 			name:        "running actor whose worker was rebooked for another actor",
 			ctx:         authed,
-			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_RUNNING),
+			status:      onWorker(ateapi.ActorState_ACTOR_STATE_RUNNING),
 			assignments: rebooked,
 			want:        codes.NotFound,
 		},
 		{
 			name:        "resuming actor whose worker was rebooked for another actor",
 			ctx:         authed,
-			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_RESUMING),
+			status:      onWorker(ateapi.ActorState_ACTOR_STATE_RESUMING),
 			assignments: rebooked,
 			want:        codes.NotFound,
 		},
 		{
 			name:        "suspending actor whose worker was rebooked for another actor",
 			ctx:         authed,
-			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_SUSPENDING),
+			status:      onWorker(ateapi.ActorState_ACTOR_STATE_SUSPENDING),
 			assignments: rebooked,
 			want:        codes.NotFound,
 		},
@@ -273,7 +273,7 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// names, so the status's worker does not host it.
 			name:        "actor held by a worker other than the one its status names",
 			ctx:         authed,
-			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_RUNNING),
+			status:      onWorker(ateapi.ActorState_ACTOR_STATE_RUNNING),
 			assignments: map[string]string{actor.GetMetadata().GetUid(): "worker-2"},
 			want:        codes.NotFound,
 		},
@@ -281,7 +281,7 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// A failed lookup refuses the mint rather than trusting the status.
 			name:          "worker assignment lookup fails",
 			ctx:           authed,
-			status:        onWorker(ateapipb.ActorState_ACTOR_STATE_RUNNING),
+			status:        onWorker(ateapi.ActorState_ACTOR_STATE_RUNNING),
 			assignmentErr: errors.New("connection reset"),
 			want:          codes.Internal,
 		},
@@ -293,25 +293,25 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 		{
 			name:   "missing actor",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.Actor = nil },
+			mutate: func(r *ateapi.MintWorkerActorJwtRequest) { r.Actor = nil },
 			want:   codes.InvalidArgument,
 		},
 		{
 			name:   "missing actor uid",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.ActorUid = "" },
+			mutate: func(r *ateapi.MintWorkerActorJwtRequest) { r.ActorUid = "" },
 			want:   codes.InvalidArgument,
 		},
 		{
 			name:   "missing audiences",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.Audiences = nil },
+			mutate: func(r *ateapi.MintWorkerActorJwtRequest) { r.Audiences = nil },
 			want:   codes.InvalidArgument,
 		},
 		{
 			name:   "empty audience",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.Audiences = []string{""} },
+			mutate: func(r *ateapi.MintWorkerActorJwtRequest) { r.Audiences = []string{""} },
 			want:   codes.InvalidArgument,
 		},
 		{
@@ -325,19 +325,19 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// check answering Aborted: the node check runs first.
 			name:   "actor hosted on another node, stale uid",
 			ctx:    ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-2")),
-			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.ActorUid = "7d1c0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a" },
+			mutate: func(r *ateapi.MintWorkerActorJwtRequest) { r.ActorUid = "7d1c0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a" },
 			want:   codes.NotFound,
 		},
 		{
 			name:   "paused actor on this node",
 			ctx:    authed,
-			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"),
+			status: pausedStatus(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1"),
 			want:   codes.OK,
 		},
 		{
 			name:   "paused actor on another node",
 			ctx:    authed,
-			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-2"),
+			status: pausedStatus(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-2"),
 			want:   codes.NotFound,
 		},
 		{
@@ -359,9 +359,9 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// clears the locality, so it still acts for the actor.
 			name: "paused actor whose snapshot is uploaded, local copy kept",
 			ctx:  authed,
-			status: func() *ateapipb.ActorStatus {
+			status: func() *ateapi.ActorStatus {
 				status := uploadPendingStatus("node-1")
-				status.Snapshots[0].DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				status.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 				return status
 			}(),
 			want: codes.OK,
@@ -370,9 +370,9 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// Only a SUSPENDED actor is hosted by a node with no worker.
 			name: "suspending actor with no worker",
 			ctx:  authed,
-			status: func() *ateapipb.ActorStatus {
+			status: func() *ateapi.ActorStatus {
 				status := uploadPendingStatus("node-1")
-				status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
+				status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDING
 				return status
 			}(),
 			want: codes.NotFound,
@@ -382,7 +382,7 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// node. Nothing is hosted there, so nothing may be minted.
 			name:   "crashed actor on its last node",
 			ctx:    authed,
-			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED, AssignedNode: "node-1"},
+			status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_CRASHED, AssignedNode: "node-1"},
 			want:   codes.NotFound,
 		},
 		{
@@ -390,26 +390,26 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// finalizes. The node no longer runs the actor.
 			name:   "reverting actor with a stale assignment",
 			ctx:    authed,
-			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_REVERTING, WorkerAssignment: &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: "worker-1"}}},
+			status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_REVERTING, WorkerAssignment: &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: "worker-1"}}},
 			want:   codes.NotFound,
 		},
 		{
 			// A suspended actor is hosted nowhere, so no node may mint for it.
 			name:   "actor hosted by no node",
 			ctx:    authed,
-			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 			want:   codes.NotFound,
 		},
 		{
 			name:   "actor assigned to a worker the store has lost",
 			ctx:    authed,
-			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: "worker-gone"}}},
+			status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: "worker-gone"}}},
 			want:   codes.NotFound,
 		},
 		{
 			name:   "actor not found",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.Actor.Name = "nonexistent" },
+			mutate: func(r *ateapi.MintWorkerActorJwtRequest) { r.Actor.Name = "nonexistent" },
 			want:   codes.NotFound,
 		},
 		{
@@ -417,7 +417,7 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			// for the old incarnation. Aborted, as MintWorkerActorCertificate answers.
 			name:   "stale actor uid",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.ActorUid = "7d1c0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a" },
+			mutate: func(r *ateapi.MintWorkerActorJwtRequest) { r.ActorUid = "7d1c0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a" },
 			want:   codes.Aborted,
 		},
 	}
@@ -459,7 +459,7 @@ func TestNodeRefusalLogNamesCredential(t *testing.T) {
 	s := New(st, &fakeControl{}, testAteletSPIFFEID, newTestCAPool(t), testActorJWTIssuer, newTestJWTPool(t))
 	// The actor's worker runs on node-1.
 	otherNode := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-2"))
-	actorRef := &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"}
+	actorRef := &ateapi.ObjectRef{Atespace: "team-a", Name: "my-actor"}
 
 	tests := []struct {
 		name string
@@ -469,7 +469,7 @@ func TestNodeRefusalLogNamesCredential(t *testing.T) {
 		{
 			name: "MintWorkerActorJwt",
 			mint: func() error {
-				_, err := s.MintWorkerActorJwt(otherNode, &ateapipb.MintWorkerActorJwtRequest{
+				_, err := s.MintWorkerActorJwt(otherNode, &ateapi.MintWorkerActorJwtRequest{
 					Actor:     actorRef,
 					ActorUid:  actor.GetMetadata().GetUid(),
 					Audiences: []string{"snapshot-plugin"},
@@ -481,11 +481,11 @@ func TestNodeRefusalLogNamesCredential(t *testing.T) {
 		{
 			name: "MintWorkerActorCertificate",
 			mint: func() error {
-				_, err := s.MintWorkerActorCertificate(otherNode, &ateapipb.MintWorkerActorCertificateRequest{
+				_, err := s.MintWorkerActorCertificate(otherNode, &ateapi.MintWorkerActorCertificateRequest{
 					Actor:                     actorRef,
 					ActorUid:                  actor.GetMetadata().GetUid(),
 					CertificateSigningRequest: csr,
-					Worker:                    &ateapipb.ObjectRef{Name: "worker-1"},
+					Worker:                    &ateapi.ObjectRef{Name: "worker-1"},
 				})
 				return err
 			},

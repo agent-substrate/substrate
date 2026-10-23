@@ -164,7 +164,7 @@ one (or create a new template and repoint suspended actors to it with
 `kubectl ate update actor --template`).
 
 ```bash
-# Create a template from a manifest (protojson-shaped ateapipb.ActorTemplate,
+# Create a template from a manifest (protojson-shaped ateapi.ActorTemplate,
 # a single YAML/JSON document; use -f - for stdin). The metadata's atespace
 # must already exist.
 kubectl ate create actor-template -f template.yaml

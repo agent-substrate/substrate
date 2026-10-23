@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
@@ -36,7 +37,6 @@ import (
 	"go.ate.dev/substrate/internal/pluginsocket"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -62,6 +62,7 @@ func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *Atelet {
 		snapshots:          snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 		sandboxAssetCache:  newTestAssetCache(t),
 		runtimes:           newRuntimeIndex(),
+		checkpointTimeout:  defaultCheckpointTimeout,
 	}
 }
 
@@ -161,11 +162,11 @@ type failingNodePlugin struct {
 	err error
 }
 
-func (p failingNodePlugin) FetchSnapshot(context.Context, *objectstorev1.FetchSnapshotRequest, ...grpc.CallOption) (*objectstorev1.FetchSnapshotResponse, error) {
+func (p failingNodePlugin) FetchSnapshot(context.Context, *objectstore.FetchSnapshotRequest, ...grpc.CallOption) (*objectstore.FetchSnapshotResponse, error) {
 	return nil, p.err
 }
 
-func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstorev1.UploadSnapshotRequest, ...grpc.CallOption) (*objectstorev1.UploadSnapshotResponse, error) {
+func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstore.UploadSnapshotRequest, ...grpc.CallOption) (*objectstore.UploadSnapshotResponse, error) {
 	return nil, p.err
 }
 
@@ -416,7 +417,7 @@ func (s *pluginSidecar) start() {
 		return
 	}
 	srv := grpc.NewServer()
-	objectstorev1.RegisterNodeProviderServer(srv, s.plugin)
+	objectstore.RegisterNodeProviderServer(srv, s.plugin)
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 	go srv.Serve(lis)
 	s.mu.Lock()
@@ -455,7 +456,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 		t.Fatalf("WaitReady = %v", err)
 	}
 	s := &Atelet{
-		objectStorePlugin:  objectstorev1.NewNodeProviderClient(conn),
+		objectStorePlugin:  objectstore.NewNodeProviderClient(conn),
 		workerActorJWTs:    testWorkerActorJWTs(),
 		snapshotScratchDir: t.TempDir(),
 	}

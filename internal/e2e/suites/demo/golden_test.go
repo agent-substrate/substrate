@@ -19,17 +19,17 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 func TestGoldenSnapshotLifecycle(t *testing.T) {
-	for _, fidelity := range []ateapipb.SnapshotFidelity{
-		ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	for _, fidelity := range []ateapi.SnapshotFidelity{
+		ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 	} {
 		t.Run(fidelity.String(), func(t *testing.T) {
 			ctx := t.Context()
@@ -45,12 +45,12 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 			t.Cleanup(func() {
 				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
-				_, _ = clients.SubstrateAPI.DeleteAtespace(cleanupCtx, &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: atespace}})
+				_, _ = clients.SubstrateAPI.DeleteAtespace(cleanupCtx, &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: atespace}})
 			})
 			created := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, ns.Name, e2e.SubstrateTemplateOptions{
 				Atespace: atespace, Name: "counter", PoolName: "counter", PoolReplicas: 1,
 				Labels: map[string]string{"golden-e2e": ns.Name},
-				SnapshotConfig: &ateapipb.SnapshotConfig{
+				SnapshotConfig: &ateapi.SnapshotConfig{
 					StorageLocation:   "gs://" + env["BUCKET_NAME"] + "/" + atespace,
 					PreferredFidelity: fidelity,
 				},
@@ -58,7 +58,7 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 
 			templateRef := e2e.TemplateRef(created)
 
-			tmpl, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: templateRef})
+			tmpl, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: templateRef})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -69,7 +69,7 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 			if got := tagRef.GetName(); got != tmpl.GetMetadata().GetUid() {
 				t.Fatalf("golden tag name = %q, want template UID %q", got, tmpl.GetMetadata().GetUid())
 			}
-			tag, err := clients.SubstrateAPI.GetTag(ctx, &ateapipb.GetTagRequest{Tag: tagRef})
+			tag, err := clients.SubstrateAPI.GetTag(ctx, &ateapi.GetTagRequest{Tag: tagRef})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -86,14 +86,14 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 			if !uri.OwnedBy(resources.TagSnapshotOwner(atespace, tag.GetMetadata().GetUid())) {
 				t.Fatalf("golden snapshot %s is not owned by its tenant tag", uri)
 			}
-			actorRef := &ateapipb.ObjectRef{Atespace: atespace, Name: "clone"}
+			actorRef := &ateapi.ObjectRef{Atespace: atespace, Name: "clone"}
 			t.Cleanup(func() {
 				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
-				_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef})
+				_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{Actor: actorRef})
 			})
-			actor, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: actorRef.Name}, ActorTemplate: templateRef,
+			actor, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Atespace: atespace, Name: actorRef.Name}, ActorTemplate: templateRef,
 			}})
 			if err != nil {
 				t.Fatal(err)
@@ -101,7 +101,7 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 			if got := durableSnapshotURI(actor.GetStatus()); got != uri.String() {
 				t.Fatalf("clone snapshot = %q, want golden %q", got, uri)
 			}
-			if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+			if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: actorRef}); err != nil {
 				t.Fatal(err)
 			}
 			response, err := callActor(t, resources.ActorRefFromObjectRef(actorRef))
@@ -110,16 +110,16 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 			}
 			validateCounterResponse(t, response, "golden restore", 1, 1)
 			// Delete the borrower before collecting the template's snapshot.
-			if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef}); err != nil {
+			if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: actorRef}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef}); err != nil {
+			if _, err := clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: templateRef}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := clients.SubstrateAPI.GetTag(ctx, &ateapipb.GetTagRequest{Tag: tagRef}); status.Code(err) != codes.NotFound {
+			if _, err := clients.SubstrateAPI.GetTag(ctx, &ateapi.GetTagRequest{Tag: tagRef}); status.Code(err) != codes.NotFound {
 				t.Fatalf("golden tag after template deletion = %v, want NotFound", err)
 			}
-			if _, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: tagRef}); status.Code(err) != codes.NotFound {
+			if _, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: tagRef}); status.Code(err) != codes.NotFound {
 				t.Fatalf("golden actor after template deletion = %v, want NotFound", err)
 			}
 			t.Logf("golden lifecycle passed: fidelity=%v, snapshot=%s", fidelity, uri)

@@ -23,13 +23,13 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -39,29 +39,29 @@ import (
 // seedTagSource stores a suspended actor whose external snapshot is made of
 // objectNames, the state a tag can be taken from. It returns the actor and the
 // URI of that snapshot.
-func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interface, objects *objectstoretest.Fake, template *ateapipb.ActorTemplate, name string, objectNames ...string) (*ateapipb.Actor, resources.SnapshotURI) {
+func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interface, objects *objectstoretest.Fake, template *ateapi.ActorTemplate, name string, objectNames ...string) (*ateapi.Actor, resources.SnapshotURI) {
 	t.Helper()
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: template.GetMetadata().GetName()},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: template.GetMetadata().GetName()},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 	uri := mustActorSnapshotURI(t, template, actor, name+"-snapshot")
 	objects.PutSnapshot(t, uri, objectNames...)
-	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 1
-		snap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		snap := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 		snap.SandboxRuntime = testSandboxRuntime()
-		s.Snapshots = []*ateapipb.Snapshot{snap}
+		s.Snapshots = []*ateapi.Snapshot{snap}
 	})
 	return actor, uri
 }
 
 // tagToCreate is the part of a Tag a client owns on create.
-func tagToCreate(sourceActor resources.ActorRef, name string) *ateapipb.Tag {
-	return &ateapipb.Tag{
-		Metadata:    &ateapipb.ResourceMetadata{Name: name},
-		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+func tagToCreate(sourceActor resources.ActorRef, name string) *ateapi.Tag {
+	return &ateapi.Tag{
+		Metadata:    &ateapi.ResourceMetadata{Name: name},
+		Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: sourceActor.ToObjectRef(),
 	}
 }
@@ -94,7 +94,7 @@ func TestTagActorSnapshot(t *testing.T) {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
 
-	tagSnapshot := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	tagSnapshot := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	if tagSnapshot == "" || tagSnapshot == actorSnapshot.String() {
 		t.Fatalf("tag snapshot uri = %q, want a copy of its own rather than the actor's %q", tagSnapshot, actorSnapshot)
 	}
@@ -107,7 +107,7 @@ func TestTagActorSnapshot(t *testing.T) {
 	if got, want := tag.GetStatus().GetActorTemplateUid(), template.GetMetadata().GetUid(); got != want {
 		t.Errorf("actor template uid = %q, want %q", got, want)
 	}
-	if got, want := tag.GetStatus().GetSnapshot().GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
+	if got, want := tag.GetStatus().GetSnapshot().GetFidelity(), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
 		t.Errorf("fidelity = %v, want the source's %v", got, want)
 	}
 	if diff := cmp.Diff(testSandboxRuntime(), tag.GetStatus().GetSnapshot().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
@@ -137,8 +137,8 @@ func TestTagActorSnapshot_ActorRepointedToAnotherTemplate(t *testing.T) {
 	// Repoint the suspended actor, the way UpdateActor does. The snapshot on
 	// disk still came from tmpl-a, and the UID recorded alongside it only
 	// moves when a later suspend commits a new snapshot.
-	if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.ActorTemplate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-b"}
+	if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+		toUpdate.ActorTemplate = &ateapi.ObjectRef{Atespace: "team-a", Name: "tmpl-b"}
 		return nil
 	}); err != nil {
 		t.Fatalf("repointing actor %s: %v", actorRef, err)
@@ -163,7 +163,7 @@ func TestTagActorSnapshot_ActorRepointedToAnotherTemplate(t *testing.T) {
 func TestTagActorSnapshot_Preconditions(t *testing.T) {
 	tests := []struct {
 		name         string
-		state        ateapipb.ActorState
+		state        ateapi.ActorState
 		withSnapshot bool
 		// builtOnTemplate records the template the seeded snapshot was taken
 		// under, as every real path to holding one does. Only the case that
@@ -173,19 +173,19 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 	}{
 		{
 			name:            "the actor is not suspended",
-			state:           ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			state:           ateapi.ActorState_ACTOR_STATE_RUNNING,
 			withSnapshot:    true,
 			builtOnTemplate: true,
 			wantCode:        codes.FailedPrecondition,
 		},
 		{
 			name:     "the actor holds no external snapshot",
-			state:    ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			state:    ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			wantCode: codes.FailedPrecondition,
 		},
 		{
 			name:         "the actor records no template its snapshot was built under",
-			state:        ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			state:        ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			withSnapshot: true,
 			wantCode:     codes.Internal,
 		},
@@ -199,22 +199,22 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 			w, objects := newFinalizeWorkflow(persistence)
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-				Status:        &ateapipb.ActorStatus{State: tt.state},
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status:        &ateapi.ActorStatus{State: tt.state},
 			})
 			if tt.withSnapshot {
 				uri := mustActorSnapshotURI(t, template, actor, "actor-1-snapshot")
 				objects.PutSnapshot(t, uri, "manifest.json")
-				mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 					var tmplUID string
 					if tt.builtOnTemplate {
 						tmplUID = template.GetMetadata().GetUid()
 					}
 					s.LastAssignedGeneration = 1
-					s.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					s.Snapshots = []*ateapi.Snapshot{
+						newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, uri.Name(), uri.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					}
 				})
 			}
@@ -266,18 +266,18 @@ func TestTagActorSnapshot_TagsNewestExternalSnapshot(t *testing.T) {
 			w, objects := newFinalizeWorkflow(persistence)
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 			})
 			uri := mustActorSnapshotURI(t, template, actor, "actor-1-snapshot")
 			objects.PutSnapshot(t, uri, "manifest.json")
-			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-				snap := newDurableSnapshot(tt.extGen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+				snap := newDurableSnapshot(tt.extGen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 				snap.Locality = tt.locality
 				s.LastAssignedGeneration = tt.lastAssigned
-				s.Snapshots = []*ateapipb.Snapshot{snap}
+				s.Snapshots = []*ateapi.Snapshot{snap}
 			})
 
 			if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); err != nil {
@@ -295,7 +295,7 @@ func TestTagActorSnapshot_TagsNewestExternalSnapshot(t *testing.T) {
 // upload.
 func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 	// reported is the state atelet answers with once it made snap durable.
-	reported := func(snap *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+	reported := func(snap *ateapi.Snapshot) *ateletpb.ActorSnapshotState {
 		report := &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: snap.GetUuid(),
 			Generation:   snap.GetGeneration(),
@@ -323,7 +323,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 		noTemplateUID bool
 		// promoteState builds the state PromoteSnapshot answers with from the
 		// local snapshot.
-		promoteState func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState
+		promoteState func(paused *ateapi.Snapshot) *ateletpb.ActorSnapshotState
 		promoteErr   error
 		wantPromote  bool
 		wantCode     codes.Code
@@ -396,13 +396,13 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 		},
 		{
 			name:         "atelet reports no durable snapshot",
-			promoteState: func(*ateapipb.Snapshot) *ateletpb.ActorSnapshotState { return &ateletpb.ActorSnapshotState{} },
+			promoteState: func(*ateapi.Snapshot) *ateletpb.ActorSnapshotState { return &ateletpb.ActorSnapshotState{} },
 			wantPromote:  true,
 			wantCode:     codes.Internal,
 		},
 		{
 			name: "atelet reports another snapshot at the generation",
-			promoteState: func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+			promoteState: func(paused *ateapi.Snapshot) *ateletpb.ActorSnapshotState {
 				state := reported(paused)
 				state.LatestDurable.Snapshot.SnapshotUuid = "another-snapshot"
 				return state
@@ -412,7 +412,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 		},
 		{
 			name: "atelet reports the snapshot at another generation",
-			promoteState: func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+			promoteState: func(paused *ateapi.Snapshot) *ateletpb.ActorSnapshotState {
 				state := reported(paused)
 				state.LatestDurable.Snapshot.Generation = 1
 				return state
@@ -422,7 +422,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 		},
 		{
 			name: "atelet reports the snapshot uploaded to another URI",
-			promoteState: func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+			promoteState: func(paused *ateapi.Snapshot) *ateletpb.ActorSnapshotState {
 				state := reported(paused)
 				state.LatestDurable.Snapshot.Object.SnapshotUri += "-elsewhere"
 				return state
@@ -432,7 +432,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 		},
 		{
 			name: "atelet reports the snapshot without a fidelity",
-			promoteState: func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+			promoteState: func(paused *ateapi.Snapshot) *ateletpb.ActorSnapshotState {
 				state := reported(paused)
 				state.LatestDurable.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 				return state
@@ -451,49 +451,49 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 			tmplUID := template.GetMetadata().GetUid()
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, AssignedNode: "node-1"},
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED, AssignedNode: "node-1"},
 			})
 			pausedURI := mustActorSnapshotURI(t, template, actor, "paused")
 			objects.PutSnapshot(t, pausedURI, "manifest.json", "memory.zst")
-			pausedStatus := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+			pausedStatus := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
 			if tt.uploaded {
-				pausedStatus = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				pausedStatus = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 			}
-			paused := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, pausedURI.Name(), pausedURI.String(), pausedStatus)
+			paused := newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, pausedURI.Name(), pausedURI.String(), pausedStatus)
 			if !tt.nodeLost {
 				paused.Locality = "node-1"
 			}
 			if tt.noTemplateUID {
 				paused.ActorTemplateUid = ""
 			}
-			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.LastAssignedGeneration = 2
 				if tt.olderDurable {
 					olderURI := mustActorSnapshotURI(t, template, actor, "older")
 					objects.PutSnapshot(t, olderURI, "manifest.json")
-					s.Snapshots = append(s.Snapshots, newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, olderURI.Name(), olderURI.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
+					s.Snapshots = append(s.Snapshots, newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, olderURI.Name(), olderURI.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
 				}
 				s.Snapshots = append(s.Snapshots, proto.CloneOf(paused))
 			})
 			tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
-			var takenBy *ateapipb.Tag
+			var takenBy *ateapi.Tag
 			if tt.nameTaken {
 				var err error
-				takenBy, err = persistence.CreateTag(ctx, &ateapipb.Tag{
-					Metadata:    &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
-					Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+				takenBy, err = persistence.CreateTag(ctx, &ateapi.Tag{
+					Metadata:    &ateapi.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
+					Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
 					SourceActor: actorRef.ToObjectRef(),
-					Status:      &ateapipb.TagStatus{ActorTemplateUid: tmplUID},
+					Status:      &ateapi.TagStatus{ActorTemplateUid: tmplUID},
 				})
 				if err != nil {
 					t.Fatalf("CreateTag: %v", err)
 				}
 			}
 			if tt.badLocation {
-				_, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(template), store.PreconditionFrom(template), func(tmpl *ateapipb.ActorTemplate) error {
+				_, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(template), store.PreconditionFrom(template), func(tmpl *ateapi.ActorTemplate) error {
 					tmpl.SnapshotConfig.StorageLocation = "gs://ate-snapshots/team-a/?query"
 					return nil
 				})
@@ -525,7 +525,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 					Snapshot: &ateletpb.Snapshot{
 						SnapshotUuid: pausedURI.Name(),
 						Generation:   2,
-						Fidelity:     fidelityToAtelet(ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
+						Fidelity:     fidelityToAtelet(ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 						Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedURI.String()},
 					},
 				}
@@ -554,7 +554,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 				return
 			}
 
-			tagSnapshot := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			tagSnapshot := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 			if tt.nodeLost {
 				// Nothing to upload from: the actor is left as it was, and the
 				// tag copied the older durable snapshot.
@@ -569,7 +569,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 
 			// The local snapshot is now durable and stays on its node.
 			wantPaused := proto.CloneOf(paused)
-			wantPaused.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+			wantPaused.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 			if diff := cmp.Diff(wantPaused, findSnapshotByGeneration(stored.GetStatus().GetSnapshots(), 2), protocmp.Transform()); diff != "" {
 				t.Errorf("the actor's latest snapshot mismatch (-want +got):\n%s", diff)
 			}
@@ -612,7 +612,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTag after the external store failure: %v", err)
 	}
-	if got := tagDurableSnapshotURI(pending, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); got != "" {
+	if got := tagDurableSnapshotURI(pending, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); got != "" {
 		t.Errorf("snapshot uri after the failure = %q, want unset: the copy never finished", got)
 	}
 	strandedURI := mustReservedTagSnapshotURI(t, pending)
@@ -651,7 +651,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TagActorSnapshot after the delete: %v", err)
 	}
-	recreated := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	recreated := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	if recreated == "" || recreated == stranded {
 		t.Fatalf("snapshot uri after the delete = %q, want a fresh prefix rather than the stranded %q", recreated, stranded)
 	}
@@ -676,7 +676,7 @@ type recordTagErrorStore struct {
 	err error
 }
 
-func (s *recordTagErrorStore) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapipb.Tag) error) (*ateapipb.Tag, error) {
+func (s *recordTagErrorStore) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -732,7 +732,7 @@ func TestTagActorSnapshot_RecreateAfterRecordFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TagActorSnapshot after the delete: %v", err)
 	}
-	if got, want := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED), mustTagSnapshotURI(t, template, "team-a", tag.GetMetadata().GetUid()).String(); got != want {
+	if got, want := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED), mustTagSnapshotURI(t, template, "team-a", tag.GetMetadata().GetUid()).String(); got != want {
 		t.Errorf("recreated tag snapshot uri = %q, want UID-based URI %q", got, want)
 	}
 }
@@ -782,7 +782,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 
 	// Nothing was collected out from under the copy, and the row in the store it
 	// is still there.
-	if got := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); got != pendingURI {
+	if got := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); got != pendingURI {
 		t.Errorf("snapshot uri = %q, want the prefix the create reserved, %q", got, pendingURI)
 	}
 	if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, pendingURI))); diff != "" {
@@ -924,8 +924,8 @@ func TestDeleteTag_ReleasesPendingSnapshot(t *testing.T) {
 	objects.PutSnapshot(t, uri, "manifest.json")
 
 	// Cleanup must work without the source actor or its template.
-	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-		s.State = ateapipb.ActorState_ACTOR_STATE_DELETING
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+		s.State = ateapi.ActorState_ACTOR_STATE_DELETING
 	})
 	if _, err := persistence.DeleteActor(ctx, resources.ActorRefFromActor(actor), store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteActor: %v", err)
@@ -965,9 +965,9 @@ func TestDeleteTag_NotFound(t *testing.T) {
 	}
 }
 
-func mustReservedTagSnapshotURI(t *testing.T, tag *ateapipb.Tag) resources.SnapshotURI {
+func mustReservedTagSnapshotURI(t *testing.T, tag *ateapi.Tag) resources.SnapshotURI {
 	t.Helper()
-	uri, err := resources.ParseSnapshotURI(tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED))
+	uri, err := resources.ParseSnapshotURI(tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED))
 	if err != nil {
 		t.Fatalf("ParseSnapshotURI: %v", err)
 	}

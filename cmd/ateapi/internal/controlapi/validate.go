@@ -14,11 +14,11 @@
 
 package controlapi
 
-import "go.ate.dev/substrate/pkg/proto/ateapipb"
+import "go.ate.dev/substrate/api/ateapi/v1"
 
 // scrubResourceMetadataForCreate removes fields that should not be set by the
 // user when creating a resource.
-func scrubResourceMetadataForCreate(in *ateapipb.ResourceMetadata) {
+func scrubResourceMetadataForCreate(in *ateapi.ResourceMetadata) {
 	if in == nil {
 		return // validation will flag it
 	}
@@ -31,7 +31,7 @@ func scrubResourceMetadataForCreate(in *ateapipb.ResourceMetadata) {
 
 // scrubResourceMetadataForUpdate removes fields that should not be set by the
 // user when updating a resource.
-func scrubResourceMetadataForUpdate(in *ateapipb.ResourceMetadata) {
+func scrubResourceMetadataForUpdate(in *ateapi.ResourceMetadata) {
 	if in == nil {
 		return // validation will flag it
 	}

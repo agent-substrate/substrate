@@ -8,6 +8,7 @@ file, read this first.
 
 ```
 substrate/
+├── api/          # Public APIs: protos and CRD types, one directory per API and version
 ├── cmd/          # Binary entry points (one subdirectory per binary)
 ├── internal/     # Shared Go packages, not importable outside this module
 ├── pkg/          # Shared Go packages, intentionally importable by external users
@@ -42,6 +43,24 @@ that nothing else in the repo should depend on or import.
 > keeping new code in `internal/` until its API has stabilized. The bar for
 > adding to `pkg/` is: "I am confident external users need to import this, and I
 > am prepared to maintain its API indefinitely."
+
+### `api/`
+
+Public APIs, one directory per API and version: `api/<name>/<version>`, and
+`api/infra/k8s/<group>/<version>` for CRD types.
+
+| Directory | API |
+|---|---|
+| `api/ateapi/v1` | Control-plane gRPC API |
+| `api/credprovider/v1` | Credential provider plugin gRPC API |
+| `api/objectstore/v1` | Object store plugin gRPC API |
+| `api/infra/k8s/ate/v1` | Kubernetes CRD types, group `ate.dev` |
+
+Each `.proto` sits next to its generated Go. Proto packages are
+`substrate.<name>.<version>`. The Go package is named after the API, as in
+`package ateapi`, so imports need no alias. The CRD types follow the Kubernetes
+convention instead: `package v1`, imported as `atev1`. A new version of an
+API goes in a new directory next to the old one.
 
 ### `cmd/<binary>/`
 
@@ -99,7 +118,8 @@ When adding a new Go package, ask:
 1. **Is it only used by one binary?** → `cmd/<binary>/internal/<pkg>`
 2. **Is it shared by multiple binaries but not meant for external import?** → `internal/<pkg>`
 3. **Is it a deliberately public API for external users?** → `pkg/<pkg>`
-4. **Is it a protobuf-generated package?**
-   - Public gRPC API (control plane) → `pkg/proto/<name>`
+4. **Is it a public API, or a protobuf-generated package?**
+   - Public gRPC API → `api/<name>/<version>`
+   - Kubernetes CRD types → `api/infra/k8s/<group>/<version>`
    - Internal gRPC API (atelet, ateworker) → `internal/proto/<name>`
 5. **Is it a script or dev tool?** → `hack/` (shell) or `tools/<name>` (Go)

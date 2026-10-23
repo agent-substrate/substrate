@@ -48,7 +48,7 @@ Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each w
 ### Example
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: WorkerPool
 metadata:
   name: agent-pool
@@ -343,6 +343,7 @@ How it behaves:
 - **When it runs.** On every `ResumeActor` that actually wakes the actor. A `ResumeActor` on an actor that is already `RUNNING` is a no-op and does not probe.
 - **Block-until-ready semantics.** `ResumeActor` returns successfully only after every container with a `wakeupProbe` has returned HTTP 200. If any container has not done so within `timeoutSeconds` (30s by default), `ResumeActor` fails and the actor moves to `ACTOR_STATE_CRASHED`, as it does for any other error while waking. A crashed actor cannot be resumed directly: `ResumeActor` rejects it with `FAILED_PRECONDITION`. Call `RevertActor` first, which returns it to `ACTOR_STATE_SUSPENDED` with its last snapshot, then resume it again.
 - **Aggressive polling.** The poll loop is tuned for single-millisecond detection latency: a keep-alive HTTP client with a 1ms interval and 250ms per-request timeout. While the workload is still booting, kernel `RST`s return in microseconds, so the loop spends almost no time blocked; once the listener is up, the next attempt completes on veth-local latency.
+- **Egress while waking.** The actor's egress is active before its containers start, so a workload can download what it needs to become ready (a model, a Git repository) before it answers the probe. A micro-VM restored from a memory snapshot is already past its boot, and gets egress just before the probe starts. Its EgressPolicy applies as it does once the actor is `RUNNING`; inbound traffic still waits for the probe. A wake that fails or is cut short after egress is active can be retried from the same snapshot, so outbound requests made while waking can be sent more than once.
 - **Golden snapshot warm-up shortcut.** When **every** container in a template declares `wakeupProbe`, the actor template controller skips its default ~20s "give the workload time to settle" delay before taking the golden snapshot — `ResumeActor` already blocked until the workload reported 200, so the workload is known to be initialized. Templates that omit `wakeupProbe` on any container keep the 20s warm-up as a safety net.
 - **Snapshot/restore interaction.** The TCP listener is part of the checkpointed RAM, so on resume `wakeupProbe` typically returns 200 on the first attempt, with no observable latency penalty.
 
@@ -350,7 +351,7 @@ If `wakeupProbe` is omitted from a container, `ResumeActor` returns as soon as t
 
 ### Example
 
-A protojson-shaped `ateapipb.ActorTemplate`, created through the ate API with
+A protojson-shaped `ateapi.ActorTemplate`, created through the ate API with
 `kubectl ate create actor-template -f secret-agent.yaml` (the `ate-demo`
 atespace must exist):
 
@@ -424,7 +425,7 @@ a `Snapshot` with the following fields:
   it restores. A snapshot captured under a replaced template restores volume
   data and boots fresh.
 - `locality`: The node holding the snapshot's local files. For attachment rules,
-  see `ActorStatus.assigned_node` in the [API schema](../pkg/proto/ateapipb/ateapi.proto).
+  see `ActorStatus.assigned_node` in the [API schema](../api/ateapi/v1/ateapi.proto).
 - `durableSnapshot`: The copy in object storage, with its URI in
   `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
   written and `COMPLETED` once it can be restored from. A synchronous suspend
@@ -455,8 +456,8 @@ a `Snapshot` with the following fields:
     retries placement. Detach uploads it if needed, deletes the local files,
     and releases the binding. The retry prefers compatible workers before
     using the durable fallback above. A detach error leaves the actor attached,
-    unless its node was deleted before the checkpoint finished uploading. See
-    [`ResumeActor`](#resumeactor) for that case.
+    unless its node was deleted. See [`ResumeActor`](#resumeactor) for that
+    case.
 
   A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
   `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime placement constraint. Because a
@@ -533,7 +534,7 @@ atecontroller alone adds and releases the finalizer. While it is down, `kubectl 
 ### Example
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: SandboxConfig
 metadata:
   name: gvisor-default
@@ -641,7 +642,7 @@ The node can cut the 30 minutes short. GKE node upgrades and cluster autoscaler 
 
 The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for managing actors and workers. This is the primary API used by the `kubectl-ate` CLI and higher-level frameworks.
 
-### Service: `ateapi.Control`
+### Service: `substrate.ateapi.v1.Control`
 
 #### `CreateActor`
 Registers a new logical actor in the system.
@@ -668,7 +669,7 @@ Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
-*   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`. A suspended actor loses its local snapshot when its node is deleted before that snapshot finishes uploading. Once another node has room, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot.
+*   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`. When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
@@ -727,7 +728,7 @@ Query the physical resource pool.
 
 ate-api-server mints credentials that identify an actor to services outside Substrate. They name the logical actor, so they stay the same as the actor moves between workers. This is distinct from the `actorMetadata` data source described under [SystemInfo Volumes](#systeminfo-volumes), which only tells an actor its own identity fields (name, atespace, uid).
 
-Both RPCs are on `ateapi.Control`. Only the egress gateway may call them; see [authorization.md](authorization.md). It calls `MintActorJwt` when an egress policy injects an actor JWT into a request.
+Both RPCs are on `substrate.ateapi.v1.Control`. Only the egress gateway may call them; see [authorization.md](authorization.md). It calls `MintActorJwt` when an egress policy injects an actor JWT into a request.
 
 ### `MintActorJwt`
 

@@ -20,13 +20,13 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 )
 
-func (p *Persistence) GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {
+func (p *Persistence) GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapi.Tag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
 	if err := p.pool.QueryRow(ctx, `
@@ -37,19 +37,19 @@ func (p *Persistence) GetTag(ctx context.Context, tagRef resources.TagRef) (*ate
 		}
 		return nil, fmt.Errorf("getting tag %s/%s: %w", atespace, name, err)
 	}
-	tag := &ateapipb.Tag{}
+	tag := &ateapi.Tag{}
 	if err := unmarshalStored(protoBytes, tag); err != nil {
 		return nil, fmt.Errorf("unmarshaling tag: %w", err)
 	}
 	return tag, nil
 }
 
-func (p *Persistence) ListTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Tag], error) {
+func (p *Persistence) ListTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.Tag], error) {
 	opts, err := store.NormalizeListOptions(opts)
 	if err != nil {
-		return store.ListResponse[*ateapipb.Tag]{}, err
+		return store.ListResponse[*ateapi.Tag]{}, err
 	}
-	var items []*ateapipb.Tag
+	var items []*ateapi.Tag
 	var nextToken string
 	if atespace != "" {
 		items, nextToken, err = p.listTagsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
@@ -57,12 +57,12 @@ func (p *Persistence) ListTags(ctx context.Context, atespace string, opts store.
 		items, nextToken, err = p.listTagsGlobal(ctx, opts.PageSize, opts.PageToken)
 	}
 	if err != nil {
-		return store.ListResponse[*ateapipb.Tag]{}, err
+		return store.ListResponse[*ateapi.Tag]{}, err
 	}
-	return store.ListResponse[*ateapipb.Tag]{Items: items, NextPageToken: nextToken}, nil
+	return store.ListResponse[*ateapi.Tag]{Items: items, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) listTagsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Tag, string, error) {
+func (p *Persistence) listTagsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapi.Tag, string, error) {
 	token, err := decodePageToken(pageTokenStr, kindTag, atespace, 1)
 	if err != nil {
 		return nil, "", err
@@ -82,14 +82,14 @@ func (p *Persistence) listTagsScoped(ctx context.Context, atespace string, pageS
 	defer rows.Close()
 
 	var names []string
-	var result []*ateapipb.Tag
+	var result []*ateapi.Tag
 	for rows.Next() {
 		var name string
 		var protoBytes []byte
 		if err := rows.Scan(&name, &protoBytes); err != nil {
 			return nil, "", fmt.Errorf("scanning tag row: %w", err)
 		}
-		tag := &ateapipb.Tag{}
+		tag := &ateapi.Tag{}
 		if err := unmarshalRow(protoBytes, tag, "tag", atespace, name); err != nil {
 			return nil, "", err
 		}
@@ -107,7 +107,7 @@ func (p *Persistence) listTagsScoped(ctx context.Context, atespace string, pageS
 	return result, nextToken, nil
 }
 
-func (p *Persistence) listTagsGlobal(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Tag, string, error) {
+func (p *Persistence) listTagsGlobal(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapi.Tag, string, error) {
 	token, err := decodePageToken(pageTokenStr, kindTag, "", 2)
 	if err != nil {
 		return nil, "", err
@@ -128,14 +128,14 @@ func (p *Persistence) listTagsGlobal(ctx context.Context, pageSize int32, pageTo
 
 	type key struct{ atespace, name string }
 	var keys []key
-	var result []*ateapipb.Tag
+	var result []*ateapi.Tag
 	for rows.Next() {
 		var k key
 		var protoBytes []byte
 		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
 			return nil, "", fmt.Errorf("scanning tag row: %w", err)
 		}
-		tag := &ateapipb.Tag{}
+		tag := &ateapi.Tag{}
 		if err := unmarshalRow(protoBytes, tag, "tag", k.atespace, k.name); err != nil {
 			return nil, "", err
 		}
@@ -154,11 +154,14 @@ func (p *Persistence) listTagsGlobal(ctx context.Context, pageSize int32, pageTo
 	return result, nextToken, nil
 }
 
-func (p *Persistence) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error) {
+func (p *Persistence) CreateTag(ctx context.Context, tag *ateapi.Tag) (*ateapi.Tag, error) {
 	atespace := tag.GetMetadata().GetAtespace()
 	name := tag.GetMetadata().GetName()
 	dbTag := proto.CloneOf(tag)
 	setCreateMetadata(dbTag.Metadata)
+	if err := validateSnapshotURIs(fmt.Sprintf("tag %s/%s", atespace, name), dbTag.GetStatus().GetSnapshot()); err != nil {
+		return nil, err
+	}
 	protoBytes, err := proto.Marshal(dbTag)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling tag: %w", err)
@@ -185,23 +188,23 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapi
 	return dbTag, nil
 }
 
-func isAllowedTagSnapshotTransition(stored, mutated *ateapipb.Snapshot) bool {
+func isAllowedTagSnapshotTransition(stored, mutated *ateapi.Snapshot) bool {
 	if proto.Equal(stored, mutated) || stored == nil {
 		return true
 	}
 	if mutated == nil || stored.GetDurableSnapshot() == nil || mutated.GetDurableSnapshot() == nil {
 		return false
 	}
-	if stored.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING ||
-		mutated.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+	if stored.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING ||
+		mutated.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 		return false
 	}
 	expected := proto.CloneOf(stored)
-	expected.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	expected.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	return proto.Equal(expected, mutated)
 }
 
-func validateUpdateTagMutation(storedTag, mutatedTag *ateapipb.Tag) error {
+func validateUpdateTagMutation(storedTag, mutatedTag *ateapi.Tag) error {
 	if stored, mutated := storedTag.GetMetadata().GetAtespace(), mutatedTag.GetMetadata().GetAtespace(); stored != mutated {
 		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
@@ -217,18 +220,18 @@ func validateUpdateTagMutation(storedTag, mutatedTag *ateapipb.Tag) error {
 	return nil
 }
 
-func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapipb.Tag) error) (*ateapipb.Tag, error) {
+func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
 	return p.updateTag(ctx, tagRef, store.DeletePreconditions(precondition), mutate, false)
 }
 
-func (p *Persistence) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapipb.Tag) error) (*ateapipb.Tag, error) {
+func (p *Persistence) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
 	return p.updateTag(ctx, tagRef, precondition, mutate, true)
 }
 
-func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapipb.Tag) error, markForDeletion bool) (*ateapipb.Tag, error) {
+func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapi.Tag) error, markForDeletion bool) (*ateapi.Tag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var currentUID string
 	var currentVersion int64
@@ -242,7 +245,7 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 		return nil, fmt.Errorf("getting tag %s/%s for update: %w", atespace, name, err)
 	}
 
-	dbTag := &ateapipb.Tag{}
+	dbTag := &ateapi.Tag{}
 	if err := unmarshalStored(currentBytes, dbTag); err != nil {
 		return nil, fmt.Errorf("unmarshaling tag: %w", err)
 	}
@@ -252,7 +255,7 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err := precondition.Check(dbTag.GetMetadata()); err != nil {
 		return nil, err
 	}
-	tagBeforeMutation := proto.Clone(dbTag).(*ateapipb.Tag)
+	tagBeforeMutation := proto.Clone(dbTag).(*ateapi.Tag)
 	oldMeta := proto.CloneOf(dbTag.Metadata)
 	if mutate != nil {
 		if err := mutate(dbTag); err != nil {
@@ -262,6 +265,9 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	// TODO: this should be done through DV and removed from here
 	if err := validateUpdateTagMutation(tagBeforeMutation, dbTag); err != nil {
 		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
+	}
+	if err := validateSnapshotURIs(fmt.Sprintf("tag %s/%s", atespace, name), dbTag.GetStatus().GetSnapshot()); err != nil {
+		return nil, err
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
@@ -291,7 +297,7 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	return dbTag, nil
 }
 
-func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
+func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapi.Tag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `
@@ -309,7 +315,7 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err != nil {
 		return nil, fmt.Errorf("deleting tag %s/%s: %w", atespace, name, err)
 	}
-	tag := &ateapipb.Tag{}
+	tag := &ateapi.Tag{}
 	if err := unmarshalStored(protoBytes, tag); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted tag: %w", err)
 	}

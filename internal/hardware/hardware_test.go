@@ -18,7 +18,7 @@ import (
 	"runtime"
 	"testing"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -34,45 +34,45 @@ func TestProbeHost(t *testing.T) {
 }
 
 func TestMatches(t *testing.T) {
-	runtimeWith := func(class, ver string, attrs ...*ateapipb.AttributeEntry) *ateapipb.ActorSandboxRuntime {
-		return &ateapipb.ActorSandboxRuntime{
+	runtimeWith := func(class, ver string, attrs ...*ateapi.AttributeEntry) *ateapi.ActorSandboxRuntime {
+		return &ateapi.ActorSandboxRuntime{
 			SandboxClass: class,
-			Version: &ateapipb.VersionedSandboxCompat{
+			Version: &ateapi.VersionedSandboxCompat{
 				SchemaVersion: ver,
 				Attributes:    attrs,
 			},
 		}
 	}
 	amd64GVisor := runtimeWith("gvisor", "v1",
-		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
 	)
 	amd64GVisorReordered := runtimeWith("gvisor", "v1",
-		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
-		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
 	)
 	arm64GVisor := runtimeWith("gvisor", "v1",
-		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "arm64"},
-		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "arm64"},
+		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
 	)
 	amd64MicroVM := runtimeWith("microvm", "v1",
-		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
 	)
 	amd64GVisorV2 := runtimeWith("gvisor", "v2",
-		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
 	)
 	amd64GVisorExtraAttr := runtimeWith("gvisor", "v1",
-		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
-		&ateapipb.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:abc"},
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
+		&ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:abc"},
 	)
 
 	tests := []struct {
 		name   string
-		worker *ateapipb.ActorSandboxRuntime
-		snap   *ateapipb.ActorSandboxRuntime
+		worker *ateapi.ActorSandboxRuntime
+		snap   *ateapi.ActorSandboxRuntime
 		want   bool
 	}{
 		{"nil snapshot imposes no constraint", amd64GVisor, nil, true},
@@ -84,7 +84,7 @@ func TestMatches(t *testing.T) {
 		{"attribute only the worker has is ignored", amd64GVisorExtraAttr, amd64GVisor, true},
 		{"attribute missing on worker fails", amd64GVisor, amd64GVisorExtraAttr, false},
 		{"nil worker fails when snapshot is stamped", nil, amd64GVisor, false},
-		{"nil version fails", &ateapipb.ActorSandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
+		{"nil version fails", &ateapi.ActorSandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,14 +96,14 @@ func TestMatches(t *testing.T) {
 }
 
 func TestMatchesCompat(t *testing.T) {
-	compat := func(ver string, attrs ...*ateapipb.AttributeEntry) *ateapipb.VersionedSandboxCompat {
-		return &ateapipb.VersionedSandboxCompat{SchemaVersion: ver, Attributes: attrs}
+	compat := func(ver string, attrs ...*ateapi.AttributeEntry) *ateapi.VersionedSandboxCompat {
+		return &ateapi.VersionedSandboxCompat{SchemaVersion: ver, Attributes: attrs}
 	}
-	amd64 := &ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"}
-	arm64 := &ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "arm64"}
-	hash := &ateapipb.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:abc"}
-	cpuBits := func(val string) *ateapipb.AttributeEntry {
-		return &ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: val}
+	amd64 := &ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"}
+	arm64 := &ateapi.AttributeEntry{Key: AttrArchitecture, Value: "arm64"}
+	hash := &ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:abc"}
+	cpuBits := func(val string) *ateapi.AttributeEntry {
+		return &ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: val}
 	}
 
 	// Build >64-bit masks so the subset check spans mask words.
@@ -122,7 +122,7 @@ func TestMatchesCompat(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		worker, snap *ateapipb.VersionedSandboxCompat
+		worker, snap *ateapi.VersionedSandboxCompat
 		want         bool
 	}{
 		{"equal", compat("v1", amd64), compat("v1", amd64), true},
@@ -161,12 +161,12 @@ func TestMatchesCompat(t *testing.T) {
 // of the snapshot must hold across comparisons, and the zero value must
 // require nothing.
 func TestRequirement(t *testing.T) {
-	rt := func(cpu string) *ateapipb.ActorSandboxRuntime {
-		return &ateapipb.ActorSandboxRuntime{
+	rt := func(cpu string) *ateapi.ActorSandboxRuntime {
+		return &ateapi.ActorSandboxRuntime{
 			SandboxClass: "gvisor",
-			Version: &ateapipb.VersionedSandboxCompat{
+			Version: &ateapi.VersionedSandboxCompat{
 				SchemaVersion: SchemaVersionV1,
-				Attributes: []*ateapipb.AttributeEntry{
+				Attributes: []*ateapi.AttributeEntry{
 					{Key: AttrArchitecture, Value: "amd64"},
 					{Key: AttrCPUFeatures, Value: cpu},
 				},
@@ -180,7 +180,7 @@ func TestRequirement(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name   string
-		worker *ateapipb.ActorSandboxRuntime
+		worker *ateapi.ActorSandboxRuntime
 		want   bool
 	}{
 		{"worker superset", rt("f"), true},
@@ -192,10 +192,10 @@ func TestRequirement(t *testing.T) {
 			t.Errorf("%s: Matches() = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	status := &ateapipb.WorkerStatus{SandboxClasses: []*ateapipb.WorkerSandboxClass{{
+	status := &ateapi.WorkerStatus{SandboxClasses: []*ateapi.WorkerSandboxClass{{
 		SandboxClass:       "gvisor",
-		DefaultRuntime:     &ateapipb.WorkerSandboxRuntime{Version: rt("3").GetVersion()},
-		RestorableRuntimes: []*ateapipb.WorkerSandboxRuntime{{Version: rt("f").GetVersion()}},
+		DefaultRuntime:     &ateapi.WorkerSandboxRuntime{Version: rt("3").GetVersion()},
+		RestorableRuntimes: []*ateapi.WorkerSandboxRuntime{{Version: rt("f").GetVersion()}},
 	}}}
 	if got := req.MatchingRuntime(status); !proto.Equal(got, rt("f")) {
 		t.Errorf("MatchingRuntime() = %v, want the restorable superset", got)
@@ -216,15 +216,15 @@ func TestRequirement(t *testing.T) {
 }
 
 func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
-	compat := func(arch, hash string) *ateapipb.VersionedSandboxCompat {
-		attrs := []*ateapipb.AttributeEntry{{Key: AttrArchitecture, Value: arch}}
+	compat := func(arch, hash string) *ateapi.VersionedSandboxCompat {
+		attrs := []*ateapi.AttributeEntry{{Key: AttrArchitecture, Value: arch}}
 		if hash != "" {
-			attrs = append(attrs, &ateapipb.AttributeEntry{Key: AttrSandboxBundleHash, Value: hash})
+			attrs = append(attrs, &ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: hash})
 		}
-		return &ateapipb.VersionedSandboxCompat{SchemaVersion: SchemaVersionV1, Attributes: attrs}
+		return &ateapi.VersionedSandboxCompat{SchemaVersion: SchemaVersionV1, Attributes: attrs}
 	}
-	rt := func(class string, c *ateapipb.VersionedSandboxCompat) *ateapipb.ActorSandboxRuntime {
-		return &ateapipb.ActorSandboxRuntime{SandboxClass: class, Version: c}
+	rt := func(class string, c *ateapi.VersionedSandboxCompat) *ateapi.ActorSandboxRuntime {
+		return &ateapi.ActorSandboxRuntime{SandboxClass: class, Version: c}
 	}
 
 	defCompat := compat("amd64", "v2-hash")
@@ -233,17 +233,17 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 	defRT := rt("gvisor", defCompat)
 	unmatchedRT := rt("gvisor", compat("arm64", "v2-hash"))
 
-	status := &ateapipb.WorkerStatus{SandboxClasses: []*ateapipb.WorkerSandboxClass{{
+	status := &ateapi.WorkerStatus{SandboxClasses: []*ateapi.WorkerSandboxClass{{
 		SandboxClass:       "gvisor",
-		DefaultRuntime:     &ateapipb.WorkerSandboxRuntime{Version: defCompat},
-		RestorableRuntimes: []*ateapipb.WorkerSandboxRuntime{{Version: restorable1}, {Version: restorable2}},
+		DefaultRuntime:     &ateapi.WorkerSandboxRuntime{Version: defCompat},
+		RestorableRuntimes: []*ateapi.WorkerSandboxRuntime{{Version: restorable1}, {Version: restorable2}},
 	}}}
 
 	t.Run("nil snap matches any worker status and returns the default", func(t *testing.T) {
 		if !WorkerMatches(nil, nil) {
 			t.Errorf("WorkerMatches(nil, nil) = false, want true")
 		}
-		if !WorkerMatches(&ateapipb.WorkerStatus{}, nil) {
+		if !WorkerMatches(&ateapi.WorkerStatus{}, nil) {
 			t.Errorf("WorkerMatches(empty, nil) = false, want true")
 		}
 		if got := MatchingRuntime(status, nil); !proto.Equal(got, defRT) {
@@ -303,13 +303,13 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 			t.Errorf("RuntimeFor(status, nil) = %v, want %v", got, defRT)
 		}
 		// A worker that reported no classes runs the actor under none.
-		if got := RuntimeFor(&ateapipb.WorkerStatus{}, unmatchedRT); got != nil {
+		if got := RuntimeFor(&ateapi.WorkerStatus{}, unmatchedRT); got != nil {
 			t.Errorf("RuntimeFor(empty, unmatchedRT) = %v, want nil", got)
 		}
 	})
 
 	t.Run("ColdBootRuntime before registration", func(t *testing.T) {
-		if got := ColdBootRuntime(&ateapipb.WorkerStatus{}); got != nil {
+		if got := ColdBootRuntime(&ateapi.WorkerStatus{}); got != nil {
 			t.Errorf("ColdBootRuntime(empty) = %v, want nil", got)
 		}
 		if got := ColdBootRuntime(nil); got != nil {

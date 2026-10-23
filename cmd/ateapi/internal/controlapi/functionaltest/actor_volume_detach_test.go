@@ -21,11 +21,11 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -67,20 +67,20 @@ func assertDetachedNodes(t *testing.T, plugin *attachFailVolumePlugin, step stri
 func createSingleVolumeActor(t *testing.T, tc *testContext, ns, name string) string {
 	t.Helper()
 	preview.InitForTest(t, "ExternalVolumes")
-	volumes := []*ateapipb.Volume{{
+	volumes := []*ateapi.Volume{{
 		Name: "vol1",
-		External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
+		External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
 			StorageClassName: "standard",
 			CapacityBytes:    10 << 30,
 		}},
 	}}
-	mounts := []*ateapipb.VolumeMount{{Name: "vol1", MountPath: "/mnt/vol1"}}
+	mounts := []*ateapi.VolumeMount{{Name: "vol1", MountPath: "/mnt/vol1"}}
 	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
-	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	if _, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
@@ -91,8 +91,8 @@ func createSingleVolumeActor(t *testing.T, tc *testContext, ns, name string) str
 // published to node1 and that the store records node1 as its assigned_node.
 func resumeToRunningOnNode1(t *testing.T, tc *testContext, plugin *attachFailVolumePlugin, name string) {
 	t.Helper()
-	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
 	}); err != nil {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
@@ -110,7 +110,7 @@ func assertCrashedKeepingAssignedNode(t *testing.T, tc *testContext, name, node 
 	if err != nil {
 		t.Fatalf("GetActor(%s) from store: %v", name, err)
 	}
-	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got := actor.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Fatalf("state = %v, want CRASHED", got)
 	}
 	if got := actor.GetStatus().GetWorkerAssignment(); got != nil {
@@ -141,8 +141,8 @@ func TestDeleteActor_CrashedWorkerGone_DetachesAssignedNode(t *testing.T) {
 	assertDetachedNodes(t, plugin, "after the crash")
 
 	// CRASHED is deletable without AnyState.
-	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	if _, err := tc.client.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
 	}); err != nil {
 		t.Fatalf("DeleteActor failed: %v", err)
 	}
@@ -170,8 +170,8 @@ func TestResumeActor_RestoreCrash_DeleteDetaches(t *testing.T) {
 	createSingleVolumeActor(t, tc, ns, name)
 	tc.fakeAtelet.FailRestore = status.Error(codes.Internal, "injected restore failure")
 
-	_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	_, err := tc.client.ResumeActor(context.Background(), &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if got := status.Code(err); got != codes.Internal {
 		t.Fatalf("ResumeActor code = %v, want %v (err: %v)", got, codes.Internal, err)
@@ -182,8 +182,8 @@ func TestResumeActor_RestoreCrash_DeleteDetaches(t *testing.T) {
 	assertCrashedKeepingAssignedNode(t, tc, name, "node1")
 	assertDetachedNodes(t, plugin, "after the crash")
 
-	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	if _, err := tc.client.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
 	}); err != nil {
 		t.Fatalf("DeleteActor failed: %v", err)
 	}
@@ -213,14 +213,14 @@ func TestSuspendActor_WorkerRowGone_StillDetaches(t *testing.T) {
 		t.Fatalf("DeleteWorker(%s) from store: %v", workerName, err)
 	}
 
-	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
-		Actor:   &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
-		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	suspended, err := tc.client.SuspendActor(context.Background(), &ateapi.SuspendActorRequest{
+		Actor:   &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	})
 	if err != nil {
 		t.Fatalf("SuspendActor failed: %v", err)
 	}
-	if got := suspended.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := suspended.GetActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got)
 	}
 	assertDetachedNodes(t, plugin, "after suspend", "node1")
@@ -249,13 +249,13 @@ func TestRevertActor_Crashed_DetachesAssignedNode(t *testing.T) {
 	tc.fakeAtelet.TerminateCalled = false
 	tc.fakeAtelet.Lock.Unlock()
 
-	reverted, err := tc.client.RevertActor(context.Background(), &ateapipb.RevertActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	reverted, err := tc.client.RevertActor(context.Background(), &ateapi.RevertActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err != nil {
 		t.Fatalf("RevertActor failed: %v", err)
 	}
-	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := reverted.GetActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got)
 	}
 	assertDetachedNodes(t, plugin, "after revert", "node1")
@@ -297,13 +297,13 @@ func TestRevertActor_WorkerNoLongerHosts_Detaches(t *testing.T) {
 	tc.fakeAtelet.TerminateCalled = false
 	tc.fakeAtelet.Lock.Unlock()
 
-	reverted, err := tc.client.RevertActor(context.Background(), &ateapipb.RevertActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	reverted, err := tc.client.RevertActor(context.Background(), &ateapi.RevertActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err != nil {
 		t.Fatalf("RevertActor failed: %v", err)
 	}
-	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := reverted.GetActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got)
 	}
 	assertDetachedNodes(t, plugin, "after revert", "node1")

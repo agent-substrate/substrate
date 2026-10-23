@@ -31,12 +31,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
 	"go.ate.dev/substrate/internal/installdefaults"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var (
@@ -113,7 +113,7 @@ func DefaultSystemPrincipals() authz.SystemPrincipals {
 // this before seeding those resources.
 func MustCreateAtespace(t *testing.T, ctx context.Context, s store.Interface, name string) {
 	t.Helper()
-	_, err := s.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: name}})
+	_, err := s.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: name}})
 	if err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("creating test atespace %q: %v", name, err)
 	}
@@ -122,7 +122,7 @@ func MustCreateAtespace(t *testing.T, ctx context.Context, s store.Interface, na
 // MustCreateActor ensures actor's parent atespace exists, then creates actor.
 // Use the store method directly only in tests that exercise missing-parent
 // behavior.
-func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor *ateapipb.Actor) *ateapipb.Actor {
+func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor *ateapi.Actor) *ateapi.Actor {
 	t.Helper()
 	atespace := actor.GetMetadata().GetAtespace()
 	MustCreateAtespace(t, ctx, s, atespace)
@@ -137,7 +137,7 @@ func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor
 // tag as given — ready or still pending, whichever state the test needs to
 // start from. Use the store method directly only in tests that exercise
 // missing-parent behavior.
-func MustCreateTag(t *testing.T, ctx context.Context, s store.Interface, tag *ateapipb.Tag) *ateapipb.Tag {
+func MustCreateTag(t *testing.T, ctx context.Context, s store.Interface, tag *ateapi.Tag) *ateapi.Tag {
 	t.Helper()
 	atespace := tag.GetMetadata().GetAtespace()
 	name := tag.GetMetadata().GetName()

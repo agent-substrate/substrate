@@ -1014,7 +1014,7 @@ func TestValidateDetachActorRequest(t *testing.T) {
 	}
 }
 
-func TestValidateRegisterWorkerRequest(t *testing.T) {
+func TestValidateSetWorkerSandboxRuntimesRequest(t *testing.T) {
 	testCompat := func() *ateletpb.VersionedSandboxCompat {
 		return &ateletpb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
@@ -1031,20 +1031,20 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		return &ateletpb.WorkerSandboxClass{SandboxClass: "gvisor", DefaultRuntime: testRuntime(testCompat())}
 	}
 	// withClass returns a request reporting c as its only sandbox class.
-	withClass := func(c *ateletpb.WorkerSandboxClass) *ateletpb.RegisterWorkerRequest {
-		return &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{},
+	withClass := func(c *ateletpb.WorkerSandboxClass) *ateletpb.SetWorkerSandboxRuntimesRequest {
+		return &ateletpb.SetWorkerSandboxRuntimesRequest{
+			Epoch:          1,
 			SandboxClasses: []*ateletpb.WorkerSandboxClass{c},
 		}
 	}
 	// withDefaultRuntime returns a request whose gVisor class cold-boots
 	// under compat.
-	withDefaultRuntime := func(compat *ateletpb.VersionedSandboxCompat) *ateletpb.RegisterWorkerRequest {
+	withDefaultRuntime := func(compat *ateletpb.VersionedSandboxCompat) *ateletpb.SetWorkerSandboxRuntimesRequest {
 		return withClass(&ateletpb.WorkerSandboxClass{SandboxClass: "gvisor", DefaultRuntime: testRuntime(compat)})
 	}
 	// withRestorable returns a request whose gVisor class can also restore
 	// compats.
-	withRestorable := func(compats ...*ateletpb.VersionedSandboxCompat) *ateletpb.RegisterWorkerRequest {
+	withRestorable := func(compats ...*ateletpb.VersionedSandboxCompat) *ateletpb.SetWorkerSandboxRuntimesRequest {
 		c := testClass()
 		for _, compat := range compats {
 			var rt *ateletpb.WorkerSandboxRuntime
@@ -1055,13 +1055,6 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		}
 		return withClass(c)
 	}
-	withCapacity := func(capacity *ateletpb.WorkerResources) *ateletpb.RegisterWorkerRequest {
-		return &ateletpb.RegisterWorkerRequest{
-			Capacity:       capacity,
-			SandboxClasses: []*ateletpb.WorkerSandboxClass{testClass()},
-		}
-	}
-	capacityPath := field.NewPath("capacity")
 	classesPath := field.NewPath("sandbox_classes")
 	classPath := classesPath.Index(0)
 	defaultRuntimePath := classPath.Child("default_runtime")
@@ -1070,7 +1063,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 
 	tests := []struct {
 		name string
-		obj  *ateletpb.RegisterWorkerRequest
+		obj  *ateletpb.SetWorkerSandboxRuntimesRequest
 		want field.ErrorList
 	}{{
 		name: "valid",
@@ -1079,24 +1072,24 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "valid with restorable runtimes",
 		obj:  withRestorable(testCompat()),
 	}, {
-		name: "missing capacity",
-		obj:  withCapacity(nil),
-		want: field.ErrorList{field.Required(field.NewPath("capacity"), "")},
+		name: "missing epoch",
+		obj:  &ateletpb.SetWorkerSandboxRuntimesRequest{SandboxClasses: []*ateletpb.WorkerSandboxClass{testClass()}},
+		want: field.ErrorList{field.Required(field.NewPath("epoch"), "")},
 	}, {
 		name: "missing sandbox_classes",
-		obj:  &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{}},
+		obj:  &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 1},
 		want: field.ErrorList{field.Required(classesPath, "")},
 	}, {
 		name: "empty sandbox_classes",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{},
+		obj: &ateletpb.SetWorkerSandboxRuntimesRequest{
+			Epoch:          1,
 			SandboxClasses: []*ateletpb.WorkerSandboxClass{},
 		},
 		want: field.ErrorList{field.Required(classesPath, "")},
 	}, {
 		name: "too many sandbox_classes",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
+		obj: &ateletpb.SetWorkerSandboxRuntimesRequest{
+			Epoch: 1,
 			SandboxClasses: []*ateletpb.WorkerSandboxClass{
 				testClass(),
 				{SandboxClass: "microvm", DefaultRuntime: testRuntime(testCompat())},
@@ -1205,15 +1198,61 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		name: "too many restorable_runtimes",
 		obj:  withRestorable(sandboxCompats(33, testCompat)...),
 		want: field.ErrorList{field.TooMany(restorablePath, 33, 32).WithOrigin("maxItems")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateSetWorkerSandboxRuntimesRequest(context.Background(), tt.obj), tt.want)
+		})
+	}
+}
+
+func TestValidateRegisterWorkerRequest(t *testing.T) {
+	ips := []string{"10.0.0.1"}
+	withCapacity := func(c *ateletpb.WorkerResources) *ateletpb.RegisterWorkerRequest {
+		return &ateletpb.RegisterWorkerRequest{Epoch: 1, Ips: ips, Capacity: c}
+	}
+	capacityPath := field.NewPath("capacity")
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.RegisterWorkerRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  &ateletpb.RegisterWorkerRequest{Epoch: 1, Ips: ips, Capacity: &ateletpb.WorkerResources{}},
+	}, {
+		name: "dual-stack IPs",
+		obj:  &ateletpb.RegisterWorkerRequest{Epoch: 1, Ips: []string{"10.0.0.1", "fd00::1"}, Capacity: &ateletpb.WorkerResources{}},
+	}, {
+		name: "missing capacity",
+		obj:  &ateletpb.RegisterWorkerRequest{Epoch: 1, Ips: ips},
+		want: field.ErrorList{field.Required(field.NewPath("capacity"), "")},
+	}, {
+		name: "missing epoch",
+		obj:  &ateletpb.RegisterWorkerRequest{Ips: ips, Capacity: &ateletpb.WorkerResources{}},
+		want: field.ErrorList{field.Required(field.NewPath("epoch"), "")},
+	}, {
+		name: "negative epoch",
+		obj:  &ateletpb.RegisterWorkerRequest{Epoch: -1, Ips: ips, Capacity: &ateletpb.WorkerResources{}},
+		want: field.ErrorList{field.Invalid(field.NewPath("epoch"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "missing ips",
+		obj:  &ateletpb.RegisterWorkerRequest{Epoch: 1, Capacity: &ateletpb.WorkerResources{}},
+		want: field.ErrorList{field.Required(field.NewPath("ips"), "")},
+	}, {
+		name: "too many ips",
+		obj:  &ateletpb.RegisterWorkerRequest{Epoch: 1, Ips: []string{"10.0.0.1", "fd00::1", "10.0.0.2"}, Capacity: &ateletpb.WorkerResources{}},
+		want: field.ErrorList{field.TooMany(field.NewPath("ips"), 3, 2).WithOrigin("maxItems")},
 	}, {
 		name: "full capacity",
 		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{Actors: 4, CpuMillicores: 4000, MemoryBytes: 8 << 30},
-			SandboxClasses: []*ateletpb.WorkerSandboxClass{testClass()},
+			Epoch:    1,
+			Ips:      ips,
+			Capacity: &ateletpb.WorkerResources{Actors: 4, CpuMillicores: 4000, MemoryBytes: 8 << 30},
 		},
 	}, {
 		name: "negative actors",
-		obj:  withCapacity(&ateletpb.WorkerResources{Actors: -1}),
+		obj:  &ateletpb.RegisterWorkerRequest{Epoch: 1, Ips: ips, Capacity: &ateletpb.WorkerResources{Actors: -1}},
 		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "negative cpu_millicores",

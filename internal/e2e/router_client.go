@@ -26,7 +26,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -61,16 +60,10 @@ type RouterClient struct {
 	stop      func()
 	tlsConfig *tls.Config
 
-	// config/clientset are retained to lazily open a second port-forward, to
-	// routerConnectTLSServicePort, only if Connect is ever called -- most
-	// callers never CONNECT, so the HTTPS one from NewRouterClient covers them.
+	// config/clientset are retained to open a port-forward to
+	// routerConnectTLSServicePort per Connect.
 	config    *rest.Config
 	clientset kubernetes.Interface
-
-	connectOnce sync.Once
-	connectAddr string
-	connectStop func()
-	connectErr  error
 }
 
 // NewRouterClient establishes a port-forward to the ingress atenet-router. Call Close
@@ -111,12 +104,9 @@ func NewRouterClient(t *testing.T, ctx context.Context) (*RouterClient, error) {
 	}, nil
 }
 
-// Close stops the port-forward tunnel(s).
+// Close stops the port-forward.
 func (c *RouterClient) Close() {
 	c.stop()
-	if c.connectStop != nil {
-		c.connectStop()
-	}
 }
 
 // BaseURL returns the local router port-forward address as an https:// URL.
@@ -130,14 +120,15 @@ func (c *RouterClient) Address() string {
 	return c.address
 }
 
-// ConnectAddress returns the host:port of the local port-forward to the
-// router's CONNECT listener, opening it on first use, for a caller that has to
-// control the protocol it speaks to the router itself.
-func (c *RouterClient) ConnectAddress(ctx context.Context) (string, error) {
-	if err := c.ensureConnectPortForward(ctx); err != nil {
-		return "", err
+// ConnectPortForward opens a new port-forward to the router's CONNECT listener
+// and returns its local host:port, for a caller that has to control the
+// protocol it speaks to the router itself. The caller must call stop.
+func (c *RouterClient) ConnectPortForward(ctx context.Context) (addr string, stop func(), err error) {
+	localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, SystemNamespace(), ResourceName("atenet-router"), routerConnectTLSServicePort)
+	if err != nil {
+		return "", nil, fmt.Errorf("port-forwarding to the router's CONNECT listener: %w", err)
 	}
-	return c.connectAddr, nil
+	return fmt.Sprintf("127.0.0.1:%d", localPort), stop, nil
 }
 
 // TLSConfig returns a copy of the TLS config the client dials the router
@@ -186,7 +177,7 @@ func (c *RouterClient) DoReq(req *http.Request) (*http.Response, error) {
 // non-2xx response the returned error carries the status and body, mirroring
 // egress.Client.DialContext's handling of the same failure mode on the
 // egress side. The caller owns the returned connection and must Close it;
-// the underlying port-forward is torn down by RouterClient.Close.
+// closing it also tears down its port-forward.
 func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef, port int) (net.Conn, error) {
 	return c.ConnectWithHeaders(ctx, actorRef, port, http.Header{
 		atenet.TargetActorHeader: []string{actorRef.String()},
@@ -196,11 +187,23 @@ func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef,
 // ConnectWithHeaders is like Connect but allows specifying custom headers on
 // the outer CONNECT request (e.g. testing repeated or missing headers).
 func (c *RouterClient) ConnectWithHeaders(ctx context.Context, actorRef resources.ActorRef, port int, header http.Header) (net.Conn, error) {
-	if err := c.ensureConnectPortForward(ctx); err != nil {
+	// client-go tears down a whole port-forward when any one of its
+	// connections errors, so each tunnel gets its own
+	addr, stop, err := c.ConnectPortForward(ctx)
+	if err != nil {
 		return nil, err
 	}
+	conn, err := c.connect(ctx, addr, actorRef, port, header)
+	if err != nil {
+		stop()
+		return nil, err
+	}
+	conn.stop = stop
+	return conn, nil
+}
 
-	tcpConn, err := (&net.Dialer{}).DialContext(ctx, "tcp", c.connectAddr)
+func (c *RouterClient) connect(ctx context.Context, addr string, actorRef resources.ActorRef, port int, header http.Header) (*bufferedConn, error) {
+	tcpConn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to router's CONNECT listener: %w", err)
 	}
@@ -245,30 +248,24 @@ func (c *RouterClient) ConnectWithHeaders(ctx context.Context, actorRef resource
 	return &bufferedConn{Conn: rawConn, reader: reader}, nil
 }
 
-// ensureConnectPortForward opens the CONNECT-listener port-forward on first
-// use, memoizing the result (including any error) so repeated Connect calls
-// in one test don't each pay for a fresh port-forward.
-func (c *RouterClient) ensureConnectPortForward(ctx context.Context) error {
-	c.connectOnce.Do(func() {
-		localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, SystemNamespace(), ResourceName("atenet-router"), routerConnectTLSServicePort)
-		if err != nil {
-			c.connectErr = fmt.Errorf("port-forwarding to the router's CONNECT listener: %w", err)
-			return
-		}
-		c.connectAddr = fmt.Sprintf("127.0.0.1:%d", localPort)
-		c.connectStop = stop
-	})
-	return c.connectErr
-}
-
 // bufferedConn recovers bytes http.ReadResponse buffered past the header
 // boundary, mirroring internal/atunnel/egress/client.go's identical need on the
 // egress CONNECT client.
 type bufferedConn struct {
 	net.Conn
 	reader *bufio.Reader
+	stop   func()
 }
 
 func (c *bufferedConn) Read(p []byte) (int, error) {
 	return c.reader.Read(p)
+}
+
+func (c *bufferedConn) Close() error {
+	err := c.Conn.Close()
+	if c.stop != nil {
+		c.stop()
+		c.stop = nil
+	}
+	return err
 }

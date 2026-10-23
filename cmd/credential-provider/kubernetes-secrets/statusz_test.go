@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/api/credprovider/v1"
 )
 
 func TestGrants(t *testing.T) {
@@ -71,7 +71,7 @@ func statuszServer(t *testing.T) (*Server, string) {
 	}
 	srv := NewServer(fake.NewSimpleClientset(secret), authz)
 
-	if _, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
+	if _, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 		Uri:           "ate-secret://k8s.io/default/ns1/example-api/token",
 		ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor",
 	}); err != nil {

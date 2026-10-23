@@ -2025,6 +2025,71 @@ func Validate_RegisterWorkerRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateletpb.RegisterWorkerRequest) (errs field.ErrorList) {
 
+	{ // field ateletpb.RegisterWorkerRequest.Epoch
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.RegisterWorkerRequest) *int64 {
+				return &oldObj.Epoch
+			})
+		errs = append(errs, fn(fldPath.Child("epoch"), &obj.Epoch, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.RegisterWorkerRequest.Ips
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 2).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.RegisterWorkerRequest) []string {
+				return oldObj.Ips
+			})
+		errs = append(errs, fn(fldPath.Child("ips"), obj.Ips, oldVal, oldObj != nil)...)
+	}
+
 	{ // field ateletpb.RegisterWorkerRequest.Capacity
 		fn := func(
 			fldPath *field.Path,
@@ -2054,60 +2119,6 @@ func Validate_RegisterWorkerRequest(
 				return oldObj.Capacity
 			})
 		errs = append(errs, fn(fldPath.Child("capacity"), obj.Capacity, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateletpb.RegisterWorkerRequest.SandboxClasses
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj []*ateletpb.WorkerSandboxClass,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.PtrSliceNoNils[ateletpb.WorkerSandboxClass](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 1).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.MinItems(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			// lists with map semantics require unique keys
-			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
-				func(a *ateletpb.WorkerSandboxClass, b *ateletpb.WorkerSandboxClass) bool {
-					return a.SandboxClass == b.SandboxClass
-				}); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			// iterate the list and call the type's validation function
-			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateletpb.WorkerSandboxClass, b *ateletpb.WorkerSandboxClass) bool {
-					return a.SandboxClass == b.SandboxClass
-				}, ateDeepEqual, Validate_WorkerSandboxClass); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RegisterWorkerRequest) []*ateletpb.WorkerSandboxClass {
-				return oldObj.SandboxClasses
-			})
-		errs = append(errs, fn(fldPath.Child("sandbox_classes"), obj.SandboxClasses, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -3175,6 +3186,101 @@ func Validate_SecurityContext(
 				return oldObj.Capabilities
 			})
 		errs = append(errs, fn(fldPath.Child("capabilities"), obj.Capabilities, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_SetWorkerSandboxRuntimesRequest validates an instance of SetWorkerSandboxRuntimesRequest according
+// to declarative validation rules in the API schema.
+func Validate_SetWorkerSandboxRuntimesRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.SetWorkerSandboxRuntimesRequest) (errs field.ErrorList) {
+
+	{ // field ateletpb.SetWorkerSandboxRuntimesRequest.Epoch
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.SetWorkerSandboxRuntimesRequest) *int64 {
+				return &oldObj.Epoch
+			})
+		errs = append(errs, fn(fldPath.Child("epoch"), &obj.Epoch, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.SetWorkerSandboxRuntimesRequest.SandboxClasses
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []*ateletpb.WorkerSandboxClass,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrSliceNoNils[ateletpb.WorkerSandboxClass](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 1).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MinItems(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with map semantics require unique keys
+			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *ateletpb.WorkerSandboxClass, b *ateletpb.WorkerSandboxClass) bool {
+					return a.SandboxClass == b.SandboxClass
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// iterate the list and call the type's validation function
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateletpb.WorkerSandboxClass, b *ateletpb.WorkerSandboxClass) bool {
+					return a.SandboxClass == b.SandboxClass
+				}, ateDeepEqual, Validate_WorkerSandboxClass); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.SetWorkerSandboxRuntimesRequest) []*ateletpb.WorkerSandboxClass {
+				return oldObj.SandboxClasses
+			})
+		errs = append(errs, fn(fldPath.Child("sandbox_classes"), obj.SandboxClasses, oldVal, oldObj != nil)...)
 	}
 
 	return errs

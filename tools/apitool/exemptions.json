@@ -1,352 +1,352 @@
 [
   {
     "rule": "documented",
-    "subject": "ateapi.Actor",
+    "subject": "substrate.ateapi.v1.Actor",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorAssignment.actor_uid",
+    "subject": "substrate.ateapi.v1.ActorAssignment.actor_uid",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorMetadataItem.field",
+    "subject": "substrate.ateapi.v1.ActorMetadataItem.field",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorState",
+    "subject": "substrate.ateapi.v1.ActorState",
     "message": "enum has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorStatus",
+    "subject": "substrate.ateapi.v1.ActorStatus",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorTemplate",
+    "subject": "substrate.ateapi.v1.ActorTemplate",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorTemplate.containers",
+    "subject": "substrate.ateapi.v1.ActorTemplate.containers",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorTemplate.status",
+    "subject": "substrate.ateapi.v1.ActorTemplate.status",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorTemplate.volumes",
+    "subject": "substrate.ateapi.v1.ActorTemplate.volumes",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorTemplateStatus",
+    "subject": "substrate.ateapi.v1.ActorTemplateStatus",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorTemplateStatus.golden_snapshot_status",
+    "subject": "substrate.ateapi.v1.ActorTemplateStatus.golden_snapshot_status",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Container.name",
+    "subject": "substrate.ateapi.v1.Container.name",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Control.CreateActorTemplate",
+    "subject": "substrate.ateapi.v1.Control.CreateActorTemplate",
     "message": "method has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Control.GetActorTemplate",
+    "subject": "substrate.ateapi.v1.Control.GetActorTemplate",
     "message": "method has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Control.ListActorTemplates",
+    "subject": "substrate.ateapi.v1.Control.ListActorTemplates",
     "message": "method has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.CreateActorTemplateRequest",
+    "subject": "substrate.ateapi.v1.CreateActorTemplateRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.CreateAtespaceRequest",
+    "subject": "substrate.ateapi.v1.CreateAtespaceRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.CreateWorkerRequest",
+    "subject": "substrate.ateapi.v1.CreateWorkerRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteActorRequest",
+    "subject": "substrate.ateapi.v1.DeleteActorRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteActorRequest.actor",
+    "subject": "substrate.ateapi.v1.DeleteActorRequest.actor",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteActorTemplateRequest",
+    "subject": "substrate.ateapi.v1.DeleteActorTemplateRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteActorTemplateRequest.actor_template",
+    "subject": "substrate.ateapi.v1.DeleteActorTemplateRequest.actor_template",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteAtespaceRequest",
+    "subject": "substrate.ateapi.v1.DeleteAtespaceRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteAtespaceRequest.atespace",
+    "subject": "substrate.ateapi.v1.DeleteAtespaceRequest.atespace",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteTagRequest",
+    "subject": "substrate.ateapi.v1.DeleteTagRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteTagRequest.tag",
+    "subject": "substrate.ateapi.v1.DeleteTagRequest.tag",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteWorkerRequest",
+    "subject": "substrate.ateapi.v1.DeleteWorkerRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DrainWorkerRequest",
+    "subject": "substrate.ateapi.v1.DrainWorkerRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetActorRequest",
+    "subject": "substrate.ateapi.v1.GetActorRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetActorRequest.actor",
+    "subject": "substrate.ateapi.v1.GetActorRequest.actor",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetActorTemplateRequest",
+    "subject": "substrate.ateapi.v1.GetActorTemplateRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetActorTemplateRequest.actor_template",
+    "subject": "substrate.ateapi.v1.GetActorTemplateRequest.actor_template",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetAtespaceRequest",
+    "subject": "substrate.ateapi.v1.GetAtespaceRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetAtespaceRequest.atespace",
+    "subject": "substrate.ateapi.v1.GetAtespaceRequest.atespace",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetTagRequest",
+    "subject": "substrate.ateapi.v1.GetTagRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetTagRequest.tag",
+    "subject": "substrate.ateapi.v1.GetTagRequest.tag",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GetWorkerRequest",
+    "subject": "substrate.ateapi.v1.GetWorkerRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.GoldenSnapshotStatus",
+    "subject": "substrate.ateapi.v1.GoldenSnapshotStatus",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorTemplatesRequest",
+    "subject": "substrate.ateapi.v1.ListActorTemplatesRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorTemplatesResponse",
+    "subject": "substrate.ateapi.v1.ListActorTemplatesResponse",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorsResponse",
+    "subject": "substrate.ateapi.v1.ListActorsResponse",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListAtespacesRequest",
+    "subject": "substrate.ateapi.v1.ListAtespacesRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListAtespacesResponse",
+    "subject": "substrate.ateapi.v1.ListAtespacesResponse",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListTagsRequest",
+    "subject": "substrate.ateapi.v1.ListTagsRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListTagsResponse",
+    "subject": "substrate.ateapi.v1.ListTagsResponse",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListTagsResponse.next_page_token",
+    "subject": "substrate.ateapi.v1.ListTagsResponse.next_page_token",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListTagsResponse.tags",
+    "subject": "substrate.ateapi.v1.ListTagsResponse.tags",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListWorkersRequest",
+    "subject": "substrate.ateapi.v1.ListWorkersRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListWorkersResponse",
+    "subject": "substrate.ateapi.v1.ListWorkersResponse",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ResumeActorRequest",
+    "subject": "substrate.ateapi.v1.ResumeActorRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ResumeActorRequest.actor",
+    "subject": "substrate.ateapi.v1.ResumeActorRequest.actor",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ResumeActorResponse",
+    "subject": "substrate.ateapi.v1.ResumeActorResponse",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ResumeActorResponse.actor",
+    "subject": "substrate.ateapi.v1.ResumeActorResponse.actor",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SuspendActorRequest",
+    "subject": "substrate.ateapi.v1.SuspendActorRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SuspendActorRequest.actor",
+    "subject": "substrate.ateapi.v1.SuspendActorRequest.actor",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SuspendActorResponse",
+    "subject": "substrate.ateapi.v1.SuspendActorResponse",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SuspendActorResponse.actor",
+    "subject": "substrate.ateapi.v1.SuspendActorResponse.actor",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SystemInfoDataSource",
+    "subject": "substrate.ateapi.v1.SystemInfoDataSource",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SystemInfoDataSource.trust_bundle",
+    "subject": "substrate.ateapi.v1.SystemInfoDataSource.trust_bundle",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.TagScope",
+    "subject": "substrate.ateapi.v1.TagScope",
     "message": "enum has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.UpdateWorkerRequest",
+    "subject": "substrate.ateapi.v1.UpdateWorkerRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Volume",
+    "subject": "substrate.ateapi.v1.Volume",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Volume.system_info",
+    "subject": "substrate.ateapi.v1.Volume.system_info",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Worker.node_name",
+    "subject": "substrate.ateapi.v1.Worker.node_name",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Worker.worker_pod",
+    "subject": "substrate.ateapi.v1.Worker.worker_pod",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Worker.worker_pod_uid",
+    "subject": "substrate.ateapi.v1.Worker.worker_pod_uid",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Worker.worker_pool",
+    "subject": "substrate.ateapi.v1.Worker.worker_pool",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.WorkerState",
+    "subject": "substrate.ateapi.v1.WorkerState",
     "message": "enum has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.WorkerStatus",
+    "subject": "substrate.ateapi.v1.WorkerStatus",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.WorkerStatus.state",
+    "subject": "substrate.ateapi.v1.WorkerStatus.state",
     "message": "field has no doc comment"
   }
 ]

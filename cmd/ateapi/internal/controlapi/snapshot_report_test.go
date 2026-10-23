@@ -24,11 +24,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -52,127 +52,127 @@ func ownedURI(t *testing.T, actorUID string, gen int32) string {
 
 // withDurable returns a Snapshot held on locality ("" for none) with a durable
 // copy in the given storage status.
-func withDurable(t *testing.T, gen int32, locality string, storage ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
+func withDurable(t *testing.T, gen int32, locality string, storage ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
 	t.Helper()
-	snap := &ateapipb.Snapshot{Uuid: snapName(gen), Generation: gen, Locality: locality, Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY}
-	snap.DurableSnapshot = &ateapipb.SnapshotStorage{
+	snap := &ateapi.Snapshot{Uuid: snapName(gen), Generation: gen, Locality: locality, Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY}
+	snap.DurableSnapshot = &ateapi.SnapshotStorage{
 		Status: storage,
-		Object: &ateapipb.ObjectSnapshot{SnapshotUri: ownedURI(t, reportActorUID, gen)},
+		Object: &ateapi.ObjectSnapshot{SnapshotUri: ownedURI(t, reportActorUID, gen)},
 	}
 	return snap
 }
 
-func reported(t *testing.T, gen int32) *ateapipb.SnapshotReport {
+func reported(t *testing.T, gen int32) *ateapi.SnapshotReport {
 	t.Helper()
 	return reportedAt(t, gen, ownedURI(t, reportActorUID, gen))
 }
 
-func reportedAt(t *testing.T, gen int32, uri string) *ateapipb.SnapshotReport {
+func reportedAt(t *testing.T, gen int32, uri string) *ateapi.SnapshotReport {
 	t.Helper()
-	return &ateapipb.SnapshotReport{
+	return &ateapi.SnapshotReport{
 		Uuid:       snapName(gen),
 		Generation: gen,
-		Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		Object:     &ateapipb.ObjectSnapshot{SnapshotUri: uri},
+		Fidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Object:     &ateapi.ObjectSnapshot{SnapshotUri: uri},
 	}
 }
 
 func TestApplyActorSnapshotState(t *testing.T) {
 	const (
-		pending   = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-		completed = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-		suspended = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-		running   = ateapipb.ActorState_ACTOR_STATE_RUNNING
+		pending   = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+		completed = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		suspended = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+		running   = ateapi.ActorState_ACTOR_STATE_RUNNING
 	)
 	tests := []struct {
 		name     string
-		status   *ateapipb.ActorStatus
-		state    *ateapipb.ActorSnapshotState
-		want     *ateapipb.ActorStatus
+		status   *ateapi.ActorStatus
+		state    *ateapi.ActorSnapshotState
+		want     *ateapi.ActorStatus
 		wantCode codes.Code
 	}{{
 		name: "upload marks the pending snapshot COMPLETED and keeps it local",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 2)},
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
 		}},
 	}, {
 		name: "upload records the fidelity the manifest reports",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: func() *ateapipb.SnapshotReport {
+		state: &ateapi.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: func() *ateapi.SnapshotReport {
 			r := reported(t, 2)
-			r.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+			r.Fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 			return r
 		}()},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
-			func() *ateapipb.Snapshot {
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
+			func() *ateapi.Snapshot {
 				snap := withDurable(t, 2, reportNode, completed)
-				snap.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+				snap.Fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 				return snap
 			}(),
 		}},
 	}, {
 		name: "an unset fidelity is refused",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: func() *ateapipb.SnapshotReport {
+		state: &ateapi.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: func() *ateapi.SnapshotReport {
 			r := reported(t, 2)
-			r.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+			r.Fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 			return r
 		}()},
 		wantCode: codes.InvalidArgument,
 	}, {
 		name: "a snapshot already COMPLETED changes nothing",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 2)},
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
 		}},
 	}, {
 		name: "a generation below the latest COMPLETED one changes nothing",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, reportNode, pending),
 			withDurable(t, 2, reportNode, completed),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: func() *ateapipb.SnapshotReport {
+		state: &ateapi.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: func() *ateapi.SnapshotReport {
 			r := reported(t, 1)
-			r.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+			r.Fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 			return r
 		}()},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, reportNode, pending),
 			withDurable(t, 2, reportNode, completed),
 		}},
 	}, {
 		name: "a generation status no longer has changes nothing",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 3, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 3, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 3, reportNode, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 3), LatestDurable: reported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 3, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestLocal: reported(t, 3), LatestDurable: reported(t, 2)},
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 3, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 3, reportNode, pending),
 		}},
 	}, {
 		name: "a generation newer than any assigned is refused",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state:    &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 5)},
+		state:    &ateapi.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 5)},
 		wantCode: codes.FailedPrecondition,
 	}, {
 		name: "a uuid other than the recorded one is refused",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: func() *ateapipb.SnapshotReport {
+		state: &ateapi.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: func() *ateapi.SnapshotReport {
 			r := reported(t, 2)
 			r.Uuid = "other"
 			return r
@@ -180,122 +180,122 @@ func TestApplyActorSnapshotState(t *testing.T) {
 		wantCode: codes.FailedPrecondition,
 	}, {
 		name: "an older snapshot's upload is recorded and the latest stays pending",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, reportNode, pending),
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 1)},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 1)},
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, reportNode, completed),
 			withDurable(t, 2, reportNode, pending),
 		}},
 	}, {
 		name: "a snapshot that records no upload is refused",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
-			{Uuid: snapName(2), Generation: 2, Locality: reportNode, Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
+			{Uuid: snapName(2), Generation: 2, Locality: reportNode, Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
 		}},
-		state:    &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 2)},
+		state:    &ateapi.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 2)},
 		wantCode: codes.FailedPrecondition,
 	}, {
 		name: "an upload URI other than the recorded one is refused",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state:    &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reportedAt(t, 2, ownedURI(t, reportActorUID, 9))},
+		state:    &ateapi.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reportedAt(t, 2, ownedURI(t, reportActorUID, 9))},
 		wantCode: codes.InvalidArgument,
 	}, {
 		name: "latest_local and uploading are not checked",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 7), Uploading: reported(t, 8)},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestLocal: reported(t, 7), Uploading: reported(t, 8)},
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
 	}, {
 		name: "an upload in flight with no local snapshot is not a detach",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{Uploading: reported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{Uploading: reported(t, 2)},
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
 	}, {
 		name: "detach releases a suspended actor from the node",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, "", completed),
 			withDurable(t, 2, reportNode, completed),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestDurable: reported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspended, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestDurable: reported(t, 2)},
+		want: &ateapi.ActorStatus{State: suspended, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, "", completed),
 			withDurable(t, 2, "", completed),
 		}},
 	}, {
 		name: "a detach can complete the upload it reports",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestDurable: reported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspended, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestDurable: reported(t, 2)},
+		want: &ateapi.ActorStatus{State: suspended, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", completed),
 		}},
 	}, {
 		name: "a late detach leaves a newer snapshot on the node and keeps the actor placed",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
 			withDurable(t, 3, reportNode, completed),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestDurable: reported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestDurable: reported(t, 2)},
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", completed),
 			withDurable(t, 3, reportNode, completed),
 		}},
 	}, {
 		name: "a late detach leaves a newer snapshot whose upload is pending on the node",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, "", completed),
 			withDurable(t, 2, reportNode, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestDurable: reported(t, 1)},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestDurable: reported(t, 1)},
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, "", completed),
 			withDurable(t, 2, reportNode, pending),
 		}},
 	}, {
 		name: "a detach of a snapshot that isn't durable is refused",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, reportNode, pending),
 		}},
-		state:    &ateapipb.ActorSnapshotState{LatestDurable: reported(t, 2)},
+		state:    &ateapi.ActorSnapshotState{LatestDurable: reported(t, 2)},
 		wantCode: codes.FailedPrecondition,
 	}, {
 		name: "a detach from a node that holds no snapshot only releases the actor",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", completed),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestDurable: reported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspended, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestDurable: reported(t, 2)},
+		want: &ateapi.ActorStatus{State: suspended, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", completed),
 		}},
 	}, {
 		name: "a running actor's detach keeps it placed on the node",
-		status: &ateapipb.ActorStatus{State: running, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: running, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestDurable: reported(t, 2)},
-		want: &ateapipb.ActorStatus{State: running, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestDurable: reported(t, 2)},
+		want: &ateapi.ActorStatus{State: running, AssignedNode: reportNode, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", completed),
 		}},
 	}, {
 		name: "a detach from one node leaves another node alone",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportOther, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportOther, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
 			withDurable(t, 3, reportOther, pending),
 		}},
-		state: &ateapipb.ActorSnapshotState{LatestDurable: reported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportOther, Snapshots: []*ateapipb.Snapshot{
+		state: &ateapi.ActorSnapshotState{LatestDurable: reported(t, 2)},
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportOther, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", completed),
 			withDurable(t, 3, reportOther, pending),
 		}},
@@ -325,18 +325,18 @@ func TestApplyActorSnapshotState(t *testing.T) {
 // logged.
 func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 	const (
-		pending   = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-		completed = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		pending   = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+		completed = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	)
 	tests := []struct {
 		name      string
-		status    *ateapipb.ActorStatus
+		status    *ateapi.ActorStatus
 		gen       int32
 		wantMsg   string
 		wantAttrs map[string]string
 	}{{
 		name: "below the latest COMPLETED generation",
-		status: &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, reportNode, pending),
 			withDurable(t, 2, reportNode, completed),
 		}},
@@ -345,7 +345,7 @@ func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 		wantAttrs: map[string]string{"generation": "1", "uuid": snapName(1), "latest_completed_generation": "2"},
 	}, {
 		name: "a generation status no longer has",
-		status: &ateapipb.ActorStatus{LastAssignedGeneration: 3, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{LastAssignedGeneration: 3, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 3, reportNode, pending),
 		}},
 		gen:       2,
@@ -353,13 +353,13 @@ func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 		wantAttrs: map[string]string{"generation": "2", "uuid": snapName(2)},
 	}, {
 		name: "the latest COMPLETED generation itself",
-		status: &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
 		}},
 		gen: 2,
 	}, {
 		name: "applied",
-		status: &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, pending),
 		}},
 		gen: 2,
@@ -405,31 +405,31 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, nil)
-	tmpl, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata:       &ateapipb.ResourceMetadata{Atespace: reportAtespace, Name: "tmpl"},
-		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	tmpl, err := persistence.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+		Metadata:       &ateapi.ResourceMetadata{Atespace: reportAtespace, Name: "tmpl"},
+		SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: testStorageLocation},
 	})
 	if err != nil {
 		t.Fatalf("CreateActorTemplate() failed: %v", err)
 	}
 
 	actorRef := resources.ActorRef{Atespace: reportAtespace, Name: "actor-1"}
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: reportAtespace, Name: "tmpl"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: reportAtespace, Name: "tmpl"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 	uid := actor.GetMetadata().GetUid()
 	pending := mustActorSnapshotURI(t, tmpl, actor, "snap-2")
-	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.AssignedNode = reportNode
 		s.LastAssignedGeneration = 2
-		snap := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", pending.Name(), pending.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+		snap := newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", pending.Name(), pending.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
 		snap.Locality = reportNode
-		s.Snapshots = []*ateapipb.Snapshot{snap}
+		s.Snapshots = []*ateapi.Snapshot{snap}
 	})
 	uploaded := reportedAt(t, 2, pending.String())
-	state := &ateapipb.ActorSnapshotState{LatestLocal: uploaded, LatestDurable: uploaded}
+	state := &ateapi.ActorSnapshotState{LatestLocal: uploaded, LatestDurable: uploaded}
 
 	assertUnwritten := func(t *testing.T) {
 		t.Helper()
@@ -470,20 +470,20 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 	}
 	// A transitioning actor gets Aborted, and a crashed one FailedPrecondition.
 	for _, tc := range []struct {
-		state ateapipb.ActorState
+		state ateapi.ActorState
 		want  codes.Code
 	}{
-		{ateapipb.ActorState_ACTOR_STATE_SUSPENDING, codes.Aborted},
-		{ateapipb.ActorState_ACTOR_STATE_RESUMING, codes.Aborted},
-		{ateapipb.ActorState_ACTOR_STATE_DELETING, codes.Aborted},
-		{ateapipb.ActorState_ACTOR_STATE_REVERTING, codes.Aborted},
-		{ateapipb.ActorState_ACTOR_STATE_CRASHED, codes.FailedPrecondition},
+		{ateapi.ActorState_ACTOR_STATE_SUSPENDING, codes.Aborted},
+		{ateapi.ActorState_ACTOR_STATE_RESUMING, codes.Aborted},
+		{ateapi.ActorState_ACTOR_STATE_DELETING, codes.Aborted},
+		{ateapi.ActorState_ACTOR_STATE_REVERTING, codes.Aborted},
+		{ateapi.ActorState_ACTOR_STATE_CRASHED, codes.FailedPrecondition},
 	} {
 		t.Run("refused for a "+tc.state.String()+" actor", func(t *testing.T) {
-			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) { s.State = tc.state })
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) { s.State = tc.state })
 			defer func() {
-				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-					s.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+					s.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
 				})
 			}()
 			if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, state); apierror.Code(err) != tc.want {
@@ -493,7 +493,7 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 		})
 	}
 	t.Run("refused for an upload to the wrong URI", func(t *testing.T) {
-		wrong := &ateapipb.ActorSnapshotState{LatestLocal: uploaded, LatestDurable: reportedAt(t, 2, ownedURI(t, uid, 9))}
+		wrong := &ateapi.ActorSnapshotState{LatestLocal: uploaded, LatestDurable: reportedAt(t, 2, ownedURI(t, uid, 9))}
 		if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, wrong); apierror.Code(err) != codes.InvalidArgument {
 			t.Fatalf("ApplyReportedSnapshotState() = %v, want InvalidArgument", err)
 		}
@@ -507,7 +507,7 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st := got.GetStatus().GetSnapshots()[0].GetDurableSnapshot().GetStatus(); st != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+	if st := got.GetStatus().GetSnapshots()[0].GetDurableSnapshot().GetStatus(); st != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 		t.Errorf("durable snapshot status = %v, want COMPLETED", st)
 	}
 
@@ -520,16 +520,16 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 }
 
 func TestActorOnNode(t *testing.T) {
-	actor := func(assigned string, localities ...string) *ateapipb.Actor {
-		status := &ateapipb.ActorStatus{AssignedNode: assigned}
+	actor := func(assigned string, localities ...string) *ateapi.Actor {
+		status := &ateapi.ActorStatus{AssignedNode: assigned}
 		for i, l := range localities {
-			status.Snapshots = append(status.Snapshots, withDurable(t, int32(i+1), l, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
+			status.Snapshots = append(status.Snapshots, withDurable(t, int32(i+1), l, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
 		}
-		return &ateapipb.Actor{Status: status}
+		return &ateapi.Actor{Status: status}
 	}
 	for _, tc := range []struct {
 		name  string
-		actor *ateapipb.Actor
+		actor *ateapi.Actor
 		want  bool
 	}{
 		{"placed on the node", actor(reportNode), true},
@@ -557,17 +557,17 @@ func ateletReported(t *testing.T, gen int32) *ateletpb.SnapshotReport {
 
 func TestApplyAteletResponseState(t *testing.T) {
 	const (
-		pending    = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-		completed  = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-		suspended  = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-		suspending = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
+		pending    = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+		completed  = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		suspended  = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+		suspending = ateapi.ActorState_ACTOR_STATE_SUSPENDING
 
 		otherActorUID = "1a7e4c83-6d20-4f95-b3c8-9e0a2f6d4b17"
 	)
 	// previousPause is a suspending actor's status, holding the snapshot of the
 	// async suspend before, whose upload is pending.
-	previousPause := func() *ateapipb.ActorStatus {
-		return &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+	previousPause := func() *ateapi.ActorStatus {
+		return &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, reportNode, pending),
 			withDurable(t, 2, "", pending),
 		}}
@@ -578,22 +578,22 @@ func TestApplyAteletResponseState(t *testing.T) {
 	}
 	tests := []struct {
 		name     string
-		status   *ateapipb.ActorStatus
+		status   *ateapi.ActorStatus
 		state    *ateletpb.ActorSnapshotState
-		want     *ateapipb.ActorStatus
+		want     *ateapi.ActorStatus
 		wantCode codes.Code
 	}{{
 		name: "an immediate checkpoint marks its snapshot COMPLETED",
-		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", pending),
 		}},
 		state: &ateletpb.ActorSnapshotState{LatestDurable: ateletReported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		want: &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", completed),
 		}},
 	}, {
 		name: "an immediate checkpoint records the fidelity it reports",
-		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", pending),
 		}},
 		state: &ateletpb.ActorSnapshotState{LatestDurable: func() *ateletpb.SnapshotReport {
@@ -601,27 +601,27 @@ func TestApplyAteletResponseState(t *testing.T) {
 			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 			return r
 		}()},
-		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
-			func() *ateapipb.Snapshot {
+		want: &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
+			func() *ateapi.Snapshot {
 				snap := withDurable(t, 2, "", completed)
-				snap.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+				snap.Fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 				return snap
 			}(),
 		}},
 	}, {
 		name: "a deferred checkpoint changes nothing",
-		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", pending),
 		}},
 		state: &ateletpb.ActorSnapshotState{LatestLocal: ateletReported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		want: &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", pending),
 		}},
 	}, {
 		name:   "a deferred checkpoint records the upload of the previous pause's snapshot",
 		status: previousPause(),
 		state:  &ateletpb.ActorSnapshotState{LatestLocal: ateletReported(t, 2), LatestDurable: ateletReported(t, 1)},
-		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		want: &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 1, reportNode, completed),
 			withDurable(t, 2, "", pending),
 		}},
@@ -645,16 +645,16 @@ func TestApplyAteletResponseState(t *testing.T) {
 		wantCode: codes.InvalidArgument,
 	}, {
 		name: "no local snapshot is not a detach",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
 		}},
 		state: &ateletpb.ActorSnapshotState{LatestDurable: ateletReported(t, 2)},
-		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		want: &ateapi.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
 		}},
 	}, {
 		name: "an upload URI other than the recorded one is refused",
-		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", pending),
 		}},
 		state: &ateletpb.ActorSnapshotState{LatestDurable: func() *ateletpb.SnapshotReport {
@@ -665,10 +665,10 @@ func TestApplyAteletResponseState(t *testing.T) {
 		wantCode: codes.InvalidArgument,
 	}, {
 		name: "an unset state changes nothing",
-		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		status: &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", pending),
 		}},
-		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+		want: &ateapi.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, "", pending),
 		}},
 	}}

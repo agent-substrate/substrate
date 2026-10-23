@@ -20,19 +20,19 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 // DeleteActor executes the workflow to delete an actor. Idempotent.
-func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.Actor, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	ctx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
@@ -97,7 +97,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 }
 
 // ensureAteletTerminated calls atelet to terminate the workload for opName.
-func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, opName string) (err error) {
+func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string) (err error) {
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
@@ -191,7 +191,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 // unmounts them from the node. A volume with no StorageVolumeId was never
 // provisioned (e.g. the actor failed while PENDING), so there is nothing
 // mounted to name.
-func fallbackWorkloadSpec(actor *ateapipb.Actor) *ateletpb.WorkloadSpec {
+func fallbackWorkloadSpec(actor *ateapi.Actor) *ateletpb.WorkloadSpec {
 	// Given that external volumes has been in the codebase for a while and
 	// its preview-ness is solely around the API, and that the impact of
 	// disabling the gate while in use would be an orphaned volume
@@ -217,7 +217,7 @@ func fallbackWorkloadSpec(actor *ateapipb.Actor) *ateletpb.WorkloadSpec {
 }
 
 // ensureVolumesDetachedForDelete detaches external volumes.
-func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
+func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 
@@ -233,7 +233,7 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 // releaseAssignmentWithoutBacklink releases an assignment the Actor does not
 // reference, found by Actor UID. Absent is the ordinary case and not an error:
 // most Actors reaching here really were released already.
-func (w *ActorWorkflow) releaseAssignmentWithoutBacklink(ctx context.Context, actor *ateapipb.Actor) error {
+func (w *ActorWorkflow) releaseAssignmentWithoutBacklink(ctx context.Context, actor *ateapi.Actor) error {
 	actorUID := actor.GetMetadata().GetUid()
 	workerName, err := w.store.FindWorkerHostingActor(ctx, actorUID)
 	if err != nil {
@@ -266,7 +266,7 @@ func (w *ActorWorkflow) releaseAssignmentWithoutBacklink(ctx context.Context, ac
 	return nil
 }
 
-func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor) (updated *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor) (updated *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "ReleaseWorker")
 	defer func() { err = done(err) }()
 
@@ -296,7 +296,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 			return nil, err
 		}
 
-		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapipb.Actor) error {
+		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapi.Actor) error {
 			if dbActor.Status != nil {
 				clearLocalSnapshots(dbActor.Status)
 				dbActor.Status.AssignedNode = ""
@@ -320,17 +320,17 @@ var errAlreadyMarked = errors.New("already marked for deletion")
 // ensureMarkedDeleting sets the actor's delete_time, checking precondition,
 // and moves it to DELETING, returning the stored copy. Skips when a previous
 // attempt already marked the actor.
-func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (updated *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (updated *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkDeleting")
 	defer func() { err = done(err) }()
 
-	var alreadyDeleting *ateapipb.Actor
-	storedActor, err := w.store.MarkActorForDeletion(ctx, actorRef, precondition, func(toUpdate *ateapipb.Actor) error {
+	var alreadyDeleting *ateapi.Actor
+	storedActor, err := w.store.MarkActorForDeletion(ctx, actorRef, precondition, func(toUpdate *ateapi.Actor) error {
 		if toUpdate.GetMetadata().GetDeleteTime() != nil {
 			alreadyDeleting = toUpdate
 			return errAlreadyMarked
 		}
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
+		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_DELETING
 		return nil
 	})
 	if errors.Is(err, errAlreadyMarked) {
@@ -355,13 +355,13 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 
 // ensureVolumesDeleted removes the actor's external volumes. Volume deletion
 // is idempotent, so a re-entered workflow can safely run it again. It assumes a no-op success if volume is not found
-func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapipb.Actor) (err error) {
+func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapi.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "DeleteVolumes")
 	defer func() { err = done(err) }()
 
 	st := actor.GetStatus().GetState()
-	if st != ateapipb.ActorState_ACTOR_STATE_DELETING {
-		return apierror.FailedPrecondition("DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
+	if st != ateapi.ActorState_ACTOR_STATE_DELETING {
+		return apierror.FailedPrecondition("DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapi.ActorState_ACTOR_STATE_DELETING)
 	}
 
 	// Given that external volumes has been in the codebase for a while and
@@ -381,7 +381,7 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 //
 // A snapshot borrowed from a tag lives under the tag's prefix, so it survives:
 // the tag owns it and outlives the actor.
-func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, actor *ateapipb.Actor) (err error) {
+func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, actor *ateapi.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "ReleaseExternalSnapshots")
 	defer func() { err = done(err) }()
 
@@ -405,9 +405,9 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 // the snapshot it last took, the one a suspend was in the middle of taking, and
 // anything a crashed suspend stranded. A zero prefix means the actor never
 // wrote anything.
-func actorSnapshotStoragePrefix(actor *ateapipb.Actor) (resources.StoragePrefix, error) {
+func actorSnapshotStoragePrefix(actor *ateapi.Actor) (resources.StoragePrefix, error) {
 	actorOwner := actorSnapshotOwner(actor)
-	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
+	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
 		snapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 		uri, err := resources.ParseSnapshotURI(snapshotURI)
 		if err != nil {
@@ -423,7 +423,7 @@ func actorSnapshotStoragePrefix(actor *ateapipb.Actor) (resources.StoragePrefix,
 	// Nothing of the actor's own is recorded. Unless a suspend died partway,
 	// nothing was ever written under its prefix: the in-progress URI is
 	// recorded before atelet uploads the first object.
-	inProgressSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	inProgressSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
 	inProgress := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if inProgress == "" {
 		return resources.StoragePrefix{}, nil
@@ -442,7 +442,7 @@ func actorSnapshotStoragePrefix(actor *ateapipb.Actor) (resources.StoragePrefix,
 
 // finalizeDeleted removes the actor from the store and returns the deleted
 // record.
-func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapipb.Actor) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapi.Actor) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeDeleted")
 	defer func() { err = done(err) }()
 

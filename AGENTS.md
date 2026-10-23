@@ -25,6 +25,7 @@
 ### Scope
 
 - Keep each PR to one change. Send refactors, cleanups and follow-ups as separate PRs. For how to batch small fixes, see "Sizing PRs for review" in `CONTRIBUTING.md`.
+- Split a PR into commits that are easy to review in order. PRs are squash-merged, so only the branch `HEAD` needs to build and pass tests.
 - Follow "Contribution process" in `CONTRIBUTING.md`: open an issue first for anything beyond a small fix, and search open PRs and issues before you start.
 - Start the PR description with why the change is needed, or link the issue. Only write "Fixes #N" if the PR fully fixes it, and keep the description in sync with the final diff.
 - Rebase onto upstream `main` before opening a PR, and don't merge main into your branch. This file may have changed there. Follow that version.
@@ -68,6 +69,7 @@ See `hack/install-ate.sh` and `tools/setup-gcp` for provisioning and deploying c
 ## Repository Layout
 
 ```
+api/          # Public APIs: protos and CRD types, one directory per API and version
 cmd/          # One subdirectory per binary (ateapi, atelet, atenet, …)
 internal/     # Shared packages, internal to this module only
 pkg/          # Shared packages intended for external import
@@ -86,11 +88,12 @@ tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 | Only used by one binary | `cmd/<binary>/internal/<pkg>` |
 | Shared across binaries, not for external import | `internal/<pkg>` |
 | Public API for external consumers | `pkg/<pkg>` |
-| Public proto (control-plane gRPC API) | `pkg/proto/<name>` |
+| Public gRPC API | `api/<name>/<version>` |
+| Kubernetes CRD types | `api/infra/k8s/<group>/<version>` |
 | Internal proto (atelet / ateworker) | `internal/proto/<name>` |
 | Dev/CI scripts | `hack/` |
 | Standalone Go dev/CI tools | `tools/<name>` with its own `go.mod` |
-| Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `pkg/`; see `internal/plugins/README.md` |
+| Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `api/` and `pkg/`; see `internal/plugins/README.md` |
 
 See `docs/dev/code-layout.md` for the full rationale and per-directory details.
 

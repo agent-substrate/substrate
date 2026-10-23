@@ -22,7 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -40,13 +40,13 @@ type PolicyManager struct {
 
 // ReconcileGlobalBindings reconciles the OpenFGA role bindings on global:root
 // within tx. The tuple changes commit or roll back with tx.
-func (m *PolicyManager) ReconcileGlobalBindings(ctx context.Context, tx pgx.Tx, bindings []*ateapipb.Binding) error {
+func (m *PolicyManager) ReconcileGlobalBindings(ctx context.Context, tx pgx.Tx, bindings []*ateapi.Binding) error {
 	return m.reconcileBindings(ctx, tx, GlobalRootObject, bindings)
 }
 
 // ReconcileAtespaceBindings reconciles the OpenFGA role bindings on an atespace
 // within tx. The tuple changes commit or roll back with tx.
-func (m *PolicyManager) ReconcileAtespaceBindings(ctx context.Context, tx pgx.Tx, name string, bindings []*ateapipb.Binding) error {
+func (m *PolicyManager) ReconcileAtespaceBindings(ctx context.Context, tx pgx.Tx, name string, bindings []*ateapi.Binding) error {
 	return m.reconcileBindings(ctx, tx, AtespaceObject(name), bindings)
 }
 
@@ -115,7 +115,7 @@ func (m *PolicyManager) readObjectTuples(ctx context.Context, obj string) ([]*op
 // reconcileBindings diffs the existing OpenFGA tuples on obj against
 // desiredBindings and writes only the net additions and deletions in batches
 // within tx, leaving unchanged (relation, user) tuples untouched.
-func (m *PolicyManager) reconcileBindings(ctx context.Context, tx pgx.Tx, obj string, desiredBindings []*ateapipb.Binding) error {
+func (m *PolicyManager) reconcileBindings(ctx context.Context, tx pgx.Tx, obj string, desiredBindings []*ateapi.Binding) error {
 	if tx == nil {
 		return ErrNilTransaction
 	}

@@ -19,16 +19,16 @@ package workerservice
 import (
 	"context"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/localjwtauthority"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
-// Server implements ateapipb.WorkerServiceServer.
+// Server implements ateapi.WorkerServiceServer.
 type Server struct {
-	ateapipb.UnimplementedWorkerServiceServer
+	ateapi.UnimplementedWorkerServiceServer
 
 	// store is where a Worker's reports are recorded, and the authoritative
 	// state every request is authorized against.
@@ -54,12 +54,12 @@ type Server struct {
 // actorControl is the in-process slice of the Control service this package
 // drives. *controlapi.RPCService satisfies it.
 type actorControl interface {
-	SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error)
-	ApplyActorSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error
-	CrashActorReportedByWorker(ctx context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapipb.Actor, error)
+	SuspendActor(ctx context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error)
+	ApplyActorSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapi.ActorSnapshotState) error
+	CrashActorReportedByWorker(ctx context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapi.Actor, error)
 }
 
-var _ ateapipb.WorkerServiceServer = (*Server)(nil)
+var _ ateapi.WorkerServiceServer = (*Server)(nil)
 
 func New(store store.Interface, control actorControl, ateletSPIFFEID string, actorIDCAPool localca.Pool, actorJWTIssuer string, actorIDJWTPool localjwtauthority.Pool) *Server {
 	return &Server{

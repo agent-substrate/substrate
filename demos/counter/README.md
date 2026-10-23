@@ -4,7 +4,7 @@ This directory contains a demo of a stateful counter application running on Agen
 
 It deploys a simple Go HTTP server (`counter.go`) that increments two counters on every request — one in process memory, one in a file on a durable volume — and preserves both across suspends and resumes: the template's `MEMORY` `preferredFidelity` snapshot captures process memory alongside the durable volumes, so the in-memory count continues from where it left off. (With a `VOLUMES` fidelity, only the durable-volume counter would survive and the in-memory counter would restart from a cold boot. `ROOTFS` also keeps each container's rootfs writes, but not process memory, so the in-memory counter would restart under it too.)
 
-The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, while the actor template is a Substrate `ActorTemplate` resource — an `ateapipb.ActorTemplate` living in an **atespace** rather than a Kubernetes namespace, managed through the ate API with `kubectl ate`.
+The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, while the actor template is a Substrate `ActorTemplate` resource — an `ateapi.ActorTemplate` living in an **atespace** rather than a Kubernetes namespace, managed through the ate API with `kubectl ate`.
 
 ## Prerequisites
 

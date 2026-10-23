@@ -120,6 +120,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err := ateworkervalidation.ValidateRestoreWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
+	epoch, err := s.epoch.Require()
+	if err != nil {
+		return nil, err
+	}
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
@@ -229,7 +233,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
-	return &ateworkerpb.RestoreWorkloadResponse{}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch}, nil
 }
 
 // restoreMemoryFidelity restores a whole-guest snapshot: relaunch cloud-hypervisor
@@ -458,8 +462,17 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// and notifies the guest before unpausing the vCPUs, so a >=5.18 kernel reseeds its
 	// CRNG on its own with no host round-trip, no per-restore RPC, and no post-Resume
 	// race. At that point this agent-driven reseed can be dropped.
+	//
+	// Egress opens only once the reseed succeeds, so nothing leaves the host drawn
+	// from CRNG state the actor shares with the snapshot's other clones, and a
+	// failed reseed is still safe to retry (see restoreGuestReadyError). The
+	// restored workload is past its boot, so it needs egress only from the wakeup
+	// probe on. Ingress follows the wakeup probe, as in coldBootActor.
 	if err := reseedGuestCRNG(ctx, guestAC); err != nil {
 		return restoreGuestReadyError(ctx, "reseeding guest CRNG", err)
+	}
+	if err := s.tunnel.ActivateEgress(p.attribution(), egress); err != nil {
+		return err
 	}
 	tReseeded := time.Now()
 
@@ -524,7 +537,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		s.startActorLogForwarding(guestAC, attribution, c.id, c.name)
 	}
 
-	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
+	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}
 	s.setRunningVM(actorUID, ra)
@@ -585,8 +598,9 @@ func (s *AteWorkerService) cleanupFailedRestoreRootfs(ctx context.Context, actor
 // the agent is dialed and the CRNG reseeded (up to about 15s plus
 // reseedTimeout). Nothing routes inbound traffic to it yet (not even the wakeup
 // probe), and atunnel's egress proxy closes its outbound TCP connections until
-// tunnel.Activate, but a background task in the guest can query the DNS relay
-// or write to its filesystems. The retry re-extracts the rootfs upper and
+// tunnel.ActivateEgress, which restoreMemoryFidelity calls after the reseed for
+// that reason, but a background task in the guest can query the DNS relay or
+// write to its filesystems. The retry re-extracts the rootfs upper and
 // durable-dir volumes from the snapshot, whereas a CSI volume is outside the
 // snapshot and keeps any writes made during that window while guest memory and
 // its page cache resume from the snapshot; we accept that narrow window over
