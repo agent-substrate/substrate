@@ -72,6 +72,16 @@ func readWhiteouts(layerDir string) (*whiteoutSet, error) {
 	return &wh, nil
 }
 
+// validateWhiteoutName rejects a whiteout whose deleted name is empty, "."
+// or "..", which would name the parent or grandparent directory.
+func validateWhiteoutName(deleted string) error {
+	switch deleted {
+	case "", ".", "..":
+		return fmt.Errorf("whiteout of %q", deleted)
+	}
+	return nil
+}
+
 func validateTarName(name string) (cleaned string, skip bool, err error) {
 	if name == "" {
 		return "", true, nil
@@ -176,6 +186,9 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			// nothing to represent in an overlayfs lowerdir.
 			continue
 		} else if deleted, ok := strings.CutPrefix(base, whiteoutPrefix); ok {
+			if err := validateWhiteoutName(deleted); err != nil {
+				return nil, fmt.Errorf("invalid tar entry %q: %w", hdr.Name, err)
+			}
 			wh.Whiteouts = append(wh.Whiteouts, filepath.Join(filepath.Dir(name), deleted))
 			markAncestors(name)
 			continue

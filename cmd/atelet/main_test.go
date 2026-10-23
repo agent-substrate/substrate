@@ -42,6 +42,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atelet"
+	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -256,7 +257,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 	}
 
 	s := &Atelet{imageCache: newImageVolumeStore(t)}
-	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec)
+	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec, imagecache.Form{})
 	if err != nil {
 		t.Fatalf("prepareOCIBundles: %v", err)
 	}
@@ -1675,4 +1676,26 @@ func TestWorkerCallError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// rootfsForm picks EROFS layer images for micro-VM actors whatever the flag,
+// follows --host-erofs-layers for gVisor actors, and fs/ trees for the rest.
+func TestRootfsForm(t *testing.T) {
+	for _, tc := range []struct {
+		class string
+		flag  bool
+		want  imagecache.Form
+	}{
+		{class: "microvm", want: imagecache.Form{EROFS: true}},
+		{class: "microvm", flag: true, want: imagecache.Form{EROFS: true}},
+		{class: "gvisor", want: imagecache.Form{}},
+		{class: "gvisor", flag: true, want: imagecache.Form{EROFS: true}},
+		{class: "", flag: true, want: imagecache.Form{}},
+	} {
+		*hostEROFSLayers = tc.flag
+		if got := rootfsForm(tc.class); got != tc.want {
+			t.Errorf("rootfsForm(%q) with --host-erofs-layers=%v = %+v, want %+v", tc.class, tc.flag, got, tc.want)
+		}
+	}
+	*hostEROFSLayers = false
 }

@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -41,7 +42,7 @@ import (
 // extracted directory). The mount lives in the calling process's mount
 // namespace, which is exactly where the workload (runsc's gofer, virtiofsd)
 // resolves it.
-func SetupBundleRootfs(bundlePath string) error {
+func SetupBundleRootfs(bundlePath string) (retErr error) {
 	spec, err := ReadSpec(bundlePath)
 	if err != nil {
 		return err
@@ -49,10 +50,11 @@ func SetupBundleRootfs(bundlePath string) error {
 	if spec == nil {
 		return nil
 	}
-
-	for _, layerDir := range spec.Layers {
-		if err := FinalizeLayer(layerDir); err != nil {
-			return fmt.Errorf("while finalizing layer %q: %w", layerDir, err)
+	if !spec.EROFS {
+		for _, layerDir := range spec.Layers {
+			if err := FinalizeLayer(layerDir); err != nil {
+				return fmt.Errorf("while finalizing layer %q: %w", layerDir, err)
+			}
 		}
 	}
 
@@ -66,9 +68,13 @@ func SetupBundleRootfs(bundlePath string) error {
 	}
 
 	// Detach any stale mount left by a previous incarnation of this bundle
-	// path (e.g. a run that failed between mount and teardown). EINVAL just
-	// means nothing was mounted there.
-	_ = unix.Unmount(rootfs, unix.MNT_DETACH)
+	// path (e.g. a run that failed between mount and teardown).
+	_ = UnmountAllUnder(bundlePath)
+	defer func() {
+		if retErr != nil {
+			_ = UnmountAllUnder(bundlePath)
+		}
+	}()
 
 	if len(spec.Layers) == 0 {
 		// Degenerate zero-layer image: the empty rootfs dir plus ExtraDirs is
@@ -76,7 +82,20 @@ func SetupBundleRootfs(bundlePath string) error {
 		return createExtraDirs(rootfs, spec.ExtraDirs)
 	}
 
-	if err := mountOverlay(rootfs, overlayLowerDirs(spec.Layers), upper, work); err != nil {
+	var lowers []string
+	if spec.EROFS {
+		if err := PrepareEROFSUpper(upper, spec, nil, UpperTrustedXattr); err != nil {
+			return fmt.Errorf("while repairing implicit dir metadata: %w", err)
+		}
+		lowers, err = mountEROFSLayers(filepath.Join(bundlePath, "layers"), spec.Layers)
+		if err != nil {
+			return err
+		}
+	} else {
+		lowers = overlayLowerDirs(spec.Layers)
+	}
+
+	if err := mountOverlay(rootfs, lowers, upper, work); err != nil {
 		return fmt.Errorf("while mounting overlay rootfs at %q: %w", rootfs, err)
 	}
 
@@ -84,15 +103,17 @@ func SetupBundleRootfs(bundlePath string) error {
 		return err
 	}
 
-	// Repair merged directory metadata shadowed by implicitly-created parent
-	// dirs (see implicitdirs.go); the chmod/chowns copy up into this bundle's
-	// private upper, never into the shared pool.
-	fixups, err := resolveImplicitDirFixups(spec.Layers)
-	if err != nil {
-		return fmt.Errorf("while resolving implicit dir metadata: %w", err)
-	}
-	if err := applyDirFixups(rootfs, fixups); err != nil {
-		return fmt.Errorf("while repairing implicit dir metadata: %w", err)
+	if !spec.EROFS {
+		// Repair merged directory metadata shadowed by implicitly-created parent
+		// dirs (see implicitdirs.go); the chmod/chowns copy up into this bundle's
+		// private upper, never into the shared pool.
+		fixups, err := resolveImplicitDirFixups(spec.Layers)
+		if err != nil {
+			return fmt.Errorf("while resolving implicit dir metadata: %w", err)
+		}
+		if err := applyDirFixups(rootfs, fixups); err != nil {
+			return fmt.Errorf("while repairing implicit dir metadata: %w", err)
+		}
 	}
 
 	if err := setupImageVolumes(bundlePath, spec.ImageVolumes); err != nil {
@@ -105,9 +126,11 @@ func SetupBundleRootfs(bundlePath string) error {
 // bundle-local mount point, for the OCI spec to bind into the container.
 func setupImageVolumes(bundlePath string, volumes []ImageVolumeOverlay) error {
 	for _, vol := range volumes {
-		for _, layerDir := range vol.Layers {
-			if err := FinalizeLayer(layerDir); err != nil {
-				return fmt.Errorf("while finalizing layer %q of image volume %q: %w", layerDir, vol.Name, err)
+		if !vol.EROFS {
+			for _, layerDir := range vol.Layers {
+				if err := FinalizeLayer(layerDir); err != nil {
+					return fmt.Errorf("while finalizing layer %q of image volume %q: %w", layerDir, vol.Name, err)
+				}
 			}
 		}
 
@@ -117,19 +140,30 @@ func setupImageVolumes(bundlePath string, volumes []ImageVolumeOverlay) error {
 		}
 		_ = unix.Unmount(mountpoint, unix.MNT_DETACH)
 
-		if err := mountImageVolume(mountpoint, vol.Layers); err != nil {
+		if err := mountImageVolume(bundlePath, mountpoint, vol); err != nil {
 			return fmt.Errorf("while mounting image volume %q: %w", vol.Name, err)
 		}
 	}
 	return nil
 }
 
-// mountImageVolume attaches layers read-only at mountpoint.
-func mountImageVolume(mountpoint string, layers []string) error {
-	if len(layers) == 1 {
+// mountImageVolume attaches vol's layers read-only at mountpoint.
+func mountImageVolume(bundlePath, mountpoint string, vol ImageVolumeOverlay) error {
+	if vol.EROFS {
+		layers := lowerLayers(vol.Layers)
+		if len(layers) == 1 {
+			return mountEROFS(LayerEROFSPath(layers[0]), mountpoint)
+		}
+		lowers, err := mountEROFSLayers(filepath.Join(bundlePath, "volumes-layers", vol.Name), vol.Layers)
+		if err != nil {
+			return err
+		}
+		return mountOverlay(mountpoint, lowers, "", "")
+	}
+	if len(vol.Layers) == 1 {
 		// The kernel rejects a single lowerdir without an upperdir, so bind
 		// the layer's fs/ tree directly for the single-layer case.
-		fsDir := filepath.Join(layers[0], layerFSDirName)
+		fsDir := filepath.Join(vol.Layers[0], layerFSDirName)
 		if err := unix.Mount(fsDir, mountpoint, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 			return fmt.Errorf("while binding %q: %w", fsDir, err)
 		}
@@ -142,7 +176,123 @@ func mountImageVolume(mountpoint string, layers []string) error {
 		}
 		return nil
 	}
-	return mountOverlay(mountpoint, overlayLowerDirs(layers), "", "")
+	return mountOverlay(mountpoint, overlayLowerDirs(vol.Layers), "", "")
+}
+
+// mountEROFSLayers mounts each distinct layer's EROFS image read-only under
+// mountRoot and returns the mount points in overlayfs top-most-first order.
+func mountEROFSLayers(mountRoot string, layers []string) ([]string, error) {
+	unique := lowerLayers(layers)
+	lowers := make([]string, len(unique))
+	for i, layerDir := range unique {
+		mp := filepath.Join(mountRoot, strconv.Itoa(i))
+		if err := os.MkdirAll(mp, 0o700); err != nil {
+			return nil, fmt.Errorf("while creating EROFS mount point %q: %w", mp, err)
+		}
+		_ = unix.Unmount(mp, unix.MNT_DETACH)
+		if err := mountEROFS(LayerEROFSPath(layerDir), mp); err != nil {
+			return nil, fmt.Errorf("while mounting EROFS layer %q: %w", layerDir, err)
+		}
+		lowers[i] = mp
+	}
+	return lowers, nil
+}
+
+// HostMountsEROFS reports whether this kernel can mount EROFS: the filesystem
+// is built in or loadable. A kernel without it (CONFIG_EROFS_FS unset, as on
+// Container-Optimized OS) answers fsopen with ENODEV, and no fallback can
+// mount the images on the host; they can still be mapped into a guest.
+func HostMountsEROFS() bool {
+	fsfd, err := unix.Fsopen("erofs", unix.FSOPEN_CLOEXEC)
+	if err != nil {
+		return false
+	}
+	unix.Close(fsfd)
+	return true
+}
+
+// mountEROFS mounts imagePath read-only at mountpoint, using a file-backed
+// EROFS mount when the kernel supports it (Linux 6.12+) and falling back to an
+// autoclear read-only loop device on older kernels.
+func mountEROFS(imagePath, mountpoint string) error {
+	err := mountEROFSFromSource(imagePath, mountpoint)
+	if err == nil || !errors.Is(err, unix.ENOTBLK) {
+		return err
+	}
+	return mountEROFSWithLoop(imagePath, mountpoint)
+}
+
+func mountEROFSFromSource(source, mountpoint string) error {
+	fsfd, err := unix.Fsopen("erofs", unix.FSOPEN_CLOEXEC)
+	if err != nil {
+		return fmt.Errorf("while opening erofs fs context: %w", err)
+	}
+	defer unix.Close(fsfd)
+
+	if err := unix.FsconfigSetString(fsfd, "source", source); err != nil {
+		return fmt.Errorf("while setting erofs source=%q: %w%s", source, err, fsContextLog(fsfd))
+	}
+	if err := unix.FsconfigSetFlag(fsfd, "ro"); err != nil {
+		return fmt.Errorf("while setting erofs ro: %w%s", err, fsContextLog(fsfd))
+	}
+	if err := unix.FsconfigCreate(fsfd); err != nil {
+		return fmt.Errorf("while creating erofs superblock: %w%s", err, fsContextLog(fsfd))
+	}
+	mfd, err := unix.Fsmount(fsfd, unix.FSMOUNT_CLOEXEC, unix.MOUNT_ATTR_RDONLY)
+	if err != nil {
+		return fmt.Errorf("while creating erofs mount object: %w%s", err, fsContextLog(fsfd))
+	}
+	defer unix.Close(mfd)
+	if err := unix.MoveMount(mfd, "", unix.AT_FDCWD, mountpoint, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
+		return fmt.Errorf("while attaching erofs at %q: %w", mountpoint, err)
+	}
+	return nil
+}
+
+func mountEROFSWithLoop(imagePath, mountpoint string) error {
+	imgFile, err := os.Open(imagePath)
+	if err != nil {
+		return fmt.Errorf("while opening EROFS image %q: %w", imagePath, err)
+	}
+	defer imgFile.Close()
+
+	ctl, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("while opening /dev/loop-control: %w", err)
+	}
+	defer ctl.Close()
+
+	for range 16 {
+		num, err := unix.IoctlRetInt(int(ctl.Fd()), unix.LOOP_CTL_GET_FREE)
+		if err != nil {
+			return fmt.Errorf("while allocating loop device: %w", err)
+		}
+		devPath := fmt.Sprintf("/dev/loop%d", num)
+		loopFile, err := os.OpenFile(devPath, os.O_RDONLY, 0)
+		if err != nil {
+			return fmt.Errorf("while opening %s: %w", devPath, err)
+		}
+		cfg := unix.LoopConfig{
+			Fd:   uint32(imgFile.Fd()),
+			Size: erofsBlockSize,
+			Info: unix.LoopInfo64{
+				Flags: unix.LO_FLAGS_READ_ONLY | unix.LO_FLAGS_AUTOCLEAR,
+			},
+		}
+		err = unix.IoctlLoopConfigure(int(loopFile.Fd()), &cfg)
+		if errors.Is(err, unix.EBUSY) {
+			loopFile.Close()
+			continue
+		}
+		if err != nil {
+			loopFile.Close()
+			return fmt.Errorf("while configuring %s for %q: %w", devPath, imagePath, err)
+		}
+		mountErr := mountEROFSFromSource(devPath, mountpoint)
+		loopFile.Close()
+		return mountErr
+	}
+	return fmt.Errorf("while allocating loop device for %q: all candidates busy", imagePath)
 }
 
 // mountOverlay attaches an overlay of lowers (top-most first) with the given

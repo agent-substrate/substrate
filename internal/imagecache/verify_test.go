@@ -274,14 +274,14 @@ func joinFlight(t *testing.T, s *Store, diffID v1.Hash, leader gatedLayer, joine
 	t.Helper()
 	leaderDone := make(chan error, 1)
 	go func() {
-		_, err := s.ensureLayer(t.Context(), diffID, leader)
+		_, err := s.ensureLayer(t.Context(), diffID, leader, false)
 		leaderDone <- err
 	}()
 	<-leader.started
 
 	joinerDone := make(chan struct{})
 	go func() {
-		joinerDir, joinerErr = s.ensureLayer(t.Context(), diffID, joiner)
+		joinerDir, joinerErr = s.ensureLayer(t.Context(), diffID, joiner, false)
 		close(joinerDone)
 	}()
 	// Every goroutine is now blocked: the leader on release, the joiner
@@ -306,13 +306,13 @@ func TestLyingPullDoesNotFailConcurrentHonestPull(t *testing.T) {
 		lying := newGatedLayer(evil, nil)
 		lyingDone := make(chan error, 1)
 		go func() {
-			_, err := s.ensureLayer(t.Context(), diffID, lying)
+			_, err := s.ensureLayer(t.Context(), diffID, lying, false)
 			lyingDone <- err
 		}()
 		<-lying.started
 
 		// The lying flight is still held open.
-		dir, err := s.ensureLayer(t.Context(), diffID, good)
+		dir, err := s.ensureLayer(t.Context(), diffID, good, false)
 		if err != nil {
 			t.Fatalf("honest ensureLayer: %v", err)
 		}
@@ -391,7 +391,7 @@ func TestRecordedSizeExcludesTrailingBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newTestStore(t)
-	dir, err := s.ensureLayer(context.Background(), diffID, layer)
+	dir, err := s.ensureLayer(context.Background(), diffID, layer, false)
 	if err != nil {
 		t.Fatalf("ensureLayer: %v", err)
 	}

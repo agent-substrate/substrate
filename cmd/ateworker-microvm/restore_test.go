@@ -36,6 +36,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
@@ -124,7 +125,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
-		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, nil); err != nil {
 			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		if got, want := readFsSockets(t, dir)[kata.FsTag], kata.VirtiofsdSocketPath(id); got != want {
@@ -140,7 +141,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 			dir := writeSnapshotConfig(t, []map[string]any{
 				{"tag": tag, "socket": "/run/vc/vm/golden/other.sock"},
 			})
-			if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+			if err := rewriteSnapshotPaths(dir, id, kernel, image, nil); err == nil {
 				t.Fatalf("rewriteSnapshotPaths accepted fs tag %q, want an error", tag)
 			}
 		}
@@ -161,7 +162,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 				{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 			})
 			mutateSnapshotConfig(t, dir, mutate)
-			if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+			if err := rewriteSnapshotPaths(dir, id, kernel, image, nil); err == nil {
 				t.Fatalf("rewriteSnapshotPaths accepted a config with %s, want an error", name)
 			}
 		})
@@ -188,16 +189,68 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 		if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, nil); err == nil {
 			t.Fatal("rewriteSnapshotPaths accepted a pmem device it does not know, want an error")
 		}
 	})
+
+	const layerDir = "/var/lib/ate/image-cache/layers/sha256/abc"
+	layerRec := &erofsLayers{Containers: map[string][]erofsLayerRecord{"app": {{Dir: layerDir, Digest: "sha256:1"}}}}
+	layer := imagecache.LayerEROFSPath(layerDir)
+	t.Run("EROFS layer images stay at their image-cache paths", func(t *testing.T) {
+		dir := writeSnapshotConfig(t, []map[string]any{
+			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
+		})
+		mutateSnapshotConfig(t, dir, func(cfg map[string]any) {
+			cfg["pmem"] = append(cfg["pmem"].([]any), map[string]any{"id": erofsPmemIDPrefix + "0", "file": layer, "discard_writes": true, "pci_segment": 2})
+		})
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, layerRec); err != nil {
+			t.Fatalf("rewriteSnapshotPaths: %v", err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg struct {
+			Pmem []map[string]any `json:"pmem"`
+		}
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.Pmem) != 2 || cfg.Pmem[0]["file"] != image || cfg.Pmem[1]["file"] != layer || cfg.Pmem[1]["pci_segment"] != float64(2) {
+			t.Errorf("pmem = %+v, want the guest image repointed to %q and the layer left at %q on segment 2", cfg.Pmem, image, layer)
+		}
+	})
+
+	// The snapshot config is not trusted for layer devices: the file must be
+	// a layer image the record names, and writes must be discarded.
+	for name, dev := range map[string]map[string]any{
+		"layer device writes through":        {"id": erofsPmemIDPrefix + "0", "file": layer, "discard_writes": false, "pci_segment": 2},
+		"layer device outside the record":    {"id": erofsPmemIDPrefix + "0", "file": "/var/lib/ate/image-cache/layers/sha256/other/layer.erofs", "discard_writes": true, "pci_segment": 2},
+		"layer device with no record at all": {"id": erofsPmemIDPrefix + "0", "file": layer, "discard_writes": true, "pci_segment": 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeSnapshotConfig(t, []map[string]any{
+				{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
+			})
+			mutateSnapshotConfig(t, dir, func(cfg map[string]any) {
+				cfg["pmem"] = append(cfg["pmem"].([]any), dev)
+			})
+			rec := layerRec
+			if name == "layer device with no record at all" {
+				rec = nil
+			}
+			if err := rewriteSnapshotPaths(dir, id, kernel, image, rec); err == nil {
+				t.Fatal("rewriteSnapshotPaths accepted the config, want a refusal")
+			}
+		})
+	}
 
 	t.Run("vsock, console, kernel and image are repointed", func(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
-		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, nil); err != nil {
 			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		b, err := os.ReadFile(filepath.Join(dir, "config.json"))
@@ -253,7 +306,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 			t.Fatalf("linking config.json: %v", err)
 		}
 
-		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, nil); err != nil {
 			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		if got, want := readFsSockets(t, dir)[kata.FsTag], kata.VirtiofsdSocketPath(id); got != want {
@@ -304,7 +357,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 		}
 		inoBefore := fiBefore.Sys().(*syscall.Stat_t).Ino
 
-		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, nil); err != nil {
 			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 

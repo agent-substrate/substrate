@@ -113,6 +113,7 @@ var (
 	imageCredentialProviderBinDir = pflag.String("image-credential-provider-bin-dir", "", "Directory holding the credential provider executables named by --image-credential-provider-config. Required when that flag is set.")
 
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
+	hostEROFSLayers              = pflag.Bool("host-erofs-layers", false, "Cache the layers of gVisor actor images, and of image volumes for every sandbox class, as EROFS images the host mounts, instead of unpacked trees: ownership, setuid bits, mtimes and xattrs the unprivileged unpack drops survive. Needs EROFS in the host kernel.")
 	imageCacheDir                = pflag.String("image-cache-dir", ateletpath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the worker pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
@@ -261,6 +262,9 @@ func main() {
 	)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open image cache", err)
+	}
+	if *hostEROFSLayers && !imagecache.HostMountsEROFS() {
+		serverboot.Fatal(ctx, "--host-erofs-layers needs EROFS in the host kernel (CONFIG_EROFS_FS), which this node lacks", nil)
 	}
 	if *imageCacheGCPeriod > 0 {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
@@ -877,7 +881,9 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 		return nil, err
 	}
-	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef, req.GetSpec())
+	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
+		req.GetSpec(), rootfsForm(sandboxRec.SandboxClass),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1226,6 +1232,18 @@ func (s *Atelet) cleanUpAfterCheckpoint(ctx context.Context, req *ateletpb.Check
 		}
 	}
 	return nil
+}
+
+// rootfsForm returns the form to cache an actor's image layers in: EROFS
+// images for micro-VM actors, EROFS images the host mounts for gVisor actors
+// when --host-erofs-layers is set, fs/ trees for everything else. A gVisor
+// snapshot does not pin the form, since its rootfs is composed on the host
+// before every boot.
+func rootfsForm(class string) imagecache.Form {
+	if class == string(atev1alpha1.SandboxClassGvisor) {
+		return imagecache.Form{EROFS: *hostEROFSLayers}
+	}
+	return imagecache.Form{EROFS: class == string(atev1alpha1.SandboxClassMicroVM)}
 }
 
 func checkpointSnapshotFiles(resp *ateworkerpb.CheckpointWorkloadResponse, required bool) (files, dataFiles []string, err error) {
@@ -1787,7 +1805,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			return err
 		}
 		t := time.Now()
-		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec())
+		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), rootfsForm(runtimeRec.SandboxClass))
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -2195,6 +2213,7 @@ func (s *Atelet) prepareOCIBundles(
 	actorUID string,
 	actorRef resources.ActorRef,
 	spec *ateletpb.WorkloadSpec,
+	form imagecache.Form,
 ) ([]*ateworkerpb.ContainerSpec, error) {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
@@ -2215,7 +2234,7 @@ func (s *Atelet) prepareOCIBundles(
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		g.Go(func() error {
-			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
+			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), form, spec.GetVolumes(), ctr.GetVolumeMounts())
 			if err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
