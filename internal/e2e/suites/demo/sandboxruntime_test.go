@@ -348,17 +348,22 @@ func TestSandboxRuntimeDisableDropsToRootfs(t *testing.T) {
 }
 
 // TestWorkerPoolSwitchSandboxConfig covers switching a WorkerPool's configRef
-// to another SandboxConfig of the same class:
+// to another SandboxConfig of the same class (and rejecting missing or
+// wrong-class SandboxConfigs without disrupting the running pool):
 //  1. A pool starts on configA (v1), builds a golden ActorTemplate stamped with
 //     v1, and resumes actor1 on v1 (memory=1, file=1, rootfs=1).
-//  2. While actor1 is RUNNING on v1, the pool's configRef switches to configB
+//  2. Pointing the pool's configRef at a missing SandboxConfig or a
+//     SandboxConfig of the other sandbox class sets Resolved=False
+//     (SandboxConfigNotFound / SandboxClassMismatch) while keeping configA in
+//     status.sandboxClasses[0].configRef and leaving the worker on v1.
+//  3. While actor1 is RUNNING on v1, the pool's configRef switches to configB
 //     (v2); the worker re-registers with v2 as default_runtime while actor1
 //     continues running on v1 (memory=2, file=2, rootfs=2).
-//  3. Suspending actor1 stamps the snapshot with v1 (from
+//  4. Suspending actor1 stamps the snapshot with v1 (from
 //     WorkerAssignment.sandbox_runtime, not the worker's new default_runtime),
 //     and resuming actor1 on configB drops to ROOTFS on v2 (memory=1, file=3,
 //     rootfs=3).
-//  4. Creating and resuming a fresh actor2 from the v1-stamped golden template
+//  5. Creating and resuming a fresh actor2 from the v1-stamped golden template
 //     while the pool is on configB also drops the borrowed golden snapshot to
 //     ROOTFS on v2 (memory=1, file=1, rootfs=1).
 func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
@@ -382,6 +387,7 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 
 	configAName := "e2e-switch-a-" + nsObj.Name
 	configBName := "e2e-switch-b-" + nsObj.Name
+	wrongClassConfigName := "e2e-switch-wrong-class-" + nsObj.Name
 	poolName := "runtime-switch"
 	for _, cfg := range []struct {
 		name string
@@ -401,11 +407,14 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 			t.Fatalf("failed to create SandboxConfig %s: %v", cfg.name, err)
 		}
 	}
+	if _, err := clients.SubstrateK8s.AteV1().SandboxConfigs().Create(ctx, wrongClassSandboxConfig(wrongClassConfigName, class), metav1.CreateOptions{}); err != nil {
+		t.Fatalf("failed to create wrong-class SandboxConfig %s: %v", wrongClassConfigName, err)
+	}
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		_ = clients.SubstrateK8s.AteV1().WorkerPools(nsObj.Name).Delete(cleanupCtx, poolName, metav1.DeleteOptions{})
-		for _, name := range []string{configAName, configBName} {
+		for _, name := range []string{configAName, configBName, wrongClassConfigName} {
 			if err := clients.SubstrateK8s.AteV1().SandboxConfigs().Delete(cleanupCtx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 				t.Errorf("failed to delete SandboxConfig %s: %v", name, err)
 			}
@@ -465,8 +474,27 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 	validateCounterResponse(t, resp, "on configA before switch", 1, 1)
 	validateRootfsCounter(t, resp, "on configA before switch", 1)
 
-	// 2. Switch the pool's configRef to configB while actor1 is still RUNNING.
+	// 2. Point the pool's configRef at a missing SandboxConfig and then at a
+	// wrong-class SandboxConfig (§6 A.5): ate-controller reports Resolved=False
+	// while keeping configA in status.sandboxClasses[0].configRef, and the
+	// worker stays on v1.
+	updateWorkerPoolSandboxConfig(t, ctx, clients, nsObj.Name, poolName, "nonexistent-"+nsObj.Name)
+	waitForPoolSandboxClassCondition(t, ctx, clients, nsObj.Name, poolName, configAName, metav1.ConditionFalse, atev1.WorkerPoolReasonSandboxConfigNotFound)
+
+	updateWorkerPoolSandboxConfig(t, ctx, clients, nsObj.Name, poolName, wrongClassConfigName)
+	waitForPoolSandboxClassCondition(t, ctx, clients, nsObj.Name, poolName, configAName, metav1.ConditionFalse, atev1.WorkerPoolReasonSandboxClassMismatch)
+
+	wOnKept, err := clients.SubstrateAPI.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: workerRef})
+	if err != nil {
+		t.Fatalf("failed to get Worker %s after invalid configRef updates: %v", workerRef.GetName(), err)
+	}
+	if diff := cmp.Diff(v1Runtime, hardware.ColdBootRuntime(wOnKept.GetStatus()), protocmp.Transform()); diff != "" {
+		t.Fatalf("worker default_runtime changed after invalid configRef updates (-want v1 +got):\n%s", diff)
+	}
+
+	// 3. Switch the pool's configRef to configB while actor1 is still RUNNING.
 	updateWorkerPoolSandboxConfig(t, ctx, clients, nsObj.Name, poolName, configBName)
+	waitForPoolSandboxClassCondition(t, ctx, clients, nsObj.Name, poolName, configBName, metav1.ConditionTrue, atev1.WorkerPoolReasonResolved)
 	v2Runtime := waitForWorkerRuntimeDisabled(t, ctx, clients, workerRef, v1Runtime)
 
 	// Verify actor1 is untouched while running and stamps v1 when suspended.
@@ -1240,6 +1268,86 @@ func updateSandboxConfigVersions(t *testing.T, ctx context.Context, clients *e2e
 			t.Fatalf("failed to update SandboxConfig %s: %v", configName, err)
 		}
 		return
+	}
+}
+
+// wrongClassSandboxConfig builds a valid SandboxConfig for the sandbox class
+// opposite to poolClass so ate-controller rejects it with SandboxClassMismatch.
+func wrongClassSandboxConfig(name string, poolClass atev1.SandboxClass) *atev1.SandboxConfig {
+	enabled := atev1.SandboxVersionStateEnabled
+	dummySHA := strings.Repeat("a", 64)
+	if poolClass == atev1.SandboxClassGvisor {
+		return &atev1.SandboxConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec: atev1.SandboxConfigSpec{
+				SandboxClass:   atev1.SandboxClassMicroVM,
+				DefaultVersion: "v1",
+				Versions: []atev1.SandboxVersionConfig{{
+					Name:  "v1",
+					State: &enabled,
+					Assets: map[string]map[string]atev1.AssetFile{
+						"amd64": {
+							"cloud-hypervisor": {URL: "gs://dummy/ch", SHA256: dummySHA},
+							"virtiofsd":        {URL: "gs://dummy/vfsd", SHA256: dummySHA},
+							"kata-kernel":      {URL: "gs://dummy/vmlinux", SHA256: dummySHA},
+							"kata-image":       {URL: "gs://dummy/rootfs", SHA256: dummySHA},
+						},
+					},
+				}},
+			},
+		}
+	}
+	return &atev1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: atev1.SandboxConfigSpec{
+			SandboxClass:   atev1.SandboxClassGvisor,
+			DefaultVersion: "v1",
+			Versions: []atev1.SandboxVersionConfig{{
+				Name:   "v1",
+				State:  &enabled,
+				Assets: gvisorSecondReleaseAssets,
+			}},
+		},
+	}
+}
+
+// waitForPoolSandboxClassCondition polls WorkerPool status until
+// status.sandboxClasses[0].configRef.name equals wantConfigName and its
+// Resolved condition matches wantStatus and wantReason.
+func waitForPoolSandboxClassCondition(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, poolName, wantConfigName string, wantStatus metav1.ConditionStatus, wantReason string) {
+	t.Helper()
+	const timeout = time.Minute
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var lastStatus []atev1.WorkerPoolSandboxClassStatus
+	for {
+		wp, err := clients.SubstrateK8s.AteV1().WorkerPools(namespace).Get(ctx, poolName, metav1.GetOptions{})
+		if err == nil && len(wp.Status.SandboxClasses) > 0 {
+			lastStatus = wp.Status.SandboxClasses
+			sc := wp.Status.SandboxClasses[0]
+			gotConfig := ""
+			if sc.ConfigRef != nil {
+				gotConfig = sc.ConfigRef.Name
+			}
+			for _, cond := range sc.Conditions {
+				if cond.Type == atev1.WorkerPoolSandboxClassConditionResolved &&
+					gotConfig == wantConfigName &&
+					cond.Status == wantStatus &&
+					cond.Reason == wantReason {
+					t.Logf("Pool %s/%s sandboxClass[0]: configRef=%s, Resolved=%s (%s: %s)",
+						namespace, poolName, gotConfig, cond.Status, cond.Reason, cond.Message)
+					return
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			raw, _ := json.Marshal(lastStatus)
+			t.Fatalf("timed out after %v waiting for WorkerPool %s/%s status.sandboxClasses[0] configRef=%q Resolved=%s/%s (last=%s, err=%v)",
+				timeout, namespace, poolName, wantConfigName, wantStatus, wantReason, raw, err)
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 }
 
