@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,8 +37,8 @@ func TestWorkerInformersNamespace(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "other", Labels: map[string]string{workerPoolLabel: "pool"}},
 			})
 			ate := atefake.NewSimpleClientset(resolvedPool("pool", "config"),
-				&v1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "other"}},
-				&v1alpha1.SandboxConfig{ObjectMeta: metav1.ObjectMeta{Name: "config"}},
+				&atev1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "other"}},
+				&atev1.SandboxConfig{ObjectMeta: metav1.ObjectMeta{Name: "config"}},
 			)
 			actions := make(chan k8stesting.Action, 10)
 			for _, client := range []*k8stesting.Fake{&kube.Fake, &ate.Fake} {
@@ -53,8 +53,8 @@ func TestWorkerInformersNamespace(t *testing.T) {
 			}
 			ateFactory, podFactory := newWorkerInformers(ate, kube, namespace, "node-1")
 			pods := podFactory.Core().V1().Pods().Informer()
-			pools := ateFactory.Api().V1alpha1().WorkerPools().Informer()
-			configs := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
+			pools := ateFactory.Ate().V1().WorkerPools().Informer()
+			configs := ateFactory.Ate().V1().SandboxConfigs().Informer()
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			t.Cleanup(func() {
 				cancel()

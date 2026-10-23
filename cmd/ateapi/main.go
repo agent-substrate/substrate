@@ -310,7 +310,7 @@ func main() {
 	// optional: it keeps retrying past the diagnostic timeout without gating
 	// API availability.
 	cachesync.OptionalSync(shutdownCtx, cacheSyncTimeout, map[string]cache.InformerSynced{
-		"WorkerPools": ateFactory.Api().V1alpha1().WorkerPools().Informer().HasSynced,
+		"WorkerPools": ateFactory.Ate().V1().WorkerPools().Informer().HasSynced,
 	}, func(ctx context.Context, err error) {
 		slog.WarnContext(ctx, "WorkerPool cache has not synced; worker-count metrics may omit empty pools",
 			"watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "", "err", err)
@@ -617,7 +617,7 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 func requiredKubernetesCaches(ateletPods cache.SharedIndexInformer, ateFactory externalversions.SharedInformerFactory, scFactory informers.SharedInformerFactory) map[string]cache.InformerSynced {
 	return map[string]cache.InformerSynced{
 		"atelet Pods":      ateletPods.HasSynced,
-		"CSIDriverConfigs": ateFactory.Api().V1alpha1().CSIDriverConfigs().Informer().HasSynced,
+		"CSIDriverConfigs": ateFactory.Ate().V1().CSIDriverConfigs().Informer().HasSynced,
 		"StorageClasses":   scFactory.Storage().V1().StorageClasses().Informer().HasSynced,
 	}
 }

@@ -75,8 +75,8 @@ func TestOptionalSyncForbiddenCache(t *testing.T) {
 		return false, nil, nil
 	})
 	factory := externalversions.NewSharedInformerFactoryWithOptions(client, 0, externalversions.WithNamespace("agent-workloads"))
-	workerPools := factory.Api().V1alpha1().WorkerPools().Informer()
-	csiConfigs := factory.Api().V1alpha1().CSIDriverConfigs().Informer()
+	workerPools := factory.Ate().V1().WorkerPools().Informer()
+	csiConfigs := factory.Ate().V1().CSIDriverConfigs().Informer()
 	factory.Start(ctx.Done())
 	t.Cleanup(func() {
 		cancel()
