@@ -177,7 +177,7 @@ resume it and confirm the count continues — proving the guest-memory snapshot
 round-tripped. The flow is the same as the
 [README Quickstart](../../README.md#quickstart-development), just with the
 microVM template; see the
-[counter demo's microVM variant](../../demos/counter/README.md#micro-vm-variant)
+[counter demo's microVM steps](../../demos/counter/README.md#1-build-and-deploy)
 for background. Note that an actor template showing a GOLDEN SNAPSHOT in the
 verify step already exercises the runtime end-to-end — the golden snapshot
 requires a full guest boot and checkpoint.
