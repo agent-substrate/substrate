@@ -37,9 +37,9 @@ func (s *RPCService) ApplyActorSnapshotState(ctx context.Context, actorRef resou
 }
 
 // ApplyReportedSnapshotState applies a report from the atelet on node to the
-// Actor. It holds the Actor's lease and applies reports only to a SUSPENDED or
-// RUNNING Actor, so a report never interleaves with a workflow. A report that
-// changes nothing writes nothing.
+// Actor. It holds the Actor's lease and applies reports only to a SUSPENDED,
+// RUNNING, or CRASHED Actor, so a report never interleaves with a workflow. A
+// report that changes nothing writes nothing.
 func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapi.ActorSnapshotState) error {
 	ctx = preview.ContextWithOptIn(ctx)
 	// Check before taking the lease, so an atelet can't hold the lease of an
@@ -57,12 +57,34 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 		return err
 	}
 
+	applied := proto.Clone(before).(*ateapi.Actor)
+	status := applied.GetStatus()
 	// A workflow owns a transitioning Actor's snapshots, even after its lease
-	// lapses. A crashed Actor's snapshots wait for a revert.
-	switch st := before.GetStatus().GetState(); st {
+	// lapses.
+	switch st := status.GetState(); st {
 	case ateapi.ActorState_ACTOR_STATE_SUSPENDED, ateapi.ActorState_ACTOR_STATE_RUNNING:
+		if err := applyActorSnapshotState(leaseCtx, status, node, state); err != nil {
+			return err
+		}
 	case ateapi.ActorState_ACTOR_STATE_CRASHED:
-		return apierror.FailedPrecondition("actor %s is %s; revert it first", actorRef, st)
+		reported := state.GetLatestDurable()
+		snap := findSnapshotByGeneration(status.GetSnapshots(), reported.GetGeneration())
+		// A crashed Actor keeps its AssignedNode, so only Locality tells a crashed
+		// suspend's snapshot from an upload that finished on node: only a finalized
+		// suspend sets Locality. Its upload is not recorded, and a revert deletes
+		// it with the rest of the discarded execution.
+		if snap != nil && snap.GetLocality() == "" && snap.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+			slog.InfoContext(leaseCtx, msgDurableCrashedSuspend,
+				slog.Int("generation", int(reported.GetGeneration())),
+				slog.String("uuid", reported.GetUuid()))
+		} else if err := applyLatestDurable(leaseCtx, status, reported); err != nil {
+			return err
+		}
+		if state.GetLatestLocal() == nil && state.GetUploading() == nil {
+			if err := applyDetach(status, node, reported.GetGeneration()); err != nil {
+				return err
+			}
+		}
 	case ateapi.ActorState_ACTOR_STATE_SUSPENDING, ateapi.ActorState_ACTOR_STATE_RESUMING,
 		ateapi.ActorState_ACTOR_STATE_DELETING, ateapi.ActorState_ACTOR_STATE_REVERTING:
 		return apierror.Aborted("actor %s is %s; retry once that finishes", actorRef, st)
@@ -70,10 +92,6 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 		return apierror.Internal("actor %s has unexpected state %s", actorRef, st)
 	}
 
-	applied := proto.Clone(before).(*ateapi.Actor)
-	if err := applyActorSnapshotState(leaseCtx, applied.GetStatus(), node, state); err != nil {
-		return err
-	}
 	if proto.Equal(applied.GetStatus(), before.GetStatus()) {
 		return nil
 	}
@@ -136,8 +154,9 @@ func actorOnNode(actor *ateapi.Actor, node string) bool {
 
 // Messages logged for a reported durable snapshot that changes nothing.
 const (
-	msgDurableOlder       = "Ignoring a durable snapshot older than the latest completed one"
-	msgDurableNotRecorded = "Ignoring a durable snapshot at a generation the actor no longer records"
+	msgDurableOlder          = "Ignoring a durable snapshot older than the latest completed one"
+	msgDurableNotRecorded    = "Ignoring a durable snapshot at a generation the actor no longer records"
+	msgDurableCrashedSuspend = "Ignoring the upload of a snapshot whose suspend crashed"
 )
 
 // applyActorSnapshotState applies the two facts a report carries: an upload
@@ -217,10 +236,11 @@ func applyLatestDurable(ctx context.Context, status *ateapi.ActorStatus, reporte
 // durable. A newer snapshot on node postdates the detach, so it stays. A
 // SUSPENDED Actor is released from node once none of its snapshots are there.
 // It refuses if the latest deleted snapshot isn't durable, so the Actor can't
-// resume from an older one.
+// resume from an older one. A CRASHED Actor resumes only after a revert, which
+// drops its local snapshots and pending uploads, so it is not refused.
 func applyDetach(status *ateapi.ActorStatus, node string, upTo int32) error {
 	deleted := func(s *ateapi.Snapshot) bool { return s.GetLocality() == node && s.GetGeneration() <= upTo }
-	if latest := latestSnapshot(status, deleted); latest != nil &&
+	if latest := latestSnapshot(status, deleted); status.GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED && latest != nil &&
 		latest.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 		return apierror.FailedPrecondition("snapshot generation %d on node %s is not durable", latest.GetGeneration(), node)
 	}
