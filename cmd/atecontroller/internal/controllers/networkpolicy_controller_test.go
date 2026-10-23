@@ -41,7 +41,7 @@ func TestWorkerPoolCreatesNetworkPolicy(t *testing.T) {
 	deleteOnCleanup(t, wp)
 
 	eventually(t, func(ctx context.Context) (bool, error) {
-		npName := resources.NetworkPolicyNamePrefix + wp.Name
+		npName := resources.NetworkPolicyName(wp.Name)
 		np := &networkingv1.NetworkPolicy{}
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: npName, Namespace: wp.Namespace}, np)
 		if err != nil {
@@ -164,7 +164,7 @@ func TestNetworkPolicyTakeover(t *testing.T) {
 			// Apply as the controller's field manager, as an earlier reconcile would.
 			// The API server rejects a second controller reference written by another
 			// manager, so the earlier-pool row would pass even without the check.
-			ac := networkingv1ac.NetworkPolicy(resources.NetworkPolicyNamePrefix+wp.Name, wp.Namespace).
+			ac := networkingv1ac.NetworkPolicy(resources.NetworkPolicyName(wp.Name), wp.Namespace).
 				WithSpec(networkingv1ac.NetworkPolicySpec().
 					WithPolicyTypes(networkingv1.PolicyTypeIngress))
 			if tt.label != "" {
