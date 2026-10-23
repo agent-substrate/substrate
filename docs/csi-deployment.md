@@ -205,7 +205,7 @@ spec:
           mountPath: /csi
       # Envoy proxy sidecar terminating mTLS and forwarding to /csi/csi.sock
       - name: envoy-proxy
-        image: envoyproxy/envoy:v1.34-latest
+        image: envoyproxy/envoy:v1.39.5@sha256:8fc594a5d85eb76dca24155cfb9208882406873932b20cf33649a0a611194c43
         command:
         - "/usr/local/bin/envoy"
         args:
