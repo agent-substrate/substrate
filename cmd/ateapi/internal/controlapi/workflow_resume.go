@@ -122,6 +122,10 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	}
 	var workerEpoch int64
 	if tele, workerEpoch, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts); err != nil {
+		snap := snapshotToResume(actor.GetStatus())
+		if expected != nil && localElsewhere(snap, actor.GetStatus().GetAssignedNode()) && apierror.Code(err) == codes.FailedPrecondition {
+			err = apierror.FailedPrecondition("held snapshot %q generation %d could not satisfy expected snapshot %q generation %d: %w", snap.GetUuid(), snap.GetGeneration(), expected.GetSnapshotUuid(), expected.GetGeneration(), err)
+		}
 		return nil, false, err
 	}
 	var running *ateapi.Actor
@@ -145,7 +149,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		return nil, nil, fmt.Errorf("while getting actor from DB: %w", err)
 	}
 
-	if err := validateExpectedSnapshot(actor, expected); err != nil {
+	if err := w.validateExpectedSnapshot(ctx, actor, expected); err != nil {
 		return nil, nil, err
 	}
 
@@ -195,7 +199,7 @@ func snapshotSharing(owner ateapi.SnapshotOwner) ateletpb.SnapshotSharing {
 // not last_assigned_generation: revert can discard generations.
 // Call only with an actor read under the lifecycle lease, including refreshes
 // after assignment conflicts, before doing further workload work.
-func validateExpectedSnapshot(actor *ateapi.Actor, expected *ateapi.ExpectedSnapshot) error {
+func (w *ActorWorkflow) validateExpectedSnapshot(ctx context.Context, actor *ateapi.Actor, expected *ateapi.ExpectedSnapshot) error {
 	if expected == nil {
 		return nil
 	}
@@ -217,6 +221,22 @@ func validateExpectedSnapshot(actor *ateapi.Actor, expected *ateapi.ExpectedSnap
 	}
 	switch latest.GetDurableSnapshot().GetStatus() {
 	case ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING:
+		if node := latest.GetLocality(); node != "" {
+			// A released node's snapshot is restored from its upload.
+			if localElsewhere(latest, actor.GetStatus().GetAssignedNode()) {
+				break
+			}
+			gone, err := w.dialer.NodeGone(ctx, node)
+			if err != nil {
+				if ctx.Err() != nil {
+					return fmt.Errorf("while checking expected snapshot node %q: %w: %w", node, err, ctx.Err())
+				}
+				return apierror.Unavailable("while checking expected snapshot node %q: %w", node, err)
+			}
+			if gone {
+				break
+			}
+		}
 		return apierror.Unavailable("expected snapshot is not yet complete in durable storage")
 	case ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED:
 	default:
@@ -601,7 +621,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			slog.WarnContext(ctx, "Failed to refresh actor after assignment conflict", slog.Any("err", gerr))
 			return nil, nil, err
 		}
-		conditionErr := validateExpectedSnapshot(fresh, expected)
+		conditionErr := w.validateExpectedSnapshot(ctx, fresh, expected)
 		if conditionErr == nil && expected != nil && !proto.Equal(fresh.GetActorTemplate(), actor.GetActorTemplate()) {
 			conditionErr = apierror.Aborted("actor template changed during conditioned resume, please retry")
 		}
