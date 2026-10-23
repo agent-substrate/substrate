@@ -150,7 +150,9 @@ build_kubectl_ate() {
 }
 
 run_kubectl_ate() {
-  "${KUBECTL_ATE_BIN}" "$@"
+  # --preview opts in to server-enabled preview gates, which the
+  # glutton-storage external volume needs (ExternalVolumes).
+  "${KUBECTL_ATE_BIN}" --preview "$@"
 }
 
 # cpu_millicores converts a Kubernetes cpu quantity like 250m or 1.5 to

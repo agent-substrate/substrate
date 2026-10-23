@@ -46,7 +46,7 @@ import (
 func main() {
 	var (
 		apiEndpoint             = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ateapi gRPC dial target.")
-		routerURL               = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
+		routerURL               = flag.String("router-url", "https://atenet-router.ate-system.svc.cluster.local", "atenet ingress router base URL (no trailing slash). https uses the pod certificate for mTLS.")
 		atespace                = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
 		promAddr                = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
 		configJSON              = flag.String("config-json", "", "Initial dynconfig as a JSON object keyed by locust flag name in snake_case (trace_probability, min_wait_time, ...); the selected user class reads the keys it documents and ignores the rest. Unset keys keep the class's built-in defaults. Each payload the master serves later stands on its own in the same way, so a key it leaves null is back at the default.")
@@ -156,6 +156,10 @@ func main() {
 	transport.MaxIdleConns = 0 // no total cap; the per-host cap governs
 	transport.MaxIdleConnsPerHost = *httpMaxIdleConnsPerHost
 	transport.IdleConnTimeout = 5 * time.Minute
+	if err := boomerutil.ConfigureRouterTransport(transport, *routerURL); err != nil {
+		slog.Error("failed to configure the router transport", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
 	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: transport}
 
 	if *masterWebPort > 0 {
