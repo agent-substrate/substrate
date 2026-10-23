@@ -3135,7 +3135,10 @@ type SnapshotConfig struct {
 	// storage_location is the base object-storage URI snapshots of actors on
 	// this version are stored under. If unset, ate-api-server's
 	// --snapshot-location is used. Requires the PerTemplateSnapshotLocation preview
-	// gate.
+	// gate. Each path segment may contain only ASCII letters, digits, '_' and
+	// '-'. Each owner's snapshots are stored under
+	// <storage_location>/atespaces/..., so no segment may be "atespaces" in any
+	// letter case.
 	//
 	// +ate:preview=PerTemplateSnapshotLocation
 	// +k8s:ifDisabled(PerTemplateSnapshotLocation)=+k8s:forbidden

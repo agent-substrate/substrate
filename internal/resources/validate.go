@@ -261,23 +261,55 @@ func ValidateSandboxAssetsDir(actorUID, dir string, fldPath *field.Path) field.E
 	return nil
 }
 
-// ValidateSnapshotLocation ensures an ActorTemplate's
-// snapshotConfig.storageLocation is a well-formed URI with a bucket, so a bad
-// location fails fast instead of deep inside an object-storage call. It
-// deliberately does not restrict the scheme: the storage layer only uses the
-// host (bucket) and path, and which schemes are acceptable is a
-// storage-backend policy, not a per-RPC one.
+// snapshotLocationSegmentRE matches a path segment of a snapshot location.
+// Characters outside it, such as dots, white space and '%', are ones an
+// object-storage backend may trim, fold or decode, which could turn a segment
+// into another name.
+var snapshotLocationSegmentRE = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// ValidateSnapshotLocation checks ate-api-server's --snapshot-location, an
+// ActorTemplate's snapshotConfig.storageLocation on create, and the location a
+// tag is created under. The location must be a URI with a bucket, so a bad
+// location fails fast instead of deep inside an object-storage call. It does
+// not restrict the scheme or the bucket: the storage layer uses only the host
+// (bucket) and path, and which schemes are acceptable is a storage-backend
+// policy.
 //
-// This validates the base that many snapshots share, not any one snapshot's
-// URI; SnapshotURI is the type for the latter, and it applies this check when
-// it is built.
+// Each path segment must match snapshotLocationSegmentRE and must not be
+// "atespaces" in any letter case, so a location cannot sit inside the
+// <location>/atespaces/... prefix another location builds.
 func ValidateSnapshotLocation(location string) error {
+	u, err := parseStorageURI(location)
+	if err != nil {
+		return err
+	}
+	path := u.EscapedPath()
+	if path == "" || path == "/" {
+		return nil
+	}
+	path = strings.TrimSuffix(strings.TrimPrefix(path, "/"), "/")
+	for segment := range strings.SplitSeq(path, "/") {
+		if !snapshotLocationSegmentRE.MatchString(segment) {
+			return fmt.Errorf("invalid snapshot location %q: path segment %q must contain only ASCII letters, digits, '_' and '-'", location, segment)
+		}
+		if strings.EqualFold(segment, atespacesPathSegment) {
+			return fmt.Errorf("invalid snapshot location %q: must not contain an %q path segment; snapshots are stored under <location>/%s/", location, atespacesPathSegment, atespacesPathSegment)
+		}
+	}
+	return nil
+}
+
+// parseStorageURI checks the shape every snapshot location, owner prefix and
+// snapshot URI shares: a host (the bucket) and a path that appending names to
+// cannot redirect. It does not check the scheme, which may be empty
+// ("//bucket/path").
+func parseStorageURI(location string) (*url.URL, error) {
 	u, err := url.Parse(location)
 	if err != nil {
-		return fmt.Errorf("invalid snapshot location %q: %v", location, err)
+		return nil, fmt.Errorf("invalid snapshot location %q: %v", location, err)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("invalid snapshot location %q: missing bucket", location)
+		return nil, fmt.Errorf("invalid snapshot location %q: missing bucket", location)
 	}
 	// Snapshot and object names are appended to the location by string
 	// concatenation. A query, fragment, or userinfo component would swallow
@@ -285,21 +317,21 @@ func ValidateSnapshotLocation(location string) error {
 	// only host and path), silently redirecting the upload/download to a
 	// different object.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
+		return nil, fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
 	}
 	// url.JoinPath cleans dot segments, and some backends trim spaces from
 	// segments (or windows, trailing dots) and treat '\' as a separator, so
 	// these could move snapshots outside of the location, e.g. into another
 	// atespace's prefix
 	if strings.Contains(u.Path, `\`) {
-		return fmt.Errorf(`invalid snapshot location %q: must not contain '\'`, location)
+		return nil, fmt.Errorf(`invalid snapshot location %q: must not contain '\'`, location)
 	}
 	for segment := range strings.SplitSeq(u.Path, "/") {
 		if segment != "" && strings.Trim(segment, ". ") == "" {
-			return fmt.Errorf("invalid snapshot location %q: must not contain path segments of only '.' and ' '", location)
+			return nil, fmt.Errorf("invalid snapshot location %q: must not contain path segments of only '.' and ' '", location)
 		}
 	}
-	return nil
+	return u, nil
 }
 
 // ValidateIP checks that the given string is a valid IP address, is not an
