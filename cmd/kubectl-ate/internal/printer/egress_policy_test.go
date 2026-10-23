@@ -60,10 +60,10 @@ func TestPrintEgressPolicyTo(t *testing.T) {
 			policy: policy,
 			want: `metadata:
   atespace: team-a
-  createTime: "2026-01-01T11:55:00Z"
   name: default
   uid: 3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d
   version: "2"
+  createTime: "2026-01-01T11:55:00Z"
 rules:
 - http:
     hostnames:
@@ -84,10 +84,10 @@ rules:
 			want: `{
   "metadata": {
     "atespace": "team-a",
-    "createTime": "2026-01-01T11:55:00Z",
     "name": "default",
     "uid": "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d",
-    "version": "2"
+    "version": "2",
+    "createTime": "2026-01-01T11:55:00Z"
   },
   "rules": [
     {
