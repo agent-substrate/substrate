@@ -48,6 +48,11 @@ import (
 // next sweep (the stagers tolerate a leftover dir — they unmount stale binds
 // and reuse mountpoints).
 func CleanupSandboxState(ctx context.Context, id string) {
+	// An empty or dotted id would make the dirs below the shared parents.
+	if !nodepath.IsPlainName(id) {
+		slog.ErrorContext(ctx, "Refusing to clean up state for an invalid sandbox id", slog.String("id", id))
+		return
+	}
 	dirs := []string{
 		filepath.Join("/run/kata-containers/shared/sandboxes", id),
 		filepath.Join(vcVMDir, id),
