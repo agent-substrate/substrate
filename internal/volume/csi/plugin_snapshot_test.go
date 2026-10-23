@@ -390,9 +390,11 @@ func TestPlugin_CreateVolume_RestoreSource(t *testing.T) {
 		source string
 		// reportedSource, if set, replaces the content source the driver
 		// reports. dropSource reports none, as a driver that ignores the
-		// requested source would.
+		// requested source would. emptySourceID reports a snapshot source
+		// with no ID.
 		reportedSource string
 		dropSource     bool
+		emptySourceID  bool
 		deleteErr      error
 		wantErr        bool
 		// wantErrContains is a substring the error must contain.
@@ -418,6 +420,15 @@ func TestPlugin_CreateVolume_RestoreSource(t *testing.T) {
 			caps:            snapshotCaps,
 			source:          "snap-1",
 			dropSource:      true,
+			wantErr:         true,
+			wantCreateCalls: 1,
+			wantDeleted:     []string{"vol-v"},
+		},
+		{
+			name:            "driver reports a snapshot source with no ID",
+			caps:            snapshotCaps,
+			source:          "snap-1",
+			emptySourceID:   true,
 			wantErr:         true,
 			wantCreateCalls: 1,
 			wantDeleted:     []string{"vol-v"},
@@ -468,7 +479,11 @@ func TestPlugin_CreateVolume_RestoreSource(t *testing.T) {
 					if tt.reportedSource != "" {
 						source = tt.reportedSource
 					}
-					if source != "" && !tt.dropSource {
+					if tt.emptySourceID {
+						vol.ContentSource = &csi.VolumeContentSource{Type: &csi.VolumeContentSource_Snapshot{
+							Snapshot: &csi.VolumeContentSource_SnapshotSource{},
+						}}
+					} else if source != "" && !tt.dropSource {
 						vol.ContentSource = &csi.VolumeContentSource{Type: &csi.VolumeContentSource_Snapshot{
 							Snapshot: &csi.VolumeContentSource_SnapshotSource{SnapshotId: source},
 						}}

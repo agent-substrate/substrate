@@ -200,12 +200,12 @@ func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeReques
 		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume response returned nil volume")
 	}
 
-	restoredFrom := resp.GetVolume().GetContentSource().GetSnapshot()
-	if req.SourceSnapshotID != "" && restoredFrom == nil {
+	restoredFrom := resp.GetVolume().GetContentSource().GetSnapshot().GetSnapshotId()
+	if req.SourceSnapshotID != "" && restoredFrom == "" {
 		// A driver that ignores the requested source returns an empty volume
 		// and reports success, which for a restore is silent data loss.
 		//
-		// Only the presence of a snapshot source is checked, not that its ID
+		// Only the presence of a snapshot ID is checked, not that it
 		// matches the request: drivers may report the source in their own
 		// format. GCE PD, for example, reports the disk's numeric
 		// sourceSnapshotId rather than the projects/.../snapshots/... handle
@@ -223,7 +223,7 @@ func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeReques
 	return volume.CreateVolumeResponse{
 		VolumeID:                resp.GetVolume().GetVolumeId(),
 		VolumeContext:           resp.GetVolume().GetVolumeContext(),
-		ContentSourceSnapshotID: restoredFrom.GetSnapshotId(),
+		ContentSourceSnapshotID: restoredFrom,
 	}, nil
 }
 
