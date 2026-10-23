@@ -62,6 +62,9 @@ const (
 	// GCS refuses a token with a larger one with a 401 that does not say why.
 	// The limit is measured, not documented.
 	maxBoundary = 4096
+	// minRetryDelay is how long exchanges pause after one failure. Each further
+	// failure doubles the pause, up to stsTimeout.
+	minRetryDelay = time.Second
 )
 
 // intermediary is what one STS exchange returns for a source token.
@@ -111,14 +114,15 @@ func (i *Issuer) currentIntermediary(ctx context.Context) (*intermediary, error)
 
 // exchange starts the exchange for src, or joins one in flight. Concurrent
 // mints share it, and it outlives a caller that gives up, so that caller does
-// not fail the mints waiting on it. For stsTimeout after a failed exchange,
-// the longest one attempt takes, it returns that failure instead of calling
-// STS again, so an STS outage or refusal does not turn every mint into an
-// STS call.
+// not fail the mints waiting on it. After a failed exchange it returns the
+// failure instead of calling STS again until the pause ends, so an STS outage
+// or refusal does not turn every mint into an STS call. The pause starts at
+// minRetryDelay, so one transient failure with nothing to fall back on fails
+// mints only briefly, and doubles with each further failure up to stsTimeout.
 func (i *Issuer) exchange(ctx context.Context, src *oauth2.Token) <-chan singleflight.Result {
 	if f := i.failure.Load(); f != nil && i.now().Before(f.until) {
 		ch := make(chan singleflight.Result, 1)
-		ch <- singleflight.Result{Err: f.err}
+		ch <- singleflight.Result{Err: fmt.Errorf("STS exchanges paused until %s after a failed exchange: %w", f.until.Format(time.RFC3339), f.err)}
 		return ch
 	}
 	return i.flight.DoChan(src.AccessToken, func() (any, error) {
@@ -132,7 +136,11 @@ func (i *Issuer) exchange(ctx context.Context, src *oauth2.Token) <-chan singlef
 		defer cancel()
 		in, err := i.exchangeIntermediary(xctx, src)
 		if err != nil {
-			i.failure.Store(&failure{err: err, until: i.now().Add(stsTimeout)})
+			delay := minRetryDelay
+			if f := i.failure.Load(); f != nil {
+				delay = min(2*f.delay, stsTimeout)
+			}
+			i.failure.Store(&failure{err: err, delay: delay, until: i.now().Add(delay)})
 			slog.WarnContext(ctx, "Exchanging the source token for an intermediary token failed", "error", err)
 			return nil, err
 		}
@@ -145,9 +153,10 @@ func (i *Issuer) exchange(ctx context.Context, src *oauth2.Token) <-chan singlef
 }
 
 // failure is the last exchange's error, returned without calling STS until
-// until.
+// until, delay after the failure.
 type failure struct {
 	err   error
+	delay time.Duration
 	until time.Time
 }
 
@@ -191,12 +200,14 @@ func (i *Issuer) exchangeIntermediary(ctx context.Context, src *oauth2.Token) (*
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := i.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("while exchanging at STS: %w", err)
+		// Formatted with %v so a timeout of the exchange's own deadline does not
+		// reach the caller as context.DeadlineExceeded.
+		return nil, fmt.Errorf("while exchanging at STS: %v", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSTSResponse))
 	if err != nil {
-		return nil, fmt.Errorf("while reading the STS response: %w", err)
+		return nil, fmt.Errorf("while reading the STS response: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("while exchanging at STS: status %d: %.1024s", resp.StatusCode, body)
