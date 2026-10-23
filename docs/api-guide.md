@@ -542,8 +542,21 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  defaultVersion: v4
+  defaultVersion: v5
   versions:
+  - name: v5
+    state: Enabled
+    assets:
+      amd64:
+        gvisor:
+          url: "gs://gvisor/releases/release/20261019.0/x86_64/gvisor.tar.zstd"
+          sha256: "8637abfb50f81552af25ca08f7172589c09292a7c881efe8d9e09a9f3b6bec7b"
+      arm64:
+        gvisor:
+          url: "gs://gvisor/releases/release/20261019.0/aarch64/gvisor.tar.zstd"
+          sha256: "88556c21468a066d872a055425958c83fcbafc79c6477a195b18070c77f856d0"
+  # The previous version stays until it has a known vulnerability: a memory
+  # snapshot restores only on the version it was taken with.
   - name: v4
     state: Enabled
     assets:
