@@ -57,34 +57,10 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 		return err
 	}
 
-	applied := proto.Clone(before).(*ateapi.Actor)
-	status := applied.GetStatus()
 	// A workflow owns a transitioning Actor's snapshots, even after its lease
 	// lapses.
-	switch st := status.GetState(); st {
-	case ateapi.ActorState_ACTOR_STATE_SUSPENDED, ateapi.ActorState_ACTOR_STATE_RUNNING:
-		if err := applyActorSnapshotState(leaseCtx, status, node, state); err != nil {
-			return err
-		}
-	case ateapi.ActorState_ACTOR_STATE_CRASHED:
-		reported := state.GetLatestDurable()
-		snap := findSnapshotByGeneration(status.GetSnapshots(), reported.GetGeneration())
-		// A crashed Actor keeps its AssignedNode, so only Locality tells a crashed
-		// suspend's snapshot from an upload that finished on node: only a finalized
-		// suspend sets Locality. Its upload is not recorded, and a revert deletes
-		// it with the rest of the discarded execution.
-		if snap != nil && snap.GetLocality() == "" && snap.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
-			slog.InfoContext(leaseCtx, msgDurableCrashedSuspend,
-				slog.Int("generation", int(reported.GetGeneration())),
-				slog.String("uuid", reported.GetUuid()))
-		} else if err := applyLatestDurable(leaseCtx, status, reported); err != nil {
-			return err
-		}
-		if state.GetLatestLocal() == nil && state.GetUploading() == nil {
-			if err := applyDetach(status, node, reported.GetGeneration()); err != nil {
-				return err
-			}
-		}
+	switch st := before.GetStatus().GetState(); st {
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDED, ateapi.ActorState_ACTOR_STATE_RUNNING, ateapi.ActorState_ACTOR_STATE_CRASHED:
 	case ateapi.ActorState_ACTOR_STATE_SUSPENDING, ateapi.ActorState_ACTOR_STATE_RESUMING,
 		ateapi.ActorState_ACTOR_STATE_DELETING, ateapi.ActorState_ACTOR_STATE_REVERTING:
 		return apierror.Aborted("actor %s is %s; retry once that finishes", actorRef, st)
@@ -92,6 +68,10 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 		return apierror.Internal("actor %s has unexpected state %s", actorRef, st)
 	}
 
+	applied := proto.Clone(before).(*ateapi.Actor)
+	if err := applyActorSnapshotState(leaseCtx, applied.GetStatus(), node, state); err != nil {
+		return err
+	}
 	if proto.Equal(applied.GetStatus(), before.GetStatus()) {
 		return nil
 	}
@@ -177,8 +157,10 @@ func applyAteletResponseState(ctx context.Context, status *ateapi.ActorStatus, s
 //
 // A late report changes nothing and is logged at Info. A report is late when
 // its generation is older than the latest COMPLETED one, or is no longer in
-// status.snapshots, for example because a revert removed it. A repeat of the
-// latest COMPLETED generation also changes nothing, and isn't logged.
+// status.snapshots, for example because a revert removed it. A CRASHED
+// Actor's report of a snapshot whose suspend crashed is logged the same way. A
+// repeat of the latest COMPLETED generation also changes nothing, and isn't
+// logged.
 func applyLatestDurable(ctx context.Context, status *ateapi.ActorStatus, reported *ateapi.SnapshotReport) error {
 	if reported == nil {
 		return nil
@@ -214,6 +196,16 @@ func applyLatestDurable(ctx context.Context, status *ateapi.ActorStatus, reporte
 	}
 	if reported.GetFidelity() == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		return apierror.InvalidArgument("snapshot generation %d reports no fidelity", reported.GetGeneration())
+	}
+	// A crashed Actor keeps its AssignedNode, so only Locality tells a crashed
+	// suspend's snapshot from an upload that finished on node: only a finalized
+	// suspend sets Locality. Its upload is not recorded, and a revert deletes
+	// it with the rest of the discarded execution.
+	if status.GetState() == ateapi.ActorState_ACTOR_STATE_CRASHED && snap.GetLocality() == "" {
+		slog.InfoContext(ctx, msgDurableCrashedSuspend,
+			slog.Int("generation", int(reported.GetGeneration())),
+			slog.String("uuid", reported.GetUuid()))
+		return nil
 	}
 	snap.Fidelity = reported.GetFidelity()
 	snap.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED

@@ -319,10 +319,10 @@ func TestApplyActorSnapshotState(t *testing.T) {
 	}
 }
 
-// A reported durable snapshot older than the latest COMPLETED one, or at a
-// generation status no longer has, is logged at Info, once, with the
-// generation it named. A repeat of the latest, and one that is applied, aren't
-// logged.
+// A reported durable snapshot older than the latest COMPLETED one, at a
+// generation status no longer has, or of a CRASHED actor's crashed suspend, is
+// logged at Info, once, with the generation it named. A repeat of the latest,
+// and one that is applied, aren't logged.
 func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 	const (
 		pending   = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
@@ -352,6 +352,15 @@ func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 		wantMsg:   msgDurableNotRecorded,
 		wantAttrs: map[string]string{"generation": "2", "uuid": snapName(2)},
 	}, {
+		name: "a CRASHED actor's crashed suspend",
+		status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_CRASHED, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
+			withDurable(t, 1, reportNode, completed),
+			withDurable(t, 2, "", pending),
+		}},
+		gen:       2,
+		wantMsg:   msgDurableCrashedSuspend,
+		wantAttrs: map[string]string{"generation": "2", "uuid": snapName(2)},
+	}, {
 		name: "the latest COMPLETED generation itself",
 		status: &ateapi.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
@@ -373,7 +382,7 @@ func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 			var got []logged
 			prev := slog.Default()
 			slog.SetDefault(slog.New(slogHandlerFunc(func(r slog.Record) {
-				if r.Message != msgDurableOlder && r.Message != msgDurableNotRecorded {
+				if r.Message != msgDurableOlder && r.Message != msgDurableNotRecorded && r.Message != msgDurableCrashedSuspend {
 					return
 				}
 				l := logged{msg: r.Message, attrs: map[string]string{}}
