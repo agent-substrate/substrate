@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package e2e
+package podidentity
 
 import (
 	"context"
@@ -34,6 +34,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+)
+
+const (
+	testNamespace      = "ns"
+	testServiceAccount = "client"
 )
 
 // fakePodIdentitySigner answers PodCertificateRequests the way the podidentity
@@ -74,7 +79,7 @@ func newFakePodIdentitySigner(t *testing.T) *fakePodIdentitySigner {
 		t: t, ca: ca, caKey: caKey,
 		uri: func(spec certsv1.PodCertificateRequestSpec) string {
 			// The namespace is not in the spec; the tests use one namespace.
-			return installdefaults.SPIFFEID(RouterClientNamespace, spec.ServiceAccountName)
+			return installdefaults.SPIFFEID(testNamespace, spec.ServiceAccountName)
 		},
 	}
 }
@@ -140,25 +145,25 @@ func (s *fakePodIdentitySigner) install(kc *fake.Clientset, version string) {
 	})
 }
 
-func TestRequestPodIdentityCertificate(t *testing.T) {
+func TestRequestCertificate(t *testing.T) {
 	for _, version := range []string{"v1", "v1beta1"} {
 		t.Run(version, func(t *testing.T) {
 			kc := fake.NewSimpleClientset()
 			signer := newFakePodIdentitySigner(t)
 			signer.install(kc, version)
 
-			cert, err := requestPodIdentityCertificate(context.Background(), kc, RouterClientNamespace, "router-client", time.Second)
+			cert, err := RequestCertificate(context.Background(), kc, "test", testNamespace, testServiceAccount, time.Second)
 			if err != nil {
-				t.Fatalf("requestPodIdentityCertificate: %v", err)
+				t.Fatalf("RequestCertificate: %v", err)
 			}
 
-			if signer.got.SignerName != podIdentitySignerName {
-				t.Errorf("signerName = %q, want %q", signer.got.SignerName, podIdentitySignerName)
+			if signer.got.SignerName != SignerName {
+				t.Errorf("signerName = %q, want %q", signer.got.SignerName, SignerName)
 			}
-			if signer.got.ServiceAccountName != "router-client" {
-				t.Errorf("serviceAccountName = %q, want router-client", signer.got.ServiceAccountName)
+			if signer.got.ServiceAccountName != testServiceAccount {
+				t.Errorf("serviceAccountName = %q, want %q", signer.got.ServiceAccountName, testServiceAccount)
 			}
-			if want := RouterClientSPIFFEID("router-client"); cert.Leaf == nil || len(cert.Leaf.URIs) != 1 || cert.Leaf.URIs[0].String() != want {
+			if want := installdefaults.SPIFFEID(testNamespace, testServiceAccount); cert.Leaf == nil || len(cert.Leaf.URIs) != 1 || cert.Leaf.URIs[0].String() != want {
 				t.Fatalf("leaf URIs = %v, want [%s]", cert.Leaf.URIs, want)
 			}
 			key, ok := cert.PrivateKey.(*ecdsa.PrivateKey)
@@ -169,13 +174,13 @@ func TestRequestPodIdentityCertificate(t *testing.T) {
 			// The request is deleted once the certificate is in hand.
 			var remaining int
 			if version == "v1" {
-				list, err := kc.CertificatesV1().PodCertificateRequests(RouterClientNamespace).List(context.Background(), metav1.ListOptions{})
+				list, err := kc.CertificatesV1().PodCertificateRequests(testNamespace).List(context.Background(), metav1.ListOptions{})
 				if err != nil {
 					t.Fatal(err)
 				}
 				remaining = len(list.Items)
 			} else {
-				list, err := kc.CertificatesV1beta1().PodCertificateRequests(RouterClientNamespace).List(context.Background(), metav1.ListOptions{})
+				list, err := kc.CertificatesV1beta1().PodCertificateRequests(testNamespace).List(context.Background(), metav1.ListOptions{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -188,7 +193,7 @@ func TestRequestPodIdentityCertificate(t *testing.T) {
 	}
 }
 
-func TestRequestPodIdentityCertificateErrors(t *testing.T) {
+func TestRequestCertificateErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		setup   func(t *testing.T, kc *fake.Clientset)
@@ -208,7 +213,7 @@ func TestRequestPodIdentityCertificateErrors(t *testing.T) {
 			setup: func(t *testing.T, kc *fake.Clientset) {
 				s := newFakePodIdentitySigner(t)
 				s.uri = func(certsv1.PodCertificateRequestSpec) string {
-					return "spiffe://cluster.local/ns/other/sa/router-client"
+					return "spiffe://cluster.local/ns/other/sa/client"
 				}
 				s.install(kc, "v1")
 			},
@@ -233,9 +238,9 @@ func TestRequestPodIdentityCertificateErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			kc := fake.NewSimpleClientset()
 			tc.setup(t, kc)
-			_, err := requestPodIdentityCertificate(context.Background(), kc, RouterClientNamespace, "router-client", 100*time.Millisecond)
+			_, err := RequestCertificate(context.Background(), kc, "test", testNamespace, testServiceAccount, 100*time.Millisecond)
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("requestPodIdentityCertificate error = %v, want one containing %q", err, tc.wantErr)
+				t.Fatalf("RequestCertificate error = %v, want one containing %q", err, tc.wantErr)
 			}
 		})
 	}

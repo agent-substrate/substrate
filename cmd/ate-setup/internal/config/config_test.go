@@ -256,7 +256,7 @@ func TestLoadIngressAllowedSPIFFEIDs(t *testing.T) {
 		want    []string
 		wantErr string
 	}{
-		{name: "unset", want: nil},
+		{name: "unset", want: []string{"spiffe://cluster.local/ns/ate-system/sa/atenet-client"}},
 		{name: "one", env: a, want: []string{a}},
 		{name: "several, with stray separators", env: " " + a + ",," + b + ", ", want: []string{a, b}},
 		{name: "not a SPIFFE ID", env: a + ",https://example.com/x", wantErr: "ingressAllowedSPIFFEIDs must be a comma-separated list of SPIFFE IDs"},
@@ -282,34 +282,6 @@ func TestLoadIngressAllowedSPIFFEIDs(t *testing.T) {
 			got, exported := scriptEnvMap(t, cfg)["ATE_INGRESS_ALLOWED_SPIFFE_IDS"]
 			if want := strings.Join(tc.want, ","); exported != (want != "") || got != want {
 				t.Errorf("ScriptEnv() ATE_INGRESS_ALLOWED_SPIFFE_IDS = %q (exported %v), want %q", got, exported, want)
-			}
-		})
-	}
-}
-
-// Only the Envoy router authenticates clients against the allowlist, and it
-// refuses to start without one.
-func TestRequireIngressAllowedSPIFFEIDs(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		cfg     Config
-		wantErr bool
-	}{
-		{name: "envoy without IDs", cfg: Config{Router: RouterEnvoy}, wantErr: true},
-		{name: "envoy with IDs", cfg: Config{Router: RouterEnvoy, IngressAllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/a/sa/a"}}},
-		{name: "agentgateway without IDs", cfg: Config{Router: RouterAgentgateway}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.cfg.RequireIngressAllowedSPIFFEIDs()
-			if !tc.wantErr {
-				if err != nil {
-					t.Fatalf("RequireIngressAllowedSPIFFEIDs() = %v, want nil", err)
-				}
-				return
-			}
-			var required *RequiredError
-			if !errors.As(err, &required) || required.Setting.Key != "ingressAllowedSPIFFEIDs" {
-				t.Fatalf("RequireIngressAllowedSPIFFEIDs() = %v, want a RequiredError for ingressAllowedSPIFFEIDs", err)
 			}
 		})
 	}

@@ -306,8 +306,9 @@ var Registry = []Setting{
 		Key: "ingressAllowedSPIFFEIDs", Env: "ATE_INGRESS_ALLOWED_SPIFFE_IDS", Flag: "ingress-allowed-spiffe-ids",
 		Kind: KindString,
 		Usage: "SPIFFE IDs (exact match, comma-separated) of the clients the ingress router lets reach actors; " +
-			"any listed client may reach any actor. Required to deploy the router with " +
-			"--atenet-dataplane=envoy. The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
+			"any listed client may reach any actor. Unset means kubectl-ate's proxy, " +
+			"spiffe://cluster.local/ns/<namespace>/sa/atenet-client. " +
+			"The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
 	},
 	{
 		Key: "otlpEndpoint", Env: "ATE_OTLP_ENDPOINT", Flag: "otlp-endpoint", Kind: KindString,

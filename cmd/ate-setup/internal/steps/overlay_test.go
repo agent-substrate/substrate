@@ -16,7 +16,6 @@ package steps
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -816,16 +815,6 @@ func TestRenderRouterAllowedSPIFFEIDs(t *testing.T) {
 			if want := []string{"--ingress-allowed-spiffe-ids=" + a + "," + b}; !slices.Equal(got, want) {
 				t.Errorf("atenet-router allowlist args = %q, want %q", got, want)
 			}
-
-			t.Run("without IDs", func(t *testing.T) {
-				cfg := cfg
-				cfg.IngressAllowedSPIFFEIDs = nil
-				_, err := tc.render(&Env{Cfg: &cfg, resolver: resolver})
-				var required *config.RequiredError
-				if !errors.As(err, &required) {
-					t.Fatalf("render error = %v, want a RequiredError", err)
-				}
-			})
 		})
 	}
 }
