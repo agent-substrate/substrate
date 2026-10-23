@@ -406,6 +406,10 @@ records its snapshot's URI in `status.snapshot` right after it is reserved,
 before anything is copied, so a tag whose creation failed still names any
 partial copy to collect.
 
+Because every owner's prefix starts with `<location>/atespaces/`, neither `--snapshot-location` nor a `storageLocation` may contain an `atespaces` path segment, in any letter case, percent-encoded, or padded with dots or spaces. A location such as `gs://my-bucket/atespaces/team-a/actors/<actor uid>` would otherwise put one owner's objects under another owner's or atespace's prefix, inside its grants and its cleanup.
+
+ate-api-server refuses to start with such a `--snapshot-location`, and `ate-setup deploy` rejects it. Creating a template rejects such a `storageLocation`, and creating a tag checks the location the tag is stored under again. Suspending and resuming an actor do not check it, so actors of a template stored with such a location keep working. With the `PerTemplateSnapshotLocation` gate enabled, creating a tag from them fails with `FAILED_PRECONDITION`. An actor that owns a snapshot cannot move to a template with a different location (see `UpdateActor` below), so create new actors from a replacement template instead.
+
 An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
 An `Actor` reports its snapshots in the server-managed `status.snapshots` (and

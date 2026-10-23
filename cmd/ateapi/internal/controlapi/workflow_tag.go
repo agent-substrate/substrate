@@ -274,7 +274,7 @@ func (w *ActorWorkflow) checkTagCreatable(ctx context.Context, tagRef resources.
 		return err
 	}
 	if err := resources.ValidateSnapshotLocation(location); err != nil {
-		return fmt.Errorf("invalid storage location for tag %s: %w", tagRef, err)
+		return apierror.FailedPrecondition("invalid storage location for tag %s: %w", tagRef, err)
 	}
 	return nil
 }
