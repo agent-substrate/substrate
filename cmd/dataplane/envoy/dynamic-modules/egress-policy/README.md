@@ -1,12 +1,22 @@
 # Envoy Substrate Egress Policy Implementation
 
 This Envoy dynamic module implements two extensions that work together to minimize
-memory usage by Substrate egress policies.
+memory usage by Substrate egress policies and to improve latency and QPS by minimizing
+external callouts for policy enforcement.
 
 To minimize memory usage egress policies are hashed using [Rapidhash](https://docs.rs/rapidhash/latest/rapidhash/)
 which produces 64 bit hashes with low probability of collision. Policies are then stored in the worker local
 store using computed hash and the hash is exchanged between outer CONNECT request and inner
 listener that terminates TCP connection encapsulated in the CONNECT request.
+
+To minimize callouts the pep_http_filter enforces a subset of policies locally on Envoy. Presently only https rules
+without effects are enforced. Enforcement of http rules and header injection will be implemented as a follow up.
+
+pep_http_filter enforces the policy for the duration of time specified in its cache_ttl configuration, with the
+default 5s value. After this policy became stale and ext_proc callout is invoked that also refreshes the egress policy.
+If the policy did not change, the local policy timestamp is updated and local enforcement continues for another cache_tll
+interval. If policy did change, the enforcement will be defered to ext_proc. In the future the connection will be gracefully
+drained after policy has changed (requires update to Envoy dynamic module's SDK).
 
 ## Details
 
@@ -19,6 +29,7 @@ destination port, the subsequent policy store filter:
 1. If it does it adds a reference to the existing policy.
 1. Otherwise it stores the new policy in the store.
 1. The policy hash is written to filter state, which the chain's set_filter_state filter copies into filter state shared with the upstream.
+1. The policy creation timestamp is written into the filter state.
 
 In the inner listener filter chain, the policy enforcement listener filter:
 
@@ -29,6 +40,22 @@ In the inner listener filter chain, the policy enforcement listener filter:
 With this approach, egress policy objects are shared by many CONNECT requests. Per request state is
 a 64 bit hash. For example if all actors have the same policy, Envoy will keep only one policy object in memory
 and all requests will share the same object.
+
+In the inner HTTP MITM filter chain
+1. the policy enforcement HTTP filter:
+   1. reads policy timestamp from the filter state and checks it agains its cache_ttl configuration.
+   1. if the policy is fresh, enforce the policy.
+   1. if the policy has no effects, skip the ext_proc
+   1. otherwise continue to the ext_proc callout.
+1. the ext_proc filter enforces the policy on the request and sends the egress policy in the response metadata.
+1. the policy_store filter computes policy cache and (if policy is new) writes it into the store. The new policy cahce is
+   written into the filter state.
+1. the policy_refrsh filter compares the new and old policy hash
+   1. if hashes are the same, it updates the policy timestamp to current time, so the policy can be used for the next
+      freshness interval.
+   1. if hashes are different it increments the counter. Presently, connection will stay up and policy will be enforced
+      by ext_proc. After SDK update, connection will be gracefully drained, so it can be re-established with the new
+      policy.
 
 ## Policy Lifetime
 
@@ -59,3 +86,21 @@ metrics:
 | `ate_egress.policy_store_size` | Gauge | Current number of unique `EgressPolicy` entries stored in the worker thread's local store (summed across workers by Envoy). |
 | `ate_egress.parse_errors` | Counter | Number of times `EgressPolicy::new_from_metadata` returned `None` due to missing or malformed policy metadata. |
 | `ate_egress.policy_shared` | Counter | Number of times a `CONNECT` request reused an `EgressPolicy` already present in the worker thread's local store. |
+
+The policy enforcement HTTP filter (`envoy_substrate_egress_pep`) defines the following
+metrics:
+
+| Metric | Type | Description |
+|---|---|---|
+| `ate_egress.cache_hit` | Counter | Number of times cached policy was used for local enforcement. |
+| `ate_egress.cache_miss` | Counter | Number of times cached policy was stale. |
+| `ate_egress.allowed` | Counter | Number of requests allowed by local enforcement. |
+| `ate_egress.rejected` | Counter | Number of requests rejected by local enforcement. |
+| `ate_egress.has_effects` | Counter | Number of requests that had effects configured by policy. |
+
+The policy refresh HTTP filter (`envoy_substrate_egress_policy_refresh`) defines the following
+metrics:
+
+| Metric | Type | Description |
+|---|---|---|
+| `ate_egress.policy_change_for_active_connection` | Counter | Number of times policy has changed for an active connection. |

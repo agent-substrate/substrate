@@ -33,7 +33,7 @@ pub const ATE_POLICY_JSON_KEY: &str = "policy_json";
 /// The SNI rules for a connection.
 #[derive(Debug, Default, Deserialize, PartialEq, Eq, Hash)]
 pub struct EgressPolicy {
-  /// Most specific first; the first match wins.
+  // Most specific first; the first match wins.
   pub rules: Vec<SniRule>,
   #[serde(skip)]
   pub hash: u64,
@@ -45,6 +45,33 @@ pub struct SniRule {
   // TODO(yanavlasov): optimize this to use enum to reduce memory usage.
   // Mode determines which filter chain (MITM or passthrough) is selected if the patter matches.
   pub mode: String,
+  // has_effects signifies that this rule has key injection actions and needs to be
+  // dispatched through ext_proc. Local PEP does not currently support key injection.
+  #[serde(default)]
+  pub has_effects: bool,
+}
+
+impl SniRule {
+  /// Reports whether a normalized `hostname` matches `self.pattern`. Must agree with
+  /// HostnamePattern.Matches in internal/egresspolicy.
+  pub fn pattern_matches(&self, hostname: &str) -> bool {
+    if hostname.is_empty() {
+      return false;
+    }
+    if self.pattern == "*" {
+      return true;
+    }
+    if let Some(suffix) = self.pattern.strip_prefix("*.") {
+      return match hostname
+        .strip_suffix(suffix)
+        .and_then(|rest| rest.strip_suffix('.'))
+      {
+        Some(label) => !label.is_empty() && !label.contains('.'),
+        None => false,
+      };
+    }
+    self.pattern == hostname
+  }
 }
 
 impl EgressPolicy {
@@ -77,9 +104,47 @@ mod tests {
   use envoy_proxy_dynamic_modules_rust_sdk::{EnvoyBuffer, MockEnvoyHttpFilter};
 
   #[test]
+  fn test_pattern_matches() {
+    let cases: &[(&str, &str, bool)] = &[
+      // "*" matches every name and only names.
+      ("*", "anything.example.com", true),
+      ("*", "localhost", true),
+      ("*", "", false),
+      // "*.suffix" matches exactly one non-empty leftmost label.
+      ("*.example.com", "api.example.com", true),
+      ("*.example.com", "example.com", false),
+      ("*.example.com", "a.b.example.com", false),
+      ("*.example.com", ".example.com", false),
+      ("*.example.com", "xexample.com", false),
+      ("*.example.com", "api.example.co", false),
+      ("*.example.com", "api.example.com.evil", false),
+      // Anything else matches the whole name.
+      ("api.example.com", "api.example.com", true),
+      ("api.example.com", "www.api.example.com", false),
+      ("api.example.com", "api.example.co", false),
+      ("example.com", "api.example.com", false),
+      // Normalization is the caller's job.
+      ("api.example.com", "API.example.com", false),
+      ("api.example.com", "api.example.com.", false),
+    ];
+    for (pattern, hostname, want) in cases {
+      let rule = SniRule {
+        pattern: (*pattern).to_string(),
+        mode: String::new(),
+        has_effects: false,
+      };
+      assert_eq!(
+        rule.pattern_matches(hostname),
+        *want,
+        "SniRule({pattern:?}).pattern_matches({hostname:?})"
+      );
+    }
+  }
+
+  #[test]
   fn test_policy_json_shape() {
     let parsed: EgressPolicy = serde_json::from_str(
-      r#"{"rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*","mode":"mitm"}]}"#,
+      r#"{"rules":[{"pattern":"api.example.com","mode":"mitm","has_effects":true},{"pattern":"*","mode":"passthrough","has_effects":false}]}"#,
     )
     .unwrap();
     assert_eq!(
@@ -89,10 +154,12 @@ mod tests {
           SniRule {
             pattern: "api.example.com".to_string(),
             mode: "mitm".to_string(),
+            has_effects: true,
           },
           SniRule {
             pattern: "*".to_string(),
-            mode: "mitm".to_string(),
+            mode: "passthrough".to_string(),
+            has_effects: false,
           },
         ],
         hash: 0,
@@ -134,6 +201,7 @@ mod tests {
       vec![SniRule {
         pattern: "api.example.com".to_string(),
         mode: "mitm".to_string(),
+        has_effects: false,
       }]
     );
     assert_ne!(p1.hash, 0);
