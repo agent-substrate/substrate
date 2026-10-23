@@ -391,10 +391,15 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
 
 def substrate_args(test: dict[str, Any]) -> list[str]:
     """Return the hack/install-ate.sh deploy ate-system arguments for a
-    tests.yaml entry: its ateArgs, then the fake data plane flag its isolate
-    block asks for. The teardown needs no matching flag: delete ate-system
-    removes the fake data plane whether or not it was installed."""
-    return [*test.get("ateArgs", []), *isolate_install_args(test)]
+    tests.yaml entry: its ateArgs, the fake data plane flag its isolate block
+    asks for, and --skip-microvm-deps when sandboxClass is not microvm so
+    gVisor runs do not need write access to <BUCKET_NAME>-assets. The teardown
+    needs no matching flag: delete ate-system removes the fake data plane and
+    any microvm SandboxConfig whether or not they were installed."""
+    args = [*test.get("ateArgs", []), *isolate_install_args(test)]
+    if test.get("sandboxClass", "gvisor") != "microvm" and "--skip-microvm-deps" not in args:
+        args.append("--skip-microvm-deps")
+    return args
 
 
 # ate-api-server enforces authorization, and the runner Job calls it with its

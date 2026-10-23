@@ -36,9 +36,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/render"
@@ -55,6 +55,7 @@ const (
 
 	assetStampFile               = ".asset-versions"
 	defaultKindMicroVMBucket     = "ate-snapshots"
+	maxGCSBucketNameLength       = 63
 	microvmAssetsPrefix          = "microvm-assets"
 	microvmSandboxConfigTemplate = "manifests/ate-install/sandboxconfig-microvm.yaml.tmpl"
 	microvmSandboxConfigName     = "microvm"
@@ -91,12 +92,6 @@ var (
 		},
 	}
 )
-
-var sandboxConfigGVK = schema.GroupVersionKind{
-	Group:   "ate.dev",
-	Version: "v1alpha1",
-	Kind:    "SandboxConfig",
-}
 
 // microvmReleaseBaseURL is overridden in unit tests to point at an httptest.Server.
 var microvmReleaseBaseURL = "https://github.com"
@@ -175,7 +170,7 @@ func (e *Env) DeleteMicroVMDeps(ctx context.Context) error {
 	log.Infof("Deleting microvm SandboxConfig...")
 
 	obj := &unstructured.Unstructured{}
-	obj.SetGroupVersionKind(sandboxConfigGVK)
+	obj.SetGroupVersionKind(atev1.GroupVersion.WithKind("SandboxConfig"))
 	obj.SetName(microvmSandboxConfigName)
 	if err := e.Kube.DeleteOne(ctx, obj); err != nil {
 		return err
@@ -201,7 +196,11 @@ func (e *Env) microVMBucket() (string, error) {
 	if e.Cfg.BucketName == "" {
 		return "", fmt.Errorf("BUCKET_NAME (--storage-bucket-name or config.storage.bucketName) must be set to stage micro-VM assets on non-Kind clusters, or pass --skip-microvm-deps")
 	}
-	return e.Cfg.BucketName + "-assets", nil
+	assetBucket := e.Cfg.BucketName + "-assets"
+	if len(assetBucket) > maxGCSBucketNameLength {
+		return "", fmt.Errorf("bucket name %q is too long: the asset bucket %q would have %d characters, and GCS allows %d", e.Cfg.BucketName, assetBucket, len(assetBucket), maxGCSBucketNameLength)
+	}
+	return assetBucket, nil
 }
 
 // microVMBucketScheme returns the URL scheme for the node's object-store
