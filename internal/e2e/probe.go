@@ -36,7 +36,11 @@ var probeManifests = SubstrateFixtureManifests{
 // ProbeOption adjusts what DeployProbe installs.
 type ProbeOption func(*probeConfig)
 
-type probeConfig struct{ trustBundles []string }
+type probeConfig struct {
+	trustBundles   []string
+	image          string
+	skipGoldenWait bool
+}
 
 // The allowlisted names atelet resolves trust bundles by.
 const (
@@ -52,6 +56,18 @@ const (
 // just needs a probe shouldn't depend on it.
 func WithTrustBundle() ProbeOption {
 	return func(c *probeConfig) { c.trustBundles = append(c.trustBundles, EgressTrustBundleName) }
+}
+
+// WithImage runs the probe from image (a digest-pinned reference) instead of the one ko builds — e.g. a copy
+// of the probe in a private registry, to prove a pull path. The template's containers all take it.
+func WithImage(image string) ProbeOption {
+	return func(c *probeConfig) { c.image = image }
+}
+
+// WithoutGoldenWait returns as soon as the template is created instead of waiting for its golden snapshot,
+// for tests that expect the golden build to fail (they poll the template's GoldenSnapshotStatus themselves).
+func WithoutGoldenWait() ProbeOption {
+	return func(c *probeConfig) { c.skipGoldenWait = true }
 }
 
 // WithSystemRoots adds the WebPKI roots atelet ships to the probe's projected
@@ -81,6 +97,14 @@ func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) (string
 		EnsureEgressTrustBundle(t, context.Background(), GetClients())
 	}
 
-	atespace, templates := DeploySubstrateFixture(t, context.Background(), GetClients(), probeManifests, bucket, name, cfg.trustBundles)
+	var mutate func(*ateapipb.ActorTemplate)
+	if cfg.image != "" {
+		mutate = func(tmpl *ateapipb.ActorTemplate) {
+			for _, c := range tmpl.GetContainers() {
+				c.Image = cfg.image
+			}
+		}
+	}
+	atespace, templates := deploySubstrateFixture(t, context.Background(), GetClients(), probeManifests, bucket, name, cfg.trustBundles, fixtureOptions{mutate: mutate, skipGoldenWait: cfg.skipGoldenWait})
 	return atespace, templates[0]
 }
