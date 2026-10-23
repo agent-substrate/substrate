@@ -41,11 +41,12 @@ import (
 const DefaultPort = 8445
 
 // Issuer mints a credential limited to grants for the actor. force skips any
-// cache the issuer keeps. An error carrying a gRPC status code other than
-// Unavailable is passed to the caller unchanged, for failures the same request
-// would hit again, and one wrapping the context's error keeps the caller's
-// code. Any other error is reported as Unavailable. The GCS issuer is
-// gcsissuer.
+// cache of minted credentials the issuer keeps. What the issuer keeps to mint
+// them, such as gcsissuer's intermediary token, may still be reused. An error
+// carrying a gRPC status code other than Unavailable is passed to the caller
+// unchanged, for failures the same request would hit again, and one wrapping
+// the context's error keeps the caller's code. Any other error is reported as
+// Unavailable. The GCS issuer is gcsissuer.
 type Issuer interface {
 	Issue(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (credential.Token, error)
 }
