@@ -67,17 +67,25 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 	for _, vol := range value.GetVolumes() {
 		declared[vol.GetName()] = true
 	}
+	mounted := sets.New[string]()
 	for i, ctr := range value.GetContainers() {
 		for j, mount := range ctr.GetVolumeMounts() {
 			name := mount.GetName()
 			if name == "" {
 				continue // required is enforced by tags
 			}
+			mounted.Insert(name)
 			if !declared[name] {
 				errs = append(errs, field.Invalid(
 					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
 					name, "must reference a volume declared in the template"))
 			}
+		}
+	}
+	for i, vol := range value.GetVolumes() {
+		name := vol.GetName()
+		if name != "" && !mounted.Has(name) {
+			errs = append(errs, field.Invalid(fldPath.Child("volumes").Index(i), name, "must be mounted by at least one container"))
 		}
 	}
 	return errs

@@ -819,9 +819,9 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 
 			ctx := context.Background()
 			// tmpl-a and tmpl-b are volume-compatible; tmpl-c mounts the data
-			// volume elsewhere, and tmpl-d declares an extra volume.
+			// volume elsewhere, and tmpl-d uses a different volume source.
 			dataVolume := &ateapi.Volume{Name: "data", DurableDir: &ateapi.DurableDirVolumeSource{}}
-			scratchVolume := &ateapi.Volume{Name: "scratch", DurableDir: &ateapi.DurableDirVolumeSource{}}
+			systemInfoVolume := &ateapi.Volume{Name: "data", SystemInfo: &ateapi.SystemInfoVolumeSource{}}
 			templates := map[string]struct {
 				mountPath string
 				volumes   []*ateapi.Volume
@@ -829,7 +829,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 				"tmpl-a": {"/data", []*ateapi.Volume{dataVolume}},
 				"tmpl-b": {"/data", []*ateapi.Volume{dataVolume}},
 				"tmpl-c": {"/mnt/data", []*ateapi.Volume{dataVolume}},
-				"tmpl-d": {"/data", []*ateapi.Volume{dataVolume, scratchVolume}},
+				"tmpl-d": {"/data", []*ateapi.Volume{systemInfoVolume}},
 			}
 			for name, tmpl := range templates {
 				if _, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
