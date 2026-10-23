@@ -68,6 +68,8 @@ type fakeSTS struct {
 	// expiresIn is the lifetime reported: an hour when zero, as STS reports
 	// for a service account's fresh token, and none when negative.
 	expiresIn int
+	// unpaddedKey sends the session key without base64 padding.
+	unpaddedKey bool
 	// holdSubject pauses a request for that subject token: the handler
 	// closes held and waits for release before answering.
 	holdSubject   string
@@ -122,18 +124,29 @@ func (f *fakeSTS) handler(w http.ResponseWriter, r *http.Request) {
 
 // sessionKey is the session key STS hands out, a serialized Tink keyset.
 func (f *fakeSTS) sessionKey() string {
-	if f.key == nil {
-		h, err := keyset.NewHandle(aead.AES256GCMKeyTemplate())
-		if err != nil {
+	for {
+		if f.key == nil {
+			h, err := keyset.NewHandle(aead.AES256GCMKeyTemplate())
+			if err != nil {
+				f.t.Fatal(err)
+			}
+			f.key = h
+		}
+		var buf bytes.Buffer
+		if err := insecurecleartextkeyset.Write(f.key, keyset.NewBinaryWriter(&buf)); err != nil {
 			f.t.Fatal(err)
 		}
-		f.key = h
+		key := base64.StdEncoding.EncodeToString(buf.Bytes())
+		if !f.unpaddedKey {
+			return key
+		}
+		// A key whose encoding needs no padding would not test anything, so
+		// draw another.
+		if strings.HasSuffix(key, "=") {
+			return strings.TrimRight(key, "=")
+		}
+		f.key = nil
 	}
-	var buf bytes.Buffer
-	if err := insecurecleartextkeyset.Write(f.key, keyset.NewBinaryWriter(&buf)); err != nil {
-		f.t.Fatal(err)
-	}
-	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
 // open splits a minted token into its intermediary token and the boundary,
@@ -360,8 +373,10 @@ func (s *changingSource) Token() (*oauth2.Token, error) {
 }
 
 func TestIssue_ExchangesOncePerSourceToken(t *testing.T) {
+	// The first intermediary has less than minServeLifetime left, so the mint
+	// after the refresh waits for the new exchange.
 	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
-	src := &changingSource{tok: oauth2.Token{AccessToken: "source-1", Expiry: now.Add(time.Hour)}}
+	src := &changingSource{tok: oauth2.Token{AccessToken: "source-1", Expiry: now.Add(minServeLifetime - time.Minute)}}
 	sts := &fakeSTS{t: t}
 	i := newTestIssuer(t, sts, src, func() time.Time { return now })
 	for _, uid := range []string{"a", "b", "c"} {
@@ -464,6 +479,9 @@ func TestIssue_ReplacedSourceTokenReusesItsIntermediary(t *testing.T) {
 	if _, err := i.Issue(t.Context(), "b", testGrants, true); err != nil {
 		t.Fatal(err)
 	}
+	// The refreshed token is exchanged in the background. Joining it waits
+	// for it.
+	<-i.exchange(t.Context(), &refreshed)
 	setSource(oauth2.Token{AccessToken: "source-1", Expiry: now.Add(40 * time.Minute)})
 	stale, err := i.Issue(t.Context(), "c", testGrants, true)
 	if err != nil {
@@ -510,6 +528,21 @@ func TestIssue_AnOlderExchangeFinishingLateKeepsTheNewerIntermediary(t *testing.
 	if laterInter, _ := sts.open(t, later.AccessToken); laterInter != newerInter || sts.calls != 2 {
 		t.Fatalf("after the older exchange finished, a mint used %q with %d STS calls, want %q with 2", laterInter, sts.calls, newerInter)
 	}
+	// The next refresh fails. Mints fall back to the newer intermediary, not
+	// the one whose exchange finished last.
+	src.mu.Lock()
+	src.tok = oauth2.Token{AccessToken: "source-3", Expiry: now.Add(2 * time.Hour)}
+	src.mu.Unlock()
+	sts.mu.Lock()
+	sts.status, sts.body = http.StatusServiceUnavailable, `{"error":"unavailable"}`
+	sts.mu.Unlock()
+	fallback, err := i.Issue(t.Context(), "d", testGrants, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inter, _ := sts.open(t, fallback.AccessToken); inter != newerInter {
+		t.Errorf("after a failed refresh, a mint used %q, want the newer %q", inter, newerInter)
+	}
 }
 
 func TestIssue_ExchangesAgainOnceTheIntermediaryExpires(t *testing.T) {
@@ -527,6 +560,92 @@ func TestIssue_ExchangesAgainOnceTheIntermediaryExpires(t *testing.T) {
 	if sts.calls != 2 {
 		t.Fatalf("STS calls = %d, want 2: the expired intermediary should not be reused", sts.calls)
 	}
+}
+
+func TestIssue_RefreshesInTheBackground(t *testing.T) {
+	// The previous intermediary has 40 minutes left when the source token is
+	// refreshed. A mint uses it at once, even with STS hanging, and later mints
+	// use the new intermediary once its exchange is done.
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	src := &changingSource{tok: oauth2.Token{AccessToken: "source-1", Expiry: now.Add(40 * time.Minute)}}
+	sts := &fakeSTS{t: t}
+	i := newTestIssuer(t, sts, src, func() time.Time { return now })
+	if _, err := i.Issue(t.Context(), "a", testGrants, true); err != nil {
+		t.Fatal(err)
+	}
+	refreshed := oauth2.Token{AccessToken: "source-2", Expiry: now.Add(time.Hour)}
+	src.mu.Lock()
+	src.tok = refreshed
+	src.mu.Unlock()
+	sts.hold(t, "source-2")
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	tok, err := i.Issue(ctx, "b", testGrants, true)
+	if err != nil {
+		t.Fatalf("Issue waited for a hanging exchange: %v", err)
+	}
+	if inter, _ := sts.open(t, tok.AccessToken); inter != "intermediary-1" {
+		t.Errorf("token starts with %q, want the previous intermediary token", inter)
+	}
+	close(sts.release)
+	<-i.exchange(t.Context(), &refreshed)
+	tok, err = i.Issue(t.Context(), "c", testGrants, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inter, _ := sts.open(t, tok.AccessToken); inter != "intermediary-2" || sts.calls != 2 {
+		t.Errorf("after the exchange, a mint used %q with %d STS calls, want intermediary-2 with 2", inter, sts.calls)
+	}
+}
+
+func TestIssue_PausesExchangesAfterAFailure(t *testing.T) {
+	// STS refuses after a refresh. Mints keep using the previous intermediary
+	// without calling STS again until stsTimeout has passed.
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	clock := now
+	src := &changingSource{tok: oauth2.Token{AccessToken: "source-1", Expiry: now.Add(time.Hour)}}
+	sts := &fakeSTS{t: t}
+	i := newTestIssuer(t, sts, src, func() time.Time { return clock })
+	if _, err := i.Issue(t.Context(), "a", testGrants, true); err != nil {
+		t.Fatal(err)
+	}
+	refreshed := oauth2.Token{AccessToken: "source-2", Expiry: now.Add(2 * time.Hour)}
+	src.mu.Lock()
+	src.tok = refreshed
+	src.mu.Unlock()
+	sts.mu.Lock()
+	sts.status, sts.body = http.StatusTooManyRequests, `{"error":"quota_exceeded"}`
+	sts.mu.Unlock()
+	for n := range 5 {
+		if _, err := i.Issue(t.Context(), fmt.Sprintf("actor-%d", n), testGrants, true); err != nil {
+			t.Fatal(err)
+		}
+		// Joining the exchange the mint started lets it finish, so the next
+		// mint sees the failure.
+		<-i.exchange(t.Context(), &refreshed)
+	}
+	if sts.calls != 2 {
+		t.Fatalf("5 mints after a refused exchange made %d STS calls in total, want 2", sts.calls)
+	}
+	clock = now.Add(stsTimeout + time.Second)
+	if _, err := i.Issue(t.Context(), "later", testGrants, true); err != nil {
+		t.Fatal(err)
+	}
+	<-i.exchange(t.Context(), &refreshed)
+	if sts.calls != 3 {
+		t.Fatalf("a mint after the pause made %d STS calls in total, want 3", sts.calls)
+	}
+}
+
+func TestIssue_AcceptsASessionKeyWithoutPadding(t *testing.T) {
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	sts := &fakeSTS{t: t, unpaddedKey: true}
+	i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return now })
+	tok, err := i.Issue(t.Context(), "9f1e", testGrants, false)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	sts.open(t, tok.AccessToken)
 }
 
 func TestIssue_ConcurrentMintsShareOneExchange(t *testing.T) {

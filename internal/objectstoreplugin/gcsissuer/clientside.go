@@ -34,6 +34,7 @@ import (
 	"github.com/tink-crypto/tink-go/v2/keyset"
 	"github.com/tink-crypto/tink-go/v2/tink"
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/protobuf/proto"
 
 	"go.ate.dev/substrate/internal/objectstoreplugin/gcsboundary"
@@ -66,15 +67,17 @@ type intermediary struct {
 	aead   tink.AEAD
 }
 
-// currentIntermediary returns the intermediary for the current source token,
-// exchanging at STS when none is stored for it. Intermediaries are stored by
-// source token until they expire, so a caller still holding a token that was
-// just replaced finds its intermediary too. Concurrent mints share one
-// exchange, which outlives a caller that gives up, so that caller does not
-// fail the mints waiting on it. If the exchange fails, the latest intermediary
-// is used while it has more than stsTimeout left, as the source token's own
-// fallback is, so an STS outage or refusal at a source token refresh does not
-// fail every mint.
+// currentIntermediary returns the intermediary to mint with. Intermediaries
+// are stored by source token until they expire, so a caller still holding a
+// token that was just replaced finds its intermediary too.
+//
+// When the source token has none yet, the latest intermediary is used while
+// it has at least minServeLifetime left, and the exchange runs in the
+// background, as Google's Java library refreshes ahead of expiry. So a source
+// token refresh, a slow STS or a failing one does not hold up mints. Only
+// without such an intermediary does a mint wait for the exchange, and if that
+// fails it still uses the latest intermediary while it has more than
+// stsTimeout left, as the source token's own fallback does.
 func (i *Issuer) currentIntermediary(ctx context.Context) (*intermediary, error) {
 	src, err := i.source.Token()
 	if err != nil {
@@ -83,36 +86,65 @@ func (i *Issuer) currentIntermediary(ctx context.Context) (*intermediary, error)
 	if in := i.stored(src); in != nil {
 		return in, nil
 	}
-	ch := i.flight.DoChan(src.AccessToken, func() (any, error) {
-		if in := i.stored(src); in != nil {
-			return in, nil
-		}
-		// The caller's deadline is dropped with its cancellation, so the
-		// exchange gets its own.
-		xctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stsTimeout)
-		defer cancel()
-		in, err := i.exchangeIntermediary(xctx, src)
-		if err != nil {
-			return nil, err
-		}
-		i.intermediaries.Set(src.AccessToken, in, in.expiry.Sub(i.now()))
-		i.keepLatest(in)
-		slog.InfoContext(ctx, "Exchanged the source token for an intermediary token", "expiry", in.expiry)
-		return in, nil
-	})
+	last := i.latest.Load()
+	if last != nil && last.expiry.Sub(i.now()) >= minServeLifetime {
+		i.exchange(ctx, src)
+		return last, nil
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case res := <-ch:
+	case res := <-i.exchange(ctx, src):
 		if res.Err != nil {
-			if last := i.latest.Load(); last != nil && last.expiry.Sub(i.now()) > stsTimeout {
-				slog.WarnContext(ctx, "STS exchange failed, minting with the latest intermediary token", "error", res.Err, "expiry", last.expiry)
+			if last != nil && last.expiry.Sub(i.now()) > stsTimeout {
 				return last, nil
 			}
 			return nil, res.Err
 		}
 		return res.Val.(*intermediary), nil
 	}
+}
+
+// exchange starts the exchange for src, or joins one in flight. Concurrent
+// mints share it, and it outlives a caller that gives up, so that caller does
+// not fail the mints waiting on it. For stsTimeout after a failed exchange,
+// the longest one attempt takes, it returns that failure instead of calling
+// STS again, so an STS outage or refusal does not turn every mint into an
+// STS call.
+func (i *Issuer) exchange(ctx context.Context, src *oauth2.Token) <-chan singleflight.Result {
+	if f := i.failure.Load(); f != nil && i.now().Before(f.until) {
+		ch := make(chan singleflight.Result, 1)
+		ch <- singleflight.Result{Err: f.err}
+		return ch
+	}
+	return i.flight.DoChan(src.AccessToken, func() (any, error) {
+		if in := i.stored(src); in != nil {
+			return in, nil
+		}
+		// The caller's deadline is dropped with its cancellation. The default
+		// client times out after stsTimeout, and one set with WithHTTPClient
+		// may not, so the exchange gets its own deadline.
+		xctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stsTimeout)
+		defer cancel()
+		in, err := i.exchangeIntermediary(xctx, src)
+		if err != nil {
+			i.failure.Store(&failure{err: err, until: i.now().Add(stsTimeout)})
+			slog.WarnContext(ctx, "Exchanging the source token for an intermediary token failed", "error", err)
+			return nil, err
+		}
+		i.failure.Store(nil)
+		i.intermediaries.Set(src.AccessToken, in, in.expiry.Sub(i.now()))
+		i.keepLatest(in)
+		slog.InfoContext(ctx, "Exchanged the source token for an intermediary token", "expiry", in.expiry)
+		return in, nil
+	})
+}
+
+// failure is the last exchange's error, returned without calling STS until
+// until.
+type failure struct {
+	err   error
+	until time.Time
 }
 
 // keepLatest stores in as the fallback intermediary, unless one that expires
