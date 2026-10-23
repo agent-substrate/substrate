@@ -316,7 +316,8 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 		nodeLost bool
 		// nameTaken seeds a tag under the name the create asks for.
 		nameTaken bool
-		// badLocation points the template at an unusable storage location.
+		// badLocation points the template at a storage location with an
+		// atespaces segment, as one stored before that was rejected.
 		badLocation bool
 		// noTemplateUID records no template the local snapshot was built
 		// under, a broken row.
@@ -354,9 +355,9 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 			wantCode:  codes.AlreadyExists,
 		},
 		{
-			name:        "the storage location is unusable",
+			name:        "the template's storage location has an atespaces segment",
 			badLocation: true,
-			wantCode:    codes.Internal,
+			wantCode:    codes.FailedPrecondition,
 		},
 		{
 			name:          "the paused snapshot records no template",
@@ -494,7 +495,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 			}
 			if tt.badLocation {
 				_, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(template), store.PreconditionFrom(template), func(tmpl *ateapi.ActorTemplate) error {
-					tmpl.SnapshotConfig.StorageLocation = "gs://ate-snapshots/team-a/?query"
+					tmpl.SnapshotConfig.StorageLocation = "gs://ate-snapshots/root/atespaces/team-b/actors/cc10"
 					return nil
 				})
 				if err != nil {
