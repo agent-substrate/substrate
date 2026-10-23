@@ -527,7 +527,7 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 			}
 			snap := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")
 			if tt.conditioned {
-				snap.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				snap.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 			}
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
 				a.Status.AssignedNode = "node-1"
@@ -637,8 +637,27 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 		uploaded bool
 		// otherRuntime gives the only free worker a runtime other than the
 		// snapshot's, so the restore falls back to ROOTFS.
-		otherRuntime bool
+		otherRuntime  bool
+		conditioned   bool
+		resuming      bool
+		nodePresent   bool
+		registered    bool
+		noNodeGetter  bool
+		nodeLookupErr error
+		cancelLookup  bool
+		staleExpected bool
+		preflight     codes.Code
 	}{
+		{name: "conditioned: live node still waits for upload", assignedNode: "node-3", conditioned: true, nodePresent: true, preflight: codes.Unavailable},
+		{name: "conditioned: registered atelet still waits for upload", assignedNode: "node-3", conditioned: true, registered: true, preflight: codes.Unavailable},
+		{name: "conditioned: no node getter still waits for upload", assignedNode: "node-3", conditioned: true, noNodeGetter: true, preflight: codes.Unavailable},
+		{name: "conditioned: node lookup failure is retryable", assignedNode: "node-3", conditioned: true, nodeLookupErr: errors.New("node lookup unavailable"), preflight: codes.Unavailable},
+		{name: "conditioned: node lookup cancellation is preserved", assignedNode: "node-3", conditioned: true, cancelLookup: true, preflight: codes.Canceled},
+		{name: "conditioned: stale expectation fails before node lookup", assignedNode: "node-3", conditioned: true, staleExpected: true, preflight: codes.FailedPrecondition},
+		{name: "conditioned: restores the matching upload", assignedNode: "node-3", uploaded: true, conditioned: true},
+		{name: "conditioned: missing upload fails permanently", assignedNode: "node-3", conditioned: true},
+		{name: "conditioned: already released node restores the matching upload", uploaded: true, conditioned: true},
+		{name: "conditioned: RESUMING retry restores the matching upload", uploaded: true, conditioned: true, resuming: true},
 		{name: "uploaded: restores on another node", assignedNode: "node-3", uploaded: true},
 		{name: "released by an earlier resume: restores on another node", uploaded: true},
 		{name: "uploaded, only another runtime has room: restores at ROOTFS", assignedNode: "node-3", uploaded: true, otherRuntime: true},
@@ -682,8 +701,78 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 				atelet.restoreErr = apierror.NotFound("snapshot has no usable local copy and no uploaded copy")
 			}
 
-			got, resumed, err := w.ResumeActor(ctx, actorRef, nil)
+			actor := mustReadActor(t, ctx, st, actorRef)
+			var expected *ateapi.ExpectedSnapshot
+			if tt.conditioned {
+				expected = &ateapi.ExpectedSnapshot{ActorUid: actor.GetMetadata().GetUid(), SnapshotUuid: "pending-2", Generation: 2}
+			}
+			if tt.resuming {
+				tmpl, err := resolveActorTemplate(ctx, st, actor)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := w.ensureWorkerAssigned(ctx, actorRef, actor, tmpl, nil); err != nil {
+					t.Fatalf("persist RESUMING: %v", err)
+				}
+				// The old node name has been reused since the actor was released.
+				WithNodeGetter(nodeGetter(nil, "node-1", "node-2", "node-3"))(w.dialer)
+			}
+			callCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			nodeReads := 0
+			if tt.preflight != codes.OK {
+				getter := nodeGetter(tt.nodeLookupErr, "node-1", "node-2")
+				if tt.nodePresent {
+					getter = nodeGetter(nil, "node-1", "node-2", "node-3")
+				}
+				WithNodeGetter(func(ctx context.Context, name string) error {
+					nodeReads++
+					if tt.cancelLookup {
+						cancel()
+						return ctx.Err()
+					}
+					return getter(ctx, name)
+				})(w.dialer)
+				if tt.noNodeGetter {
+					WithNodeGetter(nil)(w.dialer)
+				}
+				if tt.registered {
+					addAteletOnNode(t, w, "node-3")
+				}
+				if tt.staleExpected {
+					expected.SnapshotUuid, expected.Generation = "durable-1", 1
+				}
+			}
+			got, resumed, err := w.ResumeActor(callCtx, actorRef, expected)
+			if tt.preflight != codes.OK {
+				if apierror.Code(err) != tt.preflight {
+					t.Fatalf("ResumeActor = %v, want %v", err, tt.preflight)
+				}
+				if tt.cancelLookup && !errors.Is(err, context.Canceled) {
+					t.Errorf("lookup cancellation was lost: %v", err)
+				}
+				if tt.staleExpected && nodeReads != 0 {
+					t.Errorf("stale expectation performed %d node lookups", nodeReads)
+				}
+				restore, run := atelet.requests()
+				if restore != nil || run != nil || !proto.Equal(mustReadActor(t, ctx, st, actorRef), actor) {
+					t.Error("rejected resume changed actor or called atelet")
+				}
+				if _, err := st.FindWorkerHostingActor(ctx, actor.GetMetadata().GetUid()); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("rejected resume retained worker claim: %v", err)
+				}
+				return
+			}
+			if tt.uploaded && err != nil {
+				t.Fatalf("ResumeActor: %v", err)
+			}
+			if !tt.uploaded && apierror.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("ResumeActor = %v, want FailedPrecondition", err)
+			}
 			restore, _ := atelet.requests()
+			if restore.GetSnapshot().GetGeneration() != 2 || restore.GetSnapshot().GetObject().GetSnapshotUri() != pending.GetDurableSnapshot().GetObject().GetSnapshotUri() {
+				t.Errorf("Restore did not name generation 2's upload: %v", restore.GetSnapshot())
+			}
 			if restore.GetWorkerPodUid() != worker.GetWorkerPodUid() || restore.GetSnapshot().GetSnapshotUuid() != pending.GetUuid() {
 				t.Fatalf("Restore = (worker %q, snapshot %q), want (%q, %q)", restore.GetWorkerPodUid(), restore.GetSnapshot().GetSnapshotUuid(), worker.GetWorkerPodUid(), pending.GetUuid())
 			}
@@ -707,8 +796,15 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 				return
 			}
 
-			if apierror.Code(err) != codes.FailedPrecondition {
-				t.Fatalf("ResumeActor = %v, want FailedPrecondition", err)
+			if tt.conditioned {
+				for _, detail := range []string{"held snapshot", "pending-2", "generation 2", "expected snapshot"} {
+					if !strings.Contains(err.Error(), detail) {
+						t.Errorf("missing upload error %q omits %q", err, detail)
+					}
+				}
+				if _, _, retryErr := w.ResumeActor(ctx, actorRef, expected); apierror.Code(retryErr) != codes.FailedPrecondition {
+					t.Errorf("retry after missing upload = %v, want FailedPrecondition", retryErr)
+				}
 			}
 			crashed, err := st.GetActor(ctx, actorRef)
 			if err != nil {

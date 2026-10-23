@@ -1850,13 +1850,18 @@ message ResumeActorRequest {
   // Resume only if this is still the actor and checkpoint the caller observed.
   // This guards the current restore source; it does not select an older one.
   // Restoring requires SUSPENDED or retryable RESUMING and a matching completed
-  // durable checkpoint, even when restoring a local copy. A RUNNING actor with
-  // a matching UID and newest held checkpoint returns resumed=false.
+  // durable checkpoint, even when restoring a local copy. If its node was
+  // deleted, resume attempts that checkpoint's upload even if completion was
+  // not reported. A missing upload moves the actor to CRASHED and returns
+  // FAILED_PRECONDITION; call RevertActor before resuming again.
+  // A RUNNING actor with a matching UID and newest held checkpoint returns
+  // resumed=false.
   // A UID or checkpoint mismatch returns FAILED_PRECONDITION: the caller's
   // view is stale, so retrying the same request won't help. An invalid state
   // also returns FAILED_PRECONDITION.
   // A concurrent template change returns ABORTED and can be retried; a matching
-  // pending upload returns UNAVAILABLE. Omit for unconditional resume.
+  // pending upload on a node not known to be deleted returns UNAVAILABLE.
+  // Omit for unconditional resume.
   // +k8s:optional
   ExpectedSnapshot expected = 2;
 }

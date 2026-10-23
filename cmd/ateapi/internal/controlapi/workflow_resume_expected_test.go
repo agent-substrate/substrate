@@ -34,7 +34,7 @@ import (
 
 func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 	pending := func(a *ateapi.Actor) {
-		a.Status.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+		a.Status.Snapshots[0].DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
 	}
 	local := func(a *ateapi.Actor) { a.Status.AssignedNode, a.Status.Snapshots[0].Locality = "node-1", "node-1" }
 	newer := func(a *ateapi.Actor) {
@@ -64,7 +64,7 @@ func TestResumeActor_ExpectedSnapshot(t *testing.T) {
 		}, want: codes.FailedPrecondition},
 		{name: "local checkpoint/unspecified durable status", mutate: func(a *ateapi.Actor) {
 			local(a)
-			a.Status.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED
+			a.Status.Snapshots[0].DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_UNSPECIFIED
 		}, want: codes.FailedPrecondition},
 		{name: "matching checkpoint/UUID mismatch", request: func(e *ateapi.ExpectedSnapshot) { e.SnapshotUuid = "other" }, diagnostic: "newest held snapshot", want: codes.FailedPrecondition},
 		{name: "matching checkpoint/generation mismatch", request: func(e *ateapi.ExpectedSnapshot) { e.Generation = 2 }, diagnostic: "newest held snapshot", want: codes.FailedPrecondition},

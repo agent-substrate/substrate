@@ -3592,13 +3592,13 @@ func TestAssignWorkerAttempt_RefusesChangedOverhead(t *testing.T) {
 	w.store.(*contentionStore).workers[locked.GetMetadata().GetName()] = locked
 
 	tmpl := &ateapi.ActorTemplate{Resources: &ateapi.ResourceRequirements{Limits: &ateapi.Resources{MemoryBytes: 256 << 20}}}
-	_, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+	_, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl, nil)
 	if !errors.Is(err, errWorkerFilledUp) {
 		t.Fatalf("assignWorkerAttempt() = %v, want %v", err, errWorkerFilledUp)
 	}
 
 	w.store.(*contentionStore).workers[locked.GetMetadata().GetName()] = cached
-	if _, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl); err != nil {
+	if _, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl, nil); err != nil {
 		t.Fatalf("assignWorkerAttempt() with an unchanged overhead = %v", err)
 	}
 }

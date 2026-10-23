@@ -407,7 +407,12 @@ The actor's UID and newest held snapshot must match. An already `RUNNING` actor
 returns `resumed=false`, so retrying after a lost response is safe. A `SUSPENDED`
 or retryable `RESUMING` actor resumes only if the snapshot it would restore also
 matches and its durable copy is `COMPLETED`, even if a local copy exists.
-A matching pending upload returns `UNAVAILABLE`. A mismatched actor or checkpoint,
+If the snapshot's node was deleted before reporting completion, resume attempts
+that snapshot's upload on another node. A successful restore records it as
+`COMPLETED`; a missing upload moves the actor to `CRASHED` and returns
+`FAILED_PRECONDITION` with the held and expected snapshot identities. Call
+`RevertActor` before resuming again. A matching pending upload on a node not known to
+be deleted returns `UNAVAILABLE`. A mismatched actor or checkpoint,
 or an invalid state, returns `FAILED_PRECONDITION` because the caller's view is
 stale. A concurrent template change returns `ABORTED`; retry the same request.
 The condition does not select an older checkpoint or change restore fidelity.
