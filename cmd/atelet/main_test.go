@@ -42,6 +42,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atelet"
+	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -256,7 +257,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 	}
 
 	s := &Atelet{imageCache: newImageVolumeStore(t)}
-	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec)
+	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec, imagecache.Form{})
 	if err != nil {
 		t.Fatalf("prepareOCIBundles: %v", err)
 	}
@@ -1674,5 +1675,15 @@ func TestWorkerCallError(t *testing.T) {
 				t.Errorf("workerCallError() code = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// rootfsForm picks EROFS layer images for micro-VM actors and fs/ trees for
+// everything else.
+func TestRootfsForm(t *testing.T) {
+	for class, want := range map[string]imagecache.Form{"microvm": {EROFS: true}, "gvisor": {}, "": {}} {
+		if got := rootfsForm(class); got != want {
+			t.Errorf("rootfsForm(%q) = %+v, want %+v", class, got, want)
+		}
 	}
 }

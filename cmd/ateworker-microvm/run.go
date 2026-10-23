@@ -183,7 +183,8 @@ func workloadIDs(ctrs []actorContainer) []string {
 // its name, its kata container ID (also the merged rootfs's find-paths subdir), its
 // host OCI bundle and the bundle rootfs that backs the overlay lower, and its OCI
 // spec. The writable upper is a host directory (see rootfsupper.go); the host kernel
-// merges the two.
+// merges the two, or the guest does when the bundle names EROFS layer images
+// (see erofs.go).
 type actorContainer struct {
 	name         string
 	id           string // see ocispec.GuestContainerID
@@ -191,6 +192,12 @@ type actorContainer struct {
 	bundleRootfs string
 	// spec is the container's OCI spec shaped for micro-VM execution.
 	spec *specs.Spec
+	// overlay is the bundle's rootfs composition, nil for a plain rootfs.
+	overlay *imagecache.OverlaySpec
+	// erofs is set when the guest merges the rootfs from erofsLayers, the
+	// cached layer directories, top-most first.
+	erofs       bool
+	erofsLayers []string
 	// imageMounts are the image volumes this container mounts, and where.
 	imageMounts []*ateworkerpb.VolumeMount
 }
@@ -225,7 +232,9 @@ func (s *AteWorkerService) resolveRuntime(paths map[string]string) resolvedRunti
 //
 // ateworker boots cloud-hypervisor directly (no kata shim) and gives each container a
 // rootfs merged ON THE HOST: overlay(image lower + host-disk upper), served over the
-// one kataShared virtio-fs share. It drives the kata clh boot (vm.create kernel+image+fs,
+// one kataShared virtio-fs share; or, for an image cached with EROFS layer images,
+// merged IN THE GUEST from virtio-pmem lowers over the same host-disk upper (see
+// erofs.go). It drives the kata clh boot (vm.create kernel+image+fs,
 // add-net, vm.boot) and the post-boot setup the shim would otherwise do (agent
 // CreateSandbox + guest network config) before having the kata-agent assemble and
 // start each container.
@@ -434,10 +443,18 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// snapshot's tars) and join it right before the overlay mounts need it,
 	// hiding it behind the bundle preparation below. Every return before the
 	// join must drain the goroutine, or a retry's staging would race it.
+	var erofsRec *erofsLayers
+	if p.rootfsUpperSnapshotDir != "" {
+		var err error
+		erofsRec, err = readEROFSLayers(p.rootfsUpperSnapshotDir)
+		if err != nil {
+			return err
+		}
+	}
 	upperDone := make(chan error, 1)
 	upperJoined := false
 	go func() {
-		upperDone <- stageRootfsUpper(p.actorDirs, p.rootfsUpperSnapshotDir, containerNames(containers))
+		upperDone <- stageRootfsUpper(p.actorDirs, p.rootfsUpperSnapshotDir, containerNames(containers), erofsRec)
 	}()
 	defer func() {
 		if !upperJoined {
@@ -469,10 +486,14 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	}
 
 	// Prepare each container's OCI spec + record its bundle rootfs (the overlay
-	// lower the host merges under the container's writable upper).
-	ctrs, err := s.buildActorContainers(p.actorUID, p.actorDirs, containers)
+	// lower the host merges under the container's writable upper). With a
+	// ROOTFS snapshot, each container's mode must match its layer record.
+	ctrs, err := s.buildActorContainers(p.actorUID, p.actorDirs, containers, erofsRec)
 	if err != nil {
 		return err
+	}
+	if err := erofsRec.verify(ctrs); err != nil {
+		return fmt.Errorf("while checking the snapshot's layer images: %w", err)
 	}
 
 	// Reject limits the guest can never satisfy, before the containers reach the
@@ -491,6 +512,9 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// The overlay mounts below need the upper dir in its final state.
 	upperJoined = true
 	if err := <-upperDone; err != nil {
+		return err
+	}
+	if err := prepareEROFSUppers(p.actorDirs, ctrs, p.rootfsUpperSnapshotDir == ""); err != nil {
 		return err
 	}
 
@@ -532,12 +556,14 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	}()
 
 	// Assemble the CH VmConfig (kata-compatible cmdline, RO kata image on /dev/pmem0 +
-	// the virtio-fs device; no actor virtio-blk disks — rootfs writes land in the
-	// host-side overlay upper through the shared mount). The console log is also read
+	// the virtio-fs device + a virtio-pmem device per EROFS layer image; no actor
+	// virtio-blk disks: rootfs writes land in the host-side upper through the
+	// shared mount). The console log is also read
 	// on a failed agent dial below, so keep it here.
 	consoleLog := kata.ConsoleLogPath(actorUID)
+	devs := newEROFSDevices(ctrs)
 	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
-		agentInit(ctx, client.Info()), s.guestDebug)
+		agentInit(ctx, client.Info()), s.guestDebug, devs.pmem, devs.pciSegments())
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return fmt.Errorf("while creating VM: %w", err)
 	}
@@ -594,7 +620,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	}()
 
 	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
-	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
+	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs, devs); err != nil {
 		return err
 	}
 	tContainers := time.Now()
@@ -649,8 +675,10 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 // micro-VM: it builds the OCI spec from the request, injects guest DNS and hosts,
 // and records the bundle rootfs that backs the overlay's RO lower. No host disk is
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
-// sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
-func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) ([]actorContainer, error) {
+// sandbox state is clean. Both RunWorkload and RestoreWorkload go through here;
+// rec is the snapshot's layer record (see erofsLayers.checkMode), or nil
+// without a snapshot.
+func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container, rec *erofsLayers) ([]actorContainer, error) {
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
@@ -658,6 +686,37 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		spec := ocispec.Build(ocispec.Options{ActorUID: actorUID, ActorDirs: actorDirs, Container: c})
 		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerName: cn}); err != nil {
 			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
+		}
+		ac := actorContainer{
+			name:         cn,
+			id:           ocispec.GuestContainerID(cn),
+			bundle:       bundle,
+			bundleRootfs: filepath.Join(bundle, "rootfs"),
+			spec:         spec,
+			imageMounts:  c.GetImageVolumeMounts(),
+		}
+		if err := loadBundleOverlay(&ac); err != nil {
+			return nil, fmt.Errorf("while reading the rootfs overlay spec for %q: %w", cn, err)
+		}
+		if err := rec.checkMode(&ac); err != nil {
+			return nil, fmt.Errorf("while checking the snapshot's layer images: %w", err)
+		}
+		ctrs[i] = ac
+	}
+	if err := checkEROFSLayerBudget(ctrs); err != nil {
+		return nil, err
+	}
+	for i := range ctrs {
+		ac := &ctrs[i]
+		cn, bundle := ac.name, ac.bundle
+		if ac.erofs {
+			// The guest merges the layers (see erofs.go). The host composes
+			// only the image volumes, served over virtio-fs, and
+			// prepareEROFSUppers writes the guest /etc files into the upper.
+			if err := imagecache.SetupBundleImageVolumes(bundle); err != nil {
+				return nil, fmt.Errorf("while composing image volumes for %q: %w", cn, err)
+			}
+			continue
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an
 		// overlay mounted in this pod's namespace; no-op for bundles without an
@@ -668,18 +727,9 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		if err := imagecache.SetupBundleRootfs(bundle); err != nil {
 			return nil, fmt.Errorf("while composing rootfs for %q: %w", cn, err)
 		}
-		bundleRootfs := filepath.Join(bundle, "rootfs")
 		// Set guest DNS and hosts before serving the rootfs over virtio-fs, on boot and restore.
-		if err := actornet.WriteRootfsEtcFiles(bundleRootfs, ocispec.Hostname); err != nil {
+		if err := actornet.WriteRootfsEtcFiles(ac.bundleRootfs, ocispec.Hostname); err != nil {
 			return nil, fmt.Errorf("while writing guest /etc files for %q: %w", cn, err)
-		}
-		ctrs[i] = actorContainer{
-			name:         cn,
-			id:           ocispec.GuestContainerID(cn),
-			bundle:       bundle,
-			bundleRootfs: bundleRootfs,
-			spec:         spec,
-			imageMounts:  c.GetImageVolumeMounts(),
 		}
 	}
 	return ctrs, nil
@@ -687,7 +737,9 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 
 // stageMergedRootfs assembles each container's merged rootfs on the host
 // (overlay: image lower + the actor's rootfs-upper dirs) at virtiofsd's
-// find-paths location (SharedDir(id)/<cid>/rootfs), stages durable-dir volumes,
+// find-paths location (SharedDir(id)/<cid>/rootfs), or for a guest-merged
+// rootfs binds the container's rootfs-upper dir at SharedDir(id)/<cid>/rw;
+// stages durable-dir volumes,
 // CSI volumes, and system-info volumes (if any) under SharedDir(id)/durable,
 // SharedDir(id)/csi, and SharedDir(id)/system-info,
 // then starts the ONE virtiofsd that serves them all. Must run AFTER CleanupSandboxState (which
@@ -696,8 +748,19 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 // in teardownActor).
 func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*child.Process, error) {
 	upperBase := rootfsUpperDir(actorDirs)
+	xattr := false
 	for _, c := range ctrs {
-		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, c.name, id, c.id); err != nil {
+		if c.erofs {
+			// The upper exists: seeded by prepareEROFSUppers on a cold boot,
+			// restored whole (fs/ and work/) from the snapshot otherwise.
+			xattr = true
+			if _, _, err := kata.MkdirUpperWorkDirs(upperBase, c.name); err != nil {
+				return nil, fmt.Errorf("while creating rootfs upper for %q: %w", c.name, err)
+			}
+			if err := kata.StageGuestOverlayUpper(ctx, upperBase, c.name, id, c.id); err != nil {
+				return nil, fmt.Errorf("while staging rootfs upper for %q: %w", c.name, err)
+			}
+		} else if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, c.name, id, c.id); err != nil {
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
@@ -728,6 +791,7 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 		SocketPath:  kata.VirtiofsdSocketPath(id),
 		SharedDir:   kata.SharedDir(id),
 		Log:         vfsdLog,
+		Xattr:       xattr,
 		SysProcAttr: procAttr,
 	})
 	if err != nil {
@@ -795,6 +859,9 @@ func initParams(agentInit bool) string {
 // buildVMConfig assembles the cloud-hypervisor VmConfig.
 //
 // The disk-backed rootfs upper share (see rootfsupper.go) is always present.
+// pmem lists the actor's EROFS layer images (see erofs.go). They follow the
+// guest image in VmConfig.Pmem from index erofsFirstPmemDevice, and
+// pciSegments must cover the segments they sit on.
 //
 // The guest console is a virtio-console (hvc0), not the emulated UART. Every byte
 // written to an 8250/pl011 traps to the VMM, and a kata guest prints ~340 lines
@@ -804,7 +871,7 @@ func initParams(agentInit bool) string {
 // the earliest messages: hvc0 only exists once virtio-console probes, so the memory
 // map, CPU features and ACPI lines never reach the log. guestDebug adds the UART back
 // with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
-func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
+func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool, pmem []ch.PmemConfig, pciSegments int32) ch.VmConfig {
 	cmdline := "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4 " +
 		"panic=1 no_timer_check noreplace-smp console=hvc0 " +
 		initParams(agentInit)
@@ -825,10 +892,10 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		Payload: ch.PayloadConfig{Kernel: kernel, Cmdline: cmdline},
 		// The guest image is a virtio-pmem device (/dev/pmem0), mounted read-only
 		// with DAX, so its file data stays in the host page cache instead of being copied into guest RAM.
-		Pmem:     []ch.PmemConfig{{ID: guestImagePmemID, File: image, DiscardWrites: true}},
+		Pmem:     append([]ch.PmemConfig{{ID: guestImagePmemID, File: image, DiscardWrites: true}}, pmem...),
 		Fs:       buildFsConfigs(id),
 		Balloon:  &ch.BalloonConfig{FreePageReporting: true},
-		Platform: &ch.PlatformConfig{NumPciSegments: 2},
+		Platform: &ch.PlatformConfig{NumPciSegments: pciSegments},
 		Rng:      &ch.RngConfig{Src: "/dev/urandom"},
 		Console:  &ch.ConsoleConfig{Mode: "File", File: consoleLog},
 		Serial:   serial,
@@ -857,10 +924,11 @@ func buildFsConfigs(id string) []ch.FsConfig {
 }
 
 // startActorContainers performs the post-boot kata-agent setup the shim normally
-// does at boot: establish the sandbox once (mounting the kataShared virtio-fs base),
-// configure guest networking (eth0 IP/MAC/MTU + routes) once, then start each
-// container on its own overlay rootfs. On failure it dumps guest diagnostics.
-func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, ctrs []actorContainer) error {
+// does at boot: establish the sandbox once (mounting the kataShared virtio-fs base
+// and the EROFS layer images, if any), configure guest networking (eth0 IP/MAC/MTU
+// + routes) once, then start each container on its own overlay rootfs. On failure
+// it dumps guest diagnostics.
+func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, ctrs []actorContainer, devs *erofsDevices) error {
 	// Establish the agent sandbox + the kataShared virtio-fs mount (every
 	// container's merged rootfs, durable volumes, CSI volumes, and system-info
 	// volumes). All containers share it, so use the first container's hostname.
@@ -869,9 +937,14 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 	err := ac.CreateSandboxForActor(sbCtx, kata.CreateSandboxOpts{
 		SandboxID: id,
 		Hostname:  ctrs[0].spec.Hostname,
+		Pmem:      devs.mounts,
 	})
 	sbCancel()
 	if err != nil {
+		if s.guestDebug {
+			dump := kata.DebugConsoleDump(ctx, vsockPath, "ls -la /dev/pmem* 2>&1; echo '== mounts =='; grep -E 'kata|virtiofs|erofs' /proc/mounts 2>&1; echo '== dmesg =='; dmesg 2>&1 | tail -30")
+			slog.ErrorContext(ctx, "agent sandbox creation failed; dump", slog.String("dump", dump))
+		}
 		return fmt.Errorf("while creating agent sandbox: %w", err)
 	}
 	tSandbox := time.Now()
@@ -892,7 +965,7 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 	tNetwork := time.Now()
 
 	for _, c := range ctrs {
-		if err := s.startRootfsContainer(ctx, ac, vsockPath, c); err != nil {
+		if err := s.startRootfsContainer(ctx, ac, vsockPath, c, devs.overlay(c)); err != nil {
 			return err
 		}
 	}
@@ -905,20 +978,28 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 }
 
 // startRootfsContainer brings up one container on its host-merged rootfs (the
-// stock kata flow: create + start against shared/<id>/rootfs). On failure it
-// dumps the guest's view of the shared tree.
+// stock kata flow: create + start against shared/<id>/rootfs), or with ovl set
+// on the overlay the guest mounts itself from the EROFS layer images. On failure
+// it dumps the guest's view of the shared tree and, for a guest overlay, the
+// kernel log (where overlayfs says why a mount was refused).
 //
 // Its spec binds every declared volume at its mount path.
-func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
+func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer, ovl *kata.GuestOverlay) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := ac.StartRootfsContainer(cCtx, c.id, c.spec)
+	err := ac.StartRootfsContainer(cCtx, c.id, c.spec, ovl)
 	cancel()
 	if err != nil {
 		if s.guestDebug {
-			dump := kata.DebugConsoleDump(ctx, vsockPath,
-				"echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40; "+
-					"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.id+"/rootfs/ 2>&1 | head; "+
-					"echo '== mounts =='; grep -E 'kata|virtiofs' /proc/mounts 2>&1")
+			script := "echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40; " +
+				"echo '== rootfs =='; ls /run/kata-containers/shared/containers/" + c.id + "/rootfs/ 2>&1 | head; " +
+				"echo '== mounts =='; grep -E 'kata|virtiofs' /proc/mounts 2>&1"
+			if ovl != nil {
+				script = "echo '== rootfs =='; ls -la " + kata.GuestContainerRootfs(c.id) + " 2>&1 | head; " +
+					"echo '== rw =='; ls -la " + filepath.Dir(ovl.UpperDir) + " 2>&1; " +
+					"echo '== mounts =='; grep -E 'kata|virtiofs|erofs|overlay' /proc/mounts 2>&1; " +
+					"echo '== dmesg =='; dmesg 2>&1 | tail -30"
+			}
+			dump := kata.DebugConsoleDump(ctx, vsockPath, script)
 			slog.ErrorContext(ctx, "rootfs container failed; dump", slog.String("container", c.name), slog.String("dump", dump))
 		}
 		return fmt.Errorf("while starting rootfs container %q: %w", c.name, err)

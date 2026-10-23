@@ -563,6 +563,8 @@ A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainer
 
 See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble and stage these assets, plus a worked counter demo (`demos/counter/counter-microvm.yaml.tmpl`) that suspends and resumes an in-RAM counter across worker pods.
 
+A micro-VM container's rootfs is an overlay of the image's cached layers and a writable upper on the worker's disk. The image cache builds an EROFS image for each layer, the worker attaches each one as a read-only `virtio-pmem` device with DAX, and the guest mounts the overlay with its upper on the virtio-fs share. Every actor on the node shares the image's pages in the node's page cache. An actor whose containers use more than 155 distinct layers is refused. A node that also runs gVisor actors stores both forms of any layer the two classes share. Snapshots record the layer digests, and a restore checks them before resuming.
+
 ---
 
 ## 4. Operational Workflow

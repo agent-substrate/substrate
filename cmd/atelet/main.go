@@ -877,7 +877,9 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 		return nil, err
 	}
-	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef, req.GetSpec())
+	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
+		req.GetSpec(), rootfsForm(sandboxRec.SandboxClass),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1226,6 +1228,12 @@ func (s *Atelet) cleanUpAfterCheckpoint(ctx context.Context, req *ateletpb.Check
 		}
 	}
 	return nil
+}
+
+// rootfsForm returns the form to cache an actor's image layers in: EROFS
+// images for micro-VM actors, fs/ trees for everything else.
+func rootfsForm(class string) imagecache.Form {
+	return imagecache.Form{EROFS: class == string(atev1alpha1.SandboxClassMicroVM)}
 }
 
 func checkpointSnapshotFiles(resp *ateworkerpb.CheckpointWorkloadResponse, required bool) (files, dataFiles []string, err error) {
@@ -1787,7 +1795,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			return err
 		}
 		t := time.Now()
-		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec())
+		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), rootfsForm(runtimeRec.SandboxClass))
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -2195,6 +2203,7 @@ func (s *Atelet) prepareOCIBundles(
 	actorUID string,
 	actorRef resources.ActorRef,
 	spec *ateletpb.WorkloadSpec,
+	form imagecache.Form,
 ) ([]*ateworkerpb.ContainerSpec, error) {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
@@ -2215,7 +2224,7 @@ func (s *Atelet) prepareOCIBundles(
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		g.Go(func() error {
-			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
+			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), form, spec.GetVolumes(), ctr.GetVolumeMounts())
 			if err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
