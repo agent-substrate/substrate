@@ -231,14 +231,15 @@ func hashVersions(plan *sandboxPlan) []hashedVersion {
 //
 // TODO: write the file as soon as the default version's attributes are known
 // and add restorable runtimes on a later pass. On a fresh node the first
-// worker cannot register until every restorable version's runsc has been
+// worker cannot register until every restorable version's assets have been
 // fetched and probed, serially.
 //
-// Listing a runtime does not promise its assets are on the node: probing
-// fetches a gVisor version's runsc the first time this atelet sees it, and
-// nothing of a microVM version. The syncer has the default runtime prewarmed
-// once the file is written, and Run/Restore fetch any other version on
-// demand.
+// For gVisor, probing fetches a version's runsc the first time this atelet
+// sees its digest. For microVM, each build stages a version's assets into a
+// scratch directory from the cache (fetching them on a miss). Once the file is
+// written, the syncer links the default runtime under the worker's directory
+// so cache GC never evicts it. Run and Restore fetch any evicted restorable
+// version on demand.
 func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, hashed []hashedVersion) (*sandboxruntimes.File, error) {
 	class := sandboxruntimes.Class{SandboxClass: string(plan.sandboxClass)}
 	seen := make(map[string]bool, len(hashed))
@@ -280,8 +281,8 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, 
 
 // versionAttrs returns the attributes of one version's runtime, whose
 // sandbox_bundle_hash is hash: architecture and the hash for every class,
-// the host CPU identity for a microVM runtime, and the runsc binary's
-// cpu_features for a gVisor one.
+// the host CPU identity for a microVM runtime (with its assets verified in
+// the local cache), and the runsc binary's cpu_features for a gVisor one.
 func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.SandboxClass, rec *sandboxAssetsRecord, hash string) (sandboxruntimes.Attributes, error) {
 	attrs := sandboxruntimes.Attributes{
 		hardware.AttrArchitecture:      runtime.GOARCH,
@@ -292,6 +293,9 @@ func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.Sand
 		vendor, model, err := s.hostCPUIdentity()
 		if err != nil {
 			return nil, fmt.Errorf("while probing host CPU identity: %w", err)
+		}
+		if err := s.ensureMicroVMAssets(ctx, rec); err != nil {
+			return nil, err
 		}
 		attrs[hardware.AttrCPUVendor], attrs[hardware.AttrCPUModel] = vendor, model
 	case atev1.SandboxClassGvisor:
@@ -323,6 +327,24 @@ func (s *workerSandboxSyncer) hostCPUIdentity() (vendor, model string, err error
 		s.hostCPU = &cpuIdentity{vendor: vendor, model: model}
 	}
 	return s.hostCPU.vendor, s.hostCPU.model, nil
+}
+
+// ensureMicroVMAssets stages a microVM version's assets into a scratch
+// directory and removes it, so a version whose assets cannot be fetched or
+// fail SHA256 verification is not advertised in the worker's sandbox runtimes
+// file. Cached assets only link and unlink in scratch. If cache GC evicts an
+// unlinked restorable version under disk pressure, the next sync event
+// fetches it again.
+func (s *workerSandboxSyncer) ensureMicroVMAssets(ctx context.Context, rec *sandboxAssetsRecord) error {
+	ctx, cancel := context.WithTimeout(ctx, probeFetchTimeout)
+	defer cancel()
+	scratch, err := os.MkdirTemp(s.scratchDir, "microvm-assets-")
+	if err != nil {
+		return fmt.Errorf("while creating microvm-assets scratch dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	_, err = s.assets.ensureSandboxAssets(ctx, rec, scratch)
+	return err
 }
 
 // gvisorCPUFeatures returns the encoded cpu_features of rec's runsc binary.
@@ -367,13 +389,14 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	return mask, nil
 }
 
-// probeFetchTimeout bounds the fetch of a runsc binary for its probe, from
-// the first cache lookup to the staged link. The asset cache bounds each
-// download with its own fetch timeout, and the exec below has
-// cpuFeaturesTimeout; this is the backstop for everything around them,
-// such as waiting on a download another caller started, so a probe cannot
-// hold one of the syncer's few workers for longer than one download may
-// take.
+// probeFetchTimeout bounds staging a version's assets during buildFile (a
+// gVisor version's runsc binary for its probe, or a microVM version's kernel,
+// guest image, Cloud Hypervisor and virtiofsd), from the first cache lookup to
+// the staged links. The asset cache bounds each individual download with its
+// own detached 5m fetch timeout, and the exec below has cpuFeaturesTimeout.
+// This is the backstop for the whole version so a slow bucket or a download
+// another caller started cannot hold one of the syncer's few workers for
+// longer than 5 minutes before the sync fails and retries.
 const probeFetchTimeout = 5 * time.Minute
 
 // cpuFeaturesTimeout bounds one `runsc cpu-features` run, which takes
@@ -466,9 +489,9 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 		return err
 	}
 	// Only now, with the file naming its defaults: a sync that failed above
-	// left the file, and so the directories, as they were. For a gVisor
-	// default the build fetched the release for its probe, so the prewarm
-	// is links; a micro-VM default downloads here.
+	// left the file, and so the directories, as they were. The build
+	// already fetched the default's assets into the cache, so the prewarm
+	// is links for both classes.
 	if s.prewarm != nil {
 		var defaults []string
 		for _, v := range writtenVersions(hashed, want) {

@@ -390,10 +390,16 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 	}
 
 	s := newTestSyncer(t, pool, cfg)
+	var fetched []string
+	var failSHA string
 	s.assets = &fakeAssetFetcher{
-		fn: func(context.Context, *sandboxAssetsRecord) (map[string]string, error) {
-			t.Fatal("microVM buildFile must not fetch sandbox assets")
-			return nil, nil
+		fn: func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+			sha := rec.Assets["kernel"].SHA256
+			fetched = append(fetched, sha)
+			if sha == failSHA {
+				return nil, fmt.Errorf("bad sha256 for %s", sha)
+			}
+			return newTestAssetFetcher().ensureSandboxAssets(ctx, rec, "")
 		},
 	}
 	probeCalls := 0
@@ -412,8 +418,27 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 		t.Fatalf("planAndBuild() on probe failure = %v, want %v and not permanent", err, probeErr)
 	}
 
-	// Once a probe succeeds, every later sync reuses it.
+	// A failed fetch on the default version fails the build without writing.
 	probeErr = nil
+	failSHA = "sha-v2"
+	if _, err := planAndBuild(s, workerPod("pod-a", "microvm-pool")); err == nil || errors.Is(err, errPermanent) || errors.Is(err, errIncomplete) {
+		t.Fatalf("planAndBuild() on default asset fetch failure = %v, want retryable error", err)
+	}
+
+	// A failed fetch on a restorable version returns the default runtime
+	// alongside errIncomplete, leaving the unverified restorable version out.
+	failSHA = "sha-v1"
+	partial, err := planAndBuild(s, workerPod("pod-a", "microvm-pool"))
+	if !errors.Is(err, errIncomplete) || errors.Is(err, errPermanent) {
+		t.Fatalf("planAndBuild() on restorable asset fetch failure = %v, want errIncomplete", err)
+	}
+	if diff := cmp.Diff(classFile(atev1.SandboxClassMicroVM, wantMicroVM("sha-v2")), partial); diff != "" {
+		t.Errorf("planAndBuild() partial file mismatch (-want +got):\n%s", diff)
+	}
+
+	// Each build verifies every version's assets in the local cache, while the
+	// host CPU identity probe is memoized across syncs.
+	failSHA = ""
 	want := classFile(atev1.SandboxClassMicroVM, wantMicroVM("sha-v2"), wantMicroVM("sha-v1"))
 	for _, uid := range []string{"pod-a", "pod-b"} {
 		got, err := planAndBuild(s, workerPod(uid, "microvm-pool"))
@@ -426,6 +451,13 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 	}
 	if probeCalls != 2 {
 		t.Errorf("probe calls = %d, want 2: one that failed, one that succeeded and was reused", probeCalls)
+	}
+	// The probe-failure build fetches nothing. The default-failure build
+	// fetches v2, the restorable-failure build fetches v2 then v1, and each
+	// full build (pod-a, pod-b) fetches v2 then v1.
+	wantFetched := []string{"sha-v2", "sha-v2", "sha-v1", "sha-v2", "sha-v1", "sha-v2", "sha-v1"}
+	if diff := cmp.Diff(wantFetched, fetched); diff != "" {
+		t.Errorf("fetched assets mismatch (-want +got):\n%s", diff)
 	}
 }
 
