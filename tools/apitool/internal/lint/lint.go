@@ -55,6 +55,7 @@ var All = []Rule{
 	EnumZeroValueUnspecified,
 	EnumValuesPrefixed,
 	ResourceStatusFieldShape,
+	ResourceFieldOrder,
 	NoOneofs,
 	Documented,
 }
