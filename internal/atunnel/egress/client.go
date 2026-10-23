@@ -220,8 +220,13 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 			}
 			// The gateway authenticates each CONNECT with the handshake
 			// certificate, so retire connections from before a renewal.
-			if !sameCertificate(h2Conn.cert, current) {
+			if !h2Conn.retired.Load() && !sameCertificate(h2Conn.cert, current) {
 				h2Conn.retire()
+			}
+			if h2Conn.retired.Load() {
+				if !h2Conn.isClosed() {
+					keep = append(keep, h2Conn)
+				}
 				continue
 			}
 			if reserved == nil {
@@ -287,13 +292,24 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 				return nil, false, nil, err
 			}
 			if h2Conn != nil {
-				wasVerified := h2Conn.verified.Load()
-				if err := h2Conn.cc.Reserve(); err == nil {
-					return h2Conn, wasVerified, nil, nil
+				current, _ := c.tlsConfig.GetClientCertificate(nil)
+				c.mu.Lock()
+				if !h2Conn.retired.Load() && !sameCertificate(h2Conn.cert, current) {
+					h2Conn.retire()
 				}
-				if h2Conn.retired.Load() {
+				wasVerified := h2Conn.verified.Load()
+				retired := h2Conn.retired.Load()
+				var reserveErr error
+				if !retired {
+					reserveErr = h2Conn.cc.Reserve()
+				}
+				c.mu.Unlock()
+				if retired {
 					// A renewal retired it while it was being dialed.
 					continue
+				}
+				if reserveErr == nil {
+					return h2Conn, wasVerified, nil, nil
 				}
 				if !wasVerified && h2Conn.isClosed() {
 					c.removeH2Conn(h2Conn)
