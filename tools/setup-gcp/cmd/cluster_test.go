@@ -606,13 +606,19 @@ func TestCheckExistingCluster(t *testing.T) {
 	)
 
 	tests := []struct {
-		name    string
-		cluster *containerpb.Cluster
-		want    []string
+		name          string
+		cluster       *containerpb.Cluster
+		noDataplaneV2 bool
+		want          []string
 	}{
 		{
 			name:    "all match",
 			cluster: clusterWith(network, subnetwork, v2),
+		},
+		{
+			name:          "Dataplane V2 off matches legacy",
+			cluster:       clusterWith(network, subnetwork, legacy),
+			noDataplaneV2: true,
 		},
 		{
 			name:    "no network config and Dataplane V2 expected",
@@ -643,6 +649,8 @@ func TestCheckExistingCluster(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			cfg := cfg
+			cfg.EnableDataplaneV2 = !tt.noDataplaneV2
 			err := checkExistingCluster(tt.cluster, &cfg)
 			if len(tt.want) == 0 {
 				if err != nil {
@@ -660,14 +668,6 @@ func TestCheckExistingCluster(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("Dataplane V2 off matches legacy", func(t *testing.T) {
-		legacyCfg := cfg
-		legacyCfg.EnableDataplaneV2 = false
-		if err := checkExistingCluster(clusterWith(network, subnetwork, legacy), &legacyCfg); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
 }
 
 // Both commands compare the cluster's Dataplane V2 setting, so both expose it.
