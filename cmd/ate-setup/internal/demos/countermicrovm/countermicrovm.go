@@ -30,7 +30,7 @@ const namespace = "ate-demo-counter-microvm"
 func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-counter-microvm",
-		Short:              "The counter demo on micro-VM workers",
+		Short:              "The counter demo on microVM workers",
 		WorkerPoolManifest: "demos/counter/counter-microvm.yaml.tmpl",
 		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "counter-microvm"}},
 		Templates: []demos.SubstrateTemplate{{

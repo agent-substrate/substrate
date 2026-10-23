@@ -23,7 +23,7 @@ To run the cold resume tests from your workstation instead, see
 5. `go run ./cmd/ate-setup deploy ate-system` (with `ATE_CREDENTIAL_PROVIDER`
    in `.ate-dev-env.sh`, or `--credential-provider` in the test's
    `ateArgs`; passes `--skip-microvm-deps` unless `sandboxClass` is `microvm`,
-   in which case `deploy ate-system` also stages the micro-VM guest assets to
+   in which case `deploy ate-system` also stages the microVM guest assets to
    `<BUCKET_NAME>-assets` and applies the cluster-wide `microvm`
    `SandboxConfig`) + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload

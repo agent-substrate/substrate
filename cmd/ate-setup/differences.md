@@ -5,7 +5,7 @@
 `hack/install-microvm-deps.sh`.
 
 The port has replaced them. `hack/install-ate.sh` and the demo, CSI, and
-micro-VM asset scripts are deleted. See [`commands.md`](commands.md) for the
+microVM asset scripts are deleted. See [`commands.md`](commands.md) for the
 commands.
 
 This document covers the design decisions of the port, against the shell it
@@ -80,8 +80,8 @@ Still required, and why:
 | `ko` | building and publishing images (`ko resolve` only); not used with `--image-repo` |
 | `go` | locating the pinned `ko` tool, exactly as `hack/run-tool.sh` does; not used with `--image-repo` |
 | `git` | the `git describe` version stamp passed to ko; not used with `--image-repo` |
-| `docker` | the kind CSI setup (`docker exec` into the node), staging micro-VM assets into Kind's `rustfs`, and the claude-code-multiplex workload build |
-| `gcloud` | GKE `get-credentials` (when `PROJECT_ID` is set and no context was given) and `gcloud storage` when staging micro-VM assets on GKE |
+| `docker` | the kind CSI setup (`docker exec` into the node), staging microVM assets into Kind's `rustfs`, and the claude-code-multiplex workload build |
+| `gcloud` | GKE `get-credentials` (when `PROJECT_ID` is set and no context was given) and `gcloud storage` when staging microVM assets on GKE |
 | `bash` | sourcing `.ate-dev-env.sh` |
 
 One shell script is still invoked rather than reimplemented, because it
@@ -90,7 +90,7 @@ orchestrates benchmark image builds and Locust stack deployment:
 reconstructs the environment the shell installer would have exported to it, and
 is fronted by `deploy`/`delete benchmarks`.
 
-The micro-VM asset assembly (`kata-static` `.tar.zst` extraction and
+The microVM asset assembly (`kata-static` `.tar.zst` extraction and
 `cloud-hypervisor` download), object-store staging (`rustfs` on Kind,
 `<BUCKET_NAME>-assets` on GKE), and `microvm` `SandboxConfig` lifecycle now run
 in Go as part of `deploy ate-system` (and `deploy sandboxconfig`), with

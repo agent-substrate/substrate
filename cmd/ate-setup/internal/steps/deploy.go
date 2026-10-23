@@ -44,7 +44,7 @@ type DeployOptions struct {
 	// SetupCSI additionally installs the CSI driver (nfs, hostpath, both, none).
 	// Kind only. The hostpath driver is Kind only.
 	SetupCSI string
-	// SkipMicroVMDeps skips staging the micro-VM guest assets and applying the
+	// SkipMicroVMDeps skips staging the microVM guest assets and applying the
 	// microvm SandboxConfig.
 	SkipMicroVMDeps bool
 }
@@ -588,7 +588,7 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 }
 
 // DeploySandboxConfig applies the SandboxConfig admission policy, then the
-// default gVisor and (unless skipMicroVMDeps is set) micro-VM SandboxConfigs.
+// default gVisor and (unless skipMicroVMDeps is set) microVM SandboxConfigs.
 func (e *Env) DeploySandboxConfig(ctx context.Context, skipMicroVMDeps bool) error {
 	log.Step("deploy_sandboxconfig")
 

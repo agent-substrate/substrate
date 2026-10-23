@@ -96,7 +96,7 @@ var (
 // microvmReleaseBaseURL is overridden in unit tests to point at an httptest.Server.
 var microvmReleaseBaseURL = "https://github.com"
 
-// DeployMicroVMDeps installs the micro-VM prerequisites: the guest assets for
+// DeployMicroVMDeps installs the microVM prerequisites: the guest assets for
 // each supported architecture and the cluster-wide `microvm` SandboxConfig.
 func (e *Env) DeployMicroVMDeps(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
@@ -117,7 +117,7 @@ func (e *Env) DeployMicroVMDeps(ctx context.Context) error {
 			log.Infof("Asset set in %s is stale (version stamp mismatch); re-assembling.", outDir)
 		}
 		if needAssemble {
-			log.Infof("Assembling micro-VM assets into %s (arch=%s)...", outDir, arch)
+			log.Infof("Assembling microVM assets into %s (arch=%s)...", outDir, arch)
 			if err := assembleMicroVMAssets(ctx, outDir, arch, defaultKataVersion, defaultCloudHypervisorVersion); err != nil {
 				return err
 			}
@@ -183,7 +183,7 @@ func (e *Env) DeleteMicroVMDeps(ctx context.Context) error {
 	return nil
 }
 
-// microVMBucket returns the bucket where micro-VM guest assets are staged: the
+// microVMBucket returns the bucket where microVM guest assets are staged: the
 // shared rustfs bucket on Kind, and <BUCKET_NAME>-assets on GKE (where atelet
 // has read access only to the asset bucket).
 func (e *Env) microVMBucket() (string, error) {
@@ -194,7 +194,7 @@ func (e *Env) microVMBucket() (string, error) {
 		return defaultKindMicroVMBucket, nil
 	}
 	if e.Cfg.BucketName == "" {
-		return "", fmt.Errorf("BUCKET_NAME (--storage-bucket-name or config.storage.bucketName) must be set to stage micro-VM assets on non-Kind clusters, or pass --skip-microvm-deps")
+		return "", fmt.Errorf("BUCKET_NAME (--storage-bucket-name or config.storage.bucketName) must be set to stage microVM assets on non-Kind clusters, or pass --skip-microvm-deps")
 	}
 	assetBucket := e.Cfg.BucketName + "-assets"
 	if len(assetBucket) > maxGCSBucketNameLength {
@@ -240,7 +240,7 @@ func checkMicroVMAssets(outDir string) error {
 func verifyMicroVMAssetDigests(outDir, arch string) error {
 	digests, ok := microvmAssetDigests[arch]
 	if !ok {
-		return fmt.Errorf("no pinned micro-VM asset digests for arch %q", arch)
+		return fmt.Errorf("no pinned microVM asset digests for arch %q", arch)
 	}
 	for _, f := range microvmAssets {
 		p := filepath.Join(outDir, f)
@@ -249,7 +249,7 @@ func verifyMicroVMAssetDigests(outDir, arch string) error {
 			return err
 		}
 		if want := digests[f]; got != want {
-			return fmt.Errorf("micro-VM asset %s sha256 = %s, want %s (pinned in %s)", p, got, want, microvmSandboxConfigTemplate)
+			return fmt.Errorf("microVM asset %s sha256 = %s, want %s (pinned in %s)", p, got, want, microvmSandboxConfigTemplate)
 		}
 	}
 	return nil

@@ -33,7 +33,7 @@ const namespace = "ate-demo-egress-microvm"
 func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-egress-microvm",
-		Short:              "Egress policy enforcement on micro-VM workers",
+		Short:              "Egress policy enforcement on microVM workers",
 		WorkerPoolManifest: "demos/egress/egress-microvm.yaml.tmpl",
 		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "egress-microvm"}},
 		Templates: []demos.SubstrateTemplate{{

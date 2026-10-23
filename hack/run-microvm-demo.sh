@@ -19,7 +19,7 @@
 # and calls this script).
 #
 # Composes:
-#   1. ate-setup deploy ate-system            (control plane + micro-VM assets and SandboxConfig)
+#   1. ate-setup deploy ate-system            (control plane + microVM assets and SandboxConfig)
 #   2. ate-setup deploy demo counter-microvm  (worker pool manifest, atespace, and
 #                                              ActorTemplate through the ate API)
 #
@@ -75,7 +75,7 @@ log() {
   echo -e "${COLOR_CYAN}[run-microvm-demo]: $*${COLOR_RESET}"
 }
 
-# --- 1. deploy the control plane (includes micro-VM assets + SandboxConfig) -
+# --- 1. deploy the control plane (includes microVM assets + SandboxConfig) -
 log "Deploying the ate control plane (deploy ate-system)..."
 # ate-setup reads ATE_INSTALL_KIND from the environment, so this covers the kind
 # path too.
