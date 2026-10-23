@@ -36,6 +36,12 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 )
 
+// Audience is the audience of the objectstore plugin API. atelet requests it
+// on the worker-for-actor JWT it hands to whichever node plugin is installed,
+// and every exchange serving this API requires it. A token minted for another
+// audience is refused.
+const Audience = "objectstore-plugin.ate.dev"
+
 // Lookup resolves the actor a verified JWT names. actorlookup implements it.
 type Lookup interface {
 	Actor(ctx context.Context, claims *actoridjwt.WireSubstrateClaims) (*ateapi.Actor, error)
@@ -65,8 +71,7 @@ type Authorizer struct {
 	now      func() time.Time
 }
 
-// New returns an Authorizer. The verifier must accept only the audience the
-// exchange serves.
+// New returns an Authorizer. The verifier must accept only Audience.
 func New(v Verifier, l Lookup) *Authorizer {
 	return &Authorizer{verifier: v, lookup: l, now: time.Now}
 }

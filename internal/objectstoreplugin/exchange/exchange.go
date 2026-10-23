@@ -40,12 +40,6 @@ import (
 // node plugin dials by default, through the ate-api-server Service.
 const DefaultPort = 8445
 
-// ActorJWTAudience is the audience of the objectstore plugin API. atelet
-// requests it on the worker-for-actor JWT it hands to whichever node plugin is
-// installed, and every exchange serving this API requires it. A token minted
-// for another audience is refused.
-const ActorJWTAudience = "objectstore-plugin.ate.dev"
-
 // Issuer mints a credential limited to grants for the actor. force skips any
 // cache the issuer keeps. An error carrying a gRPC status code other than
 // Unavailable is passed to the caller unchanged, for failures the same request
@@ -69,7 +63,7 @@ type Server struct {
 	issuer     Issuer
 }
 
-// New returns a Server. The verifier must accept ActorJWTAudience.
+// New returns a Server. The verifier must accept actorauthz.Audience.
 func New(verifier Verifier, lookup Lookup, issuer Issuer) *Server {
 	return &Server{authorizer: actorauthz.New(verifier, lookup), issuer: issuer}
 }
