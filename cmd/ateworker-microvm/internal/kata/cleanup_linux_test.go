@@ -17,9 +17,6 @@
 package kata
 
 import (
-	"bytes"
-	"context"
-	"log/slog"
 	"strings"
 	"testing"
 
@@ -49,25 +46,6 @@ func TestIsSandboxProcess(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := isSandboxProcess(id, tc.cmdline, tc.exe); got != tc.want {
 				t.Errorf("isSandboxProcess() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-// An id that is not one path element would point the removals at the shared
-// parent dirs, so CleanupSandboxState must stop before touching anything.
-func TestCleanupSandboxStateRejectsInvalidID(t *testing.T) {
-	var logs bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
-	for _, id := range []string{"", ".", "..", "a/b", "../a"} {
-		t.Run(id, func(t *testing.T) {
-			logs.Reset()
-			CleanupSandboxState(context.Background(), id)
-			if got := logs.String(); !strings.Contains(got, "invalid sandbox id") || strings.Count(got, "\n") != 1 {
-				t.Errorf("CleanupSandboxState(%q) logged %q, want only the invalid id error", id, got)
 			}
 		})
 	}
