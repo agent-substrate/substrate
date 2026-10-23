@@ -215,6 +215,10 @@ type Config struct {
 	// (ATE_INSTALL_FAKE_DATA_PLANE), for control-plane benchmarks.
 	FakeDataPlane bool
 
+	// Components are the absolute paths of the kustomize Components given
+	// with --component, layered after the built-in ones in flag order.
+	Components []string
+
 	// IngressAllowedSPIFFEIDs are the SPIFFE IDs the ingress router lets
 	// reach actors over its TLS listeners (ATE_INGRESS_ALLOWED_SPIFFE_IDS).
 	// See RequireIngressAllowedSPIFFEIDs.

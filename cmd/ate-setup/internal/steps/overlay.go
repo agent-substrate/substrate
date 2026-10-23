@@ -51,7 +51,8 @@ const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
 // components lists the kustomize components every control plane apply is
 // composed with. Each patch targets its workloads by name, and kustomize leaves
 // a stream alone when nothing in it matches, so composing a manifest that
-// carries none of them is harmless.
+// carries none of them is harmless. The --component directories come last, so
+// their patches win over the built-in ones.
 func (e *Env) components() []string {
 	var components []string
 	if e.Cfg.FakeDataPlane {
@@ -60,7 +61,7 @@ func (e *Env) components() []string {
 	if e.Cfg.CordonControlPlane {
 		components = append(components, e.Cfg.Path(cordonControlPlaneComponent))
 	}
-	return components
+	return append(components, e.Cfg.Components...)
 }
 
 // SystemOverlay picks the kustomization for a full control plane install.

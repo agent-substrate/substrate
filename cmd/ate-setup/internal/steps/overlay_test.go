@@ -564,6 +564,82 @@ func TestRenderWithoutCordonLeavesManifestsAlone(t *testing.T) {
 	}
 }
 
+// writeComponent writes a kustomize Component that sets label
+// test.ate.dev/component to value on every resource, plus any extra
+// kustomization lines, and returns its directory.
+func writeComponent(t *testing.T, value, extra string) string {
+	t.Helper()
+	dir := t.TempDir()
+	kustomization := fmt.Sprintf(`apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+labels:
+  - pairs:
+      test.ate.dev/component: %q
+%s`, value, extra)
+	if err := os.WriteFile(dir+"/kustomization.yaml", []byte(kustomization), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// labeledWorkloads returns the value of label test.ate.dev/component on every
+// Deployment, StatefulSet and DaemonSet in a rendered manifest, by name. It
+// fails the test if the manifest carries a CRD.
+func labeledWorkloads(t *testing.T, manifest []byte) map[string]string {
+	t.Helper()
+	labels := map[string]string{}
+	for _, doc := range strings.Split(string(manifest), "\n---\n") {
+		var obj metav1.PartialObjectMetadata
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatalf("rendered document is not valid YAML: %v", err)
+		}
+		switch obj.Kind {
+		case "CustomResourceDefinition":
+			t.Errorf("render carries CRD %s", obj.Name)
+		case "Deployment", "StatefulSet", "DaemonSet":
+			labels[obj.Name] = obj.Labels["test.ate.dev/component"]
+		}
+	}
+	return labels
+}
+
+// --component directories apply after the built-in Components and in flag
+// order, so the last one wins a conflicting patch.
+func TestRenderUserComponentsOrder(t *testing.T) {
+	pool := `patches:
+  - target:
+      kind: Deployment
+      name: ate-api-server
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/nodeSelector/ate.dev~1workloadType
+        value: custom
+`
+	e := &Env{Cfg: &config.Config{
+		Root:               repoRoot(t),
+		CordonControlPlane: true,
+		Components:         []string{writeComponent(t, "first", ""), writeComponent(t, "second", pool)},
+	}}
+	rendered, err := e.render(e.Cfg.Manifest("ate-api-server.yaml"))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if got := labeledWorkloads(t, rendered)["ate-api-server"]; got != "second" {
+		t.Errorf("ate-api-server has component label %q, want the last Component's %q", got, "second")
+	}
+	var d appsv1.Deployment
+	for _, doc := range strings.Split(string(rendered), "\n---\n") {
+		if strings.Contains(doc, "kind: Deployment") {
+			if err := yaml.Unmarshal([]byte(doc), &d); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if got := d.Spec.Template.Spec.NodeSelector["ate.dev/workloadType"]; got != "custom" {
+		t.Errorf("ate-api-server pool = %q, want the --component patch's %q over --cordon-control-plane", got, "custom")
+	}
+}
+
 // dataPlaneWorkloads returns the DaemonSets and Deployments in a rendered
 // manifest, by name.
 func dataPlaneWorkloads(t *testing.T, manifest []byte) (daemonSets map[string]appsv1.DaemonSet, deployments map[string]appsv1.Deployment) {
