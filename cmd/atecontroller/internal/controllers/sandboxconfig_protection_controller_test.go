@@ -413,21 +413,21 @@ func (r *namespaceRecorder) List(ctx context.Context, list client.ObjectList, op
 func TestSandboxConfigLiveListScopesToWatchNamespace(t *testing.T) {
 	t.Parallel()
 	scheme := runtime.NewScheme()
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	now := metav1.Now()
 
-	sc := makeSandboxConfig("sc", atev1alpha1.SandboxClassGvisor, true)
-	controllerutil.AddFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+	sc := makeSandboxConfig("sc", atev1.SandboxClassGvisor, true)
+	controllerutil.AddFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 	controllerutil.AddFinalizer(sc, testHoldFinalizer)
 	sc.DeletionTimestamp = &now
 
-	user := func(ns string) *atev1alpha1.WorkerPool {
+	user := func(ns string) *atev1.WorkerPool {
 		wp := makeWorkerPool("pool", ns, 1, "worker:v1")
-		wp.Status.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClassStatus{{
-			Name:      atev1alpha1.SandboxClassGvisor,
-			ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "sc"},
+		wp.Status.SandboxClasses = []atev1.WorkerPoolSandboxClassStatus{{
+			Name:      atev1.SandboxClassGvisor,
+			ConfigRef: &atev1.SandboxConfigReference{Name: "sc"},
 		}}
 		return wp
 	}
@@ -464,9 +464,9 @@ func TestSandboxConfigLiveListScopesToWatchNamespace(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			cached := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sc).
-				WithIndex(&atev1alpha1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
-					return sandboxConfigsInUse(obj.(*atev1alpha1.WorkerPool))
+			cached := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sc.DeepCopy()).
+				WithIndex(&atev1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
+					return sandboxConfigsInUse(obj.(*atev1.WorkerPool))
 				}).Build()
 			reader := &namespaceRecorder{Reader: fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.live...).Build()}
 			r := &SandboxConfigProtectionReconciler{Client: cached, APIReader: reader, WatchNamespace: tc.watchNamespace}
@@ -477,11 +477,11 @@ func TestSandboxConfigLiveListScopesToWatchNamespace(t *testing.T) {
 			if reader.namespace != tc.wantNamespace {
 				t.Errorf("live list namespace = %q, want %q", reader.namespace, tc.wantNamespace)
 			}
-			got := &atev1alpha1.SandboxConfig{}
+			got := &atev1.SandboxConfig{}
 			if err := cached.Get(t.Context(), types.NamespacedName{Name: sc.Name}, got); err != nil {
 				t.Fatalf("get SandboxConfig: %v", err)
 			}
-			if has := controllerutil.ContainsFinalizer(got, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer); has != tc.want {
+			if has := controllerutil.ContainsFinalizer(got, atev1.SandboxConfigWorkerPoolProtectionFinalizer); has != tc.want {
 				t.Errorf("has protection finalizer = %v, want %v", has, tc.want)
 			}
 			if !controllerutil.ContainsFinalizer(got, testHoldFinalizer) {

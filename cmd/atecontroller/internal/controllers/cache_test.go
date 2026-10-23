@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atecontroller/internal/workersync"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	appsv1 "k8s.io/api/apps/v1"
@@ -125,15 +125,15 @@ func TestNamespaceScopedCachesWithRBAC(t *testing.T) {
 		t.Fatalf("cluster-wide Pod list = %v, want Forbidden", err)
 	}
 	ac := versioned.NewForConfigOrDie(restricted)
-	if _, err := ac.ApiV1alpha1().WorkerPools("").List(ctx, metav1.ListOptions{}); !apierrors.IsForbidden(err) {
+	if _, err := ac.AteV1().WorkerPools("").List(ctx, metav1.ListOptions{}); !apierrors.IsForbidden(err) {
 		t.Fatalf("cluster-wide WorkerPool list = %v, want Forbidden", err)
 	}
 
 	workerFactory, workerInformer := workersync.WorkerPodInformer(kc, workloadNamespace)
 	ateFactory := externalversions.NewSharedInformerFactoryWithOptions(ac, 0, externalversions.WithNamespace(workloadNamespace))
-	ateFactory.Api().V1alpha1().WorkerPools().Informer()
-	ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
-	ateFactory.Api().V1alpha1().CSIDriverConfigs().Informer()
+	ateFactory.Ate().V1().WorkerPools().Informer()
+	ateFactory.Ate().V1().SandboxConfigs().Informer()
+	ateFactory.Ate().V1().CSIDriverConfigs().Informer()
 	workerFactory.Start(ctx.Done())
 	ateFactory.Start(ctx.Done())
 	t.Cleanup(func() {
@@ -182,14 +182,14 @@ func TestNamespaceScopedCachesWithRBAC(t *testing.T) {
 			if err := clientgoscheme.AddToScheme(opts.Scheme); err != nil {
 				t.Fatal(err)
 			}
-			if err := atev1alpha1.AddToScheme(opts.Scheme); err != nil {
+			if err := atev1.AddToScheme(opts.Scheme); err != nil {
 				t.Fatal(err)
 			}
 			c, err := cache.New(config, opts)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, obj := range []client.Object{&corev1.Pod{}, &atev1alpha1.WorkerPool{}, &appsv1.Deployment{}, &networkingv1.NetworkPolicy{}, &corev1.Secret{}, &certsv1beta1.ClusterTrustBundle{}} {
+			for _, obj := range []client.Object{&corev1.Pod{}, &atev1.WorkerPool{}, &appsv1.Deployment{}, &networkingv1.NetworkPolicy{}, &corev1.Secret{}, &certsv1beta1.ClusterTrustBundle{}} {
 				if _, err := c.GetInformer(ctx, obj, cache.BlockUntilSynced(false)); err != nil {
 					t.Fatal(err)
 				}

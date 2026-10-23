@@ -176,10 +176,10 @@ func TestStartupScanRespectsNamespace(t *testing.T) {
 			// Put the out-of-scope worker on the first page, so skipping it
 			// must still advance to the in-scope worker on the next page.
 			api.listPageSize = 1
-			api.put(registeredWorker("other", "pool", "live", testPodUID, "10.0.0.1"))
-			api.put(registeredWorker("agent-workloads", "pool", "deleted", otherPodUID, "10.0.0.2"))
+			api.put(registeredWorker("other", "pool", "live", testPodUID))
+			api.put(registeredWorker("agent-workloads", "pool", "deleted", otherPodUID))
 			const thirdPodUID = "33333333-3333-3333-3333-333333333333"
-			api.put(registeredWorker("other", "pool", "also-live", thirdPodUID, "10.0.0.3"))
+			api.put(registeredWorker("other", "pool", "also-live", thirdPodUID))
 			kc := fake.NewClientset()
 			_, pods := WorkerPodInformer(kc, namespace)
 			_, _, pools := newWorkerPoolInformer()
@@ -220,7 +220,7 @@ func TestReconcileIgnoresWorkerOutsideNamespace(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(oldLogger) })
 	api := newFakeControl()
-	api.put(registeredWorker("other", "pool", "live", testPodUID, "10.0.0.1"))
+	api.put(registeredWorker("other", "pool", "live", testPodUID))
 	s, _, _ := setupReconcileTest(t, api)
 	defer s.queue.ShutDown()
 	s.watchNamespace = "agent-workloads"
