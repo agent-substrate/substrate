@@ -13,20 +13,29 @@
 // limitations under the License.
 
 //! The ingress-cache dynamic module provides an HTTP filter that caches
-//! actor -> worker bindings to bypass `ext_proc` on warm ingress paths.
+//! actor -> worker bindings to bypass `ext_proc` on warm ingress paths, and the
+//! `tunnel_watcher` network filter that marks cache entries from what
+//! happens to the CONNECT tunnels they route to. Both filters live in this one
+//! library so they share its per-thread cache.
 
 pub mod cache;
 pub mod config;
 pub mod filter;
 pub mod routing;
+pub mod tunnel_watcher;
 
 pub use cache::*;
 pub use config::*;
-use envoy_proxy_dynamic_modules_rust_sdk::declare_init_functions;
+use envoy_proxy_dynamic_modules_rust_sdk::declare_all_init_functions;
 pub use filter::*;
 pub use routing::*;
+pub use tunnel_watcher::*;
 
-declare_init_functions!(init, filter::new_http_filter_config_fn);
+declare_all_init_functions!(
+  init,
+  http: filter::new_http_filter_config_fn,
+  network: tunnel_watcher::new_network_filter_config_fn,
+);
 
 /// Called when the dynamic module is loaded into Envoy.
 fn init() -> bool {

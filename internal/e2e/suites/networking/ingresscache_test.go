@@ -103,16 +103,17 @@ func TestIngressCache_HitAndTTL(t *testing.T) {
 	}
 }
 
-// TestIngressCache_WorkerDisconnectionEvictsWithoutReplay tests that when an
-// actor's connection terminates or upstream closes (503 UC), ingress-cache evicts
-// the stale binding without proxy-side stream replay (erring on the side of
-// caution against duplicate side effects), allowing a single client retry to
-// succeed immediately via ext_proc without waiting for cache TTL.
-func TestIngressCache_WorkerDisconnectionEvictsWithoutReplay(t *testing.T) {
+// TestIngressCache_StaleHitReplaysAfterSuspend verifies that a bodiless request
+// that hits a stale entry after its actor was suspended while idle is replayed
+// through ext_proc, which resumes the actor, so the client gets a 200. On the
+// default CONNECT path, atunnel refuses the tunnel and the router reports a
+// 503 UC; the tunnel_watcher network filter marks the entry stale, and
+// it isn't spoiled because no request was cut off mid-flight.
+func TestIngressCache_StaleHitReplaysAfterSuspend(t *testing.T) {
 	e2e.RequireIngressCache(t)
 	ctx := context.Background()
 	clients := e2e.GetClients()
-	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "cache-evict", e2e.SubstrateCounterFixture())
+	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "cache-stale", e2e.SubstrateCounterFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -128,9 +129,10 @@ func TestIngressCache_WorkerDisconnectionEvictsWithoutReplay(t *testing.T) {
 		t.Fatalf("ScrapeRouterEnvoyMetrics before suspend: %v", err)
 	}
 	replayBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_replay")
-	evictBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_eviction")
+	staleBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_marked_stale")
+	spoiledBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_marked_spoiled")
 
-	// 2. Suspend the actor so the worker immediately deactivates it.
+	// 2. Suspend the actor while it is idle. The cache entry still points at its old worker.
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
 		Actor: &ateapi.ObjectRef{Atespace: networkingAtespace, Name: actorName},
 	}); err != nil {
@@ -138,43 +140,30 @@ func TestIngressCache_WorkerDisconnectionEvictsWithoutReplay(t *testing.T) {
 	}
 	waitForActorState(t, ctx, clients, networkingAtespace, actorName, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 
-	// 3. Send a GET request. The router connects to the old worker which closes
-	// the tunnel (503 UC). Per design, mid-flight terminations (UC) are NOT replayed
-	// to prevent duplicate side-effects. The client receives 503, and the cache
-	// entry is evicted.
+	// 3. The stale hit is refused before reaching the actor and replayed through ext_proc.
 	resp, err := router.Get(ctx, actorRef, "/readyz")
 	if err != nil {
-		t.Logf("GET encountered error on terminated connection as expected: %v", err)
-	} else {
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusServiceUnavailable {
-			t.Fatalf("expected status 503 UC on mid-flight connection termination, got %d", resp.StatusCode)
-		}
+		t.Fatalf("GET on stale entry failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET on stale entry returned status %d, want 200 after replay; body: %s", resp.StatusCode, body)
 	}
 
-	// 4. Verify eviction counter incremented and replay counter did NOT increment.
+	// 4. The request was replayed, its entry marked stale, and nothing marked spoiled.
 	scrapeAfter, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
 	if err != nil {
-		t.Fatalf("ScrapeRouterEnvoyMetrics after suspend: %v", err)
+		t.Fatalf("ScrapeRouterEnvoyMetrics after GET: %v", err)
 	}
-	replayAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_replay")
-	evictAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_eviction")
-	if evictAfter <= evictBefore {
-		t.Fatalf("expected ate_ingress_cache_eviction to increment, before=%.0f, after=%.0f", evictBefore, evictAfter)
+	if replayAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_replay"); replayAfter <= replayBefore {
+		t.Fatalf("expected ate_ingress_cache_replay to increment, before=%.0f, after=%.0f", replayBefore, replayAfter)
 	}
-	if replayAfter != replayBefore {
-		t.Fatalf("expected ate_ingress_cache_replay NOT to increment for UC, before=%.0f, after=%.0f", replayBefore, replayAfter)
+	if staleAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_marked_stale"); staleAfter <= staleBefore {
+		t.Fatalf("expected ate_ingress_cache_marked_stale to increment, before=%.0f, after=%.0f", staleBefore, staleAfter)
 	}
-
-	// 5. A single client retry now succeeds cleanly via ext_proc, which resumes the actor.
-	retryResp, err := router.Get(ctx, actorRef, "/readyz")
-	if err != nil {
-		t.Fatalf("retry GET failed: %v", err)
-	}
-	defer retryResp.Body.Close()
-	if retryResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(retryResp.Body)
-		t.Fatalf("retry GET returned status %d, want 200; body: %s", retryResp.StatusCode, body)
+	if spoiledAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_marked_spoiled"); spoiledAfter != spoiledBefore {
+		t.Fatalf("expected ate_ingress_cache_marked_spoiled unchanged for an idle suspend, before=%.0f, after=%.0f", spoiledBefore, spoiledAfter)
 	}
 }
 

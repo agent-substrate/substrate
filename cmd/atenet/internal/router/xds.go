@@ -53,6 +53,7 @@ import (
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	originaldstv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/original_dst/v3"
+	networkdynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/dynamic_modules/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setfilterstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
 	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
@@ -134,6 +135,17 @@ const (
 	// ingressCacheDynamicModuleName is the shared library and filter name for
 	// the ingress-cache dynamic module.
 	ingressCacheDynamicModuleName = "envoy_substrate_ingress_cache"
+
+	// networkDynamicModulesFilterName is envoy.filters.network.dynamic_modules's
+	// well-known name.
+	networkDynamicModulesFilterName = "envoy.filters.network.dynamic_modules"
+
+	// ingressCacheTunnelWatcherFilterName is the ingress-cache module's network
+	// filter. It marks cache entries from what happens to the CONNECT tunnels
+	// they route to, so the HTTP filter can tell a refused tunnel from one cut
+	// off mid-request. It must load from the same library as the HTTP filter,
+	// which shares its per-thread cache.
+	ingressCacheTunnelWatcherFilterName = "tunnel_watcher"
 
 	// endpointCachedHeader is set by the ingress-cache dynamic module on a cache
 	// hit so route selection picks the route that disables ext_proc.
@@ -441,8 +453,10 @@ func (x *XdsServer) SetUpstreamConnect(enabled bool) {
 }
 
 // SetIngressCache installs the ingress-cache filter and, for each workload
-// route, a copy that matches endpointCachedHeader and skips ext_proc. When
-// disabled, neither exists, so every request is resolved by ext_proc.
+// route, a copy that matches endpointCachedHeader and skips ext_proc. With
+// upstream CONNECT it also installs the tunnel_watcher network filter
+// on actor_connect. When disabled, none of these exist, so every request is
+// resolved by ext_proc.
 func (x *XdsServer) SetIngressCache(enabled bool) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
@@ -588,7 +602,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 	// Listeners
 	var listeners []types.Resource
 	if x.upstreamConnect {
-		listeners = append(listeners, buildActorConnectListener())
+		listeners = append(listeners, buildActorConnectListener(x.ingressCache))
 	}
 	if connectEnabled {
 		listeners = append(listeners, x.buildMainInternalListener())
@@ -1278,9 +1292,10 @@ func workerIdentityFilterStateFilter() *hcmv3.HttpFilter {
 
 // buildActorConnectListener turns each connection from an actor_tunnel cluster
 // into a CONNECT to atunnel, which takes the port from the authority and
-// ignores the host.
-func buildActorConnectListener() *listenerv3.Listener {
-	return &listenerv3.Listener{
+// ignores the host. With ingressCache, the tunnel_watcher network filter
+// runs ahead of tcp_proxy.
+func buildActorConnectListener(ingressCache bool) *listenerv3.Listener {
+	listener := &listenerv3.Listener{
 		Name: ActorConnectName,
 		ListenerSpecifier: &listenerv3.Listener_InternalListener{
 			InternalListener: &listenerv3.Listener_InternalListenerConfig{},
@@ -1334,6 +1349,29 @@ func buildActorConnectListener() *listenerv3.Listener {
 					},
 				},
 			},
+		},
+	}
+	if ingressCache {
+		chain := listener.GetFilterChains()[0]
+		proxy := chain.Filters[len(chain.Filters)-1]
+		chain.Filters = append(chain.Filters[:len(chain.Filters)-1], ingressCacheTunnelWatcherFilter(), proxy)
+	}
+	return listener
+}
+
+// ingressCacheTunnelWatcherFilter is the ingress-cache module's network filter for
+// actor_connect. It must run ahead of tcp_proxy to see the tunnel's bytes and
+// close; see ingressCacheTunnelWatcherFilterName.
+func ingressCacheTunnelWatcherFilter() *listenerv3.Filter {
+	return &listenerv3.Filter{
+		Name: networkDynamicModulesFilterName,
+		ConfigType: &listenerv3.Filter_TypedConfig{
+			TypedConfig: newAny(&networkdynamicmodulesv3.DynamicModuleNetworkFilter{
+				DynamicModuleConfig: &dynamicmodulesv3.DynamicModuleConfig{
+					Name: ingressCacheDynamicModuleName,
+				},
+				FilterName: ingressCacheTunnelWatcherFilterName,
+			}),
 		},
 	}
 }
