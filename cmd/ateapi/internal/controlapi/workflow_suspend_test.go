@@ -155,6 +155,10 @@ func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 	}
 	assignment := wireTestAssignment()
 	assignment.SandboxRuntime = wantRuntime
+	// Seed the assigned worker with a different current default_runtime to
+	// verify the snapshot is stamped from WorkerAssignment.sandbox_runtime
+	// rather than the worker's latest registration.
+	seedRuntimeWorker(t, ctx, persistence, assignment.GetWorkerPod(), assignment.GetNodeName(), testRuntime("arm64", "v2-hash"))
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 	storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
