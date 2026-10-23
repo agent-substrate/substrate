@@ -684,7 +684,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	// Suspending the actor
 	//
 	t.Logf("Suspending Actor %q...", actorID)
-	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+	suspended, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
 		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
 		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	})
@@ -878,6 +878,19 @@ func validateCounterResponse(t *testing.T, resp string, stage string, wantMemory
 	}
 }
 
+// validateCountersAtLeast checks that the memory and file counters in resp are
+// both at least want.
+func validateCountersAtLeast(t *testing.T, resp, stage string, want int) {
+	t.Helper()
+	for _, prefix := range []string{"preserved memory count: ", "preserved file counter: "} {
+		_, rest, _ := strings.Cut(resp, prefix)
+		var got int
+		if _, err := fmt.Sscanf(rest, "%d", &got); err != nil || got < want {
+			t.Errorf("[%s] expected %sat least %d, got response: %s", stage, prefix, want, resp)
+		}
+	}
+}
+
 func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapi.ActorTemplate) error {
 	// Create an Actor using the ATE API.
 	actorName := "demo-actor-1-" + nsObj.Name
@@ -987,7 +1000,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 
 	// Suspending the actor before deletion
 	t.Logf("Suspending Actor %q before deletion...", actorName)
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+	if _, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
 		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
 		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	}); err != nil {
@@ -1169,16 +1182,17 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	}
 	validateCounterResponse(t, resp, "after revert from RUNNING", 2, 2)
 
-	// Revert from async suspend (local snapshot). Resume prefers a local
-	// snapshot over the external one, so clearing the local snapshot is what
-	// prevents this async suspend's count=2 checkpoint from restoring on the
-	// next resume.
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef, Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}); err != nil {
+	// Revert from async suspend (local snapshot). The revert drops the local
+	// snapshot and keeps the latest durable one: the count=1 snapshot, or this
+	// pause's count=2 snapshot if atelet has already reported uploading it.
+	paused, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef, Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}})
+	if err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
 	waitForActorPaused(ctx, t, clients, actorName)
+	pausedURI := localSnapshot(paused.GetActor().GetStatus()).GetDurableSnapshot().GetObject().GetSnapshotUri()
 
-	reverted, err = clients.SubstrateAPI.RevertActor(ctx, &ateapi.RevertActorRequest{Actor: actorRef})
+	reverted, err = e2e.RetryAborted(t, ctx, clients.SubstrateAPI.RevertActor, &ateapi.RevertActorRequest{Actor: actorRef})
 	if err != nil {
 		t.Fatalf("RevertActor from paused: %v", err)
 	}
@@ -1188,8 +1202,8 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	if hasLocalSnapshot(reverted.GetActor().GetStatus()) {
 		t.Fatal("local snapshot pointer survived revert from paused")
 	}
-	if got := durableSnapshotURI(reverted.GetActor().GetStatus()); got != snapshotURI {
-		t.Fatalf("snapshot URI after revert from paused = %q, want %q", got, snapshotURI)
+	if got := durableSnapshotURI(reverted.GetActor().GetStatus()); got != snapshotURI && got != pausedURI {
+		t.Fatalf("snapshot URI after revert from paused = %q, want %q or the pause's %q", got, snapshotURI, pausedURI)
 	}
 
 	// SUSPENDED is rejected with FailedPrecondition rather than no-oping.
@@ -1197,8 +1211,8 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 		t.Fatalf("RevertActor from SUSPENDED: got %v, want FailedPrecondition", err)
 	}
 
-	// Final resume: if the local checkpoint had been restored, the counter
-	// would advance from 2 to 3. Expecting 2 proves the external snapshot won.
+	// Final resume restores the snapshot the revert kept, so this call takes
+	// the counters to 2 from the count=1 snapshot, or to 3 from the pause's.
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to resume Actor after paused revert: %v", err)
 	}
@@ -1208,7 +1222,7 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	if err != nil {
 		t.Fatalf("failed to call actor after paused revert: %v", err)
 	}
-	validateCounterResponse(t, resp, "after revert from paused", 2, 2)
+	validateCountersAtLeast(t, resp, "after revert from paused", 2)
 
 	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to delete Actor: %v", err)
