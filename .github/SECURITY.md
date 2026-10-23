@@ -37,8 +37,8 @@ include:
 
 ## What Counts as a Vulnerability
 
-See the [Security Guide](../docs/security.md) and
-[Threat Model](../docs/threat-model.md) for the security architecture, trust
+See the [Security Guide](../docs/security/security.md) and
+[Threat Model](../docs/security/threat-model.md) for the security architecture, trust
 boundaries, and assumptions this section is based on.
 
 In scope: the Agent Substrate control plane (`ateapi`, `atecontroller`,
@@ -81,7 +81,7 @@ from most to least severe:
 - Sample applications under `demos/` and load-testing harnesses under
   `benchmarking/`.
 - Documented scope boundaries and future capabilities listed in
-  [docs/security.md](../docs/security.md) at the time of your report. If you are
+  [docs/security/security.md](../docs/security/security.md) at the time of your report. If you are
   unsure whether a finding is covered by a documented limitation, report it
   privately anyway and let a maintainer make the call.
 

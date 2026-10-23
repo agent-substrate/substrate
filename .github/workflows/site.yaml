@@ -20,7 +20,10 @@ on:
     paths:
       - 'site/**'
       - 'docs/**'
+      - 'demos/*/README.md'
+      - 'tools/site-content/**'
       - 'tools/site-release-data/**'
+      - 'hack/site.sh'
       - 'hack/test-site-templates.sh'
       - '.github/workflows/site.yaml'
   push:
@@ -28,7 +31,10 @@ on:
     paths:
       - 'site/**'
       - 'docs/**'
+      - 'demos/*/README.md'
+      - 'tools/site-content/**'
       - 'tools/site-release-data/**'
+      - 'hack/site.sh'
       - 'hack/test-site-templates.sh'
       - '.github/workflows/site.yaml'
   workflow_dispatch:
@@ -76,6 +82,8 @@ jobs:
     - name: Install PostCSS
       working-directory: site
       run: npm ci
+    - name: Generate site content
+      run: hack/site.sh content
     - name: Generate release data
       run: hack/site.sh release-data
     - name: Test templates

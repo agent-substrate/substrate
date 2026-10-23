@@ -19,11 +19,6 @@ limitations under the License.
     <span class="as-pre-banner__pill">Pre-1.0</span>
     <span class="as-pre-banner__text-desktop">APIs and behavior may still change significantly.</span>
     <span class="as-pre-banner__text-mobile">APIs may change.</span>
-    <a href="{{ "docs/project/roadmap/" | relURL }}" class="as-pre-banner__link">
-      <span class="as-pre-banner__link-desktop">See the roadmap</span>
-      <span class="as-pre-banner__link-mobile">Roadmap</span>
-      <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
-    </a>
   </div>
 
   <nav class="td-navbar as-navbar" data-bs-theme="dark">
@@ -39,10 +34,9 @@ limitations under the License.
           <span>{{- .Site.Title -}}</span>
         </a>
         <div class="as-navbar__links" id="main_navbar">
-          <a href="{{ "docs/" | relURL }}" class="as-navbar__link{{ if and (strings.HasPrefix $p.RelPermalink ("docs/" | relURL)) (not (strings.HasPrefix $p.RelPermalink ("docs/tutorials/" | relURL))) (not (strings.HasPrefix $p.RelPermalink ("docs/project/community/" | relURL))) (not (strings.HasPrefix $p.RelPermalink ("docs/project/roadmap/" | relURL))) }} is-active{{ end }}">Docs</a>
+          <a href="{{ "docs/" | relURL }}" class="as-navbar__link{{ if and (strings.HasPrefix $p.RelPermalink ("docs/" | relURL)) (not (strings.HasPrefix $p.RelPermalink ("docs/tutorials/" | relURL))) (not (strings.HasPrefix $p.RelPermalink ("docs/project/community/" | relURL))) }} is-active{{ end }}">Docs</a>
           <a href="{{ "docs/tutorials/" | relURL }}" class="as-navbar__link{{ if strings.HasPrefix $p.RelPermalink ("docs/tutorials/" | relURL) }} is-active{{ end }}">Examples</a>
           <a href="{{ "docs/project/community/" | relURL }}" class="as-navbar__link{{ if strings.HasPrefix $p.RelPermalink ("docs/project/community/" | relURL) }} is-active{{ end }}">Community</a>
-          <a href="{{ "docs/project/roadmap/" | relURL }}" class="as-navbar__link{{ if strings.HasPrefix $p.RelPermalink ("docs/project/roadmap/" | relURL) }} is-active{{ end }}">Roadmap</a>
         </div>
       </div>
 

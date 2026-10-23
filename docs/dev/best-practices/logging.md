@@ -5,7 +5,7 @@ logging counterpart of [Metrics Best Practices](metrics.md) and
 [Tracing Best Practices](tracing.md).
 
 For how to read actor and component logs, see
-[Actor Observability](../../observability.md#1-logging).
+[Actor Observability](../../guides/observability.md#1-logging).
 
 ## Logging protos that hold secrets
 

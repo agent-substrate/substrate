@@ -40,15 +40,15 @@ limitations under the License.
   </div>
   <div class="as-doc-body">
     {{- $content := string .Content -}}
-    {{- if eq .Params.repo_source "docs/glossary.md" -}}
-      {{/* Anchor each term from docs/glossary.md on its bold label, which
+    {{- if in (slice "docs/reference/glossary.md" "docs/glossary.md") .Params.repo_source -}}
+      {{/* Anchor each term from the glossary doc on its bold label, which
            Goldmark renders at the start of the term's list item. */ -}}
       {{- range partialCached "glossary-terms.html" . "glossary" -}}
         {{- $label := replaceRE `([\\.+*?()|\[\]{}^$])` `\${1}` .term -}}
         {{- $pattern := printf `(<li>\s*(?:<p>)?)<strong>%s</strong>` $label -}}
         {{- $anchored := replaceRE $pattern (printf `${1}<strong id="%s">%s</strong>` .id .term) $content 1 -}}
         {{- if eq $anchored $content -}}
-          {{- errorf "glossary: term %q from docs/glossary.md: label not found on the glossary page" .term -}}
+          {{- errorf "glossary: term %q from %s: label not found on the glossary page" .term $.Params.repo_source -}}
         {{- end -}}
         {{- $content = $anchored -}}
       {{- end -}}

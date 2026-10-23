@@ -19,9 +19,10 @@ On doc pages other than the glossary itself, publishes the glossary data
 built from docs/glossary.md and tells glossary.js where to find it.
 */ -}}
 
-{{- if and (eq .Section "docs") (ne .Params.repo_source "docs/glossary.md") -}}
+{{- $glossarySources := slice "docs/reference/glossary.md" "docs/glossary.md" -}}
+{{- if and (eq .Section "docs") (not (in $glossarySources .Params.repo_source)) -}}
   {{- with partialCached "glossary-terms.html" . "glossary" -}}
-    {{- $glossary := index (where site.Pages "Params.repo_source" "docs/glossary.md") 0 -}}
+    {{- $glossary := index (where site.Pages "Params.repo_source" "in" $glossarySources) 0 -}}
     {{- $data := resources.FromString "glossary.json" (jsonify (dict "glossaryURL" $glossary.RelPermalink "terms" .)) -}}
     {{- $js := resources.Get "js/glossary.js" -}}
     {{- if hugo.IsProduction -}}

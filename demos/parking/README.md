@@ -1,3 +1,13 @@
+---
+title: "Request Parking"
+linkTitle: "Request Parking"
+weight: 5
+estimated_time: "10 mins"
+card_icon: "fa-solid fa-traffic-light"
+description: >
+  Hold and retry inbound requests during momentary WorkerPool saturation instead of failing with 503.
+---
+
 # Request Parking Demo
 
 This demo shows the **request parking** feature of the `atenet` router: when the
@@ -9,7 +19,7 @@ The setup is deliberately **oversubscribed**: a 2-worker pool with several
 actors. The workload is the same `counter` binary used by the counter demo; its
 reply includes the worker pod IP, so you can see which worker served a request.
 
-See [docs/request-parking.md](../../docs/request-parking.md) for the design.
+See [docs/concepts/request-parking.md](../../docs/concepts/request-parking.md) for the design.
 
 ## Prerequisites
 

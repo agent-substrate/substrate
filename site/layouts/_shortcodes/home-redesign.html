@@ -202,7 +202,7 @@ limitations under the License.
         </span>
       </a>
 
-      <a href="{{ "docs/security/egress-security/" | relURL }}" class="as-cap-card as-sec-card card-h">
+      <a href="{{ "docs/guides/egress-trust-bundle/" | relURL }}" class="as-cap-card as-sec-card card-h">
         <div class="as-sec-card__top">
           <div class="as-cap-card__icon as-cap-card__icon--pink">
             <svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
@@ -323,7 +323,6 @@ limitations under the License.
         <div class="as-term-card__bar">
           <div role="tablist" class="as-term-card__tabs" aria-label="Deployment environment">
             <button type="button" role="tab" class="as-term-tab is-active" aria-selected="true" data-term-tab="kind">Local (kind)</button>
-            <button type="button" role="tab" class="as-term-tab" aria-selected="false" data-term-tab="gke">GKE</button>
           </div>
           <button type="button" class="as-copy-btn" data-copy-active-term="true" aria-label="Copy commands" title="Copy commands">
             <svg class="ic" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
@@ -331,7 +330,8 @@ limitations under the License.
         </div>
         <pre class="as-term-card__pre mono is-active" data-term-pane="kind" id="term-pane-kind"><span class="as-term-comment"># 1 · create a cluster and install the system</span>
 hack/create-kind-cluster.sh
-hack/install-ate-kind.sh --deploy-ate-system --deploy-demo-counter
+hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
+hack/install-ate-kind.sh deploy demo-counter
 
 <span class="as-term-comment"># 2 · create an actor</span>
 go install ./cmd/kubectl-ate
@@ -340,15 +340,6 @@ kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 <span class="as-term-comment"># 3 · send it a request (it resumes on demand)</span>
 curl -X POST -H <span class="as-term-str">"ate-target-actor: ate-demo-counter/my-counter-1"</span> \
   http://localhost:8000/</pre>
-        <pre class="as-term-card__pre mono" data-term-pane="gke" id="term-pane-gke" hidden><span class="as-term-comment"># 1 · configure your project</span>
-cp hack/ate-dev-env.sh.example .ate-dev-env.sh &amp;&amp; source .ate-dev-env.sh
-gcloud auth application-default login --project=<span class="as-term-str">${PROJECT_ID}</span>
-
-<span class="as-term-comment"># 2 · provision GKE, GCS and IAM</span>
-go run ./tools/setup-gcp bootstrap
-
-<span class="as-term-comment"># 3 · install Agent Substrate and a demo</span>
-./hack/install-ate.sh --deploy-ate-system --deploy-demo-counter</pre>
       </div>
       <a href="{{ "docs/get-started/quickstart/" | relURL }}" class="as-arrow-link">
         <span>Full quickstart guide</span>

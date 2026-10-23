@@ -15,7 +15,7 @@ Router has several responsibilities:
 * Parks requests whose actor cannot be served immediately due to transient
   worker-pool saturation, retrying the resume until the actor is routable or a
   bounded wait elapses, instead of failing fast. See
-  [docs/request-parking.md](../../../../docs/request-parking.md).
+  [docs/concepts/request-parking.md](../../../../docs/concepts/request-parking.md).
 * Drains gracefully on SIGTERM: flips `/readyz` so the Service stops sending
   new connections, waits out endpoint propagation (`--drain-delay`), drains the
   dataplane's established connections (Envoy only — driven over its admin API;
@@ -105,7 +105,7 @@ rule, `egress_passthrough` under a `tls_passthrough` rule, and `denied`, which
 matches no chain and closes the connection, when neither covers the SNI. The
 passthrough chain resolves the SNI and relays the bytes to it on the dialed
 port; the address the actor dialed plays no part (see
-`docs/network-egress.md`).
+`docs/guides/network-egress.md`).
 
 Identity on the request legs is `dev.ate.actor.identity`, the actor's SPIFFE
 ID that the outer chain set from the verified peer certificate and shares with
@@ -125,7 +125,7 @@ deleted policy becomes a deny. Every policy denial answers a fixed
 Credential injection (`replace_headers`) runs on both request legs: a header
 the request carries is replaced with the credential from the provider, and a
 request without it is forwarded unchanged. See
-`docs/egress-credential-injection.md`.
+`docs/guides/egress-credential-injection.md`.
 
 ## adding a dataplane attribute
 

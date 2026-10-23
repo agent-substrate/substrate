@@ -22,21 +22,11 @@ hack/site.sh build   # production build into site/public/
 
 ## How docs get onto the site
 
-The site does not keep copies of the docs. `hugo.yaml` mounts selected files
-from the repository into the site's assets under `repo/`, and each page under
-`content/docs/` is a short stub that renders one of them:
+The site does not check in any Markdown content under `site/content/`. Instead:
 
-```markdown
----
-title: "Architecture"
-weight: 1
-repo_source: "docs/architecture.md"
-description: >
-  One sentence shown on the section index.
----
-
-{{% include-file %}}
-```
+- User-facing documentation lives in section subdirectories under `docs/` (`docs/get-started/`, `docs/concepts/`, `docs/guides/`, `docs/reference/`, `docs/security/`, `docs/project/`), and example tutorials live alongside their code in `demos/*/README.md`.
+- Contributor-only documentation lives in `docs/dev/` (which `hugo.yaml` and `tools/site-content` exclude) or at the root of `docs/` with `docsite: false` in its YAML front matter.
+- Before Hugo runs, `hack/site.sh` executes `go run ./tools/site-content --out site/content`, which generates the Hugo section `_index.md` files and a `{{% include-file %}}` stub page for each included Markdown file.
 
 The `include-file` shortcode (`layouts/_shortcodes/include-file.html`) drops
 the file's leading `# Heading` (the page title replaces it) and rewrites
@@ -47,11 +37,13 @@ relative links:
   mounted into `static/`;
 - any other relative link goes to the file on GitHub.
 
-To publish another doc:
-
-1. Add the file to the `module.mounts` entry for its directory in `hugo.yaml`.
-2. Add a stub page under `content/docs/` with `repo_source` set to its path
-   from the repository root.
+To publish another doc, place it in the appropriate `docs/<section>/`
+directory (or `demos/<name>/README.md`). Optional YAML front matter (`title`,
+`linkTitle`, `weight`, `description`, `aliases`, `card_icon`, `estimated_time`,
+`status`, `status_note`) is read directly from the Markdown file; if omitted,
+`tools/site-content` infers `title` from the leading `# Heading` and
+`description` from the first paragraph. To exclude a file in `docs/` from the
+website, add `docsite: false` to its YAML front matter.
 
 ## Doc status and new docs
 

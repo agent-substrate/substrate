@@ -59,7 +59,7 @@ a checkpoint).
 ## Settings
 
 The installer reads this setting in addition to those in
-[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+[docs/guides/operator-install.md](../../docs/guides/operator-install.md#settings), through the same
 flag, environment variable, and configuration document channels. It sets the
 worker thread count (`--concurrency`) of the Envoy container in `atenet-egress`;
 `0` leaves the manifest unchanged. The

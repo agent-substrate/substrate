@@ -27,8 +27,10 @@ directory of the repository file the text came from):
 {{- $repo := site.Params.github_repo -}}
 {{- $branch := site.Params.github_branch | default "main" -}}
 
-{{- range findRESubmatch `\]\(([^)\s]+)\)` $content -}}
-  {{- $target := index . 1 -}}
+{{- range findRESubmatch `(?:\]\(([^)\s]+)\)|href="([^"]+)")` $content -}}
+  {{- $mdTarget := index . 1 -}}
+  {{- $hrefTarget := index . 2 -}}
+  {{- $target := or $mdTarget $hrefTarget -}}
   {{- $isRelative := not (or (strings.HasPrefix $target "#") (strings.HasPrefix $target "/") (strings.Contains $target ":")) -}}
   {{- if $isRelative -}}
     {{- $parts := split $target "#" -}}
@@ -53,7 +55,11 @@ directory of the repository file the text came from):
       {{- $kind := cond (or (strings.HasSuffix $rel "/") (eq (path.Ext $repoPath) "")) "tree" "blob" -}}
       {{- $url = printf "%s/%s/%s/%s" $repo $kind $branch $repoPath -}}
     {{- end -}}
-    {{- $content = replace $content (printf "](%s)" $target) (printf "](%s%s)" $url $anchor) -}}
+    {{- if $mdTarget -}}
+      {{- $content = replace $content (printf "](%s)" $target) (printf "](%s%s)" $url $anchor) -}}
+    {{- else -}}
+      {{- $content = replace $content (printf "href=%q" $target) (printf "href=\"%s%s\"" $url $anchor) -}}
+    {{- end -}}
   {{- end -}}
 {{- end -}}
 {{- return $content -}}

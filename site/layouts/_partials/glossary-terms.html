@@ -27,9 +27,11 @@ end it. Returns nothing when no page renders docs/glossary.md. Call as:
 */ -}}
 
 {{- $terms := slice -}}
-{{- with where site.Pages "Params.repo_source" "docs/glossary.md" -}}
-  {{- $glossaryURL := (index . 0).RelPermalink -}}
-  {{- $doc := partialCached "repo-doc.html" "docs/glossary.md" "docs/glossary.md" -}}
+{{- with where site.Pages "Params.repo_source" "in" (slice "docs/reference/glossary.md" "docs/glossary.md") -}}
+  {{- $glossaryPage := index . 0 -}}
+  {{- $glossaryURL := $glossaryPage.RelPermalink -}}
+  {{- $glossaryPath := $glossaryPage.Params.repo_source -}}
+  {{- $doc := partialCached "repo-doc.html" $glossaryPath $glossaryPath -}}
   {{- $entries := slice -}}
   {{- $cur := dict -}}
   {{- range split $doc.body "\n" -}}
@@ -49,19 +51,19 @@ end it. Returns nothing when no page renders docs/glossary.md. Call as:
   {{- end -}}
   {{- if $cur.term }}{{ $entries = $entries | append $cur }}{{ end -}}
   {{- if not $entries -}}
-    {{- errorf "glossary-terms: docs/glossary.md: no terms found; terms must be top-level bullets like \"- **Term**: definition\"" -}}
+    {{- errorf "glossary-terms: %s: no terms found; terms must be top-level bullets like \"- **Term**: definition\"" $glossaryPath -}}
   {{- end -}}
 
   {{- $seen := dict -}}
   {{- range $entries -}}
     {{- $id := urlize .term -}}
     {{- if index $seen $id -}}
-      {{- errorf "glossary-terms: docs/glossary.md: duplicate term %q" .term -}}
+      {{- errorf "glossary-terms: %s: duplicate term %q" $glossaryPath .term -}}
     {{- end -}}
     {{- $seen = merge $seen (dict $id true) -}}
     {{/* Fragment links refer to sections of the glossary itself. */ -}}
     {{- $md := replaceRE `\]\(#` (printf "](%s#" $glossaryURL) .md -}}
-    {{- $md = partial "rewrite-repo-links.html" (dict "content" $md "dir" "docs") -}}
+    {{- $md = partial "rewrite-repo-links.html" (dict "content" $md "dir" (path.Dir $glossaryPath)) -}}
     {{- $terms = $terms | append (dict "term" .term "id" $id "html" (string ($md | markdownify))) -}}
   {{- end -}}
 {{- end -}}

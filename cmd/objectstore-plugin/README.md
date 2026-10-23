@@ -4,7 +4,7 @@ The in-tree object-store plugin. It serves the `objectstore.v1` API over a Unix
 socket as a sidecar: `node` next to atelet, moving snapshot files and sandbox
 assets, and `control` next to ate-api-server, copying and deleting whole
 snapshots. `ATE_STORAGE_BACKEND` picks GCS, the default, or S3. See
-`docs/architecture.md` for where it sits.
+`docs/concepts/architecture.md` for where it sits.
 
 ## Per-actor snapshot credentials on GCS
 

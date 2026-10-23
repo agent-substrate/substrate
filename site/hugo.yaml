@@ -151,68 +151,19 @@ module:
     - source: assets
       target: assets
     # Docs are rendered straight from the repository rather than copied. Each
-    # file listed here is available to the include-file shortcode as
+    # matched file is available to the include-file shortcode as
     # repo/<path from the repository root>.
     - source: ../docs
       target: assets/repo/docs
       disableWatch: false
       files:
-        - "api-guide.md"
-        - "architecture.md"
-        - "authentication.md"
-        - "authorization.md"
-        - "csi-deployment.md"
-        - "csi-volumes.md"
-        - "dev/best-practices/metrics.md"
-        - "egress-credential-injection.md"
-        - "egress-traffic.md"
-        - "egress-trust-bundle.md"
-        - "glossary.md"
-        - "integration-repos.md"
-        - "network-egress.md"
-        - "node-storage.md"
-        - "observability.md"
-        - "operator-install.md"
-        - "postgres.md"
-        - "request-parking.md"
-        - "resource-model.md"
-        - "roadmap.md"
-        - "sandbox-asset-cache.md"
-        - "security.md"
-        - "threat-model.md"
-        - "upgrade.md"
-        - "version-skew-policy.md"
-    - source: ..
-      target: assets/repo
-      disableWatch: true
-      files:
-        - "CONTRIBUTING.md"
+        - "**.md"
+        - "!dev/**"
     - source: ../demos
       target: assets/repo/demos
       disableWatch: false
       files:
-        - "claude-code-multiplex/README.md"
-        - "counter/README.md"
-        - "egress/README.md"
-        - "jupyter/README.md"
-        - "multi-template/README.md"
-        - "parking/README.md"
-        - "sandbox/README.md"
-    - source: ../cmd/kubectl-ate
-      target: assets/repo/cmd/kubectl-ate
-      disableWatch: false
-      files:
-        - "README.md"
-    - source: ../tools/setup-gcp
-      target: assets/repo/tools/setup-gcp
-      disableWatch: false
-      files:
-        - "README.md"
-    - source: ../benchmarking
-      target: assets/repo/benchmarking
-      disableWatch: false
-      files:
-        - "README.md"
+        - "*/README.md"
     # Keep in sync with params.repo_static_dirs.
     - source: ../docs/assets
       target: static/docs/assets
