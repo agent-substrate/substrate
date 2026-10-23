@@ -17,7 +17,6 @@ package workerservice
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -25,6 +24,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
+	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/hardware"
@@ -178,10 +178,7 @@ func (s *Server) SetWorkerSandboxRuntimes(ctx context.Context, req *ateapi.SetWo
 func (s *Server) workerOnCallerNode(ctx context.Context, name string, caller *ateletauth.Caller) (*ateapi.Worker, error) {
 	worker, err := s.store.GetWorker(ctx, name)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Worker %s not found", name)
-		}
-		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
+		return nil, controlapi.MapStoreError(fmt.Errorf("while fetching worker %s: %w", name, err), "Worker %s", name)
 	}
 	if worker.GetNodeName() != caller.NodeName {
 		// Do not disclose Workers on other nodes.
@@ -202,14 +199,7 @@ func (s *Server) workerOnCallerNode(ctx context.Context, name string, caller *at
 // retries on: a concurrent write is Aborted, which the caller resends after
 // reading the Worker again.
 func workerWriteError(name, doing string, err error) error {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return apierror.NotFound("Worker %s not found", name)
-	case errors.Is(err, store.ErrUIDConflict), errors.Is(err, store.ErrVersionConflict):
-		return apierror.Aborted("concurrent update conflict, please retry")
-	default:
-		return fmt.Errorf("while %s for worker %s: %w", doing, name, err)
-	}
+	return controlapi.MapStoreError(fmt.Errorf("while %s for worker %s: %w", doing, name, err), "Worker %s", name)
 }
 
 // validateSandboxClasses rejects an entry of a class other than the one
