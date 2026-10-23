@@ -120,7 +120,7 @@ func (w *ActorWorkflow) loadPinnedActor(ctx context.Context, actorRef resources.
 	if err != nil {
 		return nil, fmt.Errorf("while reading Actor %s: %w", actorRef, err)
 	}
-	if err := validateExpectedSnapshot(actor, expected); err != nil {
+	if err := w.validateExpectedSnapshot(ctx, actor, expected); err != nil {
 		return nil, err
 	}
 	if expected != nil && !proto.Equal(actor.GetActorTemplate(), previous.GetActorTemplate()) {
