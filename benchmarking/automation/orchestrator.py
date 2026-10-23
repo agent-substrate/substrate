@@ -61,6 +61,7 @@ from util import (
     run,
     run_no_check,
 )
+from workers import SANDBOX_CLASSES
 
 
 SUBSTRATE_DIR = "/workspace/substrate"
@@ -372,9 +373,6 @@ def wait_for_job(name: str, timeout_seconds: int) -> str:
             return "failed"
         time.sleep(10)
     return "timeout"
-
-
-SANDBOX_CLASSES = ("gvisor", "microvm")
 
 
 def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:

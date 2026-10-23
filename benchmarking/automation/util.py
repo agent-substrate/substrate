@@ -120,16 +120,25 @@ def isolate_install_args(test: dict) -> list[str]:
     return [] if isolate_block(test) is None else ["--fake-data-plane"]
 
 
-def isolate_workload_args(test: dict) -> list[str]:
-    """Return the benchmarking/workloads/deploy.sh flags that tune fake-atelet
-    for a tests.yaml entry's isolate block, or none without a block."""
+def isolate_tuning_env(test: dict) -> list[str]:
+    """Return the FAKE_ATELET_<FLAG>=VALUE entries a tests.yaml entry's
+    isolate block tunes fake-atelet with, or none without a block."""
     block = isolate_block(test) or {}
-    args = []
+    entries = []
     for key, env in ISOLATE_TUNING.items():
         if key not in block:
             continue
         value = block[key]
         if isinstance(value, bool):
             value = "true" if value else "false"
-        args += ["--fake-atelet-env", f"{env}={value}"]
+        entries.append(f"{env}={value}")
+    return entries
+
+
+def isolate_workload_args(test: dict) -> list[str]:
+    """Return the benchmarking/workloads/deploy.sh flags that tune fake-atelet
+    for a tests.yaml entry's isolate block, or none without a block."""
+    args = []
+    for entry in isolate_tuning_env(test):
+        args += ["--fake-atelet-env", entry]
     return args
