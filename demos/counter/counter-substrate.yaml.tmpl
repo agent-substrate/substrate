@@ -27,9 +27,9 @@ workerSelector:
     workload: counter
 containers:
 - name: counter
-  image: ko://go.ate.dev/substrate/demos/counter
+  image: ko://go.ate.dev/substrate/demos/counter/actor
   command:
-  - /ko-app/counter
+  - /ko-app/actor
   # Exercises atenet-router's arbitrary-port ingress support: a second
   # listener a test can address by CONNECTing to <actor-dns>:9090, distinct
   # from the primary port 80 every other assertion in this demo uses.
