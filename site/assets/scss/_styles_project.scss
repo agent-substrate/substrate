@@ -1527,7 +1527,7 @@ footer {
 
 .as-cap-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 20px;
 
   @media (max-width: 900px) {
@@ -1616,6 +1616,14 @@ footer {
     line-height: 1.6;
     color: #9aa89f;
 
+    code {
+      font-size: 13px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: #18211a;
+      color: #c8d3cb;
+    }
+
     @media (max-width: 767px) {
       font-size: 14px;
       line-height: 1.55;
@@ -1648,6 +1656,125 @@ footer {
 
     @media (max-width: 767px) {
       display: none;
+    }
+  }
+}
+
+// Security ("ZERO TRUST FOR AGENTS")
+.as-sec-head {
+  align-items: flex-end;
+
+  &__left {
+    max-width: 820px;
+  }
+}
+
+.as-sec-lead {
+  margin: 4px 0 0;
+  font-size: 17px;
+  line-height: 1.65;
+  color: #9aa89f;
+  max-width: 760px;
+
+  @media (max-width: 767px) {
+    font-size: 15px;
+    line-height: 1.55;
+  }
+}
+
+.as-sec-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+
+  @media (max-width: 1180px) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  @media (max-width: 767px) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+}
+
+.as-sec-card {
+  padding: 24px;
+
+  @media (max-width: 767px) {
+    flex-direction: column;
+    padding: 20px;
+  }
+
+  &__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+  }
+
+  &__pill {
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid #243028;
+    background: #0e130f;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #9aa89f;
+    white-space: nowrap;
+  }
+}
+
+.as-sec-foot {
+  margin-top: 20px;
+  padding: 20px 24px;
+  border: 1px solid #243028;
+  border-radius: 14px;
+  background: #0e130f;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+
+  @media (max-width: 1100px) {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 18px 20px;
+    gap: 14px;
+  }
+
+  &__copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .as-example-links {
+    flex-shrink: 0;
+  }
+
+  &__label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    color: #64d86b;
+  }
+
+  &__text {
+    font-size: 14px;
+    line-height: 1.55;
+    color: #9aa89f;
+
+    code {
+      font-size: 12.5px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: #18211a;
+      color: #c8d3cb;
     }
   }
 }

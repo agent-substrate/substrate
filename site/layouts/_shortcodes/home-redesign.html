@@ -153,6 +153,104 @@ limitations under the License.
     </div>
   </section>
 
+  <!-- Security: ZERO TRUST FOR AGENTS -->
+  <section class="as-container as-section" id="security">
+    <div class="as-section__head-row as-sec-head">
+      <div class="as-section__head-left as-sec-head__left">
+        <span class="as-eyebrow">ZERO TRUST FOR AGENTS</span>
+        <h2 class="as-h2 as-h2--lg">Every agent has an identity, but no credentials, no open network, and no way out of the sandbox.</h2>
+        <p class="as-sec-lead">Agent Substrate executes untrusted actors at scale in a multi-tenant environment where workloads are dynamic and memory states migrate continuously across physical infrastructure. All security controls operate within Substrate’s sub-500ms cold-start and resume latency budget.</p>
+      </div>
+      <a href="{{ "docs/security/security/" | relURL }}" class="as-arrow-link">
+        <span>Read the security principles</span>
+        <svg class="ic" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+      </a>
+    </div>
+
+    <div class="as-sec-grid">
+      <a href="{{ "docs/guides/authentication/" | relURL }}" class="as-cap-card as-sec-card card-h">
+        <div class="as-sec-card__top">
+          <div class="as-cap-card__icon as-cap-card__icon--blue">
+            <svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>
+          </div>
+          <span class="as-sec-card__pill mono">Identity</span>
+        </div>
+        <div class="as-cap-card__body">
+          <div class="as-cap-card__title">Distinct Workload Identity</div>
+          <p class="as-cap-card__desc">Every actor gets a short-lived (1h) SPIFFE X.509 certificate and on-demand JWTs bound to its UID, distinguishing recreated actors with the same name while keeping private keys in <code class="mono">atunnel</code> outside the guest.</p>
+        </div>
+        <span class="as-cap-card__cta as-cap-card__cta--blue">
+          <span>Authentication guide</span>
+          <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+        </span>
+      </a>
+
+      <a href="{{ "docs/guides/egress-credential-injection/" | relURL }}" class="as-cap-card as-sec-card card-h">
+        <div class="as-sec-card__top">
+          <div class="as-cap-card__icon as-cap-card__icon--yellow">
+            <svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 3 3L22 7l-3-3"></path></svg>
+          </div>
+          <span class="as-sec-card__pill mono">No credentials</span>
+        </div>
+        <div class="as-cap-card__body">
+          <div class="as-cap-card__title">Zero Ambient Credentials</div>
+          <p class="as-cap-card__desc">Default actor sandboxes execute completely credential-free. The egress gateway hydrates and injects API keys and tokens out-of-band on authorized outbound calls, so the agent never holds the secret.</p>
+        </div>
+        <span class="as-cap-card__cta as-cap-card__cta--yellow">
+          <span>Credential injection</span>
+          <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+        </span>
+      </a>
+
+      <a href="{{ "docs/security/egress-security/" | relURL }}" class="as-cap-card as-sec-card card-h">
+        <div class="as-sec-card__top">
+          <div class="as-cap-card__icon as-cap-card__icon--pink">
+            <svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          </div>
+          <span class="as-sec-card__pill mono">No open network</span>
+        </div>
+        <div class="as-cap-card__body">
+          <div class="as-cap-card__title">Default-Deny &amp; Fail-Closed Egress</div>
+          <p class="as-cap-card__desc">Actors launch in isolated network namespaces with zero access to the control plane or lateral peers. Outbound traffic funnels through <code class="mono">atenet-egress</code> for host allowlists, DNS filtering, and TLS inspection.</p>
+        </div>
+        <span class="as-cap-card__cta as-cap-card__cta--pink">
+          <span>MITM &amp; egress policies</span>
+          <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+        </span>
+      </a>
+
+      <a href="{{ "docs/security/threat-model/" | relURL }}" class="as-cap-card as-sec-card card-h">
+        <div class="as-sec-card__top">
+          <div class="as-cap-card__icon as-cap-card__icon--green">
+            <svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          </div>
+          <span class="as-sec-card__pill mono">No way out</span>
+        </div>
+        <div class="as-cap-card__body">
+          <div class="as-cap-card__title">Always Sandboxed Multi-Tenancy</div>
+          <p class="as-cap-card__desc">Standard Linux containers are not sufficient or supported. Every actor runs inside a Cloud Hypervisor microVM or <code class="mono">gVisor</code> sandbox with segregated storage and scrubbed worker state between runs.</p>
+        </div>
+        <span class="as-cap-card__cta as-cap-card__cta--green">
+          <span>Threat model</span>
+          <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+        </span>
+      </a>
+    </div>
+
+    <div class="as-sec-foot">
+      <div class="as-sec-foot__copy">
+        <span class="as-sec-foot__label mono">PLUGGABLE POLICY ENFORCEMENT</span>
+        <span class="as-sec-foot__text">Extend <code class="mono">atenet-router</code> and <code class="mono">atenet-egress</code> via Envoy <code class="mono">ext_proc</code> callouts for prompt-injection scanning, DLP, and dynamic LLM authorization.</span>
+      </div>
+      <div class="as-example-links">
+        <a href="{{ "docs/security/security/" | relURL }}" class="as-example-pill">Security Overview</a>
+        <a href="{{ "docs/security/threat-model/" | relURL }}" class="as-example-pill">Threat Model</a>
+        <a href="{{ "docs/tutorials/egress/" | relURL }}" class="as-example-pill">Egress Tutorial</a>
+        <a href="{{ "docs/tutorials/sandbox/" | relURL }}" class="as-example-pill">Sandbox Tutorial</a>
+      </div>
+    </div>
+  </section>
+
   <!-- Capabilities: HOW IT WORKS -->
   <section class="as-container as-section">
     <div class="as-section__head-row">
@@ -206,21 +304,6 @@ limitations under the License.
         </div>
         <span class="as-cap-card__cta as-cap-card__cta--pink">
           <span>WorkerPools</span>
-          <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
-        </span>
-      </a>
-      <a href="{{ "docs/security/security/" | relURL }}" class="as-cap-card card-h">
-        <div class="as-cap-card__icon as-cap-card__icon--green">
-          <svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-        </div>
-        <div class="as-cap-card__body">
-          <div class="as-cap-card__title">Isolated by Default</div>
-          <p class="as-cap-card__desc">Every actor runs in a microVM or gVisor sandbox with its own network namespace. Egress is
-            denied unless a policy allows it, and the egress gateway injects credentials so the agent never holds the secret.
-          </p>
-        </div>
-        <span class="as-cap-card__cta as-cap-card__cta--green">
-          <span>Security overview</span>
           <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
         </span>
       </a>
