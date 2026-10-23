@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -634,6 +635,93 @@ func TestIssue_PausesExchangesAfterAFailure(t *testing.T) {
 	<-i.exchange(t.Context(), &refreshed)
 	if sts.calls != 3 {
 		t.Fatalf("a mint after the pause made %d STS calls in total, want 3", sts.calls)
+	}
+}
+
+func TestIssue_RetriesSoonWithoutAFallback(t *testing.T) {
+	// With no intermediary to fall back on, one failed exchange fails mints
+	// only until minRetryDelay has passed.
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	clock := now
+	sts := &fakeSTS{t: t, status: http.StatusServiceUnavailable, body: `{"error":"unavailable"}`}
+	i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return clock })
+	if _, err := i.Issue(t.Context(), "a", testGrants, false); err == nil {
+		t.Fatal("Issue succeeded against a failing STS")
+	}
+	clock = now.Add(minRetryDelay / 2)
+	if _, err := i.Issue(t.Context(), "a", testGrants, false); err == nil || !strings.Contains(err.Error(), "paused") || sts.calls != 1 {
+		t.Fatalf("a mint during the pause got %v with %d STS calls, want a paused error with 1", err, sts.calls)
+	}
+	sts.mu.Lock()
+	sts.status, sts.body = 0, ""
+	sts.mu.Unlock()
+	clock = now.Add(minRetryDelay + time.Millisecond)
+	if _, err := i.Issue(t.Context(), "a", testGrants, false); err != nil || sts.calls != 2 {
+		t.Fatalf("a mint after the pause got %v with %d STS calls, want success with 2", err, sts.calls)
+	}
+}
+
+func TestIssue_RetryPauseDoublesAndResets(t *testing.T) {
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	clock := now
+	src := &changingSource{tok: oauth2.Token{AccessToken: "source-1", Expiry: now.Add(time.Hour)}}
+	sts := &fakeSTS{t: t, status: http.StatusServiceUnavailable, body: `{"error":"unavailable"}`}
+	i := newTestIssuer(t, sts, src, func() time.Time { return clock })
+	for _, want := range []time.Duration{1, 2, 4, 8, 16, 30, 30} {
+		if _, err := i.Issue(t.Context(), "a", testGrants, true); err == nil {
+			t.Fatal("Issue succeeded against a failing STS")
+		}
+		f := i.failure.Load()
+		if f == nil || f.delay != want*time.Second {
+			t.Fatalf("pause after failure = %v, want %v", f, want*time.Second)
+		}
+		clock = f.until
+	}
+	// A success clears the pause, so the next failure starts at
+	// minRetryDelay again.
+	sts.mu.Lock()
+	sts.status, sts.body = 0, ""
+	sts.mu.Unlock()
+	if _, err := i.Issue(t.Context(), "a", testGrants, true); err != nil {
+		t.Fatal(err)
+	}
+	src.mu.Lock()
+	src.tok = oauth2.Token{AccessToken: "source-2", Expiry: clock.Add(minServeLifetime - time.Minute)}
+	src.mu.Unlock()
+	sts.mu.Lock()
+	sts.status, sts.body = http.StatusServiceUnavailable, `{"error":"unavailable"}`
+	sts.mu.Unlock()
+	// The previous intermediary now has under minServeLifetime left, so the
+	// mint waits for the exchange, which fails. It may still fall back.
+	clock = clock.Add(time.Hour - minServeLifetime + time.Minute)
+	if _, err := i.Issue(t.Context(), "b", testGrants, true); err != nil && !strings.Contains(err.Error(), "503") {
+		t.Fatal(err)
+	}
+	if f := i.failure.Load(); f == nil || f.delay != minRetryDelay {
+		t.Fatalf("pause after a success and a new failure = %v, want %v", f, minRetryDelay)
+	}
+}
+
+func TestIssue_AnExchangeTimeoutIsNotTheCallersDeadline(t *testing.T) {
+	// The exchange times out on its own deadline while the caller's has time
+	// left. Neither that mint nor the paused ones after it may report
+	// DeadlineExceeded, which the exchange would pass on as the caller's code.
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	sts := &fakeSTS{t: t}
+	srv := httptest.NewServer(http.HandlerFunc(sts.handler))
+	t.Cleanup(srv.Close)
+	target, _ := url.Parse(srv.URL)
+	i, err := New(t.Context(), "", WithTokenSource(staticSource(now.Add(time.Hour))), WithClock(func() time.Time { return now }),
+		WithHTTPClient(&http.Client{Transport: redirect{sts: sts, target: target}, Timeout: 50 * time.Millisecond}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sts.hold(t, "source-token")
+	for _, what := range []string{"the mint that ran the exchange", "a paused mint"} {
+		_, err := i.Issue(t.Context(), "a", testGrants, false)
+		if err == nil || errors.Is(err, context.DeadlineExceeded) || status.Code(err) != codes.Unknown {
+			t.Fatalf("%s got %v (code %v), want an error without a code or context.DeadlineExceeded", what, err, status.Code(err))
+		}
 	}
 }
 
