@@ -679,11 +679,13 @@ groups:
               value: final
               brief: >
                 The last sample of an activation, written when a checkpoint, a
-                terminate, a graceful shutdown, or a re-host on ateworker-microvm
-                ends it. When the sandbox is still running, ateworker reads the
-                stats just before the teardown; when no read runs, or the read
-                fails or times out, it repeats the newest measured sample, or
-                writes a pending record when there is none.
+                terminate, a graceful shutdown, a sandbox that dies on its own,
+                or a re-host on ateworker-microvm ends it. When the sandbox is
+                still running, ateworker reads the stats just before the
+                teardown. After a gVisor sandbox dies, it reads the CPU and keeps
+                the newest memory taken while the sandbox ran. When no read runs,
+                or the read fails or times out, it repeats the newest measured
+                sample, or writes a pending record when there is none.
       - id: ate.stats.memory.usage
         stability: development
         type: int

@@ -367,6 +367,11 @@ type AteWorkerService struct {
 	// micro-VM runtime. nil means the real read.
 	readSandboxCgroup func(dir string) (cgroupstats.Sample, error)
 
+	// terminateDead overrides terminateWorkload for a sandbox that died, when
+	// set. Only tests set it: the real teardown needs the tunnel. nil means
+	// terminateWorkload.
+	terminateDead func(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error
+
 	// flags holds the watched JSON flag configuration.
 	flags *flagStore
 }
@@ -1230,12 +1235,9 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 
 	attribution := workerstats.ActorAttributionFromRequest(req)
 
-	hosted := s.lookupActor(attribution.UID)
-	if hosted != nil {
-		s.readFinal(ctx, hosted)
-	}
-	err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
-	s.recordFinalIfEnded(ctx, hosted)
+	err := s.endActivation(ctx, s.lookupActor(attribution.UID), s.readFinal, func() error {
+		return s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}

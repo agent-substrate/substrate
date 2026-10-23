@@ -24,11 +24,12 @@ import (
 	"go.ate.dev/substrate/internal/workerstats"
 )
 
-// Recorder is a stdout handler that keeps the kind and source of each record.
+// Recorder is a stdout handler that keeps the attributes of each record.
 type Recorder struct {
 	mu    sync.Mutex
 	kinds []string
 	srcs  []string
+	attrs []map[string]string
 }
 
 // NewEmitter returns an emitter that writes every record to a new Recorder.
@@ -51,12 +52,22 @@ func (r *Recorder) Sources() []string {
 	return append([]string(nil), r.srcs...)
 }
 
+// Value is the attribute key of the i-th record, or "" when it is absent.
+func (r *Recorder) Value(i int, key string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.attrs[i][key]
+}
+
 func (r *Recorder) Enabled(context.Context, slog.Level) bool { return true }
 
 func (r *Recorder) Handle(_ context.Context, rec slog.Record) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	attrs := map[string]string{}
+	r.attrs = append(r.attrs, attrs)
 	rec.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.String()
 		switch a.Key {
 		case string(ateattr.StatsKindKey):
 			r.kinds = append(r.kinds, a.Value.String())
