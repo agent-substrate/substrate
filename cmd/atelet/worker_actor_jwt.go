@@ -23,7 +23,7 @@ import (
 	"k8s.io/utils/lru"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
-	"go.ate.dev/substrate/internal/objectstoreplugin/exchange"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorauthz"
 )
 
 // actorRef identifies the actor a transfer is for, as atelet's RPCs carry it.
@@ -78,7 +78,7 @@ func (j *workerActorJWTs) get(ctx context.Context, actor actorRef) (string, erro
 	resp, err := j.workers.MintWorkerActorJwt(ctx, &ateapi.MintWorkerActorJwtRequest{
 		Actor:     &ateapi.ObjectRef{Atespace: actor.atespace, Name: actor.name},
 		ActorUid:  actor.uid,
-		Audiences: []string{exchange.ActorJWTAudience},
+		Audiences: []string{actorauthz.Audience},
 	})
 	switch status.Code(err) {
 	case codes.OK:

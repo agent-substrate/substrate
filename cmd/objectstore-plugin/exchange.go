@@ -29,6 +29,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorauthz"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorlookup"
 	"go.ate.dev/substrate/internal/objectstoreplugin/exchange"
 	"go.ate.dev/substrate/internal/objectstoreplugin/gcsissuer"
@@ -74,7 +75,7 @@ func newExchangeService(ctx context.Context, cfg exchangeConfig) (exchangepb.Cre
 	if _, err := keys.Keys(ctx); err != nil {
 		return nil, nil, fmt.Errorf("while reading the actor JWT key set: %w", err)
 	}
-	verifier := oidcjwt.NewVerifier(cfg.issuer, []string{exchange.ActorJWTAudience}, keys, oidcjwt.WithSubstrateClaims())
+	verifier := oidcjwt.NewVerifier(cfg.issuer, []string{actorauthz.Audience}, keys, oidcjwt.WithSubstrateClaims())
 	lookup, err := actorlookup.New(cfg.ateapi)
 	if err != nil {
 		return nil, nil, err
