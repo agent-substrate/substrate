@@ -51,16 +51,8 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
-    # Anonymous Docker Hub pulls are rate limited per runner IP. mirror.gcr.io
-    # is meant to be used as a daemon mirror; images it lacks still come from
-    # Docker Hub.
     - name: Use the Docker Hub mirror
-      run: |
-        cfg=/etc/docker/daemon.json
-        [ -s "$cfg" ] || echo '{}' | sudo tee "$cfg" >/dev/null
-        sudo jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' "$cfg" | sudo tee "$cfg.new" >/dev/null
-        sudo mv "$cfg.new" "$cfg"
-        sudo systemctl restart docker
+      run: hack/ci-docker-registry-mirror.sh
     # we only test on amd64, make sure everything still builds for arm64
     - name: build for arm64
       run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
