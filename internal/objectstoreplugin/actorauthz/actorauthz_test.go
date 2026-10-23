@@ -225,10 +225,7 @@ func TestAuthorize(t *testing.T) {
 	// Read-write on the actor's own prefix at the tag's location, read-only
 	// on the tag it was created from.
 	want := &Decision{
-		Atespace:  atespace,
-		ActorName: name,
-		ActorUID:  uid,
-		Node:      "node-1",
+		ActorUID: uid,
 		Grants: []actorscope.Grant{
 			{Prefix: storagePrefix(t, "gs://snaps/root/atespaces/"+atespace+"/actors/"+uid), Access: actorscope.ReadWrite},
 			{Prefix: storagePrefix(t, tagURI), Access: actorscope.ReadOnly},

@@ -53,15 +53,11 @@ type Verifier interface {
 	Verify(ctx context.Context, jwt string, now time.Time) (*oidcjwt.Claims, error)
 }
 
-// Decision is what Authorize allowed: the actor a credential may be issued
-// for, the node the token was minted for, and the storage grants the
-// credential must be limited to.
+// Decision is what Authorize allowed: the UID of the actor a credential may
+// be issued for, and the storage grants the credential must be limited to.
 type Decision struct {
-	Atespace  string
-	ActorName string
-	ActorUID  string
-	Node      string
-	Grants    []actorscope.Grant
+	ActorUID string
+	Grants   []actorscope.Grant
 }
 
 // Authorizer runs the checks.
@@ -121,14 +117,7 @@ func (a *Authorizer) Authorize(ctx context.Context, jwt string) (*Decision, erro
 	if len(grants) == 0 {
 		return nil, status.Error(codes.PermissionDenied, "actor has no snapshot location to grant")
 	}
-	meta := actor.GetMetadata()
-	return &Decision{
-		Atespace:  meta.GetAtespace(),
-		ActorName: meta.GetName(),
-		ActorUID:  meta.GetUid(),
-		Node:      claims.Substrate.Node,
-		Grants:    grants,
-	}, nil
+	return &Decision{ActorUID: actor.GetMetadata().GetUid(), Grants: grants}, nil
 }
 
 // actorStillOnNode refuses a token minted for a node the actor has since
