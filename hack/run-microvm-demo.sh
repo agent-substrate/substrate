@@ -19,7 +19,7 @@
 # and calls this script), mirroring install-ate.sh / install-ate-kind.sh.
 #
 # Composes:
-#   1. hack/install-ate.sh deploy ate-system            (control plane + micro-VM assets and SandboxConfig)
+#   1. hack/install-ate.sh deploy ate-system            (control plane + microVM assets and SandboxConfig)
 #   2. hack/install-ate.sh deploy demo counter-microvm  (worker pool manifest, atespace, and
 #                                                        ActorTemplate through the ate API)
 #
@@ -74,7 +74,7 @@ log() {
   echo -e "${COLOR_CYAN}[run-microvm-demo]: $*${COLOR_RESET}"
 }
 
-# --- 1. deploy the control plane (includes micro-VM assets + SandboxConfig) -
+# --- 1. deploy the control plane (includes microVM assets + SandboxConfig) -
 log "Deploying the ate control plane (deploy ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ATE_INSTALL_KIND itself.

@@ -59,7 +59,7 @@ var deployAteSystemCmd = &cobra.Command{
 
 This installs the CRDs and RBAC, the podcertificate controller and the secrets
 it signs, PostgreSQL, ate-api-server, ate-idp-server, ate-controller, the atenet
-dataplane, the default gVisor and micro-VM SandboxConfigs (staging the micro-VM
+dataplane, the default gVisor and microVM SandboxConfigs (staging the microVM
 guest assets to the cluster object store), and the atelet DaemonSet, then waits
 for each to roll out.
 
@@ -146,7 +146,7 @@ var deployPodCertControllerCmd = &cobra.Command{
 
 var deploySandboxConfigCmd = &cobra.Command{
 	Use:   "sandboxconfig",
-	Short: "Deploy the SandboxConfig admission policy and the default gVisor and micro-VM SandboxConfigs only",
+	Short: "Deploy the SandboxConfig admission policy and the default gVisor and microVM SandboxConfigs only",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.DeploySandboxConfig(cmd.Context(), env.Cfg.Resolved().Bool("skipMicroVMDeps"))
@@ -192,7 +192,7 @@ func init() {
 			Key: "skipMicroVMDeps", Env: "ATE_INSTALL_SKIP_MICROVM_DEPS", Flag: "skip-microvm-deps",
 			Kind: config.KindBool, Default: "false",
 			Commands: []string{deployAteSystemPath, deploySandboxConfigPath},
-			Usage:    "Skip staging micro-VM guest assets and applying the microvm SandboxConfig",
+			Usage:    "Skip staging microVM guest assets and applying the microvm SandboxConfig",
 		},
 	)
 	config.BindCommandFlags(deployAteSystemPath, deployAteSystemCmd.Flags())
