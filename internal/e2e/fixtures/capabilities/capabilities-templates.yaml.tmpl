@@ -14,7 +14,7 @@
 
 # The capabilities fixture's ActorTemplates: protojson-shaped
 # ateapi.ActorTemplate documents (NOT the ate.dev/v1 CRD), created
-# through the ate API by e2e.DeploySubstrateFixture. Two templates run the
+# through the ate API by e2e.DeploySubstrateFixture. Three templates run the
 # same probe image and differ only in securityContext.capabilities, so the
 # suite can compare what the kernel reports inside the sandbox against what
 # the template asked for.
@@ -58,9 +58,8 @@ containers:
 - name: probe
   image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
-  # The probe binds :80, which is exactly what NET_BIND_SERVICE permits, so
-  # this template also proves the granted capability is usable and not merely
-  # present in the mask: without it the container could not become ready.
+  # Drop ALL, then add one: the mask the kernel reports must hold exactly
+  # NET_BIND_SERVICE.
   securityContext:
     capabilities:
       drop: ["ALL"]
@@ -87,6 +86,8 @@ containers:
 - name: probe
   image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
+  # Every capability dropped, and the probe still binds :80: both runtimes
+  # lift the privileged-port limit, so the golden bake fails if that regresses.
   securityContext:
     capabilities:
       drop: ["ALL"]

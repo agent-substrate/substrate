@@ -78,8 +78,9 @@ func TestActorCapabilities(t *testing.T) {
 		template: "caps-exact",
 		want:     []string{"NET_BIND_SERVICE"},
 	}, {
-		// The probe listens on port 80, so the resume alone proves a low port
-		// binds without NET_BIND_SERVICE on this runtime.
+		// The golden bake in deployFixture is what proves port 80 binds without
+		// NET_BIND_SERVICE; this row checks the restored actor still answers
+		// with an empty set.
 		name:     "drop ALL still binds port 80",
 		template: "caps-none",
 		want:     nil,
@@ -139,8 +140,8 @@ func assertSameCapabilities(t *testing.T, set string, got, want []string) {
 
 // deployFixture installs the fixture for the sandbox class under test and
 // returns its atespace (which also names the namespace it created, carrying
-// the class suffix so the gVisor and micro-VM lanes never share one). Both
-// templates are golden-snapshotted when this returns; a template whose
+// the class suffix so the gVisor and micro-VM lanes never share one). Every
+// template is golden-snapshotted when this returns; a template whose
 // container cannot start — for example because a needed capability was
 // dropped — fails the deploy with the template's error message rather than
 // timing out per subtest.
