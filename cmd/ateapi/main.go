@@ -41,6 +41,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
 	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/cachesync"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/localca"
@@ -65,12 +66,16 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 )
 
 // maxRPCDeadline is the max deadline for all RPC methods exposed by this server.
 const maxRPCDeadline = 10 * time.Minute
 
 const minResyncInterval = 250 * time.Millisecond
+
+// cacheSyncTimeout bounds the startup wait for required Kubernetes caches.
+const cacheSyncTimeout = time.Minute
 
 var (
 	configFile = pflag.String("config-file", "", "API server config file")
@@ -115,6 +120,8 @@ var (
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
+	watchNamespace = pflag.String("watch-namespace", "", "Namespace containing the WorkerPools to watch. Empty watches all namespaces. Does not change the system namespace or cluster-scoped resources.")
+
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
@@ -135,7 +142,6 @@ func main() {
 	if *configFile == "" {
 		serverboot.Fatal(ctx, "--config-file must be specified", nil)
 	}
-
 	config, err := apiconfig.LoadConfig(*configFile)
 	if err != nil {
 		serverboot.Fatal(ctx, "Error while loading config file", err)
@@ -145,6 +151,10 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid log level in config file", err)
 	}
 
+	if err := serverboot.ValidateWatchNamespace(*watchNamespace); err != nil {
+		serverboot.Fatal(ctx, "Invalid --watch-namespace", err)
+	}
+	slog.InfoContext(ctx, "Resolved workload watch scope", "watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "")
 	if err := loadFlagsFromEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
@@ -282,7 +292,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}
 
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
+	ateFactory := externalversions.NewSharedInformerFactoryWithOptions(ateClient, 0, externalversions.WithNamespace(*watchNamespace))
 	workerPoolLister := ateFactory.Ate().V1().WorkerPools().Lister()
 	csiDriverConfigLister := ateFactory.Ate().V1().CSIDriverConfigs().Lister()
 
@@ -296,9 +306,18 @@ func main() {
 	ateFactory.Start(stopCh)
 	scInformerFactory.Start(stopCh)
 
-	ateletPodInformerFactory.WaitForCacheSync(stopCh)
-	ateFactory.WaitForCacheSync(stopCh)
-	scInformerFactory.WaitForCacheSync(stopCh)
+	// WorkerPools only seed zero-valued metric series, so their informer is
+	// optional: it keeps retrying past the diagnostic timeout without gating
+	// API availability.
+	cachesync.OptionalSync(shutdownCtx, cacheSyncTimeout, map[string]cache.InformerSynced{
+		"WorkerPools": ateFactory.Ate().V1().WorkerPools().Informer().HasSynced,
+	}, func(ctx context.Context, err error) {
+		slog.WarnContext(ctx, "WorkerPool cache has not synced; worker-count metrics may omit empty pools",
+			"watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "", "err", err)
+	})
+	if err := cachesync.WaitForCacheSync(shutdownCtx, cacheSyncTimeout, requiredKubernetesCaches(ateletPodInformer, ateFactory, scInformerFactory)); err != nil {
+		serverboot.Fatal(ctx, "Failed to sync required Kubernetes caches", err)
+	}
 
 	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List); err != nil {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
@@ -593,6 +612,14 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 		}
 	}
 	return nil, fmt.Errorf("connect to PostgreSQL after %d attempts: %w", postgresConnectTries, connectErr)
+}
+
+func requiredKubernetesCaches(ateletPods cache.SharedIndexInformer, ateFactory externalversions.SharedInformerFactory, scFactory informers.SharedInformerFactory) map[string]cache.InformerSynced {
+	return map[string]cache.InformerSynced{
+		"atelet Pods":      ateletPods.HasSynced,
+		"CSIDriverConfigs": ateFactory.Ate().V1().CSIDriverConfigs().Informer().HasSynced,
+		"StorageClasses":   scFactory.Storage().V1().StorageClasses().Informer().HasSynced,
+	}
 }
 
 // newKubeClients builds the standard Kubernetes clientset and the ate

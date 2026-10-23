@@ -33,6 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
@@ -464,28 +465,51 @@ func TestStatsPollerCPUDeltaSaturatesCorruptCounter(t *testing.T) {
 // TestNewWorkerPoolFetcher pins the fetcher's ingestion rules: a labeled worker
 // maps by pod UID, an empty label value names no pool and never enters the
 // map (the presence-only selector matches it anyway), and unlabeled pods are
-// not workers at all. The fake clientset honors label selectors but not the
-// spec.nodeName field selector, so node scoping is not assertable here.
+// not workers at all. The fake clientset does not filter by spec.nodeName,
+// so check that selector on the LIST request.
 func TestNewWorkerPoolFetcher(t *testing.T) {
-	client := k8sfake.NewSimpleClientset(
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-			Name: "worker-a", Namespace: "pool-ns", UID: "uid-a",
-			Labels: map[string]string{workerPoolLabel: "pool-a"},
-		}},
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-			Name: "worker-empty", Namespace: "pool-ns", UID: "uid-empty",
-			Labels: map[string]string{workerPoolLabel: ""},
-		}},
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-			Name: "bystander", Namespace: "other-ns", UID: "uid-bystander",
-		}},
-	)
+	for _, namespace := range []string{"pool-ns", ""} {
+		t.Run("namespace="+namespace, func(t *testing.T) {
+			client := k8sfake.NewClientset(
+				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+					Name: "worker-a", Namespace: "pool-ns", UID: "uid-a",
+					Labels: map[string]string{workerPoolLabel: "pool-a"},
+				}},
+				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+					Name: "worker-other", Namespace: "other-ns", UID: "uid-other",
+					Labels: map[string]string{workerPoolLabel: "pool-a"},
+				}},
+				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+					Name: "worker-empty", Namespace: "pool-ns", UID: "uid-empty",
+					Labels: map[string]string{workerPoolLabel: ""},
+				}},
+				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+					Name: "bystander", Namespace: "other-ns", UID: "uid-bystander",
+				}},
+			)
 
-	got := newWorkerPoolFetcher(client, "node-1")(context.Background())
+			got := newWorkerPoolFetcher(client, namespace, "node-1")(t.Context())
 
-	want := map[string]workerPoolRef{"uid-a": {namespace: "pool-ns", name: "pool-a"}}
-	if diff := cmp.Diff(want, got, cmp.AllowUnexported(workerPoolRef{})); diff != "" {
-		t.Errorf("newWorkerPoolFetcher mismatch (-want +got):\n%s", diff)
+			want := map[string]workerPoolRef{"uid-a": {namespace: "pool-ns", name: "pool-a"}}
+			if namespace == "" {
+				want["uid-other"] = workerPoolRef{namespace: "other-ns", name: "pool-a"}
+			}
+			if diff := cmp.Diff(want, got, cmp.AllowUnexported(workerPoolRef{})); diff != "" {
+				t.Errorf("newWorkerPoolFetcher mismatch (-want +got):\n%s", diff)
+			}
+			actions := client.Actions()
+			if len(actions) != 1 {
+				t.Fatalf("got %d API requests, want one LIST", len(actions))
+			}
+			action, ok := actions[0].(k8stesting.ListAction)
+			if !ok || action.GetNamespace() != namespace {
+				t.Fatalf("got %v, want LIST in namespace %q", actions[0], namespace)
+			}
+			selectors := action.GetListRestrictions()
+			if selectors.Fields.String() != "spec.nodeName=node-1" || selectors.Labels.String() != workerPoolLabel {
+				t.Errorf("LIST selectors = %v, want node-1 and %s", selectors, workerPoolLabel)
+			}
+		})
 	}
 }
 
