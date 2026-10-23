@@ -139,10 +139,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, nil, fmt.Errorf("while getting actor from DB: %w", err)
+		return nil, nil, MapStoreError(fmt.Errorf("while getting actor from DB: %w", err), "Actor %s", actorRef)
 	}
 
 	// If the actor is already running, there is no pending restore to prepare
@@ -223,10 +220,7 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	}
 	storedActor, updateErr := w.store.UpdateActor(ctx, actorRef, updatePrecondition, persistVolumes)
 	if updateErr != nil {
-		if errors.Is(updateErr, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while updating actor after volume creation: %w", updateErr)
+		return nil, MapStoreError(fmt.Errorf("while updating actor after volume creation: %w", updateErr), "Actor %s", actorRef)
 	}
 	return storedActor, nil
 }
@@ -945,10 +939,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
+		return nil, MapStoreError(err, "Actor %s", actorRef)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, nil

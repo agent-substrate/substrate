@@ -119,10 +119,7 @@ func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resourc
 
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, nil, fmt.Errorf("while fetching actor: %w", err)
+		return nil, nil, MapStoreError(fmt.Errorf("while fetching actor: %w", err), "Actor %s", actorRef)
 	}
 
 	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
@@ -160,10 +157,7 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while setting actor state to REVERTING: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while setting actor state to REVERTING: %w", err), "Actor %s", actorRef)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationRevert)
 	return storedActor, nil
@@ -291,10 +285,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
+		return nil, MapStoreError(err, "Actor %s", actorRef)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationRevert)
 	w.releaseDroppedSnapshots(ctx, latestActor, storedActor)

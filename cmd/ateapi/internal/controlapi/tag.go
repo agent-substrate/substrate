@@ -54,7 +54,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapi.CreateTagRequest
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.FailedPrecondition("Actor %s not found", actorRef)
 		}
-		return nil, err
+		return nil, MapStoreError(err, "Tag %s", resources.TagRefFromTag(req.GetTag()))
 	}
 	return tag, nil
 }
@@ -70,11 +70,8 @@ func (s *RPCService) GetTag(ctx context.Context, req *ateapi.GetTagRequest) (*at
 	}
 	tagRef := resources.TagRefFromObjectRef(req.GetTag())
 	tag, err := s.impl.GetTag(ctx, tagRef)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Tag %s not found", tagRef)
-	}
 	if err != nil {
-		return nil, fmt.Errorf("while getting tag: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while getting tag: %w", err), "Tag %s", tagRef)
 	}
 	return tag, nil
 }
@@ -90,7 +87,7 @@ func (s *RPCService) ListTags(ctx context.Context, req *ateapi.ListTagsRequest) 
 	}
 	page, err := s.impl.ListTags(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
 	if err != nil {
-		return nil, mapListError(fmt.Errorf("while listing tags: %w", err))
+		return nil, MapStoreError(fmt.Errorf("while listing tags: %w", err), "Tags")
 	}
 	return &ateapi.ListTagsResponse{Tags: page.Items, NextPageToken: page.NextPageToken}, nil
 }
@@ -146,22 +143,7 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapi.UpdateTagRequest
 		if errors.Is(err, errTagPending) {
 			return nil, apierror.FailedPrecondition("Tag %s/%s is still being created", tagRef.Atespace, tagRef.Name)
 		}
-		if errors.Is(err, store.ErrImmutableField) {
-			return nil, apierror.InvalidArgument("while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
-		}
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Tag %s/%s not found with uid %s", tagRef.Atespace, tagRef.Name, in.GetMetadata().GetUid())
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Tag %s/%s not found", tagRef.Atespace, tagRef.Name)
-		}
-		if errors.Is(err, store.ErrPreconditionRequired) {
-			return nil, apierror.InvalidArgument("while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
-		}
-		return nil, fmt.Errorf("while updating tag: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while updating tag: %w", err), "Tag %s", tagRef)
 	}
 	return storedTag, nil
 }

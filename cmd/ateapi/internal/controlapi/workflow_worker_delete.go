@@ -115,16 +115,7 @@ func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name strin
 		return alreadyDeleting, nil
 	}
 	if err != nil {
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
-		}
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Worker %s not found", name)
-		}
-		return nil, fmt.Errorf("while marking worker for deletion: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while marking worker for deletion: %w", err), "Worker %s", name)
 	}
 	return marked, nil
 }
@@ -286,10 +277,8 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 	case errors.Is(err, store.ErrNotFound):
 		// The actor was deleted out from under us; nothing points here anymore.
 		return nil
-	case errors.Is(err, store.ErrUIDConflict), errors.Is(err, store.ErrVersionConflict):
-		return apierror.Aborted("concurrent update conflict, please retry")
 	default:
-		return fmt.Errorf("while releasing actor from worker %s: %w", name, err)
+		return MapStoreError(fmt.Errorf("while releasing actor from worker %s: %w", name, err), "Actor %s", actorRef)
 	}
 
 	if !wasAlreadyCrashed {
@@ -381,15 +370,7 @@ func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, worker *ateapi.Wor
 	precondition := store.DeletePreconditions{UID: worker.GetMetadata().GetUid()}
 	deleted, err := w.store.DeleteWorker(ctx, name, precondition)
 	if err != nil {
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			return nil, apierror.NotFound("Worker %s not found", name)
-		case errors.Is(err, store.ErrUIDConflict):
-			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
-		case errors.Is(err, store.ErrVersionConflict):
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while deleting worker from DB: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while deleting worker from DB: %w", err), "Worker %s", name)
 	}
 	return deleted, nil
 }

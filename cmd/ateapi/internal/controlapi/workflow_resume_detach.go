@@ -149,10 +149,7 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while recording the detach of Actor %s from node %q: %w", actorRef, node, err)
+		return nil, MapStoreError(fmt.Errorf("while recording the detach of Actor %s from node %q: %w", actorRef, node, err), "Actor %s", actorRef)
 	}
 	return stored, nil
 }
@@ -175,10 +172,7 @@ func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.A
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef)
-		}
-		return nil, fmt.Errorf("while releasing Actor %s from deleted node %q: %w", actorRef, node, err)
+		return nil, MapStoreError(fmt.Errorf("while releasing Actor %s from deleted node %q: %w", actorRef, node, err), "Actor %s", actorRef)
 	}
 	slog.InfoContext(ctx, "Released actor from its deleted node to restore its snapshot's upload on another node",
 		slog.Any("actor", actorRef),

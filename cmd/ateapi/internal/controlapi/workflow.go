@@ -16,7 +16,6 @@ package controlapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -28,7 +27,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/internal/actorevent"
-	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/pluginsocket"
 	"go.ate.dev/substrate/internal/resources"
@@ -247,10 +245,7 @@ type leaseHolder interface {
 func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) (context.Context, *store.Lease, error) {
 	lease, err := holder.AcquireLease(ctx, key)
 	if err != nil {
-		if errors.Is(err, store.ErrLeaseConflict) {
-			return nil, nil, apierror.Aborted("another operation is in progress for this %s", subject)
-		}
-		return nil, nil, fmt.Errorf("while acquiring lease: %w", err)
+		return nil, nil, MapStoreError(fmt.Errorf("while acquiring lease: %w", err), "%s", subject)
 	}
 
 	return lease.Context(), lease, nil
@@ -262,9 +257,9 @@ func actorLeaseKey(actorRef resources.ActorRef) string {
 }
 
 func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
-	return acquireLease(ctx, w.store, actorLeaseKey(actorRef), "actor")
+	return acquireLease(ctx, w.store, actorLeaseKey(actorRef), "Actor "+actorRef.String())
 }
 
 func acquireTagLease(ctx context.Context, holder leaseHolder, tagRef resources.TagRef) (context.Context, *store.Lease, error) {
-	return acquireLease(ctx, holder, "lease:tag:"+tagRef.Atespace+":"+tagRef.Name, "Tag")
+	return acquireLease(ctx, holder, "lease:tag:"+tagRef.Atespace+":"+tagRef.Name, "Tag "+tagRef.String())
 }

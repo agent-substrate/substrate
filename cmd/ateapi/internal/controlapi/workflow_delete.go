@@ -305,10 +305,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 			return nil
 		})
 		if err != nil {
-			if errors.Is(err, store.ErrVersionConflict) {
-				return nil, apierror.Aborted("concurrent update conflict, please retry")
-			}
-			return nil, err
+			return nil, MapStoreError(err, "Actor %s", actorRef)
 		}
 		latestActor = updatedActor
 	}
@@ -338,16 +335,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		return alreadyDeleting, nil
 	}
 	if err != nil {
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
-		}
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, fmt.Errorf("while marking actor for deletion: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while marking actor for deletion: %w", err), "Actor %s", actorRef)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationDelete)
 	return storedActor, nil
@@ -453,16 +441,7 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapi.Actor
 	precondition := store.DeletePreconditions{UID: actor.GetMetadata().GetUid()}
 	deleted, err := w.store.DeleteActor(ctx, actorRef, precondition)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
-		}
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while deleting actor from DB: %w", err), "Actor %s", actorRef)
 	}
 	logActorDeleted(ctx, deleted, ateattr.OperationDelete)
 	return deleted, nil

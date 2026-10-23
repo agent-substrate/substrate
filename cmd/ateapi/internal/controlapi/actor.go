@@ -155,13 +155,10 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 	// Save the data in the storage layer.
 	stored, err := s.store.CreateActor(ctx, outActor)
 	if err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, apierror.AlreadyExists("Actor %s already exists", name)
-		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
 			return nil, apierror.FailedPrecondition("Atespace %s not found", atespace)
 		}
-		return nil, fmt.Errorf("while recording actor: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while recording actor: %w", err), "Actor %s", name)
 	}
 
 	// Without this an actor that is created and never resumed has no record at
@@ -210,10 +207,8 @@ func (s *RPCService) GetActor(ctx context.Context, req *ateapi.GetActorRequest) 
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	actor, err := s.impl.GetActor(ctx, actorRef)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Actor %s not found", actorRef)
-	} else if err != nil {
-		return nil, fmt.Errorf("while getting actor from DB: %w", err)
+	if err != nil {
+		return nil, MapStoreError(fmt.Errorf("while getting actor from DB: %w", err), "Actor %s", actorRef)
 	}
 	return actor, nil
 }
@@ -229,7 +224,7 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapi.ListActorsReque
 
 	page, err := s.impl.ListActors(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
 	if err != nil {
-		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
+		return nil, MapStoreError(fmt.Errorf("while listing actors in db: %w", err), "Actors")
 	}
 	return &ateapi.ListActorsResponse{
 		Actors:        page.Items,
@@ -336,19 +331,7 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("actor %s not found", actorRef)
-		}
-		if errors.Is(err, store.ErrPreconditionRequired) {
-			return nil, apierror.InvalidArgument("while updating actor %s: %v", actorRef, err)
-		}
-		return nil, fmt.Errorf("while updating actor: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while updating actor: %w", err), "Actor %s", actorRef)
 	}
 	return storedActor, nil
 }
@@ -473,13 +456,7 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapi.ResumeActorReq
 
 	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, err
+		return nil, MapStoreError(err, "Actor %s", actorRef)
 	}
 
 	setSpanActorAttributes(ctx, actor)
@@ -495,13 +472,7 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorR
 
 	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()))
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, err
+		return nil, MapStoreError(err, "Actor %s", actorRef)
 	}
 	setSpanActorAttributes(ctx, actor)
 	return &ateapi.SuspendActorResponse{Actor: actor}, nil
@@ -513,10 +484,7 @@ func (s *RPCService) CrashActorReportedByWorker(ctx context.Context, actorRef re
 	setSpanActorRefAttributes(ctx, actorRef)
 	actor, err := s.actorWorkflow.CrashActorReportedByWorker(ctx, actorRef, actorUID, workerName, message)
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
+		return nil, MapStoreError(err, "Actor %s", actorRef)
 	}
 	setSpanActorAttributes(ctx, actor)
 	return actor, nil
@@ -531,13 +499,7 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapi.RevertActorReq
 
 	actor, err := s.actorWorkflow.RevertActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, err
+		return nil, MapStoreError(err, "Actor %s", actorRef)
 	}
 	setSpanActorAttributes(ctx, actor)
 	return &ateapi.RevertActorResponse{Actor: actor}, nil
@@ -553,11 +515,10 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapi.MintActorJwtR
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue JWTs during actor boot / resume.
-	dbActor, err := s.impl.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("actor not found")
-	} else if err != nil {
-		return nil, fmt.Errorf("while retrieving actor: %w", err)
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	dbActor, err := s.impl.GetActor(ctx, actorRef)
+	if err != nil {
+		return nil, MapStoreError(fmt.Errorf("while retrieving actor: %w", err), "Actor %s", actorRef)
 	}
 
 	// We only issue tokens with audience bindings.
@@ -625,11 +586,10 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapi.MintA
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue certificates during actor boot / resume.
-	dbActor, err := s.impl.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("actor not found")
-	} else if err != nil {
-		return nil, fmt.Errorf("while retrieving actor: %w", err)
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	dbActor, err := s.impl.GetActor(ctx, actorRef)
+	if err != nil {
+		return nil, MapStoreError(fmt.Errorf("while retrieving actor: %w", err), "Actor %s", actorRef)
 	}
 	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
 		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")
