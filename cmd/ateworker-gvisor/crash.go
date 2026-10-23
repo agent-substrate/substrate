@@ -69,9 +69,15 @@ func (s *AteWorkerService) watchSandbox(ctx context.Context, hosted *hostedActor
 		ours := s.lookupActor(attribution.UID) == hosted && !hosted.stopping.Load()
 		if ours {
 			slog.WarnContext(ctx, "Sandbox died", slog.String("actorUID", attribution.UID), slog.Int("pid", pid))
-			s.endDeadSandbox(ctx, hosted, func() error {
-				return s.terminateWorkload(ctx, attribution.Ref, attribution.UID, runscPath, actorDirs, containers)
-			})
+			terminate := s.terminateWorkload
+			if s.terminateDead != nil {
+				terminate = s.terminateDead
+			}
+			if err := s.endActivation(ctx, hosted, s.readDeadFinal, func() error {
+				return terminate(ctx, attribution.Ref, attribution.UID, runscPath, actorDirs, containers)
+			}); err != nil {
+				slog.WarnContext(ctx, "Failed to tear down the dead sandbox", slog.String("actorUID", attribution.UID), slog.Any("err", err))
+			}
 		}
 		s.locks.Unlock(attribution.UID)
 		if !ours || s.crashReporter == nil {
@@ -83,15 +89,4 @@ func (s *AteWorkerService) watchSandbox(ctx context.Context, hosted *hostedActor
 			slog.ErrorContext(ctx, "Failed to report the actor crashed", slog.String("actorUID", attribution.UID), slog.Any("err", err))
 		}
 	}()
-}
-
-// endDeadSandbox tears down the activation of a sandbox that died and writes
-// its final record. The dead sandbox's cgroup keeps its counters until the
-// teardown's runsc delete removes it, so the final usage is read first.
-func (s *AteWorkerService) endDeadSandbox(ctx context.Context, hosted *hostedActor, teardown func() error) {
-	s.readFinal(ctx, hosted)
-	if err := teardown(); err != nil {
-		slog.WarnContext(ctx, "Failed to tear down the dead sandbox", slog.String("actorUID", hosted.attribution.UID), slog.Any("err", err))
-	}
-	s.recordFinalIfEnded(ctx, hosted)
 }

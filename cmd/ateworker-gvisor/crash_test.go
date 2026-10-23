@@ -20,11 +20,13 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
 	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -84,5 +86,76 @@ func TestWatchSandboxIgnoresExpectedExits(t *testing.T) {
 			case <-time.After(500 * time.Millisecond):
 			}
 		})
+	}
+}
+
+// crashFixture hosts testActor on a sweep-sampled cgroup fixture, then makes its
+// sandbox die: the cgroup's CPU rises past the last sample and its memory drops
+// to what a cgroup with no processes left holds.
+func crashFixture(t *testing.T) (*AteWorkerService, *hostedActor, string) {
+	t.Helper()
+	s := newStatsService(t, healthyCgroup)
+	h := hostWithEpoch(s, time.Now(), true)
+	s.sweepUsage(context.Background())
+	leaf := filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(testActor.UID, sandboxCgroupContainer))
+	for name, content := range map[string]string{"cpu.stat": "usage_usec 2000000\n", "memory.current": "16384\n", "memory.stat": ""} {
+		if err := os.WriteFile(filepath.Join(leaf, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s, h, leaf
+}
+
+func TestReadDeadFinal(t *testing.T) {
+	s, h, _ := crashFixture(t)
+	live := h.usage.Latest()
+	s.readDeadFinal(context.Background(), h)
+	got := h.usage.Latest()
+	if got.GetCpuUsageUsec() != 2000000 {
+		t.Errorf("CPU = %d, want the 2000000 read after the death", got.GetCpuUsageUsec())
+	}
+	if got.GetMemoryCurrentBytes() != live.GetMemoryCurrentBytes() || got.GetMemoryWorkingSetBytes() != live.GetMemoryWorkingSetBytes() {
+		t.Errorf("memory = %d/%d, want the live sample's %d/%d", got.GetMemoryCurrentBytes(), got.GetMemoryWorkingSetBytes(), live.GetMemoryCurrentBytes(), live.GetMemoryWorkingSetBytes())
+	}
+}
+
+// TestWatchSandboxCrashWritesFinal drives the watcher through a sandbox that
+// dies on its own: the actor is torn down after its cgroup is read, its final
+// record carries the CPU at death and the memory last seen live, and the crash
+// is reported.
+func TestWatchSandboxCrashWritesFinal(t *testing.T) {
+	s, h, leaf := crashFixture(t)
+	rec := withUsageRecorder(s)
+	reporter := &fakeCrashReporter{reports: make(chan string, 1)}
+	s.crashReporter = reporter
+	actorDirs := exitingSandbox(t)
+	sandbox, err := openSandboxProcess(actorDirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sandbox.Close)
+	h.sandbox = sandbox
+	s.terminateDead = func(context.Context, resources.ActorRef, string, string, *ateworkerpb.ActorDirs, []*ateworkerpb.Container) error {
+		setHostedActor(s, nil)
+		return os.RemoveAll(leaf) // as runsc delete does
+	}
+
+	s.watchSandbox(context.Background(), h, "", actorDirs, nil)
+	select {
+	case msg := <-reporter.reports:
+		if msg != "gVisor sandbox exited" {
+			t.Errorf("reported %q", msg)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("crash not reported")
+	}
+	if got := rec.Kinds(); len(got) != 1 || got[0] != ateattr.StatsKindFinal {
+		t.Fatalf("records = %v, want one final", got)
+	}
+	if got := rec.Value(0, string(ateattr.StatsCPUTimeKey)); got != "2" {
+		t.Errorf("final cpu.time = %q, want 2 (seconds) read after the death", got)
+	}
+	if got := rec.Value(0, string(ateattr.StatsMemoryUsageKey)); got != "157286400" {
+		t.Errorf("final memory.usage = %q, want the live 157286400", got)
 	}
 }
