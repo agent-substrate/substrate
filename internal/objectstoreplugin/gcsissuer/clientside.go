@@ -58,6 +58,10 @@ const (
 	// maxSTSResponse bounds what is read of an STS response, which is under
 	// a few KiB when valid. An error quotes at most the first KiB.
 	maxSTSResponse = 64 << 10
+	// maxBoundary is the largest serialized boundary GCS accepts, in bytes.
+	// GCS refuses a token with a larger one with a 401 that does not say why.
+	// The limit is measured, not documented.
+	maxBoundary = 4096
 )
 
 // intermediary is what one STS exchange returns for a source token.
@@ -265,7 +269,14 @@ func encode(env *cel.Env, rules []gcsboundary.Rule) ([]byte, error) {
 			CompiledAvailabilityCondition: cond,
 		})
 	}
-	return proto.Marshal(&b)
+	out, err := proto.Marshal(&b)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > maxBoundary {
+		return nil, fmt.Errorf("the access boundary is %d bytes, more than the %d GCS accepts", len(out), maxBoundary)
+	}
+	return out, nil
 }
 
 // seal encrypts the boundary with the session key and appends it to the

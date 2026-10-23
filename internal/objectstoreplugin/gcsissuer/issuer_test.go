@@ -867,6 +867,8 @@ func TestIssue_Errors(t *testing.T) {
 		{"session key is not a keyset", &fakeSTS{t: t, body: `{"access_token":"intermediary","access_boundary_session_key":"bm90IGEga2V5c2V0"}`}, staticSource(now.Add(time.Hour)), testGrants, "session key", codes.Unknown},
 		{"no grants", &fakeSTS{t: t}, staticSource(now.Add(time.Hour)), nil, "no storage grants", codes.Internal},
 		{"too many grants", &fakeSTS{t: t}, staticSource(now.Add(time.Hour)), manyGrants(11), "1 to 10 rules, got 11", codes.Internal},
+		{"boundary over 4096 bytes", &fakeSTS{t: t}, staticSource(now.Add(time.Hour)), longGrants(10, 400), "more than the 4096", codes.Internal},
+		{"condition over 512 bytes", &fakeSTS{t: t}, staticSource(now.Add(time.Hour)), longGrants(1, 500), "more than the 512", codes.Internal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			i := newTestIssuer(t, tc.sts, tc.source, clock)
@@ -885,6 +887,18 @@ func manyGrants(n int) []actorscope.Grant {
 	var gs []actorscope.Grant
 	for i := range n {
 		gs = append(gs, actorscope.Grant{Prefix: prefix(fmt.Sprintf("gs://b/p%d", i)), Access: actorscope.ReadOnly})
+	}
+	return gs
+}
+
+// longGrants is n grants whose paths are length bytes, each within the
+// literal limit, so only the boundary's total size is over.
+func longGrants(n, length int) []actorscope.Grant {
+	var gs []actorscope.Grant
+	for i := range n {
+		path := fmt.Sprintf("p%d/", i)
+		path += strings.Repeat("x", length-len(path))
+		gs = append(gs, actorscope.Grant{Prefix: prefix("gs://b/" + path), Access: actorscope.ReadOnly})
 	}
 	return gs
 }

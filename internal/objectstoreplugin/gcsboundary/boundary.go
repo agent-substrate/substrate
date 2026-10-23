@@ -33,6 +33,10 @@ const (
 	roleObjectAdmin = "inRole:roles/storage.objectAdmin"
 	// maxRules is the most rules GCS accepts in one boundary.
 	maxRules = 10
+	// maxLiteral is the longest string literal in a condition that GCS
+	// accepts, in bytes. GCS refuses a token whose boundary holds a longer one
+	// with a 401 that does not say why. The limit is measured, not documented.
+	maxLiteral = 512
 )
 
 // Rule is one Credential Access Boundary rule: permissions on a bucket, limited
@@ -67,10 +71,14 @@ func FromGrants(grants []actorscope.Grant) ([]Rule, error) {
 		default:
 			return nil, fmt.Errorf("grant on %s has unknown access %v", g.Prefix, g.Access)
 		}
+		literal := "projects/_/buckets/" + bucket + "/objects/" + path
+		if len(literal) > maxLiteral {
+			return nil, fmt.Errorf("the condition for %s is %d bytes, more than the %d GCS accepts", g.Prefix, len(literal), maxLiteral)
+		}
 		rules = append(rules, Rule{
 			Resource:    "//storage.googleapis.com/projects/_/buckets/" + bucket,
 			Permissions: []string{role},
-			Condition:   fmt.Sprintf("resource.name.startsWith('projects/_/buckets/%s/objects/%s')", celEscape(bucket), celEscape(path)),
+			Condition:   fmt.Sprintf("resource.name.startsWith('%s')", celEscape(literal)),
 		})
 	}
 	return rules, nil
