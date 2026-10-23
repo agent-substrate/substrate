@@ -1088,9 +1088,9 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {
-		// TODO: Worker should classify checkpoint failures, and set "should-crash"
-		// in the metadata if the error is not retriable.
-		return nil, fmt.Errorf("while calling worker CheckpointWorkload: %w", err)
+		// TODO(#3046): Worker should classify checkpoint failures that left
+		// the workload intact as retriable.
+		return nil, workerCallError("CheckpointWorkload", err)
 	}
 	// The snapshot commits on this node once worker has written it, in either
 	// upload mode.
@@ -1854,9 +1854,12 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 }
 
 // workerCallError is atelet's error for a failed call to the worker's rpc. A
-// worker that is unavailable, refusing workloads until it registers or gone
-// with a restart, is reported as Unavailable, so the caller retries once the
-// worker process has registered. Anything else reaches the caller as Internal.
+// worker that is unavailable, refusing workloads until it registers or
+// unreachable because its process is gone, is reported as Unavailable, so
+// ateapi keeps the actor's state and assignment for a retry instead of
+// crashing it. Once a restarted worker registers again, or when its pod is
+// gone, ateapi crashes the actors it hosted on its own. Anything else reaches
+// the caller as Internal.
 func workerCallError(rpc string, err error) error {
 	if status.Code(err) == codes.Unavailable {
 		return apierror.Unavailable("worker %s: the worker is unavailable: %s", rpc, status.Convert(err).Message())

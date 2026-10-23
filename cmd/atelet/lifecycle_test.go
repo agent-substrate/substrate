@@ -85,6 +85,9 @@ type fakeWorker struct {
 	// restoreErr, if set, fails every RestoreWorkload after it recorded the
 	// request, as a worker that could not start the sandbox would.
 	restoreErr error
+	// checkpointErr, if set, fails every CheckpointWorkload after it recorded
+	// the request, before it writes any snapshot file.
+	checkpointErr error
 	// actorDirs records the ActorDirs each RPC arrived with, by RPC name.
 	actorDirs map[string]*ateworkerpb.ActorDirs
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
@@ -134,6 +137,9 @@ func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkload
 func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
 	f.recordFidelity("CheckpointWorkload", req.GetFidelity())
+	if f.checkpointErr != nil {
+		return nil, f.checkpointErr
+	}
 	dir := req.GetActorDirs().GetCheckpointDir()
 	names := make([]string, 0, len(f.snapshotFiles))
 	for name, body := range f.snapshotFiles {
@@ -3870,4 +3876,28 @@ func TestCheckpointFinishesWhenCallerCancels(t *testing.T) {
 		}
 		unlock()
 	})
+}
+
+// A worker that is unreachable when Checkpoint calls it fails the checkpoint
+// with Unavailable, however many times in a row, so ateapi keeps the actor
+// SUSPENDING for a retry instead of crashing an actor whose state only the
+// worker holds. The retry checkpoints once the worker answers again.
+func TestCheckpointKeepsWorkerUnavailable(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.snapshot("pause-snap-1", 1)
+	checkpointCode := func() codes.Code {
+		_, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+		return apierror.Code(err)
+	}
+
+	a.worker.checkpointErr = status.Error(codes.Unavailable, `connection error: desc = "transport: Error while dialing: dial unix /var/lib/ate/worker/sock: connect: no such file or directory"`)
+	for i := 1; i <= 5; i++ {
+		if got := checkpointCode(); got != codes.Unavailable {
+			t.Fatalf("Checkpoint %d with the worker unreachable: code = %v, want %v", i, got, codes.Unavailable)
+		}
+	}
+	a.worker.checkpointErr = nil
+	if got := checkpointCode(); got != codes.OK {
+		t.Fatalf("Checkpoint with the worker back: code = %v, want %v", got, codes.OK)
+	}
 }
