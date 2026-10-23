@@ -182,6 +182,41 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	ctx, done := stepSpan(ctx, "DiscardWorker")
 	defer func() { err = done(err) }()
 
+	// A failed restore on another node can leave the snapshot's locality on
+	// the deleted source node. The current node's Terminate cannot clear it.
+	checkedNodes := map[string]bool{"": true, actor.GetStatus().GetAssignedNode(): true}
+	goneNodes := map[string]bool{}
+	for _, snap := range actor.GetStatus().GetSnapshots() {
+		node := snap.GetLocality()
+		if checkedNodes[node] {
+			continue
+		}
+		checkedNodes[node] = true
+		gone, err := w.dialer.NodeGone(ctx, node)
+		if err != nil {
+			return fmt.Errorf("while checking snapshot node %q: %w", node, err)
+		}
+		if gone {
+			goneNodes[node] = true
+		}
+	}
+	if len(goneNodes) > 0 {
+		actor, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+			for _, snapshot := range a.GetStatus().GetSnapshots() {
+				if goneNodes[snapshot.GetLocality()] {
+					snapshot.Locality = ""
+				}
+			}
+			return nil
+		})
+		if errors.Is(err, store.ErrVersionConflict) {
+			return apierror.Aborted("concurrent update conflict, please retry")
+		}
+		if err != nil {
+			return fmt.Errorf("while clearing snapshot locality on deleted nodes: %w", err)
+		}
+	}
+
 	if actor.GetStatus().GetAssignedNode() != "" {
 		forgetNode := false
 		snapshotState, nodeGone, err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert, true)
@@ -204,7 +239,11 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 			// actor is crashed. Reconcile before deleting any pending objects.
 			if _, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
 				if nodeGone {
-					clearLocalSnapshots(a.Status)
+					for _, snapshot := range a.GetStatus().GetSnapshots() {
+						if snapshot.GetLocality() == actor.GetStatus().GetAssignedNode() {
+							snapshot.Locality = ""
+						}
+					}
 					return nil
 				}
 				return applyRevertedSnapshotState(ctx, a.Status, actor.GetStatus().GetAssignedNode(), snapshotState)

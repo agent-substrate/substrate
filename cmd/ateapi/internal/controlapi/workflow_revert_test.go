@@ -328,6 +328,105 @@ func TestRevertActor_AteletAlreadyDetached(t *testing.T) {
 	}
 }
 
+func TestRevertActor_SnapshotOnAnotherNode(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		kept         bool
+		assignedGone bool
+		lookupErr    error
+		lookupNode   string
+		conflict     bool
+		wantCode     codes.Code
+	}{
+		{name: "deleted source node"},
+		{name: "source node still exists", kept: true},
+		{name: "assigned node deleted, source node still exists", kept: true, assignedGone: true},
+		{name: "node lookup fails", lookupErr: apierror.Unavailable("node lookup failed"), wantCode: codes.Unavailable},
+		{name: "later node lookup fails", lookupErr: apierror.Unavailable("node lookup failed"), lookupNode: "node-4", wantCode: codes.Unavailable},
+		{name: "concurrent update", conflict: true, wantCode: codes.Aborted},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			st := newTestPersistence(t)
+			w, atelet := newWireCaptureWorkflow(t, st)
+			ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			assignedNode, snapshotNode := "node-1", "node-3"
+			if tt.assignedGone {
+				assignedNode, snapshotNode = snapshotNode, assignedNode
+			}
+			seedWorkflowActor(t, ctx, st, ref, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_REVERTING, func(a *ateapi.Actor) {
+				a.Status.AssignedNode = assignedNode
+				a.Status.LastAssignedGeneration = 2
+				a.Status.Snapshots = []*ateapi.Snapshot{
+					newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "older-pending", snapshotNode),
+					newPausedSnapshot(t, 2, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pending", snapshotNode),
+				}
+				if tt.lookupNode != "" {
+					a.Status.Snapshots[1].Locality = tt.lookupNode
+				}
+			})
+			actor, err := st.GetActor(ctx, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := proto.CloneOf(actor.GetStatus()).GetSnapshots()
+			var nodes []string
+			if tt.kept {
+				nodes = append(nodes, snapshotNode)
+			}
+			lookup := nodeGetter(nil, nodes...)
+			lookups := map[string]int{}
+			WithNodeGetter(func(ctx context.Context, node string) error {
+				lookups[node]++
+				if tt.lookupErr != nil && (tt.lookupNode == "" || tt.lookupNode == node) {
+					return tt.lookupErr
+				}
+				if tt.conflict {
+					if _, err := st.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+						a.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"changed": "true"}}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return lookup(ctx, node)
+			})(w.dialer)
+
+			err = w.ensureWorkerDiscarded(ctx, ref, actor, nil)
+			if apierror.Code(err) != tt.wantCode {
+				t.Fatalf("ensureWorkerDiscarded = %v, want %v", err, tt.wantCode)
+			}
+			stored, err := st.GetActor(ctx, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tt.kept && tt.wantCode == codes.OK {
+				for _, snapshot := range want {
+					snapshot.Locality = ""
+				}
+			}
+			got := stored.GetStatus().GetSnapshots()
+			if len(got) != len(want) {
+				t.Fatalf("snapshots = %v, want retained pending snapshots %v", got, want)
+			}
+			for i := range want {
+				if !proto.Equal(got[i], want[i]) {
+					t.Errorf("snapshot = %v, want retained pending snapshot %v", got[i], want[i])
+				}
+			}
+			if lookups[snapshotNode] != 1 {
+				t.Errorf("snapshot node lookups = %d, want 1", lookups[snapshotNode])
+			}
+			if tt.conflict && stored.GetWorkerSelector().GetMatchLabels()["changed"] != "true" {
+				t.Error("concurrent update was overwritten")
+			}
+			if tt.wantCode != codes.OK && atelet.terminateRequest() != nil {
+				t.Error("terminated the actor after failing to check the snapshot node")
+			}
+		})
+	}
+}
+
 func TestRevertActor_UnreachableNode(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
