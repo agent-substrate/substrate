@@ -142,11 +142,7 @@ const kataAgentPath = "/usr/bin/kata-agent"
 // pod cgroup, which the control plane books with every actor: cloud-hypervisor
 // and virtiofsd, and the host page tables for guest RAM, KVM's EPT and the
 // memfd's xarray.
-//
-// The fixed part also covers the page cache of the actor's snapshot writes,
-// which are not capped yet, so tight pods don't OOM on suspend.
-// TODO: drop that part once snapshot writes are capped
-var actorOverhead = &ateletpb.RuntimeOverhead{MemoryBytes: 128 << 20, MemoryBytesPerGib: 8 << 20}
+var actorOverhead = &ateletpb.RuntimeOverhead{MemoryBytes: 4 << 20, MemoryBytesPerGib: 8 << 20}
 
 // memoryReservedBytes is how much of the worker pod's memory limit we keep from
 // actors: the worker process itself, and the page cache of snapshot writes in
