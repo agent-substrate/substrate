@@ -22,10 +22,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/atenet"
@@ -129,7 +127,7 @@ func TestIngressCache_WorkerDisconnectionEvictsWithoutReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScrapeRouterEnvoyMetrics before suspend: %v", err)
 	}
-	replayBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_recreate_stream")
+	replayBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_replay")
 	evictBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_eviction")
 
 	// 2. Suspend the actor so the worker immediately deactivates it.
@@ -159,13 +157,13 @@ func TestIngressCache_WorkerDisconnectionEvictsWithoutReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScrapeRouterEnvoyMetrics after suspend: %v", err)
 	}
-	replayAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_recreate_stream")
+	replayAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_replay")
 	evictAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_eviction")
 	if evictAfter <= evictBefore {
 		t.Fatalf("expected ate_ingress_cache_eviction to increment, before=%.0f, after=%.0f", evictBefore, evictAfter)
 	}
 	if replayAfter != replayBefore {
-		t.Fatalf("expected ate_ingress_cache_recreate_stream NOT to increment for UC, before=%.0f, after=%.0f", replayBefore, replayAfter)
+		t.Fatalf("expected ate_ingress_cache_replay NOT to increment for UC, before=%.0f, after=%.0f", replayBefore, replayAfter)
 	}
 
 	// 5. A single client retry now succeeds cleanly via ext_proc, which resumes the actor.
@@ -180,11 +178,11 @@ func TestIngressCache_WorkerDisconnectionEvictsWithoutReplay(t *testing.T) {
 	}
 }
 
-// TestIngressCache_BodyDoesNotReplayOnWorkerFailure tests that when a request
-// carries a body (e.g. POST), an upstream connection failure is NOT automatically
-// replayed by the proxy, preventing payload truncation or duplicate execution.
-// However, the stale binding is still evicted, so a subsequent client call succeeds.
-func TestIngressCache_BodyDoesNotReplayOnWorkerFailure(t *testing.T) {
+// TestIngressCache_BodyBypassesCache verifies that a request with a body is
+// never served from the cache: even with a stale entry for a suspended actor, it
+// goes through ext_proc, which resumes the actor, and counts as a bypass rather
+// than a hit.
+func TestIngressCache_BodyBypassesCache(t *testing.T) {
 	e2e.RequireIngressCache(t)
 	ctx := context.Background()
 	clients := e2e.GetClients()
@@ -194,20 +192,12 @@ func TestIngressCache_BodyDoesNotReplayOnWorkerFailure(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 
-	// 1. Warm route and cache.
+	// 1. Warm route and cache with a bodiless request.
 	waitForRouteReady(t, "Warm up actor route", func() (*http.Response, error) {
 		return router.Get(ctx, actorRef, "/readyz")
 	})
 
-	// 2. Scrape baseline metrics.
-	scrapeBefore, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
-	if err != nil {
-		t.Fatalf("ScrapeRouterEnvoyMetrics before suspend: %v", err)
-	}
-	replayBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_recreate_stream")
-	evictBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_eviction")
-
-	// 3. Suspend the actor so the worker immediately deactivates it.
+	// 2. Suspend the actor. The cache entry still points at its old worker.
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
 		Actor: &ateapi.ObjectRef{Atespace: networkingAtespace, Name: actorName},
 	}); err != nil {
@@ -215,44 +205,34 @@ func TestIngressCache_BodyDoesNotReplayOnWorkerFailure(t *testing.T) {
 	}
 	waitForActorState(t, ctx, clients, networkingAtespace, actorName, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 
-	// 4. Send a POST request with body. Because request has a body, the router
-	// must NOT recreate the stream. It returns 503 to the client.
-	payload := []byte(`{"count": 1}`)
-	resp, err := router.PostJSON(ctx, actorRef, "/count", payload)
+	scrapeBefore, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
 	if err != nil {
-		t.Logf("POST with body on deactivated worker failed with connection error (expected): %v", err)
-	} else {
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			t.Fatalf("POST with body unexpectedly succeeded on deactivated worker (must not replay request with body)")
-		}
-		t.Logf("POST with body returned non-200 status as expected: %d", resp.StatusCode)
+		t.Fatalf("ScrapeRouterEnvoyMetrics before POST: %v", err)
+	}
+	hitBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_hit")
+	bypassBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_bypass")
+
+	// 3. A POST with a body skips the stale entry and succeeds through ext_proc.
+	resp, err := router.PostJSON(ctx, actorRef, "/count", []byte(`{"count": 1}`))
+	if err != nil {
+		t.Fatalf("POST with body failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST with body returned status %d, want 200; body: %s", resp.StatusCode, body)
 	}
 
-	// 5. Verify eviction counter incremented and replay counter did NOT increment.
+	// 4. It counted as a bypass, not a hit.
 	scrapeAfter, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
 	if err != nil {
 		t.Fatalf("ScrapeRouterEnvoyMetrics after POST: %v", err)
 	}
-	evictAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_eviction")
-	replayAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_recreate_stream")
-	if evictAfter <= evictBefore {
-		t.Fatalf("expected ate_ingress_cache_eviction to increment, before=%.0f, after=%.0f", evictBefore, evictAfter)
+	if hitAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_hit"); hitAfter != hitBefore {
+		t.Fatalf("expected ate_ingress_cache_hit unchanged for a request with a body, before=%.0f, after=%.0f", hitBefore, hitAfter)
 	}
-	if replayAfter != replayBefore {
-		t.Fatalf("expected ate_ingress_cache_recreate_stream NOT to increment for request with body, before=%.0f, after=%.0f", replayBefore, replayAfter)
-	}
-
-	// 6. The failed request must have evicted the stale cache entry.
-	// The client retry now succeeds via ext_proc, which resumes the actor.
-	retryResp, err := router.PostJSON(ctx, actorRef, "/count", payload)
-	if err != nil {
-		t.Fatalf("retry POST failed: %v", err)
-	}
-	defer retryResp.Body.Close()
-	if retryResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(retryResp.Body)
-		t.Fatalf("retry POST returned status %d, want 200; body: %s", retryResp.StatusCode, body)
+	if bypassAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_bypass"); bypassAfter <= bypassBefore {
+		t.Fatalf("expected ate_ingress_cache_bypass to increment, before=%.0f, after=%.0f", bypassBefore, bypassAfter)
 	}
 }
 
@@ -339,7 +319,8 @@ func TestIngressCache_DisabledByDefault(t *testing.T) {
 			t.Fatalf("ScrapeRouterEnvoyMetrics before forged request: %v", err)
 		}
 		lookupsBefore = e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_hit") +
-			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_miss")
+			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_miss") +
+			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_bypass")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, router.BaseURL()+"/readyz", nil)
@@ -364,17 +345,19 @@ func TestIngressCache_DisabledByDefault(t *testing.T) {
 			t.Fatalf("ScrapeRouterEnvoyMetrics after forged request: %v", err)
 		}
 		lookupsAfter := e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_hit") +
-			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_miss")
+			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_miss") +
+			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_bypass")
 		if lookupsAfter != lookupsBefore {
 			t.Fatalf("ingress cache lookups changed with the gate off, before=%.0f, after=%.0f", lookupsBefore, lookupsAfter)
 		}
 	}
 }
 
-// TestIngressCache_GRPCUnavailableEvictsCache verifies that when a gRPC request
-// encounters an unavailable worker (grpc-status: 14 UNAVAILABLE), ingress-cache
-// evicts the stale binding without proxy-side stream replay.
-func TestIngressCache_GRPCUnavailableEvictsCache(t *testing.T) {
+// TestIngressCache_GRPCBypassesCache verifies that gRPC calls, which always
+// carry a body, never use the cache: after the actor is suspended, the next call
+// goes through ext_proc, which resumes the actor, instead of hitting the stale
+// entry.
+func TestIngressCache_GRPCBypassesCache(t *testing.T) {
 	e2e.RequireIngressCache(t)
 	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -398,27 +381,11 @@ func TestIngressCache_GRPCUnavailableEvictsCache(t *testing.T) {
 	defer conn.Close()
 	client := grpcechopb.NewEchoClient(conn)
 
-	const message = "warm cache for grpc"
+	// 1. A successful call resolves the route; its response is learned into the cache.
+	const message = "grpc bypasses the cache"
 	waitForGRPCRouteReady(t, ctx, client, message)
 
-	// 1. Initial successful RPC warms the cache.
-	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	resp, err := client.Echo(rpcCtx, &grpcechopb.EchoRequest{Message: message})
-	if err != nil {
-		t.Fatalf("initial Echo failed: %v", err)
-	}
-	if resp.GetMessage() != message {
-		t.Fatalf("initial Echo got %q, want %q", resp.GetMessage(), message)
-	}
-
-	scrapeBefore, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
-	if err != nil {
-		t.Fatalf("ScrapeRouterEnvoyMetrics before pod delete: %v", err)
-	}
-	evictBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_eviction")
-
-	// 2. Suspend the actor so the worker immediately deactivates it.
+	// 2. Suspend the actor. The cache entry still points at its old worker.
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
 		Actor: &ateapi.ObjectRef{Atespace: networkingAtespace, Name: actorName},
 	}); err != nil {
@@ -426,38 +393,34 @@ func TestIngressCache_GRPCUnavailableEvictsCache(t *testing.T) {
 	}
 	waitForActorState(t, ctx, clients, networkingAtespace, actorName, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 
-	// 3. Issue gRPC call to deactivated worker. It must return UNAVAILABLE (codes.Unavailable).
-	callCtx, callCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer callCancel()
-	_, rpcErr := client.Echo(callCtx, &grpcechopb.EchoRequest{Message: message})
-	if rpcErr == nil {
-		t.Fatalf("expected gRPC call to deactivated worker pod to fail, but it succeeded")
+	scrapeBefore, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeRouterEnvoyMetrics before call: %v", err)
 	}
-	st, ok := status.FromError(rpcErr)
-	if !ok || st.Code() != codes.Unavailable {
-		t.Logf("gRPC call to deactivated worker returned status %v (expected UNAVAILABLE)", rpcErr)
+	hitBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_hit")
+	bypassBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_bypass")
+
+	// 3. The next call skips the stale entry and succeeds through ext_proc.
+	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	resp, err := client.Echo(callCtx, &grpcechopb.EchoRequest{Message: message})
+	if err != nil {
+		t.Fatalf("Echo after suspend failed: %v", err)
+	}
+	if resp.GetMessage() != message {
+		t.Fatalf("Echo after suspend got %q, want %q", resp.GetMessage(), message)
 	}
 
-	// 4. Verify cache eviction counter incremented.
+	// 4. It counted as a bypass, not a hit.
 	scrapeAfter, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
 	if err != nil {
-		t.Fatalf("ScrapeRouterEnvoyMetrics after suspend: %v", err)
+		t.Fatalf("ScrapeRouterEnvoyMetrics after call: %v", err)
 	}
-	evictAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_eviction")
-	if evictAfter <= evictBefore {
-		t.Fatalf("expected ate_ingress_cache_eviction to increment, before=%.0f, after=%.0f", evictBefore, evictAfter)
+	if hitAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_hit"); hitAfter != hitBefore {
+		t.Fatalf("expected ate_ingress_cache_hit unchanged for a gRPC call, before=%.0f, after=%.0f", hitBefore, hitAfter)
 	}
-
-	// 5. Subsequent gRPC call succeeds via ext_proc, which resumes the actor.
-	retryCtx, retryCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer retryCancel()
-	var echoErr error
-	retryResp, echoErr := client.Echo(retryCtx, &grpcechopb.EchoRequest{Message: message})
-	if echoErr != nil {
-		t.Fatalf("subsequent gRPC call after eviction failed: %v", echoErr)
-	}
-	if retryResp.GetMessage() != message {
-		t.Fatalf("subsequent gRPC call got %q, want %q", retryResp.GetMessage(), message)
+	if bypassAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_bypass"); bypassAfter <= bypassBefore {
+		t.Fatalf("expected ate_ingress_cache_bypass to increment, before=%.0f, after=%.0f", bypassBefore, bypassAfter)
 	}
 }
 

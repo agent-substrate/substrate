@@ -68,8 +68,9 @@ pub struct FilterConfig {
   pub settings: Config,
   pub cache_hit: Option<EnvoyCounterId>,
   pub cache_miss: Option<EnvoyCounterId>,
+  pub cache_bypass: Option<EnvoyCounterId>,
   pub cache_eviction: Option<EnvoyCounterId>,
-  pub recreate_stream: Option<EnvoyCounterId>,
+  pub cache_replay: Option<EnvoyCounterId>,
 }
 
 impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for FilterConfig {
@@ -78,8 +79,9 @@ impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for FilterConfig {
       config: self.settings.clone(),
       cache_hit: self.cache_hit,
       cache_miss: self.cache_miss,
+      cache_bypass: self.cache_bypass,
       cache_eviction: self.cache_eviction,
-      recreate_stream: self.recreate_stream,
+      cache_replay: self.cache_replay,
       learn_key: None,
       actor_key: None,
       was_cache_hit: false,
