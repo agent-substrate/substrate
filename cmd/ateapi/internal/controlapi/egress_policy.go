@@ -59,11 +59,8 @@ func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapi.GetAc
 
 func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapi.EgressPolicy, error) {
 	policy, err := s.store.GetEgressPolicy(ctx, actorRef)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("EgressPolicy for actor %s not found", actorRef)
-	}
 	if err != nil {
-		return nil, fmt.Errorf("while getting Actor egress policy: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while getting Actor egress policy: %w", err), "EgressPolicy for actor %s", actorRef)
 	}
 	return policy, nil
 }
@@ -119,19 +116,9 @@ func mapEgressPolicyWrite(policy *ateapi.EgressPolicy, err error) (*ateapi.Egres
 	switch {
 	case err == nil:
 		return policy, nil
-	case errors.Is(err, store.ErrNotFound):
-		return nil, apierror.NotFound("EgressPolicy not found")
-	case errors.Is(err, store.ErrAlreadyExists):
-		return nil, apierror.AlreadyExists("EgressPolicy already exists")
-	case errors.Is(err, store.ErrVersionConflict):
-		return nil, apierror.Aborted("EgressPolicy version conflict")
-	case errors.Is(err, store.ErrUIDConflict):
-		return nil, apierror.Aborted("EgressPolicy UID conflict")
-	case errors.Is(err, store.ErrPreconditionRequired):
-		return nil, apierror.InvalidArgument("EgressPolicy UID and version are required")
 	case errors.Is(err, store.ErrFailedPrecondition):
 		return nil, apierror.FailedPrecondition("parent Actor does not exist")
 	default:
-		return nil, fmt.Errorf("while writing EgressPolicy: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while writing EgressPolicy: %w", err), "EgressPolicy")
 	}
 }

@@ -16,11 +16,9 @@ package controlapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
-	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
@@ -40,10 +38,7 @@ func (w *ActorWorkflow) CrashActorReportedByWorker(ctx context.Context, actorRef
 
 	actor, err := w.store.GetActor(leaseCtx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, fmt.Errorf("while loading actor %s: %w", actorRef, err)
+		return nil, MapStoreError(fmt.Errorf("while loading actor %s: %w", actorRef, err), "Actor %s", actorRef)
 	}
 	// rechecked under the lease, the caller's checks raced other operations
 	if actor.GetMetadata().GetUid() != actorUID || actor.GetStatus().GetWorkerAssignment().GetWorker().GetName() != workerName {
