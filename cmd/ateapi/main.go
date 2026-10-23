@@ -140,6 +140,7 @@ func main() {
 	if *configFile == "" {
 		serverboot.Fatal(ctx, "--config-file must be specified", nil)
 	}
+
 	config, err := apiconfig.LoadConfig(*configFile)
 	if err != nil {
 		serverboot.Fatal(ctx, "Error while loading config file", err)
@@ -149,10 +150,6 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid log level in config file", err)
 	}
 
-	if err := serverboot.ValidateWatchNamespace(*watchNamespace); err != nil {
-		serverboot.Fatal(ctx, "Invalid --watch-namespace", err)
-	}
-	slog.InfoContext(ctx, "Resolved workload watch scope", "watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "")
 	if err := loadFlagsFromEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
@@ -303,15 +300,6 @@ func main() {
 	ateFactory.Start(stopCh)
 	scInformerFactory.Start(stopCh)
 
-	// WorkerPools only seed zero-valued metric series, so their informer is
-	// optional: it keeps retrying past the diagnostic timeout without gating
-	// API availability.
-	cachesync.OptionalSync(shutdownCtx, cacheSyncTimeout, map[string]cache.InformerSynced{
-		"WorkerPools": ateFactory.Api().V1alpha1().WorkerPools().Informer().HasSynced,
-	}, func(ctx context.Context, err error) {
-		slog.WarnContext(ctx, "WorkerPool cache has not synced; worker-count metrics may omit empty pools",
-			"watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "", "err", err)
-	})
 	if err := cachesync.WaitForCacheSync(shutdownCtx, cacheSyncTimeout, requiredKubernetesCaches(ateletPodInformer, ateFactory, scInformerFactory)); err != nil {
 		serverboot.Fatal(ctx, "Failed to sync required Kubernetes caches", err)
 	}
@@ -619,7 +607,7 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 func requiredKubernetesCaches(ateletPods cache.SharedIndexInformer, ateFactory externalversions.SharedInformerFactory, scFactory informers.SharedInformerFactory) map[string]cache.InformerSynced {
 	return map[string]cache.InformerSynced{
 		"atelet Pods":      ateletPods.HasSynced,
-		"CSIDriverConfigs": ateFactory.Api().V1alpha1().CSIDriverConfigs().Informer().HasSynced,
+		"CSIDriverConfigs": ateFactory.Ate().V1().CSIDriverConfigs().Informer().HasSynced,
 		"StorageClasses":   scFactory.Storage().V1().StorageClasses().Informer().HasSynced,
 	}
 }

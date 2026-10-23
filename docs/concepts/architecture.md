@@ -145,24 +145,24 @@ clusters. Agent Substrate leverages Kubernetes for infrastructure provisioning a
 
 ### Namespace-scoped Kubernetes watches
 
-By default, `atecontroller`, `ateapi`, and `atelet` watch WorkerPools in all Kubernetes
+By default, `atecontroller` and `atelet` watch WorkerPools in all Kubernetes
 namespaces. To manage workloads in a single namespace, set the same flag on
-all three binaries, for example:
+both binaries, for example:
 
 ```text
 --watch-namespace=agent-workloads
 ```
 
 This scopes the controller's WorkerPool, Deployment, NetworkPolicy, and worker
-Pod caches, including its separate worker syncer. It also scopes the API
-server's WorkerPool informer and atelet's WorkerPool and worker Pod informers.
+Pod caches, including its separate worker syncer. It also scopes atelet's
+WorkerPool and worker Pod informers.
 The atelet stats poller limits its Pod LISTs to the same namespace. Both atelet
 Pod queries retain their node and worker-label selectors.
 An empty value watches all namespaces.
-All three binaries reject invalid namespace names at startup and log the effective
-scope. The API waits up to one minute for its required Kubernetes caches and
-reports any that fail to sync. Its WorkerPool informer only seeds worker-count
-metrics; it syncs in the background and warns after one minute if still unsynced.
+Both binaries reject invalid namespace names at startup and log the effective
+scope. The API server reads worker counts from the Worker registry and has no
+WorkerPool informer. It waits up to one minute for its required Kubernetes
+caches and reports any that fail to sync.
 The controller's worker syncer also waits up to one minute. If its caches have
 not synced, it logs the pending ones and exits.
 The worker syncer's startup scan leaves registry entries from other namespaces
@@ -183,12 +183,14 @@ Preserve the verbs from the existing role definitions:
 | Component | Namespace grants | Cluster grants still required |
 | --- | --- | --- |
 | `atecontroller` | WorkerPools and their status/finalizers, Deployments, NetworkPolicies, and Pods in the watched namespace; the CA pool Secret and API EndpointSlices in the system namespace | ClusterTrustBundles and the egress MITM signer attestation permission |
-| `ateapi` | WorkerPools in the watched namespace; atelet Pods in the system namespace | CSIDriverConfigs and StorageClasses |
+| `ateapi` | atelet Pods in the system namespace | Nodes (`get`), CSIDriverConfigs, and StorageClasses |
 | `atelet` | WorkerPools, worker Pods, and Warning Event writes (`create` and `patch` on `events.k8s.io` Events) in the watched namespace; API EndpointSlices in the system namespace | SandboxConfigs, CSIDriverConfigs, and ClusterTrustBundles |
 
 A Role alone cannot grant the remaining cluster permissions. Keeping the
 default ClusterRoleBindings also keeps their broader access, regardless of the
 flag. The installer does not rewrite those bindings when this flag is added.
+Keep the API server's WorkerPool grant while upgrading from a version that
+still watches WorkerPools.
 
 This setting does not partition the PostgreSQL Worker registry, constrain API
 principals, or provide tenant isolation. Before narrowing an existing

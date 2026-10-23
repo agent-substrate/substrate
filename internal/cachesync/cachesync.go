@@ -48,17 +48,3 @@ func WaitForCacheSync(ctx context.Context, timeout time.Duration, informers map[
 	slices.Sort(pending)
 	return fmt.Errorf("caches not synced (%s); check logs for more details: %w", strings.Join(pending, ", "), syncCtx.Err())
 }
-
-// OptionalSync waits in the background for caches a component can serve
-// without and never blocks or fails: after timeout it calls warn with an
-// error naming the informers that have not synced, so the component can
-// report what degraded. A canceled parent context (shutdown) does not call
-// warn. The informers keep retrying, so a cache that syncs later recovers on
-// its own.
-func OptionalSync(ctx context.Context, timeout time.Duration, informers map[string]cache.InformerSynced, warn func(context.Context, error)) {
-	go func() {
-		if err := WaitForCacheSync(ctx, timeout, informers); err != nil && ctx.Err() == nil {
-			warn(ctx, err)
-		}
-	}()
-}
