@@ -25,6 +25,7 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
@@ -34,6 +35,7 @@ import (
 	kubeinformers "k8s.io/client-go/informers"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
@@ -171,7 +173,7 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
 		workerPools: atelisters.NewWorkerPoolLister(pools),
 		configs:     atelisters.NewSandboxConfigLister(configs),
-	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), nil)
+	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), nil, events.NewFakeRecorder(2))
 	// The queue starts a goroutine; stop it with the test.
 	t.Cleanup(s.queue.ShutDown)
 	s.scratchDir = t.TempDir() // buildFile stages assets there
@@ -439,6 +441,9 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		// indexed registers pod-a in the index before processing, as an
 		// earlier sync would have; wantIndexed is whether it is there after.
 		indexed, wantIndexed bool
+		// wantEvent is a substring of the Warning event emitted on pod-a, or ""
+		// when no event should be emitted.
+		wantEvent string
 	}{{
 		name:        "writes the file",
 		wantIndexed: true,
@@ -498,6 +503,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		name:         "unresolved pool gives up after syncMaxRetries",
 		objs:         []any{workerPod("pod-a", "pool"), multiVersionConfig()},
 		priorRetries: syncMaxRetries,
+		wantEvent:    "Warning SandboxRuntimeSyncFailed",
 	}, {
 		// A transient failure on the default version leaves the existing file
 		// in place and requeues without the syncMaxRetries cap, since no
@@ -515,6 +521,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		wantDir:       true,
 		wantUntouched: true,
 		wantRetries:   syncMaxRetries + 1,
+		wantEvent:     "temporary download failure on default version",
 	}, {
 		// A transient failure on a restorable version writes the default
 		// runtime right away and requeues without the syncMaxRetries cap.
@@ -533,13 +540,33 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		want:         gvisorFile(wantRuntime("v2")),
 		wantDir:      true,
 		wantRetries:  syncMaxRetries + 1,
+		wantEvent:    "temporary download failure on restorable version",
 	}, {
-		name: "pod of no pool is not retried",
-		objs: []any{workerPod("pod-a", ""), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		name:      "pod of no pool is not retried",
+		objs:      []any{workerPod("pod-a", ""), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		wantEvent: "Warning SandboxRuntimeSyncFailed",
+	}, {
+		name:     "long sync error is truncated on a UTF-8 rune boundary to the Event note limit",
+		objs:     []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		existing: stale,
+		assets: &fakeAssetFetcher{
+			fn: func(context.Context, *sandboxAssetsRecord) (map[string]string, error) {
+				// Prefix "SandboxConfig \"gvisor-release\", version \"v2\": " is 46
+				// bytes, so 2-byte "é" runes start at even offsets and the
+				// 1021-byte cut point lands on a continuation byte.
+				return nil, errors.New(strings.Repeat("é", 1000))
+			},
+		},
+		want:          stale,
+		wantDir:       true,
+		wantUntouched: true,
+		wantRetries:   1,
+		wantEvent:     strings.Repeat("é", 487) + "...",
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestSyncer(t, tt.objs...)
+			recorder := s.recorder.(*events.FakeRecorder)
 			if tt.assets != nil {
 				s.assets = tt.assets
 			}
@@ -574,6 +601,29 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 			uid, _ := s.queue.Get()
 
 			s.process(ctx, uid)
+
+			var gotEvent string
+			select {
+			case gotEvent = <-recorder.Events:
+			default:
+			}
+			if tt.wantEvent == "" && gotEvent != "" {
+				t.Errorf("unexpected event %q", gotEvent)
+			}
+			if tt.wantEvent != "" && !strings.Contains(gotEvent, tt.wantEvent) {
+				t.Errorf("event = %q, want substring %q", gotEvent, tt.wantEvent)
+			}
+			if gotEvent != "" {
+				note := strings.TrimPrefix(gotEvent, "Warning SandboxRuntimeSyncFailed ")
+				if len(note) > maxEventNoteBytes || !utf8.ValidString(note) {
+					t.Errorf("event note len = %d (max %d), valid UTF-8 = %v", len(note), maxEventNoteBytes, utf8.ValidString(note))
+				}
+			}
+			select {
+			case extra := <-recorder.Events:
+				t.Errorf("unexpected second event %q", extra)
+			default:
+			}
 
 			if _, err := os.Stat(dir); (err == nil) != tt.wantDir {
 				t.Errorf("directory exists = %v (%v), want %v", err == nil, err, tt.wantDir)
@@ -851,7 +901,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				ateFactory.Ate().V1().WorkerPools(),
 				ateFactory.Ate().V1().SandboxConfigs(),
 				newScriptAssetFetcher(t),
-				dir, newRuntimeIndex(), nil)
+				dir, newRuntimeIndex(), nil, &events.FakeRecorder{})
 			if err != nil {
 				t.Fatalf("startWorkerSandboxSyncer() error = %v", err)
 			}

@@ -34,6 +34,7 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	kubeinformers "k8s.io/client-go/informers"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/events"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
@@ -459,7 +460,7 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 		ateFactory.Ate().V1().WorkerPools(),
 		ateFactory.Ate().V1().SandboxConfigs(),
 		newScriptAssetFetcher(t), // the syncer's runsc probe; prewarm goes through herder
-		workersDir, index, p)
+		workersDir, index, p, &events.FakeRecorder{})
 	if err != nil {
 		t.Fatalf("startWorkerSandboxSyncer: %v", err)
 	}
