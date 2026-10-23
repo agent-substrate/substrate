@@ -123,6 +123,10 @@ func TestSandboxRuntimeUpgrade(t *testing.T) {
 //     next resume restores MEMORY on v2.
 //  5. An actor cloned from the v1-stamped Tag also drops to ROOTFS on v2
 //     (memory=1, file=3, rootfs=3).
+//  6. An actor holding the v1-stamped Tag snapshot whose ActorTemplate is
+//     replaced via UpdateActor while v1 is Disabled drops to VOLUMES (not
+//     ROOTFS) on v2: both memory and rootfs counters reset while the volume
+//     counter continues (memory=1, file=3, rootfs=1).
 func TestSandboxRuntimeDisableDropsToRootfs(t *testing.T) {
 	t.Parallel()
 	f := setupSuspendedV1Actor(t, "runtime-disable", ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
@@ -261,6 +265,86 @@ func TestSandboxRuntimeDisableDropsToRootfs(t *testing.T) {
 	}
 	validateCounterResponse(t, resp, "cloned actor after ROOTFS fallback", 1, 3)
 	validateRootfsCounter(t, resp, "cloned actor after ROOTFS fallback", 3)
+
+	if _, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapi.SuspendActorRequest{
+		Actor:   cloneRef,
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}); err != nil {
+		t.Fatalf("failed to suspend cloned Actor before template replacement test: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, cloneName, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+
+	// 6. Create a second ActorTemplate (tmplB) targeting the same v2 pool,
+	// create an actor from the v1-stamped Tag, repoint it at tmplB via
+	// UpdateActor, and resume it while v1 is Disabled: template replacement
+	// takes precedence over runtime fallback and drops the restore to VOLUMES
+	// (C6 x C3: memory=1, file=3, rootfs=1).
+	tmplBName := "tmpl-b-" + f.actorName
+	tmplBRef := &ateapi.ObjectRef{Atespace: demoAtespace, Name: tmplBName}
+	tmplBSpec := &ateapi.ActorTemplate{
+		Metadata:       &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: tmplBName},
+		WorkerSelector: f.tmpl.GetWorkerSelector(),
+		Containers:     f.tmpl.GetContainers(),
+		Resources:      f.tmpl.GetResources(),
+		Volumes:        f.tmpl.GetVolumes(),
+		SnapshotConfig: &ateapi.SnapshotConfig{
+			StorageLocation:      f.tmpl.GetSnapshotConfig().GetStorageLocation() + "-b",
+			PreferredFidelity:    ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
+		},
+	}
+	if _, err := f.clients.SubstrateAPI.CreateActorTemplate(f.ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: tmplBSpec}); err != nil {
+		t.Fatalf("failed to create second ActorTemplate %s: %v", tmplBName, err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _ = f.clients.SubstrateAPI.DeleteActorTemplate(cleanupCtx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: tmplBRef})
+	})
+
+	repointName := "repoint-" + f.actorName
+	repointRef := &ateapi.ObjectRef{Atespace: demoAtespace, Name: repointName}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _ = f.clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapi.SuspendActorRequest{Actor: repointRef})
+		_, _ = f.clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{Actor: repointRef})
+	})
+
+	repointed, err := f.clients.SubstrateAPI.CreateActor(f.ctx, &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: repointName},
+			ActorTemplate: f.templateRef,
+			SourceTag:     tagRef,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create repoint Actor from Tag: %v", err)
+	}
+	if _, err := f.clients.SubstrateAPI.UpdateActor(f.ctx, &ateapi.UpdateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata:      repointed.GetMetadata(),
+			ActorTemplate: tmplBRef,
+		},
+	}); err != nil {
+		t.Fatalf("failed to update Actor %s to template %s: %v", repointName, tmplBName, err)
+	}
+
+	repointResumed, err := e2e.ResumeActorAwaitCapacity(t, f.ctx, f.clients, &ateapi.ResumeActorRequest{Actor: repointRef})
+	if err != nil {
+		t.Fatalf("failed to resume repointed Actor after v1 disabled: %v", err)
+	}
+	waitForActorState(f.ctx, t, f.clients, repointName, ateapi.ActorState_ACTOR_STATE_RUNNING)
+	if diff := cmp.Diff(v2Runtime, repointResumed.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("repointed actor assignment runtime after VOLUMES fallback (-want v2 +got):\n%s", diff)
+	}
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: repointName})
+	if err != nil {
+		t.Fatalf("failed to call repointed actor after VOLUMES fallback: %v", err)
+	}
+	validateCounterResponse(t, resp, "repointed actor after VOLUMES fallback", 1, 3)
+	validateRootfsCounter(t, resp, "repointed actor after VOLUMES fallback", 1)
 }
 
 // TestWorkerPoolSwitchSandboxConfig covers switching a WorkerPool's configRef
@@ -864,6 +948,7 @@ type sandboxRuntimeFixture struct {
 	class       atev1.SandboxClass
 	configName  string
 	v1, v2      atev1.SandboxVersionConfig
+	tmpl        *ateapi.ActorTemplate
 	templateRef *ateapi.ObjectRef
 	actorName   string
 	actorRef    *ateapi.ObjectRef
@@ -1004,6 +1089,7 @@ func setupSuspendedV1Actor(t *testing.T, prefix string, mode ateapi.DurabilityMo
 		configName:  configName,
 		v1:          v1,
 		v2:          v2,
+		tmpl:        tmpl,
 		templateRef: e2e.TemplateRef(tmpl),
 		actorName:   actorName,
 		actorRef:    actorRef,
