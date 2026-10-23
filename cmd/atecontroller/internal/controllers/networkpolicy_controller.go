@@ -138,7 +138,7 @@ func checkNetworkPolicyOwner(np *networkingv1.NetworkPolicy, wp *atev1.WorkerPoo
 }
 
 func (r *NetworkPolicyReconciler) buildNetworkPolicyApplyConfig(wp *atev1.WorkerPool) *networkingv1ac.NetworkPolicyApplyConfiguration {
-	np := networkingv1ac.NetworkPolicy(resources.NetworkPolicyNamePrefix+wp.Name, wp.Namespace).
+	np := networkingv1ac.NetworkPolicy(resources.NetworkPolicyName(wp.Name), wp.Namespace).
 		WithLabels(map[string]string{
 			"ate.dev/worker-pool": wp.Name,
 		}).

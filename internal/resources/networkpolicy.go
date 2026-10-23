@@ -14,9 +14,10 @@
 
 package resources
 
-// NetworkPolicyNamePrefix followed by a WorkerPool's name is the name of the
-// pool's NetworkPolicy. Keeping the whole pool name gives each pool its own
-// policy. The policy also uses the pool name as its ate.dev/worker-pool label
-// value, which Kubernetes caps at 63 characters, so the name never needs
-// truncating.
-const NetworkPolicyNamePrefix = "substrate-"
+// NetworkPolicyName returns the NetworkPolicy name for a WorkerPool. It keeps
+// the whole pool name, so each pool gets its own policy. The policy also uses
+// the pool name as its ate.dev/worker-pool label value, which Kubernetes caps
+// at 63 characters, so the result never needs truncating.
+func NetworkPolicyName(wpName string) string {
+	return "substrate-" + wpName
+}
