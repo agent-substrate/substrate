@@ -136,20 +136,9 @@ func (w *ActorWorkflow) loadReportedActor(ctx context.Context, actorRef resource
 	return actor, nil
 }
 
-// actorOnNode reports whether the Actor is placed on node or has a local
-// snapshot there. Unlike HostingNode, it includes a node that holds only
-// older snapshots of an Actor placed elsewhere, since that node's atelet
-// reports them.
+// actorOnNode reports whether the Actor is placed on node.
 func actorOnNode(actor *ateapi.Actor, node string) bool {
-	if actor.GetStatus().GetAssignedNode() == node {
-		return true
-	}
-	for _, snap := range actor.GetStatus().GetSnapshots() {
-		if snap.GetLocality() == node {
-			return true
-		}
-	}
-	return false
+	return actor.GetStatus().GetAssignedNode() == node
 }
 
 // Messages logged for a reported durable snapshot that changes nothing.

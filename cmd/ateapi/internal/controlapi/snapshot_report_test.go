@@ -602,7 +602,7 @@ func TestActorOnNode(t *testing.T) {
 		want  bool
 	}{
 		{"placed on the node", actor(reportNode), true},
-		{"holds a snapshot on the node", actor(reportOther, "", reportNode), true},
+		{"holds only a snapshot on the node", actor(reportOther, "", reportNode), false},
 		{"neither", actor(reportOther, reportOther), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
