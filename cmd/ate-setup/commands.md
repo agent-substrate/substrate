@@ -113,10 +113,10 @@ that already names a manifest is used as written, and is not looked up.
 `deploy ate-system` is the whole control plane: CRDs, RBAC, the store, the
 apiserver, the controller, atenet, and atelet. Unless `--skip-microvm-deps` is
 passed (also accepted by `deploy sandboxconfig`), it also stages the micro-VM
-guest assets into the cluster object store and applies the `microvm`
-cluster-wide `SandboxConfig` alongside `gvisor-default`. It creates every
-`create` resource below on the way, so those subcommands are only needed to
-redo one on a running cluster.
+guest assets into the asset bucket (`rustfs` on Kind, `<BUCKET_NAME>-assets` on
+GKE) and applies the `microvm` cluster-wide `SandboxConfig` alongside
+`gvisor-default`. It creates every `create` resource below on the way, so those
+subcommands are only needed to redo one on a running cluster.
 
 ## Publish
 

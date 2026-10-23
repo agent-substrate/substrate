@@ -40,7 +40,7 @@ class SubstrateArgsTest(unittest.TestCase):
     def test_ate_args_only(self):
         self.assertEqual(
             orchestrator.substrate_args({"ateArgs": ["--cluster-size=size10"]}),
-            ["--cluster-size=size10"],
+            ["--cluster-size=size10", "--skip-microvm-deps"],
         )
 
     def test_isolate_installs_the_fake_data_plane(self):
@@ -50,14 +50,26 @@ class SubstrateArgsTest(unittest.TestCase):
                 "isolate": {"delay": "500ms"},
             }),
             # The delay tunes fake-atelet through deploy.sh, not the install.
-            ["--cluster-size=size10", "--fake-data-plane"],
+            ["--cluster-size=size10", "--fake-data-plane", "--skip-microvm-deps"],
         )
 
     def test_neither(self):
-        self.assertEqual(orchestrator.substrate_args({}), [])
+        self.assertEqual(orchestrator.substrate_args({}), ["--skip-microvm-deps"])
 
     def test_bare_isolate_key(self):
-        self.assertEqual(orchestrator.substrate_args({"isolate": None}), ["--fake-data-plane"])
+        self.assertEqual(
+            orchestrator.substrate_args({"isolate": None}),
+            ["--fake-data-plane", "--skip-microvm-deps"],
+        )
+
+    def test_microvm_keeps_microvm_deps(self):
+        self.assertEqual(
+            orchestrator.substrate_args({
+                "sandboxClass": "microvm",
+                "ateArgs": ["--cluster-size=size10"],
+            }),
+            ["--cluster-size=size10"],
+        )
 
 
 class DeploySubstrateTest(unittest.TestCase):

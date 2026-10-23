@@ -22,9 +22,10 @@ To run the cold resume tests from your workstation instead, see
    and/or `${KO_DOCKER_REPO}/nighthawk-ingress-test:<commit>`.
 5. `go run ./cmd/ate-setup deploy ate-system` (with `ATE_CREDENTIAL_PROVIDER`
    in `.ate-dev-env.sh`, or `--credential-provider` in the test's
-   `ateArgs`, which also stages the micro-VM guest assets to the cluster's
-   object store bucket and applies both the `gvisor-default` and `microvm`
-   `SandboxConfig`s) + `benchmarking/workloads/deploy.sh
+   `ateArgs`; passes `--skip-microvm-deps` unless `sandboxClass` is `microvm`,
+   in which case `deploy ate-system` also stages the micro-VM guest assets to
+   `<BUCKET_NAME>-assets` and applies the cluster-wide `microvm`
+   `SandboxConfig`) + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
    images via `ko` as part of their deploy steps — there's no separate
    image build step). The install sets `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` to

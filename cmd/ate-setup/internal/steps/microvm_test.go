@@ -33,8 +33,14 @@ import (
 	"github.com/klauspost/compress/zstd"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
@@ -450,8 +456,9 @@ func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("DecodeManifestBytes() = %v", err)
 			}
-			if len(objs) != 1 || objs[0].GetKind() != "SandboxConfig" || objs[0].GetName() != microvmSandboxConfigName {
-				t.Errorf("decoded objects = %v, want single SandboxConfig/%s", objs, microvmSandboxConfigName)
+			wantGVK := atev1.GroupVersion.WithKind("SandboxConfig")
+			if len(objs) != 1 || objs[0].GroupVersionKind() != wantGVK || objs[0].GetName() != microvmSandboxConfigName {
+				t.Errorf("decoded objects = %v, want single %v/%s", objs, wantGVK, microvmSandboxConfigName)
 			}
 		})
 	}
@@ -543,6 +550,18 @@ func TestMicroVMBucket(t *testing.T) {
 			wantBucket: "my-gke-bucket-assets",
 			wantScheme: "gs",
 		},
+		{
+			name:       "Non-Kind accepts 56-character BucketName (63-character asset bucket)",
+			cfg:        config.Config{Kind: false, BucketName: strings.Repeat("a", 56)},
+			wantBucket: strings.Repeat("a", 56) + "-assets",
+			wantScheme: "gs",
+		},
+		{
+			name:       "Non-Kind rejects BucketName whose asset bucket exceeds 63 characters",
+			cfg:        config.Config{Kind: false, BucketName: strings.Repeat("a", 57)},
+			wantScheme: "gs",
+			wantErr:    true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := &Env{Cfg: &tc.cfg}
@@ -557,6 +576,34 @@ func TestMicroVMBucket(t *testing.T) {
 				t.Errorf("microVMBucketScheme() = %q, want %q", gotScheme, tc.wantScheme)
 			}
 		})
+	}
+}
+
+func TestDeleteMicroVMDeps(t *testing.T) {
+	silenceStepLog(t)
+
+	gvr := atev1.GroupVersion.WithResource("sandboxconfigs")
+	cs := fake.NewClientset()
+	cs.Resources = []*metav1.APIResourceList{{
+		GroupVersion: atev1.GroupVersion.String(),
+		APIResources: []metav1.APIResource{{Name: "sandboxconfigs", Kind: "SandboxConfig"}},
+	}}
+	scheme := runtime.NewScheme()
+	dc := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		scheme,
+		map[schema.GroupVersionResource]string{gvr: "SandboxConfigList"},
+		newSandboxConfig(microvmSandboxConfigName),
+	)
+	env := &Env{
+		Cfg:  &config.Config{Kind: true},
+		Kube: kube.NewFromClients(nil, cs, dc, cs.Discovery()),
+	}
+
+	if err := env.DeleteMicroVMDeps(t.Context()); err != nil {
+		t.Fatalf("DeleteMicroVMDeps() = %v, want nil", err)
+	}
+	if _, err := dc.Resource(gvr).Get(t.Context(), microvmSandboxConfigName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("Get(%s) after DeleteMicroVMDeps = %v, want NotFound", microvmSandboxConfigName, err)
 	}
 }
 
