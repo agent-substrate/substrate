@@ -461,6 +461,22 @@ func mapDeleteError(err error, uid string, version int64, precondition store.Del
 	return store.ErrVersionConflict
 }
 
+// mapToStoreError maps err from a statement on one row to a store error:
+// no row is store.ErrNotFound, a unique violation is store.ErrAlreadyExists,
+// and a foreign key violation is store.ErrFailedPrecondition. It wraps any
+// other error with the operation format describes.
+func mapToStoreError(err error, format string, args ...any) error {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return store.ErrNotFound
+	case isUniqueViolation(err):
+		return store.ErrAlreadyExists
+	case isForeignKeyViolation(err):
+		return store.ErrFailedPrecondition
+	}
+	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), err)
+}
+
 func isUniqueViolation(err error) bool { return pgErrCode(err) == "23505" }
 
 // isForeignKeyViolation matches both the insert/update-side violation
