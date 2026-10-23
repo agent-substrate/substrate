@@ -15,6 +15,7 @@
 //! HTTP filter implementation for the ingress-cache dynamic module.
 
 use std::net::SocketAddr;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use envoy_proxy_dynamic_modules_rust_sdk::{
@@ -28,7 +29,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   envoy_log_error, envoy_log_trace,
 };
 
-use crate::cache::{Binding, cache};
+use crate::cache::{self, Entry, Lookup};
 use crate::config::{Config, FilterConfig};
 use crate::routing::{
   GRPC_STATUS_HEADER, ORIGINAL_DST_ADDRESS_KEY, ORIGINAL_DST_NAMESPACE, ROUTE_RESOLVED_HEADER,
@@ -75,6 +76,7 @@ pub const UPSTREAM_FAILURE_RESPONSE_FLAGS: i64 =
 pub const ZERO_BYTE_FAILURE_RESPONSE_FLAGS: i64 = RESPONSE_FLAG_UF | RESPONSE_FLAG_UH;
 
 
+
 /// Creates a new HTTP filter configuration for the `ingress-cache` dynamic module.
 pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
   envoy_filter_config: &mut EC,
@@ -115,6 +117,8 @@ pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter
 /// * **On upstream stale rejection (`421` or `503` on a cache hit)**: evicts the
 ///   stale cache entry, removes [`ROUTE_RESOLVED_HEADER`], and calls
 ///   `recreate_stream` (if replay-safe) so the request replays through `ext_proc`.
+///   A `503` from a connection that ended before a response is replay-safe only if
+///   the `tunnel_watcher` network filter marked the entry stale and not spoiled.
 /// * **On gRPC UNAVAILABLE (`grpc-status: 14`)**: does not learn the binding, and removes
 ///   it if it was learned from this response's headers. gRPC requests always have a body,
 ///   so they never use the cache.
@@ -135,14 +139,19 @@ pub struct CacheFilter {
   pub actor_key: Option<String>,
   pub was_cache_hit: bool,
   pub has_request_body: bool,
+  /// The entry this request was routed from on a cache hit. Holding it keeps the
+  /// entry, and the network filter's marks on it, alive until the request ends.
+  pub entry: Option<Rc<Entry>>,
+  /// The entry this request's response added to the cache, if any.
+  pub learned: Option<Rc<Entry>>,
 }
 
 impl CacheFilter {
-  /// Evicts the cached binding for the target actor, and if this stream was a cache hit,
-  /// increments the eviction counter and clears the cache hit flag.
+  /// Evicts the binding this request used or learned, if it is still current, and if this
+  /// stream was a cache hit, increments the eviction counter and clears the cache hit flag.
   fn handle_eviction<EHF: EnvoyHttpFilter>(&mut self, envoy_filter: &mut EHF) {
-    if let Some(key) = &self.actor_key {
-      cache().remove(key);
+    if let (Some(key), Some(entry)) = (&self.actor_key, self.entry.as_ref().or(self.learned.as_ref())) {
+      cache::remove_if_current(key, entry);
     }
     if self.was_cache_hit {
       increment_counter(envoy_filter, self.cache_eviction);
@@ -163,6 +172,8 @@ impl CacheFilter {
       actor_key: None,
       was_cache_hit: false,
       has_request_body: false,
+      entry: None,
+      learned: None,
     }
   }
 }
@@ -198,9 +209,10 @@ fn is_stale_rejection<EHF: EnvoyHttpFilter>(
 /// 1. The request has no body (`!filter.has_request_body`). We do not buffer request
 ///    bodies in Envoy, so replaying a request with a body would drop or corrupt the payload.
 ///    Requests with a body skip the cache, so this is a defensive check.
-/// 2. For 503 errors, response flags guarantee zero bytes reached the upstream worker (`UF` or `UH`).
-///    Mid-stream disconnections (`UC`) or resets (`UR`) are never replayed to err on the side
-///    of caution against unintended client side effects.
+/// 2. For 503 errors, response flags guarantee zero bytes reached the upstream worker (`UF` or `UH`),
+///    or the connection ended before a response (`UC`) and the entry the request was
+///    routed from is stale and not spoiled. Stale means a tunnel for the binding was refused;
+///    not spoiled means no request on it was cut off after reaching the actor.
 /// 3. For 421 errors (with stale header), atunnel rejected the request before forwarding to
 ///    the actor, so bodiless requests are safe to replay.
 fn is_replay_safe(filter: &CacheFilter, status: Option<&str>, response_flags: i64) -> bool {
@@ -208,7 +220,14 @@ fn is_replay_safe(filter: &CacheFilter, status: Option<&str>, response_flags: i6
     return false;
   }
   match status {
-    Some("503") => (response_flags & ZERO_BYTE_FAILURE_RESPONSE_FLAGS) != 0,
+    Some("503") => {
+      (response_flags & ZERO_BYTE_FAILURE_RESPONSE_FLAGS) != 0
+        // On the CONNECT path a refused tunnel reaches the router as a connection
+        // termination (`UC`), like a tunnel cut off mid-request. The network filter's
+        // marks tell them apart.
+        || ((response_flags & RESPONSE_FLAG_UC) != 0
+          && filter.entry.as_ref().is_some_and(|e| e.refused_and_unspoiled()))
+    }
     Some("421") => true,
     _ => false,
   }
@@ -327,26 +346,23 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
       return envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
     }
 
-    if let Some(entry) = cache().get(&key) {
-      if entry.expires_at > Instant::now() {
-        let worker_ip = entry.worker_ip.clone();
-        let worker_spiffe_id = entry.worker_spiffe_id.clone();
-        drop(entry);
+    match cache::lookup(&key, Instant::now()) {
+      Lookup::Hit(entry) => {
         increment_counter(envoy_filter, self.cache_hit);
         self.config.route_to(
           envoy_filter,
           &actor,
-          &worker_ip,
-          worker_spiffe_id.as_deref(),
+          &entry.worker_ip,
+          entry.worker_spiffe_id.as_deref(),
         );
         envoy_filter.set_request_header(ROUTE_RESOLVED_HEADER, b"1");
         envoy_filter.clear_route_cache();
         self.was_cache_hit = true;
+        self.entry = Some(entry);
         return envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
       }
-      drop(entry);
-      cache().remove(&key);
-      increment_counter(envoy_filter, self.cache_eviction);
+      Lookup::Expired => increment_counter(envoy_filter, self.cache_eviction),
+      Lookup::Miss => {}
     }
 
     increment_counter(envoy_filter, self.cache_miss);
@@ -403,14 +419,12 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
       && let Some(key) = self.learn_key.take()
       && let Some((worker_ip, worker_spiffe_id)) = read_learned_binding(envoy_filter)
     {
-      cache().insert(
+      self.learned = Some(cache::insert(
         key,
-        Binding {
-          worker_ip,
-          worker_spiffe_id,
-          expires_at: Instant::now() + Duration::from_secs(self.config.cache_ttl_seconds),
-        },
-      );
+        worker_ip,
+        worker_spiffe_id,
+        Duration::from_secs(self.config.cache_ttl_seconds),
+      ));
     }
 
     envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
@@ -516,7 +530,7 @@ mod tests {
     );
 
     // Verify entry is now in cache
-    let entry = cache().get("team-b/actor-2").expect("should be in cache");
+    let entry = cache::current("team-b/actor-2").expect("should be in cache");
     assert_eq!(entry.worker_ip, "10.244.1.50");
     assert_eq!(
       entry.worker_spiffe_id.as_deref(),
@@ -575,14 +589,7 @@ mod tests {
   fn test_request_with_body_bypasses_cache_and_learns() {
     // Each test uses its own actor: the cache is process-wide and tests run in parallel.
     let key = "team-b/actor-body";
-    cache().insert(
-      key.to_string(),
-      Binding {
-        worker_ip: "10.244.9.1".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let _entry = cache::insert(key.to_string(), "10.244.9.1".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(Config::default());
     let bypass_id = EnvoyCounterId(7);
@@ -658,7 +665,7 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert_eq!(cache().get(key).expect("should be cached").worker_ip, "10.244.9.2");
+    assert_eq!(cache::current(key).expect("should be cached").worker_ip, "10.244.9.2");
   }
 
   #[test]
@@ -708,14 +715,7 @@ mod tests {
   #[test]
   fn test_cache_hit_populates_metadata_and_skips_extproc() {
     let config = Config::default();
-    cache().insert(
-      "team-c/actor-3".to_string(),
-      Binding {
-        worker_ip: "10.244.2.100".to_string(),
-        worker_spiffe_id: Some("spiffe://cluster.local/ns/default/sa/worker-pool-2".to_string()),
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let _entry = cache::insert("team-c/actor-3".to_string(), "10.244.2.100".to_string(), Some("spiffe://cluster.local/ns/default/sa/worker-pool-2".to_string()), Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
 
@@ -787,18 +787,12 @@ mod tests {
   #[test]
   fn test_upstream_421_recreates_stream_on_cache_hit() {
     let config = Config::default();
-    cache().insert(
-      "team-d/actor-4".to_string(),
-      Binding {
-        worker_ip: "10.244.3.40".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-d/actor-4".to_string(), "10.244.3.40".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-d/actor-4".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
 
     let mut mock = MockEnvoyHttpFilter::default();
     mock
@@ -826,25 +820,19 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_response_headers_status::StopIteration
     );
 
-    assert!(cache().get("team-d/actor-4").is_none());
+    assert!(cache::current("team-d/actor-4").is_none());
     assert!(!filter.was_cache_hit);
   }
 
   #[test]
   fn test_upstream_503_recreates_stream_on_cache_hit() {
     let config = Config::default();
-    cache().insert(
-      "team-d/actor-4-503".to_string(),
-      Binding {
-        worker_ip: "10.244.3.41".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-d/actor-4-503".to_string(), "10.244.3.41".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-d/actor-4-503".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
 
     let mut mock = MockEnvoyHttpFilter::default();
     mock
@@ -870,7 +858,7 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_response_headers_status::StopIteration
     );
 
-    assert!(cache().get("team-d/actor-4-503").is_none());
+    assert!(cache::current("team-d/actor-4-503").is_none());
     assert!(!filter.was_cache_hit);
   }
 
@@ -899,24 +887,18 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert!(cache().get("team-e/actor-5").is_none());
+    assert!(cache::current("team-e/actor-5").is_none());
   }
 
   #[test]
   fn test_upstream_421_without_stale_header_is_not_treated_as_stale() {
     let config = Config::default();
-    cache().insert(
-      "team-h/actor-8".to_string(),
-      Binding {
-        worker_ip: "10.244.5.10".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-h/actor-8".to_string(), "10.244.5.10".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-h/actor-8".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
 
     let mut mock = MockEnvoyHttpFilter::default();
     mock
@@ -936,25 +918,19 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert!(cache().get("team-h/actor-8").is_some());
+    assert!(cache::current("team-h/actor-8").is_some());
     assert!(filter.was_cache_hit);
   }
 
   #[test]
   fn test_upstream_421_with_false_stale_header_is_not_treated_as_stale() {
     let config = Config::default();
-    cache().insert(
-      "team-h/actor-9".to_string(),
-      Binding {
-        worker_ip: "10.244.5.11".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-h/actor-9".to_string(), "10.244.5.11".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-h/actor-9".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
 
     let mut mock = MockEnvoyHttpFilter::default();
     mock
@@ -973,25 +949,19 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert!(cache().get("team-h/actor-9").is_some());
+    assert!(cache::current("team-h/actor-9").is_some());
     assert!(filter.was_cache_hit);
   }
 
   #[test]
   fn test_upstream_421_with_case_insensitive_true_stale_header() {
     let config = Config::default();
-    cache().insert(
-      "team-h/actor-10".to_string(),
-      Binding {
-        worker_ip: "10.244.5.12".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-h/actor-10".to_string(), "10.244.5.12".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-h/actor-10".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
 
     let mut mock = MockEnvoyHttpFilter::default();
     mock
@@ -1018,24 +988,18 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::StopIteration
     );
-    assert!(cache().get("team-h/actor-10").is_none());
+    assert!(cache::current("team-h/actor-10").is_none());
   }
 
   #[test]
   fn test_upstream_503_from_actor_is_not_treated_as_stale() {
     let config = Config::default();
-    cache().insert(
-      "team-j/actor-11".to_string(),
-      Binding {
-        worker_ip: "10.244.6.1".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-j/actor-11".to_string(), "10.244.6.1".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-11".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
 
     let mut mock = MockEnvoyHttpFilter::default();
     mock
@@ -1051,25 +1015,19 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
     // Cache entry must remain intact, and hit status must not be cleared.
-    assert!(cache().get("team-j/actor-11").is_some());
+    assert!(cache::current("team-j/actor-11").is_some());
     assert!(filter.was_cache_hit);
   }
 
   #[test]
   fn test_upstream_503_with_uh_recreates_stream_for_bodiless_get() {
     let config = Config::default();
-    cache().insert(
-      "team-j/actor-12".to_string(),
-      Binding {
-        worker_ip: "10.244.6.2".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-j/actor-12".to_string(), "10.244.6.2".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-12".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
     filter.has_request_body = false;
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -1096,25 +1054,127 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::StopIteration
     );
-    assert!(cache().get("team-j/actor-12").is_none());
+    assert!(cache::current("team-j/actor-12").is_none());
     assert!(!filter.was_cache_hit);
+  }
+
+  /// Sets up a bodiless cache hit on `key` -> `ip` and returns the filter and the entry it was
+  /// routed from.
+  fn hit_with_503(key: &str, ip: &str) -> (CacheFilter, Rc<Entry>) {
+    let entry = cache::insert(key.to_string(), ip.to_string(), None, Duration::from_secs(5));
+    let mut filter = CacheFilter::new_test_filter(Config::default());
+    filter.actor_key = Some(key.to_string());
+    filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
+    (filter, entry)
+  }
+
+  fn mock_503(flags: i64) -> MockEnvoyHttpFilter {
+    let mut mock = MockEnvoyHttpFilter::default();
+    mock
+      .expect_get_response_header_value()
+      .withf(|key| key == ":status")
+      .returning(|_| Some(EnvoyBuffer::new(b"503")));
+    mock.expect_get_attribute_int().returning(move |_| Some(flags));
+    mock
+  }
+
+  #[test]
+  fn test_upstream_503_uc_replays_when_entry_is_stale_and_unspoiled() {
+    let (mut filter, entry) = hit_with_503("team-k/actor-1", "10.244.7.1");
+    // The network filter saw a tunnel for this binding refused.
+    assert_eq!(cache::mark_stale("team-k/actor-1", "10.244.7.1"), 1);
+
+    let mut mock = mock_503(RESPONSE_FLAG_UC);
+    mock
+      .expect_set_request_header()
+      .withf(|key, val| key == TARGET_ACTOR_HEADER && val == b"team-k/actor-1")
+      .returning(|_, _| true);
+    mock
+      .expect_remove_request_header()
+      .withf(|key| key == ROUTE_RESOLVED_HEADER)
+      .returning(|_| false);
+    mock.expect_recreate_stream().times(1).returning(|_| true);
+
+    let status = filter.on_response_headers(&mut mock, false);
+    assert_eq!(
+      status,
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::StopIteration
+    );
+    assert!(entry.is_stale());
+    assert!(cache::current("team-k/actor-1").is_none());
+  }
+
+  #[test]
+  fn test_upstream_503_ur_does_not_replay_even_when_entry_is_stale() {
+    // UR can follow response bytes the network filter counted as an answer, so only UC
+    // replays on the network filter's marks.
+    let (mut filter, _entry) = hit_with_503("team-k/actor-2", "10.244.7.2");
+    cache::mark_stale("team-k/actor-2", "10.244.7.2");
+
+    let mut mock = mock_503(RESPONSE_FLAG_UR);
+    let status = filter.on_response_headers(&mut mock, false);
+    assert_eq!(
+      status,
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_upstream_503_uc_does_not_replay_when_entry_is_spoiled() {
+    let (mut filter, _entry) = hit_with_503("team-k/actor-3", "10.244.7.3");
+    // A refusal and a mid-flight drop on the same binding: some request may have run.
+    cache::mark_stale("team-k/actor-3", "10.244.7.3");
+    cache::mark_spoiled("team-k/actor-3", "10.244.7.3");
+
+    // recreate_stream has no expectation, so calling it fails the test.
+    let mut mock = mock_503(RESPONSE_FLAG_UC);
+    let status = filter.on_response_headers(&mut mock, false);
+    assert_eq!(
+      status,
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_upstream_503_uc_does_not_replay_when_entry_is_spoiled_but_not_stale() {
+    let (mut filter, _entry) = hit_with_503("team-k/actor-4", "10.244.7.4");
+    cache::mark_spoiled("team-k/actor-4", "10.244.7.4");
+
+    let mut mock = mock_503(RESPONSE_FLAG_UC);
+    let status = filter.on_response_headers(&mut mock, false);
+    assert_eq!(
+      status,
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+    assert!(cache::current("team-k/actor-4").is_none());
+  }
+
+  #[test]
+  fn test_eviction_leaves_binding_learned_by_another_request() {
+    let (mut filter, _old) = hit_with_503("team-k/actor-5", "10.244.7.5");
+    // Another request already learned the actor's new worker.
+    let newer = cache::insert(
+      "team-k/actor-5".to_string(),
+      "10.244.7.50".to_string(),
+      None,
+      Duration::from_secs(5),
+    );
+
+    let mut mock = mock_503(RESPONSE_FLAG_UC);
+    filter.on_response_headers(&mut mock, false);
+    assert!(Rc::ptr_eq(&cache::current("team-k/actor-5").unwrap(), &newer));
   }
 
   #[test]
   fn test_upstream_503_with_uh_does_not_replay_when_request_has_body() {
     let config = Config::default();
-    cache().insert(
-      "team-j/actor-12-body".to_string(),
-      Binding {
-        worker_ip: "10.244.6.22".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-j/actor-12-body".to_string(), "10.244.6.22".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-12-body".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
     filter.has_request_body = true;
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -1131,25 +1191,19 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert!(cache().get("team-j/actor-12-body").is_none());
+    assert!(cache::current("team-j/actor-12-body").is_none());
     assert!(!filter.was_cache_hit);
   }
 
   #[test]
   fn test_upstream_503_with_uc_does_not_replay_when_request_has_body() {
     let config = Config::default();
-    cache().insert(
-      "team-j/actor-13".to_string(),
-      Binding {
-        worker_ip: "10.244.6.3".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-j/actor-13".to_string(), "10.244.6.3".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-13".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
     filter.has_request_body = true;
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -1172,25 +1226,19 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert!(cache().get("team-j/actor-13").is_none());
+    assert!(cache::current("team-j/actor-13").is_none());
     assert!(!filter.was_cache_hit);
   }
 
   #[test]
   fn test_upstream_503_with_uc_does_not_replay_even_for_bodiless_get() {
     let config = Config::default();
-    cache().insert(
-      "team-j/actor-14".to_string(),
-      Binding {
-        worker_ip: "10.244.6.4".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-j/actor-14".to_string(), "10.244.6.4".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-14".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
     filter.has_request_body = false;
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -1210,25 +1258,19 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert!(cache().get("team-j/actor-14").is_none());
+    assert!(cache::current("team-j/actor-14").is_none());
     assert!(!filter.was_cache_hit);
   }
 
   #[test]
   fn test_upstream_503_with_ur_does_not_replay() {
     let config = Config::default();
-    cache().insert(
-      "team-j/actor-14-ur".to_string(),
-      Binding {
-        worker_ip: "10.244.6.41".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-j/actor-14-ur".to_string(), "10.244.6.41".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-14-ur".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
     filter.has_request_body = false;
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -1247,25 +1289,19 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert!(cache().get("team-j/actor-14-ur").is_none());
+    assert!(cache::current("team-j/actor-14-ur").is_none());
     assert!(!filter.was_cache_hit);
   }
 
   #[test]
   fn test_stale_rejection_does_not_replay_when_request_has_body() {
     let config = Config::default();
-    cache().insert(
-      "team-j/actor-15".to_string(),
-      Binding {
-        worker_ip: "10.244.6.5".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-j/actor-15".to_string(), "10.244.6.5".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-15".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
     filter.has_request_body = true; // Request had body (e.g. POST)
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -1284,25 +1320,19 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert!(cache().get("team-j/actor-15").is_none());
+    assert!(cache::current("team-j/actor-15").is_none());
     assert!(!filter.was_cache_hit);
   }
 
   #[test]
   fn test_upstream_421_with_body_does_not_replay() {
     let config = Config::default();
-    cache().insert(
-      "team-j/actor-16-421".to_string(),
-      Binding {
-        worker_ip: "10.244.6.7".to_string(),
-        worker_spiffe_id: None,
-        expires_at: Instant::now() + Duration::from_secs(5),
-      },
-    );
+    let entry = cache::insert("team-j/actor-16-421".to_string(), "10.244.6.7".to_string(), None, Duration::from_secs(5));
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-16-421".to_string());
     filter.was_cache_hit = true;
+    filter.entry = Some(entry.clone());
     filter.has_request_body = true; // Request has body
 
     let mut mock = MockEnvoyHttpFilter::default();
@@ -1322,7 +1352,7 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert!(cache().get("team-j/actor-16-421").is_none());
+    assert!(cache::current("team-j/actor-16-421").is_none());
     assert!(!filter.was_cache_hit);
   }
 
@@ -1502,9 +1532,7 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
 
-    let entry = cache()
-      .get("team-f/actor-6")
-      .expect("entry should be cached");
+    let entry = cache::current("team-f/actor-6").expect("entry should be cached");
     assert_eq!(entry.worker_ip, "2001:db8::1");
     assert_eq!(entry.worker_spiffe_id, None);
     drop(entry);
@@ -1566,7 +1594,7 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
     // Entry must NOT have been inserted into cache
-    assert!(cache().get("team-grpc/actor-miss-h").is_none());
+    assert!(cache::current("team-grpc/actor-miss-h").is_none());
   }
 
   #[test]
@@ -1611,7 +1639,7 @@ mod tests {
       resp_status,
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
-    assert!(cache().get("team-grpc/actor-miss-t").is_some());
+    assert!(cache::current("team-grpc/actor-miss-t").is_some());
 
     // When trailers arrive with grpc-status: 14, the failed binding is removed
     mock
@@ -1624,6 +1652,6 @@ mod tests {
       trailer_status,
       envoy_dynamic_module_type_on_http_filter_response_trailers_status::Continue
     );
-    assert!(cache().get("team-grpc/actor-miss-t").is_none());
+    assert!(cache::current("team-grpc/actor-miss-t").is_none());
   }
 }

@@ -12,26 +12,191 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Process-global actor -> worker binding cache shared across Envoy worker threads.
+//! Per-thread actor -> worker binding cache.
+//!
+//! Each Envoy worker thread has its own cache. The HTTP filter and the
+//! `tunnel_watcher` network filter for a request run on the same thread
+//! (the internal listener connection is accepted on the thread that opened it),
+//! and so do Envoy's connection pools, so the network filter's marks always land
+//! in the cache the request was routed from.
+//!
+//! A request routed from the cache holds an [`Rc`] to its [`Entry`] until the
+//! request ends. The cache keeps two maps:
+//!
+//! * current bindings, `actor key -> Rc<Entry>`, which new requests look up;
+//! * live entries, `(actor key, worker IP) -> [Weak<Entry>]`, which the network
+//!   filter marks. An entry stays reachable here while any request holds it,
+//!   even after it leaves the current bindings.
 
-use std::sync::OnceLock;
-use std::time::Instant;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
+use std::time::{Duration, Instant};
 
-use dashmap::DashMap;
-
-/// A resolved actor -> worker binding stored in the cache.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Binding {
+/// A resolved actor -> worker binding.
+#[derive(Debug)]
+pub struct Entry {
   pub worker_ip: String,
   pub worker_spiffe_id: Option<String>,
   pub expires_at: Instant,
+  /// Set when a tunnel for this binding was refused before it was established.
+  stale: Cell<bool>,
+  /// Set when an established tunnel for this binding closed while a request was
+  /// waiting for its response, so that request may have reached the actor.
+  spoiled: Cell<bool>,
 }
 
-/// Returns the process-global actor -> worker binding cache shared across all
-/// Envoy worker threads.
-pub fn cache() -> &'static DashMap<String, Binding> {
-  static CACHE: OnceLock<DashMap<String, Binding>> = OnceLock::new();
-  CACHE.get_or_init(DashMap::new)
+impl Entry {
+  pub fn is_stale(&self) -> bool {
+    self.stale.get()
+  }
+
+  pub fn is_spoiled(&self) -> bool {
+    self.spoiled.get()
+  }
+
+  /// Reports whether a request routed from this entry whose connection ended
+  /// before a response can be replayed: a tunnel for the binding was refused,
+  /// and no request on it may have reached the actor.
+  pub fn refused_and_unspoiled(&self) -> bool {
+    self.is_stale() && !self.is_spoiled()
+  }
+}
+
+/// The result of looking up an actor in the cache.
+pub enum Lookup {
+  /// An unexpired binding.
+  Hit(Rc<Entry>),
+  /// A binding that had expired and has been removed.
+  Expired,
+  /// No binding.
+  Miss,
+}
+
+#[derive(Default)]
+struct Cache {
+  bindings: HashMap<String, Rc<Entry>>,
+  live: HashMap<(String, String), Vec<Weak<Entry>>>,
+}
+
+impl Cache {
+  /// Drops live-entry slots whose entries have been freed. Runs a full sweep
+  /// only when dead slots may outnumber live bindings, so the cost is amortized.
+  fn maybe_sweep(&mut self) {
+    if self.live.len() <= 2 * self.bindings.len() + 64 {
+      return;
+    }
+    self.live.retain(|_, entries| {
+      entries.retain(|e| e.strong_count() > 0);
+      !entries.is_empty()
+    });
+  }
+
+  /// Applies `mark` to every live entry for `(actor, worker_ip)` and returns how
+  /// many entries it marked.
+  fn mark(&mut self, actor: &str, worker_ip: &str, mark: impl Fn(&Entry)) -> usize {
+    let Some(entries) = self.live.get_mut(&(actor.to_string(), worker_ip.to_string())) else {
+      return 0;
+    };
+    let mut marked = 0;
+    entries.retain(|weak| match weak.upgrade() {
+      Some(entry) => {
+        mark(&entry);
+        marked += 1;
+        true
+      }
+      None => false,
+    });
+    marked
+  }
+}
+
+thread_local! {
+  static CACHE: RefCell<Cache> = RefCell::default();
+}
+
+/// Looks up the current binding for `key`, removing it if it expired by `now`.
+pub fn lookup(key: &str, now: Instant) -> Lookup {
+  CACHE.with_borrow_mut(|cache| match cache.bindings.get(key) {
+    Some(entry) if entry.expires_at > now => Lookup::Hit(Rc::clone(entry)),
+    Some(_) => {
+      cache.bindings.remove(key);
+      Lookup::Expired
+    }
+    None => Lookup::Miss,
+  })
+}
+
+/// Returns the current binding for `key`, expired or not.
+pub fn current(key: &str) -> Option<Rc<Entry>> {
+  CACHE.with_borrow(|cache| cache.bindings.get(key).cloned())
+}
+
+/// Makes a new binding for `key` current, replacing any previous one, and returns it.
+pub fn insert(
+  key: String,
+  worker_ip: String,
+  worker_spiffe_id: Option<String>,
+  ttl: Duration,
+) -> Rc<Entry> {
+  let entry = Rc::new(Entry {
+    worker_ip,
+    worker_spiffe_id,
+    expires_at: Instant::now() + ttl,
+    stale: Cell::new(false),
+    spoiled: Cell::new(false),
+  });
+  CACHE.with_borrow_mut(|cache| {
+    let slot = cache
+      .live
+      .entry((key.clone(), entry.worker_ip.clone()))
+      .or_default();
+    slot.retain(|e| e.strong_count() > 0);
+    slot.push(Rc::downgrade(&entry));
+    cache.bindings.insert(key, Rc::clone(&entry));
+    cache.maybe_sweep();
+  });
+  entry
+}
+
+/// Removes the current binding for `key` if it is `entry`, so a newer binding
+/// learned by another request is left alone. Reports whether it removed it.
+pub fn remove_if_current(key: &str, entry: &Rc<Entry>) -> bool {
+  CACHE.with_borrow_mut(|cache| {
+    if cache
+      .bindings
+      .get(key)
+      .is_some_and(|current| Rc::ptr_eq(current, entry))
+    {
+      cache.bindings.remove(key);
+      true
+    } else {
+      false
+    }
+  })
+}
+
+/// Marks every live entry for `(actor, worker_ip)` stale and removes the current
+/// binding if it points at that worker, so new requests resolve through
+/// `ext_proc`. Returns how many entries it marked.
+pub fn mark_stale(actor: &str, worker_ip: &str) -> usize {
+  CACHE.with_borrow_mut(|cache| {
+    let marked = cache.mark(actor, worker_ip, |e| e.stale.set(true));
+    if cache
+      .bindings
+      .get(actor)
+      .is_some_and(|current| current.worker_ip == worker_ip)
+    {
+      cache.bindings.remove(actor);
+    }
+    marked
+  })
+}
+
+/// Marks every live entry for `(actor, worker_ip)` spoiled. Returns how many
+/// entries it marked.
+pub fn mark_spoiled(actor: &str, worker_ip: &str) -> usize {
+  CACHE.with_borrow_mut(|cache| cache.mark(actor, worker_ip, |e| e.spoiled.set(true)))
 }
 
 // ==========================================
@@ -41,24 +206,100 @@ pub fn cache() -> &'static DashMap<String, Binding> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::time::Duration;
+
+  // Each Rust test runs on its own thread, so each test starts with an empty cache.
 
   #[test]
-  fn test_cache_insert_lookup_and_remove() {
-    let key = "test-ns/cache-unit-actor".to_string();
-    let binding = Binding {
-      worker_ip: "10.244.0.42".to_string(),
-      worker_spiffe_id: Some("spiffe://cluster.local/ns/default/sa/worker-pool-1".to_string()),
-      expires_at: Instant::now() + Duration::from_secs(5),
-    };
+  fn test_insert_lookup_and_remove() {
+    let entry = insert(
+      "ns/a".to_string(),
+      "10.244.0.42".to_string(),
+      Some("spiffe://cluster.local/ns/default/sa/worker-pool-1".to_string()),
+      Duration::from_secs(5),
+    );
+    match lookup("ns/a", Instant::now()) {
+      Lookup::Hit(hit) => assert!(Rc::ptr_eq(&hit, &entry)),
+      _ => panic!("expected a hit"),
+    }
+    assert!(remove_if_current("ns/a", &entry));
+    assert!(matches!(lookup("ns/a", Instant::now()), Lookup::Miss));
+  }
 
-    cache().insert(key.clone(), binding.clone());
-    let entry = cache().get(&key).expect("entry should exist");
-    assert_eq!(*entry, binding);
+  #[test]
+  fn test_lookup_removes_expired_binding() {
+    insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::ZERO);
+    assert!(matches!(
+      lookup("ns/a", Instant::now() + Duration::from_millis(1)),
+      Lookup::Expired
+    ));
+    assert!(current("ns/a").is_none());
+  }
+
+  #[test]
+  fn test_remove_if_current_keeps_newer_binding() {
+    let old = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    let new = insert("ns/a".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5));
+    assert!(!remove_if_current("ns/a", &old));
+    assert!(Rc::ptr_eq(&current("ns/a").unwrap(), &new));
+  }
+
+  #[test]
+  fn test_mark_stale_marks_held_entry_and_removes_binding() {
+    let held = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    assert_eq!(mark_stale("ns/a", "10.0.0.1"), 1);
+    assert!(held.is_stale());
+    assert!(!held.is_spoiled());
+    assert!(held.refused_and_unspoiled());
+    assert!(current("ns/a").is_none());
+  }
+
+  #[test]
+  fn test_mark_stale_ignores_other_worker() {
+    let on_a = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    assert_eq!(mark_stale("ns/a", "10.0.0.2"), 0);
+    assert!(!on_a.is_stale());
+    assert!(current("ns/a").is_some());
+  }
+
+  #[test]
+  fn test_marks_reach_entry_held_after_newer_binding_replaces_it() {
+    // A request still holds the worker-A entry after ext_proc learned worker B.
+    let old = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    let new = insert("ns/a".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5));
+    assert_eq!(mark_spoiled("ns/a", "10.0.0.1"), 1);
+    assert!(old.is_spoiled());
+    assert!(!new.is_spoiled());
+    // The current binding points at worker B, so a stale mark for A keeps it.
+    assert_eq!(mark_stale("ns/a", "10.0.0.1"), 1);
+    assert!(Rc::ptr_eq(&current("ns/a").unwrap(), &new));
+  }
+
+  #[test]
+  fn test_marks_reach_every_live_entry_for_the_same_worker() {
+    // The actor moved away from worker A and back while a request held the old entry.
+    let first = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    let second = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    assert_eq!(mark_spoiled("ns/a", "10.0.0.1"), 2);
+    assert!(first.is_spoiled());
+    assert!(second.is_spoiled());
+  }
+
+  #[test]
+  fn test_freed_entries_are_not_marked() {
+    let entry = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    assert!(remove_if_current("ns/a", &entry));
     drop(entry);
+    assert_eq!(mark_stale("ns/a", "10.0.0.1"), 0);
+  }
 
-    let removed = cache().remove(&key);
-    assert_eq!(removed.map(|(_, v)| v), Some(binding));
-    assert!(cache().get(&key).is_none());
+  #[test]
+  fn test_sweep_drops_dead_live_slots() {
+    for i in 0..200 {
+      let key = format!("ns/actor-{i}");
+      let entry = insert(key.clone(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+      remove_if_current(&key, &entry);
+    }
+    let live = CACHE.with_borrow(|cache| cache.live.len());
+    assert!(live <= 65, "dead live slots were not swept: {live}");
   }
 }

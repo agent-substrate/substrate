@@ -25,6 +25,7 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	setfilterstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
+	networkdynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/dynamic_modules/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setfilterstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
 	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
@@ -320,7 +321,7 @@ func TestXdsServer_ActorTunnelRoutes(t *testing.T) {
 }
 
 func TestBuildActorConnectListener(t *testing.T) {
-	filters := buildActorConnectListener().GetFilterChains()[0].GetFilters()
+	filters := buildActorConnectListener(false).GetFilterChains()[0].GetFilters()
 	if len(filters) != 2 {
 		t.Fatalf("got %d network filters, want set_filter_state and tcp_proxy", len(filters))
 	}
@@ -361,6 +362,33 @@ func TestBuildActorConnectListener(t *testing.T) {
 	}
 }
 
+// TestBuildActorConnectListenerIngressCache checks that with the ingress cache
+// on, the tunnel_watcher network filter runs ahead of tcp_proxy and
+// loads from the same library as the ingress-cache HTTP filter, whose
+// per-thread cache it marks.
+func TestBuildActorConnectListenerIngressCache(t *testing.T) {
+	filters := buildActorConnectListener(true).GetFilterChains()[0].GetFilters()
+	if len(filters) != 3 {
+		t.Fatalf("got %d network filters, want set_filter_state, tunnel_watcher and tcp_proxy", len(filters))
+	}
+	watcher := filters[1]
+	if got := watcher.GetName(); got != networkDynamicModulesFilterName {
+		t.Errorf("filter[1] name = %q, want %q", got, networkDynamicModulesFilterName)
+	}
+	cfg := &networkdynamicmodulesv3.DynamicModuleNetworkFilter{}
+	if err := watcher.GetTypedConfig().UnmarshalTo(cfg); err != nil {
+		t.Fatalf("unmarshal tunnel_watcher: %v", err)
+	}
+	if got := cfg.GetDynamicModuleConfig().GetName(); got != ingressCacheDynamicModuleName {
+		t.Errorf("tunnel_watcher module = %q, want %q (the HTTP filter's library)", got, ingressCacheDynamicModuleName)
+	}
+	if got := cfg.GetFilterName(); got != ingressCacheTunnelWatcherFilterName {
+		t.Errorf("tunnel_watcher filter name = %q, want %q", got, ingressCacheTunnelWatcherFilterName)
+	}
+	if got := filters[2].GetName(); got != "envoy.filters.network.tcp_proxy" {
+		t.Errorf("last filter = %q, want tcp_proxy", got)
+	}
+}
 func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 	protocolOptions := func(t *testing.T, c *clusterv3.Cluster) *httpv3.HttpProtocolOptions {
 		t.Helper()
