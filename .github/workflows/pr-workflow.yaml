@@ -33,6 +33,26 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  proto-compatibility:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Advisory while the project makes no pre-1.0 compatibility guarantee.
+    continue-on-error: true
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        fetch-depth: 0
+    - name: Setup Buf
+      uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1
+      with:
+        setup_only: true
+        version: '1.75.0'
+    - name: Check proto compatibility
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+      run: hack/check-proto-compatibility.sh "${BASE_SHA}"
   run-tests:
     runs-on: ubuntu-latest
     # A bound well clear of the observed runtime. Without one the platform
