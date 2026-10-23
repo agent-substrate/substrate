@@ -143,7 +143,7 @@ jobs:
         name: test-results-unit
         path: ${{ env.ARTIFACTS }}
         if-no-files-found: error
-    # Advisory while the project makes no pre-1.0 compatibility guarantee.
+    # Report compatibility breaks without blocking merges.
     - name: Setup Buf
       if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
       continue-on-error: true
