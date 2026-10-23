@@ -24,10 +24,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
+	"go.ate.dev/substrate/internal/manifest"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -118,19 +118,15 @@ func scopeFromFlags(atespace string, global bool) (accessPolicyScope, error) {
 	return accessPolicyScope{atespace: atespace}, nil
 }
 
-// accessPolicyFromManifest parses a single protojson-shaped YAML or JSON
-// document into an AccessPolicy. Parsing is strict: unknown fields are an
-// error.
+// accessPolicyFromManifest parses a manifest holding a single protojson-shaped
+// AccessPolicy. An access policy is a singleton in its scope, so more than one
+// record is an error.
 func accessPolicyFromManifest(data []byte) (*ateapi.AccessPolicy, error) {
-	jsonData, err := manifestToJSON(data)
+	policies, err := manifest.Parse[ateapi.AccessPolicy](data)
 	if err != nil {
 		return nil, err
 	}
-	policy := &ateapi.AccessPolicy{}
-	if err := protojson.Unmarshal(jsonData, policy); err != nil {
-		return nil, fmt.Errorf("invalid AccessPolicy: %w", err)
-	}
-	return policy, nil
+	return manifest.One(policies)
 }
 
 // loadAccessPolicyManifest reads a manifest from filename, or from in when
