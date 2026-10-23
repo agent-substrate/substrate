@@ -68,10 +68,11 @@ func (s *recordingStorage) objects() []string {
 }
 
 func uniformDelays(d time.Duration) delays {
-	return delays{run: d, restore: d, checkpoint: d, promoteSnapshot: d, terminate: d}
+	return delays{run: d, restore: d, checkpoint: d, promoteSnapshot: d, detachActor: d, terminate: d}
 }
 
-// herderCalls invokes every Atelet method the herder implements. The
+// herderCalls invokes every Atelet method the herder implements but
+// DetachActor, which waits only when it has a snapshot to detach. The
 // Checkpoint and PromoteSnapshot calls upload a snapshot, so each writes a
 // placeholder.
 func herderCalls(h *herder) map[string]func(context.Context) error {
@@ -256,7 +257,7 @@ func TestHerderPromoteSnapshotReportsSnapshotDurable(t *testing.T) {
 		LatestLocal:   &ateletpb.SnapshotReport{Snapshot: snap},
 		LatestDurable: &ateletpb.SnapshotReport{Snapshot: snap},
 	}
-	if diff := cmp.Diff(want, resp.GetState(), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(want, resp.GetState(), protocmp.Transform(), ignoreReportTimes); diff != "" {
 		t.Errorf("PromoteSnapshot state mismatch (-want +got):\n%s", diff)
 	}
 }
