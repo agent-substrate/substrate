@@ -41,7 +41,7 @@ type ClientConfig struct {
 	// Required.
 	CAFile string
 
-	// ServerName overrides SNI / hostname verification. Optional.
+	// ServerName is the DNS name the server certificate must carry. Required.
 	ServerName string
 
 	// ClientCredBundle is a PEM file containing the client certificate chain
@@ -61,6 +61,9 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 	}
 	if cfg.ClientCredBundle == "" {
 		return nil, fmt.Errorf("ateapiauth: a client credential bundle (mTLS) is required")
+	}
+	if cfg.ServerName == "" {
+		return nil, fmt.Errorf("ateapiauth: ServerName is required")
 	}
 	loadRootCAs := credbundle.PoolLoader(cfg.CAFile)
 	if _, err := loadRootCAs(); err != nil {
