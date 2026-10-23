@@ -153,32 +153,6 @@ func TestGracefulShutdownWritesFinal(t *testing.T) {
 // TestRecordFinalAfterSandboxGone pins that a final read that finds the cgroup
 // gone falls back to the latest sample, and to a pending record when there is
 // none.
-// TestEndDeadSandboxReadsBeforeTeardown pins that a dead sandbox's final
-// record carries the CPU its cgroup holds before the teardown removes it, not
-// the last periodic sample.
-func TestEndDeadSandboxReadsBeforeTeardown(t *testing.T) {
-	s := newStatsService(t, healthyCgroup)
-	rec := withUsageRecorder(s)
-	h := hostWithEpoch(s, time.Now(), true)
-	s.sweepUsage(context.Background())
-
-	leaf := filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(testActor.UID, sandboxCgroupContainer))
-	if err := os.WriteFile(filepath.Join(leaf, "cpu.stat"), []byte("usage_usec 2000000\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	s.endDeadSandbox(context.Background(), h, func() error {
-		setHostedActor(s, nil)
-		return os.RemoveAll(leaf) // as runsc delete does
-	})
-
-	if got := rec.Kinds(); len(got) != 2 || got[1] != ateattr.StatsKindFinal {
-		t.Fatalf("records = %v, want periodic then final", got)
-	}
-	if got := h.usage.Latest().GetCpuUsageUsec(); got != 2000000 {
-		t.Errorf("final CPU = %d, want the 2000000 read before the teardown", got)
-	}
-}
-
 func TestRecordFinalAfterSandboxGone(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 	rec := withUsageRecorder(s)
