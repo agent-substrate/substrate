@@ -206,6 +206,37 @@ func (s *AteWorkerService) readFinal(ctx context.Context, h *hostedActor) {
 	}
 }
 
+// readDeadFinal reads the cgroup of h's sandbox, which has died, for the final
+// record. The cgroup keeps its CPU counter until the teardown removes it, but
+// the memory went with the processes, so memory usage and working set come
+// from the newest sample taken while the sandbox ran, when there is one. A
+// failed read leaves the newest sample to stand in, as in readFinal.
+func (s *AteWorkerService) readDeadFinal(ctx context.Context, h *hostedActor) {
+	live := h.usage.Latest()
+	sample, _, err := s.measure(ctx, h)
+	if err != nil {
+		return
+	}
+	if live.GetSource() != ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED {
+		sample.MemoryCurrentBytes = live.GetMemoryCurrentBytes()
+		sample.MemoryWorkingSetBytes = live.GetMemoryWorkingSetBytes()
+	}
+	h.usage.Store(sample)
+}
+
+// endActivation reads h's final usage with read, tears the activation down,
+// and writes its final record, in that order: the reading needs the sandbox's
+// cgroup, which the teardown removes. h is nil for an actor not hosted. It
+// returns the teardown's error.
+func (s *AteWorkerService) endActivation(ctx context.Context, h *hostedActor, read func(context.Context, *hostedActor), teardown func() error) error {
+	if h != nil {
+		read(ctx, h)
+	}
+	err := teardown()
+	s.recordFinalIfEnded(ctx, h)
+	return err
+}
+
 // recordFinalIfEnded writes h's final record if a checkpoint or terminate tore
 // its activation down, which unhosts the actor even when a later step fails.
 // The caller holds the actor's lock.
