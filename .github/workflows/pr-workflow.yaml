@@ -141,17 +141,10 @@ jobs:
         if-no-files-found: error
     - name: verify
       run: hack/verify-all.sh
-  verify-migrations:
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-    - name: Checkout
-      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      with:
-        fetch-depth: 0
-    # A merge group has no base_ref. It exposes the base branch as refs/heads/<branch>.
+    # Last, so a failure doesn't skip the tests. A merge group has no base_ref.
+    # It exposes the base branch as refs/heads/<branch>.
     - name: Verify immutable PostgreSQL migrations
+      if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
       env:
         BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
       run: hack/verify/postgresql-migrations.sh "origin/${BASE_REF#refs/heads/}"
