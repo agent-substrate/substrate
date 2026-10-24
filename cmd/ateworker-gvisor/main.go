@@ -495,7 +495,7 @@ var containerKillTimeout = 5 * time.Second
 type containerRuntime interface {
 	cmdKill(ctx context.Context, containerName, signal string) error
 	cmdWait(ctx context.Context, containerName string) error
-	cmdState(ctx context.Context, containerName string) error
+	cmdState(ctx context.Context, containerName string) (string, error)
 	cmdDelete(ctx context.Context, containerName string) error
 	cmdList(ctx context.Context) ([]string, error)
 }
@@ -882,6 +882,22 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		// rootfs bundle and durable-dir volumes into <checkpointPath>/fs when
 		// present.
 		checkpointFn = func(ctx context.Context) error {
+			// A retry after a cancelled teardown finds the image already written and
+			// the sandbox gone; checkpointing it again fails and crashes the actor.
+			sandboxStatus := func(ctx context.Context) (string, error) { return rcmd.cmdState(ctx, ocispec.SandboxID) }
+			if previousCheckpointReusable(ctx, sandboxStatus, checkpointPath) {
+				slog.InfoContext(ctx, "Reusing the checkpoint image of a previous attempt",
+					slog.String("actor", attribution.Ref.String()),
+					slog.String("actorUID", attribution.UID))
+				timing.checkpoint = lap(&tLast)
+				return nil
+			}
+			// runsc opens its image files with O_EXCL; drop a partial earlier attempt.
+			if stale, err := listSnapshotFiles(checkpointPath); err == nil {
+				for _, f := range stale {
+					_ = os.Remove(filepath.Join(checkpointPath, f))
+				}
+			}
 			var sandbox *sandboxProcess
 			if hosted != nil {
 				hosted.stopping.Store(true)
@@ -949,6 +965,21 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	return resp, nil
 }
 
+// previousCheckpointReusable reports whether checkpointPath holds the image of
+// an earlier attempt whose sandbox no longer runs. status is the sandbox's
+// OCI status, or an error when runsc has no record of it.
+func previousCheckpointReusable(ctx context.Context, status func(context.Context) (string, error), checkpointPath string) bool {
+	info, err := os.Stat(filepath.Join(checkpointPath, "checkpoint.img"))
+	if err != nil || info.Size() == 0 {
+		return false
+	}
+	st, err := status(ctx)
+	if err != nil {
+		return true
+	}
+	return st != "running"
+}
+
 // listSnapshotFiles returns the (relative) names of regular files directly under
 // dir, dir/fs, and dir/rootfs, which atelet ships to object storage as the
 // snapshot.
@@ -1000,7 +1031,7 @@ func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []
 	// Without this, `runsc delete` occasionally throws an error.
 	present := make([]string, 0, len(names))
 	for _, name := range names {
-		if err := rcmd.cmdState(ctx, name); err != nil {
+		if _, err := rcmd.cmdState(ctx, name); err != nil {
 			err = fmt.Errorf("while checking state of %q container: %w", name, err)
 			gone, listErr := isContainerAlreadyGone(ctx, rcmd, name)
 			if listErr != nil {
