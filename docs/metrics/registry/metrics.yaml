@@ -473,15 +473,33 @@ groups:
                 and the resume activated the actor. This value is separate
                 because it is not a correct sample. One cold start with 50
                 requests is one slow activation and not 51.
+            - id: parked_exhausted
+              stability: development
+              value: parked_exhausted
+              brief: >
+                The parking budget ended while the resume was still blocked.
+                The request failed with the last capacity error. Every request
+                on that flight has this value. Not an activation time.
+            - id: parked_rejected
+              stability: development
+              value: parked_rejected
+              brief: >
+                The parking area was full, thus the router refused the request
+                at once. atenet.router.parking.rejected counts the same requests.
+            - id: canceled
+              stability: development
+              value: canceled
+              brief: >
+                The request ended before the resume gave an answer: the client
+                disconnected, or its deadline ended (see ate.router.outcome).
+                The flight continues, thus the actor can still start.
             - id: unknown
               stability: development
               value: unknown
               brief: >
-                The resume did not complete, thus the router cannot tell whether
-                an activation ran. The resume failed, or the request stopped
-                before the resume gave an answer, or the direction does not
-                resume an actor. Do not read the time in this series as an
-                activation time.
+                The resume failed for another reason (see ate.router.outcome),
+                or the direction does not resume an actor. Not an activation
+                time.
       - id: ate.router.outcome
         stability: development
         brief: The result of the route attempt.
@@ -896,7 +914,7 @@ groups:
         emitted_by: [ateapi]
         golden_signals: [latency, traffic]
         code_anchor: cmd/ateapi/internal/controlapi/metrics.go
-        buckets: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2.5, 5, 10, 30]
+        buckets: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800]
         cuj: Which actor operation is slow, and for which template or pool?
     attributes:
       - ref: ate.actor.operation.name
@@ -996,7 +1014,7 @@ groups:
         emitted_by: [atelet]
         golden_signals: [latency]
         code_anchor: cmd/atelet/metrics.go
-        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600, 1800]
         cuj: Cold starts are slow. Is the cause the download, the unpack, or ateworker?
     attributes:
       - ref: ate.template.atespace
@@ -1030,7 +1048,7 @@ groups:
         emitted_by: [atelet]
         golden_signals: [latency]
         code_anchor: cmd/atelet/metrics.go
-        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600, 1800]
         cuj: Suspends are slow. Is the cause ateworker or the upload?
     attributes:
       - ref: ate.template.atespace
@@ -1514,14 +1532,16 @@ groups:
       ate.router.resume before you read it. The triggered series is the
       activation time. The none series is the usual warm route. A sum across the
       two series puts milliseconds and tens of seconds in one distribution. The
-      unknown series holds the resumes that did not complete, thus it is neither
-      an activation time nor a warm route.
+      parked_exhausted, parked_rejected, canceled and unknown series hold the
+      resumes that did not complete, thus they are neither an activation time
+      nor a warm route. The count of parked_exhausted is the number of requests
+      that capacity, not a fault, turned away.
     annotations:
       substrate:
         emitted_by: [atenet-router]
         golden_signals: [latency, traffic, errors]
         code_anchor: cmd/atenet/internal/router/extproc/metrics.go
-        buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30]
+        buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 60, 90, 120, 180, 300, 600, 1800]
         cuj: A request stopped or got a 503 error. Was the actor cold, was the fleet full, or has the router a defect?
     attributes:
       - ref: ate.template.atespace
@@ -1564,7 +1584,7 @@ groups:
         emitted_by: [atenet-router]
         golden_signals: [latency, saturation]
         code_anchor: cmd/atenet/internal/router/ingress/metrics.go
-        buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 45, 60]
+        buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 45, 60, 90, 120, 180, 300, 600, 1800]
         cuj: How much of the wait of the user is a queue, and how much is an activation?
     attributes:
       - ref: outcome
