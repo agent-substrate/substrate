@@ -216,7 +216,8 @@ Right now the only "authorization" policy is to check the client's SPIFFE ID
 against a static allowlist.  Any ID on the allowlist may use the ingress router
 to contact any actor.  Richer authorization policies may be added post-GA.  Use
 the `--ingress-allowed-spiffe-ids` flag to set the allowlist (comma-separated
-list).
+list). `ate-setup` sets it to the `atenet-client` ServiceAccount's ID unless the
+install configures its own.
 
 ### Common setups
 
@@ -257,15 +258,17 @@ volumes:
 
 Add the pod's SPIFFE ID to `--ingress-allowed-spiffe-ids`.
 
-**Client outside the cluster, pod identity CA.** A demo on your machine can
-follow the e2e tests in `internal/e2e/ingressauth.go`. It creates a
-PodCertificateRequest for the podidentity signer that names a pod, node and
-ServiceAccount that don't exist. kube-apiserver checks those only for requests
-from a kubelet, and the signer issues the SPIFFE ID of the named namespace and
-ServiceAccount. The client keeps the private key, reads the chain from the
-request's status, and reads the servicedns ClusterTrustBundle to verify the
-router. Creating PodCertificateRequests needs RBAC for that resource in the
-namespace.
+**Client outside the cluster, pod identity CA.** `kubectl ate proxy actor`
+serves a local HTTP proxy to one actor. It presents a certificate for the
+`atenet-client` ServiceAccount, which it requests the way
+`internal/podidentity` does: a PodCertificateRequest for the podidentity
+signer that names a pod, node and ServiceAccount that don't exist.
+kube-apiserver checks those only for requests from a kubelet, and the signer
+issues the SPIFFE ID of the named namespace and ServiceAccount. The client
+keeps the private key, reads the chain from the request's status, and reads
+the servicedns ClusterTrustBundle to verify the router. Creating
+PodCertificateRequests needs RBAC for that resource in the namespace, and that
+RBAC can request a certificate for any ServiceAccount there.
 
 ## status page
 

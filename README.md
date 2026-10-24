@@ -122,7 +122,7 @@ hack/create-kind-cluster.sh
 hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
 
 # install counter demo
-hack/install-ate-kind.sh deploy demo-counter
+hack/install-ate-kind.sh deploy demo counter
 
 # install kubectl-ate
 go install ./cmd/kubectl-ate
@@ -131,8 +131,9 @@ go install ./cmd/kubectl-ate
 # actor template, resolved in the actor's atespace)
 kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 
-# port-forward the network router to bind to local port `8000`
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
+# serve a local proxy on port 8000 that sends requests to the actor through the
+# network router
+kubectl ate proxy actor my-counter-1 -a ate-demo-counter
 ```
 
 > [!IMPORTANT]
@@ -143,9 +144,7 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
-curl -X POST \
-   -H "ate-target-actor: ate-demo-counter/my-counter-1" \
-   -i http://localhost:8000/
+curl -X POST -i http://localhost:8000/
 ```
 
 ### GKE Quickstart (Development)
@@ -193,7 +192,7 @@ curl -X POST \
 
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash
-   go run ./cmd/ate-setup deploy demo demo-counter
+   go run ./cmd/ate-setup deploy demo counter
    ```
 
 #### Custom Setup and Deployment

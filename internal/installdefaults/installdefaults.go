@@ -37,6 +37,10 @@ const (
 	// ClientServiceAccount is the ServiceAccount an out-of-cluster client mints
 	// its ateapi bearer token from.
 	ClientServiceAccount = "ate-client"
+	// IngressClientServiceAccount is the ServiceAccount an out-of-cluster
+	// client requests its atenet-router client certificate for. The router
+	// allows it unless the install configures its own allowlist.
+	IngressClientServiceAccount = "atenet-client"
 
 	// AteletTrustDomain and the ServiceAccount constants are the trust-domain
 	// and service-account segments of the SPIFFE IDs that atelet,

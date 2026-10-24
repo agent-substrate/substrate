@@ -252,9 +252,6 @@ func patchAtenetEgressEnvoyConcurrency(raw []byte, concurrency int) ([]byte, err
 // manifest carries no allowlist, because which clients may reach actors is the
 // install's to decide.
 func (e *Env) patchAtenetRouterAllowedSPIFFEIDs(raw []byte) ([]byte, error) {
-	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
-		return nil, err
-	}
 	return appendContainerArgs(raw, "atenet-router", "atenet-router",
 		"--ingress-allowed-spiffe-ids="+strings.Join(e.Cfg.IngressAllowedSPIFFEIDs, ","))
 }

@@ -217,7 +217,7 @@ type Config struct {
 
 	// IngressAllowedSPIFFEIDs are the SPIFFE IDs the ingress router lets
 	// reach actors over its TLS listeners (ATE_INGRESS_ALLOWED_SPIFFE_IDS).
-	// See RequireIngressAllowedSPIFFEIDs.
+	// Unset means the ingress client ServiceAccount's ID.
 	IngressAllowedSPIFFEIDs []string
 
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
@@ -274,18 +274,6 @@ func (c *Config) Resolved() *Resolved {
 		c.resolved = defaultsOnly()
 	}
 	return c.resolved
-}
-
-// RequireIngressAllowedSPIFFEIDs fails when the install would deploy the
-// Envoy ingress router without an allowlist. That router authenticates
-// clients on its TLS listeners, and refuses to start with no SPIFFE ID to
-// match them against. The agentgateway router is configured statically and
-// takes none.
-func (c *Config) RequireIngressAllowedSPIFFEIDs() error {
-	if c.Router == RouterAgentgateway || len(c.IngressAllowedSPIFFEIDs) > 0 {
-		return nil
-	}
-	return c.Resolved().Require("ingressAllowedSPIFFEIDs")
 }
 
 // TransferServiceAccount is the email of the snapshot transfer service

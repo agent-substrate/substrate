@@ -222,6 +222,20 @@ kubectl ate revert actor my-actor -a <atespace>
 kubectl ate delete actor my-actor -a <atespace>
 ```
 
+### Sending Requests to an Actor
+
+`proxy actor` serves a local HTTP proxy that sends every request to one actor
+through atenet-router, which resumes the actor if it is suspended. It presents
+a certificate for the `atenet-client` ServiceAccount, which the router allows by
+default; see
+[Ingress client authentication](../atenet/internal/router/README.md#ingress-client-authentication-and-authorization).
+
+```bash
+# Serve http://127.0.0.1:8000 (--port and --address change it).
+kubectl ate proxy actor my-actor -a <atespace>
+curl http://127.0.0.1:8000/
+```
+
 ### Actor Snapshots
 
 Suspending an actor creates a durable snapshot. Tags give snapshots stable,

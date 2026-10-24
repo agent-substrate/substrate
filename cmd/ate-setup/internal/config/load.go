@@ -218,6 +218,12 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 	if bootstrapOwners == "" {
 		bootstrapOwners = installdefaults.ClientPrincipal(r.String("namespace"))
 	}
+	// kubectl-ate's proxy presents a certificate for the ingress client
+	// ServiceAccount, so the router allows it by default.
+	ingressAllowedSPIFFEIDs := splitList(r.String("ingressAllowedSPIFFEIDs"))
+	if len(ingressAllowedSPIFFEIDs) == 0 {
+		ingressAllowedSPIFFEIDs = []string{installdefaults.SPIFFEID(r.String("namespace"), installdefaults.IngressClientServiceAccount)}
+	}
 
 	cfg := &Config{
 		Root:              root,
@@ -275,7 +281,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		ClusterSize:                    r.String("clusterSize"),
 		CordonControlPlane:             r.Bool("cordonControlPlane"),
 		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
-		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
+		IngressAllowedSPIFFEIDs:        ingressAllowedSPIFFEIDs,
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),

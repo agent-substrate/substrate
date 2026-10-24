@@ -20,6 +20,16 @@ metadata:
   labels:
     app: atenet-router
 ---
+# The identity `kubectl ate proxy` requests its router client certificate
+# for. No pod runs as it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atenet-client
+  namespace: ate-system
+  labels:
+    app: atenet-client
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
