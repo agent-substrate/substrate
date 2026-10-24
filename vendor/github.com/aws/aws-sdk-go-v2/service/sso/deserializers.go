@@ -16,7 +16,6 @@ import (
 	"github.com/aws/smithy-go/tracing"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"io"
-	"io/ioutil"
 	"strings"
 )
 
@@ -31,6 +30,18 @@ func (m *awsRestjson1_deserializeOpGetRoleCredentials) HandleDeserialize(ctx con
 	out middleware.DeserializeOutput, metadata middleware.Metadata, err error,
 ) {
 	out, metadata, err = next.HandleDeserialize(ctx, in)
+
+	response, ok := out.RawResponse.(*smithyhttp.Response)
+	if !ok {
+		if err != nil {
+			// Transport-level failure with no HTTP response to close.
+			return out, metadata, err
+		}
+		return out, metadata, &smithy.DeserializationError{Err: fmt.Errorf("unknown transport type %T", out.RawResponse)}
+	}
+
+	defer func() { smithyhttp.CloseResponseBody(ctx, response, false, err) }()
+
 	if err != nil {
 		return out, metadata, err
 	}
@@ -39,10 +50,6 @@ func (m *awsRestjson1_deserializeOpGetRoleCredentials) HandleDeserialize(ctx con
 	endTimer := startMetricTimer(ctx, "client.call.deserialization_duration")
 	defer endTimer()
 	defer span.End()
-	response, ok := out.RawResponse.(*smithyhttp.Response)
-	if !ok {
-		return out, metadata, &smithy.DeserializationError{Err: fmt.Errorf("unknown transport type %T", out.RawResponse)}
-	}
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return out, metadata, awsRestjson1_deserializeOpErrorGetRoleCredentials(response, &metadata)
@@ -192,6 +199,18 @@ func (m *awsRestjson1_deserializeOpListAccountRoles) HandleDeserialize(ctx conte
 	out middleware.DeserializeOutput, metadata middleware.Metadata, err error,
 ) {
 	out, metadata, err = next.HandleDeserialize(ctx, in)
+
+	response, ok := out.RawResponse.(*smithyhttp.Response)
+	if !ok {
+		if err != nil {
+			// Transport-level failure with no HTTP response to close.
+			return out, metadata, err
+		}
+		return out, metadata, &smithy.DeserializationError{Err: fmt.Errorf("unknown transport type %T", out.RawResponse)}
+	}
+
+	defer func() { smithyhttp.CloseResponseBody(ctx, response, false, err) }()
+
 	if err != nil {
 		return out, metadata, err
 	}
@@ -200,10 +219,6 @@ func (m *awsRestjson1_deserializeOpListAccountRoles) HandleDeserialize(ctx conte
 	endTimer := startMetricTimer(ctx, "client.call.deserialization_duration")
 	defer endTimer()
 	defer span.End()
-	response, ok := out.RawResponse.(*smithyhttp.Response)
-	if !ok {
-		return out, metadata, &smithy.DeserializationError{Err: fmt.Errorf("unknown transport type %T", out.RawResponse)}
-	}
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return out, metadata, awsRestjson1_deserializeOpErrorListAccountRoles(response, &metadata)
@@ -362,6 +377,18 @@ func (m *awsRestjson1_deserializeOpListAccounts) HandleDeserialize(ctx context.C
 	out middleware.DeserializeOutput, metadata middleware.Metadata, err error,
 ) {
 	out, metadata, err = next.HandleDeserialize(ctx, in)
+
+	response, ok := out.RawResponse.(*smithyhttp.Response)
+	if !ok {
+		if err != nil {
+			// Transport-level failure with no HTTP response to close.
+			return out, metadata, err
+		}
+		return out, metadata, &smithy.DeserializationError{Err: fmt.Errorf("unknown transport type %T", out.RawResponse)}
+	}
+
+	defer func() { smithyhttp.CloseResponseBody(ctx, response, false, err) }()
+
 	if err != nil {
 		return out, metadata, err
 	}
@@ -370,10 +397,6 @@ func (m *awsRestjson1_deserializeOpListAccounts) HandleDeserialize(ctx context.C
 	endTimer := startMetricTimer(ctx, "client.call.deserialization_duration")
 	defer endTimer()
 	defer span.End()
-	response, ok := out.RawResponse.(*smithyhttp.Response)
-	if !ok {
-		return out, metadata, &smithy.DeserializationError{Err: fmt.Errorf("unknown transport type %T", out.RawResponse)}
-	}
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return out, metadata, awsRestjson1_deserializeOpErrorListAccounts(response, &metadata)
@@ -532,6 +555,18 @@ func (m *awsRestjson1_deserializeOpLogout) HandleDeserialize(ctx context.Context
 	out middleware.DeserializeOutput, metadata middleware.Metadata, err error,
 ) {
 	out, metadata, err = next.HandleDeserialize(ctx, in)
+
+	response, ok := out.RawResponse.(*smithyhttp.Response)
+	if !ok {
+		if err != nil {
+			// Transport-level failure with no HTTP response to close.
+			return out, metadata, err
+		}
+		return out, metadata, &smithy.DeserializationError{Err: fmt.Errorf("unknown transport type %T", out.RawResponse)}
+	}
+
+	defer func() { smithyhttp.CloseResponseBody(ctx, response, false, err) }()
+
 	if err != nil {
 		return out, metadata, err
 	}
@@ -540,10 +575,6 @@ func (m *awsRestjson1_deserializeOpLogout) HandleDeserialize(ctx context.Context
 	endTimer := startMetricTimer(ctx, "client.call.deserialization_duration")
 	defer endTimer()
 	defer span.End()
-	response, ok := out.RawResponse.(*smithyhttp.Response)
-	if !ok {
-		return out, metadata, &smithy.DeserializationError{Err: fmt.Errorf("unknown transport type %T", out.RawResponse)}
-	}
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return out, metadata, awsRestjson1_deserializeOpErrorLogout(response, &metadata)
@@ -551,7 +582,7 @@ func (m *awsRestjson1_deserializeOpLogout) HandleDeserialize(ctx context.Context
 	output := &LogoutOutput{}
 	out.Result = output
 
-	if _, err = io.Copy(ioutil.Discard, response.Body); err != nil {
+	if _, err = io.Copy(io.Discard, response.Body); err != nil {
 		return out, metadata, &smithy.DeserializationError{
 			Err: fmt.Errorf("failed to discard response body, %w", err),
 		}

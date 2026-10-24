@@ -33,6 +33,7 @@ import (
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
 	gax "github.com/googleapis/gax-go/v2"
 	"github.com/googleapis/gax-go/v2/callctx"
+	trace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/api/option/internaloption"
@@ -224,7 +225,7 @@ type TagValuesClient struct {
 
 // Wrapper methods routed to the internal client.
 
-// Close closes the connection to the API service. The user should invoke this when
+// Close closes the connection to the API service. **Always** call Close() when
 // the client is no longer required.
 func (c *TagValuesClient) Close() error {
 	return c.internalClient.Close()
@@ -420,6 +421,51 @@ func NewTagValuesClient(ctx context.Context, opts ...option.ClientOption) (*TagV
 		client.CallOptions.TestIamPermissions = append(client.CallOptions.TestIamPermissions, gax.WithClientMetrics(metrics))
 		client.CallOptions.GetOperation = append(client.CallOptions.GetOperation, gax.WithClientMetrics(metrics))
 	}
+	if gax.IsFeatureEnabled("TRACING") {
+		tracing := gax.NewClientTracing(
+			gax.WithTracingAttributes(map[string]string{
+				gax.ClientService:  "cloudresourcemanager",
+				gax.ClientVersion:  getVersionClient(),
+				gax.ClientArtifact: "cloud.google.com/go/resourcemanager/apiv3",
+				gax.RPCSystem:      "grpc",
+				gax.URLDomain:      "cloudresourcemanager.googleapis.com",
+			}),
+		)
+
+		client.CallOptions.ListTagValues = append(client.CallOptions.ListTagValues, gax.WithClientTracing(tracing))
+		client.CallOptions.GetTagValue = append(client.CallOptions.GetTagValue, gax.WithClientTracing(tracing))
+		client.CallOptions.GetNamespacedTagValue = append(client.CallOptions.GetNamespacedTagValue, gax.WithClientTracing(tracing))
+		client.CallOptions.CreateTagValue = append(client.CallOptions.CreateTagValue, gax.WithClientTracing(tracing))
+		client.CallOptions.UpdateTagValue = append(client.CallOptions.UpdateTagValue, gax.WithClientTracing(tracing))
+		client.CallOptions.DeleteTagValue = append(client.CallOptions.DeleteTagValue, gax.WithClientTracing(tracing))
+		client.CallOptions.GetIamPolicy = append(client.CallOptions.GetIamPolicy, gax.WithClientTracing(tracing))
+		client.CallOptions.SetIamPolicy = append(client.CallOptions.SetIamPolicy, gax.WithClientTracing(tracing))
+		client.CallOptions.TestIamPermissions = append(client.CallOptions.TestIamPermissions, gax.WithClientTracing(tracing))
+		client.CallOptions.GetOperation = append(client.CallOptions.GetOperation, gax.WithClientTracing(tracing))
+	}
+	if gax.IsFeatureEnabled("LOGGING") {
+		logging := gax.NewClientLogging(
+			gax.WithLoggerProvider(c.logger),
+			gax.WithLoggingAttributes(map[string]string{
+				gax.ClientService:  "cloudresourcemanager",
+				gax.ClientVersion:  getVersionClient(),
+				gax.ClientArtifact: "cloud.google.com/go/resourcemanager/apiv3",
+				gax.RPCSystem:      "grpc",
+				gax.URLDomain:      "cloudresourcemanager.googleapis.com",
+			}),
+		)
+
+		client.CallOptions.ListTagValues = append(client.CallOptions.ListTagValues, gax.WithClientLogging(logging))
+		client.CallOptions.GetTagValue = append(client.CallOptions.GetTagValue, gax.WithClientLogging(logging))
+		client.CallOptions.GetNamespacedTagValue = append(client.CallOptions.GetNamespacedTagValue, gax.WithClientLogging(logging))
+		client.CallOptions.CreateTagValue = append(client.CallOptions.CreateTagValue, gax.WithClientLogging(logging))
+		client.CallOptions.UpdateTagValue = append(client.CallOptions.UpdateTagValue, gax.WithClientLogging(logging))
+		client.CallOptions.DeleteTagValue = append(client.CallOptions.DeleteTagValue, gax.WithClientLogging(logging))
+		client.CallOptions.GetIamPolicy = append(client.CallOptions.GetIamPolicy, gax.WithClientLogging(logging))
+		client.CallOptions.SetIamPolicy = append(client.CallOptions.SetIamPolicy, gax.WithClientLogging(logging))
+		client.CallOptions.TestIamPermissions = append(client.CallOptions.TestIamPermissions, gax.WithClientLogging(logging))
+		client.CallOptions.GetOperation = append(client.CallOptions.GetOperation, gax.WithClientLogging(logging))
+	}
 
 	client.internalClient = c
 
@@ -456,7 +502,7 @@ func (c *tagValuesGRPCClient) setGoogleClientInfo(keyval ...string) {
 	}
 }
 
-// Close closes the connection to the API service. The user should invoke this when
+// Close closes the connection to the API service. **Always** call Close() when
 // the client is no longer required.
 func (c *tagValuesGRPCClient) Close() error {
 	return c.connPool.Close()
@@ -536,6 +582,51 @@ func NewTagValuesRESTClient(ctx context.Context, opts ...option.ClientOption) (*
 		callOpts.TestIamPermissions = append(callOpts.TestIamPermissions, gax.WithClientMetrics(metrics))
 		callOpts.GetOperation = append(callOpts.GetOperation, gax.WithClientMetrics(metrics))
 	}
+	if gax.IsFeatureEnabled("TRACING") {
+		tracing := gax.NewClientTracing(
+			gax.WithTracingAttributes(map[string]string{
+				gax.ClientService:  "cloudresourcemanager",
+				gax.ClientVersion:  getVersionClient(),
+				gax.ClientArtifact: "cloud.google.com/go/resourcemanager/apiv3",
+				gax.RPCSystem:      "http",
+				gax.URLDomain:      "cloudresourcemanager.googleapis.com",
+			}),
+		)
+
+		callOpts.ListTagValues = append(callOpts.ListTagValues, gax.WithClientTracing(tracing))
+		callOpts.GetTagValue = append(callOpts.GetTagValue, gax.WithClientTracing(tracing))
+		callOpts.GetNamespacedTagValue = append(callOpts.GetNamespacedTagValue, gax.WithClientTracing(tracing))
+		callOpts.CreateTagValue = append(callOpts.CreateTagValue, gax.WithClientTracing(tracing))
+		callOpts.UpdateTagValue = append(callOpts.UpdateTagValue, gax.WithClientTracing(tracing))
+		callOpts.DeleteTagValue = append(callOpts.DeleteTagValue, gax.WithClientTracing(tracing))
+		callOpts.GetIamPolicy = append(callOpts.GetIamPolicy, gax.WithClientTracing(tracing))
+		callOpts.SetIamPolicy = append(callOpts.SetIamPolicy, gax.WithClientTracing(tracing))
+		callOpts.TestIamPermissions = append(callOpts.TestIamPermissions, gax.WithClientTracing(tracing))
+		callOpts.GetOperation = append(callOpts.GetOperation, gax.WithClientTracing(tracing))
+	}
+	if gax.IsFeatureEnabled("LOGGING") {
+		logging := gax.NewClientLogging(
+			gax.WithLoggerProvider(c.logger),
+			gax.WithLoggingAttributes(map[string]string{
+				gax.ClientService:  "cloudresourcemanager",
+				gax.ClientVersion:  getVersionClient(),
+				gax.ClientArtifact: "cloud.google.com/go/resourcemanager/apiv3",
+				gax.RPCSystem:      "http",
+				gax.URLDomain:      "cloudresourcemanager.googleapis.com",
+			}),
+		)
+
+		callOpts.ListTagValues = append(callOpts.ListTagValues, gax.WithClientLogging(logging))
+		callOpts.GetTagValue = append(callOpts.GetTagValue, gax.WithClientLogging(logging))
+		callOpts.GetNamespacedTagValue = append(callOpts.GetNamespacedTagValue, gax.WithClientLogging(logging))
+		callOpts.CreateTagValue = append(callOpts.CreateTagValue, gax.WithClientLogging(logging))
+		callOpts.UpdateTagValue = append(callOpts.UpdateTagValue, gax.WithClientLogging(logging))
+		callOpts.DeleteTagValue = append(callOpts.DeleteTagValue, gax.WithClientLogging(logging))
+		callOpts.GetIamPolicy = append(callOpts.GetIamPolicy, gax.WithClientLogging(logging))
+		callOpts.SetIamPolicy = append(callOpts.SetIamPolicy, gax.WithClientLogging(logging))
+		callOpts.TestIamPermissions = append(callOpts.TestIamPermissions, gax.WithClientLogging(logging))
+		callOpts.GetOperation = append(callOpts.GetOperation, gax.WithClientLogging(logging))
+	}
 
 	lroOpts := []option.ClientOption{
 		option.WithHTTPClient(httpClient),
@@ -573,7 +664,7 @@ func (c *tagValuesRESTClient) setGoogleClientInfo(keyval ...string) {
 	}
 }
 
-// Close closes the connection to the API service. The user should invoke this when
+// Close closes the connection to the API service. **Always** call Close() when
 // the client is no longer required.
 func (c *tagValuesRESTClient) Close() error {
 	// Replace httpClient with nil to force cleanup.
@@ -594,7 +685,7 @@ func (c *tagValuesGRPCClient) ListTagValues(ctx context.Context, req *resourcema
 	}
 	opts = append((*c.CallOptions).ListTagValues[0:len((*c.CallOptions).ListTagValues):len((*c.CallOptions).ListTagValues)], opts...)
 	it := &TagValueIterator{}
-	req = proto.Clone(req).(*resourcemanagerpb.ListTagValuesRequest)
+	req = proto.CloneOf(req)
 	it.InternalFetch = func(pageSize int, pageToken string) ([]*resourcemanagerpb.TagValue, string, error) {
 		resp := &resourcemanagerpb.ListTagValuesResponse{}
 		if pageToken != "" {
@@ -638,9 +729,6 @@ func (c *tagValuesGRPCClient) GetTagValue(ctx context.Context, req *resourcemana
 
 	hds = append(c.xGoogHeaders, hds...)
 	ctx = gax.InsertMetadataIntoOutgoingContext(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetName()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagValues/GetTagValue")
 	}
@@ -690,8 +778,12 @@ func (c *tagValuesGRPCClient) CreateTagValue(ctx context.Context, req *resourcem
 	if err != nil {
 		return nil, err
 	}
+	lro := longrunning.InternalNewOperationWithMetadata(*c.LROClient, resp, "*resourcemanager.CreateTagValueOperation")
+	if gax.IsFeatureEnabled("TRACING") {
+		lro.SetParentSpanContext(trace.SpanContextFromContext(ctx))
+	}
 	return &CreateTagValueOperation{
-		lro: longrunning.InternalNewOperation(*c.LROClient, resp),
+		lro: lro,
 	}, nil
 }
 
@@ -713,8 +805,12 @@ func (c *tagValuesGRPCClient) UpdateTagValue(ctx context.Context, req *resourcem
 	if err != nil {
 		return nil, err
 	}
+	lro := longrunning.InternalNewOperationWithMetadata(*c.LROClient, resp, "*resourcemanager.UpdateTagValueOperation")
+	if gax.IsFeatureEnabled("TRACING") {
+		lro.SetParentSpanContext(trace.SpanContextFromContext(ctx))
+	}
 	return &UpdateTagValueOperation{
-		lro: longrunning.InternalNewOperation(*c.LROClient, resp),
+		lro: lro,
 	}, nil
 }
 
@@ -723,9 +819,6 @@ func (c *tagValuesGRPCClient) DeleteTagValue(ctx context.Context, req *resourcem
 
 	hds = append(c.xGoogHeaders, hds...)
 	ctx = gax.InsertMetadataIntoOutgoingContext(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetName()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagValues/DeleteTagValue")
 	}
@@ -739,8 +832,12 @@ func (c *tagValuesGRPCClient) DeleteTagValue(ctx context.Context, req *resourcem
 	if err != nil {
 		return nil, err
 	}
+	lro := longrunning.InternalNewOperationWithMetadata(*c.LROClient, resp, "*resourcemanager.DeleteTagValueOperation")
+	if gax.IsFeatureEnabled("TRACING") {
+		lro.SetParentSpanContext(trace.SpanContextFromContext(ctx))
+	}
 	return &DeleteTagValueOperation{
-		lro: longrunning.InternalNewOperation(*c.LROClient, resp),
+		lro: lro,
 	}, nil
 }
 
@@ -749,9 +846,6 @@ func (c *tagValuesGRPCClient) GetIamPolicy(ctx context.Context, req *iampb.GetIa
 
 	hds = append(c.xGoogHeaders, hds...)
 	ctx = gax.InsertMetadataIntoOutgoingContext(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetResource()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagValues/GetIamPolicy")
 	}
@@ -773,9 +867,6 @@ func (c *tagValuesGRPCClient) SetIamPolicy(ctx context.Context, req *iampb.SetIa
 
 	hds = append(c.xGoogHeaders, hds...)
 	ctx = gax.InsertMetadataIntoOutgoingContext(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetResource()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagValues/SetIamPolicy")
 	}
@@ -797,9 +888,6 @@ func (c *tagValuesGRPCClient) TestIamPermissions(ctx context.Context, req *iampb
 
 	hds = append(c.xGoogHeaders, hds...)
 	ctx = gax.InsertMetadataIntoOutgoingContext(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetResource()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagValues/TestIamPermissions")
 	}
@@ -840,7 +928,7 @@ func (c *tagValuesGRPCClient) GetOperation(ctx context.Context, req *longrunning
 // ListTagValues lists all TagValues for a specific TagKey.
 func (c *tagValuesRESTClient) ListTagValues(ctx context.Context, req *resourcemanagerpb.ListTagValuesRequest, opts ...gax.CallOption) *TagValueIterator {
 	it := &TagValueIterator{}
-	req = proto.Clone(req).(*resourcemanagerpb.ListTagValuesRequest)
+	req = proto.CloneOf(req)
 	unm := protojson.UnmarshalOptions{AllowPartial: true, DiscardUnknown: true}
 	it.InternalFetch = func(pageSize int, pageToken string) ([]*resourcemanagerpb.TagValue, string, error) {
 		resp := &resourcemanagerpb.ListTagValuesResponse{}
@@ -936,9 +1024,6 @@ func (c *tagValuesRESTClient) GetTagValue(ctx context.Context, req *resourcemana
 	hds = append(c.xGoogHeaders, hds...)
 	hds = append(hds, "Content-Type", "application/json")
 	headers := gax.BuildHeaders(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetName()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagValues/GetTagValue")
 		ctx = callctx.WithTelemetryContext(ctx, "url_template", "/v3/{name=tagValues/*}")
@@ -1089,8 +1174,12 @@ func (c *tagValuesRESTClient) CreateTagValue(ctx context.Context, req *resourcem
 	}
 
 	override := fmt.Sprintf("/v3/%s", resp.GetName())
+	lro := longrunning.InternalNewOperationWithMetadata(*c.LROClient, resp, "*resourcemanager.CreateTagValueOperation")
+	if gax.IsFeatureEnabled("TRACING") {
+		lro.SetParentSpanContext(trace.SpanContextFromContext(ctx))
+	}
 	return &CreateTagValueOperation{
-		lro:      longrunning.InternalNewOperation(*c.LROClient, resp),
+		lro:      lro,
 		pollPath: override,
 	}, nil
 }
@@ -1163,8 +1252,12 @@ func (c *tagValuesRESTClient) UpdateTagValue(ctx context.Context, req *resourcem
 	}
 
 	override := fmt.Sprintf("/v3/%s", resp.GetName())
+	lro := longrunning.InternalNewOperationWithMetadata(*c.LROClient, resp, "*resourcemanager.UpdateTagValueOperation")
+	if gax.IsFeatureEnabled("TRACING") {
+		lro.SetParentSpanContext(trace.SpanContextFromContext(ctx))
+	}
 	return &UpdateTagValueOperation{
-		lro:      longrunning.InternalNewOperation(*c.LROClient, resp),
+		lro:      lro,
 		pollPath: override,
 	}, nil
 }
@@ -1195,9 +1288,6 @@ func (c *tagValuesRESTClient) DeleteTagValue(ctx context.Context, req *resourcem
 	hds = append(c.xGoogHeaders, hds...)
 	hds = append(hds, "Content-Type", "application/json")
 	headers := gax.BuildHeaders(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetName()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagValues/DeleteTagValue")
 		ctx = callctx.WithTelemetryContext(ctx, "url_template", "/v3/{name=tagValues/*}")
@@ -1230,8 +1320,12 @@ func (c *tagValuesRESTClient) DeleteTagValue(ctx context.Context, req *resourcem
 	}
 
 	override := fmt.Sprintf("/v3/%s", resp.GetName())
+	lro := longrunning.InternalNewOperationWithMetadata(*c.LROClient, resp, "*resourcemanager.DeleteTagValueOperation")
+	if gax.IsFeatureEnabled("TRACING") {
+		lro.SetParentSpanContext(trace.SpanContextFromContext(ctx))
+	}
 	return &DeleteTagValueOperation{
-		lro:      longrunning.InternalNewOperation(*c.LROClient, resp),
+		lro:      lro,
 		pollPath: override,
 	}, nil
 }
@@ -1266,9 +1360,6 @@ func (c *tagValuesRESTClient) GetIamPolicy(ctx context.Context, req *iampb.GetIa
 	hds = append(c.xGoogHeaders, hds...)
 	hds = append(hds, "Content-Type", "application/json")
 	headers := gax.BuildHeaders(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetResource()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagValues/GetIamPolicy")
 		ctx = callctx.WithTelemetryContext(ctx, "url_template", "/v3/{resource=tagValues/*}:getIamPolicy")
@@ -1333,9 +1424,6 @@ func (c *tagValuesRESTClient) SetIamPolicy(ctx context.Context, req *iampb.SetIa
 	hds = append(c.xGoogHeaders, hds...)
 	hds = append(hds, "Content-Type", "application/json")
 	headers := gax.BuildHeaders(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetResource()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagValues/SetIamPolicy")
 		ctx = callctx.WithTelemetryContext(ctx, "url_template", "/v3/{resource=tagValues/*}:setIamPolicy")
@@ -1400,9 +1488,6 @@ func (c *tagValuesRESTClient) TestIamPermissions(ctx context.Context, req *iampb
 	hds = append(c.xGoogHeaders, hds...)
 	hds = append(hds, "Content-Type", "application/json")
 	headers := gax.BuildHeaders(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetResource()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagValues/TestIamPermissions")
 		ctx = callctx.WithTelemetryContext(ctx, "url_template", "/v3/{resource=tagValues/*}:testIamPermissions")
@@ -1496,7 +1581,7 @@ func (c *tagValuesRESTClient) GetOperation(ctx context.Context, req *longrunning
 // The name must be that of a previously created CreateTagValueOperation, possibly from a different process.
 func (c *tagValuesGRPCClient) CreateTagValueOperation(name string) *CreateTagValueOperation {
 	return &CreateTagValueOperation{
-		lro: longrunning.InternalNewOperation(*c.LROClient, &longrunningpb.Operation{Name: name}),
+		lro: longrunning.InternalNewOperationWithMetadata(*c.LROClient, &longrunningpb.Operation{Name: name}, "*resourcemanager.CreateTagValueOperation"),
 	}
 }
 
@@ -1505,7 +1590,7 @@ func (c *tagValuesGRPCClient) CreateTagValueOperation(name string) *CreateTagVal
 func (c *tagValuesRESTClient) CreateTagValueOperation(name string) *CreateTagValueOperation {
 	override := fmt.Sprintf("/v3/%s", name)
 	return &CreateTagValueOperation{
-		lro:      longrunning.InternalNewOperation(*c.LROClient, &longrunningpb.Operation{Name: name}),
+		lro:      longrunning.InternalNewOperationWithMetadata(*c.LROClient, &longrunningpb.Operation{Name: name}, "*resourcemanager.CreateTagValueOperation"),
 		pollPath: override,
 	}
 }
@@ -1514,7 +1599,7 @@ func (c *tagValuesRESTClient) CreateTagValueOperation(name string) *CreateTagVal
 // The name must be that of a previously created DeleteTagValueOperation, possibly from a different process.
 func (c *tagValuesGRPCClient) DeleteTagValueOperation(name string) *DeleteTagValueOperation {
 	return &DeleteTagValueOperation{
-		lro: longrunning.InternalNewOperation(*c.LROClient, &longrunningpb.Operation{Name: name}),
+		lro: longrunning.InternalNewOperationWithMetadata(*c.LROClient, &longrunningpb.Operation{Name: name}, "*resourcemanager.DeleteTagValueOperation"),
 	}
 }
 
@@ -1523,7 +1608,7 @@ func (c *tagValuesGRPCClient) DeleteTagValueOperation(name string) *DeleteTagVal
 func (c *tagValuesRESTClient) DeleteTagValueOperation(name string) *DeleteTagValueOperation {
 	override := fmt.Sprintf("/v3/%s", name)
 	return &DeleteTagValueOperation{
-		lro:      longrunning.InternalNewOperation(*c.LROClient, &longrunningpb.Operation{Name: name}),
+		lro:      longrunning.InternalNewOperationWithMetadata(*c.LROClient, &longrunningpb.Operation{Name: name}, "*resourcemanager.DeleteTagValueOperation"),
 		pollPath: override,
 	}
 }
@@ -1532,7 +1617,7 @@ func (c *tagValuesRESTClient) DeleteTagValueOperation(name string) *DeleteTagVal
 // The name must be that of a previously created UpdateTagValueOperation, possibly from a different process.
 func (c *tagValuesGRPCClient) UpdateTagValueOperation(name string) *UpdateTagValueOperation {
 	return &UpdateTagValueOperation{
-		lro: longrunning.InternalNewOperation(*c.LROClient, &longrunningpb.Operation{Name: name}),
+		lro: longrunning.InternalNewOperationWithMetadata(*c.LROClient, &longrunningpb.Operation{Name: name}, "*resourcemanager.UpdateTagValueOperation"),
 	}
 }
 
@@ -1541,7 +1626,7 @@ func (c *tagValuesGRPCClient) UpdateTagValueOperation(name string) *UpdateTagVal
 func (c *tagValuesRESTClient) UpdateTagValueOperation(name string) *UpdateTagValueOperation {
 	override := fmt.Sprintf("/v3/%s", name)
 	return &UpdateTagValueOperation{
-		lro:      longrunning.InternalNewOperation(*c.LROClient, &longrunningpb.Operation{Name: name}),
+		lro:      longrunning.InternalNewOperationWithMetadata(*c.LROClient, &longrunningpb.Operation{Name: name}, "*resourcemanager.UpdateTagValueOperation"),
 		pollPath: override,
 	}
 }

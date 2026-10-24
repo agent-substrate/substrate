@@ -1046,41 +1046,6 @@ func (s CreateServiceAccountRequest) MarshalJSON() ([]byte, error) {
 
 // DisableServiceAccountKeyRequest: The service account key disable request.
 type DisableServiceAccountKeyRequest struct {
-	// ExtendedStatusMessage: Optional. Usable by internal google services only. An
-	// extended_status_message can be used to include additional information about
-	// the key, such as its private key data being exposed on a public repository
-	// like GitHub.
-	ExtendedStatusMessage string `json:"extendedStatusMessage,omitempty"`
-	// ServiceAccountKeyDisableReason: Optional. Describes the reason this key is
-	// being disabled. If unspecified, the default value of
-	// SERVICE_ACCOUNT_KEY_DISABLE_REASON_USER_INITIATED will be used.
-	//
-	// Possible values:
-	//   "SERVICE_ACCOUNT_KEY_DISABLE_REASON_UNSPECIFIED" - Unspecified disable
-	// reason
-	//   "SERVICE_ACCOUNT_KEY_DISABLE_REASON_USER_INITIATED" - Disabled by the user
-	//   "SERVICE_ACCOUNT_KEY_DISABLE_REASON_EXPOSED" - Google detected this
-	// Service Account external key's private key data as exposed, typically in a
-	// public repository on GitHub or similar.
-	//   "SERVICE_ACCOUNT_KEY_DISABLE_REASON_COMPROMISE_DETECTED" - This service
-	// account external key was detected as compromised and used by an attacker.
-	ServiceAccountKeyDisableReason string `json:"serviceAccountKeyDisableReason,omitempty"`
-	// ForceSendFields is a list of field names (e.g. "ExtendedStatusMessage") to
-	// unconditionally include in API requests. By default, fields with empty or
-	// default values are omitted from API requests. See
-	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
-	// details.
-	ForceSendFields []string `json:"-"`
-	// NullFields is a list of field names (e.g. "ExtendedStatusMessage") to
-	// include in API requests with the JSON null value. By default, fields with
-	// empty values are omitted from API requests. See
-	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
-	NullFields []string `json:"-"`
-}
-
-func (s DisableServiceAccountKeyRequest) MarshalJSON() ([]byte, error) {
-	type NoMethod DisableServiceAccountKeyRequest
-	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
 // DisableServiceAccountRequest: The service account disable request.
@@ -1568,14 +1533,14 @@ type InlineCertificateIssuanceConfig struct {
 	// initiated. Must be between 50 and 80. If no value is specified, rotation
 	// window percentage is defaulted to 50.
 	RotationWindowPercentage int64 `json:"rotationWindowPercentage,omitempty"`
-	// UseDefaultSharedCa: Optional. If set to true, the trust domain will utilize
-	// the GCP-provisioned default CA. A default CA in the same region as the
-	// workload will be selected to issue the certificate. Enabling this will clear
-	// any existing `ca_pools` configuration to provision the certificates. NOTE:
-	// This field is mutually exclusive with `ca_pools`. If this flag is enabled,
-	// certificates will be automatically provisioned from the default shared CAs.
-	// This flag should not be set if you want to use your own CA pools to
-	// provision the certificates.
+	// UseDefaultSharedCa: Optional. Determines whether the trust domain utilizes
+	// the Google Cloud-provisioned default CA. A default CA in the same region as
+	// the workload will be selected to issue the certificate. Enabling this will
+	// clear any existing `ca_pools` configuration to provision the certificates.
+	// NOTE: This field is mutually exclusive with `ca_pools`. If this flag is
+	// enabled, certificates will be automatically provisioned from the default
+	// shared CAs. This flag should not be set if you want to use your own CA pools
+	// to provision the certificates.
 	UseDefaultSharedCa bool `json:"useDefaultSharedCa,omitempty"`
 	// ForceSendFields is a list of field names (e.g. "CaPools") to unconditionally
 	// include in API requests. By default, fields with empty or default values are
@@ -2286,7 +2251,7 @@ func (s ListWorkloadIdentityPoolsResponse) MarshalJSON() ([]byte, error) {
 // resources on behalf of a Workforce Identity Federation user by using OAuth
 // 2.0 Protocol to obtain an access token from Google Cloud.
 type OauthClient struct {
-	// AllowedGrantTypes: Required. The list of OAuth grant types is allowed for
+	// AllowedGrantTypes: Optional. The list of OAuth grant types is allowed for
 	// the OauthClient.
 	//
 	// Possible values:
@@ -2414,7 +2379,23 @@ type Oidc struct {
 	// https://iam.googleapis.com/projects//locations//workloadIdentityPools//providers/
 	// ```
 	AllowedAudiences []string `json:"allowedAudiences,omitempty"`
-	// IssuerUri: Required. The OIDC issuer URL. Must be an HTTPS endpoint. Per
+	// DiscoveryUri: Optional. The URL to fetch the OIDC discovery document from,
+	// overriding the default URL derived from `issuer_uri`. If not set,
+	// `discovery_uri` defaults to `issuer_uri` with
+	// `/.well-known/openid-configuration` appended, as per the OpenID Connect
+	// Discovery 1.0 specification. If set, `discovery_uri` must meet the following
+	// requirements: - Must start with `https://`. - Must not exceed 2000
+	// characters. - The scheme, host, and port must match `issuer_uri`. - The path
+	// must contain `/.well-known/` (where `` is not empty, such as
+	// `openid-configuration`) and conform to the `issuer_uri` topology: - The
+	// well-known path segment is inserted before the issuer path (for example,
+	// `https://example.com/.well-known/openid-configuration/tenant1` for issuer
+	// `https://example.com/tenant1`), or - The well-known path segment is appended
+	// under the issuer path (for example,
+	// `https://example.com/tenant1/.well-known/openid-configuration` for issuer
+	// `https://example.com/tenant1`).
+	DiscoveryUri string `json:"discoveryUri,omitempty"`
+	// IssuerUri: Required. The OIDC `issuer_uri`. Must be an HTTPS endpoint. Per
 	// OpenID Connect Discovery 1.0 spec, the OIDC issuer URL is used to locate the
 	// provider's public keys (via `jwks_uri`) for verifying tokens like the OIDC
 	// ID token. These public key types must be 'EC' or 'RSA'.
@@ -3001,6 +2982,11 @@ func (s RemoveAttestationRuleRequest) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// RevokeWorkforcePoolSubjectSessionsRequest: Request message for
+// RevokeWorkforcePoolSubjectSessions.
+type RevokeWorkforcePoolSubjectSessionsRequest struct {
+}
+
 // Role: A role in the Identity and Access Management API.
 type Role struct {
 	// Deleted: The current deleted state of the role. This field is read only. It
@@ -3161,12 +3147,14 @@ func (s ServiceAccount) MarshalJSON() ([]byte, error) {
 }
 
 // ServiceAccountKey: Represents a service account key. A service account has
-// two sets of key-pairs: user-managed, and system-managed. User-managed
-// key-pairs can be created and deleted by users. Users are responsible for
-// rotating these keys periodically to ensure security of their service
-// accounts. Users retain the private key of these key-pairs, and Google
-// retains ONLY the public key. System-managed keys are automatically rotated
-// by Google, and are used for signing for a maximum of two weeks. The rotation
+// two sets of key-pairs: user-managed and system-managed. System-managed keys
+// are also called _Google-owned and managed keys_. User-managed key-pairs can
+// be created and deleted by users. Users are responsible for rotating these
+// keys periodically to ensure security of their service accounts. Users retain
+// the private key of these key-pairs, and Google retains ONLY the public key.
+// System-managed keys that are actively used for signing are rotated regularly
+// according to security best practices
+// (https://docs.cloud.google.com/iam/docs/key-rotation#timing). The rotation
 // process is probabilistic, and usage of the new key will gradually ramp up
 // and down over the key's lifetime. If you cache the public key set for a
 // service account, we recommend that you update the cache every 15 minutes.
@@ -3589,8 +3577,8 @@ type TrustStore struct {
 	// validation against a given TrustStore. The incoming end entity's certificate
 	// must be in the trust chain of one of the trust anchors here.
 	TrustAnchors []*TrustAnchor `json:"trustAnchors,omitempty"`
-	// TrustDefaultSharedCa: Optional. If set to True, the trust bundle will
-	// include the private ca managed identity regional root public certificates.
+	// TrustDefaultSharedCa: Optional. Determines whether the trust bundle includes
+	// the private CA managed identity regional root public certificates.
 	// Important: `trust_default_shared_ca` is only supported for managed identity
 	// trust domain resource.
 	TrustDefaultSharedCa bool `json:"trustDefaultSharedCa,omitempty"`
@@ -3923,9 +3911,11 @@ type WorkforcePoolProvider struct {
 	// provider will produce an error.
 	//
 	// Possible values:
-	//   "SCIM_USAGE_UNSPECIFIED" - Gemini Enterprise only. Do not use SCIM data.
+	//   "SCIM_USAGE_UNSPECIFIED" - Indicates that SCIM data is not used.
 	//   "ENABLED_FOR_GROUPS" - Gemini Enterprise only. SCIM sync is enabled and
 	// SCIM-managed groups are used for authorization checks.
+	//   "ENABLED_FOR_USERS_GROUPS" - Looker only. SCIM sync is enabled, and
+	// SCIM-managed user claims and groups are used for authorization checks.
 	ScimUsage string `json:"scimUsage,omitempty"`
 	// State: Output only. The state of the provider.
 	//
@@ -3937,6 +3927,21 @@ type WorkforcePoolProvider struct {
 	// permanently deleted after approximately 30 days. You can restore a
 	// soft-deleted provider using UndeleteWorkforcePoolProvider.
 	State string `json:"state,omitempty"`
+	// VendorType: Optional. The vendor type of the third-party identity provider.
+	//
+	// Possible values:
+	//   "VENDOR_TYPE_UNSPECIFIED" - Default value, no vendor specified, backfilled
+	// to existing providers.
+	//   "ENTRA_ID" - Microsoft Entra ID
+	//   "OKTA" - Okta
+	//   "PING_FEDERATE" - Ping Federate
+	//   "ADFS" - Microsoft Active Directory Federation Services
+	//   "KEYCLOAK" - Keycloak
+	//   "FORGE_ROCK" - ForgeRock
+	//   "JUMP_CLOUD" - JumpCloud
+	//   "ONE_LOGIN" - OneLogin
+	//   "GENERIC" - Other Generic Identity Providers
+	VendorType string `json:"vendorType,omitempty"`
 
 	// ServerResponse contains the HTTP response code and headers from the server.
 	googleapi.ServerResponse `json:"-"`
@@ -4317,6 +4322,12 @@ type WorkloadIdentityPoolOperationMetadata struct {
 // WorkloadIdentityPoolProvider: A configuration for an external identity
 // provider.
 type WorkloadIdentityPoolProvider struct {
+	// ActorProviders: Optional. A list of the resource names of
+	// WorkloadIdentityPoolProviders in the same pool that are authorized to issue
+	// actor tokens for this provider. An actor token represents the identity of
+	// the acting party to whom authority is delegated. At most 3 actor providers
+	// can be specified.
+	ActorProviders []string `json:"actorProviders,omitempty"`
 	// AttributeCondition: Optional. A Common Expression Language
 	// (https://opensource.google/projects/cel) expression, in plain text, to
 	// restrict what otherwise valid authentication credentials issued by the
@@ -4326,11 +4337,13 @@ type WorkloadIdentityPoolProvider struct {
 	// authentication credential issued by the provider. * `google`: The Google
 	// attributes mapped from the assertion in the `attribute_mappings`. *
 	// `attribute`: The custom attributes mapped from the assertion in the
-	// `attribute_mappings`. The maximum length of the attribute condition
-	// expression is 4096 characters. If unspecified, all valid authentication
-	// credential are accepted. The following example shows how to only allow
-	// credentials with a mapped `google.groups` value of `admins`: ``` "'admins'
-	// in google.groups" ```
+	// `attribute_mappings`. The maximum length of the `attribute_condition`
+	// expression is 4,096 characters. Providing a condition longer than this will
+	// result in an error. If unspecified, all valid authentication credentials are
+	// accepted. However, multi-tenant identity providers (such as GitHub or
+	// Terraform Cloud) require an `attribute_condition` to prevent token spoofing.
+	// The following example shows how to only allow credentials with a mapped
+	// `google.groups` value of `admins`: ``` "'admins' in google.groups" ```
 	AttributeCondition string `json:"attributeCondition,omitempty"`
 	// AttributeMapping: Optional. Maps attributes from authentication credentials
 	// issued by an external identity provider to Google Cloud attributes, such as
@@ -4410,15 +4423,15 @@ type WorkloadIdentityPoolProvider struct {
 
 	// ServerResponse contains the HTTP response code and headers from the server.
 	googleapi.ServerResponse `json:"-"`
-	// ForceSendFields is a list of field names (e.g. "AttributeCondition") to
+	// ForceSendFields is a list of field names (e.g. "ActorProviders") to
 	// unconditionally include in API requests. By default, fields with empty or
 	// default values are omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
 	// details.
 	ForceSendFields []string `json:"-"`
-	// NullFields is a list of field names (e.g. "AttributeCondition") to include
-	// in API requests with the JSON null value. By default, fields with empty
-	// values are omitted from API requests. See
+	// NullFields is a list of field names (e.g. "ActorProviders") to include in
+	// API requests with the JSON null value. By default, fields with empty values
+	// are omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
 	NullFields []string `json:"-"`
 }
@@ -7693,6 +7706,111 @@ func (c *LocationsWorkforcePoolsProvidersScimTenantsGetCall) Do(opts ...googleap
 	return ret, nil
 }
 
+type LocationsWorkforcePoolsProvidersScimTenantsGetIamPolicyCall struct {
+	s                   *Service
+	resource            string
+	getiampolicyrequest *GetIamPolicyRequest
+	urlParams_          gensupport.URLParams
+	ctx_                context.Context
+	header_             http.Header
+}
+
+// GetIamPolicy: Gets IAM policies on a WorkforcePool.
+//
+//   - resource: REQUIRED: The resource for which the policy is being requested.
+//     See Resource names (https://cloud.google.com/apis/design/resource_names)
+//     for the appropriate value for this field.
+func (r *LocationsWorkforcePoolsProvidersScimTenantsService) GetIamPolicy(resource string, getiampolicyrequest *GetIamPolicyRequest) *LocationsWorkforcePoolsProvidersScimTenantsGetIamPolicyCall {
+	c := &LocationsWorkforcePoolsProvidersScimTenantsGetIamPolicyCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.resource = resource
+	c.getiampolicyrequest = getiampolicyrequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsGetIamPolicyCall) Fields(s ...googleapi.Field) *LocationsWorkforcePoolsProvidersScimTenantsGetIamPolicyCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsGetIamPolicyCall) Context(ctx context.Context) *LocationsWorkforcePoolsProvidersScimTenantsGetIamPolicyCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsGetIamPolicyCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *LocationsWorkforcePoolsProvidersScimTenantsGetIamPolicyCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.getiampolicyrequest)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+resource}:getIamPolicy")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"resource": c.resource,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "iam.locations.workforcePools.providers.scimTenants.getIamPolicy", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "iam.locations.workforcePools.providers.scimTenants.getIamPolicy" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Policy.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsGetIamPolicyCall) Do(opts ...googleapi.CallOption) (*Policy, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Policy{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "iam.locations.workforcePools.providers.scimTenants.getIamPolicy", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
 type LocationsWorkforcePoolsProvidersScimTenantsListCall struct {
 	s            *Service
 	parent       string
@@ -7963,6 +8081,220 @@ func (c *LocationsWorkforcePoolsProvidersScimTenantsPatchCall) Do(opts ...google
 		return nil, err
 	}
 	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "iam.locations.workforcePools.providers.scimTenants.patch", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type LocationsWorkforcePoolsProvidersScimTenantsSetIamPolicyCall struct {
+	s                   *Service
+	resource            string
+	setiampolicyrequest *SetIamPolicyRequest
+	urlParams_          gensupport.URLParams
+	ctx_                context.Context
+	header_             http.Header
+}
+
+// SetIamPolicy: Sets IAM policies on a WorkforcePool.
+//
+//   - resource: REQUIRED: The resource for which the policy is being specified.
+//     See Resource names (https://cloud.google.com/apis/design/resource_names)
+//     for the appropriate value for this field.
+func (r *LocationsWorkforcePoolsProvidersScimTenantsService) SetIamPolicy(resource string, setiampolicyrequest *SetIamPolicyRequest) *LocationsWorkforcePoolsProvidersScimTenantsSetIamPolicyCall {
+	c := &LocationsWorkforcePoolsProvidersScimTenantsSetIamPolicyCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.resource = resource
+	c.setiampolicyrequest = setiampolicyrequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsSetIamPolicyCall) Fields(s ...googleapi.Field) *LocationsWorkforcePoolsProvidersScimTenantsSetIamPolicyCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsSetIamPolicyCall) Context(ctx context.Context) *LocationsWorkforcePoolsProvidersScimTenantsSetIamPolicyCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsSetIamPolicyCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *LocationsWorkforcePoolsProvidersScimTenantsSetIamPolicyCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.setiampolicyrequest)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+resource}:setIamPolicy")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"resource": c.resource,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "iam.locations.workforcePools.providers.scimTenants.setIamPolicy", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "iam.locations.workforcePools.providers.scimTenants.setIamPolicy" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Policy.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsSetIamPolicyCall) Do(opts ...googleapi.CallOption) (*Policy, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Policy{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "iam.locations.workforcePools.providers.scimTenants.setIamPolicy", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type LocationsWorkforcePoolsProvidersScimTenantsTestIamPermissionsCall struct {
+	s                         *Service
+	resource                  string
+	testiampermissionsrequest *TestIamPermissionsRequest
+	urlParams_                gensupport.URLParams
+	ctx_                      context.Context
+	header_                   http.Header
+}
+
+// TestIamPermissions: Returns the caller's permissions on the WorkforcePool.
+// If the pool doesn't exist, this call returns an empty set of permissions. It
+// doesn't return a `NOT_FOUND` error.
+//
+//   - resource: REQUIRED: The resource for which the policy detail is being
+//     requested. See Resource names
+//     (https://cloud.google.com/apis/design/resource_names) for the appropriate
+//     value for this field.
+func (r *LocationsWorkforcePoolsProvidersScimTenantsService) TestIamPermissions(resource string, testiampermissionsrequest *TestIamPermissionsRequest) *LocationsWorkforcePoolsProvidersScimTenantsTestIamPermissionsCall {
+	c := &LocationsWorkforcePoolsProvidersScimTenantsTestIamPermissionsCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.resource = resource
+	c.testiampermissionsrequest = testiampermissionsrequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsTestIamPermissionsCall) Fields(s ...googleapi.Field) *LocationsWorkforcePoolsProvidersScimTenantsTestIamPermissionsCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsTestIamPermissionsCall) Context(ctx context.Context) *LocationsWorkforcePoolsProvidersScimTenantsTestIamPermissionsCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsTestIamPermissionsCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *LocationsWorkforcePoolsProvidersScimTenantsTestIamPermissionsCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.testiampermissionsrequest)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+resource}:testIamPermissions")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"resource": c.resource,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "iam.locations.workforcePools.providers.scimTenants.testIamPermissions", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "iam.locations.workforcePools.providers.scimTenants.testIamPermissions" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *TestIamPermissionsResponse.ServerResponse.Header or (if a response was
+// returned at all) in error.(*googleapi.Error).Header. Use
+// googleapi.IsNotModified to check whether the returned error was because
+// http.StatusNotModified was returned.
+func (c *LocationsWorkforcePoolsProvidersScimTenantsTestIamPermissionsCall) Do(opts ...googleapi.CallOption) (*TestIamPermissionsResponse, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &TestIamPermissionsResponse{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "iam.locations.workforcePools.providers.scimTenants.testIamPermissions", "response", internallog.HTTPResponse(res, b))
 	return ret, nil
 }
 
@@ -8795,6 +9127,117 @@ func (c *LocationsWorkforcePoolsSubjectsDeleteCall) Do(opts ...googleapi.CallOpt
 		return nil, err
 	}
 	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "iam.locations.workforcePools.subjects.delete", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type LocationsWorkforcePoolsSubjectsRevokeSessionsCall struct {
+	s                                         *Service
+	name                                      string
+	revokeworkforcepoolsubjectsessionsrequest *RevokeWorkforcePoolSubjectSessionsRequest
+	urlParams_                                gensupport.URLParams
+	ctx_                                      context.Context
+	header_                                   http.Header
+}
+
+// RevokeSessions: Revokes all sessions for the specified WorkforcePoolSubject.
+// Revoking sessions invalidates all active sessions and previously issued
+// credentials for the subject, requiring the user to re-authenticate with the
+// identity provider.
+//
+//   - name: The resource name of the WorkforcePoolSubject. Special characters,
+//     such as `/` and `:`, must be escaped, because all URLs must conform to the
+//     "When to Escape and Unescape" section of RFC 3986
+//     (https://www.rfc-editor.org/info/rfc3986/). Format:
+//     `locations/{location}/workforcePools/{workforce_pool_id}/subjects/{subject_
+//     id}`.
+func (r *LocationsWorkforcePoolsSubjectsService) RevokeSessions(name string, revokeworkforcepoolsubjectsessionsrequest *RevokeWorkforcePoolSubjectSessionsRequest) *LocationsWorkforcePoolsSubjectsRevokeSessionsCall {
+	c := &LocationsWorkforcePoolsSubjectsRevokeSessionsCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.name = name
+	c.revokeworkforcepoolsubjectsessionsrequest = revokeworkforcepoolsubjectsessionsrequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *LocationsWorkforcePoolsSubjectsRevokeSessionsCall) Fields(s ...googleapi.Field) *LocationsWorkforcePoolsSubjectsRevokeSessionsCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *LocationsWorkforcePoolsSubjectsRevokeSessionsCall) Context(ctx context.Context) *LocationsWorkforcePoolsSubjectsRevokeSessionsCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *LocationsWorkforcePoolsSubjectsRevokeSessionsCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *LocationsWorkforcePoolsSubjectsRevokeSessionsCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.revokeworkforcepoolsubjectsessionsrequest)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+name}:revokeSessions")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"name": c.name,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "iam.locations.workforcePools.subjects.revokeSessions", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "iam.locations.workforcePools.subjects.revokeSessions" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *LocationsWorkforcePoolsSubjectsRevokeSessionsCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "iam.locations.workforcePools.subjects.revokeSessions", "response", internallog.HTTPResponse(res, b))
 	return ret, nil
 }
 

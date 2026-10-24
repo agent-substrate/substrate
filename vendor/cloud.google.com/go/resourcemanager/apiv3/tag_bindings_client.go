@@ -32,6 +32,7 @@ import (
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
 	gax "github.com/googleapis/gax-go/v2"
 	"github.com/googleapis/gax-go/v2/callctx"
+	trace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/api/option/internaloption"
@@ -153,7 +154,7 @@ type TagBindingsClient struct {
 
 // Wrapper methods routed to the internal client.
 
-// Close closes the connection to the API service. The user should invoke this when
+// Close closes the connection to the API service. **Always** call Close() when
 // the client is no longer required.
 func (c *TagBindingsClient) Close() error {
 	return c.internalClient.Close()
@@ -299,6 +300,41 @@ func NewTagBindingsClient(ctx context.Context, opts ...option.ClientOption) (*Ta
 		client.CallOptions.ListEffectiveTags = append(client.CallOptions.ListEffectiveTags, gax.WithClientMetrics(metrics))
 		client.CallOptions.GetOperation = append(client.CallOptions.GetOperation, gax.WithClientMetrics(metrics))
 	}
+	if gax.IsFeatureEnabled("TRACING") {
+		tracing := gax.NewClientTracing(
+			gax.WithTracingAttributes(map[string]string{
+				gax.ClientService:  "cloudresourcemanager",
+				gax.ClientVersion:  getVersionClient(),
+				gax.ClientArtifact: "cloud.google.com/go/resourcemanager/apiv3",
+				gax.RPCSystem:      "grpc",
+				gax.URLDomain:      "cloudresourcemanager.googleapis.com",
+			}),
+		)
+
+		client.CallOptions.ListTagBindings = append(client.CallOptions.ListTagBindings, gax.WithClientTracing(tracing))
+		client.CallOptions.CreateTagBinding = append(client.CallOptions.CreateTagBinding, gax.WithClientTracing(tracing))
+		client.CallOptions.DeleteTagBinding = append(client.CallOptions.DeleteTagBinding, gax.WithClientTracing(tracing))
+		client.CallOptions.ListEffectiveTags = append(client.CallOptions.ListEffectiveTags, gax.WithClientTracing(tracing))
+		client.CallOptions.GetOperation = append(client.CallOptions.GetOperation, gax.WithClientTracing(tracing))
+	}
+	if gax.IsFeatureEnabled("LOGGING") {
+		logging := gax.NewClientLogging(
+			gax.WithLoggerProvider(c.logger),
+			gax.WithLoggingAttributes(map[string]string{
+				gax.ClientService:  "cloudresourcemanager",
+				gax.ClientVersion:  getVersionClient(),
+				gax.ClientArtifact: "cloud.google.com/go/resourcemanager/apiv3",
+				gax.RPCSystem:      "grpc",
+				gax.URLDomain:      "cloudresourcemanager.googleapis.com",
+			}),
+		)
+
+		client.CallOptions.ListTagBindings = append(client.CallOptions.ListTagBindings, gax.WithClientLogging(logging))
+		client.CallOptions.CreateTagBinding = append(client.CallOptions.CreateTagBinding, gax.WithClientLogging(logging))
+		client.CallOptions.DeleteTagBinding = append(client.CallOptions.DeleteTagBinding, gax.WithClientLogging(logging))
+		client.CallOptions.ListEffectiveTags = append(client.CallOptions.ListEffectiveTags, gax.WithClientLogging(logging))
+		client.CallOptions.GetOperation = append(client.CallOptions.GetOperation, gax.WithClientLogging(logging))
+	}
 
 	client.internalClient = c
 
@@ -335,7 +371,7 @@ func (c *tagBindingsGRPCClient) setGoogleClientInfo(keyval ...string) {
 	}
 }
 
-// Close closes the connection to the API service. The user should invoke this when
+// Close closes the connection to the API service. **Always** call Close() when
 // the client is no longer required.
 func (c *tagBindingsGRPCClient) Close() error {
 	return c.connPool.Close()
@@ -411,6 +447,41 @@ func NewTagBindingsRESTClient(ctx context.Context, opts ...option.ClientOption) 
 		callOpts.ListEffectiveTags = append(callOpts.ListEffectiveTags, gax.WithClientMetrics(metrics))
 		callOpts.GetOperation = append(callOpts.GetOperation, gax.WithClientMetrics(metrics))
 	}
+	if gax.IsFeatureEnabled("TRACING") {
+		tracing := gax.NewClientTracing(
+			gax.WithTracingAttributes(map[string]string{
+				gax.ClientService:  "cloudresourcemanager",
+				gax.ClientVersion:  getVersionClient(),
+				gax.ClientArtifact: "cloud.google.com/go/resourcemanager/apiv3",
+				gax.RPCSystem:      "http",
+				gax.URLDomain:      "cloudresourcemanager.googleapis.com",
+			}),
+		)
+
+		callOpts.ListTagBindings = append(callOpts.ListTagBindings, gax.WithClientTracing(tracing))
+		callOpts.CreateTagBinding = append(callOpts.CreateTagBinding, gax.WithClientTracing(tracing))
+		callOpts.DeleteTagBinding = append(callOpts.DeleteTagBinding, gax.WithClientTracing(tracing))
+		callOpts.ListEffectiveTags = append(callOpts.ListEffectiveTags, gax.WithClientTracing(tracing))
+		callOpts.GetOperation = append(callOpts.GetOperation, gax.WithClientTracing(tracing))
+	}
+	if gax.IsFeatureEnabled("LOGGING") {
+		logging := gax.NewClientLogging(
+			gax.WithLoggerProvider(c.logger),
+			gax.WithLoggingAttributes(map[string]string{
+				gax.ClientService:  "cloudresourcemanager",
+				gax.ClientVersion:  getVersionClient(),
+				gax.ClientArtifact: "cloud.google.com/go/resourcemanager/apiv3",
+				gax.RPCSystem:      "http",
+				gax.URLDomain:      "cloudresourcemanager.googleapis.com",
+			}),
+		)
+
+		callOpts.ListTagBindings = append(callOpts.ListTagBindings, gax.WithClientLogging(logging))
+		callOpts.CreateTagBinding = append(callOpts.CreateTagBinding, gax.WithClientLogging(logging))
+		callOpts.DeleteTagBinding = append(callOpts.DeleteTagBinding, gax.WithClientLogging(logging))
+		callOpts.ListEffectiveTags = append(callOpts.ListEffectiveTags, gax.WithClientLogging(logging))
+		callOpts.GetOperation = append(callOpts.GetOperation, gax.WithClientLogging(logging))
+	}
 
 	lroOpts := []option.ClientOption{
 		option.WithHTTPClient(httpClient),
@@ -448,7 +519,7 @@ func (c *tagBindingsRESTClient) setGoogleClientInfo(keyval ...string) {
 	}
 }
 
-// Close closes the connection to the API service. The user should invoke this when
+// Close closes the connection to the API service. **Always** call Close() when
 // the client is no longer required.
 func (c *tagBindingsRESTClient) Close() error {
 	// Replace httpClient with nil to force cleanup.
@@ -469,7 +540,7 @@ func (c *tagBindingsGRPCClient) ListTagBindings(ctx context.Context, req *resour
 	}
 	opts = append((*c.CallOptions).ListTagBindings[0:len((*c.CallOptions).ListTagBindings):len((*c.CallOptions).ListTagBindings)], opts...)
 	it := &TagBindingIterator{}
-	req = proto.Clone(req).(*resourcemanagerpb.ListTagBindingsRequest)
+	req = proto.CloneOf(req)
 	it.InternalFetch = func(pageSize int, pageToken string) ([]*resourcemanagerpb.TagBinding, string, error) {
 		resp := &resourcemanagerpb.ListTagBindingsResponse{}
 		if pageToken != "" {
@@ -523,8 +594,12 @@ func (c *tagBindingsGRPCClient) CreateTagBinding(ctx context.Context, req *resou
 	if err != nil {
 		return nil, err
 	}
+	lro := longrunning.InternalNewOperationWithMetadata(*c.LROClient, resp, "*resourcemanager.CreateTagBindingOperation")
+	if gax.IsFeatureEnabled("TRACING") {
+		lro.SetParentSpanContext(trace.SpanContextFromContext(ctx))
+	}
 	return &CreateTagBindingOperation{
-		lro: longrunning.InternalNewOperation(*c.LROClient, resp),
+		lro: lro,
 	}, nil
 }
 
@@ -533,9 +608,6 @@ func (c *tagBindingsGRPCClient) DeleteTagBinding(ctx context.Context, req *resou
 
 	hds = append(c.xGoogHeaders, hds...)
 	ctx = gax.InsertMetadataIntoOutgoingContext(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetName()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagBindings/DeleteTagBinding")
 	}
@@ -549,8 +621,12 @@ func (c *tagBindingsGRPCClient) DeleteTagBinding(ctx context.Context, req *resou
 	if err != nil {
 		return nil, err
 	}
+	lro := longrunning.InternalNewOperationWithMetadata(*c.LROClient, resp, "*resourcemanager.DeleteTagBindingOperation")
+	if gax.IsFeatureEnabled("TRACING") {
+		lro.SetParentSpanContext(trace.SpanContextFromContext(ctx))
+	}
 	return &DeleteTagBindingOperation{
-		lro: longrunning.InternalNewOperation(*c.LROClient, resp),
+		lro: lro,
 	}, nil
 }
 
@@ -561,7 +637,7 @@ func (c *tagBindingsGRPCClient) ListEffectiveTags(ctx context.Context, req *reso
 	}
 	opts = append((*c.CallOptions).ListEffectiveTags[0:len((*c.CallOptions).ListEffectiveTags):len((*c.CallOptions).ListEffectiveTags)], opts...)
 	it := &EffectiveTagIterator{}
-	req = proto.Clone(req).(*resourcemanagerpb.ListEffectiveTagsRequest)
+	req = proto.CloneOf(req)
 	it.InternalFetch = func(pageSize int, pageToken string) ([]*resourcemanagerpb.EffectiveTag, string, error) {
 		resp := &resourcemanagerpb.ListEffectiveTagsResponse{}
 		if pageToken != "" {
@@ -628,7 +704,7 @@ func (c *tagBindingsGRPCClient) GetOperation(ctx context.Context, req *longrunni
 // https://cloud.google.com/apis/design/resource_names#full_resource_name (at https://cloud.google.com/apis/design/resource_names#full_resource_name)
 func (c *tagBindingsRESTClient) ListTagBindings(ctx context.Context, req *resourcemanagerpb.ListTagBindingsRequest, opts ...gax.CallOption) *TagBindingIterator {
 	it := &TagBindingIterator{}
-	req = proto.Clone(req).(*resourcemanagerpb.ListTagBindingsRequest)
+	req = proto.CloneOf(req)
 	unm := protojson.UnmarshalOptions{AllowPartial: true, DiscardUnknown: true}
 	it.InternalFetch = func(pageSize int, pageToken string) ([]*resourcemanagerpb.TagBinding, string, error) {
 		resp := &resourcemanagerpb.ListTagBindingsResponse{}
@@ -762,8 +838,12 @@ func (c *tagBindingsRESTClient) CreateTagBinding(ctx context.Context, req *resou
 	}
 
 	override := fmt.Sprintf("/v3/%s", resp.GetName())
+	lro := longrunning.InternalNewOperationWithMetadata(*c.LROClient, resp, "*resourcemanager.CreateTagBindingOperation")
+	if gax.IsFeatureEnabled("TRACING") {
+		lro.SetParentSpanContext(trace.SpanContextFromContext(ctx))
+	}
 	return &CreateTagBindingOperation{
-		lro:      longrunning.InternalNewOperation(*c.LROClient, resp),
+		lro:      lro,
 		pollPath: override,
 	}, nil
 }
@@ -787,9 +867,6 @@ func (c *tagBindingsRESTClient) DeleteTagBinding(ctx context.Context, req *resou
 	hds = append(c.xGoogHeaders, hds...)
 	hds = append(hds, "Content-Type", "application/json")
 	headers := gax.BuildHeaders(ctx, hds...)
-	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
-		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//cloudresourcemanager.googleapis.com/%v", req.GetName()))
-	}
 	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
 		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.resourcemanager.v3.TagBindings/DeleteTagBinding")
 		ctx = callctx.WithTelemetryContext(ctx, "url_template", "/v3/{name=tagBindings/**}")
@@ -822,8 +899,12 @@ func (c *tagBindingsRESTClient) DeleteTagBinding(ctx context.Context, req *resou
 	}
 
 	override := fmt.Sprintf("/v3/%s", resp.GetName())
+	lro := longrunning.InternalNewOperationWithMetadata(*c.LROClient, resp, "*resourcemanager.DeleteTagBindingOperation")
+	if gax.IsFeatureEnabled("TRACING") {
+		lro.SetParentSpanContext(trace.SpanContextFromContext(ctx))
+	}
 	return &DeleteTagBindingOperation{
-		lro:      longrunning.InternalNewOperation(*c.LROClient, resp),
+		lro:      lro,
 		pollPath: override,
 	}, nil
 }
@@ -832,7 +913,7 @@ func (c *tagBindingsRESTClient) DeleteTagBinding(ctx context.Context, req *resou
 // specified in parent.
 func (c *tagBindingsRESTClient) ListEffectiveTags(ctx context.Context, req *resourcemanagerpb.ListEffectiveTagsRequest, opts ...gax.CallOption) *EffectiveTagIterator {
 	it := &EffectiveTagIterator{}
-	req = proto.Clone(req).(*resourcemanagerpb.ListEffectiveTagsRequest)
+	req = proto.CloneOf(req)
 	unm := protojson.UnmarshalOptions{AllowPartial: true, DiscardUnknown: true}
 	it.InternalFetch = func(pageSize int, pageToken string) ([]*resourcemanagerpb.EffectiveTag, string, error) {
 		resp := &resourcemanagerpb.ListEffectiveTagsResponse{}
@@ -966,7 +1047,7 @@ func (c *tagBindingsRESTClient) GetOperation(ctx context.Context, req *longrunni
 // The name must be that of a previously created CreateTagBindingOperation, possibly from a different process.
 func (c *tagBindingsGRPCClient) CreateTagBindingOperation(name string) *CreateTagBindingOperation {
 	return &CreateTagBindingOperation{
-		lro: longrunning.InternalNewOperation(*c.LROClient, &longrunningpb.Operation{Name: name}),
+		lro: longrunning.InternalNewOperationWithMetadata(*c.LROClient, &longrunningpb.Operation{Name: name}, "*resourcemanager.CreateTagBindingOperation"),
 	}
 }
 
@@ -975,7 +1056,7 @@ func (c *tagBindingsGRPCClient) CreateTagBindingOperation(name string) *CreateTa
 func (c *tagBindingsRESTClient) CreateTagBindingOperation(name string) *CreateTagBindingOperation {
 	override := fmt.Sprintf("/v3/%s", name)
 	return &CreateTagBindingOperation{
-		lro:      longrunning.InternalNewOperation(*c.LROClient, &longrunningpb.Operation{Name: name}),
+		lro:      longrunning.InternalNewOperationWithMetadata(*c.LROClient, &longrunningpb.Operation{Name: name}, "*resourcemanager.CreateTagBindingOperation"),
 		pollPath: override,
 	}
 }
@@ -984,7 +1065,7 @@ func (c *tagBindingsRESTClient) CreateTagBindingOperation(name string) *CreateTa
 // The name must be that of a previously created DeleteTagBindingOperation, possibly from a different process.
 func (c *tagBindingsGRPCClient) DeleteTagBindingOperation(name string) *DeleteTagBindingOperation {
 	return &DeleteTagBindingOperation{
-		lro: longrunning.InternalNewOperation(*c.LROClient, &longrunningpb.Operation{Name: name}),
+		lro: longrunning.InternalNewOperationWithMetadata(*c.LROClient, &longrunningpb.Operation{Name: name}, "*resourcemanager.DeleteTagBindingOperation"),
 	}
 }
 
@@ -993,7 +1074,7 @@ func (c *tagBindingsGRPCClient) DeleteTagBindingOperation(name string) *DeleteTa
 func (c *tagBindingsRESTClient) DeleteTagBindingOperation(name string) *DeleteTagBindingOperation {
 	override := fmt.Sprintf("/v3/%s", name)
 	return &DeleteTagBindingOperation{
-		lro:      longrunning.InternalNewOperation(*c.LROClient, &longrunningpb.Operation{Name: name}),
+		lro:      longrunning.InternalNewOperationWithMetadata(*c.LROClient, &longrunningpb.Operation{Name: name}, "*resourcemanager.DeleteTagBindingOperation"),
 		pollPath: override,
 	}
 }

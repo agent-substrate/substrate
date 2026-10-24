@@ -130,6 +130,7 @@ func NewService(ctx context.Context, opts ...option.ClientOption) (*Service, err
 	s := &Service{client: client, BasePath: basePath, logger: internaloption.GetLogger(opts)}
 	s.Backups = NewBackupsService(s)
 	s.BackupRuns = NewBackupRunsService(s)
+	s.BlueGreenDeployments = NewBlueGreenDeploymentsService(s)
 	s.Connect = NewConnectService(s)
 	s.Databases = NewDatabasesService(s)
 	s.Flags = NewFlagsService(s)
@@ -139,6 +140,7 @@ func NewService(ctx context.Context, opts ...option.ClientOption) (*Service, err
 	s.SslCerts = NewSslCertsService(s)
 	s.Tiers = NewTiersService(s)
 	s.Users = NewUsersService(s)
+	s.WorkloadCaptures = NewWorkloadCapturesService(s)
 	if endpoint != "" {
 		s.BasePath = endpoint
 	}
@@ -167,6 +169,8 @@ type Service struct {
 
 	BackupRuns *BackupRunsService
 
+	BlueGreenDeployments *BlueGreenDeploymentsService
+
 	Connect *ConnectService
 
 	Databases *DatabasesService
@@ -184,6 +188,8 @@ type Service struct {
 	Tiers *TiersService
 
 	Users *UsersService
+
+	WorkloadCaptures *WorkloadCapturesService
 }
 
 func (s *Service) userAgent() string {
@@ -208,6 +214,15 @@ func NewBackupRunsService(s *Service) *BackupRunsService {
 }
 
 type BackupRunsService struct {
+	s *Service
+}
+
+func NewBlueGreenDeploymentsService(s *Service) *BlueGreenDeploymentsService {
+	rs := &BlueGreenDeploymentsService{s: s}
+	return rs
+}
+
+type BlueGreenDeploymentsService struct {
 	s *Service
 }
 
@@ -301,6 +316,15 @@ func NewUsersService(s *Service) *UsersService {
 }
 
 type UsersService struct {
+	s *Service
+}
+
+func NewWorkloadCapturesService(s *Service) *WorkloadCapturesService {
+	rs := &WorkloadCapturesService{s: s}
+	return rs
+}
+
+type WorkloadCapturesService struct {
 	s *Service
 }
 
@@ -542,6 +566,8 @@ type Backup struct {
 	//   "POSTGRES_16" - The database version is PostgreSQL 16.
 	//   "POSTGRES_17" - The database version is PostgreSQL 17.
 	//   "POSTGRES_18" - The database version is PostgreSQL 18.
+	//   "POSTGRES_19" - The database version is PostgreSQL 19.
+	//   "POSTGRES_20" - The database version is PostgreSQL 20.
 	//   "SQLSERVER_2019_STANDARD" - The database version is SQL Server 2019
 	// Standard.
 	//   "SQLSERVER_2019_ENTERPRISE" - The database version is SQL Server 2019
@@ -680,7 +706,9 @@ type BackupConfiguration struct {
 	Location string `json:"location,omitempty"`
 	// PointInTimeRecoveryEnabled: Whether point in time recovery is enabled.
 	PointInTimeRecoveryEnabled bool `json:"pointInTimeRecoveryEnabled,omitempty"`
-	// ReplicationLogArchivingEnabled: Reserved for future use.
+	// ReplicationLogArchivingEnabled: Optional. Deprecated:
+	// replication_log_archiving_enabled is deprecated and will be removed from a
+	// future version of the API. Use point_in_time_recovery_enabled instead.
 	ReplicationLogArchivingEnabled bool `json:"replicationLogArchivingEnabled,omitempty"`
 	// StartTime: Start time for the daily backup configuration in UTC timezone in
 	// the 24 hour format - `HH:MM`.
@@ -892,6 +920,8 @@ type BackupRun struct {
 	//   "POSTGRES_16" - The database version is PostgreSQL 16.
 	//   "POSTGRES_17" - The database version is PostgreSQL 17.
 	//   "POSTGRES_18" - The database version is PostgreSQL 18.
+	//   "POSTGRES_19" - The database version is PostgreSQL 19.
+	//   "POSTGRES_20" - The database version is PostgreSQL 20.
 	//   "SQLSERVER_2019_STANDARD" - The database version is SQL Server 2019
 	// Standard.
 	//   "SQLSERVER_2019_ENTERPRISE" - The database version is SQL Server 2019
@@ -1061,6 +1091,112 @@ func (s BinLogCoordinates) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// BlueGreenDeployment: A `BlueGreenDeployment` resource represents a Cloud SQL
+// blue-green deployment setup.
+type BlueGreenDeployment struct {
+	// CreateTime: Output only. The time when the deployment was created. Example:
+	// `2024-01-01T00:00:00Z`
+	CreateTime string `json:"createTime,omitempty"`
+	// DeploymentMappings: Output only. A list representing the pairs of source and
+	// target instances in the deployment.
+	DeploymentMappings []*SourceTargetPairedNode `json:"deploymentMappings,omitempty"`
+	// DeploymentTasks: Output only. Combined list of tasks for all paired nodes.
+	DeploymentTasks *DeploymentTasks `json:"deploymentTasks,omitempty"`
+	// Description: Optional. User-provided description for the deployment. The
+	// description can be up to 255 characters long.
+	Description string `json:"description,omitempty"`
+	// ErrorDetail: Output only. Provides details on why switchover is not
+	// possible. This field is empty unless a switchover attempt failed or the
+	// state is `SWITCHOVER_NOT_READY`. Example: "The target database version does
+	// not match the source instance database version."
+	ErrorDetail string `json:"errorDetail,omitempty"`
+	// Name: Output only. Identifier. The full resource name of the deployment.
+	// Format:
+	// projects/{project}/locations/{location}/blueGreenDeployments/{deployment_id}
+	Name string `json:"name,omitempty"`
+	// RequestedConfig: Optional. Immutable. Optional on create, and immutable. The
+	// configuration intended for the target instance(s) when the deployment was
+	// created.
+	RequestedConfig *RequestedConfig `json:"requestedConfig,omitempty"`
+	// SourceInstance: Required. Immutable. Required on create, and immutable. The
+	// full resource name of the source instance (the "blue" instance). Format:
+	// projects/{project}/instances/{instance}
+	SourceInstance string `json:"sourceInstance,omitempty"`
+	// State: Output only. The current state of the blue-green deployment.
+	//
+	// Possible values:
+	//   "STATE_UNSPECIFIED" - The default value. This value is used if the state
+	// is omitted or unknown.
+	//   "PROVISIONING" - The deployment is being provisioned.
+	//   "SWITCHOVER_READY" - The deployment is ready for switchover.
+	//   "SWITCHOVER_NOT_READY" - The deployment is not ready for switchover.
+	//   "SWITCHOVER_IN_PROGRESS" - The deployment is in the process of switching
+	// over.
+	//   "SWITCHOVER_COMPLETED" - The deployment has completed switchover.
+	//   "DELETING" - The deployment is being deleted.
+	State string `json:"state,omitempty"`
+	// SwitchoverTargetInstance: Output only. The full resource name of the primary
+	// target instance (the "green" instance) that will be promoted during
+	// switchover. This field is always populated once the deployment is created.
+	// Format: projects/{project}/instances/{instance}
+	SwitchoverTargetInstance string `json:"switchoverTargetInstance,omitempty"`
+
+	// ServerResponse contains the HTTP response code and headers from the server.
+	googleapi.ServerResponse `json:"-"`
+	// ForceSendFields is a list of field names (e.g. "CreateTime") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "CreateTime") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s BlueGreenDeployment) MarshalJSON() ([]byte, error) {
+	type NoMethod BlueGreenDeployment
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// BlueGreenDeploymentInfo: Blue-green deployment metadata for a database
+// instance. In a blue-green deployment, we maintain two environments, one of
+// which is live. This message contains details about the blue-green
+// deployment.
+type BlueGreenDeploymentInfo struct {
+	// DeploymentId: Output only. The resource ID of the blue-green deployment.
+	DeploymentId string `json:"deploymentId,omitempty"`
+	// Source: Output only. The source instance for the Blue-Green deployment.
+	Source *SourceRole `json:"source,omitempty"`
+	// State: Output only. The current state of blue-green-deployment for UI tags
+	//
+	// Possible values:
+	//   "STATE_UNSPECIFIED" - The state of the deployment is unknown.
+	//   "PRE_SWITCHOVER" - The deployment is pre-switchover.
+	//   "POST_SWITCHOVER" - The deployment is post-switchover.
+	State string `json:"state,omitempty"`
+	// Target: Output only. The target instance for the Blue-Green deployment.
+	Target *TargetRole `json:"target,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "DeploymentId") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "DeploymentId") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s BlueGreenDeploymentInfo) MarshalJSON() ([]byte, error) {
+	type NoMethod BlueGreenDeploymentInfo
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // CloneContext: Database instance clone context.
 type CloneContext struct {
 	// AllocatedIpRange: The name of the allocated ip range for the private ip
@@ -1081,7 +1217,7 @@ type CloneContext struct {
 	// created as a clone.
 	DestinationInstanceName string `json:"destinationInstanceName,omitempty"`
 	// DestinationNetwork: Optional. The fully qualified URI of the VPC network to
-	// which the cloned instance will be connected via Private Services Access for
+	// which the cloned instance will be connected via private services access for
 	// private IP. For
 	// example:`projects/my-network-project/global/networks/my-network`. This field
 	// is only required for cross-project cloning.
@@ -1153,6 +1289,34 @@ func (s Column) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// ConfigDiff: Represents a specific configuration difference between blue and
+// green instances.
+type ConfigDiff struct {
+	// Field: Output only. The name of the field that differs in the blue and green
+	// instances, fully-qualified. Example: `settings.tier`
+	Field string `json:"field,omitempty"`
+	// SourceValue: Output only. The value on the source instance.
+	SourceValue string `json:"sourceValue,omitempty"`
+	// TargetValue: Output only. The value on the target instance.
+	TargetValue string `json:"targetValue,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Field") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Field") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ConfigDiff) MarshalJSON() ([]byte, error) {
+	type NoMethod ConfigDiff
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // ConnectPoolNodeConfig: Details of a single read pool node of a read pool.
 type ConnectPoolNodeConfig struct {
 	// DnsName: Output only. The DNS name of the read pool node.
@@ -1197,6 +1361,9 @@ type ConnectSettings struct {
 	//   "SECOND_GEN" - V2 speckle instance.
 	//   "EXTERNAL" - On premises instance.
 	BackendType string `json:"backendType,omitempty"`
+	// ConnectionName: Optional. Output only. Connection name of the Cloud SQL
+	// instance used in connection strings, in the format project:region:instance.
+	ConnectionName string `json:"connectionName,omitempty"`
 	// CustomSubjectAlternativeNames: Custom subject alternative names for the
 	// server certificate.
 	CustomSubjectAlternativeNames []string `json:"customSubjectAlternativeNames,omitempty"`
@@ -1278,6 +1445,8 @@ type ConnectSettings struct {
 	//   "POSTGRES_16" - The database version is PostgreSQL 16.
 	//   "POSTGRES_17" - The database version is PostgreSQL 17.
 	//   "POSTGRES_18" - The database version is PostgreSQL 18.
+	//   "POSTGRES_19" - The database version is PostgreSQL 19.
+	//   "POSTGRES_20" - The database version is PostgreSQL 20.
 	//   "SQLSERVER_2019_STANDARD" - The database version is SQL Server 2019
 	// Standard.
 	//   "SQLSERVER_2019_ENTERPRISE" - The database version is SQL Server 2019
@@ -1541,6 +1710,21 @@ type DatabaseInstance struct {
 	// (https://groups.google.com/d/msg/google-cloud-sql-announce/I_7-F9EBhT0/BtvFtdFeAgAJ)
 	// for details.
 	CurrentDiskSize int64 `json:"currentDiskSize,omitempty,string"`
+	// DatabaseCenterIntegration: Optional. State of the Database Center
+	// integration for this instance. When unspecified, Database Center integration
+	// is enabled by default.
+	//
+	// Possible values:
+	//   "DATABASE_CENTER_INTEGRATION_UNSPECIFIED" - Default value. The integration
+	// state is unspecified. When unspecified, Database Center integration is
+	// enabled by default.
+	//   "ENABLED" - Database Center integration is enabled.
+	//   "DISABLED" - Database Center integration is disabled.
+	DatabaseCenterIntegration string `json:"databaseCenterIntegration,omitempty"`
+	// DatabaseCenterIntegrationEnabled: Optional. If true, instance metadata is
+	// sent to the Database Center. If false, instance metadata is not sent to the
+	// Database Center.
+	DatabaseCenterIntegrationEnabled bool `json:"databaseCenterIntegrationEnabled,omitempty"`
 	// DatabaseInstalledVersion: Output only. Stores the current database version
 	// running on the instance including minor version such as `MYSQL_8_0_18`.
 	DatabaseInstalledVersion string `json:"databaseInstalledVersion,omitempty"`
@@ -1615,6 +1799,8 @@ type DatabaseInstance struct {
 	//   "POSTGRES_16" - The database version is PostgreSQL 16.
 	//   "POSTGRES_17" - The database version is PostgreSQL 17.
 	//   "POSTGRES_18" - The database version is PostgreSQL 18.
+	//   "POSTGRES_19" - The database version is PostgreSQL 19.
+	//   "POSTGRES_20" - The database version is PostgreSQL 20.
 	//   "SQLSERVER_2019_STANDARD" - The database version is SQL Server 2019
 	// Standard.
 	//   "SQLSERVER_2019_ENTERPRISE" - The database version is SQL Server 2019
@@ -1636,6 +1822,9 @@ type DatabaseInstance struct {
 	//   "SQLSERVER_2025_EXPRESS" - The database version is SQL Server 2025
 	// Express.
 	DatabaseVersion string `json:"databaseVersion,omitempty"`
+	// DeploymentInfo: Output only. Deployment info for the instance. This is set
+	// if the instance is currently part of any blue-green setup.
+	DeploymentInfo *BlueGreenDeploymentInfo `json:"deploymentInfo,omitempty"`
 	// DiskEncryptionConfiguration: Disk encryption configuration specific to an
 	// instance.
 	DiskEncryptionConfiguration *DiskEncryptionConfiguration `json:"diskEncryptionConfiguration,omitempty"`
@@ -1672,6 +1861,8 @@ type DatabaseInstance struct {
 	// that is not managed by Cloud SQL.
 	//   "READ_REPLICA_INSTANCE" - A Cloud SQL instance acting as a read-replica.
 	//   "READ_POOL_INSTANCE" - A Cloud SQL read pool.
+	//   "GREEN_INSTANCE" - A Cloud SQL instance acting as a Blue-Green deployment
+	// target primary. (MySQL only)
 	InstanceType string `json:"instanceType,omitempty"`
 	// IpAddresses: The assigned IP addresses for the instance.
 	IpAddresses []*IpMapping `json:"ipAddresses,omitempty"`
@@ -1750,6 +1941,9 @@ type DatabaseInstance struct {
 	ServiceAccountEmailAddress string `json:"serviceAccountEmailAddress,omitempty"`
 	// Settings: The user settings.
 	Settings *Settings `json:"settings,omitempty"`
+	// SkipPrecheck: Optional. Input only. Determines whether the precheck step is
+	// skipped during a major version upgrade.
+	SkipPrecheck bool `json:"skipPrecheck,omitempty"`
 	// Possible values:
 	//   "SQL_NETWORK_ARCHITECTURE_UNSPECIFIED"
 	//   "NEW_NETWORK_ARCHITECTURE" - The instance uses the new network
@@ -1787,6 +1981,7 @@ type DatabaseInstance struct {
 	// example:, causing the database to crash).
 	//   "KMS_KEY_ISSUE" - The KMS key used by the instance is either revoked or
 	// denied access to
+	//   "PROJECT_ABUSE" - The project is suspended due to abuse detected by Ares.
 	SuspensionReason []string `json:"suspensionReason,omitempty"`
 	// SwitchTransactionLogsToCloudStorageEnabled: Input only. Whether Cloud SQL is
 	// enabled to switch storing point-in-time recovery log files from a data disk
@@ -2045,21 +2240,109 @@ func (s DenyMaintenancePeriod) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
-// DiskEncryptionConfiguration: Disk encryption configuration for an instance.
-type DiskEncryptionConfiguration struct {
-	// Kind: This is always `sql#diskEncryptionConfiguration`.
-	Kind string `json:"kind,omitempty"`
-	// KmsKeyName: Resource name of KMS key for disk encryption
-	KmsKeyName string `json:"kmsKeyName,omitempty"`
-	// ForceSendFields is a list of field names (e.g. "Kind") to unconditionally
+// DeploymentTask: Represents a task executed as part of the deployment on a
+// target instance.
+type DeploymentTask struct {
+	// EndTime: Output only. Task end time (if completed).
+	EndTime string `json:"endTime,omitempty"`
+	// ErrorMessage: Output only. Optional error details if the task state is
+	// `FAILED`.
+	ErrorMessage string `json:"errorMessage,omitempty"`
+	// StartTime: Output only. Task start time.
+	StartTime string `json:"startTime,omitempty"`
+	// State: Output only. The current state of the task.
+	//
+	// Possible values:
+	//   "STATE_UNSPECIFIED" - The state of the task is unknown.
+	//   "PENDING" - The task is pending.
+	//   "RUNNING" - The task is running.
+	//   "SUCCEEDED" - The task has succeeded.
+	//   "FAILED" - The task has failed.
+	State string `json:"state,omitempty"`
+	// Type: Output only. The type of the task.
+	//
+	// Possible values:
+	//   "TYPE_UNSPECIFIED" - The default value. This value is used if the type is
+	// omitted.
+	//   "PROVISION" - Provisions the green environment, which includes creating
+	// the target instance.
+	//   "UPGRADE" - Upgrades the green environment, for example, performing a
+	// major version upgrade on the target instance.
+	//   "SWITCHOVER" - Promotes the target instance and then demotes the source
+	// instance for this pair.
+	//   "DELETE" - Deletes the blue-green deployment, including underlying
+	// resources.
+	//   "POST_SWITCHOVER_OPERATIONS" - Post-switchover operations, including
+	// cleaning up resources of the old instance, taking final backups, and
+	// updating metadata.
+	Type string `json:"type,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "EndTime") to unconditionally
 	// include in API requests. By default, fields with empty or default values are
 	// omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
 	// details.
 	ForceSendFields []string `json:"-"`
-	// NullFields is a list of field names (e.g. "Kind") to include in API requests
+	// NullFields is a list of field names (e.g. "EndTime") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s DeploymentTask) MarshalJSON() ([]byte, error) {
+	type NoMethod DeploymentTask
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// DeploymentTasks: Combined list of tasks for all paired nodes in the
+// deployment.
+type DeploymentTasks struct {
+	// Task: Output only. Tasks performed or being performed on the paired nodes of
+	// the deployment at a consolidated level.
+	Task []*DeploymentTask `json:"task,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Task") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Task") to include in API requests
 	// with the JSON null value. By default, fields with empty values are omitted
 	// from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s DeploymentTasks) MarshalJSON() ([]byte, error) {
+	type NoMethod DeploymentTasks
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// DiskEncryptionConfiguration: Disk encryption configuration for an instance.
+type DiskEncryptionConfiguration struct {
+	// CmekSourceLogEncryptionEnforced: Optional. Whether to enforce CMEK log
+	// encryption at source. When enforced, transaction logs are encrypted prior to
+	// being uploaded to Cloud Storage. If not enforced, then CMEK logs are
+	// encrypted by the Cloud Storage service.
+	CmekSourceLogEncryptionEnforced bool `json:"cmekSourceLogEncryptionEnforced,omitempty"`
+	// ConfidentialMode: Optional. If true, enables Confidential Mode for the
+	// instance's Hyperdisk Balanced volumes. Only supported for zonal C4A
+	// instances currently.
+	ConfidentialMode bool `json:"confidentialMode,omitempty"`
+	// Kind: This is always `sql#diskEncryptionConfiguration`.
+	Kind string `json:"kind,omitempty"`
+	// KmsKeyName: Resource name of KMS key for disk encryption.
+	KmsKeyName string `json:"kmsKeyName,omitempty"`
+	// ForceSendFields is a list of field names (e.g.
+	// "CmekSourceLogEncryptionEnforced") to unconditionally include in API
+	// requests. By default, fields with empty or default values are omitted from
+	// API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "CmekSourceLogEncryptionEnforced")
+	// to include in API requests with the JSON null value. By default, fields with
+	// empty values are omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
 	NullFields []string `json:"-"`
 }
@@ -2163,7 +2446,8 @@ type ExecuteSqlPayload struct {
 	// caller must be an IAM user in the database.
 	AutoIamAuthn bool `json:"autoIamAuthn,omitempty"`
 	// Database: Optional. Name of the database on which the statement will be
-	// executed.
+	// executed. For Postgres and SQL Server it's required, for MySQL it's
+	// optional.
 	Database string `json:"database,omitempty"`
 	// PartialResultMode: Optional. Controls how the API should respond when the
 	// SQL execution result is incomplete due to the size limit or another error.
@@ -2178,6 +2462,15 @@ type ExecuteSqlPayload struct {
 	// `partial_result` to true if the result exceeds 10 MB or if only a partial
 	// result can be retrieved due to error. Don't throw an error.
 	PartialResultMode string `json:"partialResultMode,omitempty"`
+	// PasswordSecretVersion: Optional. The resource name of the Secret Manager
+	// secret holding the password for the user to log into the database. The
+	// secret should be created using the regional endpoint (for API) or from the
+	// Regional Secrets page (for UI), and stored in the same region as the Cloud
+	// SQL instance. The expected resource name format is
+	// `projects/{project}/locations/{location}/secrets/{secret}/versions/{secret_ve
+	// rsion}`. Used together with the `user` field. The secret resource name will
+	// not be stored.
+	PasswordSecretVersion string `json:"passwordSecretVersion,omitempty"`
 	// RowLimit: Optional. The maximum number of rows returned per SQL statement.
 	RowLimit int64 `json:"rowLimit,omitempty,string"`
 	// SqlStatement: Required. SQL statements to run on the database. It can be a
@@ -2638,6 +2931,8 @@ type Flag struct {
 	//   "POSTGRES_16" - The database version is PostgreSQL 16.
 	//   "POSTGRES_17" - The database version is PostgreSQL 17.
 	//   "POSTGRES_18" - The database version is PostgreSQL 18.
+	//   "POSTGRES_19" - The database version is PostgreSQL 19.
+	//   "POSTGRES_20" - The database version is PostgreSQL 20.
 	//   "SQLSERVER_2019_STANDARD" - The database version is SQL Server 2019
 	// Standard.
 	//   "SQLSERVER_2019_ENTERPRISE" - The database version is SQL Server 2019
@@ -3507,6 +3802,10 @@ type InstancesRestoreBackupRequest struct {
 	// urces/{datasource}/backups/{backup-uid}". Only one of
 	// restore_backup_context, backup, backupdr_backup can be passed to the input.
 	BackupdrBackup string `json:"backupdrBackup,omitempty"`
+	// IgnoreMaintenanceVersion: Optional. If true, the restore operation proceeds
+	// even if the target instance's maintenance version is older than the source
+	// instance's maintenance version.
+	IgnoreMaintenanceVersion bool `json:"ignoreMaintenanceVersion,omitempty"`
 	// RestoreBackupContext: Parameters required to perform the restore backup
 	// operation.
 	RestoreBackupContext *RestoreBackupContext `json:"restoreBackupContext,omitempty"`
@@ -3865,6 +4164,35 @@ func (s ListBackupsResponse) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// ListBlueGreenDeploymentsResponse: The response message for listing
+// blue-green deployment resources.
+type ListBlueGreenDeploymentsResponse struct {
+	// BlueGreenDeployments: The list of blue-green deployment resources.
+	BlueGreenDeployments []*BlueGreenDeployment `json:"blueGreenDeployments,omitempty"`
+	// NextPageToken: A token to retrieve the next page of results, or empty if
+	// there are no more results.
+	NextPageToken string `json:"nextPageToken,omitempty"`
+
+	// ServerResponse contains the HTTP response code and headers from the server.
+	googleapi.ServerResponse `json:"-"`
+	// ForceSendFields is a list of field names (e.g. "BlueGreenDeployments") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "BlueGreenDeployments") to include
+	// in API requests with the JSON null value. By default, fields with empty
+	// values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ListBlueGreenDeploymentsResponse) MarshalJSON() ([]byte, error) {
+	type NoMethod ListBlueGreenDeploymentsResponse
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // LocationPreference: Preferred location. This specifies where a Cloud SQL
 // instance is located. Note that if the preferred location is not available,
 // the instance will be located as close as possible within the region. Only
@@ -4072,6 +4400,35 @@ func (s MySqlSyncConfig) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// NodeInfo: Details about an instance within the deployment.
+type NodeInfo struct {
+	// Connection: Output only. The instance connection name.
+	Connection string `json:"connection,omitempty"`
+	// Dns: Output only. The unique DNS name for this instance.
+	Dns string `json:"dns,omitempty"`
+	// Instance: Output only. The full resource name of the instance. Format:
+	// projects/{project}/instances/{instance}
+	Instance string `json:"instance,omitempty"`
+	// IpMappings: Output only. The list of IP addresses for this instance.
+	IpMappings []*IpMapping `json:"ipMappings,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Connection") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Connection") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s NodeInfo) MarshalJSON() ([]byte, error) {
+	type NoMethod NodeInfo
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // OnPremisesConfiguration: On-premises instance configuration.
 type OnPremisesConfiguration struct {
 	// CaCertificate: PEM representation of the trusted CA's x509 certificate.
@@ -4081,6 +4438,9 @@ type OnPremisesConfiguration struct {
 	// ClientKey: PEM representation of the replica's private key. The
 	// corresponding public key is encoded in the client's certificate.
 	ClientKey string `json:"clientKey,omitempty"`
+	// DmsManaged: Output only. Indicates whether the resource is managed by
+	// Database Migration Service.
+	DmsManaged bool `json:"dmsManaged,omitempty"`
 	// DumpFilePath: The dump file to create the Cloud SQL replica.
 	DumpFilePath string `json:"dumpFilePath,omitempty"`
 	// HostPort: The host and port of the on-premises instance in host:port format
@@ -4247,6 +4607,13 @@ type Operation struct {
 	//   "CREATE_READ_POOL" - Creates a Cloud SQL read pool instance.
 	//   "PRE_CHECK_MAJOR_VERSION_UPGRADE" - Pre-checks the major version upgrade
 	// operation.
+	//   "SETUP_MIGRATION" - This operation type represents individual steps in a
+	// multi-step setup migration workflow: including configuration, replication,
+	// switchover/back, and data reseeding, as defined by operation's intent.
+	//   "CREATE_BLUE_GREEN_DEPLOYMENT" - Creates a new Blue-Green deployment.
+	//   "SWITCHOVER_BLUE_GREEN_DEPLOYMENT" - Switches over a Blue-Green
+	// deployment.
+	//   "DELETE_BLUE_GREEN_DEPLOYMENT" - Deletes a Blue-Green deployment.
 	OperationType string `json:"operationType,omitempty"`
 	// PreCheckMajorVersionUpgradeContext: This field is only populated when the
 	// operation_type is PRE_CHECK_MAJOR_VERSION_UPGRADE. The
@@ -4260,6 +4627,15 @@ type Operation struct {
 	// 3339 (https://tools.ietf.org/html/rfc3339) format, for example
 	// `2012-11-15T16:19:00.094Z`.
 	StartTime string `json:"startTime,omitempty"`
+	// StartWorkloadCaptureContext: The context for the `StartWorkloadCapture`
+	// operation, which contains details to start recording the workload (SQL
+	// queries) on a Cloud SQL instance.
+	StartWorkloadCaptureContext *StartWorkloadCaptureContext `json:"startWorkloadCaptureContext,omitempty"`
+	// StartWorkloadReplayContext: The context for the `StartWorkloadReplay`
+	// operation, which contains details about starting the execution of a captured
+	// workload (recorded read and write SQL queries) on a replay instance (the
+	// Cloud SQL instance where the recorded SQL queries are executed).
+	StartWorkloadReplayContext *StartWorkloadReplayContext `json:"startWorkloadReplayContext,omitempty"`
 	// Status: The status of an operation.
 	//
 	// Possible values:
@@ -4269,6 +4645,14 @@ type Operation struct {
 	//   "RUNNING" - The operation is running.
 	//   "DONE" - The operation completed.
 	Status string `json:"status,omitempty"`
+	// StopWorkloadCaptureContext: The context for the `StopWorkloadCapture`
+	// operation, which contains details to stop recording the workload (SQL
+	// queries) on a Cloud SQL instance.
+	StopWorkloadCaptureContext *StopWorkloadCaptureContext `json:"stopWorkloadCaptureContext,omitempty"`
+	// StopWorkloadReplayContext: The context for the `StopWorkloadReplay`
+	// operation, which contains details about stopping the execution of a captured
+	// workload (recorded read and write SQL queries) on a replay instance.
+	StopWorkloadReplayContext *StopWorkloadReplayContext `json:"stopWorkloadReplayContext,omitempty"`
 	// SubOperationType: Optional. The sub operation based on the operation type.
 	SubOperationType *SqlSubOperationType `json:"subOperationType,omitempty"`
 	// TargetId: Name of the resource on which this operation runs.
@@ -4512,34 +4896,89 @@ func (s PerformDiskShrinkContext) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
-// PerformanceCaptureConfig: Performance Capture configuration.
+// PerformanceCaptureConfig: Performance capture configuration.
 type PerformanceCaptureConfig struct {
-	// Enabled: Optional. Enable or disable the Performance Capture feature.
+	// CpuUtilizationThresholdPercent: Optional. Specifies the minimum percentage
+	// of CPU utilization to trigger the performance capture. Valid integers range
+	// from `10` to `99`. Enter `0` to disable the check.
+	CpuUtilizationThresholdPercent int64 `json:"cpuUtilizationThresholdPercent,omitempty"`
+	// Enabled: Optional. Enables or disables the performance capture feature.
 	Enabled bool `json:"enabled,omitempty"`
-	// ProbeThreshold: Optional. The minimum number of consecutive readings above
-	// threshold that triggers instance state capture.
+	// HistoryListLengthThresholdCount: Optional. Specifies the minimum number of
+	// undo log entries in the history list length to trigger the performance
+	// capture. Valid integers range from `10000` to `10000000`. Enter `0` to
+	// disable the check.
+	HistoryListLengthThresholdCount int64 `json:"historyListLengthThresholdCount,omitempty"`
+	// MemoryUsageThresholdPercent: Optional. Specifies the minimum percentage of
+	// memory usage to trigger the performance capture. Valid integers range from
+	// `10` to `99`. Enter `0` to disable the check.
+	MemoryUsageThresholdPercent int64 `json:"memoryUsageThresholdPercent,omitempty"`
+	// ProbeThreshold: Optional. Specifies the minimum number of consecutive probe
+	// threshold that triggers performance capture.
 	ProbeThreshold int64 `json:"probeThreshold,omitempty"`
-	// ProbingIntervalSeconds: Optional. The time interval in seconds between any
-	// two probes.
+	// ProbingIntervalSeconds: Optional. Specifies the interval in seconds between
+	// consecutive probes that check if any trigger condition thresholds have been
+	// reached.
 	ProbingIntervalSeconds int64 `json:"probingIntervalSeconds,omitempty"`
-	// RunningThreadsThreshold: Optional. The minimum number of server threads
-	// running to trigger the capture on primary.
+	// RunningThreadsThreshold: Optional. Specifies the minimum number of MySQL
+	// `Threads_running` to trigger the performance capture on the primary
+	// instance.
 	RunningThreadsThreshold int64 `json:"runningThreadsThreshold,omitempty"`
-	// SecondsBehindSourceThreshold: Optional. The minimum number of seconds
-	// replica must be lagging behind primary to trigger capture on replica.
+	// SecondsBehindSourceThreshold: Optional. Specifies the minimum number of
+	// seconds replica must be lagging behind primary instance to trigger the
+	// performance capture on replica.
 	SecondsBehindSourceThreshold int64 `json:"secondsBehindSourceThreshold,omitempty"`
-	// TransactionDurationThreshold: Optional. The amount of time in seconds that a
-	// transaction needs to have been open before the watcher starts recording it.
+	// SemaphoreWaitThresholdCount: Optional. Specifies the minimum allowed number
+	// of semaphore waits to trigger the performance capture. Valid integers range
+	// from `10` to `10000`. Enter `0` to disable the check.
+	SemaphoreWaitThresholdCount int64 `json:"semaphoreWaitThresholdCount,omitempty"`
+	// TransactionDurationThreshold: Optional. Specifies the amount of time in
+	// seconds that a transaction needs to have been open before the watcher starts
+	// recording it.
 	TransactionDurationThreshold int64 `json:"transactionDurationThreshold,omitempty"`
-	// ForceSendFields is a list of field names (e.g. "Enabled") to unconditionally
-	// include in API requests. By default, fields with empty or default values are
-	// omitted from API requests. See
+	// TransactionKillExcludedUserHosts: Optional. Specifies a customer-defined
+	// list of users to exclude from transaction termination. Entries can be in the
+	// format 'user@host' or just 'user'. A standalone 'user' implies 'user@%',
+	// excluding the user from any host. Wildcard '%' is allowed in the host part
+	// of the 'user@host' format. Example: `["app_user", "db_admin@10.1.2.3",
+	// "report_user@%"]`
+	TransactionKillExcludedUserHosts []string `json:"transactionKillExcludedUserHosts,omitempty"`
+	// TransactionKillThresholdSeconds: Optional. Specifies the amount of time in
+	// seconds that a transaction needs to have been open before the watcher starts
+	// terminating it. Valid integers range from `60` to `604800` (7 days). Enter
+	// `0` to disable. If enabled (i.e., > 0), this value must be greater than or
+	// equal to `transaction_duration_threshold`. Configurations where `0 <
+	// transaction_kill_threshold_seconds < transaction_duration_threshold` will be
+	// rejected.
+	TransactionKillThresholdSeconds int64 `json:"transactionKillThresholdSeconds,omitempty"`
+	// TransactionKillType: Optional. Determines which transactions are allowed to
+	// be terminated when they exceed `transaction_kill_threshold_seconds`. This
+	// allows protecting write-heavy transactions from auto-termination if desired.
+	// Defaults to `READ_ONLY_TRANSACTIONS` if unspecified.
+	//
+	// Possible values:
+	//   "TRANSACTION_KILL_TYPE_UNSPECIFIED" - Unspecified.
+	//   "READ_ONLY_TRANSACTIONS" - Only read-only transactions are eligible for
+	// termination.
+	//   "ALL_TRANSACTIONS" - All transactions are eligible for termination,
+	// including those with write operations (such as INSERT, UPDATE, DELETE, or
+	// DDL).
+	TransactionKillType string `json:"transactionKillType,omitempty"`
+	// TransactionLockWaitThresholdCount: Optional. Specifies the minimum allowed
+	// number of transactions in lock wait state to trigger the performance
+	// capture. Valid integers range from `10` to `10000`. Enter `0` to disable the
+	// check.
+	TransactionLockWaitThresholdCount int64 `json:"transactionLockWaitThresholdCount,omitempty"`
+	// ForceSendFields is a list of field names (e.g.
+	// "CpuUtilizationThresholdPercent") to unconditionally include in API
+	// requests. By default, fields with empty or default values are omitted from
+	// API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
 	// details.
 	ForceSendFields []string `json:"-"`
-	// NullFields is a list of field names (e.g. "Enabled") to include in API
-	// requests with the JSON null value. By default, fields with empty values are
-	// omitted from API requests. See
+	// NullFields is a list of field names (e.g. "CpuUtilizationThresholdPercent")
+	// to include in API requests with the JSON null value. By default, fields with
+	// empty values are omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
 	NullFields []string `json:"-"`
 }
@@ -4671,6 +5110,9 @@ func (s PoolNodeConfig) MarshalJSON() ([]byte, error) {
 type PreCheckMajorVersionUpgradeContext struct {
 	// Kind: Optional. This is always `sql#preCheckMajorVersionUpgradeContext`.
 	Kind string `json:"kind,omitempty"`
+	// MaxRuntime: Optional. The maximum allowed runtime for the precheck
+	// operation.
+	MaxRuntime string `json:"maxRuntime,omitempty"`
 	// PreCheckResponse: Output only. The responses from the precheck operation.
 	PreCheckResponse []*PreCheckResponse `json:"preCheckResponse,omitempty"`
 	// TargetDatabaseVersion: Required. The target database version to upgrade to.
@@ -4743,6 +5185,8 @@ type PreCheckMajorVersionUpgradeContext struct {
 	//   "POSTGRES_16" - The database version is PostgreSQL 16.
 	//   "POSTGRES_17" - The database version is PostgreSQL 17.
 	//   "POSTGRES_18" - The database version is PostgreSQL 18.
+	//   "POSTGRES_19" - The database version is PostgreSQL 19.
+	//   "POSTGRES_20" - The database version is PostgreSQL 20.
 	//   "SQLSERVER_2019_STANDARD" - The database version is SQL Server 2019
 	// Standard.
 	//   "SQLSERVER_2019_ENTERPRISE" - The database version is SQL Server 2019
@@ -4833,10 +5277,41 @@ type PscAutoConnectionConfig struct {
 	// project of this consumer endpoint. This is only applicable if
 	// `consumer_network` is a shared VPC network.
 	ConsumerProject string `json:"consumerProject,omitempty"`
+	// InstanceAutoDnsStatus: Output only. The status of automated DNS
+	// provisioning.
+	//
+	// Possible values:
+	//   "AUTO_DNS_STATUS_UNSPECIFIED" - Unspecified status. This means status is
+	// missing from dependency service.
+	//   "AUTO_DNS_OK" - DNS provisioning is OK.
+	//   "AUTO_DNS_FAILED" - DNS provisioning failed.
+	//   "AUTO_DNS_UNKNOWN" - DNS provisioning status is not recognized by Cloud
+	// SQL.
+	InstanceAutoDnsStatus string `json:"instanceAutoDnsStatus,omitempty"`
 	// IpAddress: The IP address of the consumer endpoint.
 	IpAddress string `json:"ipAddress,omitempty"`
+	// ServiceConnectionPolicy: Output only. The service connection policy created
+	// automatically for the consumer network when
+	// `psc_auto_connection_policy_enabled` is true. It is in the format of:
+	// `projects/{project}/regions/{region}/serviceConnectionPolicies/{policy_id}`
+	// The `policy_id` is in format of `$NETWORK-$RANDOM`.
+	ServiceConnectionPolicy string `json:"serviceConnectionPolicy,omitempty"`
+	// ServiceConnectionPolicyCreationResult: Output only. The status of service
+	// connection policy creation.
+	ServiceConnectionPolicyCreationResult string `json:"serviceConnectionPolicyCreationResult,omitempty"`
 	// Status: The connection status of the consumer endpoint.
 	Status string `json:"status,omitempty"`
+	// WriteEndpointAutoDnsStatus: Output only. The status of automated DNS
+	// provisioning for the write endpoint.
+	//
+	// Possible values:
+	//   "AUTO_DNS_STATUS_UNSPECIFIED" - Unspecified status. This means status is
+	// missing from dependency service.
+	//   "AUTO_DNS_OK" - DNS provisioning is OK.
+	//   "AUTO_DNS_FAILED" - DNS provisioning failed.
+	//   "AUTO_DNS_UNKNOWN" - DNS provisioning status is not recognized by Cloud
+	// SQL.
+	WriteEndpointAutoDnsStatus string `json:"writeEndpointAutoDnsStatus,omitempty"`
 	// ForceSendFields is a list of field names (e.g. "ConsumerNetwork") to
 	// unconditionally include in API requests. By default, fields with empty or
 	// default values are omitted from API requests. See
@@ -4865,28 +5340,31 @@ type PscConfig struct {
 	AllowedConsumerProjects []string `json:"allowedConsumerProjects,omitempty"`
 	// NetworkAttachmentUri: Optional. The network attachment of the consumer
 	// network that the Private Service Connect enabled Cloud SQL instance is
-	// authorized to connect via PSC interface. format:
+	// authorized to connect using the PSC interface. format:
 	// projects/PROJECT/regions/REGION/networkAttachments/ID
 	NetworkAttachmentUri string `json:"networkAttachmentUri,omitempty"`
+	// PscAutoConnectionPolicyEnabled: Optional. Whether to set up the PSC service
+	// connection policy automatically.
+	PscAutoConnectionPolicyEnabled bool `json:"pscAutoConnectionPolicyEnabled,omitempty"`
 	// PscAutoConnections: Optional. The list of settings for requested Private
 	// Service Connect consumer endpoints that can be used to connect to this Cloud
 	// SQL instance.
 	PscAutoConnections []*PscAutoConnectionConfig `json:"pscAutoConnections,omitempty"`
-	// PscAutoDnsEnabled: Optional. Indicates whether PSC DNS automation is enabled
-	// for this instance. When enabled, Cloud SQL provisions a universal DNS record
-	// across all networks configured with Private Service Connect (PSC)
-	// auto-connections. This will default to true for new instances when Private
-	// Service Connect is enabled.
+	// PscAutoDnsEnabled: Optional. Indicates whether Private Service Connect DNS
+	// automation is enabled for this instance. When enabled, Cloud SQL provisions
+	// a universal DNS record across all networks configured with Private Service
+	// Connect auto-connections. This will default to true for new instances when
+	// Private Service Connect is enabled.
 	PscAutoDnsEnabled bool `json:"pscAutoDnsEnabled,omitempty"`
 	// PscEnabled: Whether PSC connectivity is enabled for this instance.
 	PscEnabled bool `json:"pscEnabled,omitempty"`
-	// PscWriteEndpointDnsEnabled: Optional. Indicates whether PSC write endpoint
-	// DNS automation is enabled for this instance. When enabled, Cloud SQL
-	// provisions a universal global DNS record across all networks configured with
-	// Private Service Connect (PSC) auto-connections that always points to the
-	// cluster primary instance. This feature is only supported for Enterprise Plus
-	// edition. This will default to true for new Enterprise Plus instances when
-	// `psc_auto_dns_enabled` is enabled.
+	// PscWriteEndpointDnsEnabled: Optional. Indicates whether Private Service
+	// Connect write endpoint DNS automation is enabled for this instance. When
+	// enabled, Cloud SQL provisions a universal global DNS record across all
+	// networks configured with Private Service Connect auto-connections that
+	// points to the cluster primary instance. This feature is only supported for
+	// Enterprise Plus edition. This will default to true for new Enterprise Plus
+	// instances when `psc_auto_dns_enabled` is enabled.
 	PscWriteEndpointDnsEnabled bool `json:"pscWriteEndpointDnsEnabled,omitempty"`
 	// ForceSendFields is a list of field names (e.g. "AllowedConsumerProjects") to
 	// unconditionally include in API requests. By default, fields with empty or
@@ -5055,6 +5533,30 @@ type ReplicationCluster struct {
 
 func (s ReplicationCluster) MarshalJSON() ([]byte, error) {
 	type NoMethod ReplicationCluster
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// RequestedConfig: Configuration specified by the user at creation time for
+// the target (green) instance.
+type RequestedConfig struct {
+	// DatabaseVersion: Optional. The target database major version for the
+	// upgrade. For example, `MYSQL_8_0` or `POSTGRES_15`.
+	DatabaseVersion string `json:"databaseVersion,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "DatabaseVersion") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "DatabaseVersion") to include in
+	// API requests with the JSON null value. By default, fields with empty values
+	// are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s RequestedConfig) MarshalJSON() ([]byte, error) {
+	type NoMethod RequestedConfig
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -5362,12 +5864,13 @@ type Settings struct {
 	DeletionProtectionEnabled bool `json:"deletionProtectionEnabled,omitempty"`
 	// DenyMaintenancePeriods: Deny maintenance periods
 	DenyMaintenancePeriods []*DenyMaintenancePeriod `json:"denyMaintenancePeriods,omitempty"`
-	// Edition: Optional. The edition of the instance.
+	// Edition: Optional. The edition type of the Cloud SQL instance.
 	//
 	// Possible values:
 	//   "EDITION_UNSPECIFIED" - The instance did not specify the edition.
 	//   "ENTERPRISE" - The instance is an enterprise edition.
 	//   "ENTERPRISE_PLUS" - The instance is an Enterprise Plus edition.
+	//   "DEVELOPER" - This instance is a Cloud SQL developer edition instance.
 	Edition string `json:"edition,omitempty"`
 	// EnableDataplexIntegration: Optional. By default, Cloud SQL instances have
 	// schema extraction disabled for Dataplex. When this parameter is set to true,
@@ -5402,7 +5905,7 @@ type Settings struct {
 	// when the instance can be restarted for maintenance purposes.
 	MaintenanceWindow *MaintenanceWindow `json:"maintenanceWindow,omitempty"`
 	// PasswordValidationPolicy: The local user password validation policy of the
-	// instance.
+	// instance for PostgreSQL and MySQL.
 	PasswordValidationPolicy *PasswordValidationPolicy `json:"passwordValidationPolicy,omitempty"`
 	// PerformanceCaptureConfig: Optional. Configuration for Performance Capture,
 	// provides diagnostic metrics during high load situations.
@@ -5480,6 +5983,74 @@ type Settings struct {
 
 func (s Settings) MarshalJSON() ([]byte, error) {
 	type NoMethod Settings
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// SourceRole: The source instance for the Blue-Green deployment.
+type SourceRole struct {
+	// TargetId: Output only. The target instance paired with this source instance
+	// in a blue-green deployment.
+	TargetId *InstanceReference `json:"targetId,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "TargetId") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "TargetId") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s SourceRole) MarshalJSON() ([]byte, error) {
+	type NoMethod SourceRole
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// SourceTargetPairedNode: Represents a pairing of a source instance node and a
+// target instance node.
+type SourceTargetPairedNode struct {
+	// Diffs: Output only. Describes the list of differences for the
+	// `SourceTargetPairedNode`.
+	Diffs []*ConfigDiff `json:"diffs,omitempty"`
+	// Source: Output only. Specifies the resource name of the source instance in
+	// this pair.
+	Source *NodeInfo `json:"source,omitempty"`
+	// State: Output only. Specifies the current state of this specific
+	// source-target pair.
+	//
+	// Possible values:
+	//   "STATE_UNSPECIFIED" - The state of the paired node is unknown.
+	//   "PROVISIONING" - The paired node is being provisioned.
+	//   "PROVISIONED" - The paired node is provisioned.
+	//   "UPGRADING" - The paired node is upgrading.
+	//   "UPGRADED" - The paired node is upgraded.
+	//   "UPGRADE_FAILED" - Upgrade failed on the paired node.
+	//   "SWITCHOVER_IN_PROGRESS" - Switchover is in progress.
+	//   "SWITCHOVER_FAILED" - Switchover failed on the paired node.
+	//   "SWITCHOVER_SUCCEEDED" - Switchover completed successfully.
+	//   "DELETING" - The paired node is being deleted.
+	State string `json:"state,omitempty"`
+	// Target: Output only. Specifies details of the corresponding target instance
+	// in this pair.
+	Target *NodeInfo `json:"target,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Diffs") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Diffs") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s SourceTargetPairedNode) MarshalJSON() ([]byte, error) {
+	type NoMethod SourceTargetPairedNode
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -5667,6 +6238,12 @@ type SqlExternalSyncSettingError struct {
 	//   "PG_DDL_REPLICATION_INSUFFICIENT_PRIVILEGE" - The replication user is
 	// missing specific privileges to setup DDL replication. (e.g. CREATE EVENT
 	// TRIGGER, CREATE SCHEMA) for PostgreSQL.
+	//   "WRITABLE_DESTINATION_REPLICA_RECREATION_DOWNTIME" - Read replicas of the
+	// Writable Destination instance will be recreated after external
+	// synchronization is complete, causing downtime on read replicas.
+	//   "WRITABLE_DESTINATION_STORAGE_AUTO_INCREASE_DISABLED" - A warning that
+	// disk storage auto increase is disabled on the destination instance for a
+	// Writable Destination migration.
 	Type string `json:"type,omitempty"`
 	// ForceSendFields is a list of field names (e.g. "Detail") to unconditionally
 	// include in API requests. By default, fields with empty or default values are
@@ -5712,7 +6289,6 @@ func (s SqlInstancesAcquireSsrsLeaseResponse) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
-// SqlInstancesExecuteSqlResponse: Execute SQL statements response.
 type SqlInstancesExecuteSqlResponse struct {
 	// Messages: A list of notices and warnings generated during query execution.
 	// For PostgreSQL, this includes all notices and warnings. For MySQL, this
@@ -5862,10 +6438,30 @@ func (s SqlInstancesRescheduleMaintenanceRequestBody) MarshalJSON() ([]byte, err
 
 // SqlInstancesResetReplicaSizeRequest: Instance reset replica size request.
 type SqlInstancesResetReplicaSizeRequest struct {
+	// Location: Optional. Region of the Cloud SQL instance.
+	Location string `json:"location,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Location") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Location") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s SqlInstancesResetReplicaSizeRequest) MarshalJSON() ([]byte, error) {
+	type NoMethod SqlInstancesResetReplicaSizeRequest
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
 // SqlInstancesStartExternalSyncRequest: Instance start external sync request.
 type SqlInstancesStartExternalSyncRequest struct {
+	// Location: Optional. Region of the Cloud SQL instance.
+	Location string `json:"location,omitempty"`
 	// MigrationType: Optional. MigrationType configures the migration to use
 	// physical files or logical dump files. If not set, then the logical dump file
 	// configuration is used. Valid values are `LOGICAL` or `PHYSICAL`. Only
@@ -5906,13 +6502,13 @@ type SqlInstancesStartExternalSyncRequest struct {
 	//   "OPTIMAL" - Optimal parallel level.
 	//   "MAX" - Maximum parallel level.
 	SyncParallelLevel string `json:"syncParallelLevel,omitempty"`
-	// ForceSendFields is a list of field names (e.g. "MigrationType") to
+	// ForceSendFields is a list of field names (e.g. "Location") to
 	// unconditionally include in API requests. By default, fields with empty or
 	// default values are omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
 	// details.
 	ForceSendFields []string `json:"-"`
-	// NullFields is a list of field names (e.g. "MigrationType") to include in API
+	// NullFields is a list of field names (e.g. "Location") to include in API
 	// requests with the JSON null value. By default, fields with empty values are
 	// omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
@@ -5927,6 +6523,8 @@ func (s SqlInstancesStartExternalSyncRequest) MarshalJSON() ([]byte, error) {
 // SqlInstancesVerifyExternalSyncSettingsRequest: Instance verify external sync
 // settings request.
 type SqlInstancesVerifyExternalSyncSettingsRequest struct {
+	// Location: Optional. Region of the Cloud SQL instance.
+	Location string `json:"location,omitempty"`
 	// MigrationType: Optional. MigrationType configures the migration to use
 	// physical files or logical dump files. If not set, then the logical dump file
 	// configuration is used. Valid values are `LOGICAL` or `PHYSICAL`. Only
@@ -5968,13 +6566,13 @@ type SqlInstancesVerifyExternalSyncSettingsRequest struct {
 	// VerifyReplicationOnly: Optional. Flag to verify settings required by
 	// replication setup only
 	VerifyReplicationOnly bool `json:"verifyReplicationOnly,omitempty"`
-	// ForceSendFields is a list of field names (e.g. "MigrationType") to
+	// ForceSendFields is a list of field names (e.g. "Location") to
 	// unconditionally include in API requests. By default, fields with empty or
 	// default values are omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
 	// details.
 	ForceSendFields []string `json:"-"`
-	// NullFields is a list of field names (e.g. "MigrationType") to include in API
+	// NullFields is a list of field names (e.g. "Location") to include in API
 	// requests with the JSON null value. By default, fields with empty values are
 	// omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
@@ -6165,9 +6763,9 @@ func (s SqlServerEntraIdConfig) MarshalJSON() ([]byte, error) {
 // SqlServerUserDetails: Represents a Sql Server user on the Cloud SQL
 // instance.
 type SqlServerUserDetails struct {
-	// Disabled: If the user has been disabled
+	// Disabled: Indicates if the user has been disabled.
 	Disabled bool `json:"disabled,omitempty"`
-	// ServerRoles: The server roles for this user
+	// ServerRoles: Indicates the server roles for this user.
 	ServerRoles []string `json:"serverRoles,omitempty"`
 	// ForceSendFields is a list of field names (e.g. "Disabled") to
 	// unconditionally include in API requests. By default, fields with empty or
@@ -6223,6 +6821,103 @@ type SqlSubOperationType struct {
 
 func (s SqlSubOperationType) MarshalJSON() ([]byte, error) {
 	type NoMethod SqlSubOperationType
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// SqlWorkloadCapturesStartReplayRequest: Request to start executing a captured
+// workload on a replay instance (the Cloud SQL instance where the recorded SQL
+// queries are executed).
+type SqlWorkloadCapturesStartReplayRequest struct {
+	// StartWorkloadReplayContext: Required. Contains details about the start
+	// workload replay operation.
+	StartWorkloadReplayContext *StartWorkloadReplayContext `json:"startWorkloadReplayContext,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "StartWorkloadReplayContext")
+	// to unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "StartWorkloadReplayContext") to
+	// include in API requests with the JSON null value. By default, fields with
+	// empty values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s SqlWorkloadCapturesStartReplayRequest) MarshalJSON() ([]byte, error) {
+	type NoMethod SqlWorkloadCapturesStartReplayRequest
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// SqlWorkloadCapturesStartRequest: Request to start recording traffic from the
+// primary instance (captured workload).
+type SqlWorkloadCapturesStartRequest struct {
+	// StartWorkloadCaptureContext: Optional. Contains details about the start
+	// workload capture operation.
+	StartWorkloadCaptureContext *StartWorkloadCaptureContext `json:"startWorkloadCaptureContext,omitempty"`
+	// ForceSendFields is a list of field names (e.g.
+	// "StartWorkloadCaptureContext") to unconditionally include in API requests.
+	// By default, fields with empty or default values are omitted from API
+	// requests. See https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields
+	// for more details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "StartWorkloadCaptureContext") to
+	// include in API requests with the JSON null value. By default, fields with
+	// empty values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s SqlWorkloadCapturesStartRequest) MarshalJSON() ([]byte, error) {
+	type NoMethod SqlWorkloadCapturesStartRequest
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// SqlWorkloadCapturesStopReplayRequest: Request to stop executing a captured
+// workload on a replay instance.
+type SqlWorkloadCapturesStopReplayRequest struct {
+	// StopWorkloadReplayContext: Required. Contains details about the stop
+	// workload replay operation.
+	StopWorkloadReplayContext *StopWorkloadReplayContext `json:"stopWorkloadReplayContext,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "StopWorkloadReplayContext")
+	// to unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "StopWorkloadReplayContext") to
+	// include in API requests with the JSON null value. By default, fields with
+	// empty values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s SqlWorkloadCapturesStopReplayRequest) MarshalJSON() ([]byte, error) {
+	type NoMethod SqlWorkloadCapturesStopReplayRequest
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// SqlWorkloadCapturesStopRequest: Request to stop recording traffic from the
+// primary instance.
+type SqlWorkloadCapturesStopRequest struct {
+	// StopWorkloadCaptureContext: Optional. Contains details about the stop
+	// workload capture operation.
+	StopWorkloadCaptureContext *StopWorkloadCaptureContext `json:"stopWorkloadCaptureContext,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "StopWorkloadCaptureContext")
+	// to unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "StopWorkloadCaptureContext") to
+	// include in API requests with the JSON null value. By default, fields with
+	// empty values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s SqlWorkloadCapturesStopRequest) MarshalJSON() ([]byte, error) {
+	type NoMethod SqlWorkloadCapturesStopRequest
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -6404,6 +7099,78 @@ func (s SslCertsListResponse) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// StartWorkloadCaptureContext: The context for the `StartWorkloadCapture`
+// operation, which contains details to start recording the workload (SQL
+// queries) on a Cloud SQL instance.
+type StartWorkloadCaptureContext struct {
+	// EnableLiveReplay: Optional. If true, the captured workload is simultaneously
+	// executed on a separate, ephemeral Cloud SQL instance. This "live replay"
+	// instance is automatically provisioned and is cloned from the source
+	// instance. If false (the default), the workload is only stored and no live
+	// replay occurs. It can be replayed later using a separate
+	// `StartWorkloadReplayRequest`. Note: The workload capture runs continuously
+	// until an explicit `StopWorkloadCaptureRequest` is issued.
+	EnableLiveReplay bool `json:"enableLiveReplay,omitempty"`
+	// ReplayInstance: Optional. Required if `enable_live_replay` is true. The name
+	// of the Cloud SQL instance where the captured workload (SQL queries) is being
+	// executed, excluding the project ID (for example, `my-replay-instance`). The
+	// instance name must start with a lowercase letter and contain only lowercase
+	// letters, numbers, and hyphens. The combined length of
+	// `project-ID:instance-name` must be 98 characters or less.
+	ReplayInstance string `json:"replayInstance,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "EnableLiveReplay") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "EnableLiveReplay") to include in
+	// API requests with the JSON null value. By default, fields with empty values
+	// are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s StartWorkloadCaptureContext) MarshalJSON() ([]byte, error) {
+	type NoMethod StartWorkloadCaptureContext
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// StartWorkloadReplayContext: The context for the `StartWorkloadReplay`
+// operation, which contains details about starting the execution of a captured
+// workload (recorded read and write SQL queries) on a replay instance (the
+// Cloud SQL instance where the recorded SQL queries are executed).
+type StartWorkloadReplayContext struct {
+	// ReplayInstance: Required. The name of the Cloud SQL instance where the
+	// captured workload (SQL queries) is being executed, excluding the project ID
+	// (for example, `my-replay-instance`). The instance name must start with a
+	// lowercase letter and contain only lowercase letters, numbers, and hyphens.
+	// The combined length of `project-ID:instance-name` must be 98 characters or
+	// less.
+	ReplayInstance string `json:"replayInstance,omitempty"`
+	// WorkloadId: Output only. The ID of the workload to start executing on the
+	// replay instance. Each workload capture generates a unique ID in the format
+	// `workload-` (for example, `workload-1786046400`). Use this ID to start
+	// executing the recorded SQL queries.
+	WorkloadId string `json:"workloadId,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "ReplayInstance") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "ReplayInstance") to include in
+	// API requests with the JSON null value. By default, fields with empty values
+	// are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s StartWorkloadReplayContext) MarshalJSON() ([]byte, error) {
+	type NoMethod StartWorkloadReplayContext
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // Status: The `Status` type defines a logical error model that is suitable for
 // different programming environments, including REST APIs and RPC APIs. It is
 // used by gRPC (https://github.com/grpc). Each `Status` message contains three
@@ -6436,6 +7203,73 @@ type Status struct {
 func (s Status) MarshalJSON() ([]byte, error) {
 	type NoMethod Status
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// StopWorkloadCaptureContext: The context for the `StopWorkloadCapture`
+// operation, which contains details to stop recording the workload (SQL
+// queries) on a Cloud SQL instance.
+type StopWorkloadCaptureContext struct {
+	// AbortLiveReplay: Optional. If true, immediately aborts the concurrent live
+	// replay and discards any un-replayed traffic alongside stopping the capture.
+	// If false (the default), the capture stops recording new traffic, but the
+	// live replay will continue executing until the entire backlog of captured
+	// traffic has been replayed.
+	AbortLiveReplay bool `json:"abortLiveReplay,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "AbortLiveReplay") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "AbortLiveReplay") to include in
+	// API requests with the JSON null value. By default, fields with empty values
+	// are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s StopWorkloadCaptureContext) MarshalJSON() ([]byte, error) {
+	type NoMethod StopWorkloadCaptureContext
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// StopWorkloadReplayContext: The context for the `StopWorkloadReplay`
+// operation, which contains details about stopping the execution of a captured
+// workload (recorded read and write SQL queries) on a replay instance.
+type StopWorkloadReplayContext struct {
+	// ReplayInstance: Required. The name of the Cloud SQL instance where the
+	// captured workload (SQL queries) is being executed, excluding the project ID
+	// (for example, `my-replay-instance`). The instance name must start with a
+	// lowercase letter and contain only lowercase letters, numbers, and hyphens.
+	// The combined length of `project-ID:instance-name` must be 98 characters or
+	// less.
+	ReplayInstance string `json:"replayInstance,omitempty"`
+	// WorkloadId: Output only. The ID of the workload to stop executing on the
+	// replay instance. Each workload capture generates a unique ID in the format
+	// `workload-` (for example, `workload-1786046400`). Use this ID to stop
+	// executing the recorded SQL queries.
+	WorkloadId string `json:"workloadId,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "ReplayInstance") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "ReplayInstance") to include in
+	// API requests with the JSON null value. By default, fields with empty values
+	// are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s StopWorkloadReplayContext) MarshalJSON() ([]byte, error) {
+	type NoMethod StopWorkloadReplayContext
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// SwitchoverBlueGreenDeploymentRequest: Request message for switching over a
+// `BlueGreenDeployment` resource.
+type SwitchoverBlueGreenDeploymentRequest struct {
 }
 
 // SyncFlags: Initial sync flags for certain Cloud SQL APIs. Currently used for
@@ -6500,6 +7334,29 @@ func (s *TargetMetric) UnmarshalJSON(data []byte) error {
 	}
 	s.TargetValue = float64(s1.TargetValue)
 	return nil
+}
+
+// TargetRole: The target instance for the Blue-Green deployment.
+type TargetRole struct {
+	// SourceId: Output only. The source instance paired with this target instance
+	// in a blue-green deployment.
+	SourceId *InstanceReference `json:"sourceId,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "SourceId") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "SourceId") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s TargetRole) MarshalJSON() ([]byte, error) {
+	type NoMethod TargetRole
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
 // Tier: A Google Cloud SQL service tier resource.
@@ -6639,7 +7496,9 @@ type User struct {
 	// Project: The project ID of the project containing the Cloud SQL database.
 	// The Google apps domain is prefixed if applicable. Can be omitted for
 	// `update` because it is already specified on the URL.
-	Project              string                `json:"project,omitempty"`
+	Project string `json:"project,omitempty"`
+	// ServerRoles: Optional. The server roles for the SQL Server login.
+	ServerRoles          []string              `json:"serverRoles,omitempty"`
 	SqlserverUserDetails *SqlServerUserDetails `json:"sqlserverUserDetails,omitempty"`
 	// Type: The user type. It determines the method to authenticate the user
 	// during login. The default is the database's built-in user type.
@@ -6653,6 +7512,8 @@ type User struct {
 	// Cloud IAM group.
 	//   "CLOUD_IAM_GROUP_SERVICE_ACCOUNT" - Read-only. Login for a service account
 	// that belongs to the Cloud IAM group.
+	//   "CLOUD_IAM_WORKFORCE_IDENTITY" - Cloud IAM workforce identity managed by
+	// Workforce Identity Federation.
 	//   "ENTRAID_USER" - Microsoft Entra ID user.
 	Type string `json:"type,omitempty"`
 
@@ -6760,6 +7621,81 @@ type Value struct {
 
 func (s Value) MarshalJSON() ([]byte, error) {
 	type NoMethod Value
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// WorkloadCapture: Captured workload for an instance.
+type WorkloadCapture struct {
+	// BackupId: Output only. The base backup ID associated with the workload
+	// capture.
+	BackupId string `json:"backupId,omitempty"`
+	// EndTime: Output only. The end time of the workload capture.
+	EndTime string `json:"endTime,omitempty"`
+	// ReplayInstance: Output only. The name of the replay instance, if live replay
+	// was enabled.
+	ReplayInstance string `json:"replayInstance,omitempty"`
+	// RetentionDays: Output only. The retention period in days for the captured
+	// workload.
+	RetentionDays int64 `json:"retentionDays,omitempty"`
+	// SourceInstance: Output only. The name of the source instance.
+	SourceInstance string `json:"sourceInstance,omitempty"`
+	// StartTime: Output only. The start time of the workload capture.
+	StartTime string `json:"startTime,omitempty"`
+	// WorkloadCaptureState: Output only. The state of the workload capture.
+	//
+	// Possible values:
+	//   "STATE_UNSPECIFIED" - Default value. This value is unused.
+	//   "RUNNING" - Workload capture is currently running.
+	//   "COMPLETED" - Workload capture completed successfully. This state is set
+	// when the user explicitly stops the capture.
+	//   "FAILED" - Workload capture failed.
+	//   "TERMINATED" - Workload capture was terminated automatically. This state
+	// is set when Cloud SQL automatically stops the capture due to a conflicting
+	// operation or when the maximum duration is reached.
+	WorkloadCaptureState string `json:"workloadCaptureState,omitempty"`
+	// WorkloadId: Output only. The ID of the captured workload.
+	WorkloadId string `json:"workloadId,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "BackupId") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "BackupId") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s WorkloadCapture) MarshalJSON() ([]byte, error) {
+	type NoMethod WorkloadCapture
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+type WorkloadCapturesListResponse struct {
+	// Kind: This is always `sql#workloadCapturesList`.
+	Kind string `json:"kind,omitempty"`
+	// WorkloadCaptures: List of captured workloads for the instance.
+	WorkloadCaptures []*WorkloadCapture `json:"workloadCaptures,omitempty"`
+
+	// ServerResponse contains the HTTP response code and headers from the server.
+	googleapi.ServerResponse `json:"-"`
+	// ForceSendFields is a list of field names (e.g. "Kind") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Kind") to include in API requests
+	// with the JSON null value. By default, fields with empty values are omitted
+	// from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s WorkloadCapturesListResponse) MarshalJSON() ([]byte, error) {
+	type NoMethod WorkloadCapturesListResponse
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -7834,6 +8770,631 @@ func (c *BackupRunsListCall) Pages(ctx context.Context, f func(*BackupRunsListRe
 	}
 }
 
+type BlueGreenDeploymentsCreateCall struct {
+	s                   *Service
+	parent              string
+	bluegreendeployment *BlueGreenDeployment
+	urlParams_          gensupport.URLParams
+	ctx_                context.Context
+	header_             http.Header
+}
+
+// Create: Creates a blue-green deployment under a given project and location.
+//
+//   - parent: The parent resource where this blue-green deployment will be
+//     created. Format: projects/{project}/locations/{location}.
+func (r *BlueGreenDeploymentsService) Create(parent string, bluegreendeployment *BlueGreenDeployment) *BlueGreenDeploymentsCreateCall {
+	c := &BlueGreenDeploymentsCreateCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.parent = parent
+	c.bluegreendeployment = bluegreendeployment
+	return c
+}
+
+// BlueGreenDeploymentId sets the optional parameter "blueGreenDeploymentId":
+// Required. The ID to use for the blue-green deployment, which will become the
+// final component of the deployment's resource name. The ID must be unique
+// within the given project and location and between 2-63 characters.
+func (c *BlueGreenDeploymentsCreateCall) BlueGreenDeploymentId(blueGreenDeploymentId string) *BlueGreenDeploymentsCreateCall {
+	c.urlParams_.Set("blueGreenDeploymentId", blueGreenDeploymentId)
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *BlueGreenDeploymentsCreateCall) Fields(s ...googleapi.Field) *BlueGreenDeploymentsCreateCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *BlueGreenDeploymentsCreateCall) Context(ctx context.Context) *BlueGreenDeploymentsCreateCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *BlueGreenDeploymentsCreateCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *BlueGreenDeploymentsCreateCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.bluegreendeployment)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+parent}/blueGreenDeployments")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"parent": c.parent,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.blueGreenDeployments.create", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.blueGreenDeployments.create" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *BlueGreenDeploymentsCreateCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.blueGreenDeployments.create", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type BlueGreenDeploymentsDeleteCall struct {
+	s          *Service
+	name       string
+	urlParams_ gensupport.URLParams
+	ctx_       context.Context
+	header_    http.Header
+}
+
+// Delete: Deletes a blue-green deployment.
+//
+//   - name: The name of the blue-green deployment to delete. Format:
+//     projects/{project}/locations/{location}/blueGreenDeployments/{blue_green_de
+//     ployment}.
+func (r *BlueGreenDeploymentsService) Delete(name string) *BlueGreenDeploymentsDeleteCall {
+	c := &BlueGreenDeploymentsDeleteCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.name = name
+	return c
+}
+
+// DeleteOldSource sets the optional parameter "deleteOldSource": If set to
+// true, and the switchover is complete, this deletes the old source instance
+// along with the deployment.
+func (c *BlueGreenDeploymentsDeleteCall) DeleteOldSource(deleteOldSource bool) *BlueGreenDeploymentsDeleteCall {
+	c.urlParams_.Set("deleteOldSource", fmt.Sprint(deleteOldSource))
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *BlueGreenDeploymentsDeleteCall) Fields(s ...googleapi.Field) *BlueGreenDeploymentsDeleteCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *BlueGreenDeploymentsDeleteCall) Context(ctx context.Context) *BlueGreenDeploymentsDeleteCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *BlueGreenDeploymentsDeleteCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *BlueGreenDeploymentsDeleteCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "", c.header_)
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+name}")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("DELETE", urls, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"name": c.name,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.blueGreenDeployments.delete", "request", internallog.HTTPRequest(req, nil))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.blueGreenDeployments.delete" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *BlueGreenDeploymentsDeleteCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.blueGreenDeployments.delete", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type BlueGreenDeploymentsGetCall struct {
+	s            *Service
+	name         string
+	urlParams_   gensupport.URLParams
+	ifNoneMatch_ string
+	ctx_         context.Context
+	header_      http.Header
+}
+
+// Get: Retrieves a blue-green deployment resource under a given project and
+// location.
+//
+//   - name: The name of the blue-green deployment to retrieve. Format:
+//     projects/{project}/locations/{location}/blueGreenDeployments/{blue_green_de
+//     ployment}.
+func (r *BlueGreenDeploymentsService) Get(name string) *BlueGreenDeploymentsGetCall {
+	c := &BlueGreenDeploymentsGetCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.name = name
+	return c
+}
+
+// View sets the optional parameter "view": Specifies whether to return the
+// basic or detailed view of the resource in the response.
+//
+// Possible values:
+//
+//	"BLUE_GREEN_DEPLOYMENT_VIEW_UNSPECIFIED" - Blue-green deployment view
+//
+// enumeration. This allows the caller to specify what view they query. If
+// unspecified (BLUE_GREEN_DEPLOYMENT_VIEW_UNSPECIFIED), the behavior is the
+// same as BASIC.
+//
+//	"BASIC" - Includes basic metadata about the blue-green deployment. `BASIC`
+//
+// is the default view.
+//
+//	"DETAILED" - Includes basic metadata and configuration differences between
+//
+// source and target instances (`database_version`, `tier`, `edition`,
+// `availability_type`, `data_disk_size_gb`, and `data_disk_type`).
+func (c *BlueGreenDeploymentsGetCall) View(view string) *BlueGreenDeploymentsGetCall {
+	c.urlParams_.Set("view", view)
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *BlueGreenDeploymentsGetCall) Fields(s ...googleapi.Field) *BlueGreenDeploymentsGetCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// IfNoneMatch sets an optional parameter which makes the operation fail if the
+// object's ETag matches the given value. This is useful for getting updates
+// only after the object has changed since the last request.
+func (c *BlueGreenDeploymentsGetCall) IfNoneMatch(entityTag string) *BlueGreenDeploymentsGetCall {
+	c.ifNoneMatch_ = entityTag
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *BlueGreenDeploymentsGetCall) Context(ctx context.Context) *BlueGreenDeploymentsGetCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *BlueGreenDeploymentsGetCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *BlueGreenDeploymentsGetCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "", c.header_)
+	if c.ifNoneMatch_ != "" {
+		reqHeaders.Set("If-None-Match", c.ifNoneMatch_)
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+name}")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("GET", urls, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"name": c.name,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.blueGreenDeployments.get", "request", internallog.HTTPRequest(req, nil))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.blueGreenDeployments.get" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *BlueGreenDeployment.ServerResponse.Header or (if a response was returned at
+// all) in error.(*googleapi.Error).Header. Use googleapi.IsNotModified to
+// check whether the returned error was because http.StatusNotModified was
+// returned.
+func (c *BlueGreenDeploymentsGetCall) Do(opts ...googleapi.CallOption) (*BlueGreenDeployment, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &BlueGreenDeployment{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.blueGreenDeployments.get", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type BlueGreenDeploymentsListCall struct {
+	s            *Service
+	parent       string
+	urlParams_   gensupport.URLParams
+	ifNoneMatch_ string
+	ctx_         context.Context
+	header_      http.Header
+}
+
+// List: Lists blue-green deployments under a given project.
+//
+//   - parent: The parent resource whose blue-green deployments are to be listed.
+//     Format: projects/{project}/locations/{location}.
+func (r *BlueGreenDeploymentsService) List(parent string) *BlueGreenDeploymentsListCall {
+	c := &BlueGreenDeploymentsListCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.parent = parent
+	return c
+}
+
+// Filter sets the optional parameter "filter": A filter expression that
+// filters the results.
+func (c *BlueGreenDeploymentsListCall) Filter(filter string) *BlueGreenDeploymentsListCall {
+	c.urlParams_.Set("filter", filter)
+	return c
+}
+
+// OrderBy sets the optional parameter "orderBy": A comma-separated list of
+// fields to order the results by.
+func (c *BlueGreenDeploymentsListCall) OrderBy(orderBy string) *BlueGreenDeploymentsListCall {
+	c.urlParams_.Set("orderBy", orderBy)
+	return c
+}
+
+// PageSize sets the optional parameter "pageSize": The maximum number of
+// deployments to return. The service may return fewer deployments than this
+// value. If unspecified, at most 500 deployments are returned. The maximum
+// value is 1000; values above 1000 are treated as 1000.
+func (c *BlueGreenDeploymentsListCall) PageSize(pageSize int64) *BlueGreenDeploymentsListCall {
+	c.urlParams_.Set("pageSize", fmt.Sprint(pageSize))
+	return c
+}
+
+// PageToken sets the optional parameter "pageToken": A page token, received
+// from a previous `ListBlueGreenDeployments` call. Provide this to retrieve
+// the subsequent page.
+func (c *BlueGreenDeploymentsListCall) PageToken(pageToken string) *BlueGreenDeploymentsListCall {
+	c.urlParams_.Set("pageToken", pageToken)
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *BlueGreenDeploymentsListCall) Fields(s ...googleapi.Field) *BlueGreenDeploymentsListCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// IfNoneMatch sets an optional parameter which makes the operation fail if the
+// object's ETag matches the given value. This is useful for getting updates
+// only after the object has changed since the last request.
+func (c *BlueGreenDeploymentsListCall) IfNoneMatch(entityTag string) *BlueGreenDeploymentsListCall {
+	c.ifNoneMatch_ = entityTag
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *BlueGreenDeploymentsListCall) Context(ctx context.Context) *BlueGreenDeploymentsListCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *BlueGreenDeploymentsListCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *BlueGreenDeploymentsListCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "", c.header_)
+	if c.ifNoneMatch_ != "" {
+		reqHeaders.Set("If-None-Match", c.ifNoneMatch_)
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+parent}/blueGreenDeployments")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("GET", urls, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"parent": c.parent,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.blueGreenDeployments.list", "request", internallog.HTTPRequest(req, nil))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.blueGreenDeployments.list" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *ListBlueGreenDeploymentsResponse.ServerResponse.Header or (if a response
+// was returned at all) in error.(*googleapi.Error).Header. Use
+// googleapi.IsNotModified to check whether the returned error was because
+// http.StatusNotModified was returned.
+func (c *BlueGreenDeploymentsListCall) Do(opts ...googleapi.CallOption) (*ListBlueGreenDeploymentsResponse, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &ListBlueGreenDeploymentsResponse{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.blueGreenDeployments.list", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+// Pages invokes f for each page of results.
+// A non-nil error returned from f will halt the iteration.
+// The provided context supersedes any context provided to the Context method.
+func (c *BlueGreenDeploymentsListCall) Pages(ctx context.Context, f func(*ListBlueGreenDeploymentsResponse) error) error {
+	c.ctx_ = ctx
+	defer c.PageToken(c.urlParams_.Get("pageToken"))
+	for {
+		x, err := c.Do()
+		if err != nil {
+			return err
+		}
+		if err := f(x); err != nil {
+			return err
+		}
+		if x.NextPageToken == "" {
+			return nil
+		}
+		c.PageToken(x.NextPageToken)
+	}
+}
+
+type BlueGreenDeploymentsSwitchoverCall struct {
+	s                                    *Service
+	name                                 string
+	switchoverbluegreendeploymentrequest *SwitchoverBlueGreenDeploymentRequest
+	urlParams_                           gensupport.URLParams
+	ctx_                                 context.Context
+	header_                              http.Header
+}
+
+// Switchover: Switches over to green instance for a blue-green deployment.
+//
+//   - name: The name of the blue-green deployment to switch over. Format:
+//     projects/{project}/locations/{location}/blueGreenDeployments/{blue_green_de
+//     ployment}.
+func (r *BlueGreenDeploymentsService) Switchover(name string, switchoverbluegreendeploymentrequest *SwitchoverBlueGreenDeploymentRequest) *BlueGreenDeploymentsSwitchoverCall {
+	c := &BlueGreenDeploymentsSwitchoverCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.name = name
+	c.switchoverbluegreendeploymentrequest = switchoverbluegreendeploymentrequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *BlueGreenDeploymentsSwitchoverCall) Fields(s ...googleapi.Field) *BlueGreenDeploymentsSwitchoverCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *BlueGreenDeploymentsSwitchoverCall) Context(ctx context.Context) *BlueGreenDeploymentsSwitchoverCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *BlueGreenDeploymentsSwitchoverCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *BlueGreenDeploymentsSwitchoverCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.switchoverbluegreendeploymentrequest)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+name}:switchover")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"name": c.name,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.blueGreenDeployments.switchover", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.blueGreenDeployments.switchover" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *BlueGreenDeploymentsSwitchoverCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.blueGreenDeployments.switchover", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
 type ConnectGenerateEphemeralCertCall struct {
 	s                            *Service
 	project                      string
@@ -8066,6 +9627,121 @@ func (c *ConnectGetCall) Do(opts ...googleapi.CallOption) (*ConnectSettings, err
 	return ret, nil
 }
 
+type ConnectResolveCall struct {
+	s            *Service
+	location     string
+	dnsName      string
+	urlParams_   gensupport.URLParams
+	ifNoneMatch_ string
+	ctx_         context.Context
+	header_      http.Header
+}
+
+// Resolve: Retrieves connect settings about a Cloud SQL instance using the
+// instance DNS name.
+//
+// - dnsName: Cloud SQL instance ID. This does not include the project ID.
+// - location: The region of the instance.
+func (r *ConnectService) Resolve(location string, dnsName string) *ConnectResolveCall {
+	c := &ConnectResolveCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.location = location
+	c.dnsName = dnsName
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *ConnectResolveCall) Fields(s ...googleapi.Field) *ConnectResolveCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// IfNoneMatch sets an optional parameter which makes the operation fail if the
+// object's ETag matches the given value. This is useful for getting updates
+// only after the object has changed since the last request.
+func (c *ConnectResolveCall) IfNoneMatch(entityTag string) *ConnectResolveCall {
+	c.ifNoneMatch_ = entityTag
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *ConnectResolveCall) Context(ctx context.Context) *ConnectResolveCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *ConnectResolveCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *ConnectResolveCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "", c.header_)
+	if c.ifNoneMatch_ != "" {
+		reqHeaders.Set("If-None-Match", c.ifNoneMatch_)
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/locations/{location}/dns/{dnsName}:resolveConnectSettings")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("GET", urls, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"location": c.location,
+		"dnsName":  c.dnsName,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.connect.resolve", "request", internallog.HTTPRequest(req, nil))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.connect.resolve" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *ConnectSettings.ServerResponse.Header or (if a response was returned at
+// all) in error.(*googleapi.Error).Header. Use googleapi.IsNotModified to
+// check whether the returned error was because http.StatusNotModified was
+// returned.
+func (c *ConnectResolveCall) Do(opts ...googleapi.CallOption) (*ConnectSettings, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &ConnectSettings{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.connect.resolve", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
 type DatabasesDeleteCall struct {
 	s          *Service
 	project    string
@@ -8086,6 +9762,13 @@ func (r *DatabasesService) Delete(project string, instance string, database stri
 	c.project = project
 	c.instance = instance
 	c.database = database
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *DatabasesDeleteCall) Location(location string) *DatabasesDeleteCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -8193,6 +9876,13 @@ func (r *DatabasesService) Get(project string, instance string, database string)
 	c.project = project
 	c.instance = instance
 	c.database = database
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *DatabasesGetCall) Location(location string) *DatabasesGetCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -8313,6 +10003,13 @@ func (r *DatabasesService) Insert(project string, instance string, database *Dat
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *DatabasesInsertCall) Location(location string) *DatabasesInsertCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -8416,6 +10113,13 @@ func (r *DatabasesService) List(project string, instance string) *DatabasesListC
 	c := &DatabasesListCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.project = project
 	c.instance = instance
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *DatabasesListCall) Location(location string) *DatabasesListCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -8538,6 +10242,13 @@ func (r *DatabasesService) Patch(project string, instance string, database strin
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *DatabasesPatchCall) Location(location string) *DatabasesPatchCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -8647,6 +10358,13 @@ func (r *DatabasesService) Update(project string, instance string, database stri
 	c.instance = instance
 	c.database = database
 	c.database2 = database2
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *DatabasesUpdateCall) Location(location string) *DatabasesUpdateCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -8886,6 +10604,13 @@ func (r *InstancesService) ListEntraIdCertificates(project string, instance stri
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesListEntraIdCertificatesCall) Location(location string) *InstancesListEntraIdCertificatesCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -9005,6 +10730,13 @@ func (r *InstancesService) ListServerCertificates(project string, instance strin
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesListServerCertificatesCall) Location(location string) *InstancesListServerCertificatesCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -9121,6 +10853,13 @@ func (r *InstancesService) RotateEntraIdCertificate(project string, instance str
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesRotateEntraIdCertificateCall) Location(location string) *InstancesRotateEntraIdCertificateCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -9228,6 +10967,13 @@ func (r *InstancesService) RotateServerCertificate(project string, instance stri
 	c.project = project
 	c.instance = instance
 	c.instancesrotateservercertificaterequest = instancesrotateservercertificaterequest
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesRotateServerCertificateCall) Location(location string) *InstancesRotateServerCertificateCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -9343,6 +11089,13 @@ func (r *InstancesService) AcquireSsrsLease(project string, instance string, ins
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesAcquireSsrsLeaseCall) Location(location string) *InstancesAcquireSsrsLeaseCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -9448,6 +11201,13 @@ func (r *InstancesService) AddEntraIdCertificate(project string, instance string
 	c := &InstancesAddEntraIdCertificateCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.project = project
 	c.instance = instance
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesAddEntraIdCertificateCall) Location(location string) *InstancesAddEntraIdCertificateCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -9558,6 +11318,13 @@ func (r *InstancesService) AddServerCa(project string, instance string) *Instanc
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesAddServerCaCall) Location(location string) *InstancesAddServerCaCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -9665,6 +11432,13 @@ func (r *InstancesService) AddServerCertificate(project string, instance string)
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesAddServerCertificateCall) Location(location string) *InstancesAddServerCertificateCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -9767,6 +11541,13 @@ func (r *InstancesService) Clone(project string, instance string, instancesclone
 	c.project = project
 	c.instance = instance
 	c.instancesclonerequest = instancesclonerequest
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesCloneCall) Location(location string) *InstancesCloneCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -9905,6 +11686,13 @@ func (c *InstancesDeleteCall) FinalBackupTtlDays(finalBackupTtlDays int64) *Inst
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesDeleteCall) Location(location string) *InstancesDeleteCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -10006,6 +11794,13 @@ func (r *InstancesService) Demote(project string, instance string, instancesdemo
 	c.project = project
 	c.instance = instance
 	c.instancesdemoterequest = instancesdemoterequest
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesDemoteCall) Location(location string) *InstancesDemoteCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -10117,6 +11912,13 @@ func (r *InstancesService) DemoteMaster(project string, instance string, instanc
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesDemoteMasterCall) Location(location string) *InstancesDemoteMasterCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -10221,6 +12023,13 @@ func (r *InstancesService) ExecuteSql(project string, instance string, executesq
 	c.project = project
 	c.instance = instance
 	c.executesqlpayload = executesqlpayload
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesExecuteSqlCall) Location(location string) *InstancesExecuteSqlCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -10331,6 +12140,13 @@ func (r *InstancesService) Export(project string, instance string, instancesexpo
 	c.project = project
 	c.instance = instance
 	c.instancesexportrequest = instancesexportrequest
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesExportCall) Location(location string) *InstancesExportCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -10447,6 +12263,13 @@ func (r *InstancesService) Failover(project string, instance string, instancesfa
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesFailoverCall) Location(location string) *InstancesFailoverCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -10550,6 +12373,13 @@ func (r *InstancesService) Get(project string, instance string) *InstancesGetCal
 	c := &InstancesGetCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.project = project
 	c.instance = instance
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesGetCall) Location(location string) *InstancesGetCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -10669,6 +12499,13 @@ func (r *InstancesService) Import(project string, instance string, instancesimpo
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesImportCall) Location(location string) *InstancesImportCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -10771,6 +12608,13 @@ func (r *InstancesService) Insert(project string, databaseinstance *DatabaseInst
 	c := &InstancesInsertCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.project = project
 	c.databaseinstance = databaseinstance
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesInsertCall) Location(location string) *InstancesInsertCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -10886,6 +12730,13 @@ func (r *InstancesService) List(project string) *InstancesListCall {
 // expression. However, you can include AND and OR expressions explicitly.
 func (c *InstancesListCall) Filter(filter string) *InstancesListCall {
 	c.urlParams_.Set("filter", filter)
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesListCall) Location(location string) *InstancesListCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -11043,6 +12894,13 @@ func (r *InstancesService) ListServerCas(project string, instance string) *Insta
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesListServerCasCall) Location(location string) *InstancesListServerCasCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -11157,6 +13015,29 @@ func (r *InstancesService) Patch(project string, instance string, databaseinstan
 	c.project = project
 	c.instance = instance
 	c.databaseinstance = databaseinstance
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesPatchCall) Location(location string) *InstancesPatchCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
+// ReconcilePscNetworking sets the optional parameter "reconcilePscNetworking":
+// Set PSC config to the same value as the existing config to reconcile the PSC
+// networking.
+func (c *InstancesPatchCall) ReconcilePscNetworking(reconcilePscNetworking bool) *InstancesPatchCall {
+	c.urlParams_.Set("reconcilePscNetworking", fmt.Sprint(reconcilePscNetworking))
+	return c
+}
+
+// ReconcilePscNetworkingForce sets the optional parameter
+// "reconcilePscNetworkingForce": Set PSC config to the same value as the
+// existing config and force reconcile the PSC networking.
+func (c *InstancesPatchCall) ReconcilePscNetworkingForce(reconcilePscNetworkingForce bool) *InstancesPatchCall {
+	c.urlParams_.Set("reconcilePscNetworkingForce", fmt.Sprint(reconcilePscNetworkingForce))
 	return c
 }
 
@@ -11372,6 +13253,13 @@ func (r *InstancesService) PreCheckMajorVersionUpgrade(project string, instance 
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesPreCheckMajorVersionUpgradeCall) Location(location string) *InstancesPreCheckMajorVersionUpgradeCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -11490,6 +13378,13 @@ func (c *InstancesPromoteReplicaCall) Failover(failover bool) *InstancesPromoteR
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesPromoteReplicaCall) Location(location string) *InstancesPromoteReplicaCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -11590,6 +13485,13 @@ func (r *InstancesService) Reencrypt(project string, instance string, instancesr
 	c.project = project
 	c.instance = instance
 	c.instancesreencryptrequest = instancesreencryptrequest
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesReencryptCall) Location(location string) *InstancesReencryptCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -11702,6 +13604,13 @@ func (r *InstancesService) ReleaseSsrsLease(project string, instance string) *In
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesReleaseSsrsLeaseCall) Location(location string) *InstancesReleaseSsrsLeaseCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -11802,6 +13711,13 @@ func (r *InstancesService) ResetSslConfig(project string, instance string) *Inst
 	c := &InstancesResetSslConfigCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.project = project
 	c.instance = instance
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesResetSslConfigCall) Location(location string) *InstancesResetSslConfigCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -11922,6 +13838,13 @@ func (r *InstancesService) Restart(project string, instance string) *InstancesRe
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesRestartCall) Location(location string) *InstancesRestartCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -12023,6 +13946,13 @@ func (r *InstancesService) RestoreBackup(project string, instance string, instan
 	c.project = project
 	c.instance = instance
 	c.instancesrestorebackuprequest = instancesrestorebackuprequest
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesRestoreBackupCall) Location(location string) *InstancesRestoreBackupCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -12137,6 +14067,13 @@ func (r *InstancesService) RotateServerCa(project string, instance string, insta
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesRotateServerCaCall) Location(location string) *InstancesRotateServerCaCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -12242,6 +14179,13 @@ func (r *InstancesService) StartReplica(project string, instance string) *Instan
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesStartReplicaCall) Location(location string) *InstancesStartReplicaCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -12340,6 +14284,13 @@ func (r *InstancesService) StopReplica(project string, instance string) *Instanc
 	c := &InstancesStopReplicaCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.project = project
 	c.instance = instance
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesStopReplicaCall) Location(location string) *InstancesStopReplicaCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -12454,6 +14405,13 @@ func (c *InstancesSwitchoverCall) DbTimeout(dbTimeout string) *InstancesSwitchov
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesSwitchoverCall) Location(location string) *InstancesSwitchoverCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -12554,6 +14512,13 @@ func (r *InstancesService) TruncateLog(project string, instance string, instance
 	c.project = project
 	c.instance = instance
 	c.instancestruncatelogrequest = instancestruncatelogrequest
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesTruncateLogCall) Location(location string) *InstancesTruncateLogCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -12665,6 +14630,13 @@ func (r *InstancesService) Update(project string, instance string, databaseinsta
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *InstancesUpdateCall) Location(location string) *InstancesUpdateCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -12771,6 +14743,13 @@ func (r *OperationsService) Cancel(project string, operation string) *Operations
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *OperationsCancelCall) Location(location string) *OperationsCancelCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -12870,6 +14849,13 @@ func (r *OperationsService) Get(project string, operation string) *OperationsGet
 	c := &OperationsGetCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.project = project
 	c.operation = operation
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *OperationsGetCall) Location(location string) *OperationsGetCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -12988,6 +14974,13 @@ func (r *OperationsService) List(project string) *OperationsListCall {
 // does not include the project ID.
 func (c *OperationsListCall) Instance(instance string) *OperationsListCall {
 	c.urlParams_.Set("instance", instance)
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *OperationsListCall) Location(location string) *OperationsListCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -13139,6 +15132,13 @@ func (r *ProjectsInstancesService) GetDiskShrinkConfig(project string, instance 
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *ProjectsInstancesGetDiskShrinkConfigCall) Location(location string) *ProjectsInstancesGetDiskShrinkConfigCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -13250,6 +15250,13 @@ func (r *ProjectsInstancesService) GetLatestRecoveryTime(project string, instanc
 	c := &ProjectsInstancesGetLatestRecoveryTimeCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.project = project
 	c.instance = instance
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *ProjectsInstancesGetLatestRecoveryTimeCall) Location(location string) *ProjectsInstancesGetLatestRecoveryTimeCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -13377,6 +15384,13 @@ func (r *ProjectsInstancesService) PerformDiskShrink(project string, instance st
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *ProjectsInstancesPerformDiskShrinkCall) Location(location string) *ProjectsInstancesPerformDiskShrinkCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -13481,6 +15495,13 @@ func (r *ProjectsInstancesService) RescheduleMaintenance(project string, instanc
 	c.project = project
 	c.instance = instance
 	c.sqlinstancesreschedulemaintenancerequestbody = sqlinstancesreschedulemaintenancerequestbody
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *ProjectsInstancesRescheduleMaintenanceCall) Location(location string) *ProjectsInstancesRescheduleMaintenanceCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -13914,6 +15935,13 @@ func (r *SslCertsService) CreateEphemeral(project string, instance string, sslce
 	c.project = project
 	c.instance = instance
 	c.sslcertscreateephemeralrequest = sslcertscreateephemeralrequest
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *SslCertsCreateEphemeralCall) Location(location string) *SslCertsCreateEphemeralCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -14589,6 +16617,13 @@ func (c *UsersDeleteCall) Host(host string) *UsersDeleteCall {
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *UsersDeleteCall) Location(location string) *UsersDeleteCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Name sets the optional parameter "name": Name of the user in the instance.
 func (c *UsersDeleteCall) Name(name string) *UsersDeleteCall {
 	c.urlParams_.Set("name", name)
@@ -14703,6 +16738,13 @@ func (r *UsersService) Get(project string, instance string, name string) *UsersG
 // Host sets the optional parameter "host": Host of a user of the instance.
 func (c *UsersGetCall) Host(host string) *UsersGetCall {
 	c.urlParams_.Set("host", host)
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *UsersGetCall) Location(location string) *UsersGetCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -14821,6 +16863,13 @@ func (r *UsersService) Insert(project string, instance string, user *User) *User
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *UsersInsertCall) Location(location string) *UsersInsertCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Fields allows partial responses to be retrieved. See
 // https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
 // details.
@@ -14924,6 +16973,13 @@ func (r *UsersService) List(project string, instance string) *UsersListCall {
 	c := &UsersListCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.project = project
 	c.instance = instance
+	return c
+}
+
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *UsersListCall) Location(location string) *UsersListCall {
+	c.urlParams_.Set("location", location)
 	return c
 }
 
@@ -15056,6 +17112,13 @@ func (c *UsersUpdateCall) Host(host string) *UsersUpdateCall {
 	return c
 }
 
+// Location sets the optional parameter "location": Region of the Cloud SQL
+// instance.
+func (c *UsersUpdateCall) Location(location string) *UsersUpdateCall {
+	c.urlParams_.Set("location", location)
+	return c
+}
+
 // Name sets the optional parameter "name": Name of the user in the instance.
 func (c *UsersUpdateCall) Name(name string) *UsersUpdateCall {
 	c.urlParams_.Set("name", name)
@@ -15068,6 +17131,25 @@ func (c *UsersUpdateCall) Name(name string) *UsersUpdateCall {
 // `database_roles` are added to the user's existing roles.
 func (c *UsersUpdateCall) RevokeExistingRoles(revokeExistingRoles bool) *UsersUpdateCall {
 	c.urlParams_.Set("revokeExistingRoles", fmt.Sprint(revokeExistingRoles))
+	return c
+}
+
+// RevokeExistingServerRoles sets the optional parameter
+// "revokeExistingServerRoles": Specifies whether to revoke existing roles that
+// are not present in the `server_roles` field. If `false` or unset, the server
+// roles specified in `server_roles` are added to the user's existing server
+// roles.
+func (c *UsersUpdateCall) RevokeExistingServerRoles(revokeExistingServerRoles bool) *UsersUpdateCall {
+	c.urlParams_.Set("revokeExistingServerRoles", fmt.Sprint(revokeExistingServerRoles))
+	return c
+}
+
+// ServerRoles sets the optional parameter "serverRoles": The server roles to
+// grant to the SQL Server login. Existing server roles will not be revoked if
+// revoke_existing_roles is false. body.server_roles will be ignored for update
+// request.
+func (c *UsersUpdateCall) ServerRoles(serverRoles ...string) *UsersUpdateCall {
+	c.urlParams_.SetMulti("serverRoles", append([]string{}, serverRoles...))
 	return c
 }
 
@@ -15153,5 +17235,563 @@ func (c *UsersUpdateCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
 		return nil, err
 	}
 	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.users.update", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type WorkloadCapturesListCall struct {
+	s            *Service
+	project      string
+	instance     string
+	urlParams_   gensupport.URLParams
+	ifNoneMatch_ string
+	ctx_         context.Context
+	header_      http.Header
+}
+
+// List: Lists all captured workloads associated with the instance.
+//
+// - instance: Cloud SQL instance ID. This does not include the project ID.
+// - project: Project ID of the project that contains the instance.
+func (r *WorkloadCapturesService) List(project string, instance string) *WorkloadCapturesListCall {
+	c := &WorkloadCapturesListCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.project = project
+	c.instance = instance
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *WorkloadCapturesListCall) Fields(s ...googleapi.Field) *WorkloadCapturesListCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// IfNoneMatch sets an optional parameter which makes the operation fail if the
+// object's ETag matches the given value. This is useful for getting updates
+// only after the object has changed since the last request.
+func (c *WorkloadCapturesListCall) IfNoneMatch(entityTag string) *WorkloadCapturesListCall {
+	c.ifNoneMatch_ = entityTag
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *WorkloadCapturesListCall) Context(ctx context.Context) *WorkloadCapturesListCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *WorkloadCapturesListCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *WorkloadCapturesListCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "", c.header_)
+	if c.ifNoneMatch_ != "" {
+		reqHeaders.Set("If-None-Match", c.ifNoneMatch_)
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/projects/{project}/instances/{instance}/workloadCaptures")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("GET", urls, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"project":  c.project,
+		"instance": c.instance,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.workloadCaptures.list", "request", internallog.HTTPRequest(req, nil))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.workloadCaptures.list" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *WorkloadCapturesListResponse.ServerResponse.Header or (if a response was
+// returned at all) in error.(*googleapi.Error).Header. Use
+// googleapi.IsNotModified to check whether the returned error was because
+// http.StatusNotModified was returned.
+func (c *WorkloadCapturesListCall) Do(opts ...googleapi.CallOption) (*WorkloadCapturesListResponse, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &WorkloadCapturesListResponse{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.workloadCaptures.list", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type WorkloadCapturesStartCall struct {
+	s                               *Service
+	project                         string
+	instance                        string
+	sqlworkloadcapturesstartrequest *SqlWorkloadCapturesStartRequest
+	urlParams_                      gensupport.URLParams
+	ctx_                            context.Context
+	header_                         http.Header
+}
+
+// Start: Starts capturing the SQL queries, transactions, and other operations
+// executed on the primary instance. This traffic is securely stored and forms
+// a "captured workload". This workload can be replayed later on a different
+// instance to safely test performance impacts, database upgrades,
+// configuration changes etc. before applying them to production.
+//
+// - instance: Cloud SQL instance ID. This does not include the project ID.
+// - project: Project ID of the project that contains the instance.
+func (r *WorkloadCapturesService) Start(project string, instance string, sqlworkloadcapturesstartrequest *SqlWorkloadCapturesStartRequest) *WorkloadCapturesStartCall {
+	c := &WorkloadCapturesStartCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.project = project
+	c.instance = instance
+	c.sqlworkloadcapturesstartrequest = sqlworkloadcapturesstartrequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *WorkloadCapturesStartCall) Fields(s ...googleapi.Field) *WorkloadCapturesStartCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *WorkloadCapturesStartCall) Context(ctx context.Context) *WorkloadCapturesStartCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *WorkloadCapturesStartCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *WorkloadCapturesStartCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.sqlworkloadcapturesstartrequest)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/projects/{project}/instances/{instance}/workloadCaptures:start")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"project":  c.project,
+		"instance": c.instance,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.workloadCaptures.start", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.workloadCaptures.start" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *WorkloadCapturesStartCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.workloadCaptures.start", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type WorkloadCapturesStartReplayCall struct {
+	s                                     *Service
+	project                               string
+	instance                              string
+	workloadId                            string
+	sqlworkloadcapturesstartreplayrequest *SqlWorkloadCapturesStartReplayRequest
+	urlParams_                            gensupport.URLParams
+	ctx_                                  context.Context
+	header_                               http.Header
+}
+
+// StartReplay: Starts executing a captured workload on a separate Cloud SQL
+// instance provisioned for workload replay. This target instance simulates the
+// production environment without affecting the primary instance.
+//
+// - instance: Cloud SQL instance ID. This does not include the project ID.
+// - project: Project ID of the project that contains the instance.
+// - workloadId: The ID of the workload to replay.
+func (r *WorkloadCapturesService) StartReplay(project string, instance string, workloadId string, sqlworkloadcapturesstartreplayrequest *SqlWorkloadCapturesStartReplayRequest) *WorkloadCapturesStartReplayCall {
+	c := &WorkloadCapturesStartReplayCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.project = project
+	c.instance = instance
+	c.workloadId = workloadId
+	c.sqlworkloadcapturesstartreplayrequest = sqlworkloadcapturesstartreplayrequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *WorkloadCapturesStartReplayCall) Fields(s ...googleapi.Field) *WorkloadCapturesStartReplayCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *WorkloadCapturesStartReplayCall) Context(ctx context.Context) *WorkloadCapturesStartReplayCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *WorkloadCapturesStartReplayCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *WorkloadCapturesStartReplayCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.sqlworkloadcapturesstartreplayrequest)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/projects/{project}/instances/{instance}/workloadCaptures/{workloadId}:startReplay")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"project":    c.project,
+		"instance":   c.instance,
+		"workloadId": c.workloadId,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.workloadCaptures.startReplay", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.workloadCaptures.startReplay" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *WorkloadCapturesStartReplayCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.workloadCaptures.startReplay", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type WorkloadCapturesStopCall struct {
+	s                              *Service
+	project                        string
+	instance                       string
+	sqlworkloadcapturesstoprequest *SqlWorkloadCapturesStopRequest
+	urlParams_                     gensupport.URLParams
+	ctx_                           context.Context
+	header_                        http.Header
+}
+
+// Stop: Stops capturing the query traffic and related operations executed on
+// the primary instance.
+//
+// - instance: Cloud SQL instance ID. This does not include the project ID.
+// - project: Project ID of the project that contains the instance.
+func (r *WorkloadCapturesService) Stop(project string, instance string, sqlworkloadcapturesstoprequest *SqlWorkloadCapturesStopRequest) *WorkloadCapturesStopCall {
+	c := &WorkloadCapturesStopCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.project = project
+	c.instance = instance
+	c.sqlworkloadcapturesstoprequest = sqlworkloadcapturesstoprequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *WorkloadCapturesStopCall) Fields(s ...googleapi.Field) *WorkloadCapturesStopCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *WorkloadCapturesStopCall) Context(ctx context.Context) *WorkloadCapturesStopCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *WorkloadCapturesStopCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *WorkloadCapturesStopCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.sqlworkloadcapturesstoprequest)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/projects/{project}/instances/{instance}/workloadCaptures:stop")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"project":  c.project,
+		"instance": c.instance,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.workloadCaptures.stop", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.workloadCaptures.stop" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *WorkloadCapturesStopCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.workloadCaptures.stop", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type WorkloadCapturesStopReplayCall struct {
+	s                                    *Service
+	project                              string
+	instance                             string
+	workloadId                           string
+	sqlworkloadcapturesstopreplayrequest *SqlWorkloadCapturesStopReplayRequest
+	urlParams_                           gensupport.URLParams
+	ctx_                                 context.Context
+	header_                              http.Header
+}
+
+// StopReplay: Stops executing a captured workload on the separate Cloud SQL
+// instance.
+//
+// - instance: Cloud SQL instance ID. This does not include the project ID.
+// - project: Project ID of the project that contains the instance.
+// - workloadId: The ID of the workload to replay.
+func (r *WorkloadCapturesService) StopReplay(project string, instance string, workloadId string, sqlworkloadcapturesstopreplayrequest *SqlWorkloadCapturesStopReplayRequest) *WorkloadCapturesStopReplayCall {
+	c := &WorkloadCapturesStopReplayCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.project = project
+	c.instance = instance
+	c.workloadId = workloadId
+	c.sqlworkloadcapturesstopreplayrequest = sqlworkloadcapturesstopreplayrequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *WorkloadCapturesStopReplayCall) Fields(s ...googleapi.Field) *WorkloadCapturesStopReplayCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *WorkloadCapturesStopReplayCall) Context(ctx context.Context) *WorkloadCapturesStopReplayCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *WorkloadCapturesStopReplayCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *WorkloadCapturesStopReplayCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.sqlworkloadcapturesstopreplayrequest)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/projects/{project}/instances/{instance}/workloadCaptures/{workloadId}:stopReplay")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"project":    c.project,
+		"instance":   c.instance,
+		"workloadId": c.workloadId,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "sql.workloadCaptures.stopReplay", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "sql.workloadCaptures.stopReplay" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *WorkloadCapturesStopReplayCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "sql.workloadCaptures.stopReplay", "response", internallog.HTTPResponse(res, b))
 	return ret, nil
 }
