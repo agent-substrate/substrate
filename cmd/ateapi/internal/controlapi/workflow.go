@@ -71,6 +71,20 @@ func markSkipped(ctx context.Context, reason string) {
 	)
 }
 
+// contextEnded is ctx.Err(), or context.DeadlineExceeded once ctx's deadline has
+// passed by the clock. gRPC reports DeadlineExceeded by the clock and the
+// context's timer can fire a moment later, so an atelet call can fail on the
+// caller's deadline while ctx.Err() is still nil.
+func contextEnded(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
 // logActorStateChanged records an actor state change. The last record for an
 // actor's uid is the state it is in now.
 //
