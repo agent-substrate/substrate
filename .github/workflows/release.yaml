@@ -14,7 +14,8 @@
 
 # Pushing a vX.Y.Z[-PRERELEASE] tag publishes the release images and then
 # creates a DRAFT release with generated notes (.github/release.yml), with the
-# kubectl-ate binaries attached. A maintainer edits and publishes it; see
+# kubectl-ate binaries attached. Every image and binary gets a build provenance
+# attestation. A maintainer edits and publishes the draft; see
 # docs/dev/releasing.md.
 #
 # Images are published only from agent-substrate/substrate, to
@@ -22,10 +23,11 @@
 # images job is skipped, because GitHub bills package storage to the fork's
 # owner, and the draft is created as before.
 #
-# Run manually to publish images or draft a release for an existing tag.
-# A complete image set is left unchanged unless overwrite is set; an incomplete
-# one is rebuilt in full. Nothing is published for a tag whose release is
-# published, and only a draft gets its binaries replaced.
+# Run manually, from the tag, to publish images or draft a release for an
+# existing tag. A complete image set is left unchanged unless overwrite is set,
+# and its attestations verified instead; an incomplete one is rebuilt in full.
+# Nothing is published for a tag whose release is published, and only a draft
+# gets its binaries replaced.
 name: release
 on:
   push:
@@ -60,6 +62,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # attest-build-provenance signs with the job's OIDC token.
+      id-token: write
+      attestations: write
     # Read by ate-setup publish release-images.
     env:
       VERSION: ${{ inputs.tag || github.ref_name }}
@@ -67,6 +72,8 @@ jobs:
       KO_DEFAULTPLATFORMS: linux/amd64,linux/arm64
       # inputs.overwrite is empty on a tag push; this makes the value explicit.
       ATE_PUBLISH_OVERWRITE: ${{ inputs.overwrite == true }}
+      # The images this run pushes, attested below. Absent when nothing was built.
+      ATE_PUBLISH_DIGESTS_FILE: bin/release-images.txt
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -80,6 +87,11 @@ jobs:
         # These jobs can write packages or releases, so they restore no cache
         # that another workflow could have written.
         cache: false
+    # The attestations name the run's commit, so it must be the tag's.
+    - name: Check the run is for the tag's commit
+      env:
+        TAG: ${{ inputs.tag || github.ref_name }}
+      run: .github/scripts/release/check-release-ref.sh
     # ko cross-compiles Go for arm64, and the envoy-dataplane Dockerfile
     # cross-compiles its Rust module, so the job needs no QEMU. buildx builds
     # envoy-dataplane for both platforms. ko, buildx, and ate-setup's registry
@@ -106,6 +118,25 @@ jobs:
     # every platform.
     - name: Publish images
       run: go run ./cmd/ate-setup publish release-images
+    # One statement for the images this run pushed; see docs/dev/releasing.md.
+    - name: Attest the images
+      if: hashFiles('bin/release-images.txt') != ''
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      with:
+        subject-checksums: bin/release-images.txt
+    # Nothing built: check the existing images' attestations instead.
+    - name: Verify the published images
+      if: hashFiles('bin/release-images.txt') == ''
+      env:
+        GH_TOKEN: ${{ github.token }}
+        DIGESTS_FILE: bin/release-images.txt
+      run: .github/scripts/release/verify-image-attestations.sh
+    - name: Upload the image digests
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: release-images
+        path: bin/release-images.txt
+        if-no-files-found: error
   # The same build and checks against a registry that exists only for the
   # duration of this job. Runs only when started manually with dry_run_images.
   images-dry-run:
@@ -122,6 +153,7 @@ jobs:
       KO_DOCKER_REPO: localhost:5000/substrate
       KO_DEFAULTPLATFORMS: linux/amd64,linux/arm64
       ATE_PUBLISH_OVERWRITE: ${{ inputs.overwrite == true }}
+      ATE_PUBLISH_DIGESTS_FILE: bin/release-images.txt
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -148,6 +180,8 @@ jobs:
             http = true
     - name: Publish images
       run: go run ./cmd/ate-setup publish release-images
+    - name: Show the image digests
+      run: cat bin/release-images.txt
   draft:
     needs: images
     # Runs after images succeeded, or when images was skipped (any repository
@@ -157,9 +191,11 @@ jobs:
     if: ${{ !cancelled() && !inputs.dry_run_images && (needs.images.result == 'success' || needs.images.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Creating a release needs contents: write.
+    # contents: write creates the release; the rest attests the binaries.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -178,6 +214,11 @@ jobs:
         # These jobs can write packages or releases, so they restore no cache
         # that another workflow could have written.
         cache: false
+    # The attestations name the run's commit, so it must be the tag's.
+    - name: Check the run is for the tag's commit
+      env:
+        TAG: ${{ inputs.tag || github.ref_name }}
+      run: .github/scripts/release/check-release-ref.sh
     # Built before the draft exists, so a build failure leaves no draft, as an
     # images failure does. A fork attaches no binaries, so it builds none.
     - name: Build kubectl-ate
@@ -185,10 +226,26 @@ jobs:
       env:
         VERSION: ${{ inputs.tag || github.ref_name }}
       run: go run ./cmd/ate-setup publish release-binaries --out bin/release
+    # The four binaries, not their .sha256 files.
+    - name: Attest kubectl-ate
+      if: github.repository == 'agent-substrate/substrate'
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      with:
+        subject-path: |
+          bin/release/kubectl-ate-*
+          !bin/release/*.sha256
+    # For the notes. Absent when the images job was skipped (a fork).
+    - name: Download the image digests
+      if: needs.images.result == 'success'
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: release-images
+        path: ${{ runner.temp }}/release-images
     - name: Draft release
       env:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ inputs.tag || github.ref_name }}
+        RELEASE_IMAGES_FILE: ${{ runner.temp }}/release-images/release-images.txt
       run: hack/release/draft-release.sh "${TAG}"
     # Only agent-substrate/substrate attaches binaries; a fork's draft gets
     # none. Assets are replaced only while the release is a draft, so a rerun
