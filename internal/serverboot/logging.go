@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
-	"go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"google.golang.org/grpc"
 
@@ -90,7 +90,7 @@ func InitLogging(ctx context.Context, opts LoggingOptions) (*sdklog.LoggerProvid
 	if err != nil {
 		return nil, err
 	}
-	global.SetLoggerProvider(lp)
+	otel.SetLoggerProvider(lp)
 	slog.InfoContext(ctx, "Logging initialized", slog.String("exporter", opts.Exporter.String()))
 	return lp, nil
 }

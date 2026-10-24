@@ -1186,7 +1186,6 @@ go.opentelemetry.io/otel/exporters/prometheus/internal/x
 ## explicit; go 1.26.0
 go.opentelemetry.io/otel/log
 go.opentelemetry.io/otel/log/embedded
-go.opentelemetry.io/otel/log/global
 go.opentelemetry.io/otel/log/noop
 # go.opentelemetry.io/otel/metric v1.47.0
 ## explicit; go 1.26.0

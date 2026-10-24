@@ -21,8 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel"
 	otellog "go.opentelemetry.io/otel/log"
-	"go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
 	"google.golang.org/grpc"
@@ -58,10 +58,10 @@ func TestResolveLogsExporter(t *testing.T) {
 }
 
 func TestInitLoggingDisabled(t *testing.T) {
-	// global.SetLoggerProvider has no undo, so assert on the provider this
+	// otel.SetLoggerProvider has no undo, so assert on the provider this
 	// returns rather than on the global. A nil provider is what proves
 	// InitLogging left the global alone.
-	before := global.GetLoggerProvider()
+	before := otel.GetLoggerProvider()
 
 	lp, err := InitLogging(context.Background(), LoggingOptions{
 		ServiceName: "test",
@@ -73,7 +73,7 @@ func TestInitLoggingDisabled(t *testing.T) {
 	if lp != nil {
 		t.Errorf("InitLogging() with the exporter disabled = %v, want nil", lp)
 	}
-	if got := global.GetLoggerProvider(); got != before {
+	if got := otel.GetLoggerProvider(); got != before {
 		t.Errorf("InitLogging() with the exporter disabled replaced the global provider")
 	}
 }
@@ -209,7 +209,7 @@ func TestInitLoggingOTLPAndConsole(t *testing.T) {
 	if lp == nil {
 		t.Fatal("InitLogging() with otlp,console returned no provider")
 	}
-	if global.GetLoggerProvider() != lp {
+	if otel.GetLoggerProvider() != lp {
 		t.Error("InitLogging() with otlp,console did not install its provider as the global")
 	}
 	t.Cleanup(func() {

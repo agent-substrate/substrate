@@ -35,9 +35,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
-	"go.opentelemetry.io/otel/log/global"
 
 	"go.ate.dev/substrate/internal/ateattr"
 )
@@ -249,7 +249,7 @@ func SetConsole(on bool) { console.Store(on) }
 // The global provider delegates, so a Logger taken before InitLogging still
 // reaches the one it installs.
 var defaultEmitter = sync.OnceValue(func() *Emitter {
-	return NewEmitter(global.GetLoggerProvider())
+	return NewEmitter(otel.GetLoggerProvider())
 })
 
 // Log records ev through the process-wide provider.

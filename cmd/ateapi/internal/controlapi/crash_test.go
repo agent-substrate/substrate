@@ -35,9 +35,9 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
-	"go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -860,7 +860,7 @@ func otlpEvents(t *testing.T) func() []otlpEvent {
 	t.Helper()
 
 	otlpSinkOnce.Do(func() {
-		global.SetLoggerProvider(sdklog.NewLoggerProvider(
+		otel.SetLoggerProvider(sdklog.NewLoggerProvider(
 			sdklog.WithProcessor(switchProcessor{sdklog.NewSimpleProcessor(otlpSinkExporter{})})))
 	})
 
