@@ -1,3 +1,13 @@
+---
+title: "Pluggable Egress Networking"
+linkTitle: "Pluggable Egress Networking"
+weight: 6
+estimated_time: "10 mins"
+card_icon: "fa-solid fa-shield-halved"
+description: >
+  Tunnel and authenticate outbound actor traffic over mTLS using Envoy or agentgateway.
+---
+
 # Egress Demo — Pluggable Egress Networking
 
 This demo shows an Actor's outbound traffic being **transparently tunneled through an
@@ -243,7 +253,7 @@ from the cluster, works for a manual run.
 - The gateway **authenticates** identity (is this a real, running actor?) and **authorizes**
   destinations against the Actor's `EgressPolicy`. The same `ext_proc` can also replace a
   placeholder request header with an upstream credential on HTTPS an `https` rule allows — see
-  [docs/egress-credential-injection.md](../../docs/egress-credential-injection.md).
+  [docs/guides/egress-credential-injection.md](../../docs/guides/egress-credential-injection.md).
 - Identity comes entirely from the actor certificate: the atespace, actor name, and UID are read
   out of the `ActorIdentity` extension and the UID is matched against the live actor, so a
   certificate cannot survive its actor being deleted and recreated under the same name. Nothing

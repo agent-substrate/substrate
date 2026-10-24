@@ -1,3 +1,13 @@
+---
+title: "Claude Code Multiplexing"
+linkTitle: "Claude Code Multiplexing"
+weight: 7
+estimated_time: "15 mins"
+card_icon: "fa-solid fa-robot"
+description: >
+  Multiplex three Claude Code agents onto two worker pods with automatic suspend and resume.
+---
+
 # Claude Code Multiplex Demo
 
 A demo of three Claude-Code-driven agents sharing two Agent Substrate pods. Substrate suspends idle agents and resumes them on demand, so the cluster runs *fewer pods than agents*.
@@ -108,7 +118,7 @@ With three agents and two pods, the third agent stays suspended (state snapshott
 ## Settings
 
 The installer reads this setting in addition to those in
-[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+[docs/guides/operator-install.md](../../docs/guides/operator-install.md#settings), through the same
 environment variable and configuration document channels.
 
 | Key                    | Environment variable | Flag        | Default    | Applies to |

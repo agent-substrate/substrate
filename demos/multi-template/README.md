@@ -1,3 +1,13 @@
+---
+title: "Multi-Template WorkerPool"
+linkTitle: "Multi-Template WorkerPool"
+weight: 4
+estimated_time: "5 mins"
+card_icon: "fa-solid fa-layer-group"
+description: >
+  Share a single WorkerPool across multiple ActorTemplates and atespaces using label selectors.
+---
+
 # Multi-Template Demo
 
 This demo shows that **two different actor templates running two different binaries
