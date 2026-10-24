@@ -448,7 +448,7 @@ func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
 		{
 			// An actor resumed from a local snapshot keeps Locality on that
 			// snapshot while running. When its worker pod vanishes, it crashes
-			// and its node state is reclaimed along with any local snapshot.
+			// and its node state is reclaimed, but not the local snapshot.
 			name:          "running actor with a local snapshot is reclaimed",
 			state:         ateapi.ActorState_ACTOR_STATE_RUNNING,
 			seed:          withPausedShape(t, "node-1"),
@@ -514,6 +514,11 @@ func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
 			}
 			if want := validWorker(apiWorkerName).GetWorkerPodUid(); req.GetWorkerPodUid() != want {
 				t.Errorf("Terminate worker_pod_uid = %q, want the worker's pod uid %q", req.GetWorkerPodUid(), want)
+			}
+			// A revert restores from the crashed actor's committed local
+			// snapshot. Reclaiming it here would leave that revert stuck.
+			if !req.GetPreserveSnapshots() {
+				t.Error("Terminate preserve_snapshots = false, want true")
 			}
 		})
 	}

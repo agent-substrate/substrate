@@ -300,9 +300,9 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 }
 
 // reclaimActorStateOnNode asks the atelet on the worker's node to terminate the
-// actor, removing /var/lib/ate/actors/<uid> and /var/lib/ate/snapshots/<uid>
-// (durable dir, checkpoint and restore images, and local snapshots) and
-// unmounting its external volumes.
+// actor, emptying /var/lib/ate/actors/<uid> and unmounting its external
+// volumes. The actor's committed local snapshot and its pending upload stay on
+// the node, so the actor's revert can return to them.
 //
 // The worker's pod and process are gone by the time this runs, while the
 // node's atelet remains and reclaims the directories without a live worker.
@@ -353,6 +353,7 @@ func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *at
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Spec:                  fallbackWorkloadSpec(actor),
+		PreserveSnapshots:     true,
 	})
 	switch status.Code(err) {
 	case codes.OK:
