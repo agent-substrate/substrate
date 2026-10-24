@@ -49,7 +49,7 @@ gcloud beta container clusters update CLUSTER_NAME \
 
 **Local (kind):**
 
-The kind overlay installed by `hack/install-ate-kind.sh --deploy-ate-system` already provisions an in-cluster OpenTelemetry Collector and a Jaeger all-in-one in the `otel-system` namespace. No additional setup is required.
+The kind overlay installed by `hack/install-ate-kind.sh --deploy-ate-system` already provisions an in-cluster OpenTelemetry Collector and Jaeger in the `otel-system` namespace. No additional setup is required.
 
 Port-forward the Jaeger UI and invoke any command with `--trace`:
 ```bash
