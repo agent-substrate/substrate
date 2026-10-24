@@ -857,7 +857,8 @@ groups:
       pool, and the counts can be fractional while the replicas disagree.
       Within one replica you can add the counts together. The sum across the
       states is the size of the pool. The sum across the pools is the size of
-      the fleet. Thus this instrument is an UpDownCounter and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
+      the fleet. Thus this instrument is an UpDownCounter
+      and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
       full pool or an empty pool reports 0. An absent series would stop an alert
       on idle == 0.
       The states count workers, not actor slots. A worker with 1 of 20 slots
