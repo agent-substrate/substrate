@@ -133,6 +133,10 @@ func NewServer(client kubernetes.Interface, nsAuth *NamespaceAuthorizer) *Server
 // when authorization is disabled.
 func (s *Server) Grants() map[string][]string { return s.nsAuth.Grants() }
 
+// PolicyError reports why the policy file failed to load while an older
+// policy stays in force, for /statusz.
+func (s *Server) PolicyError() error { return s.nsAuth.LoadError() }
+
 // FetchSecret resolves one ate-secret:// URI to its Secret value.
 func (s *Server) FetchSecret(ctx context.Context, req *credprovider.FetchSecretRequest) (*credprovider.FetchSecretResponse, error) {
 	ref, err := ParseURI(req.GetUri())

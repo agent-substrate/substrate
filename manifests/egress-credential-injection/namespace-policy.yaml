@@ -16,10 +16,7 @@
 # atespace may only resolve Secrets whose URI namespace is listed for it here.
 # Enforcement is default-deny — an atespace absent from this file resolves
 # nothing. The install creates this ConfigMap only when it is absent, granting
-# nothing; the provider needs it to start.
-#
-# TODO: k8s-credential-provider loads this once at startup, so editing this ConfigMap
-# requires restarting the k8s-credential-provider Deployment. Make it reload dynamically.
+# nothing; the provider needs it to start, and rereads it when it changes.
 apiVersion: v1
 kind: ConfigMap
 metadata:
