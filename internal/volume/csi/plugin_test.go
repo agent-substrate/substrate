@@ -418,6 +418,78 @@ func TestPlugin_MountVolume(t *testing.T) {
 	}
 }
 
+func TestPlugin_StagingDirStaysBelowPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		volumeID string
+		wantErr  bool
+	}{
+		{name: "plain", volumeID: "vol-1"},
+		{name: "slashes", volumeID: "projects/p/disks/d-1"},
+		{name: "parent", volumeID: "../x", wantErr: true},
+		{name: "parent after a name", volumeID: "a/../../x", wantErr: true},
+		{name: "absolute", volumeID: "/x", wantErr: true},
+		{name: "prefix itself", volumeID: ".", wantErr: true},
+		{name: "empty", volumeID: "", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stageCalled, unstageCalled int
+			driver := &mockCSIDriver{
+				nodeStageVolumeFunc: func(context.Context, *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+					stageCalled++
+					return &csi.NodeStageVolumeResponse{}, nil
+				},
+				nodeUnstageVolumeFunc: func(context.Context, *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+					unstageCalled++
+					return &csi.NodeUnstageVolumeResponse{}, nil
+				},
+			}
+			endpoint, cleanup := startMockCSIDriver(t, driver)
+			defer cleanup()
+			client, err := NewCSIClient(endpoint, nil)
+			if err != nil {
+				t.Fatalf("failed to create CSI client: %v", err)
+			}
+			defer client.Close()
+
+			root := t.TempDir()
+			plugin := NewPlugin(client)
+			plugin.stagingDirPrefix = filepath.Join(root, "staging")
+			ctx := context.Background()
+			plugin.InitNodeCapabilities(ctx)
+
+			err = plugin.MountVolume(ctx, volume.MountVolumeRequest{VolumeID: tc.volumeID, TargetPath: filepath.Join(root, "target")})
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("MountVolume() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			// Nothing was staged for a rejected ID, so unmounting it must still
+			// succeed or the actor could never be terminated.
+			if err := plugin.UnmountVolume(ctx, tc.volumeID, filepath.Join(root, "target")); err != nil {
+				t.Fatalf("UnmountVolume() error = %v", err)
+			}
+
+			wantCalls := 1
+			if tc.wantErr {
+				wantCalls = 0
+			}
+			if stageCalled != wantCalls || unstageCalled != wantCalls {
+				t.Errorf("NodeStageVolume calls = %d, NodeUnstageVolume calls = %d, want %d each", stageCalled, unstageCalled, wantCalls)
+			}
+			// Everything the plugin creates must be under the staging prefix.
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				if e.Name() != "staging" {
+					t.Errorf("%q was created outside the staging directory", filepath.Join(root, e.Name()))
+				}
+			}
+		})
+	}
+}
+
 func TestPlugin_UnmountVolume(t *testing.T) {
 	driver := &mockCSIDriver{}
 	endpoint, cleanup := startMockCSIDriver(t, driver)
