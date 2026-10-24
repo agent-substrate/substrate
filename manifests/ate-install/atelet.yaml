@@ -44,6 +44,8 @@ rules:
 - apiGroups: ["ate.dev"]
   resources: ["workerpools"]
   verbs: ["get", "list", "watch"]
+# Sync failures are reported as Warning Events on the worker pod
+# (see cmd/atelet/worker_sandbox_syncer.go).
 - apiGroups: ["events.k8s.io"]
   resources: ["events"]
   verbs: ["create", "patch"]

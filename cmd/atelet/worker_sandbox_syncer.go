@@ -528,12 +528,12 @@ func (s *workerSandboxSyncer) finish(ctx context.Context, pod *corev1.Pod, relat
 
 // recordSyncFailure emits a Warning event on pod when a sync fails. The
 // broadcaster keys its series cache by (regarding, related, reason, action),
-// including related's ResourceVersion, so retries against the same
-// SandboxConfig (or WorkerPool) revision update the series count instead of
-// creating a new Event on each attempt, while an edit or config switch starts
-// a new Event with the updated error message. A message that changes while
-// related's ResourceVersion stays the same still joins the open series and
-// keeps the first attempt's Note.
+// including both objects' ResourceVersion, so retries against the same pod and
+// SandboxConfig (or WorkerPool) revisions update the series count instead of
+// creating a new Event on each attempt, while a pod status update, config edit,
+// or config switch starts a new Event. A message that changes while both
+// ResourceVersions stay the same still joins the open series and keeps the
+// first attempt's Note.
 func (s *workerSandboxSyncer) recordSyncFailure(pod *corev1.Pod, related k8sruntime.Object, err error) {
 	if pod == nil {
 		return
