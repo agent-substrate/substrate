@@ -54,21 +54,8 @@ type Server struct {
 	serving     sync.WaitGroup
 }
 
-// newServer binds the sockets and starts serving goroutines.
-func newServer(
-	ctx context.Context,
-	config *serverConfig,
-	netC *netConn,
-) (*Server, error) {
-	if netC.egressUDP == nil {
-		egressUDP, err := net.ListenPacket("udp", ":0")
-		if err != nil {
-			slog.WarnContext(ctx, "Failed to open worker DNS egress socket", slog.Any("err", err))
-			return nil, fmt.Errorf("DNS egress socket ListenPacket: %w", err)
-		}
-		netC.egressUDP = egressUDP
-	}
-
+// newServer starts serving goroutines on netC's sockets.
+func newServer(ctx context.Context, config *serverConfig, netC *netConn) *Server {
 	// Detached from the activation RPC's context but cancelable so teardown
 	// drops queries still in flight and releases the actor's sockets.
 	serveCtx, stopServing := context.WithCancel(context.WithoutCancel(ctx))
@@ -106,7 +93,7 @@ func newServer(
 		}
 	}()
 
-	return s, nil
+	return s
 }
 
 // Stop cancels in-flight queries and connections, closes the sockets, and

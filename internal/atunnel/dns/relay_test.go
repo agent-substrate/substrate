@@ -203,15 +203,18 @@ func serveLoopbackWithPolicy(t *testing.T, relay *Relay, policy PolicySource) (*
 		pc.Close()
 		t.Fatal(err)
 	}
-	srv, err := relay.serveOn(context.Background(), &netConn{
-		dialer:      *relay.dialer,
-		udp:         pc,
-		tcpListener: lis,
-	}, policy)
+	egressUDP, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		pc.Close()
+		lis.Close()
 		t.Fatal(err)
 	}
+	srv := relay.serveOn(context.Background(), &netConn{
+		dialer:      *relay.dialer,
+		udp:         pc,
+		egressUDP:   egressUDP,
+		tcpListener: lis,
+	}, policy)
 	t.Cleanup(func() { _ = srv.Stop(context.Background()) })
 	return srv, pc.LocalAddr(), lis.Addr()
 }
