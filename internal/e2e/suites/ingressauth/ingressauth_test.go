@@ -32,6 +32,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"syscall"
 	"testing"
@@ -51,8 +52,8 @@ import (
 const unlistedServiceAccount = "router-client-unlisted"
 
 // targetActor names an actor that does not exist. A client the router lets
-// through gets an HTTP response, whatever its status; one it turns away gets
-// none, because certificate or network authorization rejects it first.
+// through reaches actor routing and gets an HTTP response. Authorization
+// must reject an unlisted client before that lookup, even inside CONNECT.
 var targetActor = resources.ActorRef{Atespace: "ate-e2e-ingressauth", Name: "nobody"}
 
 // atenet-router's Service ports; see manifests/ate-install/atenet-router.yaml.
@@ -67,8 +68,8 @@ type tlsListener struct {
 	name        string
 	servicePort int32
 	// request sends one request for targetActor over a TLS connection
-	// presenting cert (nil for none), and returns the HTTP status. An error
-	// means no HTTP response came back.
+	// presenting cert (nil for none), including inside an accepted CONNECT
+	// tunnel, and returns the HTTP status.
 	request func(ctx context.Context, address string, cfg *tls.Config) (int, error)
 }
 
@@ -136,12 +137,95 @@ func connectRequest(ctx context.Context, address string, cfg *tls.Config) (int, 
 	if err := req.Write(conn); err != nil {
 		return 0, err
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, req)
 	if err != nil {
 		return 0, err
 	}
+	if resp.StatusCode == http.StatusOK {
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, "http://"+destination+"/", nil)
+		if err != nil {
+			return 0, err
+		}
+		req.Header.Set(atenet.TargetActorHeader, targetActor.String())
+		if err := req.Write(conn); err != nil {
+			return 0, err
+		}
+		resp, err = http.ReadResponse(reader, req)
+		if err != nil {
+			return 0, err
+		}
+	}
 	resp.Body.Close()
 	return resp.StatusCode, nil
+}
+
+func TestConnectRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		connectStatus int
+		innerStatus   int
+		wantStatus    int
+		wantRefused   bool
+	}{
+		{name: "CONNECT denied", connectStatus: http.StatusForbidden, wantStatus: http.StatusForbidden, wantRefused: true},
+		{name: "inner denied", connectStatus: http.StatusOK, innerStatus: http.StatusForbidden, wantStatus: http.StatusForbidden, wantRefused: true},
+		{name: "inner closed", connectStatus: http.StatusOK, wantRefused: true},
+		{name: "actor lookup reached", connectStatus: http.StatusOK, innerStatus: http.StatusNotFound, wantStatus: http.StatusNotFound},
+		{name: "inner accepted", connectStatus: http.StatusOK, innerStatus: http.StatusOK, wantStatus: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.Method != http.MethodConnect {
+					t.Errorf("outer method = %s, want CONNECT", req.Method)
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
+				if tc.connectStatus != http.StatusOK {
+					w.WriteHeader(tc.connectStatus)
+					return
+				}
+				conn, rw, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Errorf("hijacking CONNECT: %v", err)
+					return
+				}
+				defer conn.Close()
+				if _, err := rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+					t.Errorf("writing CONNECT response: %v", err)
+					return
+				}
+				if err := rw.Flush(); err != nil {
+					t.Errorf("flushing CONNECT response: %v", err)
+					return
+				}
+				inner, err := http.ReadRequest(rw.Reader)
+				if err != nil {
+					t.Errorf("reading inner request: %v", err)
+					return
+				}
+				defer inner.Body.Close()
+				if inner.Method != http.MethodGet || inner.Header.Get(atenet.TargetActorHeader) != targetActor.String() {
+					t.Errorf("unexpected inner request: %s, actor %q", inner.Method, inner.Header.Get(atenet.TargetActorHeader))
+				}
+				if tc.innerStatus != 0 {
+					if _, err := fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\n\r\n", tc.innerStatus, http.StatusText(tc.innerStatus)); err != nil {
+						t.Errorf("writing inner response: %v", err)
+					}
+				}
+			}))
+			defer server.Close()
+			roots := x509.NewCertPool()
+			roots.AddCert(server.Certificate())
+			status, err := connectRequest(t.Context(), server.Listener.Addr().String(), &tls.Config{RootCAs: roots})
+			if status != tc.wantStatus {
+				t.Errorf("status = %d, want %d (error: %v)", status, tc.wantStatus, err)
+			}
+			if got := ingressRefused(status, err, true); got != tc.wantRefused {
+				t.Errorf("refused = %t, want %t (error: %v)", got, tc.wantRefused, err)
+			}
+		})
+	}
 }
 
 // routerTLSConfig is the TLS config a client presenting cert dials the router
@@ -247,7 +331,8 @@ func ingressRefused(status int, err error, allowPostTLS bool) bool {
 	if err == nil {
 		return status == http.StatusForbidden
 	}
-	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
 }
 
 func TestIngressRefused(t *testing.T) {
@@ -261,8 +346,10 @@ func TestIngressRefused(t *testing.T) {
 		{name: "TLS alert", err: &net.OpError{Op: "remote error", Err: errors.New("bad certificate")}, want: true},
 		{name: "unlisted identity closed", err: io.EOF, allowPostTLS: true, want: true},
 		{name: "unlisted identity reset", err: syscall.ECONNRESET, allowPostTLS: true, want: true},
+		{name: "unlisted identity broken pipe", err: syscall.EPIPE, allowPostTLS: true, want: true},
 		{name: "unlisted identity forbidden", status: http.StatusForbidden, allowPostTLS: true, want: true},
 		{name: "missing certificate closed", err: io.EOF},
+		{name: "missing certificate broken pipe", err: syscall.EPIPE},
 		{name: "untrusted certificate forbidden", status: http.StatusForbidden},
 		{name: "dial failure", err: syscall.ECONNREFUSED, allowPostTLS: true},
 		{name: "timeout", err: context.DeadlineExceeded, allowPostTLS: true},

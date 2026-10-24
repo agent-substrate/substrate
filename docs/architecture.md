@@ -567,7 +567,8 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     Both dataplanes must verify the client certificate against the Pod Identity
     CA during the TLS handshake on both HTTPS and TLS CONNECT listeners.
     The SPIFFE URI SAN allowlist may be checked during or after TLS, but an
-    unlisted client must not reach actor routing or open a CONNECT tunnel.
+    unlisted client must not reach actor routing. A CONNECT tunnel may be
+    accepted before that check, but traffic inside it must still be denied.
     Neither dataplane serves plaintext ingress listeners.
 
   * **Network Policy**: Agent Substrate leverages standard Kubernetes
