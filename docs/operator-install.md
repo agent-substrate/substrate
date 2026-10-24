@@ -323,6 +323,27 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `storage.snapshotLocation`                   | `SNAPSHOT_LOCATION`                             | `--snapshot-location`                              | —                     | (global)                                 |
 | `storage.transferGSAName`                    | `SNAPSHOT_TRANSFER_GSA_NAME`                    | `--snapshot-transfer-gsa-name`                     | —                     | (global)                                 |
 
+## Adding kustomize Components
+
+`--component <dir>` layers a kustomize
+[Component](https://kubectl.docs.kubernetes.io/guides/config_management/components/)
+over the manifests a deploy command renders. The flag is alpha.
+
+```bash
+ate-setup deploy ate-system --component ./my-labels --component ./my-resources
+```
+
+Each directory must hold a `kustomization.yaml` with `kind: Component`.
+ate-setup checks this before it contacts the cluster. Components apply after
+the built-in ones, such as `--cordon-control-plane`, and in flag order, so a
+later Component wins on conflicting patches.
+
+The flag works on `deploy ate-system`, `atelet`, `apiserver`, `ate-controller`,
+`atenet`, `podcertificate-controller` and `postgres`. It does not reach CRDs,
+the SandboxConfig manifests, or the CSI drivers. It has no environment
+variable or configuration key, and install records do not store it, so pass it
+again when you replay a record.
+
 ## Snapshot storage
 
 ate-api-server stores every actor and tag snapshot under a cluster-wide

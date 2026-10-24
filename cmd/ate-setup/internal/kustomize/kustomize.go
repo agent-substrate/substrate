@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/api/types"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
+	"sigs.k8s.io/yaml"
 )
 
 // Build renders an overlay directory to a multi-document YAML manifest.
@@ -45,6 +46,33 @@ func Build(dir string) ([]byte, error) {
 	out, err := resMap.AsYaml()
 	if err != nil {
 		return nil, fmt.Errorf("while serializing the kustomization at %s: %w", dir, err)
+	}
+	return out, nil
+}
+
+// ComponentDirs checks that each directory holds a kustomization.yaml of kind
+// Component and returns the directories as absolute paths, in order.
+func ComponentDirs(dirs []string) ([]string, error) {
+	out := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, fmt.Errorf("while resolving component %s: %w", dir, err)
+		}
+		data, err := os.ReadFile(filepath.Join(abs, "kustomization.yaml"))
+		if err != nil {
+			return nil, fmt.Errorf("component %s: %w", dir, err)
+		}
+		var header struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal(data, &header); err != nil {
+			return nil, fmt.Errorf("component %s: while parsing kustomization.yaml: %w", dir, err)
+		}
+		if header.Kind != types.ComponentKind {
+			return nil, fmt.Errorf("component %s: kustomization.yaml has kind %q, want %s", dir, header.Kind, types.ComponentKind)
+		}
+		out = append(out, abs)
 	}
 	return out, nil
 }

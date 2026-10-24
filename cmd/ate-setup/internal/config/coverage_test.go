@@ -29,6 +29,7 @@ var notFromASetting = map[string]bool{
 	"CloudSQL":                 true, // assembled from the ateapi.postgres.cloudsql.* settings
 	"PostgresOwnerRoleSet":     true,
 	"PostgresReadWriteRoleSet": true,
+	"Components":               true, // set from the --component flag, which the registry cannot express
 
 	// kindCluster.enabled feeds Kind, but the fixture sets it false to reach
 	// the cloud path, so its zero value here says nothing.
