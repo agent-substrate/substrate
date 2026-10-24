@@ -127,8 +127,7 @@ const (
 )
 
 // defaultExtProcMessageTimeout is Envoy's per-message ext_proc response timeout
-// when request parking is off. With parking on it must cover the park budget,
-// otherwise Envoy abandons a parked request (500) long before the router does.
+// before SetExtProcMessageTimeout is applied.
 const defaultExtProcMessageTimeout = 5 * time.Second
 
 // defaultExtProcMaxRequests is the circuit-breaker max_requests set on the
@@ -315,9 +314,9 @@ func (x *XdsServer) SetConnectTLSPort(connectTLSPort int) {
 }
 
 // SetExtProcMessageTimeout sets how long Envoy waits for the router's ext_proc
-// response. Call with (parking budget + margin) when parking is enabled so
-// Envoy keeps a parked request open until the router itself decides. A
-// non-positive value leaves the default unchanged.
+// response. Call with (resume budget + margin) so Envoy keeps a request open
+// until the router itself decides. A non-positive value leaves the default
+// unchanged.
 func (x *XdsServer) SetExtProcMessageTimeout(d time.Duration) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
