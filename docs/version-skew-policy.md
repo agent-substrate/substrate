@@ -72,7 +72,7 @@ Clients:
 Wherever a caller can be newer than its server, the server learns a new field in one minor release and the caller sends it only from the next minor release on (two-step releases). 
 ### CRDs
 
-The N+1 CRDs are applied with `ate-controller` N+1. Components that upgrade before it read the N CRDs, so users must not set new CRD fields until the upgrade completes.
+The N+1 CRDs are applied with `ate-controller` N+1. Components that upgrade before it run at N+1 against the N CRDs. `atelet`, for one, watches WorkerPool and SandboxConfig. So these components must work without a new CRD field or kind. Users must not set new CRD fields until the upgrade completes.
 
 Between compatible releases, a CRD change only adds optional fields. The CRDs serve one version with no conversion. So a rollback from N+1 that applies the N CRDs again removes every field N does not know from every object.
 
@@ -99,7 +99,7 @@ This section is about data one release writes and another release reads, whether
 * Data on the node: the directory layout and the files `atelet` keeps there.
   * What N writes, N+1 can read. What N+1 writes, N can read.
   * So a layout change takes two minor releases: the first reads the old and the new layout but still writes the old one, and the next writes the new one. This keeps a rollback possible. Neither step can go in a patch release: an upgrade can skip patch releases, and a rollback can land on any of them.
-  * `atelet` passes the per-actor directories to `ateworker` in the RPC, so only `atelet` knows the layout. The sockets `atelet` and `ateworker` use to reach each other do not change within a major.
+  * `atelet` passes the per-actor directories to `ateworker` in the RPC. `ateworker` also reads some files `atelet` writes under the paths in `internal/nodepath`, such as `sandbox-runtimes.json`, and rejects fields it does not know in them. So a new field in those files follows the two-step rule of the RPC: `ateworker` learns it in one minor release, and `atelet` writes it from the next. The sockets `atelet` and `ateworker` use to reach each other do not change within a major.
 * Data in snapshots: `manifest.json`, which `atelet` writes and reads.
   * Within a major, a release reads the snapshot data any earlier release of that major wrote.
   * A new field must be safe to ignore. A release ignores manifest fields it does not know, so a snapshot taken at N+1 still restores after a rollback to N.

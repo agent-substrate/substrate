@@ -129,6 +129,10 @@ Agent Substrate makes no compatibility guarantee before v1.0.0. Do not add code 
 Remove or rename fields, RPCs, flags, and types outright and update every caller in the same change.
 Do not add `reserved` statements to protos, deprecated aliases, fallbacks for old formats, or version negotiation.
 
+## Version Skew
+
+From v1.0.0, changes must keep upgrades and rollbacks working under [docs/version-skew-policy.md](docs/version-skew-policy.md). Read it before you change an RPC, a CRD, the worker pod template, a database migration, or a file `atelet` and `ateworker` share on the node.
+
 ## Commit Messages
 
 - **Describe the change and why it was needed**: The message is read on `main` long after the PR branch is gone, so it should stand on its own.
