@@ -153,6 +153,16 @@ func TestNewActorSnapshotURI(t *testing.T) {
 			if tc.wantErr && !got.IsZero() {
 				t.Errorf("NewActorSnapshotURI(%q, %q, %q, %q) returned %q alongside an error, want the zero value", tc.location, tc.atespace, tc.actorUID, tc.snapshot, got)
 			}
+			if !tc.wantErr {
+				// The store parses the URIs ateapi records to find tag borrows.
+				parsed, err := ParseSnapshotURI(got.String())
+				if err != nil {
+					t.Fatalf("ParseSnapshotURI(%q) error = %v", got, err)
+				}
+				if parsed.String() != got.String() || parsed.Owner() != got.Owner() || parsed.Name() != got.Name() || parsed.OwnerPrefix() != got.OwnerPrefix() {
+					t.Errorf("ParseSnapshotURI(%q) = %#v, want %#v", got, parsed, got)
+				}
+			}
 		})
 	}
 }
@@ -232,6 +242,50 @@ func TestNewTagSnapshotURI(t *testing.T) {
 			}
 			if tc.wantErr && !got.IsZero() {
 				t.Errorf("NewTagSnapshotURI(%q, %q, %q) returned %q alongside an error, want the zero value", tc.location, tc.atespace, tc.tagUID, got)
+			}
+			if !tc.wantErr {
+				parsed, err := ParseSnapshotURI(got.String())
+				if err != nil {
+					t.Fatalf("ParseSnapshotURI(%q) error = %v", got, err)
+				}
+				if parsed.String() != got.String() || parsed.Owner() != got.Owner() || parsed.Name() != got.Name() || parsed.OwnerPrefix() != got.OwnerPrefix() {
+					t.Errorf("ParseSnapshotURI(%q) = %#v, want %#v", got, parsed, got)
+				}
+			}
+		})
+	}
+}
+
+// TestSnapshotOwnerTagUID covers telling a lender out of a parsed URI. An
+// Actor records the URI it was cloned from, and its owner is all the deletion
+// check has to tell a borrowed tag snapshot from one the Actor took itself.
+func TestSnapshotOwnerTagUID(t *testing.T) {
+	tests := []struct {
+		name    string
+		owner   SnapshotOwner
+		wantUID string
+		wantOK  bool
+	}{
+		{
+			name:    "a tag owns its snapshot",
+			owner:   TagSnapshotOwner("team-a", "tag-uid"),
+			wantUID: "tag-uid",
+			wantOK:  true,
+		},
+		{
+			name:  "an actor's own snapshot has no tag",
+			owner: ActorSnapshotOwner("team-a", "actor-uid"),
+		},
+		{
+			name:  "the zero owner has no tag",
+			owner: SnapshotOwner{},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			uid, ok := tc.owner.TagUID()
+			if uid != tc.wantUID || ok != tc.wantOK {
+				t.Errorf("%s.TagUID() = (%q, %t), want (%q, %t)", tc.owner, uid, ok, tc.wantUID, tc.wantOK)
 			}
 		})
 	}

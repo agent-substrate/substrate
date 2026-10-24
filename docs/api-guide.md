@@ -589,7 +589,8 @@ Golden actors follow ordinary lifecycle and ingress policies and appear in
 Actor lists. Leave these resources to the controller: modifying or deleting
 them can interrupt Golden creation, and deleting a published Golden tag
 invalidates the template's recorded reference. `DeleteActorTemplate` collects
-its Golden tag and any unfinished Golden actor.
+its Golden tag and any unfinished Golden actor, and is refused while an actor
+still borrows the Golden tag's snapshot.
 
 Golden capture follows `preferredFidelity`. MEMORY preserves processes and memory;
 VOLUMES preserves startup data in mounted volumes and starts new processes on
@@ -648,7 +649,7 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
-    *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.snapshots` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
+    *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.snapshots` points at the tag's snapshot, under the tag's prefix, until it has a durable snapshot of its own (see [Snapshot lifetime](#snapshot-lifetime)).
     *   `actor.worker_selector`: (Optional) Per-actor `WorkerSelector` merged with the template's `worker_selector` at resume time (actor keys override template keys).
 *   **Response:** the initialized `Actor`.
 
@@ -690,11 +691,11 @@ Every external snapshot has exactly one owner, and the control plane deletes it 
 | The actor that took it (`status.snapshots`) | The actor's next successful suspend replaces it, or the actor is deleted. |
 | The tag that copied it (`status.snapshot`) | The tag is deleted. |
 
-An actor created from a tag borrows the tag's copy instead of taking one of its own. The borrowed URI sits under the tag's prefix, which the actor's own prefix does not cover, so neither suspending nor deleting the actor can reach it; its first own suspend writes a snapshot under the actor's prefix, and it owns its snapshots from then on.
+An actor created from a tag borrows the tag's copy instead of taking one of its own. The borrowed URI sits under the tag's prefix, which the actor's own prefix does not cover, so neither suspending nor deleting the actor can reach it. Its first suspend writes a snapshot under the actor's prefix, and the borrow ends once that snapshot is durable: when a `DURABILITY_MODE_SYNCHRONOUS` suspend returns, or when atelet reports the upload of an asynchronous one. Until then the tag's snapshot is still the actor's latest completed entry in `status.snapshots`, the one it resumes or reverts to without a local copy.
 
 Deletion always runs before the database reference is dropped, and a failure fails the whole RPC. Clients are expected to retry: destinations are deterministic and every phase tolerates a partly-completed predecessor, so a retry resumes rather than duplicating work. The cost of that ordering is that a crash between the two can leave an external snapshot no row names; the reverse order would instead lose the handle needed to ever delete it.
 
-> **Do not delete a tag while actors created from it exist.** A clone borrows the tag's snapshot rather than copying it, and only stops borrowing at its own first suspend (its `status.snapshots` entry still names the tag's prefix while it is). Deleting the tag leaves such a clone unable to resume. This is not prevented today.
+> **A tag cannot be deleted while an actor is still borrowing its snapshot.** Deleting it would leave the borrower unable to resume, so `DeleteTag` rejects with `FAILED_PRECONDITION` while any borrower remains. Resume each borrowing actor and suspend it with `DURABILITY_MODE_SYNCHRONOUS`, or delete it, and the tag becomes deletable. `SuspendActor` on a borrower that is already `ACTOR_STATE_SUSPENDED` returns it as it is, and a crashed one needs `RevertActor` first. A delete that gets past this check sets the tag's `delete_time` before it collects anything, so no actor can be created from the tag from then on, and a retried delete finishes the job.
 
 #### `RevertActor`
 Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE_SUSPENDED` at its last completed external snapshot (`status.snapshots`).

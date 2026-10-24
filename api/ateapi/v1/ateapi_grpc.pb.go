@@ -133,9 +133,9 @@ type ControlClient interface {
 	ListTags(ctx context.Context, in *ListTagsRequest, opts ...grpc.CallOption) (*ListTagsResponse, error)
 	// Publish or unpublish a Tag without changing its address.
 	UpdateTag(ctx context.Context, in *UpdateTagRequest, opts ...grpc.CallOption) (*Tag, error)
-	// Delete a Tag and the external snapshot it owns. Actors created from the
-	// tag that have not yet been suspended still point at that external snapshot
-	// and become unrecoverable, so do not delete a tag while such Actors exist.
+	// Delete a Tag and the external snapshot it owns. Rejects
+	// (FailedPrecondition) while an Actor created from the tag still borrows
+	// that snapshot (see Tag).
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// List Workers.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
@@ -182,7 +182,8 @@ type ControlClient interface {
 	GetActorTemplate(ctx context.Context, in *GetActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
-	// tag in the template's atespace.
+	// tag in the template's atespace. Rejects (FailedPrecondition) while an
+	// Actor still borrows the golden tag's snapshot.
 	DeleteActorTemplate(ctx context.Context, in *DeleteActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	// Get the deployment-wide global access policy singleton. Returns NotFound
 	// until the policy has been created.
@@ -698,9 +699,9 @@ type ControlServer interface {
 	ListTags(context.Context, *ListTagsRequest) (*ListTagsResponse, error)
 	// Publish or unpublish a Tag without changing its address.
 	UpdateTag(context.Context, *UpdateTagRequest) (*Tag, error)
-	// Delete a Tag and the external snapshot it owns. Actors created from the
-	// tag that have not yet been suspended still point at that external snapshot
-	// and become unrecoverable, so do not delete a tag while such Actors exist.
+	// Delete a Tag and the external snapshot it owns. Rejects
+	// (FailedPrecondition) while an Actor created from the tag still borrows
+	// that snapshot (see Tag).
 	DeleteTag(context.Context, *DeleteTagRequest) (*Tag, error)
 	// List Workers.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
@@ -747,7 +748,8 @@ type ControlServer interface {
 	GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error)
 	ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
-	// tag in the template's atespace.
+	// tag in the template's atespace. Rejects (FailedPrecondition) while an
+	// Actor still borrows the golden tag's snapshot.
 	DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error)
 	// Get the deployment-wide global access policy singleton. Returns NotFound
 	// until the policy has been created.

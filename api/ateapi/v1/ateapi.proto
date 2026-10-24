@@ -123,9 +123,9 @@ service Control {
     option (method).resource = "Tag";
   }
 
-  // Delete a Tag and the external snapshot it owns. Actors created from the
-  // tag that have not yet been suspended still point at that external snapshot
-  // and become unrecoverable, so do not delete a tag while such Actors exist.
+  // Delete a Tag and the external snapshot it owns. Rejects
+  // (FailedPrecondition) while an Actor created from the tag still borrows
+  // that snapshot (see Tag).
   rpc DeleteTag(DeleteTagRequest) returns (Tag) {
     option (method).resource = "Tag";
   }
@@ -226,7 +226,8 @@ service Control {
   }
 
   // Delete an ActorTemplate together with its golden actor and golden
-  // tag in the template's atespace.
+  // tag in the template's atespace. Rejects (FailedPrecondition) while an
+  // Actor still borrows the golden tag's snapshot.
   rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {
     option (method).resource = "ActorTemplate";
   }
@@ -1089,6 +1090,12 @@ message TagStatus {
 // external snapshot pointed by a tag is a copy of an actor snapshot. The
 // snapshot is copied when the tag is created, and deleted when the tag is. Its
 // owning Atespace cannot be deleted until the tag is removed.
+//
+// An Actor created from a tag borrows the tag's snapshot until it has a
+// durable snapshot of its own: when a DURABILITY_MODE_SYNCHRONOUS suspend
+// returns, or once the upload of an asynchronous suspend is recorded. A
+// suspend whose snapshot is still only on its node does not end the borrow.
+// The tag cannot be deleted while any Actor borrows it.
 message Tag {
   option (resource) = {
     scope : SCOPE_ATESPACE

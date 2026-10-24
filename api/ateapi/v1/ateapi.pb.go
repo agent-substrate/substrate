@@ -2555,6 +2555,12 @@ func (x *TagStatus) GetActorTemplateUid() string {
 // external snapshot pointed by a tag is a copy of an actor snapshot. The
 // snapshot is copied when the tag is created, and deleted when the tag is. Its
 // owning Atespace cannot be deleted until the tag is removed.
+//
+// An Actor created from a tag borrows the tag's snapshot until it has a
+// durable snapshot of its own: when a DURABILITY_MODE_SYNCHRONOUS suspend
+// returns, or once the upload of an asynchronous suspend is recorded. A
+// suspend whose snapshot is still only on its node does not end the borrow.
+// The tag cannot be deleted while any Actor borrows it.
 type Tag struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: atespace, name, uid, version, timestamps.
