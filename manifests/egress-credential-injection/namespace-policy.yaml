@@ -13,7 +13,8 @@
 # limitations under the License.
 
 # The atespace→namespace authorization policy k8s-credential-provider enforces: an actor's
-# atespace may only resolve Secrets whose URI namespace is listed for it here.
+# atespace may only resolve Secrets whose URI namespace is listed for it here,
+# or whose namespace an ownNamespaceSelector matches and is named after it.
 # Enforcement is default-deny — an atespace absent from this file resolves
 # nothing. The install creates this ConfigMap only when it is absent, granting
 # nothing; the provider needs it to start.
@@ -33,4 +34,8 @@ data:
     #   - atespace: team-a
     #     allowedNamespaces:
     #     - ns1
+    #   - ownNamespaceSelector:
+    #       matchExpressions:
+    #       - key: example.com/tenant
+    #         operator: Exists
     policies: []

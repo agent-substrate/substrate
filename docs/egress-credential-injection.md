@@ -212,7 +212,7 @@ it alongside the gateway. The install applies:
 * the provider's ServiceAccount, its Deployment and its Service in
   `ate-system`;
 * a ClusterRole and ClusterRoleBinding that let it read Secrets in every
-  namespace;
+  namespace, and list and watch namespaces;
 * the `k8s-credential-provider-namespace-policy` ConfigMap, only when it is
   absent (see below); and
 * a NetworkPolicy that admits only the egress gateway's pods
@@ -244,8 +244,27 @@ kubectl -n ate-system edit configmap k8s-credential-provider-namespace-policy
       - ns1
 ```
 
-The provider loads the policy **once at startup** and does not yet reload it,
-so after editing, restart the provider:
+A policy can carry an `ownNamespaceSelector` (a Kubernetes label selector) in
+place of `atespace` and `allowedNamespaces`. Each namespace it matches may be
+read by the atespace of the same name, and by no other, which suits a platform
+that creates one namespace and one atespace per tenant at run time:
+
+```yaml
+  namespace-policy.yaml: |
+    policies:
+    - ownNamespaceSelector:
+        matchExpressions:
+        - key: example.com/tenant
+          operator: Exists
+```
+
+The provider watches namespaces only when a policy has one, and matches each
+request against the namespace's current labels, so a namespace created,
+labeled, unlabeled or deleted later is granted or refused without a restart.
+A `secretSelector` narrows a selected grant as it narrows a listed one.
+
+The provider loads the policy file itself **once at startup** and does not yet
+reload it, so after editing, restart the provider:
 
 ```bash
 kubectl -n ate-system rollout restart deployment/k8s-credential-provider
