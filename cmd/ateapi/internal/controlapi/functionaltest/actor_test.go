@@ -995,7 +995,7 @@ func TestUpdateActor_Preconditions(t *testing.T) {
 	unguarded := proto.Clone(created).(*ateapi.Actor)
 	unguarded.Metadata.Uid, unguarded.Metadata.Version = "", 0
 	_, err := update(unguarded, "blind")
-	assertGrpcError(t, err, codes.InvalidArgument, "while updating actor test-atespace/id1: persistence: precondition required: uid")
+	assertGrpcError(t, err, codes.InvalidArgument, "updating Actor test-atespace/id1 requires uid and version")
 
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves and the version it
@@ -1003,7 +1003,7 @@ func TestUpdateActor_Preconditions(t *testing.T) {
 	otherLifecycle := proto.Clone(created).(*ateapi.Actor)
 	otherLifecycle.Metadata.Uid = staleUID
 	_, err = update(otherLifecycle, "other-lifecycle")
-	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, err, codes.Aborted, "Actor test-atespace/id1 has a different uid")
 
 	// Both guards matching the observed state: the update goes through, and
 	// moves the resource past the version observed above.
@@ -1055,7 +1055,7 @@ func TestUpdateActor_NotFound(t *testing.T) {
 			Version: 1,
 		}},
 	})
-	assertGrpcError(t, err, codes.NotFound, "actor test-atespace/does-not-exist not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/does-not-exist not found")
 }
 
 func TestUpdateActor_StampsFullSpanIdentity(t *testing.T) {
@@ -5440,7 +5440,7 @@ func TestResumeActor_LeaseConflict(t *testing.T) {
 	_, err = tc.client.ResumeActor(context.Background(), &ateapi.ResumeActorRequest{
 		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	assertGrpcError(t, err, codes.Aborted, "another operation is in progress for this actor")
+	assertGrpcError(t, err, codes.Aborted, "another operation is in progress for Actor "+testAtespace+"/"+name)
 
 	// Wait for Request A to finish
 	if errA := <-errChan; errA != nil {
@@ -6946,8 +6946,8 @@ func TestDeleteActor_Preconditions(t *testing.T) {
 
 	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
 	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Actor "+actorRef.String()+" does not have uid "+foreignUID)
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Actor "+actorRef.String()+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Actor "+actorRef.String()+" has a different uid")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Actor "+actorRef.String()+" has a different uid")
 	got, err := tc.client.GetActor(ctx, &ateapi.GetActorRequest{Actor: ref})
 	if err != nil {
 		t.Fatalf("a refused delete removed the actor: %v", err)

@@ -52,10 +52,7 @@ func (s *ServiceImpl) CreateAtespace(ctx context.Context, inAtespace *ateapi.Ate
 	// Save the data in the storage layer.
 	stored, err := s.store.CreateAtespace(ctx, inAtespace)
 	if err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, apierror.AlreadyExists("Atespace %s already exists", inAtespace.Metadata.Name)
-		}
-		return nil, fmt.Errorf("while recording atespace: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while recording atespace: %w", err), "Atespace %s", inAtespace.Metadata.Name)
 	}
 
 	return stored, nil
@@ -71,10 +68,8 @@ func (s *RPCService) GetAtespace(ctx context.Context, req *ateapi.GetAtespaceReq
 
 func (s *ServiceImpl) GetAtespace(ctx context.Context, name string) (*ateapi.Atespace, error) {
 	atespace, err := s.store.GetAtespace(ctx, name)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Atespace %s not found", name)
-	} else if err != nil {
-		return nil, fmt.Errorf("while getting atespace from DB: %w", err)
+	if err != nil {
+		return nil, MapStoreError(fmt.Errorf("while getting atespace from DB: %w", err), "Atespace %s", name)
 	}
 
 	return atespace, nil
@@ -98,7 +93,7 @@ func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapi.ListAtespace
 func (s *ServiceImpl) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapi.Atespace], error) {
 	page, err := s.store.ListAtespaces(ctx, opts)
 	if err != nil {
-		return page, mapListError(fmt.Errorf("while listing atespaces in db: %w", err))
+		return page, MapStoreError(fmt.Errorf("while listing atespaces in db: %w", err), "Atespaces")
 	}
 	return page, nil
 }
@@ -114,19 +109,10 @@ func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapi.DeleteAtesp
 func (s *ServiceImpl) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.Atespace, error) {
 	deleted, err := s.store.DeleteAtespace(ctx, name, precondition)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Atespace %s not found", name)
-		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
 			return nil, apierror.FailedPrecondition("Atespace %s is not empty", name)
 		}
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Atespace %s does not have uid %s", name, precondition.UID)
-		}
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while deleting atespace from DB: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while deleting atespace from DB: %w", err), "Atespace %s", name)
 	}
 
 	return deleted, nil

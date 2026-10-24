@@ -165,7 +165,7 @@ func TestUpdateActorEgressPolicy(t *testing.T) {
 		Actor:        actor,
 		EgressPolicy: toUpdate,
 	})
-	assertGrpcError(t, err, codes.Aborted, "EgressPolicy version conflict")
+	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
 }
 
 func TestUpdateActorEgressPolicy_Preconditions(t *testing.T) {
@@ -175,12 +175,12 @@ func TestUpdateActorEgressPolicy_Preconditions(t *testing.T) {
 	unguarded := proto.Clone(created).(*ateapi.EgressPolicy)
 	unguarded.Metadata.Uid, unguarded.Metadata.Version = "", 0
 	_, err := tc.client.UpdateActorEgressPolicy(context.Background(), &ateapi.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: unguarded})
-	assertGrpcError(t, err, codes.InvalidArgument, "EgressPolicy UID and version are required")
+	assertGrpcError(t, err, codes.InvalidArgument, "updating EgressPolicy requires uid and version")
 
 	wrongUID := proto.Clone(created).(*ateapi.EgressPolicy)
 	wrongUID.Metadata.Uid = "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
 	_, err = tc.client.UpdateActorEgressPolicy(context.Background(), &ateapi.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: wrongUID})
-	assertGrpcError(t, err, codes.Aborted, "EgressPolicy UID conflict")
+	assertGrpcError(t, err, codes.Aborted, "EgressPolicy has a different uid")
 
 	missingActor := &ateapi.ObjectRef{Atespace: testAtespace, Name: "missing-actor"}
 	_, err = tc.client.UpdateActorEgressPolicy(context.Background(), &ateapi.UpdateActorEgressPolicyRequest{Actor: missingActor, EgressPolicy: created})
@@ -241,10 +241,10 @@ func TestDeleteActorEgressPolicy_Preconditions(t *testing.T) {
 	policy := createEgressPolicy(t, tc, actor)
 	uid, version := policy.GetMetadata().GetUid(), policy.GetMetadata().GetVersion()
 
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "EgressPolicy version conflict")
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "EgressPolicy version conflict")
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "EgressPolicy UID conflict")
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "EgressPolicy UID conflict")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "EgressPolicy has a different uid")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "EgressPolicy has a different uid")
 	if _, err := tc.client.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName}); err != nil {
 		t.Fatalf("a refused delete removed the policy: %v", err)
 	}

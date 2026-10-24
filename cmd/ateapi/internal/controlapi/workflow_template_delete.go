@@ -76,16 +76,7 @@ func (w *ActorWorkflow) ensureTemplateMarkedForDeletion(ctx context.Context, tem
 		return alreadyDeleting, nil
 	}
 	if err != nil {
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("ActorTemplate %s does not have uid %s", templateRef, precondition.UID)
-		}
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("ActorTemplate %s not found", templateRef)
-		}
-		return nil, fmt.Errorf("while marking actor template %s for deletion: %w", templateRef, err)
+		return nil, MapStoreError(fmt.Errorf("while marking actor template %s for deletion: %w", templateRef, err), "ActorTemplate %s", templateRef)
 	}
 	return marked, nil
 }
@@ -133,16 +124,7 @@ func (w *ActorWorkflow) finalizeTemplateDeleted(ctx context.Context, tmpl *ateap
 	precondition := store.DeletePreconditions{UID: tmpl.GetMetadata().GetUid()}
 	deleted, err := w.store.DeleteActorTemplate(ctx, templateRef, precondition)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("ActorTemplate %s not found", templateRef)
-		}
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("ActorTemplate %s does not have uid %s", templateRef, precondition.UID)
-		}
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while deleting actor template from DB: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while deleting actor template from DB: %w", err), "ActorTemplate %s", templateRef)
 	}
 	return deleted, nil
 }

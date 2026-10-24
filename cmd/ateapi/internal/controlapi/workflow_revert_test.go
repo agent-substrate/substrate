@@ -426,6 +426,50 @@ func TestRevertActor_RejectsSuspended(t *testing.T) {
 	})
 }
 
+// TestRevertActor_UpdateLostRace verifies that RevertActor reports each way
+// its guarded actor update can lose a race with the code the store sentinel
+// maps to, not Internal.
+func TestRevertActor_UpdateLostRace(t *testing.T) {
+	tests := []struct {
+		name      string
+		updateErr error
+		want      codes.Code
+	}{
+		{
+			name:      "version conflict",
+			updateErr: store.ErrVersionConflict,
+			want:      codes.Aborted,
+		},
+		{
+			name:      "actor replaced",
+			updateErr: store.ErrUIDConflict,
+			want:      codes.Aborted,
+		},
+		{
+			name:      "actor deleted",
+			updateErr: store.ErrNotFound,
+			want:      codes.NotFound,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			st := conflictingUpdateStore{Interface: persistence, err: tt.updateErr}
+			svc := &RPCService{actorWorkflow: newTestActorWorkflow(t, st, "ns", "tmpl1")}
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_CRASHED)
+
+			req := &ateapi.RevertActorRequest{Actor: &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name}}
+			if _, err := svc.RevertActor(ctx, req); apierror.Code(err) != tt.want {
+				t.Fatalf("RevertActor = %v, want code %v", err, tt.want)
+			}
+		})
+	}
+}
+
 // TestRevertActor_MissingTemplate covers the wreck revert most needs to
 // recover: an actor whose template was deleted. Suspend refuses this actor
 // outright, so revert must not, or the only way out would be deletion.

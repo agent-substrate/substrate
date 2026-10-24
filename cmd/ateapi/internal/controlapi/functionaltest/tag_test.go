@@ -297,13 +297,13 @@ func TestUpdateTag_Preconditions(t *testing.T) {
 	}
 	// No preconditions
 	_, err := update(&ateapi.ResourceMetadata{}, ateapi.TagScope_TAG_SCOPE_PUBLISHED)
-	assertGrpcError(t, err, codes.InvalidArgument, fmt.Sprintf("while updating tag %s/%s: persistence: precondition required: uid", testAtespace, tagName))
+	assertGrpcError(t, err, codes.InvalidArgument, fmt.Sprintf("updating Tag %s/%s requires uid and version", testAtespace, tagName))
 
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves and the version it
 	// guards on matches the recreated tag's.
 	_, err = update(&ateapi.ResourceMetadata{Uid: staleUID, Version: staleVersion}, ateapi.TagScope_TAG_SCOPE_PUBLISHED)
-	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("Tag %s/%s not found with uid %s", testAtespace, tagName, staleUID))
+	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("Tag %s/%s has a different uid", testAtespace, tagName))
 
 	// Both guards matching the observed state: the update goes through, and
 	// moves the tag past the version observed above.
@@ -420,8 +420,8 @@ func TestDeleteTag_Preconditions(t *testing.T) {
 
 	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
 	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Tag "+tagRef.String()+" does not have uid "+foreignUID)
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Tag "+tagRef.String()+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Tag "+tagRef.String()+" has a different uid")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Tag "+tagRef.String()+" has a different uid")
 	if _, err := tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: ref}); err != nil {
 		t.Fatalf("a refused delete removed the tag: %v", err)
 	}

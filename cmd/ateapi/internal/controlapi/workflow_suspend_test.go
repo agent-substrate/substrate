@@ -872,13 +872,17 @@ func TestSuspendActor_Finalized_KeepsReplacedSnapshotOnConflict(t *testing.T) {
 	}
 }
 
-// conflictingUpdateStore fails every actor update with a version conflict, as
-// if another writer always got there first.
+// conflictingUpdateStore fails every actor update with err, or with a version
+// conflict if err is nil, as if another writer always got there first.
 type conflictingUpdateStore struct {
 	store.Interface
+	err error
 }
 
-func (conflictingUpdateStore) UpdateActor(context.Context, resources.ActorRef, store.Precondition, func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+func (s conflictingUpdateStore) UpdateActor(context.Context, resources.ActorRef, store.Precondition, func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	return nil, store.ErrVersionConflict
 }
 
