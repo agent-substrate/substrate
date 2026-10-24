@@ -142,6 +142,25 @@ func TestWait_WaitsForServerToBecomeReady(t *testing.T) {
 	}
 }
 
+func TestWait_ToleratesSlowResponse(t *testing.T) {
+	// A CPU-starved sandbox answers late; a reply slower than one request
+	// timeout must still count.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(600 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ip, port := splitHostPort(t, srv.URL)
+	probe := &ateworkerpb.WakeupProbe{HttpGet: &ateworkerpb.HttpGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 5}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := Wait(ctx, "main", probe, ip, nil); err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
+}
+
 func TestWait_ContextCancellation(t *testing.T) {
 	// Bind a port and immediately close to ensure connect-refused, so the
 	// poll loop is exercised but no server ever returns 200.
