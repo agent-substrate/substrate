@@ -37,12 +37,8 @@ hack/run-e2e-kind.sh ./internal/e2e/suites/security -v \
 
 Note the setup (victim run/write/suspend, attacker reuse) runs regardless — the subtest filter only selects which assertions execute.
 
-4. On failure, a failed suite keeps its namespaces so you can read the worker logs:
-
-
-kubectl get ns -l ate.dev/e2e
-kubectl -n <ns> logs <worker-pod> -c ateworker
-KIND_CLUSTER_NAME=kind hack/cleanup-e2e.sh   # reclaim when done
+4. The suite deletes its namespaces when it ends, pass or fail, so read the
+worker logs while it runs (see below).
 
 
 
@@ -84,7 +80,7 @@ run with `E2E_SANDBOX_CLASS=microvm`. Neither matters for this suite.
 Watch the lifecycle (start these first, before/at test launch)
 
 # The two atespace namespaces appear and vanish — this is the run's heartbeat
-kubectl get ns -l ate.dev/e2e -w
+kubectl get ns -w | grep ate-e2e-sec
 
 # The one shared worker pod: watch the victim's pod get reused, not replaced
 kubectl get pods -n ate-e2e-sec-a -w
@@ -106,14 +102,14 @@ The shared worker pod on the host
 kubectl get pods -n ate-e2e-sec-a -o wide
 
 # worker logs — the sandbox lifecycle, checkpoints, resumes
-kubectl logs -n ate-e2e-sec-a -l app=ateworker -c ateworker -f
+kubectl logs -n ate-e2e-sec-a -l ate.dev/worker-pool=shared -c worker -f
 
 # The on-host per-actor layout the host-state probes assert against.
 # Two UID-keyed durable dirs (victim's + attacker's) live side by side here:
-POD=$(kubectl get pods -n ate-e2e-sec-a -l app=ateworker -o name | head -1)
-kubectl exec -n ate-e2e-sec-a "$POD" -c ateworker -- ls -la /var/lib/ateworker-gvisor/actors
+POD=$(kubectl get pods -n ate-e2e-sec-a -l ate.dev/worker-pool=shared -o name | head -1)
+kubectl exec -n ate-e2e-sec-a "$POD" -c worker -- ls -la /var/lib/ate/actors
 Control plane / snapshots (for the tag-scope subtest)
 
 kubectl ate get tags -a ate-e2e-sec-a          # atespace-a-tag appears during the last subtest
 kubectl ate get atespaces                       # ate-e2e-sec-a / -b listed while live
-kubectl logs -n ate-system -l app=ateapi -f     # Create
+kubectl logs -n ate-system -l app=ate-api-server -f     # Create

@@ -22,8 +22,8 @@ import (
 	"regexp"
 )
 
-// noColor() disables colors for tests running in environments without colored output.
 var (
+	// NoColor disables colored output, for environments that cannot show it.
 	NoColor bool
 	// envNoColor (see https://no-color.org/)
 	envNoColor bool
@@ -71,6 +71,8 @@ func init() {
 	envNoColor = os.Getenv("NO_COLOR") != ""
 }
 
+// noColor reports whether to disable colors, for tests running in
+// environments without colored output.
 func noColor() bool {
 	return NoColor || envNoColor
 }
@@ -91,17 +93,6 @@ func Colorf(format string, a ...any) string {
 	}
 
 	return str
-}
-
-// FColorf writes a formatted string with color directives to the given writer.
-func FColorf(f io.Writer, format string, a ...any) error {
-	_, err := fmt.Fprint(f, Colorf(format, a...))
-	return err
-}
-
-// FColorfln writes a formatted string with color directives to the given writer, followed by a newline.
-func FColorfln(f io.Writer, format string, a ...any) error {
-	return FColorf(f, format+"\n", a...)
 }
 
 // ColorWriter wraps an io.Writer and forces all writes to be colored with the given ANSI code.

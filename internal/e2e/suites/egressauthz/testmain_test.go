@@ -21,21 +21,4 @@ import (
 	"go.ate.dev/substrate/internal/e2e"
 )
 
-// Setup runs before the suite. The probe is created on first use, in the
-// randomized namespace the suite creates, so there is nothing to do here.
-func Setup() {}
-
-// Teardown runs after the suite.
-func Teardown() {}
-
-func run(m *testing.M) int {
-	Setup()
-	defer Teardown()
-
-	// return allows the deferred Teardown to run.
-	return e2e.RunTestMain(m)
-}
-
-func TestMain(m *testing.M) {
-	os.Exit(run(m))
-}
+func TestMain(m *testing.M) { os.Exit(e2e.RunTestMain(m)) }
