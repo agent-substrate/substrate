@@ -2019,6 +2019,18 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 		return nil, fmt.Errorf("failed to unmount external volumes during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 
+	if req.GetPreserveSnapshots() {
+		// Workload teardown must not cancel uploads or remove the checkpoint and
+		// sandbox assets needed to restore the last successful suspend.
+		if err := actordirs.ResetActorDirs(actorUID); err != nil {
+			return nil, fmt.Errorf("failed to reset actor directories during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		if err := s.snapshots.ScheduleDetach(actorUID); err != nil {
+			return nil, err
+		}
+		return &ateletpb.TerminateResponse{State: s.snapshots.State(actorUID)}, nil
+	}
+
 	// The actor is gone, so no local snapshot of it can ever be restored again.
 	// Forget cancels the actor's background upload or detach in progress and
 	// waits for it to end before this prunes the actor's files.

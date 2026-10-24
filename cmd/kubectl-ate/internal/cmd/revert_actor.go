@@ -30,10 +30,9 @@ var revertActorCmd = &cobra.Command{
 	Short: "Revert an actor to its latest snapshot",
 	Long: `Revert an actor to SUSPENDED, discarding its current execution.
 
-The actor's external snapshot is left untouched, so a later resume restores
-from it. Only crashed or running actors, or suspended actors with a node-local
-snapshot, can be reverted. A suspended actor without a node-local snapshot is
-already at its durable snapshot, so there is nothing to revert.`,
+The latest committed snapshot is kept for the next resume, including a local
+snapshot whose upload is pending. Only crashed or running actors can be reverted.
+An already suspended actor cannot be reverted, regardless of snapshot locality.`,
 	Args: exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()

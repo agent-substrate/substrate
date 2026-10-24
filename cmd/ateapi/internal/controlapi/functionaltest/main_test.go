@@ -122,12 +122,14 @@ type FakeAteletServer struct {
 	RunRequest *ateletpb.RunRequest
 	FailRun    error
 
-	CheckpointCalled    bool
-	CheckpointRequest   *ateletpb.CheckpointRequest
-	FailCheckpoint      error
-	KeepCheckpointLocal bool
+	CheckpointCalled      bool
+	CheckpointRequest     *ateletpb.CheckpointRequest
+	FailCheckpoint        error
+	FailCheckpointCleanup error
+	KeepCheckpointLocal   bool
 	// checkpointed is each actor's last checkpointed snapshot, by UID.
-	checkpointed map[string]*ateletpb.Snapshot
+	checkpointed   map[string]*ateletpb.Snapshot
+	snapshotStates map[string]*ateletpb.ActorSnapshotState
 
 	RestoreCalled  bool
 	RestoreRequest *ateletpb.RestoreRequest
@@ -187,7 +189,9 @@ func (f *FakeAteletServer) Reset() {
 	f.CheckpointCalled = false
 	f.CheckpointRequest = nil
 	f.FailCheckpoint = nil
+	f.FailCheckpointCleanup = nil
 	f.checkpointed = nil
+	f.snapshotStates = nil
 	f.KeepCheckpointLocal = false
 
 	f.RestoreCalled = false
@@ -225,10 +229,15 @@ func (f *FakeAteletServer) PromoteSnapshot(ctx context.Context, req *ateletpb.Pr
 	}
 	// Like atelet, report the snapshot durable and still kept on the node.
 	report := &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(req.GetSnapshot())}
-	return &ateletpb.PromoteSnapshotResponse{State: &ateletpb.ActorSnapshotState{
+	state := &ateletpb.ActorSnapshotState{
 		LatestLocal:   report,
 		LatestDurable: proto.CloneOf(report),
-	}}, nil
+	}
+	if f.snapshotStates == nil {
+		f.snapshotStates = map[string]*ateletpb.ActorSnapshotState{}
+	}
+	f.snapshotStates[req.GetActorUid()] = proto.CloneOf(state)
+	return &ateletpb.PromoteSnapshotResponse{State: state}, nil
 }
 
 // DetachActor uploads the actor's last checkpointed snapshot and reports it
@@ -249,9 +258,14 @@ func (f *FakeAteletServer) DetachActor(ctx context.Context, req *ateletpb.Detach
 	if err := f.writeSnapshot(snap.GetObject().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	return &ateletpb.DetachActorResponse{State: &ateletpb.ActorSnapshotState{
+	state := &ateletpb.ActorSnapshotState{
 		LatestDurable: &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(snap)},
-	}}, nil
+	}
+	if f.snapshotStates == nil {
+		f.snapshotStates = map[string]*ateletpb.ActorSnapshotState{}
+	}
+	f.snapshotStates[req.GetActorUid()] = proto.CloneOf(state)
+	return &ateletpb.DetachActorResponse{State: state}, nil
 }
 
 func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
@@ -289,15 +303,22 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 			return nil, err
 		}
 	}
+	report := &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(req.GetSnapshot())}
+	state := &ateletpb.ActorSnapshotState{}
 	if f.KeepCheckpointLocal {
-		report := &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(req.GetSnapshot())}
-		state := &ateletpb.ActorSnapshotState{LatestLocal: report}
-		if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
-			state.LatestDurable = proto.CloneOf(report)
-		}
-		return &ateletpb.CheckpointResponse{State: state}, nil
+		state.LatestLocal = report
 	}
-	return &ateletpb.CheckpointResponse{}, nil
+	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+		state.LatestDurable = proto.CloneOf(report)
+	}
+	if f.snapshotStates == nil {
+		f.snapshotStates = map[string]*ateletpb.ActorSnapshotState{}
+	}
+	f.snapshotStates[req.GetActorUid()] = proto.CloneOf(state)
+	if f.FailCheckpointCleanup != nil {
+		return nil, f.FailCheckpointCleanup
+	}
+	return &ateletpb.CheckpointResponse{State: state}, nil
 }
 
 func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -327,6 +348,14 @@ func (f *FakeAteletServer) Terminate(ctx context.Context, req *ateletpb.Terminat
 	if f.FailTerminate != nil {
 		return nil, f.FailTerminate
 	}
+	if req.GetPreserveSnapshots() {
+		state := proto.CloneOf(f.snapshotStates[req.GetActorUid()])
+		if state == nil {
+			state = &ateletpb.ActorSnapshotState{}
+		}
+		return &ateletpb.TerminateResponse{State: state}, nil
+	}
+	delete(f.snapshotStates, req.GetActorUid())
 	return &ateletpb.TerminateResponse{}, nil
 }
 

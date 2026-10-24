@@ -3115,19 +3115,121 @@ func TestImmediateCheckpointHoldsOffBackgroundUpload(t *testing.T) {
 	}
 }
 
-// TestTerminateHoldsOffBackgroundUpload terminates an actor resumed from its
-// local snapshot, whose background upload comes due while the worker tears the
-// actor down: the upload does not start, since Terminate would only cancel it.
-// When the worker fails to tear the actor down, Terminate fails before it
-// forgets the actor, and the upload, still due, starts once Terminate returns.
+// Revert needs the retained state even when a previous detach already finished.
+func TestTerminateRetainsSnapshotState(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		mode        ateletpb.UploadMode
+		detached    bool
+		lostTracker bool
+	}{
+		{name: "pending local", mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED},
+		{name: "completed local", mode: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE},
+		{name: "already detached", mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED, detached: true},
+		{name: "tracker state lost", mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED, lostTracker: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+			if _, err := a.checkpoint(t, a.snapshot("revert-snap", 1), tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			workerUID := pluginWorkerPodUID
+			if tc.detached {
+				if _, err := a.s.DetachActor(t.Context(), &ateletpb.DetachActorRequest{Atespace: "ate-demo", ActorName: "counter", ActorUid: pluginActorUID}); err != nil {
+					t.Fatal(err)
+				}
+				workerUID = ""
+			} else {
+				a.restoreLocal(t, "revert-snap", 1)
+			}
+			if tc.lostTracker {
+				a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+			}
+			want := a.s.snapshots.State(pluginActorUID)
+			resp, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+				Atespace: "ate-demo", ActorName: "counter", ActorUid: pluginActorUID,
+				WorkerPodUid: workerUID, Spec: a.spec, PreserveSnapshots: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(resp.GetState(), want) {
+				t.Errorf("retained snapshot state = %v, want %v", resp.GetState(), want)
+			}
+			if !tc.detached {
+				a.restoreLocal(t, "revert-snap", 1)
+			}
+		})
+	}
+}
+
+func TestTerminateDiscardsIncompleteLocalCheckpoint(t *testing.T) {
+	for _, keepCommitted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("committed=%t", keepCommitted), func(t *testing.T) {
+			a := runPluginActor(t)
+			if keepCommitted {
+				if _, err := a.checkpoint(t, a.snapshot("committed-snap", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+					t.Fatal(err)
+				}
+				a.restoreLocal(t, "committed-snap", 1)
+			}
+			want := a.s.snapshots.State(pluginActorUID)
+			// Exercise the local writer directly to force a manifest write failure
+			// after moving the images, without adding an I/O fault hook.
+			conflict := filepath.Join(sandboxManifestName, "fragment")
+			checkpointDir := ateletpath.CheckpointStateDir(pluginActorUID)
+			if err := os.MkdirAll(filepath.Join(checkpointDir, sandboxManifestName), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			rec := *a.rec
+			rec.SnapshotFiles = []string{"checkpoint.img", conflict}
+			for _, name := range rec.SnapshotFiles {
+				if err := os.WriteFile(filepath.Join(checkpointDir, name), []byte("uncommitted"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := a.s.moveLocalCheckpoint(t.Context(), &ateletpb.CheckpointRequest{
+				ActorUid: pluginActorUID, Snapshot: a.snapshot("incomplete-snap", 2),
+			}, &rec)
+			if err == nil || !strings.Contains(err.Error(), "writing snapshot manifest") {
+				t.Fatalf("moveLocalCheckpoint error = %v, want manifest write failure", err)
+			}
+			resp, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+				Atespace: "ate-demo", ActorName: "counter", ActorUid: pluginActorUID,
+				WorkerPodUid: pluginWorkerPodUID, Spec: a.spec, PreserveSnapshots: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(resp.GetState(), want) {
+				t.Errorf("retained snapshot state = %v, want %v", resp.GetState(), want)
+			}
+			if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "incomplete-snap")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("incomplete checkpoint survived Terminate: %v", err)
+			}
+			if entries, err := os.ReadDir(checkpointDir); err != nil || len(entries) != 0 {
+				t.Errorf("checkpoint working directory after Terminate = %v, %v; want empty", entries, err)
+			}
+			if keepCommitted {
+				a.restoreLocal(t, "committed-snap", 1)
+			}
+		})
+	}
+}
+
+// Terminate holds off new uploads. Delete cancels them, while Revert and failed
+// teardown let pending uploads continue after the call.
 func TestTerminateHoldsOffBackgroundUpload(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		// teardownErr is what the worker's TerminateWorkload fails with.
-		teardownErr error
+		teardownErr       error
+		preserveSnapshots bool
 	}{
 		{name: "Terminate succeeds"},
 		{name: "Terminate fails", teardownErr: status.Error(codes.Internal, "teardown failed")},
+		{name: "Revert preserves pending upload", preserveSnapshots: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, store, stepPastDue := resumedWithPendingUpload(t)
@@ -3145,6 +3247,7 @@ func TestTerminateHoldsOffBackgroundUpload(t *testing.T) {
 				ActorTemplateName:     "counter",
 				WorkerPodUid:          pluginWorkerPodUID,
 				Spec:                  a.spec,
+				PreserveSnapshots:     tc.preserveSnapshots,
 			})
 			switch {
 			case tc.teardownErr == nil && err != nil:
@@ -3155,13 +3258,23 @@ func TestTerminateHoldsOffBackgroundUpload(t *testing.T) {
 			if started.Load() {
 				t.Error("background upload of pause-snap-1 started during Terminate, want none")
 			}
-			if tc.teardownErr == nil {
+			if tc.teardownErr == nil && !tc.preserveSnapshots {
 				select {
 				case <-store.started:
 					t.Error("background upload of pause-snap-1 started during Terminate, want none")
 				default:
 				}
 				return
+			}
+			if tc.preserveSnapshots {
+				if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1")); err != nil {
+					t.Fatalf("committed local checkpoint after Revert termination: %v", err)
+				}
+				if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(pluginActorUID)); err != nil {
+					t.Fatalf("persisted snapshot state after Revert termination: %v", err)
+				}
+				// Restoring the same snapshot also checks its manifest and sandbox assets.
+				a.restoreLocal(t, "pause-snap-1", 1)
 			}
 			select {
 			case <-store.started:

@@ -312,6 +312,26 @@ func (t *Tracker) BeginTerminate(actorUID string) (end func()) {
 	return t.holdLocked(actorUID, t.findLocked(actorUID), holdTerminate)
 }
 
+// ScheduleDetach makes a stopped actor's local snapshot eligible for detach
+// again after BeginStart unscheduled it. It leaves uploads and their original
+// deadlines intact. Retrying a termination does not postpone an existing detach.
+func (t *Tracker) ScheduleDetach(actorUID string) error {
+	t.lock(actorUID)
+	defer t.unlock(actorUID)
+	a := t.findLocked(actorUID)
+	if a == nil || a.LatestLocal == nil || !a.DetachAt.IsZero() {
+		return nil
+	}
+	unsaved := a.unsaved
+	a.DetachAt = t.clock.Now().Add(t.detachDelay)
+	if err := t.writeStateLocked(a); err != nil {
+		a.DetachAt, a.unsaved = time.Time{}, unsaved
+		return apierror.Unavailable("while scheduling the detach of actor %s after stopping it: %v", actorUID, err)
+	}
+	t.requeueLocked(a)
+	return nil
+}
+
 // holdLocked records a Run, Restore, Checkpoint, PromoteSnapshot, or Terminate
 // of the actor in progress on its entry a, which holds detaches and state
 // reports of the actor off (and background uploads when kind.blocksUploads),

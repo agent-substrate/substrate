@@ -432,6 +432,74 @@ func TestTrackerDetachTimer(t *testing.T) {
 	}
 }
 
+// Terminating a resumed actor restores its detach deadline without postponing
+// the upload or changing its committed snapshot.
+func TestTrackerScheduleDetachAfterTermination(t *testing.T) {
+	tr := newIdleTestTracker(t, newFakeSnapshotStore())
+	want := tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+	end, err := tr.BeginStart(t.Context(), trackedActorUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end()
+	endTerminate := tr.BeginTerminate(trackedActorUID)
+	defer endTerminate()
+	if err := tr.ScheduleDetach(trackedActorUID); err != nil {
+		t.Fatal(err)
+	}
+	due := detachDueOf(tr, trackedActorUID)
+	if expected := tr.clock.Now().Add(tr.detachDelay); !due.Equal(expected) {
+		t.Fatalf("detach due = %v, want %v", due, expected)
+	}
+	if got := detachDueOf(newTracker(t), trackedActorUID); !got.Equal(due) {
+		t.Errorf("persisted detach due = %v, want %v", got, due)
+	}
+	if got := tr.State(trackedActorUID); !proto.Equal(got, want) {
+		t.Errorf("snapshot state changed: got %v, want %v", got, want)
+	}
+	stepTo(tr, tr.clock.Now().Add(time.Minute))
+	if err := tr.ScheduleDetach(trackedActorUID); err != nil {
+		t.Fatal(err)
+	}
+	if got := detachDueOf(tr, trackedActorUID); !got.Equal(due) {
+		t.Errorf("retry postponed detach: got %v, want %v", got, due)
+	}
+}
+
+func TestTrackerScheduleDetachRetriesFailedSave(t *testing.T) {
+	tr := newIdleTestTracker(t, newFakeSnapshotStore())
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+	end, err := tr.BeginStart(t.Context(), trackedActorUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end()
+	endTerminate := tr.BeginTerminate(trackedActorUID)
+	defer endTerminate()
+	stateFile := ateletpath.ActorSnapshotStateFile(trackedActorUID)
+	if err := os.Remove(stateFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(stateFile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.ScheduleDetach(trackedActorUID); apierror.Code(err) != codes.Unavailable {
+		t.Fatalf("ScheduleDetach = %v, want Unavailable", err)
+	}
+	if due := detachDueOf(tr, trackedActorUID); !due.IsZero() {
+		t.Fatalf("failed save scheduled detach at %v", due)
+	}
+	if err := os.Remove(stateFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.ScheduleDetach(trackedActorUID); err != nil {
+		t.Fatal(err)
+	}
+	if due := detachDueOf(newTracker(t), trackedActorUID); due.IsZero() {
+		t.Fatal("retry did not persist a detach deadline")
+	}
+}
+
 // A start that cannot save that it began fails before anything starts, and
 // leaves the detach scheduled and the actor not started.
 func TestTrackerStartFailsIfItCannotSave(t *testing.T) {

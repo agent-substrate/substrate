@@ -461,7 +461,7 @@ func TestCombinedVolumes(t *testing.T) {
 		})
 	})
 
-	// A revert rewinds to the last external snapshot.
+	// A revert rewinds to the last committed snapshot, retaining its local copy.
 	t.Run("RevertRewindsOnlySnapshottedVolumes", func(t *testing.T) {
 		// Written after the suspend above, so it is in no snapshot the revert
 		// can return the actor to.
@@ -477,7 +477,13 @@ func TestCombinedVolumes(t *testing.T) {
 		if got := reverted.GetActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 			t.Fatalf("state after revert = %v, want SUSPENDED", got)
 		}
-		requireAssignedNode(t, reverted.GetActor(), "")
+		localNode := ""
+		for _, snap := range reverted.GetActor().GetStatus().GetSnapshots() {
+			if snap.GetLocality() != "" {
+				localNode = snap.GetLocality()
+			}
+		}
+		requireAssignedNode(t, reverted.GetActor(), localNode)
 
 		resumeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()

@@ -84,9 +84,9 @@ func clearLocalSnapshots(status *ateapi.ActorStatus) {
 // pruneSnapshots retains only local, the Snapshot whose local checkpoint the
 // actor keeps (nil if it keeps none), and the latest COMPLETED durable
 // snapshot, dropping all other (stale PENDING or superseded COMPLETED)
-// Snapshots. It clears Locality on every Snapshot other than local: it runs
-// in finalize steps that follow an atelet call that deleted the actor's other
-// local checkpoints from the node. Any older COMPLETED durable snapshots are
+// Snapshots. It clears Locality on every Snapshot other than local. Atelet
+// retains the latest local checkpoint and any older copy an upload still needs.
+// Any older COMPLETED durable snapshots are
 // expected to have already been garbage collected (or captured for cleanup)
 // beforehand.
 //
@@ -95,8 +95,10 @@ func clearLocalSnapshots(status *ateapi.ActorStatus) {
 //     PENDING copy. An earlier asynchronous suspend's PENDING copy is dropped:
 //     whatever atelet uploaded of it stays under the actor's prefix until
 //     DeleteActor collects it.
-//   - On revert finalization, ensureInProgressSnapshotDiscarded has already
-//     deleted the objects of every PENDING durable snapshot.
+//   - On revert finalization, the latest local snapshot and its PENDING copy
+//     are kept. ensureInProgressSnapshotDiscarded cleaned up incomplete
+//     checkpoints without locality. Older local uploads may finish under the
+//     actor's prefix until DeleteActor collects them.
 //   - On synchronous suspend finalization, the latest snapshot has already been
 //     marked COMPLETED.
 //

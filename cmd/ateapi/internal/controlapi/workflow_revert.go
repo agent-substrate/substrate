@@ -27,30 +27,26 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// revertableStates are the states a revert is accepted from. A SUSPENDED
-// actor is also accepted when its latest snapshot is node-local: the revert
-// discards the node-local copy and returns the actor to its latest durable
-// snapshot, which is that same snapshot once atelet's upload of it is
-// recorded. See isRevertable.
+// revertableStates are the states a revert is accepted from. Snapshot locality
+// does not change which lifecycle operations an actor accepts.
 var revertableStates = []ateapi.ActorState{
 	ateapi.ActorState_ACTOR_STATE_RUNNING,
 	ateapi.ActorState_ACTOR_STATE_CRASHED,
 }
 
-// isRevertable reports whether a revert is accepted from the actor's current
-// state and snapshot shape.
+// isRevertable reports whether a revert is accepted from the actor's current state.
 func isRevertable(actor *ateapi.Actor) bool {
 	state := actor.GetStatus().GetState()
-	return slices.Contains(revertableStates, state) ||
-		(state == ateapi.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocal(actor.GetStatus()))
+	return slices.Contains(revertableStates, state)
 }
 
 // RevertActor executes the workflow to discard an actor's current execution and
-// return it to SUSPENDED, leaving its external snapshot untouched for a later
+// return it to SUSPENDED, leaving its latest committed snapshot untouched for a later
 // resume to restore from. It is the recovery verb: it accepts a CRASHED actor,
 // and needs no live worker to succeed.
 //
@@ -94,13 +90,14 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 	if err = w.ensureWorkerDiscarded(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, err
 	}
+	// Termination may have discovered a deleted node and cleared its local copies.
+	if actor, err = w.store.GetActor(leaseCtx, actorRef); err != nil {
+		return nil, err
+	}
 
 	if err = w.ensureInProgressSnapshotDiscarded(leaseCtx, actor); err != nil {
 		return nil, err
 	}
-
-	// TODO: Check if local checkpoints need to be pruned #641
-	// w.ensureLocalCheckpointsPruned(leaseCtx, actor)
 
 	// FinalizeReverted clears the WorkerAssignment the labels read, so snapshot
 	// them here, as suspend and crash.go do.
@@ -152,7 +149,7 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 		return actor, nil
 	}
 	if !isRevertable(actor) {
-		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v, or %s with a node-local snapshot)", actorRef, st, revertableStates, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v)", actorRef, st, revertableStates)
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
@@ -185,9 +182,45 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	ctx, done := stepSpan(ctx, "DiscardWorker")
 	defer func() { err = done(err) }()
 
+	// A failed restore on another node can leave the snapshot's locality on
+	// the deleted source node. The current node's Terminate cannot clear it.
+	checkedNodes := map[string]bool{"": true, actor.GetStatus().GetAssignedNode(): true}
+	goneNodes := map[string]bool{}
+	for _, snap := range actor.GetStatus().GetSnapshots() {
+		node := snap.GetLocality()
+		if checkedNodes[node] {
+			continue
+		}
+		checkedNodes[node] = true
+		gone, err := w.dialer.NodeGone(ctx, node)
+		if err != nil {
+			return fmt.Errorf("while checking snapshot node %q: %w", node, err)
+		}
+		if gone {
+			goneNodes[node] = true
+		}
+	}
+	if len(goneNodes) > 0 {
+		actor, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+			for _, snapshot := range a.GetStatus().GetSnapshots() {
+				if goneNodes[snapshot.GetLocality()] {
+					snapshot.Locality = ""
+				}
+			}
+			return nil
+		})
+		if errors.Is(err, store.ErrVersionConflict) {
+			return apierror.Aborted("concurrent update conflict, please retry")
+		}
+		if err != nil {
+			return fmt.Errorf("while clearing snapshot locality on deleted nodes: %w", err)
+		}
+	}
+
 	if actor.GetStatus().GetAssignedNode() != "" {
 		forgetNode := false
-		if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
+		snapshotState, nodeGone, err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert, true)
+		if err != nil {
 			if !canDetachWithoutAtelet(ctx, actor, err) {
 				return err
 			}
@@ -201,6 +234,23 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 				return err
 			}
 		}
+		if nodeGone || snapshotState != nil {
+			// A checkpoint may commit before Suspend fails, or detach while the
+			// actor is crashed. Reconcile before deleting any pending objects.
+			if _, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+				if nodeGone {
+					for _, snapshot := range a.GetStatus().GetSnapshots() {
+						if snapshot.GetLocality() == actor.GetStatus().GetAssignedNode() {
+							snapshot.Locality = ""
+						}
+					}
+					return nil
+				}
+				return applyRevertedSnapshotState(ctx, a.Status, actor.GetStatus().GetAssignedNode(), snapshotState)
+			}); err != nil {
+				return err
+			}
+		}
 		if actor.GetStatus().GetWorkerAssignment() != nil {
 			if _, err := releaseWorker(ctx, w.store, actor); err != nil {
 				return fmt.Errorf("while releasing worker: %w", err)
@@ -211,14 +261,59 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	return w.releaseAssignmentWithoutBacklink(ctx, actor)
 }
 
-// ensureInProgressSnapshotDiscarded removes pending uploads of the discarded execution.
-// The actor keeps its latest completed durable snapshot.
+// applyRevertedSnapshotState reconciles the checkpoints atelet actually kept
+// after teardown, including a checkpoint whose Suspend failed after committing.
+func applyRevertedSnapshotState(ctx context.Context, status *ateapi.ActorStatus, node string, state *ateletpb.ActorSnapshotState) error {
+	knownLocal := latestSnapshot(status, func(s *ateapi.Snapshot) bool { return s.GetLocality() == node })
+	durable := findLatestDurableSnapshot(status, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	committed := max(state.GetLatestLocal().GetSnapshot().GetGeneration(), state.GetLatestDurable().GetSnapshot().GetGeneration(), durable.GetGeneration())
+	if knownLocal.GetGeneration() > committed {
+		// Tracker state can be lost after a failed save and an atelet restart.
+		// Absence alone does not prove a pending local checkpoint was detached.
+		return apierror.FailedPrecondition("atelet on node %s cannot account for local snapshot generation %d", node, knownLocal.GetGeneration())
+	}
+	if err := applyAteletResponseState(ctx, status, state); err != nil {
+		return err
+	}
+	for _, snap := range status.GetSnapshots() {
+		if snap.GetLocality() == node {
+			snap.Locality = ""
+		}
+	}
+	for i, report := range []*ateletpb.SnapshotReport{state.GetLatestLocal(), state.GetUploading()} {
+		if report == nil {
+			continue
+		}
+		reported := report.GetSnapshot()
+		snap := findSnapshotByGeneration(status.GetSnapshots(), reported.GetGeneration())
+		// Suspend can drop an older upload's record while atelet finishes it.
+		if snap == nil && i == 1 {
+			continue
+		}
+		if snap == nil || snap.GetUuid() != reported.GetSnapshotUuid() ||
+			snap.GetDurableSnapshot().GetObject().GetSnapshotUri() != reported.GetObject().GetSnapshotUri() {
+			return apierror.FailedPrecondition("atelet on node %s retained an unrecognized snapshot: %v", node, reported)
+		}
+		if got := fidelityFromAtelet(reported.GetFidelity()); got == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED || got != snap.GetFidelity() {
+			return apierror.FailedPrecondition("atelet on node %s retained snapshot %s with unexpected fidelity", node, snap.GetUuid())
+		}
+		snap.Locality = node
+	}
+	return nil
+}
+
+// ensureInProgressSnapshotDiscarded removes uploads of checkpoints that never
+// committed locally. A committed local snapshot's upload must continue, even
+// while its durable status is still PENDING.
 func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, actor *ateapi.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "DiscardInProgressSnapshot")
 	defer func() { err = done(err) }()
 
 	var inProgress []string
 	for _, snap := range actor.GetStatus().GetSnapshots() {
+		if snap.GetLocality() != "" {
+			continue
+		}
 		storage := snap.GetDurableSnapshot()
 		if storage.GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING && storage.GetObject().GetSnapshotUri() != "" {
 			inProgress = append(inProgress, storage.GetObject().GetSnapshotUri())
@@ -279,14 +374,14 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
 		toUpdate.Status.WorkerAssignment = nil
-		toUpdate.Status.AssignedNode = ""
-		// We revert back to the latest durable snapshot, so all local snapshots
-		// and pending durable snapshots are removed.
-		// We already cleaned up the node before this in ensureWorkerDiscarded,
-		// and any in-progress durable snapshot in ensureInProgressSnapshotDiscarded.
-		// Even during revert, we do not decrease LastAssignedGeneration so that we
-		// can keep track of stale snapshots that need to be cleaned up.
-		pruneSnapshots(toUpdate.Status, nil)
+		local := findLatestLocalSnapshot(toUpdate.Status)
+		if durable := findLatestDurableSnapshot(toUpdate.Status, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); durable.GetGeneration() > local.GetGeneration() {
+			local = nil
+		}
+		toUpdate.Status.AssignedNode = local.GetLocality()
+		// Keep the last successful checkpoint, not a newer incomplete suspend.
+		// LastAssignedGeneration stays monotonic even when that checkpoint is older.
+		pruneSnapshots(toUpdate.Status, local)
 		toUpdate.Status.Crash = nil
 		return nil
 	})

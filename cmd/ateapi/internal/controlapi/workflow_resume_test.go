@@ -1203,6 +1203,7 @@ type capturingAtelet struct {
 	run         *ateletpb.RunRequest
 	checkpoint  *ateletpb.CheckpointRequest
 	promote     *ateletpb.PromoteSnapshotRequest
+	terminate   *ateletpb.TerminateRequest
 	checkpoints int
 	promotes    int
 
@@ -1225,9 +1226,10 @@ type capturingAtelet struct {
 	detachState *ateletpb.ActorSnapshotState
 	detachErr   error
 	// onDetach, when set, runs before DetachActor returns.
-	onDetach     func()
-	terminateErr error
-	onTerminate  func()
+	onDetach       func()
+	terminateErr   error
+	onTerminate    func()
+	terminateState *ateletpb.ActorSnapshotState
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1298,12 +1300,23 @@ func (f *capturingAtelet) Terminate(ctx context.Context, req *ateletpb.Terminate
 		hook()
 	}
 	f.mu.Lock()
+	f.terminate = proto.CloneOf(req)
 	err := f.terminateErr
+	state := proto.CloneOf(f.terminateState)
 	f.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	return &ateletpb.TerminateResponse{}, nil
+	if req.GetPreserveSnapshots() && state == nil {
+		state = &ateletpb.ActorSnapshotState{}
+	}
+	return &ateletpb.TerminateResponse{State: state}, nil
+}
+
+func (f *capturingAtelet) terminateRequest() *ateletpb.TerminateRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return proto.CloneOf(f.terminate)
 }
 
 func (f *capturingAtelet) detachRequest() *ateletpb.DetachActorRequest {
