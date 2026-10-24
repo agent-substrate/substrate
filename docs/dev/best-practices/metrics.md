@@ -138,7 +138,6 @@ ends those are. Reuse an existing set when the quantity is comparable:
 | a snapshot phase | `0.005 … 60` (`cmd/atelet/metrics.go`, `snapshotPhaseBuckets`) |
 | a request wait | `0.001 … 60` (`cmd/atenet/internal/router/ingress/metrics.go`) |
 | a size in bytes | `1e6 … 1e10` (`cmd/atelet/main.go`) |
-| a small count (workers) | `0, 1, 2, 3, 5, 10, 20, 50, 100, 250` (`cmd/ateapi/internal/scheduling/metrics.go`) |
 
 The registry entry repeats the boundaries under `annotations.substrate.buckets`
 so a reader can find them without the code.
