@@ -715,6 +715,7 @@ Removes an actor in any state from the registry and cleans up associated resourc
 #### `GetActor` / `ListActors`
 Query the state of logical actors.
 *   **GetActor:** Retrieves a single actor by ID.
+    *   `status.state_transition_time` is when `status.state` last changed.
 *   **ListActors:** Lists all actors currently tracked in the database.
 
 #### `ListWorkers`
