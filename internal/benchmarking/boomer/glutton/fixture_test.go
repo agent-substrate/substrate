@@ -16,123 +16,49 @@ package glutton
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
+	"go.ate.dev/substrate/internal/controlclienttest"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 )
 
-type fakeControlClient struct {
-	ateapi.ControlClient
-	mu             sync.Mutex
-	calls          []string
-	deleteRequests []*ateapi.DeleteActorRequest
-	suspendReqs    []*ateapi.SuspendActorRequest
-	// resumeErrs is returned by successive ResumeActor calls, in order, until
-	// it is drained; every call after that succeeds.
-	resumeErrs []error
-	// suspendErrs does the same for SuspendActor.
-	suspendErrs []error
-
-	// createActorFn, when set, is called with each CreateActor's actor name;
-	// a non-nil error is returned in place of the actor.
-	createActorFn func(name string) error
-}
-
-// nextErr pops the head of errs, or returns nil once it is drained. Callers
-// hold f.mu.
-func nextErr(errs *[]error) error {
-	if len(*errs) == 0 {
-		return nil
-	}
-	err := (*errs)[0]
-	*errs = (*errs)[1:]
-	return err
-}
-
-func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "CreateAtespace")
-	return &ateapi.Atespace{}, nil
-}
-
-func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
-	f.mu.Lock()
-	f.calls = append(f.calls, "CreateActor")
-	fn := f.createActorFn
-	f.mu.Unlock()
-	if fn != nil {
-		actorName := ""
-		if in != nil && in.Actor != nil && in.Actor.Metadata != nil {
-			actorName = in.Actor.Metadata.Name
-		}
-		if err := fn(actorName); err != nil {
+// resumeActorFunc returns a ResumeActorFunc that fails with each of errs in
+// order, then succeeds.
+func resumeActorFunc(errs ...error) func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+	next := controlclienttest.Sequence(errs...)
+	return func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+		if err := next(); err != nil {
 			return nil, err
 		}
+		return &ateapi.ResumeActorResponse{}, nil
 	}
-	return &ateapi.Actor{}, nil
 }
 
-func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "ResumeActor")
-	if err := nextErr(&f.resumeErrs); err != nil {
-		return nil, err
+// suspendActorFunc is resumeActorFunc for SuspendActor.
+func suspendActorFunc(errs ...error) func(context.Context, *ateapi.SuspendActorRequest, ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
+	next := controlclienttest.Sequence(errs...)
+	return func(context.Context, *ateapi.SuspendActorRequest, ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
+		if err := next(); err != nil {
+			return nil, err
+		}
+		return &ateapi.SuspendActorResponse{}, nil
 	}
-	return &ateapi.ResumeActorResponse{}, nil
 }
 
-func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapi.SuspendActorRequest, opts ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, suspendCallName(in))
-	f.suspendReqs = append(f.suspendReqs, in)
-	if err := nextErr(&f.suspendErrs); err != nil {
-		return nil, err
+// createActorFunc adapts fn, which gets each actor's name and may fail the
+// create, to a CreateActorFunc.
+func createActorFunc(fn func(name string) error) func(context.Context, *ateapi.CreateActorRequest, ...grpc.CallOption) (*ateapi.Actor, error) {
+	return func(_ context.Context, in *ateapi.CreateActorRequest, _ ...grpc.CallOption) (*ateapi.Actor, error) {
+		if err := fn(in.GetActor().GetMetadata().GetName()); err != nil {
+			return nil, err
+		}
+		return &ateapi.Actor{}, nil
 	}
-	return &ateapi.SuspendActorResponse{}, nil
-}
-
-// suspendCallName is the name a SuspendActor call is recorded under: an
-// async suspend is told apart from a sync one.
-func suspendCallName(in *ateapi.SuspendActorRequest) string {
-	if in.GetOptions().GetMode() == ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
-		return "SuspendActor(async)"
-	}
-	return "SuspendActor"
-}
-
-func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "DeleteActor")
-	f.deleteRequests = append(f.deleteRequests, in)
-	return &ateapi.Actor{}, nil
-}
-
-func (f *fakeControlClient) recordedCalls() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.calls...)
-}
-
-func (f *fakeControlClient) recordedSuspendRequests() []*ateapi.SuspendActorRequest {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]*ateapi.SuspendActorRequest(nil), f.suspendReqs...)
-}
-
-func (f *fakeControlClient) recordedDeleteRequests() []*ateapi.DeleteActorRequest {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]*ateapi.DeleteActorRequest(nil), f.deleteRequests...)
 }
 
 // newTestConfig starts srv, sets HTTPClient and RouterURL, and ensures
@@ -144,7 +70,7 @@ func newTestConfig(t *testing.T, srv *fake.Server, cfg *userclass.Config) *userc
 		cfg = &userclass.Config{}
 	}
 	if cfg.APIStub == nil {
-		cfg.APIStub = &fakeControlClient{}
+		cfg.APIStub = &controlclienttest.Fake{}
 	}
 	if cfg.Tracer == nil {
 		cfg.Tracer = otel.Tracer("test")

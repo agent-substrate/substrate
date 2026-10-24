@@ -28,24 +28,13 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/controlclienttest"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
-
-type resumerMockClient struct {
-	ateapi.ControlClient
-	resumeFn func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error)
-}
-
-func (m *resumerMockClient) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
-	if m.resumeFn != nil {
-		return m.resumeFn(ctx, in, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "unimplemented")
-}
 
 func TestActorResumer_ResumeActor(t *testing.T) {
 	const testActorName = "actor-a"
@@ -56,8 +45,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 
 	t.Run("SuspendedResumedSuccessfully", func(t *testing.T) {
 		var resumeCalled int
-		mock := &resumerMockClient{
-			resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+		mock := &controlclienttest.Fake{
+			ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 				resumeCalled++
 				return &ateapi.ResumeActorResponse{
 					Actor: &ateapi.Actor{
@@ -85,8 +74,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 	})
 
 	t.Run("WarmRouting_Disambiguation", func(t *testing.T) {
-		mock := &resumerMockClient{
-			resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+		mock := &controlclienttest.Fake{
+			ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 				return &ateapi.ResumeActorResponse{
 					Actor: &ateapi.Actor{
 						Metadata: &ateapi.ResourceMetadata{Name: testActorName},
@@ -109,8 +98,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 
 	t.Run("RetryOnAbortedConflict", func(t *testing.T) {
 		var resumeCalled int
-		mock := &resumerMockClient{
-			resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+		mock := &controlclienttest.Fake{
+			ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 				resumeCalled++
 				if resumeCalled < 3 {
 					return nil, status.Error(codes.Aborted, "concurrent update conflict")
@@ -141,8 +130,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 	})
 
 	t.Run("ActorNotFound", func(t *testing.T) {
-		mock := &resumerMockClient{
-			resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+		mock := &controlclienttest.Fake{
+			ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 				return nil, status.Error(codes.NotFound, "not found")
 			},
 		}
@@ -168,8 +157,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		gate := make(chan struct{})
 		defer close(gate)
 
-		mock := &resumerMockClient{
-			resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+		mock := &controlclienttest.Fake{
+			ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 				<-gate
 				return &ateapi.ResumeActorResponse{Resumed: true}, nil
 			},
@@ -193,8 +182,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 			var resumeCalled atomic.Int32
 			gate := make(chan struct{})
 
-			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					resumeCalled.Add(1)
 					<-gate
 					return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
@@ -241,8 +230,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		var resumeCalled int
 		var mu sync.Mutex
 
-		mock := &resumerMockClient{
-			resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+		mock := &controlclienttest.Fake{
+			ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 				mu.Lock()
 				resumeCalled++
 				mu.Unlock()
@@ -320,8 +309,8 @@ func TestActorResumer_Parking(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var mu sync.Mutex
 			var calls int
-			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					n := calls
@@ -356,8 +345,8 @@ func TestActorResumer_Parking(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var mu sync.Mutex
 			var calls int
-			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
@@ -390,8 +379,8 @@ func TestActorResumer_Parking(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var mu sync.Mutex
 			var calls int
-			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					n := calls
@@ -426,8 +415,8 @@ func TestActorResumer_Parking(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var mu sync.Mutex
 			var calls int
-			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
@@ -461,8 +450,8 @@ func TestActorResumer_Parking(t *testing.T) {
 			var attemptStarts []time.Duration
 			var ctxErrAtReturn error
 			base := time.Now()
-			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					n := calls
@@ -518,8 +507,8 @@ func TestActorResumer_Parking(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					const budget = 300 * time.Millisecond
 					var calls atomic.Int32
-					mock := &resumerMockClient{
-						resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+					mock := &controlclienttest.Fake{
+						ResumeActorFunc: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 							if calls.Add(1) == 1 {
 								return nil, status.Error(codes.ResourceExhausted, "no free workers available")
 							}
@@ -553,8 +542,8 @@ func TestActorResumer_Parking(t *testing.T) {
 			const budget = 300 * time.Millisecond
 			var mu sync.Mutex
 			var calls int
-			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
@@ -584,8 +573,8 @@ func TestActorResumer_Parking(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var mu sync.Mutex
 			var calls int
-			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
@@ -629,8 +618,8 @@ func testCallerCancelDoesNotAbortFlight(t *testing.T) {
 	var calls int
 	started := make(chan struct{})
 	proceed := make(chan struct{})
-	mock := &resumerMockClient{
-		resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+	mock := &controlclienttest.Fake{
+		ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 			mu.Lock()
 			calls++
 			n := calls
@@ -724,8 +713,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 
 	t.Run("FastFlightNeverEntersLot", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			mock := &resumerMockClient{
-				resumeFn: func(
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(
 					ctx context.Context,
 					in *ateapi.ResumeActorRequest,
 					opts ...grpc.CallOption,
@@ -763,8 +752,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			lot := newParkingLot(cfg, nil)
 			var mu sync.Mutex
 			var calls, activeDuringRetry int
-			mock := &resumerMockClient{
-				resumeFn: func(
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(
 					ctx context.Context,
 					in *ateapi.ResumeActorRequest,
 					opts ...grpc.CallOption,
@@ -817,8 +806,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 
 			var mu sync.Mutex
 			var calls int
-			mock := &resumerMockClient{
-				resumeFn: func(
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(
 					ctx context.Context,
 					in *ateapi.ResumeActorRequest,
 					opts ...grpc.CallOption,
@@ -860,8 +849,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			var mu sync.Mutex
 			var calls int
 			proceed := make(chan struct{})
-			mock := &resumerMockClient{
-				resumeFn: func(
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(
 					ctx context.Context,
 					in *ateapi.ResumeActorRequest,
 					opts ...grpc.CallOption,
@@ -926,8 +915,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			cfg := ParkedRequestConfig{Max: 1, Budget: 1 * time.Second}
 			lot := newParkingLot(cfg, nil)
-			mock := &resumerMockClient{
-				resumeFn: func(
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(
 					ctx context.Context,
 					in *ateapi.ResumeActorRequest,
 					opts ...grpc.CallOption,
@@ -958,8 +947,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			proceed := make(chan struct{})
 			var mu sync.Mutex
 			var calls int
-			mock := &resumerMockClient{
-				resumeFn: func(
+			mock := &controlclienttest.Fake{
+				ResumeActorFunc: func(
 					ctx context.Context,
 					in *ateapi.ResumeActorRequest,
 					opts ...grpc.CallOption,
@@ -1007,8 +996,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 	t.Run("CompletedFlightIsForgotten", func(t *testing.T) {
 		var mu sync.Mutex
 		var calls int
-		mock := &resumerMockClient{
-			resumeFn: func(
+		mock := &controlclienttest.Fake{
+			ResumeActorFunc: func(
 				ctx context.Context,
 				in *ateapi.ResumeActorRequest,
 				opts ...grpc.CallOption,
@@ -1065,8 +1054,8 @@ func TestActorResumer_FlightKeepsCallerTraceContext(t *testing.T) {
 	})
 
 	var got trace.SpanContext
-	mock := &resumerMockClient{
-		resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+	mock := &controlclienttest.Fake{
+		ResumeActorFunc: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 			got = trace.SpanContextFromContext(ctx)
 			return &ateapi.ResumeActorResponse{
 				Actor: &ateapi.Actor{Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapi.WorkerAssignment{WorkerPodIps: []string{"10.0.0.1"}}}},
