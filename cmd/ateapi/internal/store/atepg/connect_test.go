@@ -85,6 +85,40 @@ func TestPoolConfigRequiresRole(t *testing.T) {
 	}
 }
 
+func TestPoolConfigConnectTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dsn  string
+		want time.Duration
+	}{
+		{
+			name: "default",
+			dsn:  "postgres://runtime@postgres:5432/atepg?sslmode=disable",
+			want: defaultConnectTimeout,
+		},
+		{
+			name: "default with TLS",
+			dsn:  "postgres://runtime@postgres:5432/atepg?sslmode=require",
+			want: defaultConnectTimeout,
+		},
+		{
+			name: "connect_timeout in the DSN wins",
+			dsn:  "postgres://runtime@postgres:5432/atepg?sslmode=disable&connect_timeout=30",
+			want: 30 * time.Second,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := poolConfig(tc.dsn, "test_role")
+			if err != nil {
+				t.Fatalf("poolConfig: %v", err)
+			}
+			if got := cfg.ConnConfig.ConnectTimeout; got != tc.want {
+				t.Errorf("ConnectTimeout = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConnectRequiresRoles(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
