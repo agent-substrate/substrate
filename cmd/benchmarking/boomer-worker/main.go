@@ -58,7 +58,7 @@ func main() {
 		totalActors             = flag.Int("total-actors", 100, "Total actors to create in the batch (spawn benchmark).")
 		spawnConcurrency        = flag.Int("spawn-concurrency", 1, "Number of actors created concurrently (spawn benchmark).")
 		actorDeadline           = flag.Float64("actor-deadline", 120, "Per-actor timeout in seconds covering CreateActor + ResumeActor + Ping (spawn benchmark).")
-		httpMaxIdleConnsPerHost = flag.Int("http-max-idle-conns-per-host", 10000, "Idle HTTP connections the router client keeps per host. Set it to at least the number of users this worker runs, so each VU reuses its connection to the router across wakes instead of opening a new one per request.")
+		httpMaxIdleConnsPerHost = flag.Int("http-max-idle-conns-per-host", 30000, "Idle HTTP connections the router client keeps per host. Set it to at least the number of users this worker runs, so each VU reuses its connection to the router across wakes instead of opening a new one per request.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
