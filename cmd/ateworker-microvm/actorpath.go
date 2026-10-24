@@ -20,10 +20,56 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
+
+const (
+	goldenDeltaMarkerFile    = "golden-delta"
+	memoryRangesDiffMetaFile = "memory-ranges.diff-meta"
+	memoryRangesDiffDataFile = "memory-ranges.diff-data"
+)
+
+// deltaRestoreStagingDir returns the per-actor host directory used to stage a
+// reconstructed memory-ranges snapshot when the restore source directory itself
+// must be preserved. Like rootfsUpperDir, it lives under root_dir and is owned
+// by ateworker-microvm.
+func deltaRestoreStagingDir(actorDirs *ateworkerpb.ActorDirs) string {
+	return filepath.Join(actorDirs.GetRootDir(), "delta-restore-staging")
+}
+
+// validBaseID reports whether baseID is a single-component local directory name
+// safe to join under the golden base cache directory.
+func validBaseID(baseID string) bool {
+	return baseID != "" && baseID != "." && !strings.Contains(baseID, "/") && filepath.IsLocal(baseID)
+}
+
+// goldenBaseMemoryRangesPath returns the node-local cache path for a golden base snapshot's memory-ranges file.
+func goldenBaseMemoryRangesPath(baseID string) string {
+	return filepath.Join(filepath.Dir(filepath.Clean(nodepath.ActorsDir)), "golden-base-cache", baseID, "memory-ranges")
+}
+
+// goldenBaseMemoryRangesPathForDir resolves the golden base memory-ranges cache path relative to snapshotDir when under an actors directory, falling back to goldenBaseMemoryRangesPath.
+func goldenBaseMemoryRangesPathForDir(snapshotDir, baseID string) string {
+	if !validBaseID(baseID) {
+		return ""
+	}
+	actorsDir := filepath.Dir(filepath.Dir(filepath.Clean(snapshotDir)))
+	if filepath.Base(actorsDir) == "actors" {
+		candidate := filepath.Join(filepath.Dir(actorsDir), "golden-base-cache", baseID, "memory-ranges")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return goldenBaseMemoryRangesPath(baseID)
+}
 
 // ociBundlePath is the container's OCI bundle.
 func ociBundlePath(actorDirs *ateworkerpb.ActorDirs, containerName string) string {
@@ -35,4 +81,42 @@ func ociBundlePath(actorDirs *ateworkerpb.ActorDirs, containerName string) strin
 // this binary: atelet never touches it, so it is not one of the ActorDirs.
 func rootfsUpperDir(actorDirs *ateworkerpb.ActorDirs) string {
 	return filepath.Join(actorDirs.GetRootDir(), "rootfs-upper")
+}
+
+// ensureGoldenBaseCached populates the node-local golden base memory-ranges cache from srcMemPath if not already cached.
+func ensureGoldenBaseCached(ctx context.Context, baseID, srcMemPath string) error {
+	if !validBaseID(baseID) || srcMemPath == "" {
+		return nil
+	}
+	dstPath := goldenBaseMemoryRangesPath(baseID)
+	if fi, err := os.Stat(dstPath); err == nil && fi.Mode().IsRegular() && fi.Size() > 0 {
+		maybePrewarmGoldenSlots(dstPath)
+		return nil
+	}
+	srcFi, err := os.Stat(srcMemPath)
+	if err != nil {
+		return err
+	}
+	if !srcFi.Mode().IsRegular() || srcFi.Size() == 0 {
+		return fmt.Errorf("invalid source memory-ranges %q (regular=%v, size=%d)", srcMemPath, srcFi.Mode().IsRegular(), srcFi.Size())
+	}
+	dstDir := filepath.Dir(dstPath)
+	if err := os.MkdirAll(dstDir, 0o700); err != nil {
+		return err
+	}
+	tmpF, err := os.CreateTemp(dstDir, ".memory-ranges.tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpF.Name()
+	_ = tmpF.Close()
+	defer os.Remove(tmpPath)
+	if err := ch.CopySparseFileFast(ctx, srcMemPath, tmpPath); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		return err
+	}
+	maybePrewarmGoldenSlots(dstPath)
+	return nil
 }
