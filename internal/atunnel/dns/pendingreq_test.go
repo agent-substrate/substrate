@@ -39,7 +39,7 @@ func recordQuery(t *testing.T, p *pendingRequests, clientID uint16, client net.A
 	t.Helper()
 	p.limiter.inFlight.tryAcquire()
 	raw := dnsQuery(clientID)
-	id, ok := p.record(raw, clientID, exampleQuestion, client, upstreams)
+	id, _, ok := p.record(raw, clientID, exampleQuestion, client, upstreams)
 	if !ok {
 		t.Fatalf("record(%#x) failed", clientID)
 	}
@@ -135,7 +135,7 @@ func TestPendingRequestsRecord(t *testing.T) {
 	lim.inFlight.tryAcquire()
 	raw := dnsQuery(0xbeef)
 	before := time.Now()
-	id, ok := p.record(raw, 0xbeef, exampleQuestion, client, upstreams)
+	id, _, ok := p.record(raw, 0xbeef, exampleQuestion, client, upstreams)
 	after := time.Now()
 	if !ok {
 		t.Fatal("record failed")
@@ -191,7 +191,7 @@ func TestPendingRequestsRecordAllocatesFreeID(t *testing.T) {
 
 	// With every ID in flight, record fails and frees the query's slot.
 	lim.inFlight.tryAcquire()
-	if _, ok := p.record(dnsQuery(0x5678), 0x5678, exampleQuestion, nil, upstreams); ok {
+	if _, _, ok := p.record(dnsQuery(0x5678), 0x5678, exampleQuestion, nil, upstreams); ok {
 		t.Fatal("record succeeded with every upstream ID in flight")
 	}
 	if got := lim.inFlight.occupied(); got != 1 {

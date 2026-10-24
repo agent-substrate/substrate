@@ -32,10 +32,10 @@ type serverConfig struct {
 }
 
 type netConn struct {
-	dialer      net.Dialer
-	udp         net.PacketConn
-	egressUDP   net.PacketConn
-	tcpListener net.Listener
+	dialer       net.Dialer
+	listenPacket func(network, address string) (net.PacketConn, error)
+	udp          net.PacketConn
+	tcpListener  net.Listener
 }
 
 // Server is one sandbox's running DNS relay, returned by [Relay.Serve].
@@ -60,15 +60,6 @@ func newServer(
 	config *serverConfig,
 	netC *netConn,
 ) (*Server, error) {
-	if netC.egressUDP == nil {
-		egressUDP, err := net.ListenPacket("udp", ":0")
-		if err != nil {
-			slog.WarnContext(ctx, "Failed to open worker DNS egress socket", slog.Any("err", err))
-			return nil, fmt.Errorf("DNS egress socket ListenPacket: %w", err)
-		}
-		netC.egressUDP = egressUDP
-	}
-
 	// Detached from the activation RPC's context but cancelable so teardown
 	// drops queries still in flight and releases the actor's sockets.
 	serveCtx, stopServing := context.WithCancel(context.WithoutCancel(ctx))
@@ -89,7 +80,7 @@ func newServer(
 	s.pendingRequests = newPendingRequests(s.limiter)
 	// The check fetches with serveCtx, so that Stop cancels one in progress.
 	s.dns = newDNSHandler(s.pendingRequests, s.limiter, egressPolicyCheck(serveCtx, config.policy))
-	s.udp = newUDPHandler(netC.udp, netC.egressUDP, udpAddrs, s.dns, s.pendingRequests)
+	s.udp = newUDPHandler(netC.udp, newUDPConnPool(netC.listenPacket), udpAddrs, s.dns, s.pendingRequests)
 	s.tcp = newTCPHandler(config.upstreams, netC.tcpListener, netC.dialer, s.dns, s.limiter)
 
 	s.serving.Add(2)
@@ -116,7 +107,7 @@ func (s *Server) Stop(ctx context.Context) error {
 		// Cancel first: closing the sockets alone leaves the queries already
 		// being resolved holding the relay.
 		s.stopServing()
-		for _, c := range []io.Closer{s.n.udp, s.n.egressUDP, s.n.tcpListener} {
+		for _, c := range []io.Closer{s.n.udp, s.udp.pool, s.n.tcpListener} {
 			if c == nil {
 				continue
 			}

@@ -43,12 +43,12 @@ const (
 )
 
 // udpHandler manages actor UDP DNS traffic using an actorSock from
-// the Actor and upstreamSock out to the upstream DNS server.
+// the Actor and a pool of outbound UDP sockets to the upstream DNS servers.
 type udpHandler struct {
 	// actorSock that receives DNS requests from the Actor.
 	actorSock net.PacketConn
-	// upstreamSock for the outbound DNS requests.
-	upstreamSock net.PacketConn
+	// pool of outbound UDP sockets for upstream DNS requests.
+	pool *udpConnPool
 
 	upstreams    []*net.UDPAddr
 	upstreamStrs []string
@@ -60,7 +60,7 @@ type udpHandler struct {
 
 func newUDPHandler(
 	actorSock net.PacketConn,
-	upstreamSock net.PacketConn,
+	pool *udpConnPool,
 	upstreams []*net.UDPAddr,
 	dns *dnsHandler,
 	pending *pendingRequests,
@@ -69,9 +69,10 @@ func newUDPHandler(
 	for i, u := range upstreams {
 		strs[i] = normalizeAddr(u)
 	}
+	pending.pool = pool
 	return &udpHandler{
 		actorSock:     actorSock,
-		upstreamSock:  upstreamSock,
+		pool:          pool,
 		upstreams:     upstreams,
 		upstreamStrs:  strs,
 		dns:           dns,
@@ -84,18 +85,33 @@ func newUDPHandler(
 // or the sockets close.
 func (h *udpHandler) serve(ctx context.Context) error {
 	var wg sync.WaitGroup
-	errCh := make(chan error, 2)
+	var readers sync.WaitGroup
+	errCh := make(chan error, 1)
 
-	wg.Add(3)
+	startReader := func(conn net.PacketConn) {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			h.processResponses(ctx, conn)
+		}()
+	}
+
+	h.pool.mu.Lock()
+	h.pool.onNewConn = startReader
+	for conn := range h.pool.entries {
+		startReader(conn)
+	}
+	h.pool.mu.Unlock()
+
+	stop := context.AfterFunc(ctx, func() {
+		_ = h.pool.Close()
+	})
+	defer stop()
+
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		if err := h.processRequests(ctx); err != nil {
-			errCh <- err
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		if err := h.processResponses(ctx); err != nil {
 			errCh <- err
 		}
 	}()
@@ -105,6 +121,8 @@ func (h *udpHandler) serve(ctx context.Context) error {
 	}()
 
 	wg.Wait()
+	_ = h.pool.Close()
+	readers.Wait()
 	h.pending.clearAll()
 	close(errCh)
 
@@ -136,20 +154,25 @@ func (h *udpHandler) processRequests(ctx context.Context) error {
 				slog.WarnContext(ctx, "dns relay: could not return a synthesized DNS reply", slog.Any("err", err))
 			}
 		case actionForward:
-			h.sendToUpstream(ctx, act.upstreamID, 0, act.payload)
+			h.sendToUpstream(ctx, act.conn, act.upstreamID, 0, act.payload)
 		}
 	}
 }
 
-func (h *udpHandler) sendToUpstream(ctx context.Context, upstreamID uint16, idx int, query []byte) {
+func (h *udpHandler) sendToUpstream(ctx context.Context, conn net.PacketConn, upstreamID uint16, idx int, query []byte) {
+	if conn == nil {
+		return
+	}
 	for idx < len(h.upstreams) {
-		_, err := h.upstreamSock.WriteTo(query, h.upstreams[idx])
+		_, err := conn.WriteTo(query, h.upstreams[idx])
 		if err == nil {
 			return
 		}
-		if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-			slog.ErrorContext(ctx, "dns relay: upstream UDP socket closed, stopping forwarding")
+		if ctx.Err() != nil {
 			h.pending.clearAll()
+			return
+		}
+		if errors.Is(err, net.ErrClosed) {
 			return
 		}
 		slog.WarnContext(ctx, "dns relay: could not send query to upstream", slog.String("upstream", h.upstreamStrs[idx]), slog.Any("err", err))
@@ -162,26 +185,26 @@ func (h *udpHandler) sendToUpstream(ctx context.Context, upstreamID uint16, idx 
 	}
 }
 
-func (h *udpHandler) processResponses(ctx context.Context) error {
+func (h *udpHandler) processResponses(ctx context.Context, conn net.PacketConn) {
 	buf := make([]byte, maxDatagramSize)
 	for {
-		n, from, err := h.upstreamSock.ReadFrom(buf)
+		n, from, err := conn.ReadFrom(buf)
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-				return nil
+				return
 			}
 			slog.DebugContext(ctx, "dns relay: upstream socket read error", slog.Any("err", err))
 			continue
 		}
 		raw := bytes.Clone(buf[:n])
-		act := h.dns.onUDPResponse(raw, from)
+		act := h.dns.onUDPResponse(raw, from, conn)
 		switch act.kind {
 		case actionDrop:
 			continue
 		case actionFailover:
 			if act.upstreamIdx >= 0 && act.upstreamIdx < len(h.upstreams) && len(act.payload) >= 2 {
 				upstreamID := binary.BigEndian.Uint16(act.payload[0:2])
-				h.sendToUpstream(ctx, upstreamID, act.upstreamIdx, act.payload)
+				h.sendToUpstream(ctx, act.conn, upstreamID, act.upstreamIdx, act.payload)
 			}
 		case actionDeliver:
 			if act.clientAddr != nil {
@@ -208,7 +231,7 @@ func (h *udpHandler) sweepLoop(ctx context.Context) {
 		case now := <-ticker.C:
 			failovers, deliveries := h.pending.sweep(now)
 			for _, f := range failovers {
-				h.sendToUpstream(ctx, f.upstreamID, f.upstreamIdx, f.query)
+				h.sendToUpstream(ctx, f.conn, f.upstreamID, f.upstreamIdx, f.query)
 			}
 			for _, d := range deliveries {
 				if _, err := h.actorSock.WriteTo(d.payload, d.clientAddr); err != nil && ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
