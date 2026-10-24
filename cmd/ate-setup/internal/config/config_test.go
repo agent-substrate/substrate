@@ -698,34 +698,46 @@ func TestLoadAPILogLevel(t *testing.T) {
 }
 
 func TestLoadAPIAuthz(t *testing.T) {
-	const (
-		clientOwner = "system:serviceaccount:ate-system:ate-client"
-		owners      = "alice@example.com,bob@example.com"
-	)
+	const clientOwner = "system:serviceaccount:ate-system:ate-client"
 	for _, tc := range []struct {
 		name       string
 		env        map[string]string
-		wantOwners string
-		wantErr    bool
+		wantOwners []string
+		wantErr    string
 	}{
 		{
 			name:       "owned by the client ServiceAccount by default",
-			wantOwners: clientOwner,
+			wantOwners: []string{clientOwner},
 		},
 		{
 			name:       "default owner follows the namespace",
 			env:        map[string]string{"ATE_NAMESPACE": "custom"},
-			wantOwners: "system:serviceaccount:custom:ate-client",
+			wantOwners: []string{"system:serviceaccount:custom:ate-client"},
 		},
 		{
 			name:       "explicit owners replace the default",
-			env:        map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": owners},
-			wantOwners: owners,
+			env:        map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": "alice@example.com,bob@example.com"},
+			wantOwners: []string{"alice@example.com", "bob@example.com"},
+		},
+		{
+			name:       "whitespace around owners is ignored",
+			env:        map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": " alice , bob "},
+			wantOwners: []string{"alice", "bob"},
+		},
+		{
+			name:       "an owner that contains a comma is quoted",
+			env:        map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": `"Doe, Jane", bob`},
+			wantOwners: []string{"Doe, Jane", "bob"},
 		},
 		{
 			name:    "only separators",
 			env:     map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": " , "},
-			wantErr: true,
+			wantErr: "bootstrap owner",
+		},
+		{
+			name:    "an unterminated quote",
+			env:     map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": `"alice`},
+			wantErr: "ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -734,16 +746,16 @@ func TestLoadAPIAuthz(t *testing.T) {
 				t.Setenv(name, value)
 			}
 			cfg, err := Load(Options{})
-			if tc.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "bootstrap owner") {
-					t.Fatalf("Load() error = %v, want the missing bootstrap owner error", err)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want it to contain %q", err, tc.wantErr)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if cfg.APIAuthzBootstrapOwners != tc.wantOwners {
+			if !slices.Equal(cfg.APIAuthzBootstrapOwners, tc.wantOwners) {
 				t.Errorf("APIAuthzBootstrapOwners = %q, want %q", cfg.APIAuthzBootstrapOwners, tc.wantOwners)
 			}
 		})
