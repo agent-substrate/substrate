@@ -189,12 +189,13 @@ hack/install-ate.sh --deploy-atenet --credential-provider='{"name":"k8s.io"}'
 ```
 
 `--credential-provider` (or `ATE_CREDENTIAL_PROVIDER` when the flag is
-absent) is a JSON object with these keys; any other key is an error:
+absent) is a JSON object with these keys, or a JSON array of such objects
+without `enabled`, one per provider class; any other key is an error:
 
 | Key | Value |
 |---|---|
 | `enabled` | Defaults to `true`. `false` turns injection off, and then no other key is allowed |
-| `name` | Required unless `enabled` is `false`. A DNS name: `k8s.io` for the bundled Kubernetes Secrets provider, or the name of a provider you deploy, which is the host of the `ate-secret://` URIs it serves, e.g. `vault.example.com` for `ate-secret://vault.example.com/...`. A policy URI naming any other provider fails closed |
+| `name` | Required unless `enabled` is `false`. A DNS name: `k8s.io` for the bundled Kubernetes Secrets provider, or the name of a provider you deploy, which is the host of the `ate-secret://` URIs it serves, e.g. `vault.example.com` for `ate-secret://vault.example.com/...`. A policy URI naming a class no provider is given for fails closed. An array names each class once |
 | `address` | The `host:port` the gateway dials the provider at. Required for a provider you deploy; optional with `k8s.io`, where it defaults to the bundled provider's Service, `k8s-credential-provider.ate-system.svc:50051` |
 
 For example:
@@ -203,7 +204,11 @@ For example:
 --credential-provider='{"name":"k8s.io"}'
 --credential-provider='{"enabled":false}'
 --credential-provider='{"name":"vault.example.com","address":"vault-provider.ate-system.svc:50051"}'
+--credential-provider='[{"name":"k8s.io"},{"name":"vault.example.com","address":"vault-provider.ate-system.svc:50051"}]'
 ```
+
+More than one provider requires the agentgateway dataplane; the Envoy
+dataplane's injector takes one.
 
 **2. The provider.** With `k8s.io` the install deploys the Kubernetes Secrets
 provider itself, from `manifests/egress-credential-injection/`, and waits for
@@ -310,14 +315,22 @@ The provider is a plugin: any gRPC service that implements
 can back injection. To bring your own — reading HashiCorp Vault, Google Secret
 Manager, or any other secret store — implement the API under your own provider
 class (the URI host, e.g. `ate-secret://vault.example.com/...`), then have a
-cluster admin point the gateway at it with
-`--credential-provider='{"name":"vault.example.com","address":"<host>:<port>"}'`.
-A gateway currently fronts **one** provider:
-a policy URI naming any other class fails closed rather than being sent to the
-wrong provider.
+cluster admin point the gateway at it.
 
-The gateway reads only the URI host, to confirm the URI targets the provider it
-serves. Everything after the host is the provider's to interpret.
+The agentgateway dataplane fronts the bundled provider and any number of
+further ones, each selected by its class. A provider that lives outside this
+repository is deployed beside Substrate, as its own Deployment and Service,
+and routed with the array form of `--credential-provider`:
+
+```bash
+--credential-provider='[{"name":"k8s.io"},{"name":"vault.example.com","address":"<host>:<port>"}]'
+```
+
+A policy URI naming a class no provider is routed for fails closed rather than
+being sent to the wrong provider. The Envoy dataplane fronts one provider.
+
+The gateway reads only the URI host, to select the provider that serves it.
+Everything after the host is the provider's to interpret.
 
 `internal/plugins/gcp-secret-manager` is such a provider for Google Cloud Secret Manager.
 

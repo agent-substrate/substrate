@@ -1020,6 +1020,16 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"kubernetes address without a port", Options{CredentialProvider: `{"name":"k8s.io","address":"secrets.ate-system.svc"}`}},
 		{"other provider without an address", Options{CredentialProvider: `{"name":"vault.example.com"}`}},
 		{"other provider address without a port", Options{CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc"}`}},
+		{"provider array empty", Options{Router: RouterAgentgateway, CredentialProvider: `[]`}},
+		{"provider array with a repeated name", Options{Router: RouterAgentgateway, CredentialProvider: `[{"name":"k8s.io"},{"name":"k8s.io","address":"secrets.ate-system.svc:50051"}]`}},
+		{"provider array with enabled", Options{Router: RouterAgentgateway, CredentialProvider: `[{"enabled":true,"name":"k8s.io"}]`}},
+		{"provider array disabling", Options{Router: RouterAgentgateway, CredentialProvider: `[{"enabled":false}]`}},
+		{"provider array with a bad name", Options{Router: RouterAgentgateway, CredentialProvider: `[{"name":"k8s.io"},{"name":"Vault.example.com","address":"vault.ate-system.svc:50051"}]`}},
+		{"provider array without an address", Options{Router: RouterAgentgateway, CredentialProvider: `[{"name":"k8s.io"},{"name":"vault.example.com"}]`}},
+		{"provider array with an unknown key", Options{Router: RouterAgentgateway, CredentialProvider: `[{"name":"k8s.io","adress":"x:1"}]`}},
+		{"provider array with trailing data", Options{Router: RouterAgentgateway, CredentialProvider: `[{"name":"k8s.io"}] []`}},
+		{"provider array of strings", Options{Router: RouterAgentgateway, CredentialProvider: `["k8s.io"]`}},
+		{"several providers on envoy", Options{Router: RouterEnvoy, CredentialProvider: `[{"name":"k8s.io"},{"name":"vault.example.com","address":"vault.ate-system.svc:50051"}]`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {
@@ -1030,15 +1040,15 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 }
 
 // The provider selection is required only where the egress gateway is
-// rendered, so Load accepts an absent value and CredentialProvider refuses it.
-func TestCredentialProvider(t *testing.T) {
+// rendered, so Load accepts an absent value and CredentialProviders refuses it.
+func TestCredentialProviders(t *testing.T) {
 	loadEnv(t)
 
 	for _, tc := range []struct {
 		name    string
 		opts    Options
 		env     map[string]string
-		want    CredentialProvider
+		want    CredentialProviders
 		wantErr bool
 	}{
 		{name: "absent is an error", opts: Options{}, wantErr: true},
@@ -1047,42 +1057,63 @@ func TestCredentialProvider(t *testing.T) {
 		{
 			name: "kubernetes on agentgateway",
 			opts: Options{Router: RouterAgentgateway, CredentialProvider: `{"name":"k8s.io"}`},
-			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+			want: CredentialProviders{CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress}},
 		},
 		{
 			name: "another provider on agentgateway",
 			opts: Options{Router: RouterAgentgateway, CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc:50051"}`},
-			want: CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:50051"},
+			want: CredentialProviders{CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:50051"}},
 		},
 		{
 			name: "enabled true names a provider",
 			opts: Options{CredentialProvider: `{"enabled":true,"name":"k8s.io"}`},
-			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+			want: CredentialProviders{CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress}},
 		},
 		{
 			name: "kubernetes gets the bundled address",
 			opts: Options{CredentialProvider: `{"name":"k8s.io"}`},
-			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+			want: CredentialProviders{CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress}},
 		},
 		{
 			name: "kubernetes keeps a given address",
 			opts: Options{CredentialProvider: `{"name":"k8s.io","address":"secrets.ate-system.svc:443"}`},
-			want: CredentialProvider{Name: K8sCredentialProviderName, Address: "secrets.ate-system.svc:443"},
+			want: CredentialProviders{CredentialProvider{Name: K8sCredentialProviderName, Address: "secrets.ate-system.svc:443"}},
 		},
 		{
 			name: "another provider",
 			opts: Options{CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc:50051"}`},
-			want: CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:50051"},
+			want: CredentialProviders{CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:50051"}},
 		},
 		{
 			name: "whitespace is allowed",
 			opts: Options{CredentialProvider: ` { "name" : "k8s.io" } `},
-			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+			want: CredentialProviders{CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress}},
+		},
+		{
+			name: "an array of one",
+			opts: Options{CredentialProvider: `[{"name":"k8s.io"}]`},
+			want: CredentialProviders{{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress}},
+		},
+		{
+			name: "an array of several on agentgateway",
+			opts: Options{Router: RouterAgentgateway, CredentialProvider: `[{"name":"k8s.io"},{"name":"vault.example.com","address":"vault.ate-system.svc:50051"}]`},
+			want: CredentialProviders{
+				{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+				{Name: "vault.example.com", Address: "vault.ate-system.svc:50051"},
+			},
+		},
+		{
+			name: "an array without the bundled provider",
+			opts: Options{Router: RouterAgentgateway, CredentialProvider: ` [ {"name":"vault.example.com","address":"vault.ate-system.svc:50051"}, {"name":"tokens.example.com","address":"tokens.ate-system.svc:50051"} ] `},
+			want: CredentialProviders{
+				{Name: "vault.example.com", Address: "vault.ate-system.svc:50051"},
+				{Name: "tokens.example.com", Address: "tokens.ate-system.svc:50051"},
+			},
 		},
 		{
 			name: "the environment selects too",
 			env:  map[string]string{"ATE_CREDENTIAL_PROVIDER": `{"name":"k8s.io"}`},
-			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+			want: CredentialProviders{CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress}},
 		},
 		{
 			name: "the flag overrides the environment",
@@ -1098,21 +1129,25 @@ func TestCredentialProvider(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			got, err := cfg.CredentialProvider()
+			got, err := cfg.CredentialProviders()
 			if tc.wantErr {
 				if err == nil {
-					t.Fatal("CredentialProvider() succeeded, want an error")
+					t.Fatal("CredentialProviders() succeeded, want an error")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("CredentialProvider() error = %v", err)
+				t.Fatalf("CredentialProviders() error = %v", err)
 			}
-			if got != tc.want {
-				t.Errorf("CredentialProvider() = %+v, want %+v", got, tc.want)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("CredentialProviders() = %+v, want %+v", got, tc.want)
 			}
-			if got.Enabled() != (tc.want.Name != "") {
-				t.Errorf("Enabled() = %v, want %v", got.Enabled(), tc.want.Name != "")
+			if got.Enabled() != (len(tc.want) > 0) {
+				t.Errorf("Enabled() = %v, want %v", got.Enabled(), len(tc.want) > 0)
+			}
+			wantKubernetes := slices.ContainsFunc(tc.want, func(p CredentialProvider) bool { return p.Name == K8sCredentialProviderName })
+			if got.Kubernetes() != wantKubernetes {
+				t.Errorf("Kubernetes() = %v, want %v", got.Kubernetes(), wantKubernetes)
 			}
 		})
 	}

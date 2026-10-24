@@ -188,14 +188,14 @@ var Registry = []Setting{
 			"Unset means kubectl-ate's ServiceAccount, system:serviceaccount:<namespace>:ate-client",
 	},
 	{
-		// The egress gateway's credential provider, as a JSON object. Upstream
+		// The egress gateway's credential providers, as JSON. Upstream
 		// takes it as one value on one flag; it is carried the same way here
 		// so the two channels accept the same text.
 		Key: "atenet.egress.credentialProvider", Env: "ATE_CREDENTIAL_PROVIDER",
 		Flag: "credential-provider", Kind: KindString,
-		Usage: "Credential provider the egress gateway injects credentials from, as JSON; " +
+		Usage: "Credential providers the egress gateway injects credentials from, as JSON; " +
 			"required by deploy ate-system and deploy atenet. " + credentialProviderUsage +
-			". A provider requires --atenet-dataplane=envoy",
+			". More than one provider requires --atenet-dataplane=agentgateway",
 	},
 	{
 		// Both pools use the read-write connection when only it is set; both
