@@ -80,6 +80,7 @@ type capabilitiesResponse struct {
 	Permitted   []string `json:"permitted"`
 	Inheritable []string `json:"inheritable"`
 	Ambient     []string `json:"ambient"`
+	NoNewPrivs  bool     `json:"noNewPrivs"`
 	// Error carries a read/parse failure so a failing assertion explains itself
 	// instead of just showing empty sets.
 	Error string `json:"error,omitempty"`
@@ -128,6 +129,10 @@ func readProcCapabilities() (*capabilitiesResponse, error) {
 	for scanner.Scan() {
 		key, value, found := strings.Cut(scanner.Text(), "\t")
 		if !found {
+			continue
+		}
+		if key == "NoNewPrivs:" {
+			out.NoNewPrivs = strings.TrimSpace(value) == "1"
 			continue
 		}
 		dst, ok := targets[strings.TrimSpace(key)]
