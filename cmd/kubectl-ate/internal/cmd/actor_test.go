@@ -1138,6 +1138,7 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 
 	var streamCalls int
 	var streamMu sync.Mutex
+	var pod2Since *metav1.Time
 
 	mockStreamer := &mockPodLogsStreamer{
 		StreamLogsFunc: func(streamCtx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
@@ -1154,7 +1155,7 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 				pr, pw := io.Pipe()
 				go func() {
 					// write one line and then keep it open
-					fmt.Fprintln(pw, `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"line 1 from pod-1","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}`)
+					fmt.Fprintln(pw, `2026-05-16T01:03:38.500000000Z {"time":"2026-05-16T01:03:38Z","level":"info","msg":"line 1 from pod-1","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}`)
 					close(lineRead) // guaranteed to have been read because io.Pipe is unbuffered!
 					// wait until context is cancelled
 					<-streamCtx.Done()
@@ -1167,11 +1168,18 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 			if name != "pod-2" {
 				return nil, fmt.Errorf("expected pod-2, got %s", name)
 			}
+			pod2Since = opts.SinceTime
 
 			// Now we can cancel the main context to exit the follow loop
 			cancel()
 
-			return io.NopCloser(strings.NewReader(`{"time":"2026-05-16T01:03:39Z","level":"info","msg":"line 1 from pod-2","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}` + "\n")), nil
+			// pod-2's node clock is behind pod-1's; if SinceTime was carried over
+			// from pod-1, the kubelet on pod-2 filters this line out.
+			pod2Stamp := time.Date(2026, 5, 16, 1, 3, 37, 500000000, time.UTC)
+			if opts.SinceTime != nil && pod2Stamp.Before(opts.SinceTime.Time) {
+				return io.NopCloser(strings.NewReader("")), nil
+			}
+			return io.NopCloser(strings.NewReader(`2026-05-16T01:03:37.500000000Z {"time":"2026-05-16T01:03:37Z","level":"info","msg":"line 1 from pod-2","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}` + "\n")), nil
 		},
 	}
 
@@ -1192,6 +1200,13 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 	err := runner.Run(ctx)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	streamMu.Lock()
+	gotPod2Since := pod2Since
+	streamMu.Unlock()
+	if gotPod2Since != nil {
+		t.Errorf("pod-2 StreamLogs SinceTime = %v, want nil after migrating to a new pod", gotPod2Since.Time)
 	}
 
 	stdoutStr := stdout.String()
@@ -1357,8 +1372,10 @@ func TestLogsActorRunner_Run_Follow_CursorIsKubeletTimestampOfLastLineRead(t *te
 	foreignLine := `2026-05-16T01:03:39.200000000Z {"time":"2026-05-16T01:03:39Z","message":"not mine","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"other"}}`
 	counterLine := `2026-05-16T01:03:40.300000000Z {"time":"2099-01-01T00:00:00Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"counter"}}`
 	// After the reconnect the kubelet re-sends the cursor's second: the
-	// counter line again, then a new lifecycle event in the same second.
-	laterLine := `2026-05-16T01:03:40.900000000Z {"time":"2026-05-16T01:03:40Z","message":"Actor checkpointing","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	// counter line again, then two new lifecycle events sharing a timestamp in
+	// the same second.
+	checkpointingLine := `2026-05-16T01:03:40.900000000Z {"time":"2026-05-16T01:03:40Z","message":"Actor checkpointing","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	checkpointedLine := `2026-05-16T01:03:40.900000000Z {"time":"2026-05-16T01:03:40Z","message":"Actor checkpointed","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
 	wantSince := time.Date(2026, 5, 16, 1, 3, 40, 300000000, time.UTC)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1381,7 +1398,7 @@ func TestLogsActorRunner_Run_Follow_CursorIsKubeletTimestampOfLastLineRead(t *te
 			case 2:
 				reconnectSince = opts.SinceTime
 				reconnectTimestamps = opts.Timestamps
-				return io.NopCloser(strings.NewReader(counterLine + "\n" + laterLine + "\n")), nil
+				return io.NopCloser(strings.NewReader(counterLine + "\n" + checkpointingLine + "\n" + checkpointedLine + "\n")), nil
 			case 3:
 				close(thirdCall)
 			}
@@ -1432,7 +1449,8 @@ func TestLogsActorRunner_Run_Follow_CursorIsKubeletTimestampOfLastLineRead(t *te
 		t.Errorf("reconnect SinceTime = %v, want %v: the kubelet's timestamp on the last line read, not the last line displayed and not the line's own time", reconnectSince.Time, wantSince)
 	}
 	want := "{\"time\":\"2026-05-16T01:03:38Z\",\"message\":\"Actor started\"}\n" +
-		"{\"time\":\"2026-05-16T01:03:40Z\",\"message\":\"Actor checkpointing\"}\n"
+		"{\"time\":\"2026-05-16T01:03:40Z\",\"message\":\"Actor checkpointing\"}\n" +
+		"{\"time\":\"2026-05-16T01:03:40Z\",\"message\":\"Actor checkpointed\"}\n"
 	if got := stdout.String(); got != want {
 		t.Errorf("output =\n%s\nwant\n%s", got, want)
 	}
