@@ -191,6 +191,8 @@ const (
 	Controller_ControllerUnpublishVolume_FullMethodName  = "/csi.v1.Controller/ControllerUnpublishVolume"
 	Controller_ValidateVolumeCapabilities_FullMethodName = "/csi.v1.Controller/ValidateVolumeCapabilities"
 	Controller_ListVolumes_FullMethodName                = "/csi.v1.Controller/ListVolumes"
+	Controller_ControllerListVolumeHealth_FullMethodName = "/csi.v1.Controller/ControllerListVolumeHealth"
+	Controller_ControllerGetVolumeHealth_FullMethodName  = "/csi.v1.Controller/ControllerGetVolumeHealth"
 	Controller_GetCapacity_FullMethodName                = "/csi.v1.Controller/GetCapacity"
 	Controller_ControllerGetCapabilities_FullMethodName  = "/csi.v1.Controller/ControllerGetCapabilities"
 	Controller_CreateSnapshot_FullMethodName             = "/csi.v1.Controller/CreateSnapshot"
@@ -212,6 +214,8 @@ type ControllerClient interface {
 	ControllerUnpublishVolume(ctx context.Context, in *ControllerUnpublishVolumeRequest, opts ...grpc.CallOption) (*ControllerUnpublishVolumeResponse, error)
 	ValidateVolumeCapabilities(ctx context.Context, in *ValidateVolumeCapabilitiesRequest, opts ...grpc.CallOption) (*ValidateVolumeCapabilitiesResponse, error)
 	ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error)
+	ControllerListVolumeHealth(ctx context.Context, in *ControllerListVolumeHealthRequest, opts ...grpc.CallOption) (*ControllerListVolumeHealthResponse, error)
+	ControllerGetVolumeHealth(ctx context.Context, in *ControllerGetVolumeHealthRequest, opts ...grpc.CallOption) (*ControllerGetVolumeHealthResponse, error)
 	GetCapacity(ctx context.Context, in *GetCapacityRequest, opts ...grpc.CallOption) (*GetCapacityResponse, error)
 	ControllerGetCapabilities(ctx context.Context, in *ControllerGetCapabilitiesRequest, opts ...grpc.CallOption) (*ControllerGetCapabilitiesResponse, error)
 	CreateSnapshot(ctx context.Context, in *CreateSnapshotRequest, opts ...grpc.CallOption) (*CreateSnapshotResponse, error)
@@ -279,6 +283,24 @@ func (c *controllerClient) ValidateVolumeCapabilities(ctx context.Context, in *V
 func (c *controllerClient) ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error) {
 	out := new(ListVolumesResponse)
 	err := c.cc.Invoke(ctx, Controller_ListVolumes_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controllerClient) ControllerListVolumeHealth(ctx context.Context, in *ControllerListVolumeHealthRequest, opts ...grpc.CallOption) (*ControllerListVolumeHealthResponse, error) {
+	out := new(ControllerListVolumeHealthResponse)
+	err := c.cc.Invoke(ctx, Controller_ControllerListVolumeHealth_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controllerClient) ControllerGetVolumeHealth(ctx context.Context, in *ControllerGetVolumeHealthRequest, opts ...grpc.CallOption) (*ControllerGetVolumeHealthResponse, error) {
+	out := new(ControllerGetVolumeHealthResponse)
+	err := c.cc.Invoke(ctx, Controller_ControllerGetVolumeHealth_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -376,6 +398,8 @@ type ControllerServer interface {
 	ControllerUnpublishVolume(context.Context, *ControllerUnpublishVolumeRequest) (*ControllerUnpublishVolumeResponse, error)
 	ValidateVolumeCapabilities(context.Context, *ValidateVolumeCapabilitiesRequest) (*ValidateVolumeCapabilitiesResponse, error)
 	ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error)
+	ControllerListVolumeHealth(context.Context, *ControllerListVolumeHealthRequest) (*ControllerListVolumeHealthResponse, error)
+	ControllerGetVolumeHealth(context.Context, *ControllerGetVolumeHealthRequest) (*ControllerGetVolumeHealthResponse, error)
 	GetCapacity(context.Context, *GetCapacityRequest) (*GetCapacityResponse, error)
 	ControllerGetCapabilities(context.Context, *ControllerGetCapabilitiesRequest) (*ControllerGetCapabilitiesResponse, error)
 	CreateSnapshot(context.Context, *CreateSnapshotRequest) (*CreateSnapshotResponse, error)
@@ -409,6 +433,12 @@ func (UnimplementedControllerServer) ValidateVolumeCapabilities(context.Context,
 }
 func (UnimplementedControllerServer) ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListVolumes not implemented")
+}
+func (UnimplementedControllerServer) ControllerListVolumeHealth(context.Context, *ControllerListVolumeHealthRequest) (*ControllerListVolumeHealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ControllerListVolumeHealth not implemented")
+}
+func (UnimplementedControllerServer) ControllerGetVolumeHealth(context.Context, *ControllerGetVolumeHealthRequest) (*ControllerGetVolumeHealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ControllerGetVolumeHealth not implemented")
 }
 func (UnimplementedControllerServer) GetCapacity(context.Context, *GetCapacityRequest) (*GetCapacityResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCapacity not implemented")
@@ -554,6 +584,42 @@ func _Controller_ListVolumes_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControllerServer).ListVolumes(ctx, req.(*ListVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Controller_ControllerListVolumeHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ControllerListVolumeHealthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControllerServer).ControllerListVolumeHealth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Controller_ControllerListVolumeHealth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControllerServer).ControllerListVolumeHealth(ctx, req.(*ControllerListVolumeHealthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Controller_ControllerGetVolumeHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ControllerGetVolumeHealthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControllerServer).ControllerGetVolumeHealth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Controller_ControllerGetVolumeHealth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControllerServer).ControllerGetVolumeHealth(ctx, req.(*ControllerGetVolumeHealthRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -750,6 +816,14 @@ var Controller_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListVolumes",
 			Handler:    _Controller_ListVolumes_Handler,
+		},
+		{
+			MethodName: "ControllerListVolumeHealth",
+			Handler:    _Controller_ControllerListVolumeHealth_Handler,
+		},
+		{
+			MethodName: "ControllerGetVolumeHealth",
+			Handler:    _Controller_ControllerGetVolumeHealth_Handler,
 		},
 		{
 			MethodName: "GetCapacity",
@@ -1175,14 +1249,16 @@ var SnapshotMetadata_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	Node_NodeStageVolume_FullMethodName     = "/csi.v1.Node/NodeStageVolume"
-	Node_NodeUnstageVolume_FullMethodName   = "/csi.v1.Node/NodeUnstageVolume"
-	Node_NodePublishVolume_FullMethodName   = "/csi.v1.Node/NodePublishVolume"
-	Node_NodeUnpublishVolume_FullMethodName = "/csi.v1.Node/NodeUnpublishVolume"
-	Node_NodeGetVolumeStats_FullMethodName  = "/csi.v1.Node/NodeGetVolumeStats"
-	Node_NodeExpandVolume_FullMethodName    = "/csi.v1.Node/NodeExpandVolume"
-	Node_NodeGetCapabilities_FullMethodName = "/csi.v1.Node/NodeGetCapabilities"
-	Node_NodeGetInfo_FullMethodName         = "/csi.v1.Node/NodeGetInfo"
+	Node_NodeStageVolume_FullMethodName      = "/csi.v1.Node/NodeStageVolume"
+	Node_NodeUnstageVolume_FullMethodName    = "/csi.v1.Node/NodeUnstageVolume"
+	Node_NodePublishVolume_FullMethodName    = "/csi.v1.Node/NodePublishVolume"
+	Node_NodeUnpublishVolume_FullMethodName  = "/csi.v1.Node/NodeUnpublishVolume"
+	Node_NodeGetVolumeStats_FullMethodName   = "/csi.v1.Node/NodeGetVolumeStats"
+	Node_NodeGetVolumeHealth_FullMethodName  = "/csi.v1.Node/NodeGetVolumeHealth"
+	Node_NodeGetStorageHealth_FullMethodName = "/csi.v1.Node/NodeGetStorageHealth"
+	Node_NodeExpandVolume_FullMethodName     = "/csi.v1.Node/NodeExpandVolume"
+	Node_NodeGetCapabilities_FullMethodName  = "/csi.v1.Node/NodeGetCapabilities"
+	Node_NodeGetInfo_FullMethodName          = "/csi.v1.Node/NodeGetInfo"
 )
 
 // NodeClient is the client API for Node service.
@@ -1194,6 +1270,8 @@ type NodeClient interface {
 	NodePublishVolume(ctx context.Context, in *NodePublishVolumeRequest, opts ...grpc.CallOption) (*NodePublishVolumeResponse, error)
 	NodeUnpublishVolume(ctx context.Context, in *NodeUnpublishVolumeRequest, opts ...grpc.CallOption) (*NodeUnpublishVolumeResponse, error)
 	NodeGetVolumeStats(ctx context.Context, in *NodeGetVolumeStatsRequest, opts ...grpc.CallOption) (*NodeGetVolumeStatsResponse, error)
+	NodeGetVolumeHealth(ctx context.Context, in *NodeGetVolumeHealthRequest, opts ...grpc.CallOption) (*NodeGetVolumeHealthResponse, error)
+	NodeGetStorageHealth(ctx context.Context, in *NodeGetStorageHealthRequest, opts ...grpc.CallOption) (*NodeGetStorageHealthResponse, error)
 	NodeExpandVolume(ctx context.Context, in *NodeExpandVolumeRequest, opts ...grpc.CallOption) (*NodeExpandVolumeResponse, error)
 	NodeGetCapabilities(ctx context.Context, in *NodeGetCapabilitiesRequest, opts ...grpc.CallOption) (*NodeGetCapabilitiesResponse, error)
 	NodeGetInfo(ctx context.Context, in *NodeGetInfoRequest, opts ...grpc.CallOption) (*NodeGetInfoResponse, error)
@@ -1252,6 +1330,24 @@ func (c *nodeClient) NodeGetVolumeStats(ctx context.Context, in *NodeGetVolumeSt
 	return out, nil
 }
 
+func (c *nodeClient) NodeGetVolumeHealth(ctx context.Context, in *NodeGetVolumeHealthRequest, opts ...grpc.CallOption) (*NodeGetVolumeHealthResponse, error) {
+	out := new(NodeGetVolumeHealthResponse)
+	err := c.cc.Invoke(ctx, Node_NodeGetVolumeHealth_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeClient) NodeGetStorageHealth(ctx context.Context, in *NodeGetStorageHealthRequest, opts ...grpc.CallOption) (*NodeGetStorageHealthResponse, error) {
+	out := new(NodeGetStorageHealthResponse)
+	err := c.cc.Invoke(ctx, Node_NodeGetStorageHealth_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *nodeClient) NodeExpandVolume(ctx context.Context, in *NodeExpandVolumeRequest, opts ...grpc.CallOption) (*NodeExpandVolumeResponse, error) {
 	out := new(NodeExpandVolumeResponse)
 	err := c.cc.Invoke(ctx, Node_NodeExpandVolume_FullMethodName, in, out, opts...)
@@ -1288,6 +1384,8 @@ type NodeServer interface {
 	NodePublishVolume(context.Context, *NodePublishVolumeRequest) (*NodePublishVolumeResponse, error)
 	NodeUnpublishVolume(context.Context, *NodeUnpublishVolumeRequest) (*NodeUnpublishVolumeResponse, error)
 	NodeGetVolumeStats(context.Context, *NodeGetVolumeStatsRequest) (*NodeGetVolumeStatsResponse, error)
+	NodeGetVolumeHealth(context.Context, *NodeGetVolumeHealthRequest) (*NodeGetVolumeHealthResponse, error)
+	NodeGetStorageHealth(context.Context, *NodeGetStorageHealthRequest) (*NodeGetStorageHealthResponse, error)
 	NodeExpandVolume(context.Context, *NodeExpandVolumeRequest) (*NodeExpandVolumeResponse, error)
 	NodeGetCapabilities(context.Context, *NodeGetCapabilitiesRequest) (*NodeGetCapabilitiesResponse, error)
 	NodeGetInfo(context.Context, *NodeGetInfoRequest) (*NodeGetInfoResponse, error)
@@ -1312,6 +1410,12 @@ func (UnimplementedNodeServer) NodeUnpublishVolume(context.Context, *NodeUnpubli
 }
 func (UnimplementedNodeServer) NodeGetVolumeStats(context.Context, *NodeGetVolumeStatsRequest) (*NodeGetVolumeStatsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NodeGetVolumeStats not implemented")
+}
+func (UnimplementedNodeServer) NodeGetVolumeHealth(context.Context, *NodeGetVolumeHealthRequest) (*NodeGetVolumeHealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NodeGetVolumeHealth not implemented")
+}
+func (UnimplementedNodeServer) NodeGetStorageHealth(context.Context, *NodeGetStorageHealthRequest) (*NodeGetStorageHealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NodeGetStorageHealth not implemented")
 }
 func (UnimplementedNodeServer) NodeExpandVolume(context.Context, *NodeExpandVolumeRequest) (*NodeExpandVolumeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NodeExpandVolume not implemented")
@@ -1425,6 +1529,42 @@ func _Node_NodeGetVolumeStats_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Node_NodeGetVolumeHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NodeGetVolumeHealthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServer).NodeGetVolumeHealth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Node_NodeGetVolumeHealth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServer).NodeGetVolumeHealth(ctx, req.(*NodeGetVolumeHealthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Node_NodeGetStorageHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NodeGetStorageHealthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServer).NodeGetStorageHealth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Node_NodeGetStorageHealth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServer).NodeGetStorageHealth(ctx, req.(*NodeGetStorageHealthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Node_NodeExpandVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(NodeExpandVolumeRequest)
 	if err := dec(in); err != nil {
@@ -1505,6 +1645,14 @@ var Node_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "NodeGetVolumeStats",
 			Handler:    _Node_NodeGetVolumeStats_Handler,
+		},
+		{
+			MethodName: "NodeGetVolumeHealth",
+			Handler:    _Node_NodeGetVolumeHealth_Handler,
+		},
+		{
+			MethodName: "NodeGetStorageHealth",
+			Handler:    _Node_NodeGetStorageHealth_Handler,
 		},
 		{
 			MethodName: "NodeExpandVolume",
