@@ -22,7 +22,8 @@ package main
 //   - process: for each UID, sync the pod, or remove its worker directory
 //     once the pod is gone
 //   - finish: forget the UID, or retry it with backoff, capped at
-//     syncMaxRetries while the pool's SandboxConfig is unresolved
+//     syncMaxRetries while the pool's SandboxConfig is unresolved, and
+//     emit a Warning Event on the pod when a sync fails
 //
 // worker_sandbox_versions.go builds the sandbox runtimes file for each
 // worker pod.
@@ -39,12 +40,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	coreinformers "k8s.io/client-go/informers/core/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
@@ -92,6 +96,18 @@ const syncMaxRetries = 8
 // cached syncs for other pods on the node.
 const syncWorkers = 2
 
+const (
+	// eventReasonSandboxRuntimeSyncFailed is the reason of the Warning
+	// event emitted on a worker pod when its sandbox runtimes file cannot
+	// be synced (or is written without a restorable version).
+	eventReasonSandboxRuntimeSyncFailed = "SandboxRuntimeSyncFailed"
+	// eventActionSyncSandboxRuntimes is the action of events emitted while
+	// syncing a worker pod's sandbox runtimes file.
+	eventActionSyncSandboxRuntimes = "SyncSandboxRuntimes"
+	// maxEventNoteBytes is the events.k8s.io/v1 Note length limit (1 kB).
+	maxEventNoteBytes = 1024
+)
+
 // workerSandboxSyncer keeps a sandbox runtimes file in each local worker's
 // directory under workersDir: the runtimes of the enabled versions of the
 // SandboxConfig the worker's pool uses. It creates a worker's directory once
@@ -106,6 +122,9 @@ type workerSandboxSyncer struct {
 	// so they are fetched before an actor asks for them and stay cached
 	// while none runs them.
 	prewarm runtimePrewarm
+	// recorder emits a Warning event on the worker pod when syncing its
+	// sandbox runtimes file fails.
+	recorder events.EventRecorder
 	// pods holds this node's worker pods, indexed by podUIDIndex.
 	pods   cache.Indexer
 	assets sandboxAssetFetcher
@@ -136,7 +155,7 @@ type workerSandboxSyncer struct {
 	cpuFeatures map[string]string
 }
 
-func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) *workerSandboxSyncer {
+func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm, recorder events.EventRecorder) *workerSandboxSyncer {
 	return &workerSandboxSyncer{
 		resolver:   resolver,
 		pods:       pods,
@@ -144,6 +163,7 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 		scratchDir: ateletpath.SandboxAssetScratchDir,
 		index:      index,
 		prewarm:    prewarm,
+		recorder:   recorder,
 		// Backoff doubles from 1s for informer lag and unresolved pools, and
 		// caps at 5m where uncapped retries for transient asset fetch or probe
 		// failures stay until they recover.
@@ -225,7 +245,7 @@ func (s *workerSandboxSyncer) syncDefaultRuntimeDirs(uid string, defaults []stri
 // or a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
 // binary), existing files and index entries stay as they are and only
 // changes wait.
-func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools ateinformers.WorkerPoolInformer, configs ateinformers.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) (*workerSandboxSyncer, error) {
+func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools ateinformers.WorkerPoolInformer, configs ateinformers.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm, recorder events.EventRecorder) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok {
@@ -239,7 +259,7 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 		workerPools: workerPools.Lister(),
 		configs:     configs.Lister(),
 	}
-	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), assets, workersDir, index, prewarm)
+	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), assets, workersDir, index, prewarm, recorder)
 	if err := watch(ctx, "worker pod", pods.Informer(), s.podHandler()); err != nil {
 		return nil, err
 	}
@@ -440,6 +460,7 @@ func (s *workerSandboxSyncer) run(ctx context.Context, synced ...cache.InformerS
 // it is gone.
 func (s *workerSandboxSyncer) process(ctx context.Context, uid string) {
 	defer s.queue.Done(uid)
+	var related k8sruntime.Object
 	pod, err := s.podByUID(uid)
 	switch {
 	case err != nil:
@@ -448,9 +469,9 @@ func (s *workerSandboxSyncer) process(ctx context.Context, uid string) {
 	case pod.DeletionTimestamp != nil:
 		// The Delete event removes the directory.
 	default:
-		err = s.syncPod(ctx, pod)
+		related, err = s.syncPod(ctx, pod)
 	}
-	s.finish(ctx, uid, err)
+	s.finish(ctx, pod, related, uid, err)
 }
 
 // podByUID returns the cached pod with the given UID, or nil if there is none.
@@ -471,30 +492,67 @@ func (s *workerSandboxSyncer) podByUID(uid string) (*corev1.Pod, error) {
 }
 
 // finish forgets uid on success or errPermanent, caps errUnresolved retries at
-// syncMaxRetries, and otherwise requeues with backoff without a retry cap. A
-// sync that fails before it writes leaves the existing file in place.
-func (s *workerSandboxSyncer) finish(ctx context.Context, uid string, err error) {
+// syncMaxRetries, and otherwise requeues with backoff without a retry cap. It
+// emits a Warning Event on pod for every failure except an unresolved pool
+// still being retried. A sync that fails before it writes leaves the existing
+// file in place.
+func (s *workerSandboxSyncer) finish(ctx context.Context, pod *corev1.Pod, related k8sruntime.Object, uid string, err error) {
 	switch {
 	case err == nil:
 		s.queue.Forget(uid)
 	case errors.Is(err, errPermanent):
 		slog.WarnContext(ctx, "Cannot sync worker sandbox runtimes; not retrying until the pool's SandboxConfig changes or atelet restarts", slog.String("pod_uid", uid), slog.Any("err", err))
+		s.recordSyncFailure(pod, related, err)
 		s.queue.Forget(uid)
 	case ctx.Err() != nil:
 		// Shutting down, not a sync failure.
 	case errors.Is(err, errIncomplete):
 		slog.WarnContext(ctx, "Worker sandbox runtimes file is missing a restorable version; will retry",
 			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
+		s.recordSyncFailure(pod, related, err)
 		s.queue.AddRateLimited(uid)
 	case s.queue.NumRequeues(uid) < syncMaxRetries || !errors.Is(err, errUnresolved):
 		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; will retry",
 			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
+		if !errors.Is(err, errUnresolved) {
+			s.recordSyncFailure(pod, related, err)
+		}
 		s.queue.AddRateLimited(uid)
 	default:
 		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; giving up until the pool's SandboxConfig changes or atelet restarts",
 			slog.String("pod_uid", uid), slog.Int("retries", syncMaxRetries), slog.Any("err", err))
+		s.recordSyncFailure(pod, related, err)
 		s.queue.Forget(uid)
 	}
+}
+
+// recordSyncFailure emits a Warning event on pod when a sync fails. The
+// broadcaster keys its series cache by (regarding, related, reason, action),
+// including both objects' ResourceVersion, so retries against the same pod and
+// SandboxConfig (or WorkerPool) revisions update the series count instead of
+// creating a new Event on each attempt, while a pod status update, config edit,
+// or config switch starts a new Event. A message that changes while both
+// ResourceVersions stay the same still joins the open series and keeps the
+// first attempt's Note.
+func (s *workerSandboxSyncer) recordSyncFailure(pod *corev1.Pod, related k8sruntime.Object, err error) {
+	if pod == nil {
+		return
+	}
+	s.recorder.Eventf(pod, related, corev1.EventTypeWarning, eventReasonSandboxRuntimeSyncFailed, eventActionSyncSandboxRuntimes, "%s", truncateEventNote(err.Error()))
+}
+
+// truncateEventNote caps msg at maxEventNoteBytes on a UTF-8 rune boundary,
+// ending a truncated message with "...".
+func truncateEventNote(msg string) string {
+	if len(msg) <= maxEventNoteBytes {
+		return msg
+	}
+	const ellipsis = "..."
+	cut := maxEventNoteBytes - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut] + ellipsis
 }
 
 func (s *workerSandboxSyncer) removeDir(ctx context.Context, uid string) error {
