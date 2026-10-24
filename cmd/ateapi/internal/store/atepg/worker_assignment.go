@@ -33,10 +33,7 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi.Wo
 	var protoBytes []byte
 	err := tx.QueryRow(ctx, `SELECT proto FROM workers WHERE name = $1 FOR UPDATE`, name).Scan(&protoBytes)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("locking worker %s: %w", name, err)
+		return nil, mapToStoreError(err, "locking worker %s", name)
 	}
 	worker := &ateapi.Worker{}
 	if err := proto.Unmarshal(protoBytes, worker); err != nil {
@@ -223,10 +220,7 @@ func getAssignmentRow(ctx context.Context, q querier, actorUID string) (*ateapi.
 	err := q.QueryRow(ctx, `SELECT proto, worker_name FROM worker_assignments WHERE actor_uid = $1`, actorUID).
 		Scan(&protoBytes, &workerName)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, "", store.ErrNotFound
-		}
-		return nil, "", fmt.Errorf("getting assignment for actor %s: %w", actorUID, err)
+		return nil, "", mapToStoreError(err, "getting assignment for actor %s", actorUID)
 	}
 	assignment := &ateapi.ActorAssignment{}
 	if err := proto.Unmarshal(protoBytes, assignment); err != nil {
@@ -304,10 +298,7 @@ func (p *Persistence) FindWorkerHostingActor(ctx context.Context, actorUID strin
 	var workerName string
 	err := p.pool.QueryRow(ctx, `SELECT worker_name FROM worker_assignments WHERE actor_uid = $1`, actorUID).Scan(&workerName)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return "", store.ErrNotFound
-		}
-		return "", fmt.Errorf("finding the worker hosting actor %s: %w", actorUID, err)
+		return "", mapToStoreError(err, "finding the worker hosting actor %s", actorUID)
 	}
 	return workerName, nil
 }

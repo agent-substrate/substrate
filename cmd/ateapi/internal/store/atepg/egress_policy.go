@@ -38,13 +38,7 @@ func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources
 		INSERT INTO actor_egress_policies (atespace, actor_name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`, actorRef.Atespace, actorRef.Name, dbPolicy.GetMetadata().GetUid(), dbPolicy.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, store.ErrAlreadyExists
-		}
-		if isForeignKeyViolation(err) {
-			return nil, store.ErrFailedPrecondition
-		}
-		return nil, fmt.Errorf("inserting egress policy for %s: %w", actorRef, err)
+		return nil, mapToStoreError(err, "inserting egress policy for %s", actorRef)
 	}
 	return dbPolicy, nil
 }
@@ -126,10 +120,7 @@ func getEgressPolicyRow(ctx context.Context, q querier, query string, args ...an
 	var version int64
 	var protoBytes []byte
 	if err := q.QueryRow(ctx, query, args...).Scan(&uid, &version, &protoBytes); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting egress policy: %w", err)
+		return nil, mapToStoreError(err, "getting egress policy")
 	}
 	return unmarshalEgressPolicy(uid, version, protoBytes)
 }
