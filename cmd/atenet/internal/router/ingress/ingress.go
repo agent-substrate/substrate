@@ -93,18 +93,24 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_NotFound, "invalid actor reference")
 	}
 
-	// CONNECT traffic can name a port other than defaultActorPort. After Envoy
-	// terminates CONNECT, filter state retains the outer authority while md.Host
-	// belongs to the inner request.
 	targetPort := defaultActorPort
 	targetAuthority := md.Attribute(extproc.ConnectAuthorityFilterStateAttribute)
 	if targetAuthority == "" && md.Method == http.MethodConnect {
 		targetAuthority = md.Host
 	}
-	if _, portStr, err := net.SplitHostPort(targetAuthority); err == nil {
-		if p, ok := atunnelingress.ParsePort(portStr); ok {
-			targetPort = p
+	if targetAuthority != "" || md.Method == http.MethodConnect {
+		// CONNECT selects its port only through the outer authority.
+		if _, portStr, err := net.SplitHostPort(targetAuthority); err == nil {
+			if port, ok := atunnelingress.ParsePort(portStr); ok {
+				targetPort = port
+			}
 		}
+	} else if value := md.Header(atenet.TargetPortHeader); value != "" {
+		port, err := strconv.ParseUint(value, 10, 16)
+		if err != nil || port == 0 {
+			return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_BadRequest, "invalid target port")
+		}
+		targetPort = int(port)
 	}
 
 	slog.InfoContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
@@ -163,7 +169,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 
 	// Overwrite the routing header so a client-provided value cannot select a
 	// different actor after this request has been resolved.
-	mutation := &extprocv3.HeaderMutation{}
+	mutation := &extprocv3.HeaderMutation{RemoveHeaders: []string{atenet.TargetPortHeader}}
 	mutation.SetHeaders = append(mutation.SetHeaders, &corev3.HeaderValueOption{
 		Header: &corev3.HeaderValue{
 			Key:      atenet.TargetActorHeader,

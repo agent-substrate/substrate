@@ -359,10 +359,12 @@ Handles actor-aware routing and automatic re-animation.
     path. With `--upstream-connect=false`, the Envoy router instead reaches
     `atunnel` over HTTPS on port 443.
 
-  * **Arbitrary-Port Ingress**: A client reaches a port on the Actor other than
-    its default (80) with an HTTP `CONNECT` request naming the port in the
-    authority (e.g. `CONNECT <actor-dns>:9090`), rather than a separate header
-    or field. `atenet-router` terminates the `CONNECT` on a dedicated listener
+  * **Arbitrary-Port Ingress**: An ordinary HTTP request selects the Actor's
+    port with `ate-target-port`, defaulting to 80 when missing or empty.
+    Alternatively, an HTTP `CONNECT` request names the port in its authority
+    (e.g. `CONNECT <actor-dns>:9090`). CONNECT ignores `ate-target-port` on both
+    the outer request and tunneled requests. `atenet-router` terminates the
+    `CONNECT` on a dedicated listener
     and re-enters the tunneled traffic through the same ingress path as
     ordinary requests, so each request inside a long-lived tunnel still
     resumes the Actor and re-routes it independently if it moves workers. Only

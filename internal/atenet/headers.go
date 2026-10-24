@@ -27,6 +27,8 @@ const (
 	// "<atespace>/<actor>". HTTP field names are case-insensitive; this uses its
 	// HTTP/2 wire form so dataplane configuration and metadata are native.
 	TargetActorHeader = "ate-target-actor"
+	// TargetPortHeader selects the actor's TCP port for HTTP ingress.
+	TargetPortHeader = "ate-target-port"
 )
 
 // ParseTargetActor parses and validates a TargetActorHeader value.

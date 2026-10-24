@@ -23,13 +23,15 @@ likely be split in the future for better scalability.)
     reaches a port on the actor other than its default (80) with an HTTP
     `CONNECT` request naming the port in the authority. Only HTTP(S) traffic
     over the tunnel is supported today, not raw TCP.
+  Ordinary HTTP requests can select a non-default port with `ate-target-port`;
+  see [Workload Connectivity](../../docs/api-guide.md#workload-connectivity).
 * Upstream: Envoy's `ORIGINAL_DST` actor cluster dials the actor's in-worker
   `atunnel` ingress server on the worker pod's port 443 over mTLS, using the
   address `atenet router`'s ext_proc resolves into dynamic metadata rather
   than a header. `atunnel` can't read that metadata directly, though -- it's
   a separate process on the worker pod, not part of Envoy -- so the port to
-  reach on the actor itself (its default port, or an arbitrary one for
-  CONNECT) still travels as a real header, `TargetPortHeader` in `internal/atunnel/ingress`.
+  reach on the actor itself (selected by `ate-target-port`, CONNECT authority,
+  or the default) still travels as a real header, `TargetPortHeader` in `internal/atunnel/ingress`.
   `ate-target-actor: <atespace>/<actor>` identifies the Actor independently of
   `:authority`/`Host`.
 * Termination: the router drains gracefully on SIGTERM (readiness flip →

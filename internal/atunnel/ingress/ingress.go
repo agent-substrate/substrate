@@ -45,9 +45,9 @@ const (
 	// staleAssignmentHeader distinguishes an atunnel routing rejection from a
 	// 421 returned by the actor application itself.
 	staleAssignmentHeader = "X-Ate-Assignment-Stale"
-	// TargetPortHeader carries the port to reach on the actor: the CONNECT
-	// :authority's port for arbitrary-port ingress, or the default 80
-	// otherwise (see atenet-router's HandleRequestHeaders). cfg.Upstream is
+	// TargetPortHeader carries the port selected by atenet-router from the
+	// public ate-target-port header, CONNECT authority, or the default 80
+	// (see atenet-router's HandleRequestHeaders). cfg.Upstream is
 	// fixed for the Server's lifetime, so this lets the port vary per
 	// request; stripped before the request reaches the actor.
 	TargetPortHeader = "X-Ate-Target-Port"
