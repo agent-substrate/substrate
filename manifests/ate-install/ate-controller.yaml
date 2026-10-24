@@ -102,6 +102,12 @@ spec:
       containers:
       - name: ate-controller
         image: ko://go.ate.dev/substrate/cmd/atecontroller
+        # Requests, no limits: a node packed with sandboxes gives a BestEffort
+        # pod almost no CPU.
+        resources:
+          requests:
+            cpu: 50m
+            memory: 256Mi
         args:
         - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
         - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem

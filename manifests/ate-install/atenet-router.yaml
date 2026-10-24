@@ -202,6 +202,12 @@ spec:
       containers:
       - name: atenet-router
         image: ko://go.ate.dev/substrate/cmd/atenet
+        # Requests, no limits: a node packed with sandboxes gives a BestEffort
+        # pod almost no CPU and its probes time out.
+        resources:
+          requests:
+            cpu: 100m
+            memory: 512Mi
         args:
         - "router"
         # Serve the ingress direction only: the ingress ext_proc handler, plus
@@ -289,7 +295,8 @@ spec:
             port: health
           initialDelaySeconds: 5
           periodSeconds: 2
-          failureThreshold: 3
+          timeoutSeconds: 5
+          failureThreshold: 6
         # /healthz stays 200 while a terminating pod drains; /readyz turns
         # 503, so liveness and readiness diverge correctly during shutdown.
         livenessProbe:
@@ -298,6 +305,8 @@ spec:
             port: health
           initialDelaySeconds: 10
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
         volumeMounts:
         # Router's own client identity presented to ateapi.
         - name: "podidentity"
@@ -313,6 +322,10 @@ spec:
       - name: envoy
         # ENVOY_DATAPLANE_IMAGE is substituted for the image URI by ate-setup
         image: ${ENVOY_DATAPLANE_IMAGE}
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
         command:
         - "/usr/local/bin/envoy"
         - "-c"
@@ -340,6 +353,8 @@ spec:
             path: /ready
             port: envoy-metrics
           periodSeconds: 2
+          timeoutSeconds: 5
+          failureThreshold: 6
         volumeMounts:
         - name: envoy-config
           mountPath: /etc/envoy
