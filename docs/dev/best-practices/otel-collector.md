@@ -504,7 +504,7 @@ failure.
 
 ## Local Development (kind)
 
-`hack/install-ate-kind.sh` installs a collector plus a Jaeger all-in-one into
+`hack/install-ate-kind.sh` installs a collector plus Jaeger into
 the `otel-system` namespace — see
 `manifests/ate-install/kind/otel-collector.yaml`. It is a single-replica
 Deployment, which is appropriate for a one-node kind cluster. The kind
