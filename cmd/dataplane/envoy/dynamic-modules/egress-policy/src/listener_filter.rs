@@ -33,7 +33,7 @@ pub const ATE_EGRESS_FILTER_CHAIN_MITM: &str = "mitm";
 /// Verdict for TLS a tls_passthrough rule allows.
 pub const ATE_EGRESS_FILTER_CHAIN_PASSTHROUGH: &str = "passthrough";
 
-/// Verdict for anything that is not TLS.
+/// Verdict for cleartext HTTP.
 pub const ATE_EGRESS_FILTER_CHAIN_CLEARTEXT: &str = "cleartext";
 
 /// Verdict for a denied connection. No chain has this name.
@@ -50,6 +50,9 @@ const TRANSPORT_TLS: &str = "tls";
 
 /// Transport protocol Envoy assumes when no inspector detected one.
 const TRANSPORT_RAW_BUFFER: &str = "raw_buffer";
+
+/// Application protocols http_inspector sets when it recognizes cleartext HTTP.
+const CLEARTEXT_HTTP_PROTOCOLS: &[&str] = &["http/1.0", "http/1.1", "h2c"];
 
 /// Reports whether a normalized `hostname` matches `pattern`. Must agree with
 /// HostnamePattern.Matches in internal/egresspolicy.
@@ -81,12 +84,25 @@ fn normalize_sni(sni: &str) -> String {
   }
 }
 
-/// Returns the verdict from the transport alone, or None for TLS, which is
-/// decided by SNI. Unknown transports are denied.
-pub fn transport_verdict(transport: Option<&str>) -> Option<&'static str> {
+/// Returns the verdict for a non-TLS connection, or None for TLS, which is
+/// decided by SNI. Only connections `http_inspector` recognized as HTTP go to
+/// the cleartext chain; anything else is denied.
+pub fn transport_verdict<S: AsRef<str>>(
+  transport: Option<&str>,
+  app_protocols: &[S],
+) -> Option<&'static str> {
   match transport {
     Some(TRANSPORT_TLS) => None,
-    None | Some(TRANSPORT_RAW_BUFFER) => Some(ATE_EGRESS_FILTER_CHAIN_CLEARTEXT),
+    None | Some(TRANSPORT_RAW_BUFFER) => {
+      if app_protocols
+        .iter()
+        .any(|p| CLEARTEXT_HTTP_PROTOCOLS.contains(&p.as_ref()))
+      {
+        Some(ATE_EGRESS_FILTER_CHAIN_CLEARTEXT)
+      } else {
+        Some(ATE_EGRESS_FILTER_CHAIN_DENIED)
+      }
+    }
     Some(_) => Some(ATE_EGRESS_FILTER_CHAIN_DENIED),
   }
 }
@@ -128,8 +144,13 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EgressPolicyFilter {
     let transport = envoy_filter
       .get_detected_transport_protocol()
       .map(|value| String::from_utf8_lossy(value.as_slice()).into_owned());
+    let app_protocols: Vec<String> = envoy_filter
+      .get_requested_application_protocols()
+      .into_iter()
+      .map(|value| String::from_utf8_lossy(value.as_slice()).into_owned())
+      .collect();
 
-    let verdict = match transport_verdict(transport.as_deref()) {
+    let verdict = match transport_verdict(transport.as_deref(), &app_protocols) {
       Some(verdict) => verdict,
       None => {
         let sni = envoy_filter
@@ -154,8 +175,9 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EgressPolicyFilter {
 
     envoy_filter.set_filter_state_bytes(ATE_EGRESS_FILTER_CHAIN, verdict.as_bytes());
     envoy_log_trace!(
-      "egress policy: transport={:?} chain={}",
+      "egress policy: transport={:?} app_protocols={:?} chain={}",
       transport,
+      app_protocols,
       verdict
     );
     envoy_dynamic_module_type_on_listener_filter_status::Continue
@@ -243,14 +265,37 @@ mod tests {
 
   #[test]
   fn test_transport_verdict() {
-    assert_eq!(transport_verdict(Some("tls")), None);
-    assert_eq!(transport_verdict(None), Some(ATE_EGRESS_FILTER_CHAIN_CLEARTEXT));
+    assert_eq!(transport_verdict::<&str>(Some("tls"), &[]), None);
+    for proto in ["http/1.0", "http/1.1", "h2c"] {
+      assert_eq!(
+        transport_verdict(None, &[proto]),
+        Some(ATE_EGRESS_FILTER_CHAIN_CLEARTEXT)
+      );
+      assert_eq!(
+        transport_verdict(Some("raw_buffer"), &[proto]),
+        Some(ATE_EGRESS_FILTER_CHAIN_CLEARTEXT)
+      );
+    }
     assert_eq!(
-      transport_verdict(Some("raw_buffer")),
-      Some(ATE_EGRESS_FILTER_CHAIN_CLEARTEXT)
+      transport_verdict::<&str>(None, &[]),
+      Some(ATE_EGRESS_FILTER_CHAIN_DENIED)
     );
-    assert_eq!(transport_verdict(Some("quic")), Some(ATE_EGRESS_FILTER_CHAIN_DENIED));
-    assert_eq!(transport_verdict(Some("")), Some(ATE_EGRESS_FILTER_CHAIN_DENIED));
+    assert_eq!(
+      transport_verdict::<&str>(Some("raw_buffer"), &[]),
+      Some(ATE_EGRESS_FILTER_CHAIN_DENIED)
+    );
+    assert_eq!(
+      transport_verdict(Some("raw_buffer"), &["ssh"]),
+      Some(ATE_EGRESS_FILTER_CHAIN_DENIED)
+    );
+    assert_eq!(
+      transport_verdict(Some("quic"), &["http/1.1"]),
+      Some(ATE_EGRESS_FILTER_CHAIN_DENIED)
+    );
+    assert_eq!(
+      transport_verdict(Some(""), &["http/1.1"]),
+      Some(ATE_EGRESS_FILTER_CHAIN_DENIED)
+    );
   }
 
   #[test]
@@ -339,6 +384,9 @@ mod tests {
       .expect_get_detected_transport_protocol()
       .returning(|| Some(EnvoyBuffer::new(b"tls")));
     mock_filter
+      .expect_get_requested_application_protocols()
+      .returning(Vec::new);
+    mock_filter
       .expect_get_requested_server_name()
       .returning(move || sni.map(EnvoyBuffer::new));
     mock_filter
@@ -374,14 +422,21 @@ mod tests {
     assert_tls_verdict_with_hash_state(sni, hash_state, want);
   }
 
-  /// Runs on_accept for a connection with the given detected transport,
-  /// asserting the verdict written.
-  fn assert_transport_verdict(transport: Option<&'static [u8]>, want: &'static str) {
+  /// Runs on_accept for a connection with the given detected transport and
+  /// application protocols, asserting the verdict written.
+  fn assert_transport_verdict(
+    transport: Option<&'static [u8]>,
+    app_protocols: &'static [&'static [u8]],
+    want: &'static str,
+  ) {
     let config = new_filter_config();
     let mut mock_filter = MockEnvoyListenerFilter::new();
     mock_filter
       .expect_get_detected_transport_protocol()
       .returning(move || transport.map(EnvoyBuffer::new));
+    mock_filter
+      .expect_get_requested_application_protocols()
+      .returning(move || app_protocols.iter().copied().map(EnvoyBuffer::new).collect());
     mock_filter
       .expect_set_filter_state_bytes()
       .withf(move |key, value| key == ATE_EGRESS_FILTER_CHAIN && value == want.as_bytes())
@@ -400,18 +455,37 @@ mod tests {
   }
 
   #[test]
-  fn test_on_accept_no_transport_is_cleartext() {
-    assert_transport_verdict(None, ATE_EGRESS_FILTER_CHAIN_CLEARTEXT);
+  fn test_on_accept_no_transport_with_http_is_cleartext() {
+    assert_transport_verdict(None, &[b"http/1.1"], ATE_EGRESS_FILTER_CHAIN_CLEARTEXT);
   }
 
   #[test]
-  fn test_on_accept_raw_buffer_is_cleartext() {
-    assert_transport_verdict(Some(b"raw_buffer"), ATE_EGRESS_FILTER_CHAIN_CLEARTEXT);
+  fn test_on_accept_raw_buffer_with_http_is_cleartext() {
+    assert_transport_verdict(
+      Some(b"raw_buffer"),
+      &[b"http/1.1"],
+      ATE_EGRESS_FILTER_CHAIN_CLEARTEXT,
+    );
+    assert_transport_verdict(
+      Some(b"raw_buffer"),
+      &[b"h2c"],
+      ATE_EGRESS_FILTER_CHAIN_CLEARTEXT,
+    );
+  }
+
+  #[test]
+  fn test_on_accept_raw_buffer_without_http_is_denied() {
+    assert_transport_verdict(None, &[], ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_transport_verdict(Some(b"raw_buffer"), &[], ATE_EGRESS_FILTER_CHAIN_DENIED);
   }
 
   #[test]
   fn test_on_accept_unknown_transport_is_denied() {
-    assert_transport_verdict(Some(b"quic"), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_transport_verdict(
+      Some(b"quic"),
+      &[b"http/1.1"],
+      ATE_EGRESS_FILTER_CHAIN_DENIED,
+    );
   }
 
   fn google_rules() -> EgressPolicy {

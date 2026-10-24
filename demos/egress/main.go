@@ -13,8 +13,10 @@
 // limitations under the License.
 
 // Command egress is a small HTTP service for demonstrating per-Actor egress
-// policy. It accepts a URL, fetches it, and returns the upstream response, and
-// on a second endpoint it makes gRPC calls and returns what came back.
+// policy. It accepts a URL, fetches it, and returns the upstream response. On
+// /grpc it makes gRPC calls and returns what came back, and on /tcp it opens a
+// raw TCP connection, so that egress can be exercised with something other than
+// HTTP.
 package main
 
 import (
@@ -25,6 +27,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,6 +37,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -156,11 +160,14 @@ type connectResponse struct {
 }
 
 func main() {
+	listen := flag.String("listen", listenAddress, "address to serve on")
+	flag.Parse()
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	client := &http.Client{Timeout: requestTimeout}
-	slog.Info("starting egress demo", "address", listenAddress)
-	if err := http.ListenAndServe(listenAddress, newHandler(client)); err != nil {
+	slog.Info("starting egress demo", "address", *listen)
+	if err := http.ListenAndServe(*listen, newHandler(client)); err != nil {
 		slog.Error("egress demo stopped", "error", err)
 		os.Exit(1)
 	}
@@ -235,6 +242,8 @@ func newHandler(client *http.Client) http.Handler {
 	mux.HandleFunc("/websocket", handleWebSocket)
 	mux.HandleFunc("/grpc", handleGRPC)
 	mux.HandleFunc("/connect", handleConnect)
+	mux.HandleFunc("/tcp", handleTCPProbe)
+	mux.HandleFunc("/udpecho", handleUDPEcho)
 	return mux
 }
 
@@ -986,6 +995,189 @@ func performConnect(ctx context.Context, input connectRequest, tlsCfg *tls.Confi
 	}
 	response.Body = string(body)
 	return response, nil
+}
+
+// tcpProbeRequest asks for one raw TCP exchange.
+type tcpProbeRequest struct {
+	Address    string `json:"address"`
+	Send       string `json:"send,omitempty"`
+	Timeout    string `json:"timeout,omitempty"`
+	SkipBanner bool   `json:"skipBanner,omitempty"`
+}
+
+type tcpProbeResponse struct {
+	Banner   string `json:"banner,omitempty"`
+	Received string `json:"received,omitempty"`
+	Closed   bool   `json:"closed,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// handleTCPProbe opens a TCP connection and, unless SkipBanner is set, reads
+// before it writes.
+func handleTCPProbe(w http.ResponseWriter, r *http.Request) {
+	const (
+		defaultProbeTimeout = 5 * time.Second
+		probeReadBytes      = 512
+	)
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, tcpProbeResponse{Error: "method must be POST"})
+		return
+	}
+
+	var input tcpProbeRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if err := decoder.Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, tcpProbeResponse{Error: fmt.Sprintf("invalid JSON payload: %v", err)})
+		return
+	}
+	if err := validateTarget(input.Address, "address"); err != nil {
+		writeJSON(w, http.StatusBadRequest, tcpProbeResponse{Error: err.Error()})
+		return
+	}
+
+	timeout := defaultProbeTimeout
+	if input.Timeout != "" {
+		parsed, err := time.ParseDuration(input.Timeout)
+		if err != nil || parsed <= 0 {
+			writeJSON(w, http.StatusBadRequest, tcpProbeResponse{Error: fmt.Sprintf("invalid timeout %q", input.Timeout)})
+			return
+		}
+		timeout = parsed
+	}
+
+	dialer := net.Dialer{Timeout: timeout}
+	connection, err := dialer.DialContext(r.Context(), "tcp", input.Address)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("dialing %s: %v", input.Address, err)})
+		return
+	}
+	defer connection.Close()
+
+	var response tcpProbeResponse
+	if !input.SkipBanner {
+		banner, closed, err := readWithTimeout(connection, probeReadBytes, timeout)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("reading banner from %s: %v", input.Address, err)})
+			return
+		}
+		response.Banner = string(banner)
+		if closed {
+			response.Closed = true
+			writeJSON(w, http.StatusOK, response)
+			return
+		}
+	}
+	if input.Send == "" {
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+
+	if err := connection.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		writeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("setting write deadline: %v", err)})
+		return
+	}
+	if _, err := io.WriteString(connection, input.Send); err != nil {
+		if peerClosed(err) {
+			response.Closed = true
+			writeJSON(w, http.StatusOK, response)
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("writing to %s: %v", input.Address, err)})
+		return
+	}
+	received, closed, err := readWithTimeout(connection, probeReadBytes, timeout)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("reading reply from %s: %v", input.Address, err)})
+		return
+	}
+	response.Received = string(received)
+	response.Closed = closed
+	writeJSON(w, http.StatusOK, response)
+}
+
+// readWithTimeout reads up to limit bytes within timeout and reports whether
+// the peer closed or reset the connection.
+func readWithTimeout(connection net.Conn, limit int, timeout time.Duration) ([]byte, bool, error) {
+	if err := connection.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, false, fmt.Errorf("setting read deadline: %w", err)
+	}
+	buffer := make([]byte, limit)
+	n, err := connection.Read(buffer)
+	switch {
+	case err == nil, errors.Is(err, os.ErrDeadlineExceeded):
+		return buffer[:n], false, nil
+	case peerClosed(err):
+		return buffer[:n], true, nil
+	default:
+		return nil, false, err
+	}
+}
+
+func peerClosed(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
+}
+
+const (
+	udpEchoAttempts = 5
+	udpEchoWait     = time.Second
+)
+
+type udpEchoResponse struct {
+	Addr     string `json:"addr"`
+	Echoed   bool   `json:"echoed"`
+	Attempts int    `json:"attempts"`
+	Error    string `json:"error,omitempty"`
+}
+
+// handleUDPEcho sends datagrams to ?addr= and reports whether one was echoed back.
+func handleUDPEcho(w http.ResponseWriter, r *http.Request) {
+	addr := r.URL.Query().Get("addr")
+	result := udpEchoResponse{Addr: addr}
+	if err := validateTarget(addr, "addr"); err != nil {
+		result.Error = err.Error()
+		writeJSON(w, http.StatusBadRequest, result)
+		return
+	}
+
+	conn, err := net.Dial("udp", addr)
+	if err != nil {
+		result.Error = "dialing " + addr + ": " + err.Error()
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	defer conn.Close()
+
+	payload := fmt.Sprintf("probe-%d", time.Now().UnixNano())
+	for result.Attempts < udpEchoAttempts {
+		result.Attempts++
+		if _, err := conn.Write([]byte(payload)); err != nil {
+			result.Error = "sending to " + addr + ": " + err.Error()
+			break
+		}
+		if err := conn.SetReadDeadline(time.Now().Add(udpEchoWait)); err != nil {
+			result.Error = "setting the read deadline: " + err.Error()
+			break
+		}
+		buf := make([]byte, 512)
+		n, err := conn.Read(buf)
+		if err != nil {
+			result.Error = "waiting for the echo from " + addr + ": " + err.Error()
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				break
+			}
+			continue
+		}
+		if string(buf[:n]) == payload {
+			result.Echoed = true
+			result.Error = ""
+			break
+		}
+		result.Error = fmt.Sprintf("echo from %s was %q, want %q", addr, buf[:n], payload)
+		break
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func validateURL(raw string) error {

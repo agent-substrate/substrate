@@ -1010,3 +1010,93 @@ func protocolGatewayAccessLogMatches(entry gatewayAccessLogLine, actorRef resour
 	}
 	return false
 }
+
+// TestActorEgressRawTCPBlocked checks that non-HTTP, non-TLS TCP is closed by
+// the egress gateway with no bytes returned, whether the server or the client
+// speaks first.
+func TestActorEgressRawTCPBlocked(t *testing.T) {
+	ctx := context.Background()
+
+	bannerTarget := e2e.DeployServerPod(t, ctx, tcpBannerTarget)
+	quietTarget := e2e.DeployServerPod(t, ctx, tcpQuietTarget)
+
+	tests := []struct {
+		name       string
+		target     e2e.Server
+		skipBanner bool
+	}{
+		{name: "server speaks first", target: bannerTarget},
+		{name: "client speaks first", target: quietTarget, skipBanner: true},
+	}
+
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-tcp", egressFixture(), e2e.EgressAllowAll()...)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+			address := test.target.Address()
+
+			token := fmt.Sprintf("ping-%d", time.Now().UnixNano())
+			probe := probeRawTCP(t, ctx, router, actorRef, map[string]any{
+				"address": address, "send": token + "\r\n", "skipBanner": test.skipBanner, "timeout": "5s",
+			})
+			if probe.Banner != "" {
+				t.Fatalf("raw TCP to %s got the origin's greeting %q", address, probe.Banner)
+			}
+			if probe.Received != "" {
+				t.Fatalf("raw TCP to %s received %q, want the connection closed with no bytes", address, probe.Received)
+			}
+			if !probe.Closed {
+				t.Fatalf("raw TCP to %s got no bytes but was never closed before the 5s read timeout", address)
+			}
+			assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(test.target.Port))
+		})
+	}
+}
+
+type rawTCPProbe struct {
+	Banner   string `json:"banner"`
+	Received string `json:"received"`
+	Closed   bool   `json:"closed"`
+	Error    string `json:"error"`
+}
+
+func probeRawTCP(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, request map[string]any) rawTCPProbe {
+	t.Helper()
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshaling the TCP probe request: %v", err)
+	}
+	status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/tcp", payload, notTransient)
+	if status != http.StatusOK {
+		t.Fatalf("TCP probe returned HTTP %d, want 200; body: %s", status, body)
+	}
+	var probe rawTCPProbe
+	if err := json.Unmarshal(body, &probe); err != nil {
+		t.Fatalf("decoding the TCP probe response %s: %v", body, err)
+	}
+	return probe
+}
+
+const tcpEchoBanner = "TESTBANNER/1.0\r\n"
+
+var (
+	tcpBannerTarget = e2e.ServerPod{
+		Name:       "tcpbanner",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"tcpecho", "--banner=" + tcpEchoBanner},
+		Port:       2222,
+		TCPProbe:   true,
+	}
+	tcpQuietTarget = e2e.ServerPod{
+		Name:       "tcpquiet",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"tcpecho"},
+		Port:       2223,
+		TCPProbe:   true,
+	}
+)
