@@ -76,6 +76,8 @@ type fakeWorker struct {
 	ateworkerpb.UnimplementedWorkerServer
 	// mu guards the record maps: concurrent RPCs record at the same time.
 	mu sync.Mutex
+
+	checkpointErr error
 	// snapshotFiles are written at checkpoint and reported back to atelet as
 	// the exact set the snapshot consists of.
 	snapshotFiles map[string]string
@@ -134,6 +136,9 @@ func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkload
 func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
 	f.recordFidelity("CheckpointWorkload", req.GetFidelity())
+	if f.checkpointErr != nil {
+		return nil, f.checkpointErr
+	}
 	dir := req.GetActorDirs().GetCheckpointDir()
 	names := make([]string, 0, len(f.snapshotFiles))
 	for name, body := range f.snapshotFiles {
@@ -149,6 +154,37 @@ func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.Ch
 		return nil, err
 	}
 	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
+}
+
+func TestCheckpointPreservesApplicationExitCode(t *testing.T) {
+	useTempNodeDirs(t)
+	const message = `application container "app" exited before checkpoint (exit code 1)`
+	serveFakeWorker(t, &fakeWorker{checkpointErr: status.Error(codes.FailedPrecondition, message)})
+	req := validCheckpointRequest()
+	req.Spec.Containers[0].Image = "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	release := newGVisorTestRelease(t)
+	if err := writeSandboxRecord(req.ActorUid, &sandboxAssetsRecord{
+		SandboxClass: "gvisor",
+		Assets:       map[string]assetEntry{gvisorAssetName: release.entry},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Atelet{
+		workerDialer:      newWorkerDialer(1),
+		imageCache:        newImageVolumeStore(t),
+		sandboxAssetCache: newTestAssetCache(t),
+		anonGCSClient:     fakeObjectStorage{data: release.tarball},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+		checkpointTimeout: defaultCheckpointTimeout,
+	}
+	resp, err := s.Checkpoint(t.Context(), req)
+	if resp != nil || apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Checkpoint = %v, %v; want FailedPrecondition", resp, err)
+	}
+	if !strings.Contains(err.Error(), message) {
+		t.Fatalf("checkpoint error %q lost the application exit diagnostic", err)
+	}
 }
 
 func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.RestoreWorkloadRequest) (*ateworkerpb.RestoreWorkloadResponse, error) {
