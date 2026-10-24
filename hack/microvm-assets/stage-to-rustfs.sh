@@ -74,7 +74,12 @@ echo ">> Waiting for rustfs in namespace ${NAMESPACE}..."
 run_kubectl rollout status deploy/rustfs --timeout=300s
 run_kubectl wait --for=condition=Complete job/rustfs-bucket-init --timeout=300s
 
-NODE="$("${ROOT}/hack/kind.sh" get nodes --name "${KIND_CLUSTER_NAME}" | head -n1)"
+# The upload runs in a node's netns; rustfs's NetworkPolicy admits that node's address only on
+# the node that hosts rustfs, so on a multi-node cluster the upload must go through that node.
+NODE="$(run_kubectl get pod -l app=rustfs -o jsonpath='{.items[0].spec.nodeName}' 2>/dev/null)"
+if [[ -z "${NODE}" ]]; then
+  NODE="$("${ROOT}/hack/kind.sh" get nodes --name "${KIND_CLUSTER_NAME}" | head -n1)"
+fi
 if [[ -z "${NODE}" ]]; then
   echo "error: no nodes found for kind cluster '${KIND_CLUSTER_NAME}'" >&2
   exit 1
