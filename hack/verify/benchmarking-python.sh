@@ -34,6 +34,7 @@ SUITES=(
   "benchmarking/locust unit_tests"
   "benchmarking/nighthawk-ingress tests"
   "benchmarking/workloads/manifests/sweperf ."
+  "tools/goodput ."
 )
 
 # A test that escapes its mocks must not reach a cluster or a registry with
