@@ -333,6 +333,9 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 		wantOwnerDSN  string
 		wantSchema    string
 		wantPoolSize  string
+		// recordedPool is the limit in the cluster's ConfigMap; empty records
+		// none, as an install from before the installer set one.
+		recordedPool string
 	}{
 		{
 			name: "preserve recorded identity",
@@ -340,12 +343,30 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole,
 				PostgresOwnerRole:     config.DefaultPostgresOwnerRole,
+				PostgresPoolMaxConns:  config.DefaultPostgresPoolMaxConns,
+			},
+			recordedPool:  "25",
+			wantReadWrite: "tenant_readwrite",
+			wantOwner:     "tenant_owner",
+			wantOwnerDSN:  recordedDSN,
+			wantSchema:    "tenant_schema",
+			wantPoolSize:  "25",
+		},
+		{
+			// The size10 limit is for the bundled PostgreSQL; an adopted
+			// database that recorded no limit gets the default instead.
+			name: "size10 limit does not reach an adopted database",
+			cfg: config.Config{
+				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
+				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole,
+				PostgresOwnerRole:     config.DefaultPostgresOwnerRole,
+				PostgresPoolMaxConns:  config.Size10PostgresPoolMaxConns,
 			},
 			wantReadWrite: "tenant_readwrite",
 			wantOwner:     "tenant_owner",
 			wantOwnerDSN:  recordedDSN,
 			wantSchema:    "tenant_schema",
-			wantPoolSize:  "20",
+			wantPoolSize:  config.DefaultPostgresPoolMaxConns,
 		},
 		{
 			name: "explicit overrides win",
@@ -358,7 +379,9 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 				PostgresOwnerConnectionString: explicitOwnerDSN,
 				PostgresSchema:                "other_schema",
 				PostgresPoolMaxConns:          "30",
+				PostgresPoolMaxConnsSet:       true,
 			},
+			recordedPool:  "25",
 			wantReadWrite: config.DefaultPostgresReadWriteRole,
 			wantOwner:     config.DefaultPostgresOwnerRole,
 			wantOwnerDSN:  explicitOwnerDSN,
@@ -368,16 +391,19 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.cfg.SnapshotLocation = "gs://ate-snapshots/"
+			recorded := map[string]string{
+				"ATE_API_POSTGRES_CLOUDSQL_INSTANCE": "p:r:i",
+				"ATE_API_POSTGRES_READ_WRITE_ROLE":   "tenant_readwrite",
+				"ATE_API_POSTGRES_OWNER_ROLE":        "tenant_owner",
+			}
+			if tc.recordedPool != "" {
+				recorded["ATE_API_POSTGRES_POOL_MAX_CONNS"] = tc.recordedPool
+			}
 			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem},
-					Data: map[string]string{
-						"ATE_API_POSTGRES_CLOUDSQL_INSTANCE": "p:r:i",
-						"ATE_API_POSTGRES_READ_WRITE_ROLE":   "tenant_readwrite",
-						"ATE_API_POSTGRES_OWNER_ROLE":        "tenant_owner",
-						"ATE_API_POSTGRES_POOL_MAX_CONNS":    "20",
-					},
+					Data:       recorded,
 				},
 				&corev1.Secret{
 					ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem},

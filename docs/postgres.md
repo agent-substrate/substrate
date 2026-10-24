@@ -85,7 +85,7 @@ Set `ATE_API_POSTGRES_OWNER_ROLE` and `ATE_API_POSTGRES_READ_WRITE_ROLE` to the 
 
 User credentials are passed as connection strings through `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` and `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`. When running `ateapi` directly, pass the DSNs as flags or use `@env` flags to read these environment variables; the installer manifest already uses `@env`.
 
-`ATE_API_POSTGRES_POOL_MAX_CONNS` (or `--postgres-pool-max-conns` when running `ateapi` directly) sets the read/write pool limit after the connection string is loaded. When unset, a `pool_max_conns` value in the DSN or the pgxpool default applies. This setting does not affect the owner, watch, or readiness probe pools; they are capped at 2, 3, and 1 connections, respectively.
+`ATE_API_POSTGRES_POOL_MAX_CONNS` (or `--postgres-pool-max-conns` when running `ateapi` directly) sets the read/write pool limit after the connection string is loaded, so it wins over a `pool_max_conns` in the DSN. The installer sets 20 per replica, 64 on `--cluster-size size10` with the bundled PostgreSQL; an external database keeps 20. With the flag unset, as when running `ateapi` directly, a `pool_max_conns` value in the DSN or the pgxpool default (one connection per CPU) applies. This setting does not affect the owner, watch, or readiness probe pools; they are capped at 2, 3, and 1 connections, respectively.
 
 `ateapi` uses the same `@env` flag pattern for role names and schema.
 

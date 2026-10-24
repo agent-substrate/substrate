@@ -229,8 +229,9 @@ var Registry = []Setting{
 	},
 	{
 		Key: "ateapi.postgres.poolMaxConns", Env: "ATE_API_POSTGRES_POOL_MAX_CONNS",
-		Flag: "ateapi-postgres-pool-max-conns", Kind: KindString,
-		Usage: "Maximum connections in the apiserver's pgxpool",
+		Flag: "ateapi-postgres-pool-max-conns", Kind: KindInt,
+		Default: DefaultPostgresPoolMaxConns,
+		Usage:   "Maximum connections in the apiserver's read/write pgxpool; size10 clusters with bundled PostgreSQL default to " + Size10PostgresPoolMaxConns,
 	},
 	{
 		Key: "ateapi.postgres.serverCAFile", Env: "ATE_API_POSTGRES_SERVER_CA_FILE",
