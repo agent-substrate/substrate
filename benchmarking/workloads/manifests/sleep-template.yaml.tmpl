@@ -26,8 +26,7 @@ containers:
   command: ["/bin/sleep", "1000000"]
 # Keep the memory small: anything the micro-VM guest kernel caches rides
 # along in the memory snapshot, so a bigger guest means slower
-# suspend/resume. microvm requires at least 256Mi (128Mi VMM reserve +
-# 128Mi guest floor).
+# suspend/resume. microvm requires at least 128Mi.
 resources:
   limits:
     cpuMillicores: "${ACTOR_CPU_MILLICORES}"

@@ -43,6 +43,7 @@ Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each w
 
 - Worker capacity is a shared budget: each actor placed on a worker subtracts its declared limits from what is left. Size a pool's `limits` for the actors it should host together.
 - A worker also has an actor limit, set by the ateworker's `--max-actors` flag (default 1000). Placement stops at whichever runs out first.
+- A worker keeps some of its memory limit for itself and reports the rest as capacity. Each actor can also use memory on its worker outside its own limits, e.g. for the microVM's VMM. The worker reports this overhead with each runtime, placement counts it against capacity, and it shows in the worker's allocated resources.
 - Capacity is advisory for placement only: a worker that declares no CPU/memory limit reports zero capacity for that dimension, which the scheduler treats as **unconstrained** (placement is never blocked by missing data). The actual sandbox size still comes from the `ActorTemplate`.
 
 ### Example
@@ -160,8 +161,8 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
 
 1. **Size the sandbox.** The limits are supplied to the sandbox over the actor RPCs (control plane → atelet → ateworker):
    - **gVisor (`ateworker-gvisor`)** — applied to the container OCI spec: `limits.cpuMillicores` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memoryBytes` caps the sandbox's memory and bounds the virtual total memory it reports (so JVM/Go do not over-allocate from host RAM). When the node's kernel has cgroup memory pressure (PSI) enabled, an actor that stays over its limit is killed and reported crashed, and other actors on its worker keep running.
-   - **microVM (`ateworker-microvm`)** — `limits.cpuMillicores` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memoryBytes` sets guest RAM, reserving a small configurable margin (default 256 MiB, `--vmm-mem-reserve-mib`) for the VMM and virtiofsd so the pod cgroup does not OOM.
-2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits.
+   - **microVM (`ateworker-microvm`)** — `limits.cpuMillicores` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memoryBytes` sets guest RAM, all of it. The microVM worker refuses to boot an actor with less than 128 MiB. What the actor costs outside the guest comes out of the worker's capacity instead (see [Worker Capacity](#worker-capacity-spectemplateresources)).
+2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits, plus its runtime's overhead on that worker.
 
 `requests` are not consulted today (an actor occupies its whole worker). Because the size is baked into snapshots, a **microVM MEMORY-fidelity restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
 
@@ -324,7 +325,7 @@ A container that exceeds its memory limit is OOM-killed on its own; the actor's 
 
 Per-container limits are microVM only today. gVisor applies cgroup limits at the sandbox level: one sentry backs every container in the actor, so a per-container cgroup is created and then stays empty ([google/gvisor#190](https://github.com/google/gvisor/issues/190)). On a gVisor worker the per-container limits are accepted but not enforced; only the sandbox-level size applies.
 
-These limits subdivide the sandbox that [`resources`](#sandbox-right-sizing-resources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A microVM guest's memory is `resources.limits.memoryBytes` minus the VMM reserve, and its vCPU count is `resources.limits.cpuMillicores` rounded up to whole cores. A container limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
+These limits subdivide the sandbox that [`resources`](#sandbox-right-sizing-resources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A microVM guest's memory is `resources.limits.memoryBytes`, and its vCPU count is `resources.limits.cpuMillicores` rounded up to whole cores. A container limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
 
 Each limit is validated on its own at apply, but the sum across the actor's containers is only checked when the actor first runs, against the real guest size. A template whose limits do not fit is accepted by the API server and fails on its first actor.
 

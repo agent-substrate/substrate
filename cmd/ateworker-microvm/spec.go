@@ -17,7 +17,6 @@
 package main
 
 import (
-	"fmt"
 	"math"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -27,34 +26,24 @@ import (
 )
 
 // guestEnvelope is the ceiling an actor's container limits must fit inside.
-// declaredBytes is the actor-level memory limit and reserveMiB the guest RAM
-// held back for the VMM; together they explain where memMiB came from, so the
-// error can name the field the user can actually raise.
 //
-// memMiB is already net of reserveMiB, while vcpus is not. The asymmetry is
-// deliberate: an unreduced memory limit would push the worker pod past its own
-// and get it OOM-killed, whereas CPU is compressible, so the shortfall only
-// slows the workload down. cloud-hypervisor's vCPU threads, virtiofsd and ateworker
-// are host processes drawing on the same worker-pod CPU quota, and the
-// scheduler's capacity check sets none of it aside, so a container gets somewhat
-// less CPU than it declared and the in-guest quota is throttled by the host
-// before it binds. Carving out a CPU reserve is left for a follow-up.
+// memMiB is the actor's whole memory limit, and vcpus its CPU limit rounded up.
+// cloud-hypervisor's vCPU threads, virtiofsd and ateworker are host processes
+// drawing on the same worker-pod CPU quota, and the scheduler's capacity check
+// sets none of it aside, so a container gets somewhat less CPU than it declared
+// and the in-guest quota is throttled by the host before it binds. Carving out a
+// CPU reserve is left for a follow-up.
 type guestEnvelope struct {
-	memMiB        int
-	vcpus         int
-	declaredBytes int64
-	reserveMiB    int
+	memMiB int
+	vcpus  int
 }
 
 // remedy names the field that raises the memory ceiling.
 func (e guestEnvelope) remedy() string {
-	return fmt.Sprintf("raise spec.resources.limits.memory (declared %dMiB, less the %dMiB VMM reserve) or lower the container limits",
-		e.declaredBytes/(1024*1024), e.reserveMiB)
+	return "raise spec.resources.limits.memory or lower the container limits"
 }
 
-// cpuRemedy names the field that raises the vCPU ceiling. Unlike remedy, it
-// takes no reserve into account: the VMM reserve applies to guest memory, not
-// vCPU count (see guestEnvelope).
+// cpuRemedy names the field that raises the vCPU ceiling.
 func (e guestEnvelope) cpuRemedy() string {
 	return "raise spec.resources.limits.cpu or lower the container limits"
 }

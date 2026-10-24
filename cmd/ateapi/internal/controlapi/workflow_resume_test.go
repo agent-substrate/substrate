@@ -3578,3 +3578,27 @@ func TestAssignWorkerAttempt_WorkerWithoutNodeRejectsVolumes(t *testing.T) {
 		})
 	}
 }
+
+// A Worker that re-registered with a different overhead since the cache saw
+// it is refused under its row lock, so what the assignment records is what
+// admit checked.
+func TestAssignWorkerAttempt_RefusesChangedOverhead(t *testing.T) {
+	cached := contendedWorker("pod-a")
+	cached.Status.SandboxClasses[0].DefaultRuntime.ActorOverhead = &ateapi.RuntimeOverhead{MemoryBytes: 4 << 20}
+	sched := &filledUpScheduler{workers: []*ateapi.Worker{cached}}
+	w, actor, _ := newContendedWorkflow(t, sched)
+	locked := proto.Clone(cached).(*ateapi.Worker)
+	locked.Status.SandboxClasses[0].DefaultRuntime.ActorOverhead = &ateapi.RuntimeOverhead{MemoryBytes: 16 << 20}
+	w.store.(*contentionStore).workers[locked.GetMetadata().GetName()] = locked
+
+	tmpl := &ateapi.ActorTemplate{Resources: &ateapi.ResourceRequirements{Limits: &ateapi.Resources{MemoryBytes: 256 << 20}}}
+	_, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+	if !errors.Is(err, errWorkerFilledUp) {
+		t.Fatalf("assignWorkerAttempt() = %v, want %v", err, errWorkerFilledUp)
+	}
+
+	w.store.(*contentionStore).workers[locked.GetMetadata().GetName()] = cached
+	if _, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl); err != nil {
+		t.Fatalf("assignWorkerAttempt() with an unchanged overhead = %v", err)
+	}
+}

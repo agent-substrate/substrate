@@ -57,18 +57,17 @@ fi
 
 WORKER_COUNT=1
 SANDBOX_CLASS="gvisor"
-# Actor memory limit (ActorTemplate resources.limits.memory). The default
-# is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
-# since a bigger guest drags more page cache into every memory snapshot. Raise
-# it for RAM-consuming suites.
+# Actor memory limit (ActorTemplate resources.limits.memory). Small by
+# default, since a bigger guest drags more page cache into every memory
+# snapshot. Raise it for RAM-consuming suites.
 ACTOR_MEMORY="256Mi"
 # Actor CPU limit (ActorTemplate resources.limits.cpu). The scheduler books
 # it against the worker's CPU capacity, so it bounds how many actors a worker
 # hosts at once as much as the memory limit does.
 ACTOR_CPU="1"
 # Worker pod memory (WorkerPool spec.template.resources), set as both request
-# and limit. Empty leaves the pod unsized. The limit is also the memory the
-# worker reports as its actor capacity.
+# and limit. Empty leaves the pod unsized. The limit, less what the worker
+# keeps for itself, is the memory it reports as its actor capacity.
 WORKER_MEMORY=""
 # The StorageClass for the glutton-storage external volume. Empty means the
 # template is not deployed.
@@ -96,8 +95,7 @@ usage() {
   echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
   echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
-  echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
-  echo "                              the smallest size microvm admits)"
+  echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi)"
   echo "  --actor-cpu CPU             CPU limit for the benchmark ActorTemplates (default: 1)"
   echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"
   echo "                              (default: unset, the pod is unsized)"
