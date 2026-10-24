@@ -64,10 +64,20 @@ docs/dev/releasing.md lists what the release images cover.
 
 If REPO already holds every image for the tag on every platform, nothing is
 built unless --overwrite is set. After pushing, every image is checked for
-every platform, and a missing one fails the command.`,
+every platform, and a missing one fails the command.
+
+--digests-file writes one "<sha256 hex>  <image>" line per image this run
+pushed, in the form sha256sum writes, and removes the file when nothing was
+built. With --list-published it receives the images the registry holds for
+the tag instead, and nothing is built.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		opts := steps.PublishReleaseOptions{Overwrite: env.Cfg.Resolved().Bool("publish.overwrite")}
+		resolved := env.Cfg.Resolved()
+		opts := steps.PublishReleaseOptions{
+			Overwrite:     resolved.Bool("publish.overwrite"),
+			DigestsFile:   resolved.String("publish.digestsFile"),
+			ListPublished: resolved.Bool("publish.listPublished"),
+		}
 		return env.PublishReleaseImages(cmd.Context(), cmd.OutOrStdout(), opts)
 	},
 }
@@ -109,6 +119,18 @@ func init() {
 		Kind: config.KindBool, Default: "false",
 		Commands: []string{publishReleaseImagesPath},
 		Usage:    "Rebuild and replace images the registry already holds for the tag",
+	})
+	config.RegisterCommand(config.Setting{
+		Key: "publish.digestsFile", Env: "ATE_PUBLISH_DIGESTS_FILE", Flag: "digests-file",
+		Kind: config.KindString, Default: "",
+		Commands: []string{publishReleaseImagesPath},
+		Usage:    "File to write the digest of each image this run pushes to, one \"<sha256 hex>  <image>\" line per image",
+	})
+	config.RegisterCommand(config.Setting{
+		Key: "publish.listPublished", Env: "ATE_PUBLISH_LIST_PUBLISHED", Flag: "list-published",
+		Kind: config.KindBool, Default: "false",
+		Commands: []string{publishReleaseImagesPath},
+		Usage:    "Write the release images the registry holds for the tag to --digests-file, and build nothing",
 	})
 	config.BindCommandFlags(publishReleaseImagesPath, publishReleaseImagesCmd.Flags())
 }
