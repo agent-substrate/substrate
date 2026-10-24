@@ -171,3 +171,50 @@ func TestShapeMicroVM_LeavesUndeclaredContainerUnlimited(t *testing.T) {
 		t.Errorf("cpu quota = %d, want unset for a container that declared none", *c.Quota)
 	}
 }
+
+func TestShapeMicroVM_RejectsPathTraversalAndEmptyActorDirs(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		source    string
+		actorDirs *ateworkerpb.ActorDirs
+	}{
+		{
+			name:      "traversal escapes durable share",
+			source:    parityActorDirs.GetDurableDirVolumeMountsDir() + "/../../../../../dev/vda",
+			actorDirs: parityActorDirs,
+		},
+		{
+			name:      "dot relative path collapses to share root",
+			source:    parityActorDirs.GetDurableDirVolumeMountsDir() + "/.",
+			actorDirs: parityActorDirs,
+		},
+		{
+			name:      "dot slash relative path collapses to share root",
+			source:    parityActorDirs.GetDurableDirVolumeMountsDir() + "/./",
+			actorDirs: parityActorDirs,
+		},
+		{
+			name:      "nil ActorDirs does not match root prefix",
+			source:    "/etc/passwd",
+			actorDirs: nil,
+		},
+		{
+			name:      "empty ActorDirs does not match root prefix",
+			source:    "/dev/vda",
+			actorDirs: &ateworkerpb.ActorDirs{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
+			spec.Mounts = append(spec.Mounts, specs.Mount{
+				Destination: "/mnt/vol",
+				Type:        "bind",
+				Source:      tc.source,
+				Options:     []string{"bind", "rw"},
+			})
+			if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: tc.actorDirs, ContainerName: "app"}); err == nil {
+				t.Fatalf("ShapeMicroVM() with source %q succeeded, want error", tc.source)
+			}
+		})
+	}
+}

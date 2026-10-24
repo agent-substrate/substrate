@@ -128,7 +128,10 @@ func guestVolumeSource(hostPath string, actorDirs *ateworkerpb.ActorDirs, contai
 		{actorDirs.GetSystemInfoVolumeRootsDir(), path.Join(GuestSharedDir, ShareSystemInfo)},
 		{imagecache.ImageVolumeMountPath(filepath.Join(actorDirs.GetOciBundleDir(), containerName), ""), path.Join(GuestSharedDir, GuestContainerID(containerName), ShareVolumes)},
 	} {
-		if rel, ok := strings.CutPrefix(hostPath, staged.host+"/"); ok {
+		if staged.host == "" {
+			continue
+		}
+		if rel, ok := strings.CutPrefix(hostPath, staged.host+"/"); ok && filepath.IsLocal(rel) && filepath.Clean(rel) != "." {
 			return path.Join(staged.guest, rel), nil
 		}
 	}
