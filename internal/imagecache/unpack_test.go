@@ -676,6 +676,18 @@ func TestUnpackLayer_RejectFifo(t *testing.T) {
 	}
 }
 
+// A whiteout whose deleted name is empty, "." or ".." is refused.
+func TestUnpackLayer_RejectMalformedWhiteout(t *testing.T) {
+	for _, name := range []string{"a/.wh.", "a/.wh..", "a/.wh...", ".wh."} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := runUnpack(t, []tarEntry{{name: "a/", typeflag: tar.TypeDir}, {name: name, typeflag: tar.TypeReg}})
+			if err == nil || !strings.Contains(err.Error(), "invalid tar entry") {
+				t.Fatalf("unpackLayer(%q) = %v, want an invalid tar entry error", name, err)
+			}
+		})
+	}
+}
+
 func TestUnpackLayer_TruncatedArchive(t *testing.T) {
 	full := buildTar(t, []tarEntry{
 		{name: "ok", typeflag: tar.TypeReg, body: "hello"},
