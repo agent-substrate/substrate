@@ -83,6 +83,10 @@ func (g *AuthorizationModelGraph) Reversed() (*AuthorizationModelGraph, error) {
 			if !ok {
 				return nil, fmt.Errorf("%w: could not cast to AuthorizationModelEdge", ErrBuildingGraph)
 			}
+			// AddEdge returns nil if either endpoint is nil (isNilNode check). If the source
+			// graph is corrupted with nil endpoints, this silently drops those edges. An error
+			// would be more correct, but AddEdge is also called from parseModel which shouldn't
+			// error on the builder's own nil checks. Documenting the behavior instead.
 			graphBuilder.AddEdge(nextLine.To(), nextLine.From(), casted.edgeType, casted.tuplesetRelation, casted.conditions)
 		}
 	}

@@ -75,7 +75,7 @@ type ValidationErrorMessageResponseMultiError []error
 
 // Error returns a concatenation of all the error messages it wraps.
 func (m ValidationErrorMessageResponseMultiError) Error() string {
-	var msgs []string
+	msgs := make([]string, 0, len(m))
 	for _, err := range m {
 		msgs = append(msgs, err.Error())
 	}
@@ -182,7 +182,7 @@ type UnauthenticatedResponseMultiError []error
 
 // Error returns a concatenation of all the error messages it wraps.
 func (m UnauthenticatedResponseMultiError) Error() string {
-	var msgs []string
+	msgs := make([]string, 0, len(m))
 	for _, err := range m {
 		msgs = append(msgs, err.Error())
 	}
@@ -290,7 +290,7 @@ type UnprocessableContentMessageResponseMultiError []error
 
 // Error returns a concatenation of all the error messages it wraps.
 func (m UnprocessableContentMessageResponseMultiError) Error() string {
-	var msgs []string
+	msgs := make([]string, 0, len(m))
 	for _, err := range m {
 		msgs = append(msgs, err.Error())
 	}
@@ -397,7 +397,7 @@ type InternalErrorMessageResponseMultiError []error
 
 // Error returns a concatenation of all the error messages it wraps.
 func (m InternalErrorMessageResponseMultiError) Error() string {
-	var msgs []string
+	msgs := make([]string, 0, len(m))
 	for _, err := range m {
 		msgs = append(msgs, err.Error())
 	}
@@ -504,7 +504,7 @@ type PathUnknownErrorMessageResponseMultiError []error
 
 // Error returns a concatenation of all the error messages it wraps.
 func (m PathUnknownErrorMessageResponseMultiError) Error() string {
-	var msgs []string
+	msgs := make([]string, 0, len(m))
 	for _, err := range m {
 		msgs = append(msgs, err.Error())
 	}
@@ -611,7 +611,7 @@ type AbortedMessageResponseMultiError []error
 
 // Error returns a concatenation of all the error messages it wraps.
 func (m AbortedMessageResponseMultiError) Error() string {
-	var msgs []string
+	msgs := make([]string, 0, len(m))
 	for _, err := range m {
 		msgs = append(msgs, err.Error())
 	}
@@ -713,7 +713,7 @@ type ErrorMessageRequestMultiError []error
 
 // Error returns a concatenation of all the error messages it wraps.
 func (m ErrorMessageRequestMultiError) Error() string {
-	var msgs []string
+	msgs := make([]string, 0, len(m))
 	for _, err := range m {
 		msgs = append(msgs, err.Error())
 	}
@@ -819,7 +819,7 @@ type ForbiddenResponseMultiError []error
 
 // Error returns a concatenation of all the error messages it wraps.
 func (m ForbiddenResponseMultiError) Error() string {
-	var msgs []string
+	msgs := make([]string, 0, len(m))
 	for _, err := range m {
 		msgs = append(msgs, err.Error())
 	}

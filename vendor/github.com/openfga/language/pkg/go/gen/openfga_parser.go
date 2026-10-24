@@ -39,7 +39,8 @@ func openfgaparserParserInit() {
     "", "'extend'", "'type'", "'condition'", "'relations'", "'relation'", 
     "'define'", "'with'", "'=='", "'!='", "'in'", "'<='", "'>='", "'&&'", 
     "'||'", "']'", "'{'", "'}'", "'.'", "'-'", "'!'", "'?'", "'+'", "'*'", 
-    "'/'", "'%'", "'true'", "'false'", "'null'",
+    "'/'", "'%'", "'true'", "'false'", "'null'", "", "", "", "", "", "", 
+    "'$expression'",
   }
   staticData.SymbolicNames = []string{
     "", "COLON", "COMMA", "LESS", "GREATER", "LBRACKET", "RBRACKET", "LPAREN", 
@@ -50,7 +51,7 @@ func openfgaparserParserInit() {
     "LOGICAL_OR", "RPRACKET", "LBRACE", "RBRACE", "DOT", "MINUS", "EXCLAM", 
     "QUESTIONMARK", "PLUS", "STAR", "SLASH", "PERCENT", "CEL_TRUE", "CEL_FALSE", 
     "NUL", "CEL_COMMENT", "NUM_FLOAT", "NUM_INT", "NUM_UINT", "STRING", 
-    "BYTES", "EXTENDED_IDENTIFIER", "NEWLINE", "CONDITION_PARAM_CONTAINER", 
+    "BYTES", "DOLLAR_EXPRESSION", "EXTENDED_IDENTIFIER", "NEWLINE", "CONDITION_PARAM_CONTAINER", 
     "CONDITION_PARAM_TYPE",
   }
   staticData.RuleNames = []string{
@@ -64,7 +65,7 @@ func openfgaparserParserInit() {
   }
   staticData.PredictionContextCache = antlr.NewPredictionContextCache()
   staticData.serializedATN = []int32{
-	4, 1, 57, 392, 2, 0, 7, 0, 2, 1, 7, 1, 2, 2, 7, 2, 2, 3, 7, 3, 2, 4, 7, 
+	4, 1, 58, 394, 2, 0, 7, 0, 2, 1, 7, 1, 2, 2, 7, 2, 2, 3, 7, 3, 2, 4, 7, 
 	4, 2, 5, 7, 5, 2, 6, 7, 6, 2, 7, 7, 7, 2, 8, 7, 8, 2, 9, 7, 9, 2, 10, 7, 
 	10, 2, 11, 7, 11, 2, 12, 7, 12, 2, 13, 7, 13, 2, 14, 7, 14, 2, 15, 7, 15, 
 	2, 16, 7, 16, 2, 17, 7, 17, 2, 18, 7, 18, 2, 19, 7, 19, 2, 20, 7, 20, 2, 
@@ -92,159 +93,160 @@ func openfgaparserParserInit() {
 	1, 13, 1, 13, 3, 13, 248, 8, 13, 5, 13, 250, 8, 13, 10, 13, 12, 13, 253, 
 	9, 13, 1, 13, 1, 13, 1, 14, 1, 14, 1, 14, 1, 14, 1, 14, 3, 14, 262, 8, 
 	14, 1, 15, 3, 15, 265, 8, 15, 1, 15, 1, 15, 1, 15, 1, 15, 1, 15, 1, 15, 
-	1, 15, 3, 15, 274, 8, 15, 1, 15, 3, 15, 277, 8, 15, 1, 16, 1, 16, 1, 16, 
-	1, 16, 1, 16, 3, 16, 284, 8, 16, 1, 17, 5, 17, 287, 8, 17, 10, 17, 12, 
-	17, 290, 9, 17, 1, 18, 1, 18, 3, 18, 294, 8, 18, 1, 18, 1, 18, 1, 18, 1, 
-	18, 1, 18, 3, 18, 301, 8, 18, 1, 18, 1, 18, 3, 18, 305, 8, 18, 1, 18, 1, 
-	18, 3, 18, 309, 8, 18, 1, 18, 1, 18, 3, 18, 313, 8, 18, 1, 18, 1, 18, 3, 
-	18, 317, 8, 18, 5, 18, 319, 8, 18, 10, 18, 12, 18, 322, 9, 18, 1, 18, 3, 
-	18, 325, 8, 18, 1, 18, 1, 18, 3, 18, 329, 8, 18, 1, 18, 1, 18, 3, 18, 333, 
-	8, 18, 1, 18, 3, 18, 336, 8, 18, 1, 18, 1, 18, 3, 18, 340, 8, 18, 1, 18, 
-	1, 18, 1, 19, 1, 19, 1, 20, 3, 20, 347, 8, 20, 1, 20, 1, 20, 3, 20, 351, 
-	8, 20, 1, 20, 1, 20, 3, 20, 355, 8, 20, 1, 20, 1, 20, 1, 21, 1, 21, 1, 
-	22, 1, 22, 1, 22, 1, 22, 1, 22, 3, 22, 366, 8, 22, 1, 23, 1, 23, 5, 23, 
-	370, 8, 23, 10, 23, 12, 23, 373, 9, 23, 1, 23, 1, 23, 3, 23, 377, 8, 23, 
-	1, 24, 1, 24, 1, 25, 1, 25, 3, 25, 383, 8, 25, 1, 26, 1, 26, 5, 26, 387, 
-	8, 26, 10, 26, 12, 26, 390, 9, 26, 1, 26, 0, 0, 27, 0, 2, 4, 6, 8, 10, 
-	12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 
-	48, 50, 52, 0, 4, 1, 0, 55, 55, 4, 0, 10, 10, 16, 18, 20, 21, 24, 24, 5, 
-	0, 3, 5, 7, 10, 27, 35, 37, 53, 55, 55, 1, 0, 36, 36, 433, 0, 55, 1, 0, 
-	0, 0, 2, 80, 1, 0, 0, 0, 4, 93, 1, 0, 0, 0, 6, 104, 1, 0, 0, 0, 8, 109, 
-	1, 0, 0, 0, 10, 130, 1, 0, 0, 0, 12, 145, 1, 0, 0, 0, 14, 150, 1, 0, 0, 
-	0, 16, 157, 1, 0, 0, 0, 18, 191, 1, 0, 0, 0, 20, 193, 1, 0, 0, 0, 22, 195, 
-	1, 0, 0, 0, 24, 214, 1, 0, 0, 0, 26, 233, 1, 0, 0, 0, 28, 256, 1, 0, 0, 
-	0, 30, 264, 1, 0, 0, 0, 32, 278, 1, 0, 0, 0, 34, 288, 1, 0, 0, 0, 36, 293, 
-	1, 0, 0, 0, 38, 343, 1, 0, 0, 0, 40, 346, 1, 0, 0, 0, 42, 358, 1, 0, 0, 
-	0, 44, 365, 1, 0, 0, 0, 46, 367, 1, 0, 0, 0, 48, 378, 1, 0, 0, 0, 50, 382, 
-	1, 0, 0, 0, 52, 388, 1, 0, 0, 0, 54, 56, 5, 9, 0, 0, 55, 54, 1, 0, 0, 0, 
-	55, 56, 1, 0, 0, 0, 56, 58, 1, 0, 0, 0, 57, 59, 5, 55, 0, 0, 58, 57, 1, 
-	0, 0, 0, 58, 59, 1, 0, 0, 0, 59, 62, 1, 0, 0, 0, 60, 63, 3, 2, 1, 0, 61, 
-	63, 3, 4, 2, 0, 62, 60, 1, 0, 0, 0, 62, 61, 1, 0, 0, 0, 63, 65, 1, 0, 0, 
-	0, 64, 66, 5, 55, 0, 0, 65, 64, 1, 0, 0, 0, 65, 66, 1, 0, 0, 0, 66, 67, 
-	1, 0, 0, 0, 67, 69, 3, 6, 3, 0, 68, 70, 5, 55, 0, 0, 69, 68, 1, 0, 0, 0, 
-	69, 70, 1, 0, 0, 0, 70, 71, 1, 0, 0, 0, 71, 73, 3, 34, 17, 0, 72, 74, 5, 
-	55, 0, 0, 73, 72, 1, 0, 0, 0, 73, 74, 1, 0, 0, 0, 74, 75, 1, 0, 0, 0, 75, 
-	76, 5, 0, 0, 1, 76, 1, 1, 0, 0, 0, 77, 78, 3, 46, 23, 0, 78, 79, 5, 55, 
-	0, 0, 79, 81, 1, 0, 0, 0, 80, 77, 1, 0, 0, 0, 80, 81, 1, 0, 0, 0, 81, 82, 
-	1, 0, 0, 0, 82, 83, 5, 17, 0, 0, 83, 84, 5, 55, 0, 0, 84, 85, 5, 18, 0, 
-	0, 85, 86, 5, 9, 0, 0, 86, 88, 5, 19, 0, 0, 87, 89, 5, 9, 0, 0, 88, 87, 
-	1, 0, 0, 0, 88, 89, 1, 0, 0, 0, 89, 3, 1, 0, 0, 0, 90, 91, 3, 46, 23, 0, 
-	91, 92, 5, 55, 0, 0, 92, 94, 1, 0, 0, 0, 93, 90, 1, 0, 0, 0, 93, 94, 1, 
-	0, 0, 0, 94, 95, 1, 0, 0, 0, 95, 96, 5, 16, 0, 0, 96, 97, 5, 9, 0, 0, 97, 
-	99, 3, 48, 24, 0, 98, 100, 5, 9, 0, 0, 99, 98, 1, 0, 0, 0, 99, 100, 1, 
-	0, 0, 0, 100, 5, 1, 0, 0, 0, 101, 103, 3, 8, 4, 0, 102, 101, 1, 0, 0, 0, 
-	103, 106, 1, 0, 0, 0, 104, 102, 1, 0, 0, 0, 104, 105, 1, 0, 0, 0, 105, 
-	7, 1, 0, 0, 0, 106, 104, 1, 0, 0, 0, 107, 108, 5, 55, 0, 0, 108, 110, 3, 
-	46, 23, 0, 109, 107, 1, 0, 0, 0, 109, 110, 1, 0, 0, 0, 110, 111, 1, 0, 
-	0, 0, 111, 114, 5, 55, 0, 0, 112, 113, 5, 20, 0, 0, 113, 115, 5, 9, 0, 
-	0, 114, 112, 1, 0, 0, 0, 114, 115, 1, 0, 0, 0, 115, 116, 1, 0, 0, 0, 116, 
-	117, 5, 21, 0, 0, 117, 118, 5, 9, 0, 0, 118, 126, 3, 50, 25, 0, 119, 120, 
-	5, 55, 0, 0, 120, 122, 5, 23, 0, 0, 121, 123, 3, 10, 5, 0, 122, 121, 1, 
-	0, 0, 0, 123, 124, 1, 0, 0, 0, 124, 122, 1, 0, 0, 0, 124, 125, 1, 0, 0, 
-	0, 125, 127, 1, 0, 0, 0, 126, 119, 1, 0, 0, 0, 126, 127, 1, 0, 0, 0, 127, 
-	9, 1, 0, 0, 0, 128, 129, 5, 55, 0, 0, 129, 131, 3, 46, 23, 0, 130, 128, 
-	1, 0, 0, 0, 130, 131, 1, 0, 0, 0, 131, 132, 1, 0, 0, 0, 132, 133, 5, 55, 
-	0, 0, 133, 134, 5, 25, 0, 0, 134, 135, 5, 9, 0, 0, 135, 137, 3, 12, 6, 
-	0, 136, 138, 5, 9, 0, 0, 137, 136, 1, 0, 0, 0, 137, 138, 1, 0, 0, 0, 138, 
-	139, 1, 0, 0, 0, 139, 141, 5, 1, 0, 0, 140, 142, 5, 9, 0, 0, 141, 140, 
-	1, 0, 0, 0, 141, 142, 1, 0, 0, 0, 142, 143, 1, 0, 0, 0, 143, 144, 3, 14, 
-	7, 0, 144, 11, 1, 0, 0, 0, 145, 146, 3, 50, 25, 0, 146, 13, 1, 0, 0, 0, 
-	147, 151, 3, 26, 13, 0, 148, 151, 3, 20, 10, 0, 149, 151, 3, 22, 11, 0, 
-	150, 147, 1, 0, 0, 0, 150, 148, 1, 0, 0, 0, 150, 149, 1, 0, 0, 0, 151, 
-	153, 1, 0, 0, 0, 152, 154, 3, 18, 9, 0, 153, 152, 1, 0, 0, 0, 153, 154, 
-	1, 0, 0, 0, 154, 15, 1, 0, 0, 0, 155, 158, 3, 20, 10, 0, 156, 158, 3, 24, 
-	12, 0, 157, 155, 1, 0, 0, 0, 157, 156, 1, 0, 0, 0, 158, 160, 1, 0, 0, 0, 
-	159, 161, 3, 18, 9, 0, 160, 159, 1, 0, 0, 0, 160, 161, 1, 0, 0, 0, 161, 
-	17, 1, 0, 0, 0, 162, 163, 5, 9, 0, 0, 163, 164, 5, 13, 0, 0, 164, 167, 
-	5, 9, 0, 0, 165, 168, 3, 20, 10, 0, 166, 168, 3, 24, 12, 0, 167, 165, 1, 
-	0, 0, 0, 167, 166, 1, 0, 0, 0, 168, 170, 1, 0, 0, 0, 169, 162, 1, 0, 0, 
-	0, 170, 171, 1, 0, 0, 0, 171, 169, 1, 0, 0, 0, 171, 172, 1, 0, 0, 0, 172, 
-	192, 1, 0, 0, 0, 173, 174, 5, 9, 0, 0, 174, 175, 5, 12, 0, 0, 175, 178, 
-	5, 9, 0, 0, 176, 179, 3, 20, 10, 0, 177, 179, 3, 24, 12, 0, 178, 176, 1, 
-	0, 0, 0, 178, 177, 1, 0, 0, 0, 179, 181, 1, 0, 0, 0, 180, 173, 1, 0, 0, 
-	0, 181, 182, 1, 0, 0, 0, 182, 180, 1, 0, 0, 0, 182, 183, 1, 0, 0, 0, 183, 
-	192, 1, 0, 0, 0, 184, 185, 5, 9, 0, 0, 185, 186, 5, 14, 0, 0, 186, 189, 
-	5, 9, 0, 0, 187, 190, 3, 20, 10, 0, 188, 190, 3, 24, 12, 0, 189, 187, 1, 
-	0, 0, 0, 189, 188, 1, 0, 0, 0, 190, 192, 1, 0, 0, 0, 191, 169, 1, 0, 0, 
-	0, 191, 180, 1, 0, 0, 0, 191, 184, 1, 0, 0, 0, 192, 19, 1, 0, 0, 0, 193, 
-	194, 3, 28, 14, 0, 194, 21, 1, 0, 0, 0, 195, 199, 5, 7, 0, 0, 196, 198, 
-	5, 9, 0, 0, 197, 196, 1, 0, 0, 0, 198, 201, 1, 0, 0, 0, 199, 197, 1, 0, 
-	0, 0, 199, 200, 1, 0, 0, 0, 200, 204, 1, 0, 0, 0, 201, 199, 1, 0, 0, 0, 
-	202, 205, 3, 14, 7, 0, 203, 205, 3, 24, 12, 0, 204, 202, 1, 0, 0, 0, 204, 
-	203, 1, 0, 0, 0, 205, 209, 1, 0, 0, 0, 206, 208, 5, 9, 0, 0, 207, 206, 
-	1, 0, 0, 0, 208, 211, 1, 0, 0, 0, 209, 207, 1, 0, 0, 0, 209, 210, 1, 0, 
-	0, 0, 210, 212, 1, 0, 0, 0, 211, 209, 1, 0, 0, 0, 212, 213, 5, 8, 0, 0, 
-	213, 23, 1, 0, 0, 0, 214, 218, 5, 7, 0, 0, 215, 217, 5, 9, 0, 0, 216, 215, 
-	1, 0, 0, 0, 217, 220, 1, 0, 0, 0, 218, 216, 1, 0, 0, 0, 218, 219, 1, 0, 
-	0, 0, 219, 223, 1, 0, 0, 0, 220, 218, 1, 0, 0, 0, 221, 224, 3, 16, 8, 0, 
-	222, 224, 3, 24, 12, 0, 223, 221, 1, 0, 0, 0, 223, 222, 1, 0, 0, 0, 224, 
-	228, 1, 0, 0, 0, 225, 227, 5, 9, 0, 0, 226, 225, 1, 0, 0, 0, 227, 230, 
-	1, 0, 0, 0, 228, 226, 1, 0, 0, 0, 228, 229, 1, 0, 0, 0, 229, 231, 1, 0, 
-	0, 0, 230, 228, 1, 0, 0, 0, 231, 232, 5, 8, 0, 0, 232, 25, 1, 0, 0, 0, 
-	233, 235, 5, 5, 0, 0, 234, 236, 5, 9, 0, 0, 235, 234, 1, 0, 0, 0, 235, 
-	236, 1, 0, 0, 0, 236, 237, 1, 0, 0, 0, 237, 239, 3, 30, 15, 0, 238, 240, 
-	5, 9, 0, 0, 239, 238, 1, 0, 0, 0, 239, 240, 1, 0, 0, 0, 240, 251, 1, 0, 
-	0, 0, 241, 243, 5, 2, 0, 0, 242, 244, 5, 9, 0, 0, 243, 242, 1, 0, 0, 0, 
-	243, 244, 1, 0, 0, 0, 244, 245, 1, 0, 0, 0, 245, 247, 3, 30, 15, 0, 246, 
-	248, 5, 9, 0, 0, 247, 246, 1, 0, 0, 0, 247, 248, 1, 0, 0, 0, 248, 250, 
-	1, 0, 0, 0, 249, 241, 1, 0, 0, 0, 250, 253, 1, 0, 0, 0, 251, 249, 1, 0, 
-	0, 0, 251, 252, 1, 0, 0, 0, 252, 254, 1, 0, 0, 0, 253, 251, 1, 0, 0, 0, 
-	254, 255, 5, 34, 0, 0, 255, 27, 1, 0, 0, 0, 256, 261, 3, 50, 25, 0, 257, 
-	258, 5, 9, 0, 0, 258, 259, 5, 15, 0, 0, 259, 260, 5, 9, 0, 0, 260, 262, 
-	3, 50, 25, 0, 261, 257, 1, 0, 0, 0, 261, 262, 1, 0, 0, 0, 262, 29, 1, 0, 
-	0, 0, 263, 265, 5, 55, 0, 0, 264, 263, 1, 0, 0, 0, 264, 265, 1, 0, 0, 0, 
-	265, 273, 1, 0, 0, 0, 266, 274, 3, 32, 16, 0, 267, 268, 3, 32, 16, 0, 268, 
-	269, 5, 9, 0, 0, 269, 270, 5, 26, 0, 0, 270, 271, 5, 9, 0, 0, 271, 272, 
-	3, 38, 19, 0, 272, 274, 1, 0, 0, 0, 273, 266, 1, 0, 0, 0, 273, 267, 1, 
-	0, 0, 0, 274, 276, 1, 0, 0, 0, 275, 277, 5, 55, 0, 0, 276, 275, 1, 0, 0, 
-	0, 276, 277, 1, 0, 0, 0, 277, 31, 1, 0, 0, 0, 278, 283, 3, 50, 25, 0, 279, 
-	280, 5, 1, 0, 0, 280, 284, 5, 42, 0, 0, 281, 282, 5, 11, 0, 0, 282, 284, 
-	3, 50, 25, 0, 283, 279, 1, 0, 0, 0, 283, 281, 1, 0, 0, 0, 283, 284, 1, 
-	0, 0, 0, 284, 33, 1, 0, 0, 0, 285, 287, 3, 36, 18, 0, 286, 285, 1, 0, 0, 
-	0, 287, 290, 1, 0, 0, 0, 288, 286, 1, 0, 0, 0, 288, 289, 1, 0, 0, 0, 289, 
-	35, 1, 0, 0, 0, 290, 288, 1, 0, 0, 0, 291, 292, 5, 55, 0, 0, 292, 294, 
-	3, 46, 23, 0, 293, 291, 1, 0, 0, 0, 293, 294, 1, 0, 0, 0, 294, 295, 1, 
-	0, 0, 0, 295, 296, 5, 55, 0, 0, 296, 297, 5, 22, 0, 0, 297, 298, 5, 9, 
-	0, 0, 298, 300, 3, 38, 19, 0, 299, 301, 5, 9, 0, 0, 300, 299, 1, 0, 0, 
-	0, 300, 301, 1, 0, 0, 0, 301, 302, 1, 0, 0, 0, 302, 304, 5, 7, 0, 0, 303, 
-	305, 5, 9, 0, 0, 304, 303, 1, 0, 0, 0, 304, 305, 1, 0, 0, 0, 305, 306, 
-	1, 0, 0, 0, 306, 308, 3, 40, 20, 0, 307, 309, 5, 9, 0, 0, 308, 307, 1, 
-	0, 0, 0, 308, 309, 1, 0, 0, 0, 309, 320, 1, 0, 0, 0, 310, 312, 5, 2, 0, 
-	0, 311, 313, 5, 9, 0, 0, 312, 311, 1, 0, 0, 0, 312, 313, 1, 0, 0, 0, 313, 
-	314, 1, 0, 0, 0, 314, 316, 3, 40, 20, 0, 315, 317, 5, 9, 0, 0, 316, 315, 
-	1, 0, 0, 0, 316, 317, 1, 0, 0, 0, 317, 319, 1, 0, 0, 0, 318, 310, 1, 0, 
-	0, 0, 319, 322, 1, 0, 0, 0, 320, 318, 1, 0, 0, 0, 320, 321, 1, 0, 0, 0, 
-	321, 324, 1, 0, 0, 0, 322, 320, 1, 0, 0, 0, 323, 325, 5, 55, 0, 0, 324, 
-	323, 1, 0, 0, 0, 324, 325, 1, 0, 0, 0, 325, 326, 1, 0, 0, 0, 326, 328, 
-	5, 8, 0, 0, 327, 329, 5, 9, 0, 0, 328, 327, 1, 0, 0, 0, 328, 329, 1, 0, 
-	0, 0, 329, 330, 1, 0, 0, 0, 330, 332, 5, 35, 0, 0, 331, 333, 5, 55, 0, 
-	0, 332, 331, 1, 0, 0, 0, 332, 333, 1, 0, 0, 0, 333, 335, 1, 0, 0, 0, 334, 
-	336, 5, 9, 0, 0, 335, 334, 1, 0, 0, 0, 335, 336, 1, 0, 0, 0, 336, 337, 
-	1, 0, 0, 0, 337, 339, 3, 52, 26, 0, 338, 340, 5, 55, 0, 0, 339, 338, 1, 
-	0, 0, 0, 339, 340, 1, 0, 0, 0, 340, 341, 1, 0, 0, 0, 341, 342, 5, 36, 0, 
-	0, 342, 37, 1, 0, 0, 0, 343, 344, 5, 10, 0, 0, 344, 39, 1, 0, 0, 0, 345, 
-	347, 5, 55, 0, 0, 346, 345, 1, 0, 0, 0, 346, 347, 1, 0, 0, 0, 347, 348, 
-	1, 0, 0, 0, 348, 350, 3, 42, 21, 0, 349, 351, 5, 9, 0, 0, 350, 349, 1, 
-	0, 0, 0, 350, 351, 1, 0, 0, 0, 351, 352, 1, 0, 0, 0, 352, 354, 5, 1, 0, 
-	0, 353, 355, 5, 9, 0, 0, 354, 353, 1, 0, 0, 0, 354, 355, 1, 0, 0, 0, 355, 
-	356, 1, 0, 0, 0, 356, 357, 3, 44, 22, 0, 357, 41, 1, 0, 0, 0, 358, 359, 
-	5, 10, 0, 0, 359, 43, 1, 0, 0, 0, 360, 366, 5, 57, 0, 0, 361, 362, 5, 56, 
-	0, 0, 362, 363, 5, 3, 0, 0, 363, 364, 5, 57, 0, 0, 364, 366, 5, 4, 0, 0, 
-	365, 360, 1, 0, 0, 0, 365, 361, 1, 0, 0, 0, 366, 45, 1, 0, 0, 0, 367, 371, 
-	5, 11, 0, 0, 368, 370, 8, 0, 0, 0, 369, 368, 1, 0, 0, 0, 370, 373, 1, 0, 
-	0, 0, 371, 369, 1, 0, 0, 0, 371, 372, 1, 0, 0, 0, 372, 376, 1, 0, 0, 0, 
-	373, 371, 1, 0, 0, 0, 374, 375, 5, 55, 0, 0, 375, 377, 3, 46, 23, 0, 376, 
-	374, 1, 0, 0, 0, 376, 377, 1, 0, 0, 0, 377, 47, 1, 0, 0, 0, 378, 379, 7, 
-	1, 0, 0, 379, 49, 1, 0, 0, 0, 380, 383, 3, 48, 24, 0, 381, 383, 5, 54, 
-	0, 0, 382, 380, 1, 0, 0, 0, 382, 381, 1, 0, 0, 0, 383, 51, 1, 0, 0, 0, 
-	384, 387, 7, 2, 0, 0, 385, 387, 8, 3, 0, 0, 386, 384, 1, 0, 0, 0, 386, 
-	385, 1, 0, 0, 0, 387, 390, 1, 0, 0, 0, 388, 386, 1, 0, 0, 0, 388, 389, 
-	1, 0, 0, 0, 389, 53, 1, 0, 0, 0, 390, 388, 1, 0, 0, 0, 66, 55, 58, 62, 
-	65, 69, 73, 80, 88, 93, 99, 104, 109, 114, 124, 126, 130, 137, 141, 150, 
-	153, 157, 160, 167, 171, 178, 182, 189, 191, 199, 204, 209, 218, 223, 228, 
-	235, 239, 243, 247, 251, 261, 264, 273, 276, 283, 288, 293, 300, 304, 308, 
-	312, 316, 320, 324, 328, 332, 335, 339, 346, 350, 354, 365, 371, 376, 382, 
-	386, 388,
+	1, 15, 3, 15, 274, 8, 15, 3, 15, 276, 8, 15, 1, 15, 3, 15, 279, 8, 15, 
+	1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 3, 16, 286, 8, 16, 1, 17, 5, 17, 289, 
+	8, 17, 10, 17, 12, 17, 292, 9, 17, 1, 18, 1, 18, 3, 18, 296, 8, 18, 1, 
+	18, 1, 18, 1, 18, 1, 18, 1, 18, 3, 18, 303, 8, 18, 1, 18, 1, 18, 3, 18, 
+	307, 8, 18, 1, 18, 1, 18, 3, 18, 311, 8, 18, 1, 18, 1, 18, 3, 18, 315, 
+	8, 18, 1, 18, 1, 18, 3, 18, 319, 8, 18, 5, 18, 321, 8, 18, 10, 18, 12, 
+	18, 324, 9, 18, 1, 18, 3, 18, 327, 8, 18, 1, 18, 1, 18, 3, 18, 331, 8, 
+	18, 1, 18, 1, 18, 3, 18, 335, 8, 18, 1, 18, 3, 18, 338, 8, 18, 1, 18, 1, 
+	18, 3, 18, 342, 8, 18, 1, 18, 1, 18, 1, 19, 1, 19, 1, 20, 3, 20, 349, 8, 
+	20, 1, 20, 1, 20, 3, 20, 353, 8, 20, 1, 20, 1, 20, 3, 20, 357, 8, 20, 1, 
+	20, 1, 20, 1, 21, 1, 21, 1, 22, 1, 22, 1, 22, 1, 22, 1, 22, 3, 22, 368, 
+	8, 22, 1, 23, 1, 23, 5, 23, 372, 8, 23, 10, 23, 12, 23, 375, 9, 23, 1, 
+	23, 1, 23, 3, 23, 379, 8, 23, 1, 24, 1, 24, 1, 25, 1, 25, 3, 25, 385, 8, 
+	25, 1, 26, 1, 26, 5, 26, 389, 8, 26, 10, 26, 12, 26, 392, 9, 26, 1, 26, 
+	0, 0, 27, 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 
+	34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 0, 4, 1, 0, 56, 56, 4, 0, 10, 10, 
+	16, 18, 20, 21, 24, 24, 5, 0, 3, 5, 7, 10, 27, 35, 37, 53, 56, 56, 1, 0, 
+	36, 36, 436, 0, 55, 1, 0, 0, 0, 2, 80, 1, 0, 0, 0, 4, 93, 1, 0, 0, 0, 6, 
+	104, 1, 0, 0, 0, 8, 109, 1, 0, 0, 0, 10, 130, 1, 0, 0, 0, 12, 145, 1, 0, 
+	0, 0, 14, 150, 1, 0, 0, 0, 16, 157, 1, 0, 0, 0, 18, 191, 1, 0, 0, 0, 20, 
+	193, 1, 0, 0, 0, 22, 195, 1, 0, 0, 0, 24, 214, 1, 0, 0, 0, 26, 233, 1, 
+	0, 0, 0, 28, 256, 1, 0, 0, 0, 30, 264, 1, 0, 0, 0, 32, 280, 1, 0, 0, 0, 
+	34, 290, 1, 0, 0, 0, 36, 295, 1, 0, 0, 0, 38, 345, 1, 0, 0, 0, 40, 348, 
+	1, 0, 0, 0, 42, 360, 1, 0, 0, 0, 44, 367, 1, 0, 0, 0, 46, 369, 1, 0, 0, 
+	0, 48, 380, 1, 0, 0, 0, 50, 384, 1, 0, 0, 0, 52, 390, 1, 0, 0, 0, 54, 56, 
+	5, 9, 0, 0, 55, 54, 1, 0, 0, 0, 55, 56, 1, 0, 0, 0, 56, 58, 1, 0, 0, 0, 
+	57, 59, 5, 56, 0, 0, 58, 57, 1, 0, 0, 0, 58, 59, 1, 0, 0, 0, 59, 62, 1, 
+	0, 0, 0, 60, 63, 3, 2, 1, 0, 61, 63, 3, 4, 2, 0, 62, 60, 1, 0, 0, 0, 62, 
+	61, 1, 0, 0, 0, 63, 65, 1, 0, 0, 0, 64, 66, 5, 56, 0, 0, 65, 64, 1, 0, 
+	0, 0, 65, 66, 1, 0, 0, 0, 66, 67, 1, 0, 0, 0, 67, 69, 3, 6, 3, 0, 68, 70, 
+	5, 56, 0, 0, 69, 68, 1, 0, 0, 0, 69, 70, 1, 0, 0, 0, 70, 71, 1, 0, 0, 0, 
+	71, 73, 3, 34, 17, 0, 72, 74, 5, 56, 0, 0, 73, 72, 1, 0, 0, 0, 73, 74, 
+	1, 0, 0, 0, 74, 75, 1, 0, 0, 0, 75, 76, 5, 0, 0, 1, 76, 1, 1, 0, 0, 0, 
+	77, 78, 3, 46, 23, 0, 78, 79, 5, 56, 0, 0, 79, 81, 1, 0, 0, 0, 80, 77, 
+	1, 0, 0, 0, 80, 81, 1, 0, 0, 0, 81, 82, 1, 0, 0, 0, 82, 83, 5, 17, 0, 0, 
+	83, 84, 5, 56, 0, 0, 84, 85, 5, 18, 0, 0, 85, 86, 5, 9, 0, 0, 86, 88, 5, 
+	19, 0, 0, 87, 89, 5, 9, 0, 0, 88, 87, 1, 0, 0, 0, 88, 89, 1, 0, 0, 0, 89, 
+	3, 1, 0, 0, 0, 90, 91, 3, 46, 23, 0, 91, 92, 5, 56, 0, 0, 92, 94, 1, 0, 
+	0, 0, 93, 90, 1, 0, 0, 0, 93, 94, 1, 0, 0, 0, 94, 95, 1, 0, 0, 0, 95, 96, 
+	5, 16, 0, 0, 96, 97, 5, 9, 0, 0, 97, 99, 3, 48, 24, 0, 98, 100, 5, 9, 0, 
+	0, 99, 98, 1, 0, 0, 0, 99, 100, 1, 0, 0, 0, 100, 5, 1, 0, 0, 0, 101, 103, 
+	3, 8, 4, 0, 102, 101, 1, 0, 0, 0, 103, 106, 1, 0, 0, 0, 104, 102, 1, 0, 
+	0, 0, 104, 105, 1, 0, 0, 0, 105, 7, 1, 0, 0, 0, 106, 104, 1, 0, 0, 0, 107, 
+	108, 5, 56, 0, 0, 108, 110, 3, 46, 23, 0, 109, 107, 1, 0, 0, 0, 109, 110, 
+	1, 0, 0, 0, 110, 111, 1, 0, 0, 0, 111, 114, 5, 56, 0, 0, 112, 113, 5, 20, 
+	0, 0, 113, 115, 5, 9, 0, 0, 114, 112, 1, 0, 0, 0, 114, 115, 1, 0, 0, 0, 
+	115, 116, 1, 0, 0, 0, 116, 117, 5, 21, 0, 0, 117, 118, 5, 9, 0, 0, 118, 
+	126, 3, 50, 25, 0, 119, 120, 5, 56, 0, 0, 120, 122, 5, 23, 0, 0, 121, 123, 
+	3, 10, 5, 0, 122, 121, 1, 0, 0, 0, 123, 124, 1, 0, 0, 0, 124, 122, 1, 0, 
+	0, 0, 124, 125, 1, 0, 0, 0, 125, 127, 1, 0, 0, 0, 126, 119, 1, 0, 0, 0, 
+	126, 127, 1, 0, 0, 0, 127, 9, 1, 0, 0, 0, 128, 129, 5, 56, 0, 0, 129, 131, 
+	3, 46, 23, 0, 130, 128, 1, 0, 0, 0, 130, 131, 1, 0, 0, 0, 131, 132, 1, 
+	0, 0, 0, 132, 133, 5, 56, 0, 0, 133, 134, 5, 25, 0, 0, 134, 135, 5, 9, 
+	0, 0, 135, 137, 3, 12, 6, 0, 136, 138, 5, 9, 0, 0, 137, 136, 1, 0, 0, 0, 
+	137, 138, 1, 0, 0, 0, 138, 139, 1, 0, 0, 0, 139, 141, 5, 1, 0, 0, 140, 
+	142, 5, 9, 0, 0, 141, 140, 1, 0, 0, 0, 141, 142, 1, 0, 0, 0, 142, 143, 
+	1, 0, 0, 0, 143, 144, 3, 14, 7, 0, 144, 11, 1, 0, 0, 0, 145, 146, 3, 50, 
+	25, 0, 146, 13, 1, 0, 0, 0, 147, 151, 3, 26, 13, 0, 148, 151, 3, 20, 10, 
+	0, 149, 151, 3, 22, 11, 0, 150, 147, 1, 0, 0, 0, 150, 148, 1, 0, 0, 0, 
+	150, 149, 1, 0, 0, 0, 151, 153, 1, 0, 0, 0, 152, 154, 3, 18, 9, 0, 153, 
+	152, 1, 0, 0, 0, 153, 154, 1, 0, 0, 0, 154, 15, 1, 0, 0, 0, 155, 158, 3, 
+	20, 10, 0, 156, 158, 3, 24, 12, 0, 157, 155, 1, 0, 0, 0, 157, 156, 1, 0, 
+	0, 0, 158, 160, 1, 0, 0, 0, 159, 161, 3, 18, 9, 0, 160, 159, 1, 0, 0, 0, 
+	160, 161, 1, 0, 0, 0, 161, 17, 1, 0, 0, 0, 162, 163, 5, 9, 0, 0, 163, 164, 
+	5, 13, 0, 0, 164, 167, 5, 9, 0, 0, 165, 168, 3, 20, 10, 0, 166, 168, 3, 
+	24, 12, 0, 167, 165, 1, 0, 0, 0, 167, 166, 1, 0, 0, 0, 168, 170, 1, 0, 
+	0, 0, 169, 162, 1, 0, 0, 0, 170, 171, 1, 0, 0, 0, 171, 169, 1, 0, 0, 0, 
+	171, 172, 1, 0, 0, 0, 172, 192, 1, 0, 0, 0, 173, 174, 5, 9, 0, 0, 174, 
+	175, 5, 12, 0, 0, 175, 178, 5, 9, 0, 0, 176, 179, 3, 20, 10, 0, 177, 179, 
+	3, 24, 12, 0, 178, 176, 1, 0, 0, 0, 178, 177, 1, 0, 0, 0, 179, 181, 1, 
+	0, 0, 0, 180, 173, 1, 0, 0, 0, 181, 182, 1, 0, 0, 0, 182, 180, 1, 0, 0, 
+	0, 182, 183, 1, 0, 0, 0, 183, 192, 1, 0, 0, 0, 184, 185, 5, 9, 0, 0, 185, 
+	186, 5, 14, 0, 0, 186, 189, 5, 9, 0, 0, 187, 190, 3, 20, 10, 0, 188, 190, 
+	3, 24, 12, 0, 189, 187, 1, 0, 0, 0, 189, 188, 1, 0, 0, 0, 190, 192, 1, 
+	0, 0, 0, 191, 169, 1, 0, 0, 0, 191, 180, 1, 0, 0, 0, 191, 184, 1, 0, 0, 
+	0, 192, 19, 1, 0, 0, 0, 193, 194, 3, 28, 14, 0, 194, 21, 1, 0, 0, 0, 195, 
+	199, 5, 7, 0, 0, 196, 198, 5, 9, 0, 0, 197, 196, 1, 0, 0, 0, 198, 201, 
+	1, 0, 0, 0, 199, 197, 1, 0, 0, 0, 199, 200, 1, 0, 0, 0, 200, 204, 1, 0, 
+	0, 0, 201, 199, 1, 0, 0, 0, 202, 205, 3, 14, 7, 0, 203, 205, 3, 24, 12, 
+	0, 204, 202, 1, 0, 0, 0, 204, 203, 1, 0, 0, 0, 205, 209, 1, 0, 0, 0, 206, 
+	208, 5, 9, 0, 0, 207, 206, 1, 0, 0, 0, 208, 211, 1, 0, 0, 0, 209, 207, 
+	1, 0, 0, 0, 209, 210, 1, 0, 0, 0, 210, 212, 1, 0, 0, 0, 211, 209, 1, 0, 
+	0, 0, 212, 213, 5, 8, 0, 0, 213, 23, 1, 0, 0, 0, 214, 218, 5, 7, 0, 0, 
+	215, 217, 5, 9, 0, 0, 216, 215, 1, 0, 0, 0, 217, 220, 1, 0, 0, 0, 218, 
+	216, 1, 0, 0, 0, 218, 219, 1, 0, 0, 0, 219, 223, 1, 0, 0, 0, 220, 218, 
+	1, 0, 0, 0, 221, 224, 3, 16, 8, 0, 222, 224, 3, 24, 12, 0, 223, 221, 1, 
+	0, 0, 0, 223, 222, 1, 0, 0, 0, 224, 228, 1, 0, 0, 0, 225, 227, 5, 9, 0, 
+	0, 226, 225, 1, 0, 0, 0, 227, 230, 1, 0, 0, 0, 228, 226, 1, 0, 0, 0, 228, 
+	229, 1, 0, 0, 0, 229, 231, 1, 0, 0, 0, 230, 228, 1, 0, 0, 0, 231, 232, 
+	5, 8, 0, 0, 232, 25, 1, 0, 0, 0, 233, 235, 5, 5, 0, 0, 234, 236, 5, 9, 
+	0, 0, 235, 234, 1, 0, 0, 0, 235, 236, 1, 0, 0, 0, 236, 237, 1, 0, 0, 0, 
+	237, 239, 3, 30, 15, 0, 238, 240, 5, 9, 0, 0, 239, 238, 1, 0, 0, 0, 239, 
+	240, 1, 0, 0, 0, 240, 251, 1, 0, 0, 0, 241, 243, 5, 2, 0, 0, 242, 244, 
+	5, 9, 0, 0, 243, 242, 1, 0, 0, 0, 243, 244, 1, 0, 0, 0, 244, 245, 1, 0, 
+	0, 0, 245, 247, 3, 30, 15, 0, 246, 248, 5, 9, 0, 0, 247, 246, 1, 0, 0, 
+	0, 247, 248, 1, 0, 0, 0, 248, 250, 1, 0, 0, 0, 249, 241, 1, 0, 0, 0, 250, 
+	253, 1, 0, 0, 0, 251, 249, 1, 0, 0, 0, 251, 252, 1, 0, 0, 0, 252, 254, 
+	1, 0, 0, 0, 253, 251, 1, 0, 0, 0, 254, 255, 5, 34, 0, 0, 255, 27, 1, 0, 
+	0, 0, 256, 261, 3, 50, 25, 0, 257, 258, 5, 9, 0, 0, 258, 259, 5, 15, 0, 
+	0, 259, 260, 5, 9, 0, 0, 260, 262, 3, 50, 25, 0, 261, 257, 1, 0, 0, 0, 
+	261, 262, 1, 0, 0, 0, 262, 29, 1, 0, 0, 0, 263, 265, 5, 56, 0, 0, 264, 
+	263, 1, 0, 0, 0, 264, 265, 1, 0, 0, 0, 265, 275, 1, 0, 0, 0, 266, 276, 
+	3, 32, 16, 0, 267, 268, 3, 32, 16, 0, 268, 269, 5, 9, 0, 0, 269, 270, 5, 
+	26, 0, 0, 270, 273, 5, 9, 0, 0, 271, 274, 3, 38, 19, 0, 272, 274, 5, 54, 
+	0, 0, 273, 271, 1, 0, 0, 0, 273, 272, 1, 0, 0, 0, 274, 276, 1, 0, 0, 0, 
+	275, 266, 1, 0, 0, 0, 275, 267, 1, 0, 0, 0, 276, 278, 1, 0, 0, 0, 277, 
+	279, 5, 56, 0, 0, 278, 277, 1, 0, 0, 0, 278, 279, 1, 0, 0, 0, 279, 31, 
+	1, 0, 0, 0, 280, 285, 3, 50, 25, 0, 281, 282, 5, 1, 0, 0, 282, 286, 5, 
+	42, 0, 0, 283, 284, 5, 11, 0, 0, 284, 286, 3, 50, 25, 0, 285, 281, 1, 0, 
+	0, 0, 285, 283, 1, 0, 0, 0, 285, 286, 1, 0, 0, 0, 286, 33, 1, 0, 0, 0, 
+	287, 289, 3, 36, 18, 0, 288, 287, 1, 0, 0, 0, 289, 292, 1, 0, 0, 0, 290, 
+	288, 1, 0, 0, 0, 290, 291, 1, 0, 0, 0, 291, 35, 1, 0, 0, 0, 292, 290, 1, 
+	0, 0, 0, 293, 294, 5, 56, 0, 0, 294, 296, 3, 46, 23, 0, 295, 293, 1, 0, 
+	0, 0, 295, 296, 1, 0, 0, 0, 296, 297, 1, 0, 0, 0, 297, 298, 5, 56, 0, 0, 
+	298, 299, 5, 22, 0, 0, 299, 300, 5, 9, 0, 0, 300, 302, 3, 38, 19, 0, 301, 
+	303, 5, 9, 0, 0, 302, 301, 1, 0, 0, 0, 302, 303, 1, 0, 0, 0, 303, 304, 
+	1, 0, 0, 0, 304, 306, 5, 7, 0, 0, 305, 307, 5, 9, 0, 0, 306, 305, 1, 0, 
+	0, 0, 306, 307, 1, 0, 0, 0, 307, 308, 1, 0, 0, 0, 308, 310, 3, 40, 20, 
+	0, 309, 311, 5, 9, 0, 0, 310, 309, 1, 0, 0, 0, 310, 311, 1, 0, 0, 0, 311, 
+	322, 1, 0, 0, 0, 312, 314, 5, 2, 0, 0, 313, 315, 5, 9, 0, 0, 314, 313, 
+	1, 0, 0, 0, 314, 315, 1, 0, 0, 0, 315, 316, 1, 0, 0, 0, 316, 318, 3, 40, 
+	20, 0, 317, 319, 5, 9, 0, 0, 318, 317, 1, 0, 0, 0, 318, 319, 1, 0, 0, 0, 
+	319, 321, 1, 0, 0, 0, 320, 312, 1, 0, 0, 0, 321, 324, 1, 0, 0, 0, 322, 
+	320, 1, 0, 0, 0, 322, 323, 1, 0, 0, 0, 323, 326, 1, 0, 0, 0, 324, 322, 
+	1, 0, 0, 0, 325, 327, 5, 56, 0, 0, 326, 325, 1, 0, 0, 0, 326, 327, 1, 0, 
+	0, 0, 327, 328, 1, 0, 0, 0, 328, 330, 5, 8, 0, 0, 329, 331, 5, 9, 0, 0, 
+	330, 329, 1, 0, 0, 0, 330, 331, 1, 0, 0, 0, 331, 332, 1, 0, 0, 0, 332, 
+	334, 5, 35, 0, 0, 333, 335, 5, 56, 0, 0, 334, 333, 1, 0, 0, 0, 334, 335, 
+	1, 0, 0, 0, 335, 337, 1, 0, 0, 0, 336, 338, 5, 9, 0, 0, 337, 336, 1, 0, 
+	0, 0, 337, 338, 1, 0, 0, 0, 338, 339, 1, 0, 0, 0, 339, 341, 3, 52, 26, 
+	0, 340, 342, 5, 56, 0, 0, 341, 340, 1, 0, 0, 0, 341, 342, 1, 0, 0, 0, 342, 
+	343, 1, 0, 0, 0, 343, 344, 5, 36, 0, 0, 344, 37, 1, 0, 0, 0, 345, 346, 
+	5, 10, 0, 0, 346, 39, 1, 0, 0, 0, 347, 349, 5, 56, 0, 0, 348, 347, 1, 0, 
+	0, 0, 348, 349, 1, 0, 0, 0, 349, 350, 1, 0, 0, 0, 350, 352, 3, 42, 21, 
+	0, 351, 353, 5, 9, 0, 0, 352, 351, 1, 0, 0, 0, 352, 353, 1, 0, 0, 0, 353, 
+	354, 1, 0, 0, 0, 354, 356, 5, 1, 0, 0, 355, 357, 5, 9, 0, 0, 356, 355, 
+	1, 0, 0, 0, 356, 357, 1, 0, 0, 0, 357, 358, 1, 0, 0, 0, 358, 359, 3, 44, 
+	22, 0, 359, 41, 1, 0, 0, 0, 360, 361, 5, 10, 0, 0, 361, 43, 1, 0, 0, 0, 
+	362, 368, 5, 58, 0, 0, 363, 364, 5, 57, 0, 0, 364, 365, 5, 3, 0, 0, 365, 
+	366, 5, 58, 0, 0, 366, 368, 5, 4, 0, 0, 367, 362, 1, 0, 0, 0, 367, 363, 
+	1, 0, 0, 0, 368, 45, 1, 0, 0, 0, 369, 373, 5, 11, 0, 0, 370, 372, 8, 0, 
+	0, 0, 371, 370, 1, 0, 0, 0, 372, 375, 1, 0, 0, 0, 373, 371, 1, 0, 0, 0, 
+	373, 374, 1, 0, 0, 0, 374, 378, 1, 0, 0, 0, 375, 373, 1, 0, 0, 0, 376, 
+	377, 5, 56, 0, 0, 377, 379, 3, 46, 23, 0, 378, 376, 1, 0, 0, 0, 378, 379, 
+	1, 0, 0, 0, 379, 47, 1, 0, 0, 0, 380, 381, 7, 1, 0, 0, 381, 49, 1, 0, 0, 
+	0, 382, 385, 3, 48, 24, 0, 383, 385, 5, 55, 0, 0, 384, 382, 1, 0, 0, 0, 
+	384, 383, 1, 0, 0, 0, 385, 51, 1, 0, 0, 0, 386, 389, 7, 2, 0, 0, 387, 389, 
+	8, 3, 0, 0, 388, 386, 1, 0, 0, 0, 388, 387, 1, 0, 0, 0, 389, 392, 1, 0, 
+	0, 0, 390, 388, 1, 0, 0, 0, 390, 391, 1, 0, 0, 0, 391, 53, 1, 0, 0, 0, 
+	392, 390, 1, 0, 0, 0, 67, 55, 58, 62, 65, 69, 73, 80, 88, 93, 99, 104, 
+	109, 114, 124, 126, 130, 137, 141, 150, 153, 157, 160, 167, 171, 178, 182, 
+	189, 191, 199, 204, 209, 218, 223, 228, 235, 239, 243, 247, 251, 261, 264, 
+	273, 275, 278, 285, 290, 295, 302, 306, 310, 314, 318, 322, 326, 330, 334, 
+	337, 341, 348, 352, 356, 367, 373, 378, 384, 388, 390,
 }
   deserializer := antlr.NewATNDeserializer(nil)
   staticData.atn = deserializer.Deserialize(staticData.serializedATN)
@@ -337,10 +339,11 @@ const (
 	OpenFGAParserNUM_UINT = 51
 	OpenFGAParserSTRING = 52
 	OpenFGAParserBYTES = 53
-	OpenFGAParserEXTENDED_IDENTIFIER = 54
-	OpenFGAParserNEWLINE = 55
-	OpenFGAParserCONDITION_PARAM_CONTAINER = 56
-	OpenFGAParserCONDITION_PARAM_TYPE = 57
+	OpenFGAParserDOLLAR_EXPRESSION = 54
+	OpenFGAParserEXTENDED_IDENTIFIER = 55
+	OpenFGAParserNEWLINE = 56
+	OpenFGAParserCONDITION_PARAM_CONTAINER = 57
+	OpenFGAParserCONDITION_PARAM_TYPE = 58
 )
 
 // OpenFGAParser rules.
@@ -3989,6 +3992,7 @@ type IRelationDefTypeRestrictionContext interface {
 	WHITESPACE(i int) antlr.TerminalNode
 	KEYWORD_WITH() antlr.TerminalNode
 	ConditionName() IConditionNameContext
+	DOLLAR_EXPRESSION() antlr.TerminalNode
 
 	// IsRelationDefTypeRestrictionContext differentiates from other interfaces.
 	IsRelationDefTypeRestrictionContext()
@@ -4078,6 +4082,10 @@ func (s *RelationDefTypeRestrictionContext) ConditionName() IConditionNameContex
 	return t.(IConditionNameContext)
 }
 
+func (s *RelationDefTypeRestrictionContext) DOLLAR_EXPRESSION() antlr.TerminalNode {
+	return s.GetToken(OpenFGAParserDOLLAR_EXPRESSION, 0)
+}
+
 func (s *RelationDefTypeRestrictionContext) GetRuleContext() antlr.RuleContext {
 	return s
 }
@@ -4127,13 +4135,13 @@ func (p *OpenFGAParser) RelationDefTypeRestriction() (localctx IRelationDefTypeR
 		}
 
 	}
-	p.SetState(273)
+	p.SetState(275)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
 	}
 
-	switch p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 41, p.GetParserRuleContext()) {
+	switch p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 42, p.GetParserRuleContext()) {
 	case 1:
 		{
 			p.SetState(266)
@@ -4170,16 +4178,42 @@ func (p *OpenFGAParser) RelationDefTypeRestriction() (localctx IRelationDefTypeR
 					goto errorExit
 			}
 		}
-		{
-			p.SetState(271)
-			p.ConditionName()
+		p.SetState(273)
+		p.GetErrorHandler().Sync(p)
+		if p.HasError() {
+			goto errorExit
+		}
+
+		switch p.GetTokenStream().LA(1) {
+		case OpenFGAParserIDENTIFIER:
+			{
+				p.SetState(271)
+				p.ConditionName()
+			}
+
+
+		case OpenFGAParserDOLLAR_EXPRESSION:
+			{
+				p.SetState(272)
+				p.Match(OpenFGAParserDOLLAR_EXPRESSION)
+				if p.HasError() {
+						// Recognition error - abort rule
+						goto errorExit
+				}
+			}
+
+
+
+		default:
+			p.SetError(antlr.NewNoViableAltException(p, nil, nil, nil, nil, nil))
+			goto errorExit
 		}
 
 
 	case antlr.ATNInvalidAltNumber:
 		goto errorExit
 	}
-	p.SetState(276)
+	p.SetState(278)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -4189,7 +4223,7 @@ func (p *OpenFGAParser) RelationDefTypeRestriction() (localctx IRelationDefTypeR
 
 	if _la == OpenFGAParserNEWLINE {
 		{
-			p.SetState(275)
+			p.SetState(277)
 			p.Match(OpenFGAParserNEWLINE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -4388,14 +4422,14 @@ func (p *OpenFGAParser) RelationDefTypeRestrictionBase() (localctx IRelationDefT
 	p.EnterRule(localctx, 32, OpenFGAParserRULE_relationDefTypeRestrictionBase)
 	p.EnterOuterAlt(localctx, 1)
 	{
-		p.SetState(278)
+		p.SetState(280)
 
 		var _x = p.Extended_identifier()
 
 
 		localctx.(*RelationDefTypeRestrictionBaseContext).relationDefTypeRestrictionType = _x
 	}
-	p.SetState(283)
+	p.SetState(285)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -4403,7 +4437,7 @@ func (p *OpenFGAParser) RelationDefTypeRestrictionBase() (localctx IRelationDefT
 	switch p.GetTokenStream().LA(1) {
 	case OpenFGAParserCOLON:
 		{
-			p.SetState(279)
+			p.SetState(281)
 			p.Match(OpenFGAParserCOLON)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -4411,7 +4445,7 @@ func (p *OpenFGAParser) RelationDefTypeRestrictionBase() (localctx IRelationDefT
 			}
 		}
 		{
-			p.SetState(280)
+			p.SetState(282)
 
 			var _m = p.Match(OpenFGAParserSTAR)
 
@@ -4426,7 +4460,7 @@ func (p *OpenFGAParser) RelationDefTypeRestrictionBase() (localctx IRelationDefT
 
 	case OpenFGAParserHASH:
 		{
-			p.SetState(281)
+			p.SetState(283)
 			p.Match(OpenFGAParserHASH)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -4434,7 +4468,7 @@ func (p *OpenFGAParser) RelationDefTypeRestrictionBase() (localctx IRelationDefT
 			}
 		}
 		{
-			p.SetState(282)
+			p.SetState(284)
 
 			var _x = p.Extended_identifier()
 
@@ -4585,30 +4619,30 @@ func (p *OpenFGAParser) Conditions() (localctx IConditionsContext) {
 	var _alt int
 
 	p.EnterOuterAlt(localctx, 1)
-	p.SetState(288)
+	p.SetState(290)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
 	}
-	_alt = p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 44, p.GetParserRuleContext())
+	_alt = p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 45, p.GetParserRuleContext())
 	if p.HasError() {
 		goto errorExit
 	}
 	for _alt != 2 && _alt != antlr.ATNInvalidAltNumber {
 		if _alt == 1 {
 			{
-				p.SetState(285)
+				p.SetState(287)
 				p.Condition()
 			}
 
 
 		}
-		p.SetState(290)
+		p.SetState(292)
 		p.GetErrorHandler().Sync(p)
 		if p.HasError() {
 	    	goto errorExit
 	    }
-		_alt = p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 44, p.GetParserRuleContext())
+		_alt = p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 45, p.GetParserRuleContext())
 		if p.HasError() {
 			goto errorExit
 		}
@@ -4854,13 +4888,13 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 	var _la int
 
 	p.EnterOuterAlt(localctx, 1)
-	p.SetState(293)
+	p.SetState(295)
 	p.GetErrorHandler().Sync(p)
 
 
-	if p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 45, p.GetParserRuleContext()) == 1 {
+	if p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 46, p.GetParserRuleContext()) == 1 {
 		{
-			p.SetState(291)
+			p.SetState(293)
 			p.Match(OpenFGAParserNEWLINE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -4868,7 +4902,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 			}
 		}
 		{
-			p.SetState(292)
+			p.SetState(294)
 			p.MultiLineComment()
 		}
 
@@ -4876,7 +4910,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 			goto errorExit
 	}
 	{
-		p.SetState(295)
+		p.SetState(297)
 		p.Match(OpenFGAParserNEWLINE)
 		if p.HasError() {
 				// Recognition error - abort rule
@@ -4884,7 +4918,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 		}
 	}
 	{
-		p.SetState(296)
+		p.SetState(298)
 		p.Match(OpenFGAParserCONDITION)
 		if p.HasError() {
 				// Recognition error - abort rule
@@ -4892,7 +4926,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 		}
 	}
 	{
-		p.SetState(297)
+		p.SetState(299)
 		p.Match(OpenFGAParserWHITESPACE)
 		if p.HasError() {
 				// Recognition error - abort rule
@@ -4900,10 +4934,10 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 		}
 	}
 	{
-		p.SetState(298)
+		p.SetState(300)
 		p.ConditionName()
 	}
-	p.SetState(300)
+	p.SetState(302)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -4913,7 +4947,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	if _la == OpenFGAParserWHITESPACE {
 		{
-			p.SetState(299)
+			p.SetState(301)
 			p.Match(OpenFGAParserWHITESPACE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -4923,14 +4957,14 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	}
 	{
-		p.SetState(302)
+		p.SetState(304)
 		p.Match(OpenFGAParserLPAREN)
 		if p.HasError() {
 				// Recognition error - abort rule
 				goto errorExit
 		}
 	}
-	p.SetState(304)
+	p.SetState(306)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -4940,7 +4974,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	if _la == OpenFGAParserWHITESPACE {
 		{
-			p.SetState(303)
+			p.SetState(305)
 			p.Match(OpenFGAParserWHITESPACE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -4950,10 +4984,10 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	}
 	{
-		p.SetState(306)
+		p.SetState(308)
 		p.ConditionParameter()
 	}
-	p.SetState(308)
+	p.SetState(310)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -4963,7 +4997,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	if _la == OpenFGAParserWHITESPACE {
 		{
-			p.SetState(307)
+			p.SetState(309)
 			p.Match(OpenFGAParserWHITESPACE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -4972,7 +5006,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 		}
 
 	}
-	p.SetState(320)
+	p.SetState(322)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -4982,14 +5016,14 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	for _la == OpenFGAParserCOMMA {
 		{
-			p.SetState(310)
+			p.SetState(312)
 			p.Match(OpenFGAParserCOMMA)
 			if p.HasError() {
 					// Recognition error - abort rule
 					goto errorExit
 			}
 		}
-		p.SetState(312)
+		p.SetState(314)
 		p.GetErrorHandler().Sync(p)
 		if p.HasError() {
 			goto errorExit
@@ -4999,7 +5033,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 		if _la == OpenFGAParserWHITESPACE {
 			{
-				p.SetState(311)
+				p.SetState(313)
 				p.Match(OpenFGAParserWHITESPACE)
 				if p.HasError() {
 						// Recognition error - abort rule
@@ -5009,10 +5043,10 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 		}
 		{
-			p.SetState(314)
+			p.SetState(316)
 			p.ConditionParameter()
 		}
-		p.SetState(316)
+		p.SetState(318)
 		p.GetErrorHandler().Sync(p)
 		if p.HasError() {
 			goto errorExit
@@ -5022,7 +5056,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 		if _la == OpenFGAParserWHITESPACE {
 			{
-				p.SetState(315)
+				p.SetState(317)
 				p.Match(OpenFGAParserWHITESPACE)
 				if p.HasError() {
 						// Recognition error - abort rule
@@ -5033,14 +5067,14 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 		}
 
 
-		p.SetState(322)
+		p.SetState(324)
 		p.GetErrorHandler().Sync(p)
 		if p.HasError() {
 	    	goto errorExit
 	    }
 		_la = p.GetTokenStream().LA(1)
 	}
-	p.SetState(324)
+	p.SetState(326)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -5050,7 +5084,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	if _la == OpenFGAParserNEWLINE {
 		{
-			p.SetState(323)
+			p.SetState(325)
 			p.Match(OpenFGAParserNEWLINE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5060,14 +5094,14 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	}
 	{
-		p.SetState(326)
+		p.SetState(328)
 		p.Match(OpenFGAParserRPAREN)
 		if p.HasError() {
 				// Recognition error - abort rule
 				goto errorExit
 		}
 	}
-	p.SetState(328)
+	p.SetState(330)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -5077,7 +5111,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	if _la == OpenFGAParserWHITESPACE {
 		{
-			p.SetState(327)
+			p.SetState(329)
 			p.Match(OpenFGAParserWHITESPACE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5087,20 +5121,20 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	}
 	{
-		p.SetState(330)
+		p.SetState(332)
 		p.Match(OpenFGAParserLBRACE)
 		if p.HasError() {
 				// Recognition error - abort rule
 				goto errorExit
 		}
 	}
-	p.SetState(332)
+	p.SetState(334)
 	p.GetErrorHandler().Sync(p)
 
 
-	if p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 54, p.GetParserRuleContext()) == 1 {
+	if p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 55, p.GetParserRuleContext()) == 1 {
 		{
-			p.SetState(331)
+			p.SetState(333)
 			p.Match(OpenFGAParserNEWLINE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5111,13 +5145,13 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 		} else if p.HasError() { // JIM
 			goto errorExit
 	}
-	p.SetState(335)
+	p.SetState(337)
 	p.GetErrorHandler().Sync(p)
 
 
-	if p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 55, p.GetParserRuleContext()) == 1 {
+	if p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 56, p.GetParserRuleContext()) == 1 {
 		{
-			p.SetState(334)
+			p.SetState(336)
 			p.Match(OpenFGAParserWHITESPACE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5129,10 +5163,10 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 			goto errorExit
 	}
 	{
-		p.SetState(337)
+		p.SetState(339)
 		p.ConditionExpression()
 	}
-	p.SetState(339)
+	p.SetState(341)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -5142,7 +5176,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	if _la == OpenFGAParserNEWLINE {
 		{
-			p.SetState(338)
+			p.SetState(340)
 			p.Match(OpenFGAParserNEWLINE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5152,7 +5186,7 @@ func (p *OpenFGAParser) Condition() (localctx IConditionContext) {
 
 	}
 	{
-		p.SetState(341)
+		p.SetState(343)
 		p.Match(OpenFGAParserRBRACE)
 		if p.HasError() {
 				// Recognition error - abort rule
@@ -5255,7 +5289,7 @@ func (p *OpenFGAParser) ConditionName() (localctx IConditionNameContext) {
 	p.EnterRule(localctx, 38, OpenFGAParserRULE_conditionName)
 	p.EnterOuterAlt(localctx, 1)
 	{
-		p.SetState(343)
+		p.SetState(345)
 		p.Match(OpenFGAParserIDENTIFIER)
 		if p.HasError() {
 				// Recognition error - abort rule
@@ -5408,7 +5442,7 @@ func (p *OpenFGAParser) ConditionParameter() (localctx IConditionParameterContex
 	var _la int
 
 	p.EnterOuterAlt(localctx, 1)
-	p.SetState(346)
+	p.SetState(348)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -5418,7 +5452,7 @@ func (p *OpenFGAParser) ConditionParameter() (localctx IConditionParameterContex
 
 	if _la == OpenFGAParserNEWLINE {
 		{
-			p.SetState(345)
+			p.SetState(347)
 			p.Match(OpenFGAParserNEWLINE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5428,10 +5462,10 @@ func (p *OpenFGAParser) ConditionParameter() (localctx IConditionParameterContex
 
 	}
 	{
-		p.SetState(348)
+		p.SetState(350)
 		p.ParameterName()
 	}
-	p.SetState(350)
+	p.SetState(352)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -5441,7 +5475,7 @@ func (p *OpenFGAParser) ConditionParameter() (localctx IConditionParameterContex
 
 	if _la == OpenFGAParserWHITESPACE {
 		{
-			p.SetState(349)
+			p.SetState(351)
 			p.Match(OpenFGAParserWHITESPACE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5451,14 +5485,14 @@ func (p *OpenFGAParser) ConditionParameter() (localctx IConditionParameterContex
 
 	}
 	{
-		p.SetState(352)
+		p.SetState(354)
 		p.Match(OpenFGAParserCOLON)
 		if p.HasError() {
 				// Recognition error - abort rule
 				goto errorExit
 		}
 	}
-	p.SetState(354)
+	p.SetState(356)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -5468,7 +5502,7 @@ func (p *OpenFGAParser) ConditionParameter() (localctx IConditionParameterContex
 
 	if _la == OpenFGAParserWHITESPACE {
 		{
-			p.SetState(353)
+			p.SetState(355)
 			p.Match(OpenFGAParserWHITESPACE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5478,7 +5512,7 @@ func (p *OpenFGAParser) ConditionParameter() (localctx IConditionParameterContex
 
 	}
 	{
-		p.SetState(356)
+		p.SetState(358)
 		p.ParameterType()
 	}
 
@@ -5577,7 +5611,7 @@ func (p *OpenFGAParser) ParameterName() (localctx IParameterNameContext) {
 	p.EnterRule(localctx, 42, OpenFGAParserRULE_parameterName)
 	p.EnterOuterAlt(localctx, 1)
 	{
-		p.SetState(358)
+		p.SetState(360)
 		p.Match(OpenFGAParserIDENTIFIER)
 		if p.HasError() {
 				// Recognition error - abort rule
@@ -5693,7 +5727,7 @@ func (s *ParameterTypeContext) ExitRule(listener antlr.ParseTreeListener) {
 func (p *OpenFGAParser) ParameterType() (localctx IParameterTypeContext) {
 	localctx = NewParameterTypeContext(p, p.GetParserRuleContext(), p.GetState())
 	p.EnterRule(localctx, 44, OpenFGAParserRULE_parameterType)
-	p.SetState(365)
+	p.SetState(367)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -5703,7 +5737,7 @@ func (p *OpenFGAParser) ParameterType() (localctx IParameterTypeContext) {
 	case OpenFGAParserCONDITION_PARAM_TYPE:
 		p.EnterOuterAlt(localctx, 1)
 		{
-			p.SetState(360)
+			p.SetState(362)
 			p.Match(OpenFGAParserCONDITION_PARAM_TYPE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5715,7 +5749,7 @@ func (p *OpenFGAParser) ParameterType() (localctx IParameterTypeContext) {
 	case OpenFGAParserCONDITION_PARAM_CONTAINER:
 		p.EnterOuterAlt(localctx, 2)
 		{
-			p.SetState(361)
+			p.SetState(363)
 			p.Match(OpenFGAParserCONDITION_PARAM_CONTAINER)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5723,7 +5757,7 @@ func (p *OpenFGAParser) ParameterType() (localctx IParameterTypeContext) {
 			}
 		}
 		{
-			p.SetState(362)
+			p.SetState(364)
 			p.Match(OpenFGAParserLESS)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5731,7 +5765,7 @@ func (p *OpenFGAParser) ParameterType() (localctx IParameterTypeContext) {
 			}
 		}
 		{
-			p.SetState(363)
+			p.SetState(365)
 			p.Match(OpenFGAParserCONDITION_PARAM_TYPE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5739,7 +5773,7 @@ func (p *OpenFGAParser) ParameterType() (localctx IParameterTypeContext) {
 			}
 		}
 		{
-			p.SetState(364)
+			p.SetState(366)
 			p.Match(OpenFGAParserGREATER)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5878,14 +5912,14 @@ func (p *OpenFGAParser) MultiLineComment() (localctx IMultiLineCommentContext) {
 
 	p.EnterOuterAlt(localctx, 1)
 	{
-		p.SetState(367)
+		p.SetState(369)
 		p.Match(OpenFGAParserHASH)
 		if p.HasError() {
 				// Recognition error - abort rule
 				goto errorExit
 		}
 	}
-	p.SetState(371)
+	p.SetState(373)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -5893,9 +5927,9 @@ func (p *OpenFGAParser) MultiLineComment() (localctx IMultiLineCommentContext) {
 	_la = p.GetTokenStream().LA(1)
 
 
-	for ((int64(_la) & ^0x3f) == 0 && ((int64(1) << _la) & 252201579132747774) != 0) {
+	for ((int64(_la) & ^0x3f) == 0 && ((int64(1) << _la) & 504403158265495550) != 0) {
 		{
-			p.SetState(368)
+			p.SetState(370)
 			_la = p.GetTokenStream().LA(1)
 
 			if _la <= 0 || _la == OpenFGAParserNEWLINE  {
@@ -5907,20 +5941,20 @@ func (p *OpenFGAParser) MultiLineComment() (localctx IMultiLineCommentContext) {
 		}
 
 
-		p.SetState(373)
+		p.SetState(375)
 		p.GetErrorHandler().Sync(p)
 		if p.HasError() {
 	    	goto errorExit
 	    }
 		_la = p.GetTokenStream().LA(1)
 	}
-	p.SetState(376)
+	p.SetState(378)
 	p.GetErrorHandler().Sync(p)
 
 
-	if p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 62, p.GetParserRuleContext()) == 1 {
+	if p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 63, p.GetParserRuleContext()) == 1 {
 		{
-			p.SetState(374)
+			p.SetState(376)
 			p.Match(OpenFGAParserNEWLINE)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -5928,7 +5962,7 @@ func (p *OpenFGAParser) MultiLineComment() (localctx IMultiLineCommentContext) {
 			}
 		}
 		{
-			p.SetState(375)
+			p.SetState(377)
 			p.MultiLineComment()
 		}
 
@@ -6063,7 +6097,7 @@ func (p *OpenFGAParser) Identifier() (localctx IIdentifierContext) {
 
 	p.EnterOuterAlt(localctx, 1)
 	{
-		p.SetState(378)
+		p.SetState(380)
 		_la = p.GetTokenStream().LA(1)
 
 		if !(((int64(_la) & ^0x3f) == 0 && ((int64(1) << _la) & 20382720) != 0)) {
@@ -6184,7 +6218,7 @@ func (s *Extended_identifierContext) ExitRule(listener antlr.ParseTreeListener) 
 func (p *OpenFGAParser) Extended_identifier() (localctx IExtended_identifierContext) {
 	localctx = NewExtended_identifierContext(p, p.GetParserRuleContext(), p.GetState())
 	p.EnterRule(localctx, 50, OpenFGAParserRULE_extended_identifier)
-	p.SetState(382)
+	p.SetState(384)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
@@ -6194,7 +6228,7 @@ func (p *OpenFGAParser) Extended_identifier() (localctx IExtended_identifierCont
 	case OpenFGAParserIDENTIFIER, OpenFGAParserMODULE, OpenFGAParserMODEL, OpenFGAParserSCHEMA, OpenFGAParserEXTEND, OpenFGAParserTYPE, OpenFGAParserRELATION:
 		p.EnterOuterAlt(localctx, 1)
 		{
-			p.SetState(380)
+			p.SetState(382)
 			p.Identifier()
 		}
 
@@ -6202,7 +6236,7 @@ func (p *OpenFGAParser) Extended_identifier() (localctx IExtended_identifierCont
 	case OpenFGAParserEXTENDED_IDENTIFIER:
 		p.EnterOuterAlt(localctx, 2)
 		{
-			p.SetState(381)
+			p.SetState(383)
 			p.Match(OpenFGAParserEXTENDED_IDENTIFIER)
 			if p.HasError() {
 					// Recognition error - abort rule
@@ -6659,30 +6693,30 @@ func (p *OpenFGAParser) ConditionExpression() (localctx IConditionExpressionCont
 	var _alt int
 
 	p.EnterOuterAlt(localctx, 1)
-	p.SetState(388)
+	p.SetState(390)
 	p.GetErrorHandler().Sync(p)
 	if p.HasError() {
 		goto errorExit
 	}
-	_alt = p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 65, p.GetParserRuleContext())
+	_alt = p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 66, p.GetParserRuleContext())
 	if p.HasError() {
 		goto errorExit
 	}
 	for _alt != 2 && _alt != antlr.ATNInvalidAltNumber {
 		if _alt == 1 {
-			p.SetState(386)
+			p.SetState(388)
 			p.GetErrorHandler().Sync(p)
 			if p.HasError() {
 				goto errorExit
 			}
 
-			switch p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 64, p.GetParserRuleContext()) {
+			switch p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 65, p.GetParserRuleContext()) {
 			case 1:
 				{
-					p.SetState(384)
+					p.SetState(386)
 					_la = p.GetTokenStream().LA(1)
 
-					if !(((int64(_la) & ^0x3f) == 0 && ((int64(1) << _la) & 54043126674753464) != 0)) {
+					if !(((int64(_la) & ^0x3f) == 0 && ((int64(1) << _la) & 90071923693717432) != 0)) {
 						p.GetErrorHandler().RecoverInline(p)
 					} else {
 						p.GetErrorHandler().ReportMatch(p)
@@ -6693,7 +6727,7 @@ func (p *OpenFGAParser) ConditionExpression() (localctx IConditionExpressionCont
 
 			case 2:
 				{
-					p.SetState(385)
+					p.SetState(387)
 					_la = p.GetTokenStream().LA(1)
 
 					if _la <= 0 || _la == OpenFGAParserRBRACE  {
@@ -6709,12 +6743,12 @@ func (p *OpenFGAParser) ConditionExpression() (localctx IConditionExpressionCont
 			}
 
 		}
-		p.SetState(390)
+		p.SetState(392)
 		p.GetErrorHandler().Sync(p)
 		if p.HasError() {
 	    	goto errorExit
 	    }
-		_alt = p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 65, p.GetParserRuleContext())
+		_alt = p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 66, p.GetParserRuleContext())
 		if p.HasError() {
 			goto errorExit
 		}

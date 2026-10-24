@@ -330,6 +330,10 @@ func (l *OpenFgaDslListener) ExitRelationDefTypeRestriction(ctx *parser.Relation
 
 	if conditionName != nil {
 		relationRef.Condition = conditionName.GetText()
+	} else if dollarExpression := ctx.DOLLAR_EXPRESSION(); dollarExpression != nil {
+		// `$expression` is a reserved condition name for inline expressions; it
+		// is carried on the RelationReference exactly like a named condition.
+		relationRef.Condition = dollarExpression.GetText()
 	}
 
 	if usersetRestriction != nil {

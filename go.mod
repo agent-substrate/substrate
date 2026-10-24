@@ -36,9 +36,9 @@ require (
 	github.com/klauspost/compress v1.20.3
 	github.com/myzhan/boomer v1.6.1-0.20250711115830-8a2c7ce4c7b1
 	github.com/opencontainers/runtime-spec v1.3.0
-	github.com/openfga/api/proto v0.0.0-20260319214821-f153694bfc20
-	github.com/openfga/language/pkg/go v0.3.2-0.20260730144454-83fedf8a4e70
-	github.com/openfga/openfga v1.20.0
+	github.com/openfga/api/proto v0.0.0-20260928071936-c0650ce2169b
+	github.com/openfga/language/pkg/go v0.3.2
+	github.com/openfga/openfga v1.22.0
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/spf13/cobra v1.10.2
@@ -166,7 +166,7 @@ require (
 	github.com/google/s2a-go v0.1.11 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.23 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
-	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3 // indirect
+	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.4 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect

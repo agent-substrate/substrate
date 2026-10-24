@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/oklog/ulid/v2"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -117,32 +118,48 @@ func checkRewrite(graphBuilder *AuthorizationModelGraphBuilder, parentNode *Auth
 	}
 }
 
+// classifyRelationReference determines the label and node type for a RelationReference.
+// It validates the Type field and classifies the reference based on its RelationOrWildcard oneof.
+// Returns empty label if the Type is invalid (empty or contains special characters).
+func classifyRelationReference(ref *openfgav1.RelationReference) (label string, nodeType NodeType) {
+	typeName := ref.GetType()
+	// Skip entries with invalid Type field: empty, or containing special characters
+	// that would break node label format (e.g., "user:admin" → "user:admin:*",
+	// "type#rel" → "type#rel#member").
+	if typeName == "" || strings.ContainsAny(typeName, ":#") {
+		return "", 0
+	}
+
+	switch {
+	case ref.GetWildcard() != nil:
+		// direct assignment to wildcard
+		return typeName + ":*", SpecificTypeWildcard
+	case ref.GetRelation() != "":
+		// direct assignment to userset
+		return typeName + "#" + ref.GetRelation(), SpecificTypeAndRelation
+	default:
+		// Direct assignment to concrete type. Covers oneof unset and set-but-empty
+		// (openfga/api gates relation pattern on non-empty, so "" survives validation).
+		// Matches transformer/jsontodsl.go parseTypeRestriction behavior.
+		return typeName, SpecificType
+	}
+}
+
 func parseThis(graphBuilder *AuthorizationModelGraphBuilder, parentNode graph.Node, typeDef *openfgav1.TypeDefinition, relation string) {
 	directlyRelated := make([]*openfgav1.RelationReference, 0)
-	var curNode *AuthorizationModelNode
 
 	if relationMetadata, ok := typeDef.GetMetadata().GetRelations()[relation]; ok {
 		directlyRelated = relationMetadata.GetDirectlyRelatedUserTypes()
 	}
 
 	for _, directlyRelatedDef := range directlyRelated {
-		if directlyRelatedDef.GetRelationOrWildcard() == nil {
-			// direct assignment to concrete type
-			assignableType := directlyRelatedDef.GetType()
-			curNode = graphBuilder.getOrAddNode(assignableType, assignableType, SpecificType)
+		label, nodeType := classifyRelationReference(directlyRelatedDef)
+		if label == "" {
+			// Invalid Type field (empty or contains special characters)
+			continue
 		}
 
-		if directlyRelatedDef.GetWildcard() != nil {
-			// direct assignment to wildcard
-			assignableWildcard := directlyRelatedDef.GetType() + ":*"
-			curNode = graphBuilder.getOrAddNode(assignableWildcard, assignableWildcard, SpecificTypeWildcard)
-		}
-
-		if directlyRelatedDef.GetRelation() != "" {
-			// direct assignment to userset
-			assignableUserset := directlyRelatedDef.GetType() + "#" + directlyRelatedDef.GetRelation()
-			curNode = graphBuilder.getOrAddNode(assignableUserset, assignableUserset, SpecificTypeAndRelation)
-		}
+		curNode := graphBuilder.getOrAddNode(label, label, nodeType)
 
 		// de-dup types that are conditioned, e.g. if define viewer: [user, user with condX]
 		// we only draw one edge from user to x#viewer, but with two conditions: none and condX
@@ -238,8 +255,18 @@ func (g *AuthorizationModelGraphBuilder) getNodeByLabel(uniqueLabel string) *Aut
 	return authModelNode
 }
 
+// isNilNode reports whether n is nil or a typed-nil *AuthorizationModelNode. The latter is
+// not == nil once boxed into graph.Node, and its promoted ID() nil-derefs.
+func isNilNode(n graph.Node) bool {
+	if n == nil {
+		return true
+	}
+	amn, ok := n.(*AuthorizationModelNode)
+	return ok && amn == nil
+}
+
 func (g *AuthorizationModelGraphBuilder) AddEdge(from, to graph.Node, edgeType EdgeType, tuplesetRelation string, conditions []string) *AuthorizationModelEdge {
-	if from == nil || to == nil {
+	if isNilNode(from) || isNilNode(to) {
 		return nil
 	}
 	if len(conditions) == 0 {
@@ -254,14 +281,17 @@ func (g *AuthorizationModelGraphBuilder) AddEdge(from, to graph.Node, edgeType E
 }
 
 func (g *AuthorizationModelGraphBuilder) upsertEdge(from, to graph.Node, edgeType EdgeType, tuplesetRelation string, condition string) {
-	if from == nil || to == nil {
+	if isNilNode(from) || isNilNode(to) {
 		return
 	}
 
 	iter := g.Lines(from.ID(), to.ID())
 	for iter.Next() {
 		l := iter.Line()
-		edge, _ := l.(*AuthorizationModelEdge)
+		edge, ok := l.(*AuthorizationModelEdge)
+		if !ok {
+			continue
+		}
 		if edge.edgeType == edgeType && edge.tuplesetRelation == tuplesetRelation {
 			for _, cond := range edge.conditions {
 				if cond == condition {
@@ -277,14 +307,17 @@ func (g *AuthorizationModelGraphBuilder) upsertEdge(from, to graph.Node, edgeTyp
 }
 
 func (g *AuthorizationModelGraphBuilder) hasEdge(from, to graph.Node, edgeType EdgeType, tuplesetRelation string) bool {
-	if from == nil || to == nil {
+	if isNilNode(from) || isNilNode(to) {
 		return false
 	}
 
 	iter := g.Lines(from.ID(), to.ID())
 	for iter.Next() {
 		l := iter.Line()
-		edge, _ := l.(*AuthorizationModelEdge)
+		edge, ok := l.(*AuthorizationModelEdge)
+		if !ok {
+			continue
+		}
 		if edge.edgeType == edgeType && edge.tuplesetRelation == tuplesetRelation {
 			return true
 		}
