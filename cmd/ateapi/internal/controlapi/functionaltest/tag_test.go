@@ -25,6 +25,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -381,8 +382,11 @@ func TestDeleteTag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteTag failed: %v", err)
 	}
-	if diff := cmp.Diff(created, deleted, protocmp.Transform(), ignoreVersion, ignoreTimestamps); diff != "" {
-		t.Errorf("DeleteTag response mismatch (-created +deleted):\n%s", diff)
+	// The delete returns the row as it was marked: TAG_STATE_DELETING.
+	want := proto.Clone(created).(*ateapi.Tag)
+	want.Status.State = ateapi.TagState_TAG_STATE_DELETING
+	if diff := cmp.Diff(want, deleted, protocmp.Transform(), ignoreVersion, ignoreTimestamps); diff != "" {
+		t.Errorf("DeleteTag response mismatch (-want +deleted):\n%s", diff)
 	}
 	if deleted.GetMetadata().GetDeleteTime() == nil {
 		t.Errorf("the deleted tag carries no delete_time")

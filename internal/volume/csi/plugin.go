@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -175,6 +176,20 @@ func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeReques
 		VolumeCapabilities: getStandardCapabilities(),
 		Parameters:         req.Parameters,
 	}
+	if req.SourceSnapshotID != "" {
+		// Like CreateSnapshot, refuse locally rather than ask a driver that
+		// cannot handle snapshots to restore from one.
+		if !p.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT) {
+			return volume.CreateVolumeResponse{}, fmt.Errorf("CSI driver does not support restoring from snapshot %q", req.SourceSnapshotID)
+		}
+		csiReq.VolumeContentSource = &csi.VolumeContentSource{
+			Type: &csi.VolumeContentSource_Snapshot{
+				Snapshot: &csi.VolumeContentSource_SnapshotSource{
+					SnapshotId: req.SourceSnapshotID,
+				},
+			},
+		}
+	}
 
 	resp, err := p.client.CreateVolume(ctx, csiReq)
 	if err != nil {
@@ -185,9 +200,30 @@ func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeReques
 		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume response returned nil volume")
 	}
 
+	restoredFrom := resp.GetVolume().GetContentSource().GetSnapshot()
+	if req.SourceSnapshotID != "" && restoredFrom == nil {
+		// A driver that ignores the requested source returns an empty volume
+		// and reports success, which for a restore is silent data loss.
+		//
+		// Only the presence of a snapshot source is checked, not that its ID
+		// matches the request: drivers may report the source in their own
+		// format. GCE PD, for example, reports the disk's numeric
+		// sourceSnapshotId rather than the projects/.../snapshots/... handle
+		// it was given. Kubernetes' external-provisioner checks the same way.
+		//
+		// The caller only knows the volume by its requested name, not the ID
+		// the driver issued, so delete it here rather than leak it.
+		volumeID := resp.GetVolume().GetVolumeId()
+		if delErr := p.DeleteVolume(ctx, volumeID); delErr != nil {
+			return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume did not report restoring from requested snapshot %q, and deleting volume %q failed: %w", req.SourceSnapshotID, volumeID, delErr)
+		}
+		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume did not report restoring from requested snapshot %q", req.SourceSnapshotID)
+	}
+
 	return volume.CreateVolumeResponse{
-		VolumeID:      resp.GetVolume().GetVolumeId(),
-		VolumeContext: resp.GetVolume().GetVolumeContext(),
+		VolumeID:                resp.GetVolume().GetVolumeId(),
+		VolumeContext:           resp.GetVolume().GetVolumeContext(),
+		ContentSourceSnapshotID: restoredFrom.GetSnapshotId(),
 	}, nil
 }
 
@@ -253,6 +289,105 @@ func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string)
 		return fmt.Errorf("CSI ControllerUnpublishVolume failed: %w", err)
 	}
 	return nil
+}
+
+// CreateSnapshot maps to CSI Controller CreateSnapshot.
+func (p *Plugin) CreateSnapshot(ctx context.Context, req volume.CreateSnapshotRequest) (volume.Snapshot, error) {
+	if !p.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT) {
+		return volume.Snapshot{}, fmt.Errorf("CSI driver does not support CreateSnapshot")
+	}
+	resp, err := p.client.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           req.Name,
+		SourceVolumeId: req.SourceVolumeID,
+		Parameters:     req.Parameters,
+	})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			p.disableControllerCap(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT)
+		}
+		return volume.Snapshot{}, fmt.Errorf("CSI CreateSnapshot failed: %w", err)
+	}
+	if resp.GetSnapshot().GetSnapshotId() == "" {
+		return volume.Snapshot{}, fmt.Errorf("CSI CreateSnapshot response returned no snapshot ID")
+	}
+	return snapshotFromCSI(resp.GetSnapshot()), nil
+}
+
+// GetSnapshot maps to CSI Controller ListSnapshots filtered to one handle.
+// ListSnapshots is used rather than the newer GetSnapshot RPC because far more
+// drivers implement it. A driver without ListSnapshots returns an error
+// wrapping errors.ErrUnsupported.
+func (p *Plugin) GetSnapshot(ctx context.Context, snapshotID string) (volume.Snapshot, bool, error) {
+	if snapshotID == "" {
+		// An empty filter would list every snapshot the driver holds.
+		return volume.Snapshot{}, false, fmt.Errorf("snapshot ID is required")
+	}
+	if !p.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS) {
+		return volume.Snapshot{}, false, fmt.Errorf("CSI driver does not support ListSnapshots: %w", errors.ErrUnsupported)
+	}
+	resp, err := p.client.ListSnapshots(ctx, &csi.ListSnapshotsRequest{
+		SnapshotId: snapshotID,
+	})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			p.disableControllerCap(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS)
+			return volume.Snapshot{}, false, fmt.Errorf("CSI ListSnapshots is unimplemented by driver: %w", errors.ErrUnsupported)
+		}
+		// Some drivers answer NotFound for an unknown snapshot_id filter
+		// instead of an empty list.
+		if status.Code(err) == codes.NotFound {
+			return volume.Snapshot{}, false, nil
+		}
+		return volume.Snapshot{}, false, fmt.Errorf("CSI ListSnapshots failed: %w", err)
+	}
+	// Filtering by snapshot_id yields at most one entry, and an empty list for
+	// a handle the driver no longer has.
+	for _, entry := range resp.GetEntries() {
+		if snap := entry.GetSnapshot(); snap.GetSnapshotId() == snapshotID {
+			return snapshotFromCSI(snap), true, nil
+		}
+	}
+	return volume.Snapshot{}, false, nil
+}
+
+// DeleteSnapshot maps to CSI Controller DeleteSnapshot.
+//
+// Unlike CreateSnapshot, it is not skipped when the cached capabilities say
+// the driver cannot snapshot: the caller holds a handle the driver issued, and
+// skipping the call would leak it.
+func (p *Plugin) DeleteSnapshot(ctx context.Context, snapshotID string) error {
+	if snapshotID == "" {
+		return fmt.Errorf("snapshot ID is required")
+	}
+	// The CSI spec requires DeleteSnapshot to succeed for a snapshot that does
+	// not exist, but not every driver honors that, and cleanup must stay
+	// retryable either way.
+	_, err := p.client.DeleteSnapshot(ctx, &csi.DeleteSnapshotRequest{
+		SnapshotId: snapshotID,
+	})
+	if err != nil && status.Code(err) != codes.NotFound {
+		return fmt.Errorf("CSI DeleteSnapshot failed: %w", err)
+	}
+	return nil
+}
+
+// ControllerCapabilities reports the snapshot capabilities cached by
+// InitControllerCapabilities, narrowed by any RPC the driver has since
+// returned Unimplemented for. It does not call the driver.
+func (p *Plugin) ControllerCapabilities(context.Context) (volume.Capabilities, error) {
+	return volume.Capabilities{
+		CreateDeleteSnapshot: p.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
+		ListSnapshots:        p.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS),
+	}, nil
+}
+
+func snapshotFromCSI(snap *csi.Snapshot) volume.Snapshot {
+	return volume.Snapshot{
+		SnapshotID:     snap.GetSnapshotId(),
+		SourceVolumeID: snap.GetSourceVolumeId(),
+		ReadyToUse:     snap.GetReadyToUse(),
+		SizeBytes:      snap.GetSizeBytes(),
+	}
 }
 
 // MountVolume maps to CSI Node NodePublishVolume.

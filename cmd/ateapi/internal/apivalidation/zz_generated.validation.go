@@ -9093,6 +9093,40 @@ func Validate_TagStatus(
 		errs = append(errs, fn(fldPath.Child("actor_template_uid"), &obj.ActorTemplateUid, oldVal, oldObj != nil)...)
 	}
 
+	{ // field v1.TagStatus.State
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.TagState,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 5); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.TagStatus) *v1.TagState {
+				return &oldObj.State
+			})
+		errs = append(errs, fn(fldPath.Child("state"), &obj.State, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

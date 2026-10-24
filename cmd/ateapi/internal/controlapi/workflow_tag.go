@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -39,21 +41,24 @@ import (
 //  1. Check that the name is free and the storage location is usable.
 //  2. Make the actor's latest snapshot durable, if it is not uploaded yet: an
 //     asynchronously suspended actor's snapshot may still be uploading.
-//  3. Reserve the tag's name; the store assigns its UID.
+//  3. Reserve the tag's name in TAG_STATE_CREATING; the store assigns its UID.
 //  4. Record the snapshot's URI, under the tag's UID, before anything is
 //     copied there.
 //  5. Copy the snapshot to that URI.
-//  6. Finalize: mark the tag's snapshot COMPLETED.
+//  6. Finalize: mark the tag's snapshot COMPLETED and move the tag to
+//     TAG_STATE_READY.
 //
 // The tag captures whichever snapshot the actor holds when the workflow runs.
 // An actor keeps no snapshot history, so a suspend that lands first moves what
 // gets tagged; that race is inherent to naming an actor rather than a snapshot.
 //
-// Not idempotent: the name is taken as soon as phase 3 lands, so a create that
-// dies after it leaves a pending tag and every later create under that name is
-// AlreadyExists. To retry, delete the tag, which collects whatever the failed
-// attempt stranded, and create it again.
-func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (*ateapi.Tag, error) {
+// Not idempotent: the name is taken as soon as phase 3 lands. If a later phase
+// fails, the tag is moved to TAG_STATE_FAILED and kept, along with whatever the
+// failed phases left behind. A create whose process dies leaves the tag in
+// TAG_STATE_CREATING. Either way every later create under that name is
+// AlreadyExists; to retry, delete the tag, which collects what it stranded,
+// and create it again.
+func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (_ *ateapi.Tag, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	actorRef := resources.ActorRefFromObjectRef(tag.GetSourceActor())
 
@@ -96,6 +101,14 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (
 	if err != nil {
 		return nil, err
 	}
+	// From here on the row exists, so a failure marks it failed. The deferred
+	// call runs before the leases are released.
+	defer func() {
+		if err != nil {
+			w.markTagFailed(leaseCtx, reserved)
+		}
+	}()
+
 	recorded, dst, err := w.ensureTagSnapshotRecorded(leaseCtx, reserved, actorTemplate, snapshot)
 	if err != nil {
 		return nil, err
@@ -111,9 +124,14 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (
 // it first would leak.
 //
 // The workflow is built in 3 phases:
-//  1. Load the tag (which names the snapshot to collect).
-//  2. Release that snapshot, tolerating a previous attempt partly collected.
+//  1. Mark the tag for deletion: set delete_time and move it to
+//     TAG_STATE_DELETING in one write, so readers see it is going away.
+//  2. Release the snapshot the tag names, tolerating a previous attempt partly
+//     collected.
 //  3. Finalize: drop the row.
+//
+// It cleans up a tag in any state, including one a failed or crashed create
+// left in TAG_STATE_FAILED or TAG_STATE_CREATING.
 //
 // Idempotent: a failure at any phase leaves the row in place, so the same
 // delete run again rediscovers the work from it and resumes over whatever is
@@ -146,9 +164,9 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, 
 	return w.finalizeTagDeleted(ctx, tag)
 }
 
-// ensureTagMarkedForDeletion sets the tag's delete_time, checking precondition,
-// and returns the stored copy. Skips when a previous attempt already marked the
-// tag.
+// ensureTagMarkedForDeletion sets the tag's delete_time and moves it to
+// TAG_STATE_DELETING, checking precondition, and returns the stored copy. Skips
+// when a previous attempt already marked the tag.
 func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (_ *ateapi.Tag, err error) {
 	ctx, done := stepSpan(ctx, "MarkTagForDeletion")
 	defer func() { err = done(err) }()
@@ -159,6 +177,9 @@ func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef r
 			alreadyDeleting = toUpdate
 			return errAlreadyMarked
 		}
+		// TAG_STATE_DELETING is terminal, and lands in the same write that
+		// sets delete_time.
+		toUpdate.Status.State = ateapi.TagState_TAG_STATE_DELETING
 		return nil
 	})
 	if errors.Is(err, errAlreadyMarked) {
@@ -230,6 +251,44 @@ func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tag *ateapi.Tag)
 		return nil, fmt.Errorf("while deleting tag %s: %w", tagRef, err)
 	}
 	return tag, nil
+}
+
+// markTagFailedTimeout bounds the write that marks a failed create's tag after
+// the caller's context may be gone.
+const markTagFailedTimeout = 30 * time.Second
+
+// markTagFailed moves a tag whose create failed to TAG_STATE_FAILED. It is
+// best effort: the create is already failing, so an error here is logged and
+// the tag is left in TAG_STATE_CREATING, which DeleteTag cleans up the same
+// way.
+//
+// It keeps ctx's values but not its cancellation, so a create that failed
+// because its RPC was canceled still records the failure. The row is read
+// again rather than taken from the caller, since earlier phases moved its
+// version on; a row that is gone or carries another UID is left alone.
+func (w *ActorWorkflow) markTagFailed(ctx context.Context, reserved *ateapi.Tag) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markTagFailedTimeout)
+	defer cancel()
+	ctx, done := stepSpan(ctx, "MarkTagFailed")
+
+	tagRef := resources.TagRefFromTag(reserved)
+	err := func() error {
+		tag, err := w.store.GetTag(ctx, tagRef)
+		if err != nil {
+			return fmt.Errorf("while getting tag %s: %w", tagRef, err)
+		}
+		if tag.GetMetadata().GetUid() != reserved.GetMetadata().GetUid() {
+			return nil
+		}
+		_, err = w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapi.Tag) error {
+			toUpdate.Status.State = ateapi.TagState_TAG_STATE_FAILED
+			return nil
+		})
+		return err
+	}()
+	if err = done(err); err != nil {
+		slog.ErrorContext(ctx, "failed to mark a failed tag create; the tag is left creating", slog.String("tag", tagRef.String()), slog.Any("error", err))
+	}
 }
 
 // loadActorForTag fetches the actor to tag and its template, and checks that
@@ -402,15 +461,16 @@ func sourceSnapshotForTag(actorRef resources.ActorRef, actor *ateapi.Actor) (*at
 	return snap, nil
 }
 
-// ensureTagReserved takes the tag's name. The store assigns the tag's UID on
-// create, and the UID keys the prefix the snapshot is copied to, so the
-// snapshot is recorded by the next step.
+// ensureTagReserved takes the tag's name in TAG_STATE_CREATING. The store
+// assigns the tag's UID on create, and the UID keys the prefix the snapshot is
+// copied to, so the snapshot is recorded by the next step.
 //
-// A name already taken is AlreadyExists, whether the tag holding it is finished
-// or was left pending by a create that died. Resuming a pending row would mean
-// deciding whether the objects under it still belong to the snapshot being
-// tagged, and the row may not even be this actor's; deleting the tag collects
-// them and frees the name, so a retry is a delete followed by a create.
+// A name already taken is AlreadyExists, whatever state the tag holding it is
+// in, including one a failed or crashed create left behind. Resuming such a
+// row would mean deciding whether the objects under it still belong to the
+// snapshot being tagged, and the row may not even be this actor's; deleting
+// the tag collects them and frees the name, so a retry is a delete followed by
+// a create.
 func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.TagRef, actor *ateapi.Actor, snapshot *ateapi.Snapshot, tag *ateapi.Tag) (_ *ateapi.Tag, err error) {
 	ctx, done := stepSpan(ctx, "ReserveTag")
 	defer func() { err = done(err) }()
@@ -426,6 +486,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 			// memory under the new one's identity, past the data-only downgrade a resume of
 			// the actor itself would take.
 			ActorTemplateUid: snapshot.GetActorTemplateUid(),
+			State:            ateapi.TagState_TAG_STATE_CREATING,
 		},
 	}
 
@@ -507,9 +568,9 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 	return nil
 }
 
-// ensureTagFinalized publishes the copy by marking status.snapshot COMPLETED.
-// Until this lands the tag is pending and unusable; deleting it collects any
-// partial copy.
+// ensureTagFinalized publishes the copy by marking status.snapshot COMPLETED
+// and moves the tag from TAG_STATE_CREATING to TAG_STATE_READY. Until this
+// lands the tag is unusable; deleting it collects any partial copy.
 func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapi.Tag, snapshot *ateapi.Snapshot, dst resources.SnapshotURI) (_ *ateapi.Tag, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeTag")
 	defer func() { err = done(err) }()
@@ -528,6 +589,7 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapi.Tag,
 	finalSnapshot.SandboxRuntime = proto.CloneOf(snapshot.GetSandboxRuntime())
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapi.Tag) error {
 		toUpdate.Status.Snapshot = finalSnapshot
+		toUpdate.Status.State = ateapi.TagState_TAG_STATE_READY
 		return nil
 	})
 	if err != nil {

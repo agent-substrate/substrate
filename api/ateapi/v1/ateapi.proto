@@ -402,6 +402,27 @@ enum TagScope {
   TAG_SCOPE_PUBLISHED = 2;
 }
 
+// TagState is where a Tag is in its lifecycle.
+enum TagState {
+  // Not set, as on a tag stored before states were recorded.
+  TAG_STATE_UNSPECIFIED = 0;
+  // The name is reserved and the actor snapshot is being copied and its
+  // volumes snapshotted. Actors cannot be created from the tag yet.
+  TAG_STATE_CREATING = 1;
+  // Creation completed and every volume snapshot was ready to use when last
+  // observed.
+  TAG_STATE_READY = 2;
+  // The tag is being deleted and what it owns is being released. Terminal.
+  TAG_STATE_DELETING = 3;
+  // Creation completed, but at least one volume snapshot was not yet ready to
+  // use when last observed. Actors can be created from the tag; restoring a
+  // volume waits until its snapshot is ready.
+  TAG_STATE_CAPTURED = 4;
+  // Creation failed. The tag cannot be used, and deleting it releases whatever
+  // the failed creation left behind. Terminal.
+  TAG_STATE_FAILED = 5;
+}
+
 // Selector matches worker pools by label.
 // Only equality-based matching is supported.
 message Selector {
@@ -1083,6 +1104,14 @@ message TagStatus {
   // +k8s:required
   // +k8s:format=k8s-uuid
   string actor_template_uid = 2;
+
+  // state is where the tag is in its lifecycle. Set by the server; unset on a
+  // tag stored before states were recorded.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=5 # keep this in sync with the TagState enum
+  TagState state = 4;
 }
 
 // Tag is an Atespace-owned, stable name for one external snapshot. The
@@ -2073,8 +2102,11 @@ message ListTagsResponse {
 //
 // The tag is given its own copy of that snapshot, so it survives the Actor
 // being suspended again or deleted.
-// To retry a create that failed or timed out, delete the tag first,
-// which collects whatever that attempt stranded, and create it again.
+//
+// A call that fails leaves the tag behind in TAG_STATE_FAILED, or in
+// TAG_STATE_CREATING if the server stopped mid-call. A retry under the same
+// name returns ALREADY_EXISTS: delete the tag first, which collects whatever
+// the failed attempt stranded and frees the name, and create it again.
 //
 // +k8s:customValidation # metadata.atespace must match source_actor.atespace
 message CreateTagRequest {

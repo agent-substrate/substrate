@@ -113,6 +113,9 @@ func TestTagActorSnapshot(t *testing.T) {
 	if diff := cmp.Diff(testSandboxRuntime(), tag.GetStatus().GetSnapshot().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
 		t.Errorf("tag Snapshot.SandboxRuntime mismatch (-want +got):\n%s", diff)
 	}
+	if got, want := tag.GetStatus().GetState(), ateapi.TagState_TAG_STATE_READY; got != want {
+		t.Errorf("tag state = %v, want %v", got, want)
+	}
 
 	// Both prefixes hold the same objects: the tag copied rather than moved.
 	wantObjects := []string{"manifest.json", "memory.zst"}
@@ -582,8 +585,8 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 }
 
 // TestTagActorSnapshot_RecreateAfterCopyFailure verifies what a create that
-// dies mid-copy leaves behind, and how a client gets past it. The row survives
-// as a pending tag naming the prefix the copy was writing into, so the objects
+// fails mid-copy leaves behind, and how a client gets past it. The row survives
+// as a failed tag naming the prefix the copy was writing into, so the objects
 // it stranded are reachable; the name it holds is taken until the tag is
 // deleted, and only then does a create under that name run again.
 func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
@@ -614,6 +617,9 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 	if got := tagDurableSnapshotURI(pending, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); got != "" {
 		t.Errorf("snapshot uri after the failure = %q, want unset: the copy never finished", got)
+	}
+	if got, want := pending.GetStatus().GetState(), ateapi.TagState_TAG_STATE_FAILED; got != want {
+		t.Errorf("tag state after the failure = %v, want %v", got, want)
 	}
 	strandedURI := mustReservedTagSnapshotURI(t, pending)
 	stranded := strandedURI.String()
@@ -874,6 +880,9 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	}
 	if admitted.GetMetadata().GetDeleteTime() == nil {
 		t.Fatal("a failed delete left delete_time unset")
+	}
+	if got, want := admitted.GetStatus().GetState(), ateapi.TagState_TAG_STATE_DELETING; got != want {
+		t.Errorf("tag state after the failed delete = %v, want %v", got, want)
 	}
 
 	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !isObjectStoreErr(err) {
