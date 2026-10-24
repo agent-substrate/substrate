@@ -58,6 +58,10 @@ const (
 	// borrows. With no minimum it dials on the first probe.
 	probePoolMaxConns = 1
 	probePoolMinConns = 0
+	// defaultConnectTimeout bounds one connection attempt unless the DSN sets
+	// connect_timeout. pgxpool otherwise waits 2 minutes on a dead address,
+	// such as the old IP of a restarted PostgreSQL pod.
+	defaultConnectTimeout = 5 * time.Second
 )
 
 type Persistence struct {
@@ -273,6 +277,9 @@ func poolConfig(dsn, role string) (*pgxpool.Config, error) {
 			return fmt.Errorf("assuming PostgreSQL role %q: %w", role, err)
 		}
 		return nil
+	}
+	if cfg.ConnConfig.ConnectTimeout == 0 {
+		cfg.ConnConfig.ConnectTimeout = defaultConnectTimeout
 	}
 	// Per-statement trace spans; the watch and probe pools inherit this through
 	// resizedPoolConfig.
