@@ -365,7 +365,7 @@ func BenchmarkDecodeSparse(b *testing.B) {
 			defer os.Remove(dst.Name())
 			defer dst.Close()
 			decode := func() {
-				size, err := readSparseZstd(dst, bytes.NewReader(stream[len(sparseMagic):]))
+				size, err := readSparseZstd(dst, bytes.NewReader(stream[len(sparseMagic):]), true)
 				if err != nil {
 					b.Fatal(err)
 				}
