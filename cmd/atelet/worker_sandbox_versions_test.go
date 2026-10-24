@@ -437,8 +437,8 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 		t.Errorf("planAndBuild() partial file mismatch (-want +got):\n%s", diff)
 	}
 
-	// Once a version's assets are verified, the check is memoized by bundle
-	// hash alongside the host CPU identity probe.
+	// Once a restorable version's assets are verified, the check is memoized
+	// by bundle hash alongside the host CPU identity probe.
 	failSHA = ""
 	want := classFile(atev1.SandboxClassMicroVM, wantMicroVM("sha-v2"), wantMicroVM("sha-v1"))
 	got, err := planAndBuild(s, workerPod("pod-a", "microvm-pool"))
@@ -449,12 +449,9 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 		t.Errorf("planAndBuild(pod-a) mismatch (-want +got):\n%s", diff)
 	}
 
-	// Syncing pod-b must reuse the memoized check without fetching again.
-	s.assets = &fakeAssetFetcher{
-		fn: func(context.Context, *sandboxAssetsRecord) (map[string]string, error) {
-			return nil, errors.New("fetched a microVM version whose assets are memoized")
-		},
-	}
+	// Syncing pod-b stages the default (v2) again and reuses the memoized check
+	// for the restorable version (v1) without fetching v1 again.
+	failSHA = "sha-v1"
 	got, err = planAndBuild(s, workerPod("pod-b", "microvm-pool"))
 	if err != nil {
 		t.Fatalf("planAndBuild(pod-b) error = %v", err)
@@ -466,9 +463,10 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 		t.Errorf("probe calls = %d, want 2: one that failed, one that succeeded and was reused", probeCalls)
 	}
 	// The probe-failure build fetches nothing. The default-failure build
-	// fetches v2, the restorable-failure build fetches v2 (memoizing it) then
-	// fails on v1, pod-a fetches only v1, and pod-b fetches nothing.
-	wantFetched := []string{"sha-v2", "sha-v2", "sha-v1", "sha-v1"}
+	// fetches v2, the restorable-failure build fetches v2 then fails on v1,
+	// pod-a fetches v2 and v1 (memoizing v1), and pod-b fetches only the
+	// default v2.
+	wantFetched := []string{"sha-v2", "sha-v2", "sha-v1", "sha-v2", "sha-v1", "sha-v2"}
 	if diff := cmp.Diff(wantFetched, fetched); diff != "" {
 		t.Errorf("fetched assets mismatch (-want +got):\n%s", diff)
 	}
@@ -481,7 +479,10 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 //     so EvictUnused reclaims the unlinked restorable version;
 //   - once memoized, syncing a new worker pod does not re-download the evicted
 //     restorable version, and re-syncing while the bucket is failing keeps the
-//     restorable version in sandbox-runtimes.json.
+//     restorable version in sandbox-runtimes.json;
+//   - promoting the evicted restorable version to default while the bucket is
+//     failing fails the sync and leaves the file and the old default's
+//     directory as they were.
 func TestSyncPodMicroVMAssetCacheAndEviction(t *testing.T) {
 	ctx := context.Background()
 	v1Bytes, v2Bytes := []byte("kernel v1"), []byte("kernel v2")
@@ -587,6 +588,30 @@ func TestSyncPodMicroVMAssetCacheAndEviction(t *testing.T) {
 	}
 	if got := storage.gets.Load(); got != 2 {
 		t.Errorf("bucket gets after syncing pod-b and re-syncing pod-a = %d, want 2 (no re-downloads)", got)
+	}
+
+	// Promoting the evicted v1 to default while the bucket is offline must fail
+	// the sync and keep pod-a's previous file and default-runtime pin in place.
+	cfg.Spec.DefaultVersion = "v1"
+	if err := s.syncPod(ctx, workerPod("pod-a", "microvm-pool")); err == nil {
+		t.Fatal("syncPod(pod-a) after promoting evicted v1 to default with bucket offline = nil, want error")
+	}
+	got, err := sandboxruntimes.Read(s.runtimesFile("pod-a"))
+	if err != nil {
+		t.Fatalf("sandboxruntimes.Read(pod-a): %v", err)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("sandbox-runtimes.json for pod-a after failed default promotion (-want +got):\n%s", diff)
+	}
+	v2Hash := want.SandboxClasses[0].DefaultRuntime.Version[hardware.AttrSandboxBundleHash]
+	if !exists(s.defaultRuntimeDir("pod-a", v2Hash)) {
+		t.Error("a failed sync removed pod-a's default-runtime directory for v2")
+	}
+	if n := cachedAssets(t, root); n != 1 {
+		t.Errorf("cached assets after failed default promotion = %d, want 1 (v2 still linked)", n)
+	}
+	if got := storage.gets.Load(); got != 3 {
+		t.Errorf("bucket gets after promoting evicted v1 to default = %d, want 3 (the default is checked, not memoized)", got)
 	}
 }
 

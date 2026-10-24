@@ -26,7 +26,7 @@ cannot cross mounts.
 | `actors/<actor uid>/sandbox-assets/` | The actor's assets, each a hard link into the cache, named by asset name. The only location a worker runs a sandbox binary from; the worker checks that a request names the actor's own directory. `sandbox-assets.staging/` beside it exists only while a Run fetches. |
 | `workers/<pod uid>/sandbox-runtimes.json` | What each worker advertises to the control plane, written by `atelet`. |
 | `workers/<pod uid>/default-runtime/<hash>/` | The worker's default runtimes, one directory per default its file advertises, by bundle hash, one per sandbox class, linked in from the cache by the prewarmer. These links are what keeps a default runtime cached while no actor runs it; the syncer removes a directory when the file stops naming its runtime, and they all go with the worker's directory when the pod does. |
-| `sandbox-asset-scratch/` | Short-lived destinations for fetches that have no actor and no worker directory to link into: the assets the worker sandbox syncer stages when it first checks a version (and probes `runsc` for CPU features). Wiped at startup. |
+| `sandbox-asset-scratch/` | Short-lived destinations for fetches that have no actor and no worker directory to link into: the assets the worker sandbox syncer stages when checking a version (and probes `runsc` for CPU features). Wiped at startup. |
 | `sandbox-runtime-index.json` | The runtime index serialized: every runtime a worker on this node has advertised, by hash, with the asset record the hash was computed from. |
 
 A cache entry is keyed by the asset's sha256, so the same binaries under
@@ -67,10 +67,12 @@ pool runs, hashes every enabled version, and:
 - **registers** every hash in the runtime index, with its record, and writes
   the index file durably, *before* anything else, so a hash is resolvable
   before the worker can register it with the control plane;
-- fetches each version's assets into the cache the first time it sees them,
-  probes what a snapshot taken on the runtime must find again (CPU features
-  for gVisor, host CPU identity for microVM), and writes the worker's
-  `sandbox-runtimes.json`, from which the worker registers;
+- fetches each version's assets into the cache (every sync for a microVM
+  default, and once per `atelet` process for restorable microVM versions and
+  gVisor `runsc` digests), probes what a snapshot taken on the runtime must
+  find again (CPU features for gVisor, host CPU identity for microVM), and
+  writes the worker's `sandbox-runtimes.json`, from which the worker
+  registers;
 - records what the worker now advertises, which is what the written file
   says;
 - makes the worker's `default-runtime/` directory match the file's
@@ -87,9 +89,12 @@ in-memory map is the read path; the file is write-through persistence.
 
 Only default runtimes stay linked under the worker's directory. A
 non-default version's assets are fetched when the syncer first checks the
-version, but nothing links them while no actor runs it; if cache eviction
-reclaims them, the next actor restored on that version downloads them on
-demand.
+version in that `atelet` process, but nothing links them while no actor runs
+it; if cache eviction reclaims them, the next actor restored on that version
+(or the first sync after an `atelet` restart) downloads them again. A sync
+whose download fails writes the file without the version until a retry
+succeeds, so after a restart a worker can stop advertising a version it held
+before.
 
 ### The default runtime directories
 
@@ -107,8 +112,9 @@ which directories exist. Nothing counts references and nothing prunes.
 - The hand-over comes after the build on purpose. A build that fails, as a
   permanent `runsc` probe failure does, leaves the file and so the
   directories as they were, with the previous default still linked and still
-  advertised. Because the build already fetched the default's assets into
-  the cache, the prewarm is just hard links.
+  advertised. Unless an evicted gVisor version was promoted to default, the
+  build has already fetched the default's assets into the cache, so the
+  prewarm is just hard links.
 - The prewarm fills what exists and creates nothing. It checks that its
   directory is there, stages into it, and on an error checks again: a
   directory gone, after a later sync or the pod's removal, means the item
@@ -125,13 +131,14 @@ which directories exist. Nothing counts references and nothing prunes.
   directories of pods that are gone.
 
 The old default's directory is removed as soon as the file names the new
-default: by then the build has already fetched the new default into the
-cache and the worker has registered it, so nothing new is placed on the old
-one. Actors already running on it hold their own links, and restores of
-snapshots taken on it go through the on-demand path like every non-default
-version. Several pods of one pool each hold their own links to the same
-entries; the entry becomes evictable when the last of them goes. One queue
-and one worker drain the prewarm items in order.
+default: by then the worker has registered the new default (and unless an
+evicted gVisor version was promoted to default, the build has already fetched
+it into the cache), so nothing new is placed on the old one. Actors already
+running on it hold their own links, and restores of snapshots taken on it go
+through the on-demand path like every non-default version. Several pods of
+one pool each hold their own links to the same entries; the entry becomes
+evictable when the last of them goes. One queue and one worker drain the
+prewarm items in order.
 
 ## Eviction
 

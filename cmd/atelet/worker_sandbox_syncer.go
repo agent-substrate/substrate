@@ -130,9 +130,9 @@ type workerSandboxSyncer struct {
 	// succeeds; cpuFeatures is the encoded cpu_features of each runsc binary
 	// by its gVisor asset's SHA256 digest; and microvmAssets holds the
 	// bundle hashes of microVM versions whose assets have been verified in
-	// the local cache. Each version's assets are verified once per atelet
-	// lifetime, except that two workers meeting a version before either has
-	// memoized it both stage it.
+	// this atelet process. Restorable microVM versions are verified once per
+	// atelet process (except when two workers meet a version before either
+	// memoizes it); the default version is staged on every sync.
 	mu            sync.Mutex
 	hostCPU       *cpuIdentity
 	cpuFeatures   map[string]string
