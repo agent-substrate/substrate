@@ -428,20 +428,6 @@ func (t *Tracker) endOpLocked(actorUID string, op *actorOp) *actorSnapshots {
 	return a
 }
 
-// endOp ends op, queues the actor for its next background operation and any
-// report due, and returns the actor's state, or opErr if non-nil.
-func (t *Tracker) endOp(actorUID string, op *actorOp, opErr error) (*ateletpb.ActorSnapshotState, error) {
-	t.lock(actorUID)
-	defer t.unlock(actorUID)
-	a := t.endOpLocked(actorUID, op)
-	t.requeueLocked(a)
-	t.queueReportLocked(a)
-	if opErr != nil {
-		return nil, opErr
-	}
-	return t.stateLocked(a), nil
-}
-
 // waitIdleLocked waits, as long as ctx allows, until the actor has no
 // operation in progress (whether started by a background worker or an atelet
 // RPC), and returns the actor's entry, which may be nil. It releases the
