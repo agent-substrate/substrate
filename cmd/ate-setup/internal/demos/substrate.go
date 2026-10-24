@@ -53,6 +53,9 @@ type Substrate struct {
 
 	// WorkerPoolManifest is the *.yaml.tmpl holding the namespace and
 	// WorkerPool, relative to the repository root.
+	//
+	// TODO: Rename to K8sManifest, because it can contain other k8s resources
+	// for some demos.
 	WorkerPoolManifest string
 
 	// Deployments are the pool Deployments to wait for at deploy time, in

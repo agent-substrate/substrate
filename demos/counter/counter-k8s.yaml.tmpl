@@ -61,3 +61,51 @@ spec:
       requests:
         cpu: 250m
         memory: 1Gi
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: ate-demo-counter
+  name: counter-driver
+  labels:
+    app: counter-driver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: counter-driver
+  template:
+    metadata:
+      labels:
+        app: counter-driver
+    spec:
+      containers:
+      - name: driver
+        image: ko://github.com/agent-substrate/substrate/demos/counter/driver
+        args:
+        - --credential-folder=/run/in-cluster-mtls
+        - --ate-api-connstring=dns:///api.ate-system.svc:443
+        - --ate-router-address=atenet-router.ate-system.svc
+        - --counter-atespace=ate-demo-counter
+        - --counter-template=counter
+        volumeMounts:
+        - name: in-cluster-mtls
+          mountPath: /run/in-cluster-mtls
+          readOnly: true
+      volumes:
+      - name: in-cluster-mtls
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.private-key.pem
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: service-trust-bundle.pem
+          

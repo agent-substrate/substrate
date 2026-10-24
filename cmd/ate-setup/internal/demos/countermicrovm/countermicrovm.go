@@ -33,10 +33,10 @@ func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-counter-microvm",
 		Short:              "The counter demo on micro-VM workers (needs hack/install-microvm-deps.sh --install)",
-		WorkerPoolManifest: "demos/counter/counter-microvm.yaml.tmpl",
+		WorkerPoolManifest: "demos/counter-microvm/counter-microvm.yaml.tmpl",
 		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "counter-microvm"}},
 		Templates: []demos.SubstrateTemplate{{
-			Manifest: "demos/counter/counter-microvm-template.yaml.tmpl",
+			Manifest: "demos/counter-microvm/counter-microvm-template.yaml.tmpl",
 			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "counter-microvm"},
 		}},
 		GoldenTimeout: demos.MicroVMGoldenTimeout,
