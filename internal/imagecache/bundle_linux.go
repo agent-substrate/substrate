@@ -22,10 +22,13 @@ package imagecache
 import (
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -35,7 +38,9 @@ import (
 // once per layer node-wide), mounts an overlay at <bundle>/rootfs with the
 // cached layers as read-only lowerdirs and the bundle-local upper/ + work/
 // as the actor's private writable side, and creates the spec's ExtraDirs
-// through the mount (so they land in the upper).
+// through the mount (so they land in the upper). On a kernel that cannot
+// compose the layers in one overlay, the lowered side is flattened into a
+// single merged base tree instead (see mountOverlay).
 //
 // A bundle without an overlay spec is left untouched (its rootfs is a plain
 // extracted directory). The mount lives in the calling process's mount
@@ -76,7 +81,7 @@ func SetupBundleRootfs(bundlePath string) error {
 		return createExtraDirs(rootfs, spec.ExtraDirs)
 	}
 
-	if err := mountOverlay(rootfs, overlayLowerDirs(spec.Layers), upper, work); err != nil {
+	if err := mountOverlay(rootfs, filepath.Join(bundlePath, "flat"), overlayLowerDirs(spec.Layers), upper, work); err != nil {
 		return fmt.Errorf("while mounting overlay rootfs at %q: %w", rootfs, err)
 	}
 
@@ -117,7 +122,7 @@ func setupImageVolumes(bundlePath string, volumes []ImageVolumeOverlay) error {
 		}
 		_ = unix.Unmount(mountpoint, unix.MNT_DETACH)
 
-		if err := mountImageVolume(mountpoint, vol.Layers); err != nil {
+		if err := mountImageVolume(mountpoint, filepath.Join(bundlePath, "volumes", vol.Name+"-flat"), vol.Layers); err != nil {
 			return fmt.Errorf("while mounting image volume %q: %w", vol.Name, err)
 		}
 	}
@@ -125,37 +130,90 @@ func setupImageVolumes(bundlePath string, volumes []ImageVolumeOverlay) error {
 }
 
 // mountImageVolume attaches layers read-only at mountpoint.
-func mountImageVolume(mountpoint string, layers []string) error {
+func mountImageVolume(mountpoint, baseDir string, layers []string) error {
 	if len(layers) == 1 {
 		// The kernel rejects a single lowerdir without an upperdir, so bind
 		// the layer's fs/ tree directly for the single-layer case.
-		fsDir := filepath.Join(layers[0], layerFSDirName)
-		if err := unix.Mount(fsDir, mountpoint, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
-			return fmt.Errorf("while binding %q: %w", fsDir, err)
-		}
-		// MS_BIND and MS_RDONLY cannot be combined; a second call applies read-only.
-		if err := unix.Mount("", mountpoint, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY, ""); err != nil {
-			return fmt.Errorf("while remounting %q read-only: %w", mountpoint, err)
-		}
-		return nil
+		return bindReadOnly(filepath.Join(layers[0], layerFSDirName), mountpoint)
 	}
-	return mountOverlay(mountpoint, overlayLowerDirs(layers), "", "")
+	return mountOverlay(mountpoint, baseDir, overlayLowerDirs(layers), "", "")
+}
+
+// bindReadOnly exposes src read-only at mountpoint via a recursive bind and
+// a follow-up read-only remount: MS_BIND and MS_RDONLY cannot be combined in
+// one mount(2) call.
+func bindReadOnly(src, mountpoint string) error {
+	if err := unix.Mount(src, mountpoint, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return fmt.Errorf("while binding %q: %w", src, err)
+	}
+	if err := unix.Mount("", mountpoint, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY, ""); err != nil {
+		return fmt.Errorf("while remounting %q read-only: %w", mountpoint, err)
+	}
+	return nil
 }
 
 // mountOverlay attaches an overlay of lowers (top-most first) with the given
-// upper/work dirs at mountpoint, using the new mount API rather than
-// mount(2): appending lowerdirs one fsconfig(2) call at a time sidesteps
+// upper/work dirs at mountpoint.
+//
+// It first attempts one overlay mount through the new mount API: appending
+// lowers one incremental "lowerdir+" fsconfig(2) call at a time sidesteps
 // mount(2)'s single-page option-string cap, which digest-derived layer paths
-// (~114 bytes each) would hit at roughly 34 layers.
+// (~114 bytes each) would hit at roughly 34 layers. Kernels without that
+// option fall back to the classic colon-joined "lowerdir" key.
+//
+// A single overlay is not always composable: some kernels cap how many
+// lowerdirs one overlay may stack (the 5.15 linuxkit VM kernel under Docker
+// Desktop and kind rejects stacks past two lowerdirs and, separately, caps
+// overlay nesting at depth two, so no staged pairwise tree helps there).
+// When the direct mount fails and there is more than one layer,
+// mountFlattened merges the layer trees into a single base directory and
+// mounts a one-lower overlay on top — a shape any kernel that supports a
+// two-layer overlay can compose; the read-only form (empty upper) is a
+// read-only bind of the base.
 //
 // An empty upper mounts the overlay without a writable layer, which overlayfs
 // makes read-only.
-//
-// Minimum supported kernel: Linux 6.5, where overlayfs gained the
-// incremental "lowerdir+" option. Every current GKE channel is at or above
-// it (Stable runs COS 121 LTS on kernel 6.6; Regular and Rapid run COS
-// 125/129 on 6.12).
-func mountOverlay(mountpoint string, lowers []string, upper, work string) error {
+func mountOverlay(mountpoint, baseDir string, lowers []string, upper, work string) error {
+	if err := mountSingleOverlay(mountpoint, lowers, upper, work); err == nil {
+		return nil
+	} else if len(lowers) <= 1 {
+		// A one-lower overlay is every overlay-supporting kernel's limit;
+		// a failure here has no fallback.
+		return err
+	}
+	return mountFlattened(mountpoint, baseDir, lowers, upper, work)
+}
+
+// mountFlattened merges the layer trees into baseDir (see flattenLayers) and
+// attaches the result at mountpoint: a one-lower writable overlay when
+// upper/work are given, a read-only bind otherwise.
+func mountFlattened(mountpoint, baseDir string, lowers []string, upper, work string) error {
+	if err := flattenLayers(baseDir, lowers); err != nil {
+		return fmt.Errorf("while flattening layers into %q: %w", baseDir, err)
+	}
+	if upper == "" {
+		return bindReadOnly(baseDir, mountpoint)
+	}
+	return mountSingleOverlay(mountpoint, []string{baseDir}, upper, work)
+}
+
+// mountSingleOverlay composes one overlay of lowers with upper/work at
+// mountpoint via fsopen(2)/fsconfig(2). It tries the incremental "lowerdir+"
+// form (kernels >= 6.5) first; a kernel that lacks the option rejects it when
+// the superblock is created, so that failure retries the whole mount with the
+// classic colon-joined "lowerdir" key. The layer paths this module builds are
+// digest-derived and contain no colons, so the join is unambiguous.
+func mountSingleOverlay(mountpoint string, lowers []string, upper, work string) error {
+	if err := attachOverlay(mountpoint, lowers, upper, work, false); err == nil {
+		return nil
+	}
+	return attachOverlay(mountpoint, lowers, upper, work, true)
+}
+
+// attachOverlay builds one overlay fs context and attaches it at mountpoint.
+// When joinLowers is false the lowers are appended one "lowerdir+" fsconfig(2)
+// call each; otherwise the classic colon-joined "lowerdir" key is used.
+func attachOverlay(mountpoint string, lowers []string, upper, work string, joinLowers bool) error {
 	fsfd, err := unix.Fsopen("overlay", unix.FSOPEN_CLOEXEC)
 	if err != nil {
 		return fmt.Errorf("while opening overlay fs context: %w", err)
@@ -168,9 +226,15 @@ func mountOverlay(mountpoint string, lowers []string, upper, work string) error 
 		}
 		return nil
 	}
-	for _, lower := range lowers {
-		if err := set("lowerdir+", lower); err != nil {
+	if joinLowers {
+		if err := set("lowerdir", strings.Join(lowers, ":")); err != nil {
 			return err
+		}
+	} else {
+		for _, lower := range lowers {
+			if err := set("lowerdir+", lower); err != nil {
+				return err
+			}
 		}
 	}
 	if upper != "" {
@@ -196,13 +260,171 @@ func mountOverlay(mountpoint string, lowers []string, upper, work string) error 
 	}
 	mfd, err := unix.Fsmount(fsfd, unix.FSMOUNT_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("while creating overlay mount object: %w%s", err, fsContextLog(fsfd))
+		return fmt.Errorf("while creating overlay mount object: %w", err)
 	}
 	defer unix.Close(mfd)
 	if err := unix.MoveMount(mfd, "", unix.AT_FDCWD, mountpoint, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
 		return fmt.Errorf("while attaching overlay at %q: %w", mountpoint, err)
 	}
 	return nil
+}
+
+// flattenLayers merges the layer trees into one base directory, emulating
+// the overlayfs merge the kernel performs when the layers are passed as
+// lowerdirs. trees are the lowerdir paths in mount order (top-most first,
+// already fs/ trees per overlayLowerDirs): the bottom layer seeds the base
+// and each subsequent layer merges over it.
+//
+// Per-entry merge semantics:
+//   - a 0:0 char device (a whiteout materialized by FinalizeLayer) deletes
+//     the same-path entry from the base tree; deleting a missing path is a
+//     no-op
+//   - a directory carrying trusted.overlay.opaque=y hides lower-layer
+//     contents: the base subtree is cleared before the layer's entry is
+//     copied
+//   - a non-opaque directory merges per-path with the base's subtree
+//   - a later (upper) layer's entry wins at a path
+//
+// Files are linked into the base where pool and bundle share a filesystem
+// (zero-copy; unlinking a base entry never touches the pool).
+// Cross-device falls back to a byte copy, which does not preserve st_nlink
+// identity. The base is rebuilt from scratch: it is cleared on entry so a
+// re-compose is deterministic (the between-activation wipe removes it as
+// well).
+func flattenLayers(baseDir string, trees []string) error {
+	if err := os.RemoveAll(baseDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(baseDir, 0o700); err != nil {
+		return err
+	}
+	for _, tree := range trees {
+		if err := flattenLayerInto(baseDir, tree); err != nil {
+			return fmt.Errorf("while merging layer tree %q: %w", tree, err)
+		}
+	}
+	return nil
+}
+
+// flattenLayerInto merges one layer's fs/ tree into baseDir per
+// flattenLayers' semantics.
+func flattenLayerInto(baseDir, fsDir string) error {
+	return filepath.WalkDir(fsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(fsDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(baseDir, rel)
+
+		switch {
+		case d.IsDir():
+			// An opaque dir clears the base subtree first; a non-opaque
+			// one leaves lower-layer entries in place.
+			if isOpaqueDir(path) {
+				if err := os.RemoveAll(dest); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
+			if err := os.MkdirAll(dest, fi.Mode().Perm()); err != nil {
+				// The base entry may be a lower layer's FILE: clear it
+				// before creating the directory.
+				if rmErr := os.RemoveAll(dest); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+					return rmErr
+				}
+				if err := os.MkdirAll(dest, fi.Mode().Perm()); err != nil {
+					return err
+				}
+			}
+			return nil
+
+		case fi.Mode()&fs.ModeCharDevice != 0:
+			// The only char devices finalized layer trees hold are 0:0
+			// whiteouts (Rdev 0 is major 0 minor 0); unpack rejects every
+			// other device. A whiteout deletes the merged entry.
+			st, _ := fi.Sys().(*syscall.Stat_t)
+			if st == nil || st.Rdev != 0 {
+				return fmt.Errorf("unexpected char device (not a whiteout) at %q", rel)
+			}
+			if err := os.RemoveAll(dest); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return nil
+
+		case fi.Mode()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			// RemoveAll on a symlink removes the link entry only, never
+			// whatever it points at.
+			if err := os.RemoveAll(dest); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return os.Symlink(target, dest)
+
+		case fi.Mode().IsRegular():
+			// Later layers win: replace whatever the base holds at the path.
+			if err := os.RemoveAll(dest); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			// Hardlink into the base where possible: zero-copy, and any
+			// later unlink inside the base cannot affect the pool's inode.
+			if err := os.Link(path, dest); err == nil {
+				return nil
+			} else if !errors.Is(err, syscall.EXDEV) {
+				return err
+			}
+			return copyFile(path, dest, fi)
+
+		default:
+			return fmt.Errorf("unsupported node type %s at %q", d.Type(), rel)
+		}
+	})
+}
+
+// copyFile is flattenLayerInto's cross-device fallback: byte copy with mode
+// and mtime preserved. O_CREATE's perm is subject to umask, so the mode is
+// restored afterwards.
+func copyFile(src, dst string, fi os.FileInfo) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fi.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(dst, fi.Mode().Perm()); err != nil {
+		return err
+	}
+	return os.Chtimes(dst, fi.ModTime(), fi.ModTime())
+}
+
+// isOpaqueDir reports whether path carries the overlayfs opaque marker
+// FinalizeLayer materializes (trusted.overlay.opaque=y; reading it needs
+// CAP_SYS_ADMIN, which ateom holds).
+func isOpaqueDir(path string) bool {
+	buf := make([]byte, 16)
+	n, err := unix.Getxattr(path, "trusted.overlay.opaque", buf)
+	return err == nil && n > 0 && string(buf[:n]) == "y"
 }
 
 // fsContextLog drains the human-readable message log the kernel queues on an
