@@ -346,6 +346,9 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 	}
 
 	t.Run("keeps unsaved detach in memory when state save fails", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions, so the save cannot fail")
+		}
 		useActorDir(t)
 		before := newIdleTestTracker(t, newFakeSnapshotStore())
 		s1 := testRef("s1", 1, before.clock.Now())
@@ -370,6 +373,9 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 	})
 
 	t.Run("schedules detach retry when pruning fails", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions, so the prune cannot fail")
+		}
 		useActorDir(t)
 		before := newIdleTestTracker(t, newFakeSnapshotStore())
 		s1 := testRef("s1", 1, before.clock.Now())
@@ -438,6 +444,9 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 	})
 
 	t.Run("stops tracking an undurable snapshot when deleting it fails", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions, so the delete cannot fail")
+		}
 		before := newIdleTestTracker(t, newFakeSnapshotStore())
 		// Older than the upload delay, so a snapshot still tracked would count
 		// as overdue.
