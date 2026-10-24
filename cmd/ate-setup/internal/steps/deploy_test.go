@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -71,7 +72,7 @@ func workersPerSigner(t *testing.T, objs []*unstructured.Unstructured) []any {
 // Runs over the real manifests, so a renamed variable or Deployment fails here
 // rather than on an install that silently keeps one worker.
 func TestSetPodcertWorkersPerSigner(t *testing.T) {
-	for _, size := range []string{config.ClusterSizeSize0, config.ClusterSizeSize10} {
+	for _, size := range []string{config.ClusterSizeSize0, config.ClusterSizeSize10, config.ClusterSizeSize100} {
 		t.Run(size, func(t *testing.T) {
 			objs := podcertObjects(t, size)
 			if got := workersPerSigner(t, objs); len(got) != 1 {
@@ -229,3 +230,68 @@ func TestComponentManifestsMatchSystemBundle(t *testing.T) {
 		}
 	}
 }
+
+func containerResourcesMap(t *testing.T, obj *unstructured.Unstructured, cname, section string) map[string]any {
+	t.Helper()
+	containers, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+	for _, raw := range containers {
+		c, ok := raw.(map[string]any)
+		if !ok || c["name"] != cname {
+			continue
+		}
+		res, _, _ := unstructured.NestedMap(c, "resources", section)
+		return res
+	}
+	t.Fatalf("%s has no container %q", kube.Describe(obj), cname)
+	return nil
+}
+
+func TestApplyWorkloadScaleOverrides(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterEnvoy}}
+	manifest, err := e.render(e.Cfg.Path(SystemOverlay(e.Cfg)))
+	if err != nil {
+		t.Fatalf("render system overlay: %v", err)
+	}
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
+		t.Fatalf("decode system overlay: %v", err)
+	}
+
+	applyWorkloadScaleOverrides(objs, true, false)
+
+	apiDep := findObject(objs, "Deployment", "ate-api-server")
+	if replicas, _, _ := unstructured.NestedInt64(apiDep.Object, "spec", "replicas"); replicas != 6 {
+		t.Errorf("size100 ate-api-server replicas = %d, want 6", replicas)
+	}
+	apiReqs := containerResourcesMap(t, apiDep, "ate-api-server", "requests")
+	if apiReqs["cpu"] != "8" || apiReqs["memory"] != "16Gi" {
+		t.Errorf("size100 ate-api-server requests = %v, want cpu=8 memory=16Gi", apiReqs)
+	}
+
+	ctrlDep := findObject(objs, "Deployment", "ate-controller")
+	ctrlContainers, _, _ := unstructured.NestedSlice(ctrlDep.Object, "spec", "template", "spec", "containers")
+	ctrlArgs, _, _ := unstructured.NestedStringSlice(ctrlContainers[0].(map[string]any), "args")
+	if !slices.Contains(ctrlArgs, "--worker-sync-concurrency=32") {
+		t.Errorf("size100 ate-controller args = %v, want --worker-sync-concurrency=32", ctrlArgs)
+	}
+
+	routerDep := findObject(objs, "Deployment", "atenet-router")
+	if replicas, _, _ := unstructured.NestedInt64(routerDep.Object, "spec", "replicas"); replicas != 8 {
+		t.Errorf("size100 atenet-router replicas = %d, want 8", replicas)
+	}
+	routerReqs := containerResourcesMap(t, routerDep, "atenet-router", "requests")
+	if routerReqs["cpu"] != "4" || routerReqs["memory"] != "4Gi" {
+		t.Errorf("size100 atenet-router container requests = %v, want cpu=4 memory=4Gi", routerReqs)
+	}
+	envoyReqs := containerResourcesMap(t, routerDep, "envoy", "requests")
+	if envoyReqs["cpu"] == "4" || envoyReqs["memory"] == "4Gi" {
+		t.Errorf("size100 envoy sidecar requests = %v, want sidecar left at manifest defaults", envoyReqs)
+	}
+
+	ateletDS := findObject(objs, "DaemonSet", "atelet")
+	ateletSpec, _, _ := unstructured.NestedMap(ateletDS.Object, "spec", "template", "spec")
+	if got := ateletSpec["terminationGracePeriodSeconds"]; got != int64(330) && got != float64(330) {
+		t.Errorf("size100 atelet terminationGracePeriodSeconds = %v (%T), want manifest default 330", got, got)
+	}
+}
+
