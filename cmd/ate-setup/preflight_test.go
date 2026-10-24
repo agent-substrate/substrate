@@ -155,6 +155,27 @@ func TestKindInstallerDockerUnavailable(t *testing.T) {
 	}
 }
 
+// A source build of the envoy dataplane needs docker buildx. Without it the
+// install has to stop before it touches the cluster, which here is an address
+// nothing listens on.
+func TestInstallerRequiresBuildxBeforeTouchingCluster(t *testing.T) {
+	out, code := runPreflightInstaller(t, preflightKubeconfig(t, "http://127.0.0.1:1"), "1",
+		"deploy", "ate-system",
+		"--context=kind-kind",
+		`--credential-provider={"name":"k8s.io"}`,
+		"--ingress-allowed-spiffe-ids=spiffe://example.invalid/client",
+		"--gcp-project-id=example-invalid",
+		"--snapshot-transfer-gsa-name=ate-snapshot-transfer",
+		"--snapshot-location=gs://example-invalid",
+		"--ko-docker-repo=example.invalid/repo")
+	if code == 0 || !strings.Contains(out, "docker buildx plugin") || !strings.Contains(out, "--image-repo") {
+		t.Fatalf("exit=%d, want docker buildx guidance\n%s", code, out)
+	}
+	if strings.Contains(out, "127.0.0.1:1") {
+		t.Fatalf("installer contacted the cluster before checking for docker buildx\n%s", out)
+	}
+}
+
 func TestInstallerRequiresControlPlaneBeforeDemoOrBenchmark(t *testing.T) {
 	for _, tc := range []struct {
 		name string

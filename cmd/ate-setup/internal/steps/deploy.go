@@ -87,6 +87,12 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if _, err := clusterSnapshotLocation(e.Cfg.SnapshotLocation, e.Cfg.PreviewGates); err != nil {
 		return err
 	}
+	// The envoy-dataplane image is built only after most of the system is
+	// applied, so a missing docker buildx would otherwise leave a partial
+	// install.
+	if err := e.requireEnvoyDataplaneBuild(ctx); err != nil {
+		return err
+	}
 	if err := e.requireNoWorkerPods(ctx); err != nil {
 		return err
 	}
@@ -539,6 +545,9 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 		return err
 	}
 	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
+		return err
+	}
+	if err := e.requireEnvoyDataplaneBuild(ctx); err != nil {
 		return err
 	}
 	if err := e.EnsureCRDs(ctx); err != nil {

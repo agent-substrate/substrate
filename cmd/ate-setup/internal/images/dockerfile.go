@@ -76,6 +76,25 @@ func dockerBuildArgs(platforms string, extraFlags []string, tag, contextPath str
 	return append(args, "-t", tag, contextPath)
 }
 
+// CheckBuildx reports an error when the docker buildx plugin is unavailable.
+// Callers run it before changing anything, because without the plugin docker
+// rejects the build only once it is reached, and as "unknown flag: --platform"
+// rather than a missing plugin.
+func CheckBuildx(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "docker", "buildx", "version").CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	return fmt.Errorf("building images from source needs the docker buildx plugin, and `docker buildx version` failed: %w\n%s\n"+
+		"Install buildx (https://docs.docker.com/go/buildx/), or install pre-built images with --image-repo and --image-tag",
+		err, strings.TrimSpace(string(output)))
+}
+
 // BuildDockerfileImage builds a Dockerfile-based image from contextPath, pushes
 // it to dockerRepo/<imageName>, and returns the digest-pinned reference.
 // extraFlags are passed to docker buildx build, e.g. --cache-from/--cache-to.
@@ -100,6 +119,13 @@ func BuildDockerfileImage(ctx context.Context, rootDir, dockerRepo, imageName, c
 	build.Stdout = os.Stderr
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
+		// Without the plugin docker names the first buildx flag as unknown,
+		// which hides the cause.
+		if ctx.Err() == nil {
+			if buildxErr := CheckBuildx(ctx); buildxErr != nil {
+				err = buildxErr
+			}
+		}
 		return "", fmt.Errorf("while building the %s image: %w", imageName, err)
 	}
 

@@ -16,11 +16,103 @@ package images
 
 import (
 	"cmp"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
+
+// fakeDocker puts a docker on PATH that records each invocation's arguments.
+// `docker buildx version` exits with versionStatus and every other command
+// with buildStatus; non-zero values print what a docker CLI without the buildx
+// plugin prints. It returns the path of the invocation log.
+func fakeDocker(t *testing.T, versionStatus, buildStatus int) string {
+	t.Helper()
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$*" >> %q
+if [ "$1 $2" = "buildx version" ]; then
+  if [ %d -eq 0 ]; then echo "github.com/docker/buildx v0.0.0"; exit 0; fi
+  echo "docker: unknown command: docker buildx" >&2
+  exit %d
+fi
+if [ %d -ne 0 ]; then echo "unknown flag: --platform" >&2; fi
+exit %d
+`, calls, versionStatus, versionStatus, buildStatus, buildStatus)
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return calls
+}
+
+func readCalls(t *testing.T, path string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(raw)), "\n")
+}
+
+func TestCheckBuildx(t *testing.T) {
+	t.Run("available", func(t *testing.T) {
+		calls := fakeDocker(t, 0, 0)
+		if err := CheckBuildx(t.Context()); err != nil {
+			t.Fatalf("CheckBuildx() = %v, want nil", err)
+		}
+		if got, want := readCalls(t, calls), []string{"buildx version"}; !slices.Equal(got, want) {
+			t.Errorf("docker invocations = %q, want %q", got, want)
+		}
+	})
+	t.Run("missing", func(t *testing.T) {
+		fakeDocker(t, 1, 125)
+		err := CheckBuildx(t.Context())
+		if err == nil {
+			t.Fatal("CheckBuildx() = nil, want an error")
+		}
+		// The message has to name the missing plugin, carry docker's own
+		// output, and offer the install that needs no docker build.
+		for _, want := range []string{"docker buildx plugin", "unknown command: docker buildx", "--image-repo"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("CheckBuildx() error = %q, want it to contain %q", err, want)
+			}
+		}
+	})
+}
+
+// Without the plugin docker reports "unknown flag: --platform", so a failed
+// build names the missing plugin instead.
+func TestBuildDockerfileImageNamesMissingBuildx(t *testing.T) {
+	fakeDocker(t, 1, 125)
+	_, err := BuildDockerfileImage(t.Context(), t.TempDir(), "example.invalid/repo", "envoy-dataplane", t.TempDir(), "linux/amd64", nil)
+	if err == nil {
+		t.Fatal("BuildDockerfileImage() = nil, want an error")
+	}
+	for _, want := range []string{"while building the envoy-dataplane image", "docker buildx plugin"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("BuildDockerfileImage() error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+// A build that fails with buildx present keeps docker's own error.
+func TestBuildDockerfileImageKeepsBuildErrorWithBuildx(t *testing.T) {
+	fakeDocker(t, 0, 1)
+	_, err := BuildDockerfileImage(t.Context(), t.TempDir(), "example.invalid/repo", "envoy-dataplane", t.TempDir(), "linux/amd64", nil)
+	if err == nil {
+		t.Fatal("BuildDockerfileImage() = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "exit status 1") || strings.Contains(err.Error(), "buildx plugin") {
+		t.Errorf("BuildDockerfileImage() error = %q, want docker's exit status and no buildx diagnosis", err)
+	}
+}
 
 func TestDockerBuildArgs(t *testing.T) {
 	got := dockerBuildArgs("linux/amd64", []string{"--cache-from", "type=gha"}, "repo/img:build-1", "ctx")
