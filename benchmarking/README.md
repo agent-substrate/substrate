@@ -797,6 +797,15 @@ actually did, independent of what the load generator reported.
 * `pod_psi.cpu_stall_pct`, `mem_stall_pct`, `io_stall_pct`: the same for each
   worker pod's cgroup slice, which also holds its gVisor sandbox, with every
   pod's samples pooled. `pod_psi.pods` is how many pods were seen.
+* `node_disk.read_mb_s`, `write_mb_s`: disk throughput in MiB/s per device
+  (such as `/dev/nvme0n1`) on the nodes hosting a worker pod, from cAdvisor's
+  `container_fs_{reads,writes}_bytes_total` on the root cgroup, with every
+  node's samples pooled per device. Every device cAdvisor reports is kept,
+  including `/dev/root`, which can read 0 while the disk holding it carries the
+  traffic. `node_disk.nodes` is how many nodes were seen. In `stats.jsonl` the
+  keys name the device without `/dev/`, as in
+  `node_disk_nvme0n1_write_p99_mb_s`. A device's keys are absent when it was
+  never seen, and `null` when it was seen only outside the steady-state window.
 * `snapshots.size_p50_mb` through `size_p99_mb`: actor memory image sizes.
 * `snapshots.size_avg_mb`: mean memory image size.
 * `snapshots.restore_p50_s` through `restore_p99_s`, `restore_mean_s`, and the
@@ -873,8 +882,8 @@ more of the run's peak user count, so ramp-up and teardown are left out. Under
 a step-ladder load shape it covers only the top step.
 Counts, means and `checkpoint_mb_s` come from the growth of the histogram's sum
 and count across the window, and the size, restore and checkpoint percentiles
-are interpolated inside its buckets. PSI is a one-minute rolling average read
-every 10s.
+are interpolated inside its buckets. PSI and disk throughput are one-minute
+rolling averages read every 10s.
 
 The atelet exports before Prometheus scrapes it, so the harvest waits
 `--atelet-lag-s` seconds (default 70, enough for the OTel SDK's 60s default
