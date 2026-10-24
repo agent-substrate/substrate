@@ -336,15 +336,11 @@ func (e *Env) annotateAPIServerEnvHash(ctx context.Context) error {
 	return e.Kube.PatchDeployment(ctx, e.Namespace(), "ate-api-server", []byte(patch))
 }
 
-// applyWithAPIServerEnvHash applies a manifest that carries the ate-api-server
-// Deployment, with the digest of its current environment on the pod template.
-// A new image and a new environment are then one rollout, and a fresh install
-// starts out stamped.
-func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) error {
-	objs, err := kube.DecodeManifestBytes(manifest)
-	if err != nil {
-		return err
-	}
+// applyWithAPIServerEnvHash applies a decoded manifest that carries the
+// ate-api-server Deployment, with the digest of its current environment on the
+// pod template. A new image and a new environment are then one rollout, and a
+// fresh install starts out stamped.
+func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, objs []*unstructured.Unstructured) error {
 	hash, err := e.apiServerEnvHash(ctx)
 	if err != nil {
 		return err
