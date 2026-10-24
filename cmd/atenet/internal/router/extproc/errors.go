@@ -30,7 +30,13 @@ type ReqError struct {
 	Msg        string
 	Cause      error
 	StatusCode int
+	// Reason is one of the apierror.Reason* values, sent as the
+	// ate-error-reason header when set.
+	Reason string
 }
+
+// ReasonHeader names the response header that carries ReqError.Reason.
+const ReasonHeader = "ate-error-reason"
 
 func (e *ReqError) Error() string { return e.Msg }
 func (e *ReqError) Unwrap() error { return e.Cause }
@@ -54,6 +60,17 @@ func WrapReqError(code envoy_type.StatusCode, cause error, format string, args .
 	}
 }
 
+// Response is the immediate response for e, with the reason header when e
+// carries a reason.
+func (e *ReqError) Response() *extprocv3.ProcessingResponse {
+	resp := ImmediateResponse(envoy_type.StatusCode(e.StatusCode), e.Msg)
+	if e.Reason != "" {
+		im := resp.GetImmediateResponse()
+		im.Headers.SetHeaders = append(im.Headers.SetHeaders, rawHeader(ReasonHeader, e.Reason))
+	}
+	return resp
+}
+
 // ImmediateResponse tells the dataplane to answer the request itself, without
 // going upstream.
 func ImmediateResponse(statusCode envoy_type.StatusCode, message string) *extprocv3.ProcessingResponse {
@@ -65,18 +82,14 @@ func ImmediateResponse(statusCode envoy_type.StatusCode, message string) *extpro
 				},
 				Body: []byte(message),
 				Headers: &extprocv3.HeaderMutation{
-					SetHeaders: []*corev3.HeaderValueOption{
-						{
-							// Using RawValues instead of Value: newer versions of Envoy
-							// drop Value and use RawValue
-							Header: &corev3.HeaderValue{
-								Key:      "content-type",
-								RawValue: []byte("text/plain"),
-							},
-						},
-					},
+					SetHeaders: []*corev3.HeaderValueOption{rawHeader("content-type", "text/plain")},
 				},
 			},
 		},
 	}
+}
+
+// rawHeader uses RawValue, not Value: newer Envoy versions drop Value.
+func rawHeader(key, value string) *corev3.HeaderValueOption {
+	return &corev3.HeaderValueOption{Header: &corev3.HeaderValue{Key: key, RawValue: []byte(value)}}
 }

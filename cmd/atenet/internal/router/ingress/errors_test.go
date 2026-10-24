@@ -85,11 +85,26 @@ func TestMapResumeError(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "ctr6"}
 
 	tests := []struct {
-		name     string
-		err      error
-		wantCode envoy_type.StatusCode
-		wantBody string
+		name       string
+		err        error
+		wantCode   envoy_type.StatusCode
+		wantBody   string
+		wantReason string
 	}{
+		{
+			name:       "TERMINAL_STATE reason is carried",
+			err:        withReason(codes.FailedPrecondition, "AssignWorker prerequisite not met", "TERMINAL_STATE"),
+			wantCode:   envoy_type.StatusCode_ServiceUnavailable,
+			wantBody:   `actor team-a/ctr6 unavailable: AssignWorker prerequisite not met`,
+			wantReason: "TERMINAL_STATE",
+		},
+		{
+			name:       "budget exhausted keeps the reason through the wrapper",
+			err:        &budgetExhaustedError{lastErr: withReason(codes.ResourceExhausted, "no worker has room for the actor", "NO_CAPACITY")},
+			wantCode:   envoy_type.StatusCode_ServiceUnavailable,
+			wantBody:   `actor team-a/ctr6 unavailable: no worker has room for the actor`,
+			wantReason: "NO_CAPACITY",
+		},
 		{
 			name:     "NotFound maps to 404",
 			err:      status.Error(codes.NotFound, "actor not found"),
@@ -103,10 +118,11 @@ func TestMapResumeError(t *testing.T) {
 			wantBody: `actor team-a/ctr6 unavailable: no worker has room for the actor`,
 		},
 		{
-			name:     "Unavailable maps to 503",
-			err:      status.Error(codes.Unavailable, "control-plane down"),
-			wantCode: envoy_type.StatusCode_ServiceUnavailable,
-			wantBody: `actor team-a/ctr6 unavailable`,
+			name:       "Unavailable maps to 503",
+			err:        status.Error(codes.Unavailable, "control-plane down"),
+			wantCode:   envoy_type.StatusCode_ServiceUnavailable,
+			wantBody:   `actor team-a/ctr6 unavailable`,
+			wantReason: "API_UNAVAILABLE",
 		},
 		{
 			name:     "DeadlineExceeded maps to 504",
@@ -195,6 +211,9 @@ func TestMapResumeError(t *testing.T) {
 			}
 			if got.Error() != tc.wantBody {
 				t.Errorf("Error() = %q, want %q", got.Error(), tc.wantBody)
+			}
+			if reqErr.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", reqErr.Reason, tc.wantReason)
 			}
 			if !errors.Is(got, tc.err) {
 				t.Errorf("errors.Is(result, original) = false, want true (original must be preserved for logs)")
