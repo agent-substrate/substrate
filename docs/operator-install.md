@@ -264,7 +264,8 @@ changes it.
 Defaults are also shown by `ate-setup --help` and by `--help` on the owning
 command. A setting with no default is unset unless something supplies it.
 The `ateapi.authz.*` settings are described in
-[authorization.md](authorization.md).
+[authorization.md](authorization.md), and `ateapi.expectedJWTIssuer` in
+[authentication.md](authentication.md#configuring-jwt-providers).
 
 Settings for the demos, benchmarks, and e2e tests are listed with them: the
 [counter](../demos/counter/README.md#settings) and
