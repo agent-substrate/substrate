@@ -73,8 +73,9 @@ func (m suspendMode) uploadMode() ateletpb.UploadMode {
 // returning, an async suspend uploads it in the background. A SUSPENDED actor
 // is returned as it is, whatever the mode. Idempotent: a re-entered workflow
 // fast-forwards past the steps a previous attempt completed, deriving
-// progress from the persisted actor alone.
-func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode) (_ *ateapi.Actor, err error) {
+// progress from the persisted actor alone. A non-nil precondition pins the
+// actor revision checked under its lease before any step runs.
+func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, precondition *store.Precondition) (_ *ateapi.Actor, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
 	var actor *ateapi.Actor
@@ -101,7 +102,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	}
 	defer lease.Close()
 
-	actor, actorTemplate, err = w.loadActorForSuspend(leaseCtx, actorRef)
+	actor, actorTemplate, err = w.loadActorForSuspend(leaseCtx, actorRef, precondition)
 	if err != nil {
 		return nil, err
 	}
@@ -138,13 +139,18 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 }
 
 // loadActorForSuspend fetches the current actor record and its template.
-func (w *ActorWorkflow) loadActorForSuspend(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
+func (w *ActorWorkflow) loadActorForSuspend(ctx context.Context, actorRef resources.ActorRef, precondition *store.Precondition) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForSuspend")
 	defer func() { err = done(err) }()
 
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, nil, err
+	}
+	if precondition != nil {
+		if err := precondition.Check(actor.GetMetadata()); err != nil {
+			return nil, nil, apierror.Aborted("actor changed before capture: %w", err)
+		}
 	}
 	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
 	if err != nil {
