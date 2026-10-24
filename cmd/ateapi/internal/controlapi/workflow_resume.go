@@ -256,6 +256,9 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 	// ctxErr marks the loop ending between attempts, where no attempt ran and
 	// so none recorded.
 	var ctxErr error
+	// lostErr is the error of the last attempt that lost a race. It decides
+	// how the loop reports that the retries ran out.
+	var lostErr error
 	// lastAttempt times only the last attempt that ran, as every other record
 	// on the histogram does. The backoff can sleep once more after the last
 	// attempt before it gives up, so the time since that attempt began is too
@@ -275,7 +278,8 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 			assignedActor, assignedWorker = attemptActor, attemptWorker
 			return true, nil
 		}
-		if errors.Is(attemptErr, store.ErrVersionConflict) || errors.Is(attemptErr, errWorkerFilledUp) {
+		if lostRace(attemptErr) {
+			lostErr = attemptErr
 			if attemptActor != nil {
 				actor = attemptActor // retry with the refreshed actor
 			}
@@ -300,12 +304,18 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		return assignedActor, assignedWorker, nil
 	case ctxErr != nil:
 		if attempted {
-			w.recordExhaustedAssignment(ctx, lastAttempt, actor, ctxErr)
+			w.recordExhaustedAssignment(ctx, lastAttempt, actor, ateattr.SchedulerOutcomeError, ctxErr)
 		}
+		return nil, nil, err
+	case exhausted && errors.Is(lostErr, errWorkerFilledUp):
+		// Every worker the scheduler offered was full: a lack of room, not a
+		// conflict, so the caller sees ResourceExhausted.
+		err = apierror.ResourceExhausted("%w", errNoWorkerRoom)
+		w.recordExhaustedAssignment(ctx, lastAttempt, actor, ateattr.SchedulerOutcomeNoCapacity, err)
 		return nil, nil, err
 	case exhausted:
 		err = apierror.Aborted("concurrent update conflict, please retry: %w", store.ErrVersionConflict)
-		w.recordExhaustedAssignment(ctx, lastAttempt, actor, err)
+		w.recordExhaustedAssignment(ctx, lastAttempt, actor, ateattr.SchedulerOutcomeError, err)
 		return nil, nil, err
 	default:
 		// assignWorkerAttempt recorded this one itself.
@@ -326,8 +336,8 @@ var assignmentBackoff = wait.Backoff{
 
 // recordExhaustedAssignment writes the one record of an assignment loop that
 // ended without assigning. No worker was assigned, so no pool is named.
-func (w *ActorWorkflow) recordExhaustedAssignment(ctx context.Context, elapsed time.Duration, actor *ateapi.Actor, err error) {
-	w.instruments.recordSchedulerAssignment(ctx, elapsed, ateattr.SchedulerOutcomeError, "", "", snapshotSandboxClass(actor), err)
+func (w *ActorWorkflow) recordExhaustedAssignment(ctx context.Context, elapsed time.Duration, actor *ateapi.Actor, outcome string, err error) {
+	w.instruments.recordSchedulerAssignment(ctx, elapsed, outcome, "", "", snapshotSandboxClass(actor), err)
 }
 
 // validateAssignedWorker checks a RESUMING actor's persisted assignment
@@ -444,12 +454,16 @@ func (w *ActorWorkflow) workerHoldingStaleClaim(ctx context.Context, actor *atea
 	return nil, nil
 }
 
-// schedulerRecordable excludes the two errors the assignment loop retries
-// transparently. Counting a retried attempt would inflate the error rate and
-// double-count the eventual success; ensureWorkerAssigned records a loop that
-// never succeeds.
+// lostRace reports the two errors the assignment loop retries transparently.
+func lostRace(err error) bool {
+	return errors.Is(err, store.ErrVersionConflict) || errors.Is(err, errWorkerFilledUp)
+}
+
+// schedulerRecordable excludes a retried attempt. Counting it would inflate
+// the error rate and double-count the eventual success; ensureWorkerAssigned
+// records a loop that never succeeds.
 func schedulerRecordable(err error) bool {
-	return !errors.Is(err, store.ErrVersionConflict) && !errors.Is(err, errWorkerFilledUp)
+	return !lostRace(err)
 }
 
 // assignWorkerAttempt makes one attempt at claiming a worker for the actor

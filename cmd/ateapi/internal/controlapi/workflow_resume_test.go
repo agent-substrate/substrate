@@ -2457,43 +2457,99 @@ func TestEnsureWorkerAssigned_ContentionRecordsOneObservation(t *testing.T) {
 // TestEnsureWorkerAssigned_ExhaustedBackoffRecordsOneError covers the other
 // end: every attempt loses the race, the retries run out, and the resume
 // fails. The histogram carries one observation for the resume, and not one
-// for each attempt. error.type is the code RPCService.ResumeActor returns, so
-// the scheduler histogram agrees with the router. The returned error carries
-// that code too, so ate.actor.lifecycle.operation.duration, which classifies
-// the same error, also records Aborted. The record times the last attempt and
-// not the backoff, as every other record on the histogram does.
+// for each attempt. The last attempt decides what the resume reports. A full
+// worker is a lack of room: ResourceExhausted, and the no_capacity outcome with
+// no error.type, so the scheduler histogram agrees with the router. A version
+// conflict is Aborted, and error.type is that code. The returned error carries
+// the same code, so ate.actor.lifecycle.operation.duration, which classifies
+// it, agrees too. The record times the last attempt and not the backoff, as
+// every other record on the histogram does.
 func TestEnsureWorkerAssigned_ExhaustedBackoffRecordsOneError(t *testing.T) {
-	sched := &filledUpScheduler{
-		workers: []*ateapi.Worker{contendedWorker("full-pod")},
-		full:    map[string]bool{"full-pod": true},
+	const pod = "full-pod"
+	tests := []struct {
+		name string
+		// goneUntil is the first Schedule call at which the worker is back in
+		// the store. Before it, the bind fails with a version conflict. A
+		// negative value keeps the worker out of the store.
+		goneUntil int
+		// goneFrom is the first Schedule call at which the worker has left the
+		// store again. Zero leaves it in.
+		goneFrom    int
+		wantCode    codes.Code
+		wantOutcome string
+	}{
+		{
+			name:        "full workers",
+			wantCode:    codes.ResourceExhausted,
+			wantOutcome: ateattr.SchedulerOutcomeNoCapacity,
+		},
+		{
+			name:        "version conflicts",
+			goneUntil:   -1,
+			wantCode:    codes.Aborted,
+			wantOutcome: ateattr.SchedulerOutcomeError + "/" + codes.Aborted.String(),
+		},
+		{
+			name:        "conflict, then full workers",
+			goneUntil:   2,
+			wantCode:    codes.ResourceExhausted,
+			wantOutcome: ateattr.SchedulerOutcomeNoCapacity,
+		},
+		{
+			name:        "full workers, then conflicts",
+			goneFrom:    3,
+			wantCode:    codes.Aborted,
+			wantOutcome: ateattr.SchedulerOutcomeError + "/" + codes.Aborted.String(),
+		},
 	}
-	w, actor, reader := newContendedWorkflow(t, sched)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sched := &filledUpScheduler{
+				workers: []*ateapi.Worker{contendedWorker(pod)},
+				full:    map[string]bool{pod: true},
+			}
+			w, actor, reader := newContendedWorkflow(t, sched)
+			workers := w.store.(*contentionStore).workers
+			worker := sched.workers[0]
+			name := worker.GetMetadata().GetName()
+			if tt.goneUntil != 0 {
+				delete(workers, name)
+			}
+			sched.onSchedule = func(calls int) {
+				if tt.goneUntil > 0 && calls == tt.goneUntil {
+					workers[name] = worker
+				}
+				if tt.goneFrom > 0 && calls == tt.goneFrom {
+					delete(workers, name)
+				}
+			}
 
-	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
-	if err == nil {
-		t.Fatal("ensureWorkerAssigned succeeded, want a failure after the backoff ended")
-	}
-	if got := apierror.Code(err); got != codes.Aborted {
-		t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
-	}
-	if !errors.Is(err, store.ErrVersionConflict) {
-		t.Errorf("ensureWorkerAssigned error = %v, want one that wraps store.ErrVersionConflict for RPCService.ResumeActor", err)
-	}
+			_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+			if err == nil {
+				t.Fatal("ensureWorkerAssigned succeeded, want a failure after the backoff ended")
+			}
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
+			}
+			if tt.wantCode == codes.Aborted && !errors.Is(err, store.ErrVersionConflict) {
+				t.Errorf("ensureWorkerAssigned error = %v, want one that wraps store.ErrVersionConflict for RPCService.ResumeActor", err)
+			}
 
-	got, outcomes := assignmentObservations(t, reader)
-	if got != 1 {
-		t.Fatalf("observations on ate.scheduler.assignment.duration = %d %v, want 1 for the whole resume", got, outcomes)
-	}
-	want := ateattr.SchedulerOutcomeError + "/" + codes.Aborted.String()
-	if outcomes[0] != want {
-		t.Errorf("recorded outcome %q, want %q: error.type must be the code ResumeActor returns", outcomes[0], want)
-	}
+			got, outcomes := assignmentObservations(t, reader)
+			if got != 1 {
+				t.Fatalf("observations on ate.scheduler.assignment.duration = %d %v, want 1 for the whole resume", got, outcomes)
+			}
+			if outcomes[0] != tt.wantOutcome {
+				t.Errorf("recorded outcome %q, want %q", outcomes[0], tt.wantOutcome)
+			}
 
-	// One attempt against the stubs takes microseconds, so a record that
-	// includes the sleep after the last attempt goes above half of it.
-	_, sleep := replayBackoff(t, assignmentBackoff)
-	if recorded := assignmentSum(t, reader); recorded >= sleep.Seconds()/2 {
-		t.Errorf("recorded duration = %.3fs, want less than %.3fs: the record must time the last attempt, not the backoff", recorded, sleep.Seconds()/2)
+			// One attempt against the stubs takes microseconds, so a record that
+			// includes the sleep after the last attempt goes above half of it.
+			_, sleep := replayBackoff(t, assignmentBackoff)
+			if recorded := assignmentSum(t, reader); recorded >= sleep.Seconds()/2 {
+				t.Errorf("recorded duration = %.3fs, want less than %.3fs: the record must time the last attempt, not the backoff", recorded, sleep.Seconds()/2)
+			}
+		})
 	}
 }
 
