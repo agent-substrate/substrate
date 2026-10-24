@@ -19,6 +19,15 @@ import (
 	"testing"
 )
 
+func setColorState(t *testing.T, noColor, fromEnv bool) {
+	t.Helper()
+	origNoColor, origEnvNoColor := NoColor, envNoColor
+	t.Cleanup(func() {
+		NoColor, envNoColor = origNoColor, origEnvNoColor
+	})
+	NoColor, envNoColor = noColor, fromEnv
+}
+
 func TestColorf(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -98,8 +107,7 @@ func TestColorf(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			NoColor = tc.noColor
-			defer func() { NoColor = false }()
+			setColorState(t, tc.noColor, false)
 
 			got := Colorf(tc.format, tc.args...)
 			if got != tc.want {
@@ -112,7 +120,7 @@ func TestColorf(t *testing.T) {
 func TestFColorfAndFColorfln(t *testing.T) {
 	t.Run("FColorf", func(t *testing.T) {
 		var buf bytes.Buffer
-		NoColor = false
+		setColorState(t, false, false)
 		err := FColorf(&buf, "Hello <green>%s</green>", "world")
 		if err != nil {
 			t.Fatalf("FColorf failed: %v", err)
@@ -125,7 +133,7 @@ func TestFColorfAndFColorfln(t *testing.T) {
 
 	t.Run("FColorfln", func(t *testing.T) {
 		var buf bytes.Buffer
-		NoColor = false
+		setColorState(t, false, false)
 		err := FColorfln(&buf, "Hello <green>%s</green>", "world")
 		if err != nil {
 			t.Fatalf("FColorfln failed: %v", err)
@@ -138,8 +146,7 @@ func TestFColorfAndFColorfln(t *testing.T) {
 
 	t.Run("FColorf no color", func(t *testing.T) {
 		var buf bytes.Buffer
-		NoColor = true
-		defer func() { NoColor = false }()
+		setColorState(t, true, false)
 		err := FColorf(&buf, "Hello <green>%s</green>", "world")
 		if err != nil {
 			t.Fatalf("FColorf failed: %v", err)
@@ -191,8 +198,7 @@ func TestColorWriter(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			NoColor = tc.noColor
-			defer func() { NoColor = false }()
+			setColorState(t, tc.noColor, false)
 
 			var buf bytes.Buffer
 			cw := &ColorWriter{W: &buf, ANSI: tc.ansi}
@@ -280,8 +286,7 @@ func TestIndentAndColorChaining(t *testing.T) {
 	cyanWriter := &ColorWriter{W: &buf, ANSI: "\033[36m"}
 	iw := NewIndentWriter(cyanWriter, "        ")
 
-	NoColor = false
-	defer func() { NoColor = false }()
+	setColorState(t, false, false)
 
 	_, err := iw.Write([]byte("hello\nworld\n"))
 	if err != nil {
@@ -295,16 +300,8 @@ func TestIndentAndColorChaining(t *testing.T) {
 }
 
 func TestEnvNoColor(t *testing.T) {
-	origEnvNoColor := envNoColor
-	origNoColor := NoColor
-	defer func() {
-		envNoColor = origEnvNoColor
-		NoColor = origNoColor
-	}()
-
 	t.Run("envNoColor true disables color", func(t *testing.T) {
-		envNoColor = true
-		NoColor = false
+		setColorState(t, false, true)
 
 		if !noColor() {
 			t.Errorf("noColor() = false, want true when envNoColor is true")
@@ -318,8 +315,7 @@ func TestEnvNoColor(t *testing.T) {
 	})
 
 	t.Run("envNoColor false allows color", func(t *testing.T) {
-		envNoColor = false
-		NoColor = false
+		setColorState(t, false, false)
 
 		if noColor() {
 			t.Errorf("noColor() = true, want false when both are false")
