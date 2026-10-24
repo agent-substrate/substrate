@@ -284,7 +284,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
-| `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`partial`/`at_capacity`/`unschedulable`) and sandbox class to provide fleet capacity and saturation at a glance. Every ateapi replica reports the whole fleet: take the `max` by pool namespace, pool, state, and sandbox class first, then `sum` (example query below the table) |
+| `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`partial`/`at_capacity`/`unschedulable`) and sandbox class to provide fleet capacity and saturation at a glance. Every ateapi replica reports the whole fleet from its own worker cache: take the `avg` by pool namespace, pool, state, and sandbox class first, then `sum`, because the replicas can disagree for a few seconds and `max` would count a worker that changed state under both its old and new state (example query below the table) |
 | `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/delete/revert) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, snapshot kind on resume, and snapshot fidelity on resume and suspend; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
 | `ate.scheduler.assignment.duration` | ateapi | histogram | time of one attempt to assign a worker to an actor, with one record for each resume (ateapi retries an attempt that loses a race for a worker and records only the last attempt), with the outcome (`assigned` / `no_capacity` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
 | `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.fidelity`, `ate.template.atespace`, `ate.template.name`, `ate.sandbox.class`) |
@@ -307,11 +307,11 @@ For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 * **Autoscaling Control Loop & Anti-Windup**: `desired - ready > 0` sustained beyond a few minutes indicates undelivered capacity due to node pool exhaustion, quota limits, or stuck worker pods, serving as anti-windup input for demand-reactive capacity scaling.
 
 For `ate.workerpool.workers`:
-* Every ateapi replica reports the whole fleet, so a plain `sum` counts each worker once per replica ([#3055](https://github.com/agent-substrate/substrate/issues/3055)). Take the `max` across replicas first, keeping the pool namespace, pool, state, and sandbox class, then `sum`. Workers per pool:
+* Every ateapi replica reports the whole fleet, so a plain `sum` counts each worker once per replica ([#3055](https://github.com/agent-substrate/substrate/issues/3055)). The replicas read separate worker caches and can disagree for a few seconds: a worker that changed state sits under its old state on one replica and its new state on the other ([#3162](https://github.com/agent-substrate/substrate/issues/3162)). Take the `avg` across replicas first, keeping the pool namespace, pool, state, and sandbox class, then `sum`. A `max` would keep that worker under both states and the summed pool outgrows its real size. The average keeps the sum equal to the pool size; the counts can be fractional while the replicas disagree. Workers per pool:
 
   ```promql
   sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
-    max by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+    avg by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
       {"ate.workerpool.workers"}
     )
   )
