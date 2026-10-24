@@ -339,8 +339,9 @@ func (p *Plugin) unstageVolume(ctx context.Context, volumeID string) error {
 
 	stagingPath, err := p.stagingDir(volumeID)
 	if err != nil {
-		// stageVolume rejects this ID too, so nothing was staged. Failing here
-		// would leave the actor that carries it unable to terminate.
+		// stageVolume rejects this ID too, so this build staged nothing. An
+		// older build may have, and that directory is left behind. Failing
+		// here would leave the actor that carries it unable to terminate.
 		slog.WarnContext(ctx, "Skipping unstage of a volume ID that cannot have been staged", slog.String("volume_id", volumeID), slog.Any("error", err))
 		return nil
 	}
