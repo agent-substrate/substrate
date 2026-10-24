@@ -428,6 +428,10 @@ To explore metrics locally:
 
 > **Roadmap Note (Actor-Level Metrics):** The control plane latency, snapshot performance, and fleet utilization instruments above are in place. What remains is actor-level correlation: telemetry that an actor emits itself carries no Substrate-injected identity yet ([#853](https://github.com/agent-substrate/substrate/issues/853), [#761](https://github.com/agent-substrate/substrate/issues/761)).
 
+### SLOs and alerting
+
+Please see the [SLOs and alerting](slos-and-alerts.md) page for suggestions about how to set up SLOs, SLO-based alerts, and other alerts to ensure your deployment is working well.
+
 ---
 
 ## 3. Tracing

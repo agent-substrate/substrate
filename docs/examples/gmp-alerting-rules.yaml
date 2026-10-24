@@ -1,0 +1,355 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# See ../slos-and-alerts.md for context on this file.
+#
+# This file is a Custom Resource for Google Cloud Managed Service for
+# Prometheus ("GMP"), but everything inside of the "spec" is identical to
+# Prometheus' `rule_group` array, so it can be used by any compliant Prometheus
+# installation, with the exceptions listed below. See
+# https://docs.cloud.google.com/stackdriver/docs/managed-prometheus/rules-managed
+# for more information.
+#
+# The known differences in this file to support GMP (vs regular Prometheus) are:
+#
+# - **Dotted OTel label names:** GMP (up to at least GKE 1.37) rejects
+#   dotted OTel label names in `sum by (...)` / `max by (...)` clauses, so the
+#   rules copy labels like `rpc.method` to `rpc_method` via `label_replace`
+#   first (see comments below).
+# - **Workload name selectors:** GMP automatically attaches
+#   `top_level_controller_name` from the Kubernetes Deployment name.
+#   Outside GMP, replace this selector with the label your Prometheus setup
+#   uses to identify the API server (e.g. `job="ateapi"`,
+#   `app="ate-api-server"`, or `"service.name"="ateapi"`; see comment at first
+#   use below).
+# - **Metric unit suffixes and naming:** GMP preserves OTel dotted instrument names
+#   and omits unit suffixes on histograms; Standard Prometheus exporters append
+#   the unit suffix (e.g. `_seconds_count` / `.seconds_count`) and, unless
+#   UTF-8 naming is enabled with NoTranslation (which should be the default after #2343),
+#   translate dots to underscores. You may need to adjust the metric names as a result;
+#   see [metric naming](../dev/best-practices/metrics.md) for more information.
+#
+# To test this file, you can set up a very basic "alerting" configuration as
+# follows:
+#
+# 1. Create an HTTP-to-stdout pod (use this pod image at your own risk):
+#
+#   kubectl run alert-logger --image=mendhak/http-https-echo:42 --port=8080 -n gmp-public
+#   kubectl expose pod alert-logger --port=8080 --target-port=8080 -n gmp-public
+#
+# 2. Create an alertmanager configuration:
+#
+#   global:
+#     resolve_timeout: 5m
+#   route:
+#     receiver: 'test-webhook'
+#   receivers:
+#   - name: 'test-webhook'
+#     webhook_configs:
+#     - url: 'http://alert-logger.gmp-public.svc.cluster.local:8080/'
+#       send_resolved: true
+#
+# 3. Point GMP to the alertmanager file (if not using GMP, see Prom documentation):
+#
+#   kubectl create secret generic alertmanager -n gmp-public --from-file=alertmanager.yaml
+#
+# 4. Apply this file, then watch the logs coming off of the alert-logger pod to
+#    see when alerts are fired or resolved.
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterRules
+metadata:
+  name: substrate-slos-and-alerts
+spec:
+  groups:
+  # ============================================================================
+  # ResumeActor Capacity Availability (ResourceExhausted vs Success)
+  # See section A.1 in ../slos-and-alerts.md.
+  # Target: 99% capacity availability over 30d (error budget = 0.01)
+  # For strategy, see https://sre.google/workbook/alerting-on-slos/
+  #
+  # **TODO:** Find a way to distinguish between retryable and final failures, e.g.
+  # by passing in a "retryable" parameter in ResumeActor. See
+  # [#2650](https://github.com/agent-substrate/substrate/issues/2650).
+  # ============================================================================
+  - name: ate_resume_actor_capacity_slo_recording_rules
+    rules:
+      # 1. Base 5m event rates (the only rules that scan the raw OTel metric)
+      #
+      # NB: top_level_controller_name="ate-api-server" is a GMP-specific label
+      # added by Google Cloud Monitoring from the Kubernetes Deployment name.
+      # Outside GMP, replace it throughout this file with the label your
+      # Prometheus setup attaches to the API server, such as:
+      #   - job="ateapi" (when exporting via the OTel Collector Prometheus exporter,
+      #     which maps the resource attribute service.name="ateapi" to job)
+      #   - app="ate-api-server" (when scraping pods directly with pod labelmapping,
+      #     as in manifests/ate-install/kind/prometheus.yaml)
+      #   - "service.name"="ateapi" (when promoting OTel resource attributes)
+      - record: aterules:actor_resume_no_capacity:rate5m
+        expr: |
+          sum(rate({"ate.actor.lifecycle.operation.duration_count", top_level_controller_name="ate-api-server", "ate.actor.operation.name"="resume", "error.type"="ResourceExhausted"}[5m]))
+          or vector(0)
+      - record: aterules:actor_resume_valid:rate5m
+        # NB: this doesn't filter out errors other than ResourceExhausted; it
+        # looks at _all_ calls. That can probably be tightened up, but combined
+        # with the RPC SLOs this should be good enough.
+        expr: |
+          sum(rate({"ate.actor.lifecycle.operation.duration_count", top_level_controller_name="ate-api-server", "ate.actor.operation.name"="resume"}[5m]))
+          or vector(0)
+      # 2. Pre-computed multi-window error ratios (rolled up from the 5m rates)
+      - record: aterules:actor_resume_no_capacity:ratio_rate5m
+        expr: |
+          aterules:actor_resume_no_capacity:rate5m
+          /
+          aterules:actor_resume_valid:rate5m
+      - record: aterules:actor_resume_no_capacity:ratio_rate30m
+        expr: |
+          avg_over_time(aterules:actor_resume_no_capacity:rate5m[30m])
+          /
+          avg_over_time(aterules:actor_resume_valid:rate5m[30m])
+      - record: aterules:actor_resume_no_capacity:ratio_rate1h
+        expr: |
+          avg_over_time(aterules:actor_resume_no_capacity:rate5m[1h])
+          /
+          avg_over_time(aterules:actor_resume_valid:rate5m[1h])
+      - record: aterules:actor_resume_no_capacity:ratio_rate6h
+        expr: |
+          avg_over_time(aterules:actor_resume_no_capacity:rate5m[6h])
+          /
+          avg_over_time(aterules:actor_resume_valid:rate5m[6h])
+      - record: aterules:actor_resume_no_capacity:ratio_rate3d
+        expr: |
+          avg_over_time(aterules:actor_resume_no_capacity:rate5m[3d])
+          /
+          avg_over_time(aterules:actor_resume_valid:rate5m[3d])
+  - name: ate_resume_actor_capacity_slo_alerts
+    rules:
+      # Page on fast burn (14.4x over 1h/5m) OR slow burn (6x over 6h/30m)
+      - alert: AteResumeActorCapacityBurnPage
+        expr: |
+          (
+          aterules:actor_resume_no_capacity:ratio_rate1h > (14.4 * 0.01)
+            and
+            aterules:actor_resume_no_capacity:ratio_rate5m > (14.4 * 0.01)
+          )
+          or
+          (
+          aterules:actor_resume_no_capacity:ratio_rate6h > (6 * 0.01)
+            and
+            aterules:actor_resume_no_capacity:ratio_rate30m > (6 * 0.01)
+          )
+        labels:
+          severity: page
+          slo: ate-resume-actor-capacity
+        annotations:
+          summary: "High ResumeActor out-of-capacity error budget burn rate"
+          description: "ResumeActor ResourceExhausted failures are burning the 30d 99% capacity budget at a paging rate (current={{ $value | humanizePercentage }})."
+      # Ticket on sustained burn (1x over 3d/6h)
+      - alert: AteResumeActorCapacityBurnTicket
+        expr: |
+          aterules:actor_resume_no_capacity:ratio_rate3d > (1 * 0.01)
+          and
+          aterules:actor_resume_no_capacity:ratio_rate6h > (1 * 0.01)
+        labels:
+          severity: ticket
+          slo: ate-resume-actor-capacity
+        annotations:
+          summary: "Sustained ResumeActor out-of-capacity error budget burn"
+          description: "ResumeActor ResourceExhausted failure rate has exceeded the 1x burn rate threshold over 3d and 6h."
+  # ============================================================================
+  # ateapi Per-Method RPC Server-Side Error Rate (5xx-equivalent gRPC codes)
+  # See section A.2 in ../slos-and-alerts.md.
+  # Target: 99.9% availability over 30d per RPC method (error budget = 0.001)
+  # For strategy, see https://sre.google/workbook/alerting-on-slos/
+  #
+  # NB: For low-traffic methods (e.g. CreateActorTemplate), this could be much
+  # too sensitive. If this applies to you, consider some of the options from
+  # the SRE workbook: combine multiple methods, exclude those methods, or
+  # generate artificial traffic.
+  #
+  # **TODO:** Add SLOs for latencies.
+  # ============================================================================
+  - name: ateapi_rpc_availability_slo_recording_rules
+    rules:
+      # 1. Base 5m event rates per rpc.method (the only rules that scan the raw OTel metric)
+      - record: aterules:api_rpc_calls:rate5m
+        # In Google Managed Prometheus, at least up to and including GKE 1.37, labels in a "sum by(xxx)"
+        # expression can only include traditional names (e.g. rpc_method) and not Otel-style names
+        # (e.g. rpc.method). This is due to github.com/GoogleCloudPlatform/prometheus-engine depending
+        # on an older version of the Prometheus parser (v2.53.5); this dependency was updated on
+        # 23-09-2026 (5c449d70c4) to v3.13.0, which fixes this bug, but it may take some time for this
+        # to be released in GKE.
+        #
+        # If you are using an updated version of GKE, or are not using GMP, you can remove the
+        # label_replace functions (in this rule and the next), and replace all occurrences of rpc_method
+        # with rpc.method in the rest of this file.
+        expr: |
+          sum by (rpc_method) (
+            label_replace(
+              rate({"rpc.server.call.duration_count", top_level_controller_name="ate-api-server"}[5m]),
+              "rpc_method", "$1", "rpc.method", "(.*)"
+            )
+          )
+
+      - record: aterules:api_rpc_server_errors:rate5m
+        expr: |
+          sum by (rpc_method) (
+            label_replace(
+              rate({"rpc.server.call.duration_count", top_level_controller_name="ate-api-server", "rpc.response.status_code"=~"INTERNAL|UNAVAILABLE|DATA_LOSS|UNKNOWN|DEADLINE_EXCEEDED|UNIMPLEMENTED"}[5m]),
+              "rpc_method", "$1", "rpc.method", "(.*)"
+            )
+          )
+          or on (rpc_method)
+          sum by (rpc_method) (0 * aterules:api_rpc_calls:rate5m)
+
+      # 2. Pre-computed multi-window error ratios per rpc.method (rolled up from the 5m rates)
+      - record: aterules:api_rpc_server_errors:ratio_rate5m
+        expr: |
+          aterules:api_rpc_server_errors:rate5m
+          /
+          aterules:api_rpc_calls:rate5m
+      - record: aterules:api_rpc_server_errors:ratio_rate30m
+        expr: |
+          avg_over_time(aterules:api_rpc_server_errors:rate5m[30m])
+          /
+          avg_over_time(aterules:api_rpc_calls:rate5m[30m])
+      - record: aterules:api_rpc_server_errors:ratio_rate1h
+        expr: |
+          avg_over_time(aterules:api_rpc_server_errors:rate5m[1h])
+          /
+          avg_over_time(aterules:api_rpc_calls:rate5m[1h])
+      - record: aterules:api_rpc_server_errors:ratio_rate6h
+        expr: |
+          avg_over_time(aterules:api_rpc_server_errors:rate5m[6h])
+          /
+          avg_over_time(aterules:api_rpc_calls:rate5m[6h])
+      - record: aterules:api_rpc_server_errors:ratio_rate3d
+        expr: |
+          avg_over_time(aterules:api_rpc_server_errors:rate5m[3d])
+          /
+          avg_over_time(aterules:api_rpc_calls:rate5m[3d])
+  - name: ateapi_rpc_availability_slo_alerts
+    rules:
+      # Page if ANY rpc.method hits fast burn (14.4x over 1h/5m) OR slow burn (6x over 6h/30m)
+      - alert: AteApiRpcErrorBudgetBurnPage
+        expr: |
+          (
+          aterules:api_rpc_server_errors:ratio_rate1h > (14.4 * 0.001)
+            and
+            aterules:api_rpc_server_errors:ratio_rate5m > (14.4 * 0.001)
+          )
+          or
+          (
+          aterules:api_rpc_server_errors:ratio_rate6h > (6 * 0.001)
+            and
+            aterules:api_rpc_server_errors:ratio_rate30m > (6 * 0.001)
+          )
+        labels:
+          severity: page
+          slo: ateapi-rpc-availability
+        annotations:
+          summary: "High server-side error budget burn rate on {{ index $labels \"rpc_method\" }}"
+          description: "ateapi RPC {{ index $labels \"rpc_method\" }} 5xx-equivalent gRPC error rate is burning the 30d 99.9% error budget at a paging rate (current={{ $value | humanizePercentage }})."
+
+      # Ticket if ANY rpc.method hits sustained burn (1x over 3d/6h)
+      - alert: AteApiRpcErrorBudgetBurnTicket
+        expr: |
+          aterules:api_rpc_server_errors:ratio_rate3d > (1 * 0.001)
+          and
+          aterules:api_rpc_server_errors:ratio_rate6h > (1 * 0.001)
+        labels:
+          severity: ticket
+          slo: ateapi-rpc-availability
+        annotations:
+          summary: "Sustained server-side error budget burn on {{ index $labels \"rpc_method\" }}"
+          description: "ateapi RPC {{ index $labels \"rpc_method\" }} 5xx-equivalent gRPC error rate has exceeded the 1x burn rate threshold over 3d and 6h."
+  # ============================================================================
+  # Alert on lack of convergence between desired and actual number of workers.
+  #
+  # See section B.1 in ../slos-and-alerts.md. NB: this alert fires on the
+  # _overall_ failure rate, of intended workers -> registered pods; that is, it
+  # fires whether the failure is because of the pods not being created, or the
+  # pods not being registered. To debug which of these it is, look at
+  # ate.workerpool.ready_workers which tracks the number of ready _pods_. If
+  # that is converging, but the overall number of workers is not, there's a
+  # problem with registration; otherwise, your cluster is likely out of
+  # capacity (though you will likely see other symptoms of this, e.g.
+  # unschedulable pods).
+  #
+  # The strategy here is:
+  # - Look for workers in all states except "unschedulable." Ignore unknown
+  #   sandbox classes.
+  # - Sum across all (remaining) workload states (e.g. excluding
+  #   "unschedulable"). Alert if this is lower than the lowest number of
+  #   desired workers over the last five minutes.
+  # - Each replica of ate-api-server emits these metrics, so we need a way to
+  #   resolve disagreements between them on the correct number of actual and
+  #   desired workers. The most likely conflict is that a replica disappears
+  #   (presumably, to later be replaced) and its last value is therefore "stuck,"
+  #   or that one of them is a bit slow. Therefore, we take the max value across
+  #   all replicas for the current number of workers, and the min value for the
+  #   desired number of workers, so that if max(current) < min(desired), we are
+  #   *certain* that something has gone wrong. This may miss some genuine problems
+  #   but those should be transient.
+  # ============================================================================
+  - name: ate_workerpool_recording_rules
+    rules:
+    # See comment for label_replace, above. You can remove this and simplify
+    # the alerts below if you are not using GMP.
+    - record: aterules:workerpool_actual_workers:label_replaced
+      expr: |
+        label_replace(
+          label_replace(
+            label_replace(
+              label_replace(
+                {"ate.workerpool.workers", "ate.worker.state"!="unschedulable", "ate.sandbox.class"!="unknown"},
+                "ate_sandbox_class", "$1", "ate.sandbox.class", "(.*)"
+              ),
+              "ate_worker_state", "$1", "ate.worker.state", "(.*)"
+            ),
+            "ate_workerpool_name", "$1", "ate.workerpool.name", "(.*)"
+          ),
+          "ate_workerpool_namespace", "$1", "ate.workerpool.namespace", "(.*)"
+        )
+    - record: aterules:workerpool_desired_workers:label_replaced
+      expr: |
+        label_replace(
+          label_replace(
+            {"ate.workerpool.desired_workers"},
+            "ate_workerpool_name", "$1", "ate.workerpool.name", "(.*)"
+          ),
+          "ate_workerpool_namespace", "$1", "ate.workerpool.namespace", "(.*)"
+        )
+
+  - name: ate_workerpool_alerts
+    rules:
+    - alert: SubstrateWorkerPoolCapacityNotDelivered
+      expr: |
+        sum by (ate_workerpool_namespace, ate_workerpool_name) (
+          max by (ate_workerpool_namespace, ate_workerpool_name, ate_worker_state, ate_sandbox_class) (
+            aterules:workerpool_actual_workers:label_replaced
+          )
+        )
+        <
+        min by (ate_workerpool_namespace, ate_workerpool_name) (
+          min_over_time(aterules:workerpool_desired_workers:label_replaced[5m])
+        )
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: 'WorkerPool {{ index $labels "ate_workerpool_namespace" }}/{{ index $labels "ate_workerpool_name" }} has not reached target capacity in ateapi'
+        description: >-
+          WorkerPool {{ index $labels "ate_workerpool_namespace" }}/{{ index $labels "ate_workerpool_name" }}
+          currently has {{ $value }} schedulable workers registered in ateapi,
+          which is fewer than the fewest number of workers requested over the last five minutes.
