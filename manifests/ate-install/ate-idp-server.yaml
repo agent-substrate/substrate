@@ -50,18 +50,28 @@ spec:
         ports:
         - name: https
           containerPort: 8443
+        # Requests, no limits: a node packed with sandboxes gives a BestEffort
+        # pod almost no CPU and its probes time out.
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
         readinessProbe:
           httpGet:
             path: /healthz
             port: https
             scheme: HTTPS
           periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 6
         livenessProbe:
           httpGet:
             path: /healthz
             port: https
             scheme: HTTPS
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
         securityContext:
           capabilities:
             drop:

@@ -173,6 +173,12 @@ spec:
               fieldPath: metadata.uid
         - name: WORKERS_PER_SIGNER
           value: "1"
+        # Requests, no limits: a node packed with sandboxes gives a BestEffort
+        # pod almost no CPU.
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
         volumeMounts:
         - name: "ca-state"
           mountPath: "/run/ca-state"
