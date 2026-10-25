@@ -139,6 +139,28 @@ func TestLimitLeafGrowth(t *testing.T) {
 	release()
 }
 
+// A leaf that already has a memory.high gets it back on release.
+func TestLimitLeafGrowthRestoresMemoryHigh(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "uid-a")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, v := range map[string]string{"memory.current": "1000\n", "memory.high": "2048\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(v), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release, err := limitLeafGrowth(root, "uid-a", 24, 4096, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if got, _ := os.ReadFile(filepath.Join(dir, "memory.high")); string(got) != "2048" {
+		t.Errorf("memory.high after release = %q, want %q", got, "2048")
+	}
+}
+
 // Without the memory controller there is no memory.high to write.
 func TestLimitLeafGrowthWithoutTheMemoryController(t *testing.T) {
 	root := t.TempDir()
