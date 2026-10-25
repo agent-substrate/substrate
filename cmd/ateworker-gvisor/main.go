@@ -245,7 +245,7 @@ func do(ctx context.Context) error {
 		return err
 	}
 	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags, bootID)
-	ateworkerService.throttleMemory = psiEnabled(defaultCgroupRoot)
+	ateworkerService.throttleMemory = cgroup.PSIEnabled(defaultCgroupRoot)
 	if !ateworkerService.throttleMemory {
 		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so sandboxes keep memory.max and an OOM kill in one can restart the worker")
 	}
@@ -690,7 +690,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
-			if hosted.oomKilled.Load() {
+			if hosted.memory.Killed() {
 				retErr = fmt.Errorf("killed for exceeding its memory limit: %w", retErr)
 			}
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -952,7 +952,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	// the sentry leaves its sandbox leaf for the checkpoint cgroup
 	var memoryLimit uint64
 	if hosted != nil {
-		memoryLimit = pauseMemoryWatch(hosted)
+		memoryLimit = hosted.memory.Pause()
 	}
 	cacheHigh, borrowed := s.checkpointCacheLimit(hosted, req.GetActorUid())
 	err = checkpointIsolated(ctx, s.cgroupRoot, req.GetActorUid(), cacheHigh, req.GetActorDirs(), checkpointFn, terminate)
@@ -960,8 +960,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		<-s.checkpointWrites
 	}
 	if err != nil {
-		if hosted != nil && memoryLimit != 0 {
-			resumeMemoryWatch(hosted, memoryLimit)
+		if hosted != nil {
+			hosted.memory.Resume(memoryLimit)
 		}
 		s.borrow.Return(borrowed)
 		return nil, err
@@ -1167,7 +1167,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
-			if hosted.oomKilled.Load() {
+			if hosted.memory.Killed() {
 				retErr = fmt.Errorf("killed for exceeding its memory limit: %w", retErr)
 			}
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)

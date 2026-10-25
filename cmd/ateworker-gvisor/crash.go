@@ -58,7 +58,7 @@ func (s *AteWorkerService) watchSandbox(ctx context.Context, hosted *hostedActor
 		}
 		ctx := context.Background()
 		message := "gVisor sandbox exited"
-		if hosted.oomKilled.Load() {
+		if hosted.memory.Killed() {
 			message = "killed for exceeding its memory limit"
 		}
 

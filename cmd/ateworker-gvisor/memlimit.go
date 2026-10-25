@@ -33,20 +33,11 @@ import (
 	"go.ate.dev/substrate/internal/ocispec"
 )
 
-// With runc 1.5.2+ on systemd 253-258 the worker container's scope has
-// OOMPolicy=kill, so any kernel OOM kill under it stops the whole worker, even
-// one confined to a single actor's leaf. So the sandbox leaf gets memory.high
-// at the actor's limit, which throttles without invoking the OOM killer, and
-// we kill a sandbox that stays over with cgroup.kill, which systemd ignores.
-// https://github.com/opencontainers/cgroups/blob/19a241326c83a5100dff94732733791a0c9e4720/systemd/v2.go#L366-L382
-
-// memoryWatchInterval is how often sandbox leaves are checked.
-const memoryWatchInterval = 250 * time.Millisecond
-
 // throttleSandboxMemory swaps the memory.max runsc set on the sandbox leaf for
-// a memory.high at the same limit. runsc reads memory.max back to size the
-// sentry's --total-memory when create launches the sandbox, so this runs after
-// the sandbox's create. On failure the leaf keeps its memory.max.
+// a memory.high at the same limit (see cgroup.MemoryGuard). runsc reads
+// memory.max back to size the sentry's --total-memory when create launches the
+// sandbox, so this runs after the sandbox's create. On failure the leaf keeps
+// its memory.max.
 func (s *AteWorkerService) throttleSandboxMemory(ctx context.Context, hosted *hostedActor) {
 	if !s.throttleMemory {
 		return
@@ -57,14 +48,7 @@ func (s *AteWorkerService) throttleSandboxMemory(ctx context.Context, hosted *ho
 		slog.LogAttrs(ctx, slog.LevelWarn, "Sandbox keeps its memory.max, an OOM kill in it will restart the worker", attrs...)
 		return
 	}
-	hosted.memoryLimit.Store(limit)
-}
-
-// psiEnabled reports whether the kernel tracks memory pressure for cgroups
-// under root, which the watch needs to tell a stuck sandbox from a busy one.
-func psiEnabled(root string) bool {
-	_, err := os.Stat(filepath.Join(root, "memory.pressure"))
-	return err == nil
+	hosted.memory.Resume(limit)
 }
 
 // removeStaleSandboxLeaf removes a sandbox leaf an earlier activation of the
@@ -120,7 +104,7 @@ func swapMemoryMaxForHigh(dir string) (uint64, error) {
 // watchMemory kills sandboxes that stay over their memory limit, until ctx is
 // done.
 func (s *AteWorkerService) watchMemory(ctx context.Context) {
-	ticker := time.NewTicker(memoryWatchInterval)
+	ticker := time.NewTicker(cgroup.MemoryGuardInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -134,54 +118,23 @@ func (s *AteWorkerService) watchMemory(ctx context.Context) {
 	}
 }
 
-// checkMemory kills h's sandbox if the watch finds it stuck at its limit. The
-// kill runs in the background, holding h.memoryMu until the sandbox is gone.
+// checkMemory kills h's sandbox if it is stuck at its memory limit.
 func (s *AteWorkerService) checkMemory(ctx context.Context, h *hostedActor) {
-	if !h.memoryMu.TryLock() {
-		// being killed, or paused for a checkpoint
+	if h.stopping.Load() {
 		return
 	}
-	limit := h.memoryLimit.Load()
-	if limit == 0 || h.stopping.Load() || h.oomKilled.Load() {
-		h.memoryMu.Unlock()
+	kill, ok := h.memory.Check(ctx, s.cgroupRoot, filepath.Base(s.sandboxLeaf(h.attribution.UID)))
+	if !ok {
 		return
 	}
-	dir := s.sandboxLeaf(h.attribution.UID)
-	over, current, err := h.memoryWatch.Check(dir, limit, time.Now())
-	if err != nil || !over {
-		// a read fails when the sandbox is going away
-		h.memoryMu.Unlock()
-		return
-	}
-	h.oomKilled.Store(true)
 	attrs := append(ateattr.ActorLogAttrs(h.attribution),
-		slog.Uint64("memoryLimitBytes", limit),
-		slog.Uint64(string(ateattr.StatsMemoryUsageKey), current))
+		slog.Uint64("memoryLimitBytes", kill.Limit),
+		slog.Uint64(string(ateattr.StatsMemoryUsageKey), kill.Current))
 	slog.LogAttrs(ctx, slog.LevelWarn, "Killing a sandbox over its memory limit", attrs...)
 	go func() {
-		defer h.memoryMu.Unlock()
-		killCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		if err := cgroup.KillLeafUnder(killCtx, s.cgroupRoot, filepath.Base(dir)); err != nil {
+		if err := <-kill.Done; err != nil {
 			attrs = append(attrs, slog.Any("err", err))
 			slog.LogAttrs(ctx, slog.LevelError, "Failed to kill a sandbox over its memory limit", attrs...)
 		}
 	}()
-}
-
-// pauseMemoryWatch stops the watch on h's sandbox leaf, e.g. while its sentry
-// sits in the checkpoint cgroup, waiting out a kill in progress. It returns
-// the limit to resume with.
-func pauseMemoryWatch(h *hostedActor) uint64 {
-	h.memoryMu.Lock()
-	defer h.memoryMu.Unlock()
-	return h.memoryLimit.Swap(0)
-}
-
-// resumeMemoryWatch watches h's sandbox leaf again, from a fresh window.
-func resumeMemoryWatch(h *hostedActor, limit uint64) {
-	h.memoryMu.Lock()
-	defer h.memoryMu.Unlock()
-	h.memoryWatch = cgroup.MemoryWatch{}
-	h.memoryLimit.Store(limit)
 }
