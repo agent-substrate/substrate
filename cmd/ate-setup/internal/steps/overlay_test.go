@@ -16,7 +16,6 @@ package steps
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -769,7 +768,7 @@ func TestRenderFakeDataPlane(t *testing.T) {
 }
 
 // Both paths that deliver the Envoy router pass it the install's allowlist,
-// whatever the overlay, and refuse to render without one.
+// whatever the overlay, and pass none when the install sets none.
 func TestRenderRouterAllowedSPIFFEIDs(t *testing.T) {
 	const a, b = "spiffe://cluster.local/ns/a/sa/a", "spiffe://cluster.local/ns/b/sa/b"
 	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
@@ -820,10 +819,14 @@ func TestRenderRouterAllowedSPIFFEIDs(t *testing.T) {
 			t.Run("without IDs", func(t *testing.T) {
 				cfg := cfg
 				cfg.IngressAllowedSPIFFEIDs = nil
-				_, err := tc.render(&Env{Cfg: &cfg, resolver: resolver})
-				var required *config.RequiredError
-				if !errors.As(err, &required) {
-					t.Fatalf("render error = %v, want a RequiredError", err)
+				rendered, err := tc.render(&Env{Cfg: &cfg, resolver: resolver})
+				if err != nil {
+					t.Fatalf("render: %v", err)
+				}
+				for _, arg := range routerArgs(t, rendered) {
+					if strings.HasPrefix(arg, "--ingress-allowed-spiffe-ids") {
+						t.Errorf("atenet-router args include %q, want no allowlist", arg)
+					}
 				}
 			})
 		})
@@ -948,10 +951,18 @@ func TestRenderAgentgatewayStaticMTLS(t *testing.T) {
 
 			t.Run("without IDs", func(t *testing.T) {
 				cfg.IngressAllowedSPIFFEIDs = nil
-				_, err := tc.render(e)
-				var required *config.RequiredError
-				if !errors.As(err, &required) {
-					t.Fatalf("render error = %v, want a RequiredError", err)
+				manifest, err := tc.render(e)
+				if err != nil {
+					t.Fatalf("rendering static-mtls AgentGateway manifests: %v", err)
+				}
+				var gateway map[string]interface{}
+				if err := yaml.Unmarshal([]byte(agentgatewayRouterConfig(t, manifest).Data["config.yaml"]), &gateway); err != nil {
+					t.Fatalf("parsing rendered AgentGateway config: %v", err)
+				}
+				authorization := gateway["frontendPolicies"].(map[string]interface{})["networkAuthorization"].(map[string]interface{})
+				wantRules := []interface{}{map[string]interface{}{"allow": "source.spiffeId in []"}}
+				if got := authorization["rules"]; !reflect.DeepEqual(got, wantRules) {
+					t.Errorf("network authorization rules = %v, want %v", got, wantRules)
 				}
 			})
 		})

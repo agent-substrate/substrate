@@ -370,6 +370,19 @@ any other bucket a template names, as setup-gcp does on the snapshot bucket. Wit
 ate-api-server ignores `snapshotConfig.storageLocation`. See
 [Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
 
+## Ingress to actors
+
+> [!IMPORTANT]
+> atenet-router lets a client reach actors only if the client's SPIFFE ID is
+> in `ingressAllowedSPIFFEIDs` (`--ingress-allowed-spiffe-ids`). The setting
+> has no default, so an install that leaves it unset accepts no ingress
+> traffic.
+
+List every client that calls atenet-router. If all traffic reaches actors
+through one frontend or gateway, list that gateway's identity. If several
+services call the router, list each of them. Any listed client may reach any
+actor.
+
 ## Secrets
 
 Credentials should come from the environment, not from a document that gets

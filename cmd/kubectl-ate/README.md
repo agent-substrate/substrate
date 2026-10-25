@@ -222,6 +222,21 @@ kubectl ate revert actor my-actor -a <atespace>
 kubectl ate delete actor my-actor -a <atespace>
 ```
 
+### Sending Requests to an Actor
+
+`proxy actor` forwards one or more local TCP ports to an actor. It presents
+the client certificate for `spiffe://cluster.local/ns/ate-system/sa/atenet-client`, so the install must list that ID in
+`--ingress-allowed-spiffe-ids`.
+
+```bash
+# Forward 127.0.0.1:8000 to actor port 80 (default when no ports are given).
+kubectl ate proxy actor my-actor -a <atespace>
+curl http://127.0.0.1:8000/
+
+# Forward specific [local-port:]remote-port mappings.
+kubectl ate proxy actor my-actor 8000:80 9090:9090 -a <atespace>
+```
+
 ### Actor Snapshots
 
 Suspending an actor creates a durable snapshot. Tags give snapshots stable,

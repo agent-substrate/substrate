@@ -72,7 +72,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 
 	// Flags for client authentication and authorization in ingress mode.
 	fs.StringVar(&cfg.IngressAuth.ClientCAFile, "ingress-client-ca-file", "", "PEM bundle of the CAs allowed to sign ingress client certificates. Envoy reads the file, so it must be mounted at this path in the Envoy container as well. Required for the Envoy ingress dataplane")
-	fs.StringSliceVar(&cfg.IngressAuth.AllowedSPIFFEIDs, "ingress-allowed-spiffe-ids", nil, "SPIFFE IDs (exact match) allowed to connect to actors through the ingress dataplane. Comma-separated or repeated. Required for the Envoy ingress dataplane")
+	fs.StringSliceVar(&cfg.IngressAuth.AllowedSPIFFEIDs, "ingress-allowed-spiffe-ids", nil, "SPIFFE IDs (exact match) allowed to connect to actors through the ingress dataplane. Comma-separated or repeated. Without any, the Envoy ingress dataplane serves no traffic")
 
 	fs.StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80) and needs --upstream-connect=false.")
 	fs.StringVar(&cfg.UpstreamTrustBundlePath, "upstream-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to validate the actor's atunnel ingress server certificate.")

@@ -196,11 +196,12 @@ func (e *Env) setAgentgatewayIngressAllowedSPIFFEIDs(raw []byte) ([]byte, error)
 	if e.Cfg.Router != config.RouterAgentgateway {
 		return raw, nil
 	}
-	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
-		return nil, err
+	// nil would marshal as null, which agentgateway's networkAuthorization CEL rule can't evaluate.
+	allowed := e.Cfg.IngressAllowedSPIFFEIDs
+	if allowed == nil {
+		allowed = []string{}
 	}
-
-	ids, err := json.Marshal(e.Cfg.IngressAllowedSPIFFEIDs)
+	ids, err := json.Marshal(allowed)
 	if err != nil {
 		return nil, fmt.Errorf("encoding AgentGateway ingress SPIFFE IDs: %w", err)
 	}
@@ -287,10 +288,10 @@ func patchAtenetEgressEnvoyConcurrency(raw []byte, concurrency int) ([]byte, err
 // patchAtenetRouterAllowedSPIFFEIDs appends --ingress-allowed-spiffe-ids to the
 // atenet-router container's args in the Envoy router Deployment. The base
 // manifest carries no allowlist, because which clients may reach actors is the
-// install's to decide.
+// install's to decide. Without one the router serves no traffic.
 func (e *Env) patchAtenetRouterAllowedSPIFFEIDs(raw []byte) ([]byte, error) {
-	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
-		return nil, err
+	if len(e.Cfg.IngressAllowedSPIFFEIDs) == 0 {
+		return raw, nil
 	}
 	return appendContainerArgs(raw, "atenet-router", "atenet-router",
 		"--ingress-allowed-spiffe-ids="+strings.Join(e.Cfg.IngressAllowedSPIFFEIDs, ","))

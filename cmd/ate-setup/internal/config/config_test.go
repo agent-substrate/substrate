@@ -287,34 +287,6 @@ func TestLoadIngressAllowedSPIFFEIDs(t *testing.T) {
 	}
 }
 
-// Both ingress dataplanes require an allowlist.
-func TestRequireIngressAllowedSPIFFEIDs(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		cfg     Config
-		wantErr bool
-	}{
-		{name: "envoy without IDs", cfg: Config{Router: RouterEnvoy}, wantErr: true},
-		{name: "envoy with IDs", cfg: Config{Router: RouterEnvoy, IngressAllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/a/sa/a"}}},
-		{name: "agentgateway without IDs", cfg: Config{Router: RouterAgentgateway}, wantErr: true},
-		{name: "agentgateway with IDs", cfg: Config{Router: RouterAgentgateway, IngressAllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/a/sa/a"}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.cfg.RequireIngressAllowedSPIFFEIDs()
-			if !tc.wantErr {
-				if err != nil {
-					t.Fatalf("RequireIngressAllowedSPIFFEIDs() = %v, want nil", err)
-				}
-				return
-			}
-			var required *RequiredError
-			if !errors.As(err, &required) || required.Setting.Key != "ingressAllowedSPIFFEIDs" {
-				t.Fatalf("RequireIngressAllowedSPIFFEIDs() = %v, want a RequiredError for ingressAllowedSPIFFEIDs", err)
-			}
-		})
-	}
-}
-
 // The credential exchange impersonates the transfer account only on GCS, so
 // only a GKE deploy needs one, and its email needs both the name and the
 // project.

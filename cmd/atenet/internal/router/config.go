@@ -73,7 +73,7 @@ type ingressAuthConfig struct {
 	// container at the same path.
 	ClientCAFile string
 	// AllowedSPIFFEIDs is the exact set of SPIFFE IDs allowed to connect to
-	// actors.
+	// actors. When it is empty, the dataplane serves no traffic.
 	//
 	// Entries are complete SPIFFE IDs, like
 	// `spiffe://mytrustdomain.com/foo/bar/baz`.
@@ -325,9 +325,6 @@ func (c routerConfig) validateIngressAuth() error {
 	}
 	if c.IngressAuth.ClientCAFile == "" {
 		return fmt.Errorf("--ingress-client-ca-file is required")
-	}
-	if len(c.IngressAuth.AllowedSPIFFEIDs) == 0 {
-		return fmt.Errorf("at least one --ingress-allowed-spiffe-ids entry is required")
 	}
 	for _, id := range c.IngressAuth.AllowedSPIFFEIDs {
 		if _, err := spiffeid.FromString(id); err != nil {

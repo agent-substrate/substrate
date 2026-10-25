@@ -185,20 +185,36 @@ the lowercase name `ate-target-actor`.
 
 For an HTTP `CONNECT` tunnel to a non-default Actor port, put the routing
 header on the outer `CONNECT` request and keep the target port in its
-authority. With curl, use `--proxy-header` instead of `-H`:
+authority. With curl and the projected volumes from the router's
+[common setups](../cmd/atenet/internal/router/README.md#common-setups), use
+`--proxy-header` instead of `-H`:
 
 ```bash
-curl --proxytunnel --proxy http://localhost:8001 \
+curl --proxytunnel \
+  --proxy https://atenet-router.ate-system.svc:8444 \
+  --proxy-cacert /run/router-client/router-ca.pem \
+  --proxy-cert /run/router-client/credential-bundle.pem \
+  --proxy-key /run/router-client/credential-bundle.pem \
   --proxy-header "ate-target-actor: my-atespace/my-actor" \
   http://actor-upstream:9090/
 ```
 
-Browser navigation cannot add custom request headers. Browser-based and other
-fixed clients must therefore connect through a user-controlled reverse proxy or
-policy enforcement point that overwrites the routing header before forwarding
-to `atenet-router`. The [Jupyter demo](../demos/jupyter/README.md) shows this
-pattern with NGINX. The proxy must derive the value from trusted configuration
-or authenticated request context rather than forwarding values supplied by an
+From outside the cluster, `kubectl ate proxy actor` opens this mTLS `CONNECT`
+tunnel automatically:
+
+```bash
+kubectl ate proxy actor my-actor 9090:9090 -a my-atespace
+curl http://localhost:9090/
+```
+
+Browser navigation cannot add custom request headers or present the router's
+client certificate. For local development and demos (such as the
+[Jupyter demo](../demos/jupyter/README.md)), `kubectl ate proxy actor` serves a
+local port that forwards browser traffic and WebSockets through `atenet-router`.
+In production, browser-based and other fixed clients connect through a
+user-controlled reverse proxy or policy enforcement point that authenticates to
+`atenet-router` and sets `ate-target-actor` from trusted configuration or
+authenticated request context rather than forwarding values supplied by an
 untrusted caller.
 
 ### SystemInfo Volumes

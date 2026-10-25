@@ -306,8 +306,8 @@ var Registry = []Setting{
 		Key: "ingressAllowedSPIFFEIDs", Env: "ATE_INGRESS_ALLOWED_SPIFFE_IDS", Flag: "ingress-allowed-spiffe-ids",
 		Kind: KindString,
 		Usage: "SPIFFE IDs (exact match, comma-separated) of the clients the ingress router lets reach actors; " +
-			"any listed client may reach any actor. Required to deploy the router with " +
-			"either dataplane. The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
+			"any listed client may reach any actor. Unset, no client may reach actors through the router. " +
+			"The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
 	},
 	{
 		Key: "otlpEndpoint", Env: "ATE_OTLP_ENDPOINT", Flag: "otlp-endpoint", Kind: KindString,
