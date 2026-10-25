@@ -519,9 +519,19 @@ message TerminateRequest {
   //
   // +k8s:optional
   WorkloadSpec spec = 7;
+
+  // Keep committed local snapshots and their background uploads after stopping
+  // the workload. Revert uses these snapshots for the next resume.
+  //
+  // +k8s:optional
+  bool preserve_snapshots = 8;
 }
 
 message TerminateResponse {
+  // Snapshot state retained when preserve_snapshots is set.
+  //
+  // +k8s:optional
+  ActorSnapshotState state = 1;
 }
 
 message RunRequest {

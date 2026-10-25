@@ -5383,8 +5383,8 @@ func (x *RevertActorRequest) GetActor() *ObjectRef {
 // RevertActorResponse holds the reverted Actor.
 type RevertActorResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// actor as it stands after the revert, SUSPENDED and still holding the
-	// external snapshot it was reverted to.
+	// Actor after the revert, SUSPENDED and retaining its latest committed
+	// snapshot, which may be local with a pending upload or already durable.
 	Actor         *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

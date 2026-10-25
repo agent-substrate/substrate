@@ -61,7 +61,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	}
 
 	var atletTerminatedErr, volumesDetachedErr error
-	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationDelete); err != nil {
+	if _, _, err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationDelete, false); err != nil {
 		atletTerminatedErr = fmt.Errorf("while terminating atelet: %w", err)
 		errs = append(errs, atletTerminatedErr)
 	}
@@ -97,14 +97,16 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 }
 
 // ensureAteletTerminated calls atelet to terminate the workload for opName.
-func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string) (err error) {
+// It reports whether the assigned node is gone, so callers do not retain local
+// snapshots on a node that no longer exists.
+func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string, preserveSnapshots bool) (snapshotState *ateletpb.ActorSnapshotState, nodeGone bool, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
 	nodeName := actor.GetStatus().GetAssignedNode()
 	if nodeName == "" {
 		slog.InfoContext(ctx, "actor has no assigned node, skipping atelet terminate request", slog.Any("actor", actorRef))
-		return nil
+		return nil, false, nil
 	}
 
 	workerPodUID := ""
@@ -116,7 +118,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			// ordinary case, and the others are none of this delete's business.
 			hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
 			if err != nil {
-				return err
+				return nil, false, err
 			}
 			if !hosted {
 				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping worker workload termination",
@@ -131,18 +133,18 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	if errors.Is(err, ErrNoAteletOnNode) {
 		gone, nodeErr := w.dialer.NodeGone(ctx, nodeName)
 		if nodeErr != nil {
-			return fmt.Errorf("while connecting to atelet on node %q: %w (and while checking the node: %w)", nodeName, err, nodeErr)
+			return nil, false, fmt.Errorf("while connecting to atelet on node %q: %w (and while checking the node: %w)", nodeName, err, nodeErr)
 		}
 		if gone {
 			// A deleted Node object counts as the node being gone for good. If the
 			// machine still runs, whatever atelet holds for the actor stays there.
 			slog.WarnContext(ctx, "assigned node no longer exists, skipping atelet terminate request",
 				slog.String("node", nodeName), slog.Any("actor", actorRef))
-			return nil
+			return nil, true, nil
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("while connecting to atelet on node %q: %w", nodeName, err)
+		return nil, false, fmt.Errorf("while connecting to atelet on node %q: %w", nodeName, err)
 	}
 
 	client := ateletpb.NewAteletClient(conn)
@@ -151,7 +153,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	if actorTemplate != nil {
 		spec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 		workloadSpec = spec
 	} else {
@@ -172,17 +174,21 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Spec:                  workloadSpec,
+		PreserveSnapshots:     preserveSnapshots,
 	}
 
-	if _, err := client.Terminate(ctx, req); err != nil {
-		if status.Code(err) == codes.NotFound {
+	resp, err := client.Terminate(ctx, req)
+	if err != nil {
+		if status.Code(err) == codes.NotFound && !preserveSnapshots {
 			slog.InfoContext(ctx, "workload already terminated on atelet", slog.Any("actor", actorRef))
-			return nil
+			return nil, false, nil
 		}
-		return handleAteletError(ctx, w.store, actorRef, opName, "Terminate", true, err)
+		return nil, false, handleAteletError(ctx, w.store, actorRef, opName, "Terminate", true, err)
 	}
-
-	return nil
+	if preserveSnapshots && resp.GetState() == nil {
+		return nil, false, apierror.Internal("atelet terminated Actor %s without reporting retained snapshot state", actorRef)
+	}
+	return resp.GetState(), false, nil
 }
 
 // fallbackWorkloadSpec is the spec to terminate an actor with when its template

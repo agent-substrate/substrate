@@ -3790,6 +3790,34 @@ func Validate_TerminateRequest(
 		errs = append(errs, fn(fldPath.Child("spec"), obj.Spec, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateletpb.TerminateRequest.PreserveSnapshots
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *bool,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.TerminateRequest) *bool {
+				return &oldObj.PreserveSnapshots
+			})
+		errs = append(errs, fn(fldPath.Child("preserve_snapshots"), &obj.PreserveSnapshots, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

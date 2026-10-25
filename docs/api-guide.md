@@ -624,7 +624,7 @@ Every actor that must keep its state through an eviction needs a `SIGTERM` handl
 - **runs in the container's main process.** Substrate signals only to the main process.
 - **gets the actor suspended within the 30 minutes.**
 
-An actor still running when the 30 minutes are up is killed. Once the pod is gone, the actor moves to `ACTOR_STATE_CRASHED`, and everything since its last snapshot is lost. `RevertActor` (`kubectl ate revert`) returns a crashed actor to `ACTOR_STATE_SUSPENDED` at its last external snapshot.
+An actor still running when the 30 minutes are up is killed. Once the pod is gone, the actor moves to `ACTOR_STATE_CRASHED`, and everything since its last snapshot is lost. `RevertActor` (`kubectl ate revert`) returns a crashed actor to `ACTOR_STATE_SUSPENDED` at its last committed snapshot, including a local snapshot whose upload is pending.
 
 The node can cut the 30 minutes short. GKE node upgrades and cluster autoscaler scale-downs wait up to an hour for a pod, so they leave the full 30 minutes. A reclaimed GKE [Spot VM](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/spot-vms) gives pods 15 seconds by default and at most 2 minutes, so an actor there has to be suspended in that time or it crashes.
 
@@ -697,11 +697,11 @@ Deletion always runs before the database reference is dropped, and a failure fai
 > **Do not delete a tag while actors created from it exist.** A clone borrows the tag's snapshot rather than copying it, and only stops borrowing at its own first suspend (its `status.snapshots` entry still names the tag's prefix while it is). Deleting the tag leaves such a clone unable to resume. This is not prevented today.
 
 #### `RevertActor`
-Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE_SUSPENDED` at its last completed external snapshot (`status.snapshots`).
+Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE_SUSPENDED` at its last committed snapshot (`status.snapshots`).
 *   **Request:** `RevertActorRequest`
-    *   `actor`: `ObjectRef` of the actor to revert. Accepted from `ACTOR_STATE_RUNNING` and `ACTOR_STATE_CRASHED` (plus `ACTOR_STATE_REVERTING` for idempotent retries), and from `ACTOR_STATE_SUSPENDED` when the actor's latest snapshot is node-local. Calling `RevertActor` on an `ACTOR_STATE_SUSPENDED` actor with no node-local snapshot returns `FAILED_PRECONDITION`.
+    *   `actor`: `ObjectRef` of the actor to revert. Accepted from `ACTOR_STATE_RUNNING` and `ACTOR_STATE_CRASHED` (plus `ACTOR_STATE_REVERTING` for idempotent retries). Calling `RevertActor` on an `ACTOR_STATE_SUSPENDED` actor returns `FAILED_PRECONDITION`, regardless of whether its snapshot is local or uploaded.
 *   **Response:** `RevertActorResponse` containing the reverted `Actor` in `ACTOR_STATE_SUSPENDED`.
-*   Reverting terminates any bound worker sandbox, clears node-local checkpoints, and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed durable snapshot in `status.snapshots`.
+*   Reverting terminates any bound worker sandbox and releases its assignment. It keeps the latest committed local snapshot and its background upload, as well as the latest completed external snapshot. Partial external snapshots from interrupted suspends that never committed locally are garbage-collected. A retained local snapshot keeps the actor pinned to that node until it is detached; snapshots on a deleted node cannot be retained.
 *   External volumes are not reverted. Their contents are never part of a snapshot, so a reverted actor comes back with its memory and root filesystem rewound but its volumes exactly as the discarded execution left them.
 
 #### `DeleteActor`

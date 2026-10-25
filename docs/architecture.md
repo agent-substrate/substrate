@@ -512,7 +512,7 @@ tags cannot be deleted until they are.
 
 ### Phase 4: Recovery (`RevertActor`) and Deletion (`DeleteActor`)
 
-An actor in `ACTOR_STATE_RUNNING` or `ACTOR_STATE_CRASHED`, or an `ACTOR_STATE_SUSPENDED` actor with a node-local latest snapshot, can be reverted back to `ACTOR_STATE_SUSPENDED` at its durable snapshot via `RevertActor`. Reverting terminates any active sandbox, discards any node-local checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
+An actor in `ACTOR_STATE_RUNNING` or `ACTOR_STATE_CRASHED` can be reverted back to `ACTOR_STATE_SUSPENDED` via `RevertActor`. Reverting terminates any active sandbox while retaining the latest committed local snapshot and its background upload, plus the latest completed external snapshot. It cleans up partial snapshots from interrupted suspends that never committed locally. A subsequent `ResumeActor` restores the retained checkpoint. Already suspended actors cannot be reverted, regardless of snapshot locality.
 
 An actor in any state (such as `ACTOR_STATE_RUNNING`) can be deleted from the Control Plane. The workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
 

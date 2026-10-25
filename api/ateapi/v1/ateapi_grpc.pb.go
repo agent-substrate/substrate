@@ -95,10 +95,9 @@ type ControlClient interface {
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
-	// Revert an actor to SUSPENDED state at its durable snapshot.
-	// Only crashed or running actors, or suspended actors with a node-local
-	// snapshot, can be reverted. A suspended actor without a node-local snapshot
-	// is already at its durable snapshot, so there is nothing to revert.
+	// Revert a running or crashed actor to SUSPENDED at its latest snapshot,
+	// including a committed local snapshot whose upload is still pending.
+	// An already suspended actor cannot be reverted, regardless of snapshot locality.
 	RevertActor(ctx context.Context, in *RevertActorRequest, opts ...grpc.CallOption) (*RevertActorResponse, error)
 	// Delete an actor. A running actor's workload is terminated, its volumes
 	// detached, and its worker released before the record is removed.
@@ -660,10 +659,9 @@ type ControlServer interface {
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
-	// Revert an actor to SUSPENDED state at its durable snapshot.
-	// Only crashed or running actors, or suspended actors with a node-local
-	// snapshot, can be reverted. A suspended actor without a node-local snapshot
-	// is already at its durable snapshot, so there is nothing to revert.
+	// Revert a running or crashed actor to SUSPENDED at its latest snapshot,
+	// including a committed local snapshot whose upload is still pending.
+	// An already suspended actor cannot be reverted, regardless of snapshot locality.
 	RevertActor(context.Context, *RevertActorRequest) (*RevertActorResponse, error)
 	// Delete an actor. A running actor's workload is terminated, its volumes
 	// detached, and its worker released before the record is removed.

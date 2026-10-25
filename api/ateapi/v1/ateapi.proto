@@ -49,10 +49,9 @@ service Control {
     option (method).resource = "Actor";
   }
 
-  // Revert an actor to SUSPENDED state at its durable snapshot.
-  // Only crashed or running actors, or suspended actors with a node-local
-  // snapshot, can be reverted. A suspended actor without a node-local snapshot
-  // is already at its durable snapshot, so there is nothing to revert.
+  // Revert a running or crashed actor to SUSPENDED at its latest snapshot,
+  // including a committed local snapshot whose upload is still pending.
+  // An already suspended actor cannot be reverted, regardless of snapshot locality.
   rpc RevertActor(RevertActorRequest) returns (RevertActorResponse) {
     option (method).resource = "Actor";
   }
@@ -1866,8 +1865,8 @@ message RevertActorRequest {
 
 // RevertActorResponse holds the reverted Actor.
 message RevertActorResponse {
-  // actor as it stands after the revert, SUSPENDED and still holding the
-  // external snapshot it was reverted to.
+  // Actor after the revert, SUSPENDED and retaining its latest committed
+  // snapshot, which may be local with a pending upload or already durable.
   Actor actor = 1;
 }
 
