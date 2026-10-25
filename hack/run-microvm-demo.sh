@@ -30,7 +30,8 @@
 # requires a credential provider selection, which reaches it only through the
 # environment here: export ATE_CREDENTIAL_PROVIDER (e.g. '{"name":"k8s.io"}';
 # see hack/install-ate.sh --help) before running this, the kind wrapper
-# included.
+# included. The printed `kubectl ate proxy actor` step also needs
+# ATE_INGRESS_ALLOWED_SPIFFE_IDS to include spiffe://cluster.local/ns/ate-system/sa/atenet-client.
 #
 # Env (most come from .ate-dev-env.sh):
 #   KO_DOCKER_REPO   (required) image registry, e.g. gcr.io/PROJECT/ate-images for
@@ -121,11 +122,9 @@ cat <<EOF
        kubectl ate${KCTX_FLAG} create actor my-counter-1 -a ate-demo-counter-microvm \\
          --template counter-microvm
 
-  3. Port-forward the atenet-router and curl the in-RAM counter:
-       kubectl${KCTX_FLAG} port-forward -n ate-system svc/atenet-router 8000:80 &
-       curl -X POST \\
-         -H "ate-target-actor: ate-demo-counter-microvm/my-counter-1" \
-         http://localhost:8000
+  3. Proxy to the actor and curl the in-RAM counter:
+       kubectl ate${KCTX_FLAG} proxy actor my-counter-1 -a ate-demo-counter-microvm &
+       curl -X POST http://localhost:8000
 
      Increment, suspend (kubectl ate suspend actor my-counter-1 -a ate-demo-counter-microvm),
      resume on another worker, and confirm the count continues — the guest memory snapshot round-tripped.
