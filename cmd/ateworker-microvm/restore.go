@@ -625,6 +625,22 @@ func restoreGuestReadyError(ctx context.Context, step string, err error) error {
 	return apierror.Unavailable("while %s: %w", step, err)
 }
 
+// hasValue reports whether a decoded config.json value is set. CH writes an
+// unset device as null or leaves the key out.
+func hasValue(v any) bool {
+	switch v := v.(type) {
+	case nil:
+		return false
+	case []any:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	case string:
+		return v != ""
+	}
+	return true
+}
+
 // rewriteSnapshotPaths repoints the snapshot config.json's per-actor paths from
 // the source actor's to the restoring actor's. The file is CH's own: at
 // snapshot time it serializes the config the VM booted with, and at restore
@@ -635,6 +651,10 @@ func restoreGuestReadyError(ctx context.Context, step string, err error) error {
 // with the actor, so the source actor's copies may be gone. How atelet
 // identifies the runtime (asset URLs today, a SandboxConfig hash later)
 // changes none of this. The overlay has no per-actor disk to repoint.
+//
+// The snapshot comes from object storage, so the config is also checked for
+// host devices and files this worker never boots a VM with. CH would open them
+// on restore.
 func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
 	cfgPath := filepath.Join(snapshotDir, "config.json")
 	b, err := os.ReadFile(cfgPath)
@@ -644,6 +664,16 @@ func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
 	var cfg map[string]any
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return fmt.Errorf("parsing %q: %w", cfgPath, err)
+	}
+	for _, key := range []string{"disks", "devices", "user_devices", "vdpa"} {
+		if hasValue(cfg[key]) {
+			return fmt.Errorf("snapshot config %q has unexpected %q", cfgPath, key)
+		}
+	}
+	if rng, ok := cfg["rng"].(map[string]any); ok {
+		if src, _ := rng["src"].(string); src != rngSource {
+			return fmt.Errorf("snapshot config %q has rng source %q, want %q", cfgPath, src, rngSource)
+		}
 	}
 	changed := false
 	if vsock, ok := cfg["vsock"].(map[string]any); ok {
@@ -700,6 +730,11 @@ func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
 	payload, ok := cfg["payload"].(map[string]any)
 	if !ok {
 		return fmt.Errorf("snapshot config %q has no payload", cfgPath)
+	}
+	for _, key := range []string{"firmware", "initramfs"} {
+		if hasValue(payload[key]) {
+			return fmt.Errorf("snapshot config %q has unexpected payload %q", cfgPath, key)
+		}
 	}
 	if got, _ := payload["kernel"].(string); got != kernel {
 		payload["kernel"] = kernel

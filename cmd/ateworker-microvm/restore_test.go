@@ -43,17 +43,23 @@ import (
 // writeSnapshotConfig writes a config.json holding the given fs devices (plus the
 // vsock and console entries every snapshot has) into a fresh snapshot dir. The
 // serial device is the debug-mode one, present here so the rewrite is exercised
-// against a snapshot that has both.
+// against a snapshot that has both. The devices the worker never boots with are
+// null, which is how CH can write an unset one.
 func writeSnapshotConfig(t *testing.T, fsDevices []map[string]any) string {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := map[string]any{
-		"vsock":   map[string]any{"cid": 3, "socket": "/run/vc/vm/golden/clh.sock"},
-		"console": map[string]any{"mode": "File", "file": "/run/vc/vm/golden/console.log"},
-		"serial":  map[string]any{"mode": "File", "file": "/run/vc/vm/golden/serial.log"},
-		"fs":      fsDevices,
-		"payload": map[string]any{"kernel": "/var/lib/ate/actors/golden/sandbox-assets/kata-kernel", "cmdline": "console=hvc0"},
-		"pmem":    []map[string]any{{"id": guestImagePmemID, "file": "/var/lib/ate/actors/golden/sandbox-assets/kata-image", "discard_writes": true}},
+		"vsock":        map[string]any{"cid": 3, "socket": "/run/vc/vm/golden/clh.sock"},
+		"console":      map[string]any{"mode": "File", "file": "/run/vc/vm/golden/console.log"},
+		"serial":       map[string]any{"mode": "File", "file": "/run/vc/vm/golden/serial.log"},
+		"fs":           fsDevices,
+		"payload":      map[string]any{"kernel": "/var/lib/ate/actors/golden/sandbox-assets/kata-kernel", "cmdline": "console=hvc0", "firmware": nil, "initramfs": nil},
+		"pmem":         []map[string]any{{"id": guestImagePmemID, "file": "/var/lib/ate/actors/golden/sandbox-assets/kata-image", "discard_writes": true}},
+		"rng":          map[string]any{"src": rngSource},
+		"disks":        nil,
+		"devices":      nil,
+		"user_devices": nil,
+		"vdpa":         nil,
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
@@ -163,6 +169,30 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 			mutateSnapshotConfig(t, dir, mutate)
 			if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
 				t.Fatalf("rewriteSnapshotPaths accepted a config with %s, want an error", name)
+			}
+		})
+	}
+
+	// CH would open each of these host paths or devices on restore, and the
+	// worker boots VMs with none of them, so a snapshot that has one was altered.
+	for name, mutate := range map[string]func(cfg map[string]any){
+		"disk": func(cfg map[string]any) { cfg["disks"] = []any{map[string]any{"path": "/dev/sda"}} },
+		"device": func(cfg map[string]any) {
+			cfg["devices"] = []any{map[string]any{"path": "/sys/bus/pci/devices/0000:00:01.0/"}}
+		},
+		"user device":       func(cfg map[string]any) { cfg["user_devices"] = []any{map[string]any{"socket": "/run/other.sock"}} },
+		"vdpa device":       func(cfg map[string]any) { cfg["vdpa"] = []any{map[string]any{"path": "/dev/vhost-vdpa-0"}} },
+		"payload firmware":  func(cfg map[string]any) { cfg["payload"].(map[string]any)["firmware"] = "/etc/shadow" },
+		"payload initramfs": func(cfg map[string]any) { cfg["payload"].(map[string]any)["initramfs"] = "/etc/shadow" },
+		"rng source":        func(cfg map[string]any) { cfg["rng"] = map[string]any{"src": "/etc/shadow"} },
+	} {
+		t.Run(name+" is an error", func(t *testing.T) {
+			dir := writeSnapshotConfig(t, []map[string]any{
+				{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
+			})
+			mutateSnapshotConfig(t, dir, mutate)
+			if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+				t.Fatalf("rewriteSnapshotPaths accepted a config with a %s, want an error", name)
 			}
 		})
 	}

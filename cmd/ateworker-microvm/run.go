@@ -129,6 +129,10 @@ const (
 	// guestImagePmemID names the virtio-pmem device that carries the guest
 	// image, in the VM config and so in every snapshot's config.json.
 	guestImagePmemID = "guest-image"
+
+	// rngSource is the guest entropy source in the VM config and so in every
+	// snapshot's config.json.
+	rngSource = "/dev/urandom"
 )
 
 // kataAgentPath is where the kata guest image keeps the agent binary. buildVMConfig
@@ -830,7 +834,7 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		Fs:       buildFsConfigs(id),
 		Balloon:  &ch.BalloonConfig{FreePageReporting: true},
 		Platform: &ch.PlatformConfig{NumPciSegments: 2},
-		Rng:      &ch.RngConfig{Src: "/dev/urandom"},
+		Rng:      &ch.RngConfig{Src: rngSource},
 		Console:  &ch.ConsoleConfig{Mode: "File", File: consoleLog},
 		Serial:   serial,
 		Vsock:    &ch.VsockConfig{Cid: 3, Socket: kata.VsockSocketPath(id)},
