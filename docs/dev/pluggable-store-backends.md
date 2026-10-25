@@ -166,7 +166,10 @@ eight RPCs. The data model is one table:
   ones.
 * `uid` is server-assigned on create and never reused for the same name.
   `version` starts at 1 and increases by exactly 1 per write. Together they
-  are the precondition every update and delete carries today.
+  are the precondition every update and delete carries today. The entry,
+  not the payload, carries identity: the client copies `uid` and `version`
+  into `ResourceMetadata` when it decodes a payload, so whatever a payload's
+  own metadata says is never authoritative.
 * `secondary_key` is an optional client-chosen index key. It gives the
   server one extra lookup and listing path per entry without knowing what
   the key means.
@@ -213,9 +216,13 @@ Two choices in this table are deliberate:
   concurrent binds to different workers cannot both commit.
 * `Watch` does not replay existing entries. That matches `WatchWorkers`
   today: `workercache` opens the watch and then lists, and relists whenever
-  the watch closes. The client also applies its own committed worker writes
-  to local watchers immediately, as `atepg` does since #1583, so a replica
-  reads its own writes without waiting for the event.
+  the watch closes. The server sends response headers once the stream's
+  cursor is fixed and the client waits for them before `WatchWorkers`
+  returns, so a write that follows the call is never missed. Events reach
+  a watcher once, through the stream only. The client does not re-publish
+  its own committed writes to local watchers as `atepg` does since #1583:
+  that compensated for a 50 ms poll, and the stream is push. It can be
+  added later without a protocol change if measured latency warrants it.
 
 ### Concurrency
 
@@ -235,7 +242,10 @@ A conforming server keeps change events for a bounded retention and reports
 it in `Handshake`. A client that falls behind is disconnected with `ABORTED`
 and relists, which is the behavior `TestWatchWorkers_ClosesWhenTrimmedPastCursor`
 pins for `atepg` today. Events for one collection are delivered in commit
-order; events of different collections are independent.
+order; events of different collections are independent. A transaction that
+emits several events appends them atomically, so a watcher sees either none
+or all of them, and a server trims by event count or age, never through
+the middle of a commit.
 
 ### Leases
 
@@ -337,6 +347,21 @@ otherwise. A server is conformant when:
 * `memserver` gets unit tests for retention, trim, lease expiry and
   transaction atomicity under concurrent clients.
 * The PostgreSQL contract test keeps running as it does now.
+
+### What a prototype showed
+
+A prototype of the client and `memserver` passes `RunContractTests` (127
+subtests, under the race detector) over an in-process connection. It
+settled the points above about identity and the watch cursor, and found two
+things the suite had not made explicit:
+
+* Subresources without defaults. `defaults.Apply` is defined for the seven
+  top-level resources only, so a backend decodes `ActorAssignment` without
+  it. The shared decode helper takes that into account.
+* `delete_time` on a plain delete. The suite requires it on a deleted
+  `Atespace` and `EgressPolicy` (set at delete time) but expects a deleted
+  `Worker` or `Tag` to carry only what a prior mark wrote. The prototype
+  mirrors `atepg` kind by kind; a follow-up can make the contract uniform.
 
 ### Rollout
 

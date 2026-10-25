@@ -224,7 +224,9 @@ type Entry struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Key   *EntryKey              `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	// Server-assigned on create; immutable for the life of the entry. A name
-	// that is deleted and recreated gets a new uid.
+	// that is deleted and recreated gets a new uid. The entry's uid and
+	// version are authoritative; a client that also keeps them inside its
+	// payload copies them from the entry on read.
 	Uid string `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
 	// Starts at 1 on create and increases by exactly 1 on every write.
 	Version int64 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`

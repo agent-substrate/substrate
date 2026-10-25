@@ -126,6 +126,11 @@ type KVStoreClient interface {
 	// the server's current position. It does not replay existing entries: the
 	// client lists after opening the watch, as workercache does today.
 	//
+	// The server sends response headers once the stream's position is fixed.
+	// Every event committed after the client receives the headers is
+	// delivered, so a client that waits for them before writing cannot miss
+	// its own write.
+	//
 	// The stream ends with ABORTED when the client's position has been
 	// trimmed (it fell behind the server's retention) or when the server is
 	// shutting down. The client re-opens the watch and relists.
@@ -302,6 +307,11 @@ type KVStoreServer interface {
 	// Watch streams change events for one collection, in commit order, from
 	// the server's current position. It does not replay existing entries: the
 	// client lists after opening the watch, as workercache does today.
+	//
+	// The server sends response headers once the stream's position is fixed.
+	// Every event committed after the client receives the headers is
+	// delivered, so a client that waits for them before writing cannot miss
+	// its own write.
 	//
 	// The stream ends with ABORTED when the client's position has been
 	// trimmed (it fell behind the server's retention) or when the server is
