@@ -53,7 +53,7 @@ func KillActorSandbox(ctx context.Context, t *testing.T, clients *Clients, names
 	image := testserverImage(t)
 	pods := clients.K8s.CoreV1().Pods(namespace)
 	var name string
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		pod, err := pods.Get(ctx, podName, metav1.GetOptions{})
 		if err != nil {
 			return err
