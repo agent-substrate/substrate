@@ -75,8 +75,8 @@ func ActorPath(actorUID string) string {
 }
 
 // ActorSnapshotPath is the actor's snapshot staging directory, which may be on
-// a different filesystem from ActorPath. Checkpoints rename files between its
-// subdirectories, so they must stay on one filesystem.
+// a different filesystem from ActorPath. Checkpoints link and rename files
+// between its subdirectories, so they must stay on one filesystem.
 func ActorSnapshotPath(actorUID string) string {
 	return filepath.Join(
 		nodepath.SnapshotsDir,
