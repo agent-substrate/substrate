@@ -49,8 +49,8 @@ const (
 	// and bucket-init Job on Kind.
 	MicroVMStageTimeout = 300 * time.Second
 
-	defaultMicroVMAssetVersion    = "v1"
-	defaultKataVersion            = "4.1.0"
+	defaultMicroVMAssetVersion    = "v2"
+	defaultKataVersion            = "4.3.1"
 	defaultCloudHypervisorVersion = "v53.0"
 
 	assetStampFile               = ".asset-versions"
@@ -61,7 +61,7 @@ const (
 	microvmSandboxConfigName     = "microvm"
 
 	// Keep in sync with manifests/ate-install/kind/rustfs.yaml.
-	rustfsAWSCLIImage = "amazon/aws-cli:2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73"
+	rustfsAWSCLIImage = "amazon/aws-cli:2.38.5@sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1"
 
 	kataSharePrefix      = "opt/kata/share/kata-containers/"
 	kataKernelSymlink    = "opt/kata/share/kata-containers/vmlinux.container"
@@ -80,15 +80,15 @@ var (
 	microvmAssetDigests = map[string]map[string]string{
 		"arm64": {
 			"cloud-hypervisor": "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850",
-			"virtiofsd":        "3aa9240045d2261930ef04138fe05cf288f94c867e63e5d0845758bac5e3d458",
-			"vmlinux":          "4960f6cf781274eaa445fc9f88bb8c5ce951649278bc9caa13afb1e99cfe80e6",
-			"rootfs.img":       "7e3bdd500eb92de17c377bd84f8ed57e50d6bb68c7ec08c88f5e1916cd49f30d",
+			"virtiofsd":        "4b43f4f6de6500203b01214a790314eea4182f5f110594ddb28ae2805622f06f",
+			"vmlinux":          "dece388830720fe8bddb41552fff5f486240aeece5acc0aebc1812761e3e3f66",
+			"rootfs.img":       "69f9a76e5a2563b7c74d1f271f3a904240f50ef405465f832021525894519f97",
 		},
 		"amd64": {
 			"cloud-hypervisor": "448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc",
 			"virtiofsd":        "15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4",
-			"vmlinux":          "8e9dbc3a6e4c26adb089d23d31201edebce905c7f3e31aa67b32bdd41df1b86f",
-			"rootfs.img":       "96497f64da1de9c7473fef46c3d29ddd0805d334731cf9d903a21a5b2c33cefb",
+			"vmlinux":          "f87d8359035cb7557b16a319e6431ea09b183e62268aef436bf8dc6530d786b6",
+			"rootfs.img":       "6770db2cca5710593f27c9ac5e1d9d7aab836422695a5e5c4807496a92a0f24d",
 		},
 	}
 )
