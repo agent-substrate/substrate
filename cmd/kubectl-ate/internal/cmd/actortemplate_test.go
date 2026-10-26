@@ -226,6 +226,7 @@ func (f *fakeActorTemplateCreator) CreateActorTemplate(ctx context.Context, req 
 }
 
 func TestCreateActorTemplates(t *testing.T) {
+	// Three templates, in two atespaces.
 	const manifestText = `metadata: {atespace: a, name: one}
 ---
 metadata: {atespace: a, name: two}
@@ -300,31 +301,50 @@ func TestPrintCreatedActorTemplates(t *testing.T) {
 		name      string
 		requested int
 		created   []*ateapi.ActorTemplate
-		want      string // substring of the JSON output, empty for none
-		wantList  bool
+		want      string
 	}{
-		{name: "one requested and created", requested: 1, created: []*ateapi.ActorTemplate{one}, want: `"name": "one"`},
-		{name: "two requested and created", requested: 2, created: []*ateapi.ActorTemplate{one, two}, wantList: true},
-		{name: "two requested, one created stays a list", requested: 2, created: []*ateapi.ActorTemplate{two}, wantList: true},
-		{name: "none created prints nothing", requested: 2},
+		{
+			name:      "one requested, one created: a template",
+			requested: 1,
+			created:   []*ateapi.ActorTemplate{one},
+			want: `metadata:
+  atespace: a
+  name: one
+`,
+		},
+		{
+			name:      "two requested, two created: a list",
+			requested: 2,
+			created:   []*ateapi.ActorTemplate{one, two},
+			want: `actorTemplates:
+- metadata:
+    atespace: a
+    name: one
+- metadata:
+    atespace: a
+    name: two
+`,
+		},
+		{
+			name:      "two requested, one created: still a list",
+			requested: 2,
+			created:   []*ateapi.ActorTemplate{two},
+			want: `actorTemplates:
+- metadata:
+    atespace: a
+    name: two
+`,
+		},
+		{name: "two requested, none created: no output", requested: 2},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var out bytes.Buffer
-			if err := printCreatedActorTemplates(&out, test.requested, test.created, "json"); err != nil {
+			if err := printCreatedActorTemplates(&out, test.requested, test.created, "yaml"); err != nil {
 				t.Fatalf("printCreatedActorTemplates: %v", err)
 			}
-			if len(test.created) == 0 {
-				if out.Len() != 0 {
-					t.Errorf("output = %q, want none", out.String())
-				}
-				return
-			}
-			if isList := strings.Contains(out.String(), "actorTemplates"); isList != test.wantList {
-				t.Errorf("list output = %v, want %v:\n%s", isList, test.wantList, out.String())
-			}
-			if test.want != "" && !strings.Contains(out.String(), test.want) {
-				t.Errorf("output = %q, want it to contain %q", out.String(), test.want)
+			if diff := cmp.Diff(test.want, out.String()); diff != "" {
+				t.Errorf("output mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
