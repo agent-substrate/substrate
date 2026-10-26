@@ -36,6 +36,16 @@ const (
 	installDir = "manifests/ate-install"
 )
 
+// Sizing components. sizingDefaultComponent sets the replicas, container
+// resources and disruption budgets the base manifests leave out, and is
+// layered over every control plane apply. sizingLargeComponent layers over it
+// under --cluster-size=size10, and sizingKindComponent under --kind.
+const (
+	sizingDefaultComponent = installDir + "/components/sizing-default"
+	sizingLargeComponent   = installDir + "/components/sizing-large"
+	sizingKindComponent    = installDir + "/components/sizing-kind"
+)
+
 // cordonSystemInfraComponent is the kustomize component that pins each
 // system infra workload to its own node pool, layered over every system
 // infra apply under --cordon-system-infra-components.
@@ -56,10 +66,17 @@ const agentgatewayStaticMTLSComponent = installDir + "/components/agentgateway-s
 // components lists the kustomize components every control plane apply is
 // composed with. Each patch targets its workloads by name, and kustomize leaves
 // a stream alone when nothing in it matches, so composing a manifest that
-// carries none of them is harmless. The --component directories come last, so
+// carries none of them is harmless. Sizing comes first, so fake-data-plane can
+// scale ate-controller to zero. The --component directories come last, so
 // their patches win over the built-in ones.
 func (e *Env) components() []string {
-	var components []string
+	components := []string{e.Cfg.Path(sizingDefaultComponent)}
+	if e.Cfg.Size10() {
+		components = append(components, e.Cfg.Path(sizingLargeComponent))
+	}
+	if e.Cfg.Kind {
+		components = append(components, e.Cfg.Path(sizingKindComponent))
+	}
 	// e2e must come before fake-data-plane: e2e appends to atelet's args,
 	// and fake-data-plane removes args entirely.
 	if e.Cfg.E2ETuning {
@@ -82,8 +99,8 @@ func (e *Env) components() []string {
 // The choice is a product of two switches: kind vs GKE, and the atenet router
 // dataplane. The plain GKE envoy install renders the base kustomization rather
 // than the raw manifests/ate-install directory: the directory would also
-// re-apply pod-certificate-controller.yaml (reverting the size10 flags and the
-// WORKERS_PER_SIGNER value set earlier in the install), both atenet-egress
+// re-apply pod-certificate-controller.yaml (reverting the WORKERS_PER_SIGNER
+// value set earlier in the install), both atenet-egress
 // variants, and the sandboxconfig files, all of which have their own apply
 // steps.
 func SystemOverlay(cfg *config.Config) string {
@@ -99,33 +116,17 @@ func SystemOverlay(cfg *config.Config) string {
 	}
 }
 
-// kustomization directory, before image resolution. It composes path with the
-// selected components (see components), so the same patches reach every
-// control plane workload whichever apply path delivers it.
+// render produces the manifest at path, a manifest file or a kustomization
+// directory, before image resolution. It composes path with the selected
+// components (see components), so the same patches reach every control plane
+// workload whichever apply path delivers it.
 func (e *Env) render(path string) ([]byte, error) {
-	if components := e.components(); len(components) > 0 {
-		return kustomize.Compose(path, components...)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("while reading %s: %w", path, err)
-	}
-	if info.IsDir() {
-		return kustomize.Build(path)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("while reading %s: %w", path, err)
-	}
-	return data, nil
+	return kustomize.Compose(path, e.components()...)
 }
 
 // renderBytes is render for a manifest already held in memory.
 func (e *Env) renderBytes(manifest []byte) ([]byte, error) {
-	if components := e.components(); len(components) > 0 {
-		return kustomize.ComposeBytes(manifest, components...)
-	}
-	return manifest, nil
+	return kustomize.ComposeBytes(manifest, e.components()...)
 }
 
 // renderResolve renders path and resolves its image references.

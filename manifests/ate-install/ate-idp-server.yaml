@@ -27,7 +27,6 @@ metadata:
   name: ate-idp-server
   namespace: ate-system
 spec:
-  replicas: 2
   strategy:
     rollingUpdate:
       maxUnavailable: 0
@@ -99,7 +98,6 @@ metadata:
   name: ate-idp-server
   namespace: ate-system
 spec:
-  maxUnavailable: 1
   selector:
     matchLabels:
       app: ate-idp-server

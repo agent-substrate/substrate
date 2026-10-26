@@ -89,7 +89,6 @@ metadata:
   name: ate-controller
   namespace: ate-system
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app: ate-controller

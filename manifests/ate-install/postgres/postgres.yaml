@@ -93,7 +93,6 @@ metadata:
   namespace: ate-system
 spec:
   serviceName: postgres
-  replicas: 1
   selector:
     matchLabels:
       app: postgres
@@ -141,10 +140,6 @@ spec:
           readOnly: true
         - name: socket
           mountPath: /var/run/postgresql
-        resources:
-          requests:
-            cpu: 10m
-            memory: 32Mi
       containers:
       - name: postgres
         image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
@@ -207,16 +202,6 @@ spec:
           mountPath: /var/run/postgresql
         - name: data
           mountPath: /var/lib/postgresql/data
-        # The whole control plane shares this one database; under activation
-        # load it sustains several cores. The kind overlay shrinks this back
-        # down to fit a CI runner.
-        resources:
-          requests:
-            cpu: "2"
-            memory: "1Gi"
-          limits:
-            cpu: "16"
-            memory: "2Gi"
       volumes:
       - name: config
         configMap:
