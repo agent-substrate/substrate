@@ -439,7 +439,7 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 		}
 		// Only ownership applies to a symlink itself; its mode is meaningless
 		// and its times would follow the target.
-		return lchownEntry(root, name, hdr)
+		return Lchown(root, name, hdr)
 
 	case tar.TypeFifo:
 		if err := replaceExisting(root, name); err != nil {
@@ -529,28 +529,16 @@ func restoreDirMeta(root *os.Root, dirs map[string]*tar.Header) error {
 	return nil
 }
 
-// restoredMode is the mode an extracted entry ends up with: the permission bits
-// plus setuid, setgid, and sticky, which FileMode.Perm() alone would drop.
-//
-// The archive records them, so dropping them would make the round trip silently
-// lossy. The case that bites is a setgid data directory (0o2775): the workload
-// relies on group inheritance for files its different uids create, and losing
-// the bit only surfaces later, when the next file lands with the wrong group.
-// These bits govern behavior inside the sandbox — the host never executes a
-// workload's files — and a running workload can set them on its own data
-// anyway, so carrying them across a suspend/resume grants it nothing new.
-func restoredMode(hdr *tar.Header) os.FileMode {
-	return hdr.FileInfo().Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)
-}
-
 // restoreMeta applies ownership, mode, and modification time to an extracted
 // path. Ownership is applied first because chowning a file clears its setuid
-// and setgid bits, which the chmod below then puts back.
+// and setgid bits, which the chmod below then puts back. Restoring a snapshot
+// grants nothing new with those bits: a running workload can set them on its
+// own files anyway.
 func restoreMeta(root *os.Root, name string, hdr *tar.Header) error {
-	if err := lchownEntry(root, name, hdr); err != nil {
+	if err := Lchown(root, name, hdr); err != nil {
 		return err
 	}
-	if err := root.Chmod(name, restoredMode(hdr)); err != nil {
+	if err := root.Chmod(name, Mode(hdr)); err != nil {
 		return fmt.Errorf("restoring mode on %q: %w", name, err)
 	}
 	if !hdr.ModTime.IsZero() {

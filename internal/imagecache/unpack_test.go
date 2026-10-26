@@ -21,8 +21,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -36,6 +38,7 @@ type tarEntry struct {
 	modTime  time.Time
 	devmajor int64
 	devminor int64
+	uid, gid int
 }
 
 func defaultMode(typeflag byte) int64 {
@@ -67,6 +70,8 @@ func buildTar(t *testing.T, entries []tarEntry) []byte {
 			ModTime:  e.modTime,
 			Devmajor: e.devmajor,
 			Devminor: e.devminor,
+			Uid:      e.uid,
+			Gid:      e.gid,
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatalf("tar.WriteHeader(%+v): %v", hdr, err)
@@ -404,6 +409,88 @@ func TestUnpackLayer_LaterEntryWins(t *testing.T) {
 		}
 	})
 
+	t.Run("declared dir under an ancestor replaced by symlink", func(t *testing.T) {
+		// "a/b/" is declared, then "a" becomes a symlink to "cc", which has its
+		// own "b/". Restoring "a/b"'s mode must not resolve through the symlink
+		// and land on "cc/b".
+		entries := []tarEntry{
+			{name: "a/", typeflag: tar.TypeDir},
+			{name: "a/b/", typeflag: tar.TypeDir, mode: 0o700},
+			{name: "cc/", typeflag: tar.TypeDir},
+			{name: "cc/b/", typeflag: tar.TypeDir, mode: 0o755},
+			{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+		}
+		dir, _, err := runUnpack(t, entries)
+		if err != nil {
+			t.Fatalf("unpackLayer: %v", err)
+		}
+		fi, err := os.Lstat(filepath.Join(dir, "cc/b"))
+		if err != nil {
+			t.Fatalf("lstat cc/b: %v", err)
+		}
+		if got := fi.Mode().Perm(); got != 0o755 {
+			t.Errorf("cc/b mode = %v, want 0755 as its own entry declares", got)
+		}
+	})
+
+	t.Run("declared dir under an ancestor replaced by an absolute symlink", func(t *testing.T) {
+		// Resolving "var/run/lock" would follow "/run" out of the root, which
+		// os.Root refuses; the restore pass must stop at "var/run" instead.
+		entries := []tarEntry{
+			{name: "var/", typeflag: tar.TypeDir},
+			{name: "var/run/", typeflag: tar.TypeDir},
+			{name: "var/run/lock/", typeflag: tar.TypeDir, mode: 0o700},
+			{name: "var/run", typeflag: tar.TypeSymlink, linkname: "/run"},
+		}
+		if _, _, err := runUnpack(t, entries); err != nil {
+			t.Fatalf("unpackLayer: %v", err)
+		}
+	})
+
+	t.Run("declared dir under an earlier symlink", func(t *testing.T) {
+		// "a" is already a symlink to "cc" when "a/b/" is declared, so the
+		// entry creates "cc/b", and its mode applies there.
+		entries := []tarEntry{
+			{name: "cc/", typeflag: tar.TypeDir},
+			{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+			{name: "a/b/", typeflag: tar.TypeDir, mode: 0o555},
+		}
+		dir, _, err := runUnpack(t, entries)
+		if err != nil {
+			t.Fatalf("unpackLayer: %v", err)
+		}
+		fi, err := os.Lstat(filepath.Join(dir, "cc/b"))
+		if err != nil {
+			t.Fatalf("lstat cc/b: %v", err)
+		}
+		if got := fi.Mode().Perm(); got != 0o555 {
+			t.Errorf("cc/b mode = %v, want 0555 as the a/b/ entry declares", got)
+		}
+	})
+
+	t.Run("dir declared through a symlink then replaced by a file", func(t *testing.T) {
+		// "a/b/" creates "cc/b"; the later "cc/b" file replaces it, so the
+		// file's mode stands and no directory mode is restored onto it.
+		entries := []tarEntry{
+			{name: "cc/", typeflag: tar.TypeDir},
+			{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+			{name: "a/b/", typeflag: tar.TypeDir, mode: 0o555},
+			{name: "a/b/d/", typeflag: tar.TypeDir, mode: 0o555},
+			{name: "cc/b", typeflag: tar.TypeReg, mode: 0o640, body: "file"},
+		}
+		dir, _, err := runUnpack(t, entries)
+		if err != nil {
+			t.Fatalf("unpackLayer: %v", err)
+		}
+		fi, err := os.Lstat(filepath.Join(dir, "cc/b"))
+		if err != nil {
+			t.Fatalf("lstat cc/b: %v", err)
+		}
+		if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o640 {
+			t.Errorf("cc/b mode = %v, want a regular file with 0640", fi.Mode())
+		}
+	})
+
 	t.Run("file overwritten by symlink", func(t *testing.T) {
 		entries := []tarEntry{
 			{name: "etc/", typeflag: tar.TypeDir},
@@ -487,6 +574,80 @@ func TestUnpackLayer_ReadOnlyDir(t *testing.T) {
 	// t.TempDir's cleanup succeed, which plain os.RemoveAll could not on 0555).
 	if err := RemoveAllWritable(filepath.Join(dir, "ko-app")); err != nil {
 		t.Errorf("RemoveAllWritable on restored read-only dir: %v", err)
+	}
+}
+
+// Directories keep the setgid and sticky bits their tar entries record, not
+// only the permission bits: /tmp must stay 1777 so users cannot delete each
+// other's files, and a setgid directory must keep giving new files its group.
+// Implicit-dir repair also copies a lower layer's /tmp mode up into the actor.
+func TestUnpackLayer_KeepsSpecialDirBits(t *testing.T) {
+	entries := []tarEntry{
+		{name: "tmp/", typeflag: tar.TypeDir, mode: 0o1777},
+		{name: "tmp/x", typeflag: tar.TypeReg, mode: 0o644, body: "x"},
+		{name: "srv/", typeflag: tar.TypeDir},
+		{name: "srv/team/", typeflag: tar.TypeDir, mode: 0o2775},
+	}
+	dir, _, err := runUnpack(t, entries)
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	want := map[string]os.FileMode{
+		"tmp": os.ModeDir | os.ModeSticky | 0o777,
+	}
+	// Only Linux's setgid-directory semantics are pinned: on BSDs new files
+	// take the parent's group regardless of the bit.
+	if runtime.GOOS == "linux" {
+		want["srv/team"] = os.ModeDir | os.ModeSetgid | 0o775
+	}
+	for name, mode := range want {
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("lstat %s: %v", name, err)
+		}
+		if fi.Mode() != mode {
+			t.Errorf("%s mode = %v, want %v", name, fi.Mode(), mode)
+		}
+	}
+}
+
+// Files keep the mode their tar entries record whatever the umask: a
+// group-writable file must not lose group write, and setuid and setgid survive
+// on files and on hardlinks to them. TestUnpackLayer_AppliesOwnership covers
+// the same bits once the files are given to other owners.
+func TestUnpackLayer_KeepsFileModes(t *testing.T) {
+	old := syscall.Umask(0o022)
+	t.Cleanup(func() { syscall.Umask(old) })
+
+	entries := []tarEntry{
+		{name: "srv/", typeflag: tar.TypeDir},
+		{name: "srv/shared.txt", typeflag: tar.TypeReg, mode: 0o664, body: "s"},
+		{name: "srv/run.sh", typeflag: tar.TypeReg, mode: 0o775, body: "r"},
+		{name: "srv/open", typeflag: tar.TypeReg, mode: 0o666, body: "o"},
+		{name: "bin/", typeflag: tar.TypeDir},
+		{name: "bin/su", typeflag: tar.TypeReg, mode: 0o4755, body: "su"},
+		{name: "bin/su2", typeflag: tar.TypeLink, linkname: "bin/su"},
+		{name: "bin/wall", typeflag: tar.TypeReg, mode: 0o2755, body: "wall"},
+	}
+	dir, _, err := runUnpack(t, entries)
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	for name, want := range map[string]os.FileMode{
+		"srv/shared.txt": 0o664,
+		"srv/run.sh":     0o775,
+		"srv/open":       0o666,
+		"bin/su":         os.ModeSetuid | 0o755,
+		"bin/su2":        os.ModeSetuid | 0o755,
+		"bin/wall":       os.ModeSetgid | 0o755,
+	} {
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("lstat %s: %v", name, err)
+		}
+		if fi.Mode() != want {
+			t.Errorf("%s mode = %v, want %v", name, fi.Mode(), want)
+		}
 	}
 }
 

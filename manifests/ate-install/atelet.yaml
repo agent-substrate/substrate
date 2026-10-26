@@ -256,10 +256,24 @@ spec:
         - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the worker pod) — it only reads/writes the
-        # /var/lib/ate hostPath as root. CAP_DAC_OVERRIDE is for one thing:
-        # emptying a directory a non-root actor created in its 0777 durable dir.
-        # It is owned by the actor's uid, typically 0755, so root has no write
-        # access to it and resetActorDirs fails after every checkpoint.
+        # /var/lib/ate hostPath as root. These capabilities exist because
+        # atelet handles files that belong to other uids:
+        # - CHOWN: unpacking image layers into the image cache gives each entry
+        #   the owner its layer tar records, so image content owned by a
+        #   non-root user (a home directory, say) is theirs inside the actor.
+        # - DAC_OVERRIDE: emptying a directory a non-root actor created in its
+        #   0777 durable dir (owned by the actor's uid, typically 0755, so root
+        #   has no write access to it and resetActorDirs would fail after every
+        #   checkpoint), and removing, sizing, or hardlinking cached image
+        #   content that belongs to such a user.
+        # - FOWNER and FSETID: the unpack sets each file's mode and mtime after
+        #   its owner, because chown clears setuid and setgid. Doing that on a
+        #   file another user owns takes FOWNER, and keeping setgid for a group
+        #   root is not in takes FSETID (Debian's unix_chkpwd and chage are
+        #   setgid to shadow). Unpacking a hardlink to another user's symlink,
+        #   setuid file or setgid executable, and removing cached image content
+        #   from another user's directories, also take FOWNER. Without either,
+        #   unpacking such a layer fails.
         # runAsUser is pinned explicitly rather than relying on the base image's
         # default user.
         securityContext:
@@ -270,7 +284,10 @@ spec:
             drop:
             - ALL
             add:
+            - CHOWN
             - DAC_OVERRIDE
+            - FOWNER
+            - FSETID
         # Keep per-node reservations small; omit limits to allow usage to grow
         # with the number of hosted actors.
         resources:
@@ -379,8 +396,8 @@ spec:
           type: DirectoryOrCreate
       # Read-only view of the node's device nodes, used only to detect which
       # ones exist (atelet's own /dev is the container's, and does not show
-      # /dev/kvm). Detection is all this grants: atelet drops every capability
-      # and its own cgroup device filter still denies opening these.
+      # /dev/kvm). Detection is all this grants: atelet's own cgroup device
+      # filter denies opening these.
       - name: host-dev
         hostPath:
           path: /dev
