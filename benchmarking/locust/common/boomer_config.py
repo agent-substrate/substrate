@@ -87,6 +87,7 @@ _FLAGS = {
     "--target-rps": float,
     "--spawn-template": str,
     "--spawn-wake-storm": bool,
+    "--spawn-wake-delay": float,
 }
 
 

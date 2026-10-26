@@ -46,6 +46,31 @@ type fakeControlClient struct {
 	// deleteActorFn does the same for DeleteActor, and also gets the call's
 	// context.
 	deleteActorFn func(ctx context.Context, name string) error
+	// getActorFn, when set, answers GetActor. Otherwise GetActor returns an
+	// actor whose latest snapshot is stored durably.
+	getActorFn func(name string) (*ateapipb.Actor, error)
+}
+
+// durableActor is an actor whose latest snapshot has the given storage status.
+func durableActor(st ateapipb.SnapshotStorageStatus) *ateapipb.Actor {
+	return &ateapipb.Actor{Status: &ateapipb.ActorStatus{
+		LastAssignedGeneration: 1,
+		Snapshots: []*ateapipb.Snapshot{{
+			Generation:      1,
+			DurableSnapshot: &ateapipb.SnapshotStorage{Status: st},
+		}},
+	}}
+}
+
+func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, "GetActor")
+	fn := f.getActorFn
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(in.GetActor().GetName())
+	}
+	return durableActor(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED), nil
 }
 
 // nextErr pops the head of errs, or returns nil once it is drained. Callers

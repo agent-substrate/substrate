@@ -135,6 +135,9 @@ type spawnKnobs struct {
 	ActorDeadline    dynconfig.Seconds `json:"actor_deadline"`
 	SpawnTemplate    string            `json:"spawn_template"`
 	SpawnWakeStorm   bool              `json:"spawn_wake_storm"`
+	// SpawnWakeDelay is how long the suspended batch sits idle before the
+	// wake phase starts.
+	SpawnWakeDelay dynconfig.Seconds `json:"spawn_wake_delay"`
 }
 
 var spawnCodec = dynconfig.Typed[spawnKnobs]{
@@ -150,6 +153,9 @@ var spawnCodec = dynconfig.Typed[spawnKnobs]{
 		}
 		if k.ActorDeadline < 0 {
 			return fmt.Errorf("actor_deadline cannot be negative: %v", k.ActorDeadline.Duration())
+		}
+		if k.SpawnWakeDelay < 0 {
+			return fmt.Errorf("spawn_wake_delay cannot be negative: %v", k.SpawnWakeDelay.Duration())
 		}
 		return nil
 	},

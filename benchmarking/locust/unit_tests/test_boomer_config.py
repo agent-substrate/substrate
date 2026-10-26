@@ -65,10 +65,12 @@ class TestBoomerConfig(unittest.TestCase):
         raw = boomer_config.build_config_json([
             "--spawn-template=glutton-storage",
             "--spawn-wake-storm",
+            "--spawn-wake-delay=30",
         ])
         parsed = json.loads(raw)
         self.assertEqual(parsed["spawn_template"], "glutton-storage")
         self.assertTrue(parsed["spawn_wake_storm"])
+        self.assertEqual(parsed["spawn_wake_delay"], 30.0)
 
 
 if __name__ == "__main__":

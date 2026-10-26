@@ -19,6 +19,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -874,6 +876,118 @@ func TestSpawnRunBatch_WakeStorm(t *testing.T) {
 	rt.shutdown(shutdownCtx)
 	if afterDeletes := len(fakeAPI.recordedDeleteRequests()); afterDeletes != beforeShutdownDeletes {
 		t.Errorf("shutdown issued %d additional DeleteActor calls, want 0", afterDeletes-beforeShutdownDeletes)
+	}
+}
+
+// The resume mode, lifecycle mode and wake delay knobs shape the storm
+// between the suspend and wake phases.
+func TestSpawnRunBatch_WakeStormKnobs(t *testing.T) {
+	const actors = 3
+	for _, tc := range []struct {
+		name  string
+		knobs spawnKnobs
+		// pendingGets is how many GetActor calls see an upload still running.
+		pendingGets int64
+		// wantWakeResumes counts ResumeActor calls after the first resumes.
+		wantWakeResumes int
+		wantGetActor    bool
+		wantMinRun      time.Duration
+	}{
+		{
+			name:            "explicit wake",
+			wantWakeResumes: actors,
+		},
+		{
+			name:            "implicit wake pings without ResumeActor",
+			knobs:           spawnKnobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeImplicit}},
+			wantWakeResumes: 0,
+		},
+		{
+			name:            "pause waits for durable snapshots before the wake",
+			knobs:           spawnKnobs{Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause}},
+			pendingGets:     2,
+			wantWakeResumes: actors,
+			wantGetActor:    true,
+		},
+		{
+			name:            "wake delay",
+			knobs:           spawnKnobs{SpawnWakeDelay: dynconfig.Seconds(300 * time.Millisecond)},
+			wantWakeResumes: actors,
+			wantMinRun:      300 * time.Millisecond,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestHTTPServer(t, nil)
+			defer srv.Close()
+
+			var gets atomic.Int64
+			fakeAPI := &fakeControlClient{
+				getActorFn: func(string) (*ateapipb.Actor, error) {
+					if gets.Add(1) <= tc.pendingGets {
+						return durableActor(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING), nil
+					}
+					return durableActor(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED), nil
+				},
+			}
+			cfg := &userclass.Config{
+				APIStub:          fakeAPI,
+				HTTPClient:       srv.Client(),
+				RouterURL:        srv.URL,
+				Atespace:         "test-space",
+				Tracer:           otel.Tracer("test"),
+				Dyn:              dynconfig.Static(tc.knobs),
+				TotalActors:      actors,
+				SpawnConcurrency: actors,
+				ActorDeadline:    5 * time.Second,
+				SpawnWakeStorm:   true,
+			}
+			runCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			rt := &spawnRuntime{cfg: cfg, runCtx: runCtx, cancelRun: cancel}
+
+			beforeWakeReady := getPromCounter("ActorWakeTimeToReady", "success")
+			beforeDurable := getPromCounter("TimeToAllDurable", "success")
+			start := time.Now()
+			rt.runBatch(runCtx)
+			elapsed := time.Since(start)
+
+			if diff := getPromCounter("ActorWakeTimeToReady", "success") - beforeWakeReady; diff != actors {
+				t.Errorf("ActorWakeTimeToReady diff = %v, want %d", diff, actors)
+			}
+			if got := resumeCalls(fakeAPI) - actors; got != tc.wantWakeResumes {
+				t.Errorf("wake ResumeActor calls = %d, want %d", got, tc.wantWakeResumes)
+			}
+			if elapsed < tc.wantMinRun {
+				t.Errorf("run took %v, want at least %v", elapsed, tc.wantMinRun)
+			}
+
+			calls := fakeAPI.recordedCalls()
+			if !tc.wantGetActor {
+				if slices.Contains(calls, "GetActor") {
+					t.Errorf("calls = %v, want no GetActor", calls)
+				}
+				return
+			}
+			if diff := getPromCounter("TimeToAllDurable", "success") - beforeDurable; diff != 1 {
+				t.Errorf("TimeToAllDurable diff = %v, want 1", diff)
+			}
+			// Every GetActor comes before the first wake ResumeActor.
+			lastGet := -1
+			for i, c := range calls {
+				if c == "GetActor" {
+					lastGet = i
+				}
+			}
+			resumes := 0
+			for i, c := range calls {
+				if c != "ResumeActor" {
+					continue
+				}
+				if resumes++; resumes > actors && i < lastGet {
+					t.Fatalf("wake ResumeActor at call %d came before the last GetActor at %d: %v", i, lastGet, calls)
+				}
+			}
+		})
 	}
 }
 

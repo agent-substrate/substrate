@@ -249,6 +249,8 @@ func (r *spawnRuntime) runBatch(ctx context.Context) {
 	if knobs.LifecycleMode != "" {
 		lifecycleMode = knobs.LifecycleMode
 	}
+	resumeMode := knobs.ResumeMode
+	wakeDelay := knobs.SpawnWakeDelay.Duration()
 	if tmpl == "" {
 		tmpl = templateName
 	}
@@ -273,7 +275,7 @@ func (r *spawnRuntime) runBatch(ctx context.Context) {
 	}
 
 	if wakeStorm {
-		r.runStormAndDelete(ctx, r.getReadyActorNames(), spawnConcurrency, deadline, lifecycleMode)
+		r.runStormAndDelete(ctx, r.getReadyActorNames(), spawnConcurrency, deadline, lifecycleMode, resumeMode, wakeDelay)
 	}
 }
 
@@ -443,7 +445,7 @@ func (r *spawnRuntime) hibernateActorWithRetry(ctx context.Context, actorName, m
 	}
 }
 
-func (r *spawnRuntime) runStormAndDelete(ctx context.Context, readyActors []string, concurrency int, deadline time.Duration, lifecycleMode string) {
+func (r *spawnRuntime) runStormAndDelete(ctx context.Context, readyActors []string, concurrency int, deadline time.Duration, lifecycleMode, resumeMode string, wakeDelay time.Duration) {
 	if len(readyActors) == 0 || ctx.Err() != nil {
 		return
 	}
@@ -454,8 +456,23 @@ func (r *spawnRuntime) runStormAndDelete(ctx context.Context, readyActors []stri
 		return
 	}
 
+	// An async suspend returns before its snapshot upload ends. Wait for the
+	// uploads, so the wake does not compete with them.
+	if lifecycleMode == dynconfig.LifecycleModePause {
+		r.runDurableWait(ctx, suspended, concurrency, deadline)
+	}
+	if wakeDelay > 0 {
+		select {
+		case <-time.After(wakeDelay):
+		case <-ctx.Done():
+		}
+	}
+	if ctx.Err() != nil {
+		return
+	}
+
 	// Phase 3: Wake storm
-	r.runWakeBatch(ctx, suspended, concurrency, deadline)
+	r.runWakeBatch(ctx, suspended, concurrency, deadline, resumeMode)
 	if ctx.Err() != nil {
 		return
 	}
@@ -489,7 +506,62 @@ func (r *spawnRuntime) runSuspendBatch(ctx context.Context, actors []string, con
 	return suspended
 }
 
-func (r *spawnRuntime) runWakeBatch(ctx context.Context, actors []string, concurrency int, deadline time.Duration) {
+// runDurableWait polls each actor until its latest snapshot is stored durably.
+func (r *spawnRuntime) runDurableWait(ctx context.Context, actors []string, concurrency int, deadline time.Duration) {
+	waitStart := time.Now()
+	var durableCount atomic.Int64
+	var lastDurableElapsed atomic.Int64
+	runPool(ctx, concurrency, actors, func(actorName string) {
+		actorCtx, cancel := context.WithTimeout(ctx, deadline)
+		defer cancel()
+		if err := r.pollUntilDurable(actorCtx, actorName); err != nil {
+			r.recordFailure("summary", "SnapshotDurable", time.Since(waitStart), err.Error())
+			return
+		}
+		storeMax(&lastDurableElapsed, int64(time.Since(waitStart)))
+		durableCount.Add(1)
+	})
+
+	if durableCount.Load() > 0 {
+		r.recordSuccess("summary", "TimeToAllDurable", time.Duration(lastDurableElapsed.Load()), 0)
+	} else {
+		r.recordFailure("summary", "TimeToAllDurable", time.Since(waitStart), "no snapshots stored durably")
+	}
+}
+
+func (r *spawnRuntime) pollUntilDurable(ctx context.Context, actorName string) error {
+	req := &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: r.cfg.Atespace, Name: actorName}}
+	for {
+		actor, err := r.cfg.APIStub.GetActor(ctx, req)
+		if err != nil && isSpawnTerminalError(err) {
+			return err
+		}
+		if err == nil && latestSnapshotDurable(actor) {
+			return nil
+		}
+		select {
+		case <-time.After(200 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// latestSnapshotDurable reports whether the actor's latest snapshot
+// generation has finished uploading.
+func latestSnapshotDurable(actor *ateapipb.Actor) bool {
+	status := actor.GetStatus()
+	for _, snap := range status.GetSnapshots() {
+		if snap.GetGeneration() == status.GetLastAssignedGeneration() {
+			return snap.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		}
+	}
+	return false
+}
+
+// runWakeBatch wakes each actor with ResumeActor, then pings it. Under
+// resume mode implicit it only pings, and the router wakes the actor.
+func (r *spawnRuntime) runWakeBatch(ctx context.Context, actors []string, concurrency int, deadline time.Duration, resumeMode string) {
 	wakeStart := time.Now()
 	var wokenCount atomic.Int64
 	var lastWakeElapsed atomic.Int64
@@ -498,9 +570,11 @@ func (r *spawnRuntime) runWakeBatch(ctx context.Context, actors []string, concur
 		defer cancel()
 		actorStart := time.Now()
 
-		if err := r.resumeActorWithRetry(actorCtx, actorName); err != nil {
-			r.recordFailure("summary", "ActorWakeTimeToReady", time.Since(actorStart), err.Error())
-			return
+		if resumeMode != dynconfig.ResumeModeImplicit {
+			if err := r.resumeActorWithRetry(actorCtx, actorName); err != nil {
+				r.recordFailure("summary", "ActorWakeTimeToReady", time.Since(actorStart), err.Error())
+				return
+			}
 		}
 		if err := r.pingUntilReady(actorCtx, actorName); err != nil {
 			r.recordFailure("summary", "ActorWakeTimeToReady", time.Since(actorStart), err.Error())

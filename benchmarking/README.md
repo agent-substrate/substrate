@@ -531,7 +531,13 @@ are deleted when boomer exits.
   first ping, and each actor's suspend, wake and delete in the storm (default `120`).
 * `--spawn-template`: ActorTemplate of the batch (default `glutton`).
 * `--spawn-wake-storm`: Run the suspend, wake and delete phases after the batch
-  is ready (default off). The suspend is asynchronous under `--lifecycle-mode pause`.
+  is ready (default off). The suspend is asynchronous under `--lifecycle-mode pause`,
+  and the wake waits until every snapshot is stored durably.
+* `--spawn-wake-delay`: Seconds the suspended batch sits idle before the wake
+  (default `0`). A suspended actor stays bound to its node, so the wake still
+  restores from that node's local snapshot.
+* `--resume-mode implicit`: The wake sends only pings, and the router wakes
+  each actor. The first resume is always a `ResumeActor`.
 
 The web UI shows the same fields; `0` or an empty template keeps the value
 boomer-worker started with.
@@ -557,10 +563,13 @@ With `--spawn-wake-storm`, also:
   `DeleteActor`: Latency of each call.
 * `TimeToAllSuspended`, `TimeToAllDeleted`: From the start of the phase until
   the last actor finished it.
-* `ActorWakeTimeToReady`: Per actor, from its wake `ResumeActor` to its first
-  successful ping.
+* `ActorWakeTimeToReady`: Per actor, from its wake `ResumeActor` (its first
+  ping under `--resume-mode implicit`) to its first successful ping.
 * `TimeToWoken_<k>pct`, `TimeToAllWoken`: As `TimeToReady_<k>pct` and
   `TimeToAllReady`, for the wake.
+* `TimeToAllDurable` (`--lifecycle-mode pause` only): From the end of the
+  suspend phase until the last snapshot was stored durably. `SnapshotDurable`
+  counts actors whose snapshot did not finish within `--actor-deadline`.
 
 The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
 count users × `--actors-per-user`, not `--total-actors`.

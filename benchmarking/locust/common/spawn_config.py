@@ -60,3 +60,11 @@ def add_spawn_arguments(parser: LocustArgumentParser) -> None:
         help="After spawning all actors, suspend all, wake all, and delete all with per-actor and batch timing",
         include_in_web_ui=True,
     )
+    parser.add_argument(
+        "--spawn-wake-delay",
+        type=float,
+        default=0.0,
+        env_var="LOCUST_SPAWN_WAKE_DELAY",
+        help="Seconds the suspended batch sits idle before the wake storm starts",
+        include_in_web_ui=True,
+    )
