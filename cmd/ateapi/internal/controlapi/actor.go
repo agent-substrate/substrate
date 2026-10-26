@@ -90,7 +90,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 		labels := maps.Clone(defaults)
 		maps.Copy(labels, inActor.GetLabels())
 		inActor.Labels = labels
-		if errs := apivalidation.ValidateActorCreate(ctx, field.NewPath("actor"), inActor); len(errs) > 0 {
+		if errs := apivalidation.ValidateCreateActorRequest(ctx, &ateapi.CreateActorRequest{Actor: inActor}); len(errs) > 0 {
 			return nil, resources.ToAPIError(errs)
 		}
 	}
