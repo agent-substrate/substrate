@@ -16,6 +16,7 @@ package dns
 
 import (
 	"errors"
+	"math/rand/v2"
 	"net"
 	"slices"
 	"sync"
@@ -64,8 +65,8 @@ func newUDPConnPool(listenPacket func(network, address string) (net.PacketConn, 
 	}
 }
 
-// Get returns the least-used available PacketConn from the pool, or opens a
-// new one on an ephemeral port if none is available.
+// Get returns a random available PacketConn from the pool, or opens a new one
+// on an ephemeral port if none is available.
 func (p *udpConnPool) Get() (net.PacketConn, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -75,16 +76,12 @@ func (p *udpConnPool) Get() (net.PacketConn, error) {
 	}
 
 	if len(p.idle) > 0 {
-		bestIdx := 0
-		bestUses := p.entries[p.idle[0]].uses
-		for i := 1; i < len(p.idle); i++ {
-			if u := p.entries[p.idle[i]].uses; u < bestUses {
-				bestIdx = i
-				bestUses = u
-			}
-		}
-		conn := p.idle[bestIdx]
-		p.idle = slices.Delete(p.idle, bestIdx, bestIdx+1)
+		idx := rand.IntN(len(p.idle))
+		conn := p.idle[idx]
+		last := len(p.idle) - 1
+		p.idle[idx] = p.idle[last]
+		p.idle[last] = nil
+		p.idle = p.idle[:last]
 		entry := p.entries[conn]
 		entry.idle = false
 		entry.uses++
@@ -132,6 +129,24 @@ func (p *udpConnPool) Put(conn net.PacketConn) {
 	entry.idle = true
 	p.idle = append(p.idle, conn)
 	p.mu.Unlock()
+}
+
+// Discard removes conn from the pool and closes it.
+func (p *udpConnPool) Discard(conn net.PacketConn) {
+	if conn == nil {
+		return
+	}
+
+	p.mu.Lock()
+	if entry, ok := p.entries[conn]; ok {
+		delete(p.entries, conn)
+		if entry.idle {
+			p.idle = slices.DeleteFunc(p.idle, func(c net.PacketConn) bool { return c == conn })
+		}
+	}
+	p.mu.Unlock()
+
+	_ = conn.Close()
 }
 
 // Close marks the pool closed and closes all idle and in-flight sockets.
