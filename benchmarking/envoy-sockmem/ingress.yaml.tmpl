@@ -1,0 +1,90 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# The ingress Envoy: atenet-router's data path in brief, from
+# cmd/atenet/internal/router/xds.go. The mTLS listener's HTTP connection
+# manager, with Envoy's default buffer limits and HTTP/2 settings, proxies to
+# the worker over HTTP/2. The real router picks the worker with ext_proc and
+# tunnels through internal listeners to atunnel's CONNECT port; here one static
+# cluster stands in for the worker, over one shared HTTP/2 connection, with the
+# router's HTTP/2 defaults unless envoy-sockmem config sets windows.
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 15000 } }
+static_resources:
+  listeners:
+  - name: ingress_https
+    address: { socket_address: { address: 0.0.0.0, port_value: 8443 } }
+{{- with .SocketOptions }}
+    socket_options:
+{{- range . }}
+    - { description: {{ .Description }}, level: {{ .Level }}, name: {{ .Name }}, int_value: {{ .Value }}, state: STATE_PREBIND }
+{{- end }}
+{{- end }}
+    filter_chains:
+    - transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+          require_client_certificate: true
+          common_tls_context:
+            alpn_protocols: ["h2", "http/1.1"]
+            tls_certificates:
+            - certificate_chain: { filename: /pki/envoy-cert.pem }
+              private_key: { filename: /pki/envoy-key.pem }
+            validation_context:
+              trusted_ca: { filename: /pki/ca.pem }
+      filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_https
+          codec_type: AUTO
+          route_config:
+            virtual_hosts:
+            - name: actors
+              domains: ["*"]
+              routes:
+              - match: { prefix: "/" }
+                route: { cluster: worker, timeout: 0s }
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config: { "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router }
+  clusters:
+  - name: worker
+    type: STRICT_DNS
+    connect_timeout: 5s
+{{- with .SocketOptions }}
+    upstream_bind_config:
+      socket_options:
+{{- range . }}
+      - { description: {{ .Description }}, level: {{ .Level }}, name: {{ .Name }}, int_value: {{ .Value }}, state: STATE_PREBIND }
+{{- end }}
+{{- end }}
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+{{- if .UpstreamStreamWindow }}
+        explicit_http_config:
+          http2_protocol_options:
+            initial_stream_window_size: {{ .UpstreamStreamWindow }}
+            initial_connection_window_size: {{ .UpstreamConnectionWindow }}
+{{- else }}
+        explicit_http_config: { http2_protocol_options: {} }
+{{- end }}
+    load_assignment:
+      cluster_name: worker
+      endpoints:
+      - lb_endpoints:
+        - endpoint: { address: { socket_address: { address: origin, port_value: {{ .HTTPPort }} } } }

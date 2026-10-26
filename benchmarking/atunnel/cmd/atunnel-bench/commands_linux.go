@@ -27,5 +27,7 @@ func linuxCommands() []*cobra.Command {
 		ingressActorCommand(),
 		egressActorCommand(),
 		netnsExecCommand(),
+		sysctlCommand(),
+		netemCommand(),
 	}
 }
