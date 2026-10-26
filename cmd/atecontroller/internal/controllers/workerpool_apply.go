@@ -402,10 +402,18 @@ var workerMicroVMCapabilities = slices.Concat(workerGvisorCapabilities, []corev1
 	"FSETID", "DAC_READ_SEARCH",
 })
 
+// runsVMs reports whether the class boots VMs: its worker gets the microVM
+// pod shape and capability set. The kata class has the same needs, plus
+// whatever devices its Kata configuration asks for, such as the vhost-vsock
+// device of QEMU, which the pod does not get.
+func runsVMs(class atev1.SandboxClass) bool {
+	return class == atev1.SandboxClassMicroVM || class == atev1.SandboxClassKata
+}
+
 // workerSecurityContext returns the worker container security context for a sandbox
-// class. Neither class runs privileged; they differ in their capability set.
-// Both declare seccomp Unconfined because their sandbox child pivot_root()s,
-// which the default profile denies. An empty class defaults to gVisor.
+// class. No class runs privileged; they differ in their capability set. All
+// declare seccomp Unconfined because their sandbox child pivot_root()s, which
+// the default profile denies. An empty class defaults to gVisor.
 func workerSecurityContext(class atev1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
 	// Both runtimes mount inside the worker — runsc pivots root and the worker
 	// remounts /sys/fs/cgroup to nest per-actor cgroups; the micro-VM worker
@@ -421,7 +429,7 @@ func workerSecurityContext(class atev1.SandboxClass) *corev1ac.SecurityContextAp
 		WithAppArmorProfile(corev1ac.AppArmorProfile().
 			WithType(corev1.AppArmorProfileTypeUnconfined))
 
-	if class == atev1.SandboxClassMicroVM {
+	if runsVMs(class) {
 		// Give up the default seccomp profile so virtiofsd keeps its own sandbox,
 		// which pivot_root()s — a syscall the profile denies whatever capabilities
 		// the worker holds. The trade favors containing the guest: virtiofsd parses
@@ -452,7 +460,7 @@ func workerSecurityContext(class atev1.SandboxClass) *corev1ac.SecurityContextAp
 
 // maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a
 // micro-VM (kata + cloud-hypervisor) worker pool needs, on top of any
-// pod-template settings. No-op unless sandboxClass is the micro-VM class.
+// pod-template settings. No-op unless sandboxClass boots VMs, see runsVMs.
 //
 // TODO: this hardcodes one sandbox class's pod requirements in the controller.
 // Consider making it generic so a sandbox class can declare its own pod shape
@@ -464,7 +472,7 @@ func maybeApplyMicroVMPodShape(
 	containerAC *corev1ac.ContainerApplyConfiguration,
 	sandboxClass atev1.SandboxClass,
 ) {
-	if sandboxClass != atev1.SandboxClassMicroVM {
+	if !runsVMs(sandboxClass) {
 		return
 	}
 

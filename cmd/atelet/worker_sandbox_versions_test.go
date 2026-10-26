@@ -35,6 +35,7 @@ import (
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/sandboxruntimes"
 )
 
@@ -351,6 +352,53 @@ func TestPlanAndBuild(t *testing.T) {
 			}
 			if errors.Is(err, errPermanent) != tt.wantPermanent {
 				t.Errorf("planAndBuild() error = %v, want permanent %v", err, tt.wantPermanent)
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("planAndBuild() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestPlanAndBuildKata covers the kata class: refused without its preview
+// gate, and with it a runtime has only the architecture and the bundle hash.
+func TestPlanAndBuildKata(t *testing.T) {
+	pool := resolvedPoolOf(atev1.SandboxClassKata, "kata-pool", "kata-release")
+	cfg := &atev1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "kata-release"},
+		Spec: atev1.SandboxConfigSpec{
+			SandboxClass:   atev1.SandboxClassKata,
+			DefaultVersion: "v1",
+			Versions: []atev1.SandboxVersionConfig{{
+				Name: "v1",
+				Assets: map[string]map[string]atev1.AssetFile{
+					runtime.GOARCH: {"kata-config": {URL: "gs://bucket/kata-config", SHA256: "sha-kata"}},
+				},
+			}},
+		},
+	}
+	rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{"kata-config": {SHA256: "sha-kata"}}}
+	want := classFile(atev1.SandboxClassKata, sandboxruntimes.Attributes{
+		hardware.AttrArchitecture:      runtime.GOARCH,
+		hardware.AttrSandboxBundleHash: bundleHash(rec),
+	})
+
+	tests := []struct {
+		name          string
+		gate          []string
+		want          *sandboxruntimes.File
+		wantPermanent bool
+	}{
+		{name: "gate on", gate: []string{string(preview.GateKataSandbox)}, want: want},
+		{name: "gate off", wantPermanent: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, tt.gate...)
+			s := newTestSyncer(t, pool, cfg)
+			got, err := planAndBuild(s, workerPod("pod-a", "kata-pool"))
+			if (err != nil) != tt.wantPermanent || errors.Is(err, errPermanent) != tt.wantPermanent {
+				t.Fatalf("planAndBuild() error = %v, want permanent error %v", err, tt.wantPermanent)
 			}
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("planAndBuild() mismatch (-want +got):\n%s", diff)

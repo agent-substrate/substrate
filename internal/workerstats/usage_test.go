@@ -118,7 +118,8 @@ func TestUsageAttrsNormalizesSandboxClass(t *testing.T) {
 		"gvisor":  "gvisor",
 		"gVisor":  ateattr.SandboxClassUnknown,
 		"":        ateattr.SandboxClassUnknown,
-		"kata":    ateattr.SandboxClassUnknown,
+		"kata":    "kata",
+		"runc":    ateattr.SandboxClassUnknown,
 	} {
 		s := measuredSample()
 		s.SandboxClass = class

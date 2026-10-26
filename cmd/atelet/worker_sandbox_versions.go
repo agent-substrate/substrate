@@ -47,6 +47,7 @@ import (
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/sandboxruntimes"
 	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
 )
@@ -285,7 +286,8 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, 
 // versionAttrs returns the attributes of one version's runtime, whose
 // sandbox_bundle_hash is hash: architecture and the hash for every class,
 // the host CPU identity for a microVM runtime (with its assets verified in
-// the local cache), and the runsc binary's cpu_features for a gVisor one.
+// the local cache), the runsc binary's cpu_features for a gVisor one, and
+// nothing more for a Kata one.
 // isDefault makes the microVM asset check skip the memo.
 func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.SandboxClass, rec *sandboxAssetsRecord, hash string, isDefault bool) (sandboxruntimes.Attributes, error) {
 	attrs := sandboxruntimes.Attributes{
@@ -302,6 +304,16 @@ func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.Sand
 			return nil, err
 		}
 		attrs[hardware.AttrCPUVendor], attrs[hardware.AttrCPUModel] = vendor, model
+	case atev1.SandboxClassKata:
+		if !preview.IsEnabled(preview.GateKataSandbox) {
+			return nil, fmt.Errorf("%w: sandbox class %q needs the %s preview gate", errPermanent, class, preview.GateKataSandbox)
+		}
+		// A Kata VM is never snapshotted, so only the bundle hash and the
+		// architecture tell versions apart. The config asset is checked like a
+		// microVM's assets.
+		if err := s.ensureMicroVMAssets(ctx, rec, hash, isDefault); err != nil {
+			return nil, err
+		}
 	case atev1.SandboxClassGvisor:
 		mask, err := s.gvisorCPUFeatures(ctx, rec)
 		if err != nil {

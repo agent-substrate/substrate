@@ -48,6 +48,14 @@ spec:
           ['cloud-hypervisor', 'virtiofsd', 'kata-kernel', 'kata-image']
             .all(name, name in v.assets[arch])))
     message: "a microvm SandboxConfig must define cloud-hypervisor, virtiofsd, kata-kernel, and kata-image assets for every architecture of every version under spec.versions[].assets"
+  # The kata class runs the Kata install baked into the worker image. Its one
+  # asset is the Kata configuration file, which selects the hypervisor.
+  - expression: >-
+      object.spec.sandboxClass != 'kata' ||
+      object.spec.versions.all(v,
+        has(v.assets) && size(v.assets) > 0 &&
+        v.assets.all(arch, 'kata-config' in v.assets[arch]))
+    message: "a kata SandboxConfig must define a 'kata-config' (Kata configuration file) asset for every architecture of every version under spec.versions[].assets"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

@@ -121,7 +121,7 @@ type WorkerPoolSandboxClass struct {
 	// from the SandboxConfig referenced by ConfigRef (or the class default).
 	//
 	// +required
-	// +kubebuilder:validation:Enum=gvisor;microvm
+	// +kubebuilder:validation:Enum=gvisor;microvm;kata
 	Name SandboxClass `json:"name,omitempty"`
 
 	// configRef names a cluster-scoped SandboxConfig for this sandbox class.
@@ -206,7 +206,7 @@ type WorkerPoolSandboxClassStatus struct {
 	// name is the sandbox runtime family.
 	//
 	// +required
-	// +kubebuilder:validation:Enum=gvisor;microvm
+	// +kubebuilder:validation:Enum=gvisor;microvm;kata
 	Name SandboxClass `json:"name,omitempty"`
 
 	// configRef names the cluster-scoped SandboxConfig in use. That is the

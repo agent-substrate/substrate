@@ -112,6 +112,7 @@ spec:
                       enum:
                       - gvisor
                       - microvm
+                      - kata
                       type: string
                   required:
                   - name
@@ -594,6 +595,7 @@ spec:
                       enum:
                       - gvisor
                       - microvm
+                      - kata
                       type: string
                     pendingConfigRef:
                       description: |-

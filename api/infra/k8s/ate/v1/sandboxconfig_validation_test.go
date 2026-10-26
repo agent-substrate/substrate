@@ -176,6 +176,15 @@ func TestSandboxConfigValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "microvm SandboxConfig must define",
 	}, {
+		name:    "valid kata with a config asset",
+		sc:      sandboxConfig("ok-kata", SandboxClassKata, map[string]map[string]AssetFile{"amd64": {"kata-config": otherAsset()}}),
+		wantErr: false,
+	}, {
+		name:    "kata without a config asset",
+		sc:      sandboxConfig("bad-kata", SandboxClassKata, map[string]map[string]AssetFile{"amd64": {"other": otherAsset()}}),
+		wantErr: true,
+		errMsg:  "kata SandboxConfig must define",
+	}, {
 		name:    "gvisor arch missing the gvisor asset",
 		sc:      sandboxConfig("bad-no-gvisor", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"other": otherAsset()}}),
 		wantErr: true,

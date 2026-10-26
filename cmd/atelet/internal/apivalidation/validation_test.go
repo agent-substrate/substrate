@@ -382,7 +382,7 @@ func TestValidateRunRequest(t *testing.T) {
 	}, {
 		name: "sandbox_runtime errors surface at their path",
 		obj: valid(func(r *ateletpb.RunRequest) {
-			r.SandboxRuntime.SandboxClass = "kata"
+			r.SandboxRuntime.SandboxClass = "runc"
 		}),
 		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_runtime", "sandbox_class"), nil, nil)},
 	}}
@@ -730,7 +730,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}, {
 		name: "sandbox_runtime errors surface at their path",
 		obj: valid(func(r *ateletpb.RestoreRequest) {
-			r.SandboxRuntime.SandboxClass = "kata"
+			r.SandboxRuntime.SandboxClass = "runc"
 		}),
 		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_runtime", "sandbox_class"), nil, nil)},
 	}}
@@ -1109,7 +1109,7 @@ func TestValidateSetWorkerSandboxRuntimesRequest(t *testing.T) {
 		},
 	}, {
 		name: "unsupported sandbox_classes.sandbox_class",
-		obj:  withClass(&ateletpb.WorkerSandboxClass{SandboxClass: "kata", DefaultRuntime: testRuntime(testCompat())}),
+		obj:  withClass(&ateletpb.WorkerSandboxClass{SandboxClass: "runc", DefaultRuntime: testRuntime(testCompat())}),
 		want: field.ErrorList{field.NotSupported[string](classPath.Child("sandbox_class"), nil, nil)},
 	}, {
 		name: "missing sandbox_classes.default_runtime",

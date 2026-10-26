@@ -45,6 +45,11 @@ const (
 	// GateGoldenEgressPolicy controls configuring a golden actor's egress policy on its template.
 	GateGoldenEgressPolicy Gate = "GoldenEgressPolicy"
 
+	// GateKataSandbox controls whether the kata sandbox class, which runs actors
+	// in a Kata Containers VM through the Kata shim (cmd/ateworker-kata), is
+	// served. When disabled, atelet and the kata worker refuse it.
+	GateKataSandbox Gate = "KataSandbox"
+
 	// GatePerTemplateSnapshotLocation controls whether an ActorTemplate's
 	// snapshotConfig.storage_location is honored. When disabled, snapshots
 	// are stored under ate-api-server's --snapshot-location.
@@ -59,6 +64,7 @@ const All = "ALL"
 var realKnownGates = []Gate{
 	GateExternalVolumes,
 	GateGoldenEgressPolicy,
+	GateKataSandbox,
 	GatePerTemplateSnapshotLocation,
 }
 

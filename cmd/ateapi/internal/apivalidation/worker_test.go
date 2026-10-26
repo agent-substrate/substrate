@@ -541,7 +541,7 @@ func TestValidateSetWorkerSandboxRuntimesRequest(t *testing.T) {
 		},
 	}, {
 		name: "unsupported sandbox_classes.sandbox_class",
-		req:  valid(func(r *ateapi.SetWorkerSandboxRuntimesRequest) { r.SandboxClasses[0].SandboxClass = "kata" }),
+		req:  valid(func(r *ateapi.SetWorkerSandboxRuntimesRequest) { r.SandboxClasses[0].SandboxClass = "runc" }),
 		want: field.ErrorList{field.NotSupported[string](classPath.Child("sandbox_class"), nil, nil)},
 	}, {
 		name: "missing sandbox_classes.default_runtime",
@@ -687,7 +687,7 @@ func TestValidateWorkerUpdate_SandboxClasses(t *testing.T) {
 		want:   field.ErrorList{field.Required(classPath.Child("sandbox_class"), "")},
 	}, {
 		name:   "unsupported sandbox_classes.sandbox_class",
-		mutate: func(s *ateapi.WorkerStatus) { s.SandboxClasses[0].SandboxClass = "kata" },
+		mutate: func(s *ateapi.WorkerStatus) { s.SandboxClasses[0].SandboxClass = "runc" },
 		want:   field.ErrorList{field.NotSupported[string](classPath.Child("sandbox_class"), nil, nil)},
 	}, {
 		name:   "missing sandbox_classes.default_runtime",

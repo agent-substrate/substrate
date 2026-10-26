@@ -86,6 +86,7 @@ spec:
                 enum:
                 - gvisor
                 - microvm
+                - kata
                 type: string
               versions:
                 description: versions are the sandbox versions this config offers,

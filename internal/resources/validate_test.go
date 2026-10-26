@@ -269,8 +269,9 @@ func TestValidateSandboxClass(t *testing.T) {
 	}{
 		{name: "gvisor", class: "gvisor"},
 		{name: "microvm", class: "microvm"},
+		{name: "kata", class: "kata"},
 		{name: "empty left to tags", class: ""},
-		{name: "unknown class", class: "kata", want: field.ErrorList{field.NotSupported[string](path, nil, nil)}},
+		{name: "unknown class", class: "runc", want: field.ErrorList{field.NotSupported[string](path, nil, nil)}},
 		{name: "case-sensitive", class: "GVISOR", want: field.ErrorList{field.NotSupported[string](path, nil, nil)}},
 	}
 	for _, tt := range tests {

@@ -200,7 +200,7 @@ type ReportConfig struct {
 	Actors int
 	// PodIPs are the worker pod's IPs, from the downward API.
 	PodIPs []string
-	// SandboxClass is the class this worker implements ("gvisor", "microvm").
+	// SandboxClass is the class this worker implements ("gvisor", "microvm", "kata").
 	SandboxClass string
 	// RuntimesFile is the sandbox runtimes file atelet keeps for this worker
 	// (nodepath.WorkerSandboxRuntimesPath).
