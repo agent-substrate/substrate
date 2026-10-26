@@ -14,15 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Rejects changes to api/ateapi/v1 that break binary wire compatibility.
+# Rejects proto changes that break binary wire compatibility.
 #
-# ateapi stores resources as binary protobuf in bytea columns, and atepg.go
-# unmarshals them with DiscardUnknown. Binary protobuf identifies a field only
-# by its number. A renumbered field loses its stored value, and a reused number
-# decodes into the wrong field. The original bytes are dropped on the next
-# read-modify-write.
+# Binary protobuf identifies a field only by its number. ateapi stores
+# resources as binary protobuf in bytea columns, and atepg.go unmarshals them
+# with DiscardUnknown. A renumbered field loses its stored value, and a reused
+# number decodes into the wrong field. The original bytes are dropped on the
+# next read-modify-write. The same breaks affect gRPC messages between
+# binaries built from different commits.
 #
-# buf.yaml selects buf's WIRE rules:
+# buf.yaml checks the protos under api/ and internal/proto/ with buf's WIRE
+# rules:
 #
 #   renumber a field                     rejected, unless the old number is reserved
 #   delete a field without `reserved`    rejected
@@ -56,13 +58,7 @@ fi
 BASELINE="$(git merge-base HEAD "${BASELINE_REF}")"
 
 # The input is the working tree, so an incompatible edit is reported before it
-# is ever committed. --against-config points the baseline at the buf.yaml we
-# have now, because commits older than that file carry no buf config of their
-# own and would otherwise be read with buf's defaults.
-#
-# TODO: Drop --against-config once buf.yaml is on main. The flag makes buf
-# look for the protos at the current buf.yaml path in the baseline commit too.
-# If a PR moves ateapi.proto to another directory, the baseline has no protos
-# at the new path, and the check fails.
+# is ever committed. --against-config reads the baseline with the current
+# buf.yaml, so a baseline commit without one still builds.
 BIN="$("${ROOT}"/hack/run-tool.sh --print-bin-path buf)"
 "${BIN}" breaking --against ".git#ref=${BASELINE}" --against-config buf.yaml

@@ -14,9 +14,12 @@
 
 version: v2
 
-# Only api/ateapi/v1 is stored in Postgres. See hack/verify/proto-breaking.sh.
+# See hack/verify/proto-breaking.sh.
 modules:
-  - path: api/ateapi/v1
+  - path: .
+    includes:
+      - api
+      - internal/proto
 
 breaking:
   use:
