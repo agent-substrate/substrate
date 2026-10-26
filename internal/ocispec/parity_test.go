@@ -67,7 +67,7 @@ func TestBuild_IsRuntimeNeutral(t *testing.T) {
 	}
 }
 
-// Both shapers keep every declared volume mount, with a non-empty source.
+// Every shaper keeps every declared volume mount, with a non-empty source.
 func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 	for _, tc := range []struct {
 		runtime string
@@ -82,6 +82,12 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 		runtime: "microvm",
 		shape: func(s *specs.Spec) error {
 			return ShapeMicroVM(s, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"})
+		},
+	}, {
+		runtime: "kata",
+		shape: func(s *specs.Spec) error {
+			ShapeKata(s, KataOptions{ActorUID: testActorUID, ContainerName: "app", BootsVM: true})
+			return nil
 		},
 	}} {
 		t.Run(tc.runtime, func(t *testing.T) {

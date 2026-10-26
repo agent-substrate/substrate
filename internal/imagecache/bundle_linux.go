@@ -346,6 +346,13 @@ func UnmountAllUnder(dir string) error {
 	return errors.Join(errs...)
 }
 
+// MountedUnder reports whether any mount is at or below dir in the calling
+// process's mount namespace.
+func MountedUnder(dir string) (bool, error) {
+	points, err := mountPointsUnder(dir)
+	return len(points) > 0, err
+}
+
 // mountPointsUnder lists mount points at or below dir per
 // /proc/self/mountinfo.
 func mountPointsUnder(dir string) ([]string, error) {

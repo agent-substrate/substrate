@@ -576,7 +576,7 @@ func TestWorkerServicesMatchTheWorkerBinaries(t *testing.T) {
 	decl := regexp.MustCompile(`(?m)^\s*const\s+serviceName\s*=\s*"([^"]+)"`)
 
 	found := map[string]bool{}
-	for _, main := range []string{"../../cmd/ateworker-gvisor/main.go", "../../cmd/ateworker-microvm/main.go"} {
+	for _, main := range []string{"../../cmd/ateworker-gvisor/main.go", "../../cmd/ateworker-microvm/main.go", "../../cmd/ateworker-kata/main.go"} {
 		src, err := os.ReadFile(main)
 		if err != nil {
 			t.Fatalf("reading %s: %v", main, err)

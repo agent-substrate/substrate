@@ -224,6 +224,9 @@ func TestSetupBundleRootfs_MountAndUnmount(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
 
+	if mounted, err := MountedUnder(bundle); err != nil || !mounted {
+		t.Errorf("MountedUnder() = %v, %v after the overlay was mounted, want true", mounted, err)
+	}
 	if got, err := os.ReadFile(filepath.Join(bundle, "rootfs", "from-layer.txt")); err != nil || string(got) != "hello" {
 		t.Errorf("layer content not visible through overlay: %q (%v)", got, err)
 	}
@@ -244,8 +247,31 @@ func TestSetupBundleRootfs_MountAndUnmount(t *testing.T) {
 	if err := UnmountAllUnder(bundle); err != nil {
 		t.Fatalf("UnmountAllUnder: %v", err)
 	}
+	if mounted, err := MountedUnder(bundle); err != nil || mounted {
+		t.Errorf("MountedUnder() = %v, %v after the unmount, want false", mounted, err)
+	}
 	if _, err := os.Stat(filepath.Join(bundle, "rootfs", "from-layer.txt")); err == nil {
 		t.Errorf("rootfs still shows layer content after unmount")
+	}
+}
+
+func TestMountedUnder(t *testing.T) {
+	tests := []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{"a directory with no mount", t.TempDir(), false},
+		{"a directory that does not exist", "/nonexistent/dir", false},
+		{"a mount point", "/proc", true},
+		{"the parent of a mount point", "/", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := MountedUnder(tt.dir); err != nil || got != tt.want {
+				t.Errorf("MountedUnder(%q) = %v, %v, want %v", tt.dir, got, err, tt.want)
+			}
+		})
 	}
 }
 
