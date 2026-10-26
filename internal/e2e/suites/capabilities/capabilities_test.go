@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -128,8 +129,12 @@ func TestActorCapabilities(t *testing.T) {
 			// uid 0 must not write /proc/sys. gVisor's procfs makes this file
 			// 0444. On microVM the container is root in the guest kernel, so
 			// this relies on the read-only path.
-			if msg := probeWriteFile(t, ctx, rc, namespace, actor, "/proc/sys/kernel/domainname"); msg == "" {
+			msg := probeWriteFile(t, ctx, rc, namespace, actor, "/proc/sys/kernel/domainname")
+			switch {
+			case msg == "":
 				t.Error("writing /proc/sys/kernel/domainname succeeded, want an error")
+			case e2e.IsMicroVM() && !strings.Contains(msg, "read-only file system"):
+				t.Errorf("writing /proc/sys/kernel/domainname: %s, want a read-only file system error", msg)
 			}
 		})
 	}
