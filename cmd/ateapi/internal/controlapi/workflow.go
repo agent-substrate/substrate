@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -164,6 +165,16 @@ func (w *ActorWorkflow) cleanupSnapshot(ctx context.Context, prefix resources.St
 func (w *ActorWorkflow) copySnapshot(ctx context.Context, src, dst resources.StoragePrefix) error {
 	_, err := w.objectStorePlugin.CopySnapshot(ctx, &objectstore.CopySnapshotRequest{SrcUri: src.String(), DstUri: dst.String()})
 	return pluginsocket.CallError(err)
+}
+
+// dialAtelet dials the atelet on node. It fails with Unavailable, since the
+// atelet may be restarting.
+func (w *ActorWorkflow) dialAtelet(node string) (*grpc.ClientConn, error) {
+	conn, err := w.dialer.DialForAteletOnNode(node)
+	if err != nil {
+		return nil, apierror.Unavailable("while getting atelet conn for node %q: %w", node, err)
+	}
+	return conn, nil
 }
 
 // actorWorkflowStore enumerates the exact storage methods needed by

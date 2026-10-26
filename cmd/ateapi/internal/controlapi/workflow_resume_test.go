@@ -960,6 +960,31 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 	}
 }
 
+// TestEnsureAteletRestored_AteletNotDialable verifies that a resume whose
+// assigned node has no atelet to dial fails with Unavailable, so the caller
+// retries.
+func TestEnsureAteletRestored_AteletNotDialable(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		atelets []*corev1.Pod
+	}{
+		{name: "no atelet on the node"},
+		{name: "atelet has no IPs", atelets: []*corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Namespace: installdefaults.SystemNamespace, Name: "atelet-1", UID: "atelet-uid"},
+			Spec:       corev1.PodSpec{NodeName: "node-1"},
+		}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &ActorWorkflow{dialer: NewAteletDialer(newTestAteletIndexer(t, tc.atelets...), installdefaults.SystemNamespace, "", "")}
+			actor := &ateapi.Actor{Status: &ateapi.ActorStatus{WorkerAssignment: wireTestAssignment()}}
+			_, _, err := w.ensureAteletRestored(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{}, nil)
+			if got := apierror.Code(err); got != codes.Unavailable {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Unavailable, err)
+			}
+		})
+	}
+}
+
 // TestValidateAssignedWorker verifies that RESUMING recovery only proceeds on
 // a live, non-draining worker whose assignment still names this actor: the
 // recovery path loads the worker by pod name only, so the assignment may have
