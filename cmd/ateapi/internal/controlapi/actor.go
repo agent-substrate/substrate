@@ -19,6 +19,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -80,6 +81,18 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 	template, err := resolveActorTemplate(ctx, s.store, inActor)
 	if err != nil {
 		return nil, err
+	}
+
+	// The template's actor_labels are defaults; the Actor's own value wins.
+	// The request was validated before the merge, and each set alone can fit
+	// the label limits while their union does not.
+	if defaults := template.GetActorLabels(); len(defaults) > 0 {
+		labels := maps.Clone(defaults)
+		maps.Copy(labels, inActor.GetLabels())
+		inActor.Labels = labels
+		if errs := apivalidation.ValidateActorCreate(ctx, field.NewPath("actor"), inActor); len(errs) > 0 {
+			return nil, resources.ToAPIError(errs)
+		}
 	}
 
 	// Resolve the explicit tag, or freeze the template's current golden default.

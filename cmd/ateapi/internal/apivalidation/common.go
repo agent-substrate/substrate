@@ -17,7 +17,10 @@ package apivalidation
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
+	"slices"
+	"strings"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -111,6 +114,29 @@ func validateDualStackIPs(fldPath *field.Path, ips []string) field.ErrorList {
 			errs = append(errs, field.Invalid(idxPath, ip, "must not contain more than one address per IP family"))
 		}
 		*seen = true
+	}
+	return errs
+}
+
+// maxLabelsSizeBytes bounds the keys and values of one label set together.
+// Labels travel with every Get and List of their resource, so the per-entry
+// formats alone would allow a set far larger than identification needs.
+const maxLabelsSizeBytes = 4096
+
+// validateLabels checks what the label tags cannot express: keys in ate.dev
+// and its subdomains are reserved, as on WorkerPool labels, and the set fits
+// maxLabelsSizeBytes. Count and per-entry formats are enforced by tags.
+func validateLabels(fldPath *field.Path, labels map[string]string) field.ErrorList {
+	var errs field.ErrorList
+	size := 0
+	for _, key := range slices.Sorted(maps.Keys(labels)) {
+		if strings.HasPrefix(key, "ate.dev/") || strings.Contains(key, ".ate.dev/") {
+			errs = append(errs, field.Invalid(fldPath, key, "ate.dev and its subdomains are reserved"))
+		}
+		size += len(key) + len(labels[key])
+	}
+	if size > maxLabelsSizeBytes {
+		errs = append(errs, field.TooLong(fldPath, size, maxLabelsSizeBytes))
 	}
 	return errs
 }

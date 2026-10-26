@@ -50,6 +50,7 @@ var (
 	createActorAtespaceFlag       string
 	createActorTemplateFlag       string
 	createActorTagFlag            string
+	createActorLabelsFlag         string
 	updateActorAtespaceFlag       string
 	updateActorTemplateFlag       string
 	updateActorWorkerSelectorFlag string
@@ -123,7 +124,7 @@ var createActorCmd = &cobra.Command{
 	Short: "Create an actor",
 	Args:  exactlyOneArg("<actor-name>", "atespace", "template"),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag)
+		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag, createActorLabelsFlag)
 		if err != nil {
 			return wrapUsageError(err)
 		}
@@ -305,7 +306,7 @@ func buildSuspendActorRequest(actorRef resources.ActorRef, mode ateapi.Durabilit
 	}
 }
 
-func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapi.CreateActorRequest, error) {
+func buildCreateActorRequest(actorName, atespace, template, tag, labels string) (*ateapi.CreateActorRequest, error) {
 	templateRef, err := parseAtespacedName(template, atespace)
 	if err != nil {
 		return nil, err
@@ -324,6 +325,12 @@ func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapi
 			return nil, err
 		}
 		actor.SourceTag = ref
+	}
+	if labels != "" {
+		actor.Labels, err = parseLabelPairs("labels", labels)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &ateapi.CreateActorRequest{Actor: actor}, nil
 }
@@ -354,27 +361,37 @@ func parseWorkerSelector(raw string) (*ateapi.Selector, error) {
 	if raw == "" {
 		return nil, nil
 	}
-	matchLabels := make(map[string]string)
-	for entry := range strings.SplitSeq(raw, ",") {
-		key, val, ok := strings.Cut(entry, "=")
-		if !ok {
-			return nil, fmt.Errorf("invalid worker selector %q: entry %q must be in key=value format", raw, entry)
-		}
-		if errs := content.IsLabelKey(key); len(errs) > 0 {
-			return nil, fmt.Errorf("invalid worker selector %q: invalid label key %q: %s", raw, key, strings.Join(errs, "; "))
-		}
-		if errs := content.IsLabelValue(val); len(errs) > 0 {
-			return nil, fmt.Errorf("invalid worker selector %q: invalid label value %q for key %q: %s", raw, val, key, strings.Join(errs, "; "))
-		}
-		if _, exists := matchLabels[key]; exists {
-			return nil, fmt.Errorf("invalid worker selector %q: duplicate label key %q", raw, key)
-		}
-		matchLabels[key] = val
+	matchLabels, err := parseLabelPairs("worker selector", raw)
+	if err != nil {
+		return nil, err
 	}
 	if len(matchLabels) > maxWorkerSelectorLabels {
 		return nil, fmt.Errorf("invalid worker selector %q: at most %d labels are allowed, got %d", raw, maxWorkerSelectorLabels, len(matchLabels))
 	}
 	return &ateapi.Selector{MatchLabels: matchLabels}, nil
+}
+
+// parseLabelPairs parses comma-separated key=value labels. what names the
+// flag value in errors.
+func parseLabelPairs(what, raw string) (map[string]string, error) {
+	labels := make(map[string]string)
+	for entry := range strings.SplitSeq(raw, ",") {
+		key, val, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid %s %q: entry %q must be in key=value format", what, raw, entry)
+		}
+		if errs := content.IsLabelKey(key); len(errs) > 0 {
+			return nil, fmt.Errorf("invalid %s %q: invalid label key %q: %s", what, raw, key, strings.Join(errs, "; "))
+		}
+		if errs := content.IsLabelValue(val); len(errs) > 0 {
+			return nil, fmt.Errorf("invalid %s %q: invalid label value %q for key %q: %s", what, raw, val, key, strings.Join(errs, "; "))
+		}
+		if _, exists := labels[key]; exists {
+			return nil, fmt.Errorf("invalid %s %q: duplicate label key %q", what, raw, key)
+		}
+		labels[key] = val
+	}
+	return labels, nil
 }
 
 // AteAPIClient abstracts the gRPC client calls.
@@ -850,6 +867,7 @@ func init() {
 	createActorCmd.Flags().StringVar(&createActorTemplateFlag, "template", "", "actor-template to derive the actor from, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")
 	createActorCmd.Flags().StringVarP(&createActorAtespaceFlag, "atespace", "a", "", "atespace to create the actor in")
 	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (see --atespace)")
+	createActorCmd.Flags().StringVar(&createActorLabelsFlag, "labels", "", "comma-separated key=value labels for the actor, merged over the template's actor_labels; immutable after creation")
 	createCmd.AddCommand(createActorCmd)
 
 	updateActorCmd.Flags().StringVarP(&updateActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")

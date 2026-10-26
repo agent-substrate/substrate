@@ -49,6 +49,7 @@ func TestBuildCreateActorRequest(t *testing.T) {
 		name        string
 		templateRef string
 		tag         string
+		labels      string
 		want        *ateapi.Actor
 		wantErr     bool
 	}{
@@ -89,12 +90,25 @@ func TestBuildCreateActorRequest(t *testing.T) {
 			},
 		},
 		{name: "malformed template ref", templateRef: "a/b/c", wantErr: true},
+		{
+			name:        "labels",
+			templateRef: "counter",
+			labels:      "app=billing,example.com/team=payments",
+			want: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter"},
+				Labels:        map[string]string{"app": "billing", "example.com/team": "payments"},
+			},
+		},
 		{name: "malformed tag", templateRef: "counter", tag: "a/b/c", wantErr: true},
+		{name: "malformed labels", templateRef: "counter", labels: "app", wantErr: true},
+		{name: "invalid label key", templateRef: "counter", labels: "bad key=1", wantErr: true},
+		{name: "duplicate label key", templateRef: "counter", labels: "app=a,app=b", wantErr: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.tag)
+			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.tag, test.labels)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("buildCreateActorRequest error = %v, wantErr %t", err, test.wantErr)
 			}
