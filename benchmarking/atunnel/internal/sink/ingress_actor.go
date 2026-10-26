@@ -20,6 +20,7 @@ package sink
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -58,11 +59,63 @@ func (a *IngressActor) Stats() IngressActorStats {
 	}
 }
 
-func (a *IngressActor) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+// Paths that make the ingress actor a slow peer instead of answering.
+const (
+	// StreamPath answers with a body that never ends.
+	StreamPath = "/stream"
+	// DiscardPath reads the request body to its end and drops it.
+	DiscardPath = "/discard"
+	// StallPath answers at once, reads the number of request body bytes in
+	// the drain query parameter, and then none until the unix time in until,
+	// after which it closes the connection. It needs the bound: an HTTP/1.1
+	// server notices a client going away only by reading.
+	StallPath = "/stall"
+)
+
+func (a *IngressActor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.requests.Add(1)
+	switch r.URL.Path {
+	case StreamPath:
+		a.stream(w)
+		return
+	case DiscardPath:
+		_, _ = io.Copy(io.Discard, r.Body)
+		return
+	case StallPath:
+		until, err1 := strconv.ParseInt(r.URL.Query().Get("until"), 10, 64)
+		drain, err2 := strconv.ParseInt(r.URL.Query().Get("drain"), 10, 64)
+		if err1 != nil || err2 != nil {
+			http.Error(w, "until and drain must be integers", http.StatusBadRequest)
+			return
+		}
+		rc := http.NewResponseController(w)
+		// Read the body after answering, as a server streaming both ways
+		// does.
+		_ = rc.EnableFullDuplex()
+		w.Header().Set("Connection", "close")
+		w.WriteHeader(http.StatusOK)
+		_ = rc.Flush()
+		stall(r.Context(), r.Body, time.Unix(until, 0), drain)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("Content-Length", strconv.Itoa(len(a.body)))
 	_, _ = w.Write(a.body)
+}
+
+// stream writes the fixed body over and over until the client goes away.
+func (a *IngressActor) stream(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/octet-stream")
+	rc := http.NewResponseController(w)
+	chunk := fixedBody(sourceChunk)
+	for {
+		if _, err := w.Write(chunk); err != nil {
+			return
+		}
+		if err := rc.Flush(); err != nil {
+			return
+		}
+	}
 }
 
 // Serve serves HTTP/1.1 and h2c on lis until ctx ends.

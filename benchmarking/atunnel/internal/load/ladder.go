@@ -204,17 +204,45 @@ func (r *Runner) rung(ctx context.Context, s Scenario, target float64) (report.R
 		workers:                 r.Workers,
 		newConnectionPerRequest: s.newConnectionPerRequest,
 	}
+	if s.fill > 0 {
+		opts.drainBytes = slowDrain
+		if err := r.quiesce(ctx); err != nil {
+			return report.Rung{}, err
+		}
+	}
+	defer func() {
+		if s.mode == EgressSlowWrite {
+			// Tunnels opened by the next scenario must not stall.
+			_ = r.sink.post(ctx, "/stall?until=0&drain=0")
+		}
+	}()
 	var live Stats
 	var liveErr error
 	switch {
 	case s.holdsConnections:
 		// Open at a steady rate, stretching the rung if the count needs
-		// it, then hold for at least half a step. Every open is measured.
+		// it, then hold for at least half a step, and long enough for the
+		// slow peers' queues to fill. Every open is measured.
 		opts.connections = int(target)
 		opts.rate = idleOpenRate
 		opts.warmup = 0
-		opts.duration = max(r.Step, time.Duration(target/idleOpenRate*float64(time.Second))+r.Step/2)
-		opts.whileHolding = func(ctx context.Context) { live, liveErr = r.tunnel.liveStats(ctx) }
+		opens := time.Duration(target / idleOpenRate * float64(time.Second))
+		opts.duration = max(r.Step, opens+max(r.Step/2, s.fill+2*time.Second))
+		if s.mode == EgressSlowWrite {
+			// The gateway stops stalling as the hold ends, so the tunnels the
+			// generator closes do not linger in atunnel into the next rung.
+			until := time.Now().Add(opts.duration + 2*time.Second).Unix()
+			if err := r.sink.post(ctx, fmt.Sprintf("/stall?until=%d&drain=%d", until, opts.drainBytes)); err != nil {
+				return report.Rung{}, fmt.Errorf("setting the gateway's stall: %w", err)
+			}
+		}
+		opts.whileHolding = func(ctx context.Context) {
+			select {
+			case <-ctx.Done():
+			case <-time.After(s.fill):
+			}
+			live, liveErr = r.tunnel.liveStats(ctx)
+		}
 	case s.streams > 0:
 		opts.connections = s.streams
 		opts.payloadBytes = 64 << 10
@@ -313,6 +341,10 @@ func (r *Runner) rung(ctx context.Context, s Scenario, target float64) (report.R
 	if s.holdsConnections {
 		rung.Tunnel.HeapLiveBytes = live.Process.HeapInUseBytes
 		rung.Tunnel.GoroutinesLive = live.Process.Goroutines
+		if c := live.Process.Cgroup; c != nil {
+			rung.Tunnel.CgroupMemLiveBytes = c.MemoryCurrentBytes
+			rung.Tunnel.CgroupSockLiveBytes = c.MemorySockBytes
+		}
 	}
 	if r.ProfileDir != "" {
 		path := filepath.Join(r.ProfileDir, profileName(s, target, "heap"))
@@ -326,13 +358,45 @@ func (r *Runner) rung(ctx context.Context, s Scenario, target float64) (report.R
 	return rung, nil
 }
 
+// quiesce waits, for up to quiesceTimeout, until atunnel's kernel socket
+// memory is back near nothing, so a slow-peer rung does not count the queues
+// of connections the last one closed.
+func (r *Runner) quiesce(ctx context.Context) error {
+	const (
+		quiesceTimeout = time.Minute
+		quiet          = 2 << 20
+	)
+	deadline := time.Now().Add(quiesceTimeout)
+	for {
+		st, err := r.tunnel.stats(ctx)
+		if err != nil {
+			return err
+		}
+		c := st.Process.Cgroup
+		if c == nil {
+			return fmt.Errorf("slow-peer scenarios read atunnel's cgroup, but atunnel runs in none")
+		}
+		if c.MemorySockBytes < quiet {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("atunnel still holds %d bytes of socket memory %s after the last rung", c.MemorySockBytes, quiesceTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
 // execute runs opts here, or on the egress actor for egress modes.
 func (r *Runner) execute(ctx context.Context, opts options) (report.Load, error) {
 	if isEgress(opts.mode) {
 		if r.SharedDir == "" {
 			return report.Load{}, fmt.Errorf("%s needs the egress actor in the shared directory", opts.mode)
 		}
-		if opts.mode == EgressIdle && len(r.Targets.Actors) > 1 {
+		if holds(opts.mode) && len(r.Targets.Actors) > 1 {
 			sockets := make([]string, len(r.Targets.Actors))
 			for i := range sockets {
 				sockets[i] = r.egressActorSocket(i)

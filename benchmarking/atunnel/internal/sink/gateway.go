@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,7 +39,21 @@ const (
 	// DiscardPort tunnels carry raw bytes, which the gateway reads and drops,
 	// for throughput.
 	DiscardPort = "9"
+	// SourcePort tunnels carry bytes the gateway writes without end, as a
+	// large download does, however slowly the actor reads.
+	SourcePort = "19"
+	// StallPort tunnels get one byte from the gateway, to show they are open.
+	// The gateway then reads the drain bytes set by POST /stall and nothing
+	// more until the time set there, as a server that stalls partway through
+	// an upload does. The settings cannot travel inside the tunnel: stalled
+	// tunnels use up the HTTP/2 connection's receive window, which stops
+	// every other tunnel on the connection.
+	StallPort = "29"
 )
+
+// sourceChunk is how much the gateway writes at a time into a SourcePort
+// tunnel.
+const sourceChunk = 32 << 10
 
 // GatewayStats are the fake gateway's counters.
 type GatewayStats struct {
@@ -79,6 +94,18 @@ type Gateway struct {
 	rejected    atomic.Uint64
 	requests    atomic.Uint64
 	bytesIn     atomic.Uint64
+
+	stallMu    sync.Mutex
+	stallUntil time.Time
+	stallDrain int64
+}
+
+// SetStall sets what StallPort tunnels opened from now on read before they
+// stall, and when they stop stalling and close.
+func (g *Gateway) SetStall(until time.Time, drain int64) {
+	g.stallMu.Lock()
+	defer g.stallMu.Unlock()
+	g.stallUntil, g.stallDrain = until, drain
 }
 
 // NewGateway loads the gateway's TLS material.
@@ -151,7 +178,7 @@ func (g *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, port, err := net.SplitHostPort(r.Host)
-	if err != nil || (port != AnswerPort && port != DiscardPort) {
+	if err != nil || (port != AnswerPort && port != DiscardPort && port != SourcePort && port != StallPort) {
 		g.rejected.Add(1)
 		http.Error(w, "unknown destination port", http.StatusBadGateway)
 		return
@@ -189,11 +216,27 @@ func (g *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	counted := countingReader{r: in, n: &g.bytesIn}
-	if port == DiscardPort {
+	switch port {
+	case DiscardPort:
 		_, _ = io.Copy(io.Discard, counted)
-		return
+	case SourcePort:
+		chunk := fixedBody(sourceChunk)
+		for {
+			if _, err := out.Write(chunk); err != nil {
+				return
+			}
+		}
+	case StallPort:
+		if _, err := out.Write([]byte{'k'}); err != nil {
+			return
+		}
+		g.stallMu.Lock()
+		until, drain := g.stallUntil, g.stallDrain
+		g.stallMu.Unlock()
+		stall(r.Context(), counted, until, drain)
+	default:
+		g.answer(counted, out)
 	}
-	g.answer(counted, out)
 }
 
 // answer reads HTTP/1.1 requests from the tunnel and writes the fixed response
@@ -211,6 +254,18 @@ func (g *Gateway) answer(in io.Reader, out io.Writer) {
 		if _, err := out.Write(g.response); err != nil {
 			return
 		}
+	}
+}
+
+// stall reads drain bytes from in and then nothing until until, or until ctx
+// ends.
+func stall(ctx context.Context, in io.Reader, until time.Time, drain int64) {
+	if _, err := io.CopyN(io.Discard, in, drain); err != nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Until(until)):
 	}
 }
 
@@ -247,6 +302,15 @@ func AdminHandler(gateway *Gateway) http.Handler {
 	mux.Handle("/stats", procstats.Handler(func() map[string]any {
 		return map[string]any{"gateway": gateway.Stats()}
 	}))
+	mux.HandleFunc("POST /stall", func(w http.ResponseWriter, r *http.Request) {
+		until, err1 := strconv.ParseInt(r.URL.Query().Get("until"), 10, 64)
+		drain, err2 := strconv.ParseInt(r.URL.Query().Get("drain"), 10, 64)
+		if err1 != nil || err2 != nil {
+			http.Error(w, "until and drain must be integers", http.StatusBadRequest)
+			return
+		}
+		gateway.SetStall(time.Unix(until, 0), drain)
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	return mux
 }

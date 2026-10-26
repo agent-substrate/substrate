@@ -41,6 +41,8 @@ import (
 const (
 	egressAnswerDestination  = "192.0.2.10:80"
 	egressDiscardDestination = "192.0.2.10:9"
+	egressSourceDestination  = "192.0.2.10:19"
+	egressStallDestination   = "192.0.2.10:29"
 )
 
 // egressActorHolding is the line the egress actor writes when EgressIdle has
@@ -58,6 +60,7 @@ type egressActorRequest struct {
 	Connections             int           `json:"connections"`
 	NewConnectionPerRequest bool          `json:"new_connection_per_request"`
 	PayloadBytes            int           `json:"payload_bytes"`
+	DrainBytes              int64         `json:"drain_bytes"`
 }
 
 type egressActorResult struct {
@@ -67,12 +70,21 @@ type egressActorResult struct {
 
 // isEgress reports whether a mode's traffic starts inside the sandbox.
 func isEgress(m Mode) bool {
-	return m == EgressHTTP || m == EgressIdle || m == EgressStream
+	switch m {
+	case EgressHTTP, EgressIdle, EgressStream, EgressStreamDown, EgressSlowRead, EgressSlowWrite:
+		return true
+	}
+	return false
 }
 
 // ServeEgressActor serves egress runs on lis until ctx ends.
 func ServeEgressActor(ctx context.Context, lis net.Listener) error {
-	return serveEgressActor(ctx, lis, Targets{Egress: egressAnswerDestination, EgressDiscard: egressDiscardDestination})
+	return serveEgressActor(ctx, lis, Targets{
+		Egress:        egressAnswerDestination,
+		EgressDiscard: egressDiscardDestination,
+		EgressSource:  egressSourceDestination,
+		EgressStall:   egressStallDestination,
+	})
 }
 
 func serveEgressActor(ctx context.Context, lis net.Listener, targets Targets) error {
@@ -90,6 +102,7 @@ func serveEgressActor(ctx context.Context, lis net.Listener, targets Targets) er
 			mode: req.Mode, rate: req.Rate, duration: req.Duration, warmup: req.Warmup,
 			workers: req.Workers, connections: req.Connections,
 			newConnectionPerRequest: req.NewConnectionPerRequest, payloadBytes: req.PayloadBytes,
+			drainBytes: req.DrainBytes,
 			whileHolding: func(context.Context) {
 				_, _ = fmt.Fprintln(w, egressActorHolding)
 				_ = rc.Flush()
@@ -117,6 +130,7 @@ func executeOnEgressActor(ctx context.Context, socket string, opts options) (rep
 		Mode: opts.mode, Rate: opts.rate, Duration: opts.duration, Warmup: opts.warmup,
 		Workers: opts.workers, Connections: opts.connections,
 		NewConnectionPerRequest: opts.newConnectionPerRequest, PayloadBytes: opts.payloadBytes,
+		DrainBytes: opts.drainBytes,
 	})
 	if err != nil {
 		return report.Load{}, err
@@ -162,7 +176,7 @@ func executeOnEgressActor(ctx context.Context, socket string, opts options) (rep
 	return report.Load{}, fmt.Errorf("egress actor: no result")
 }
 
-// executeOnEgressActors splits an EgressIdle run evenly across the egress
+// executeOnEgressActors splits a run that holds connections evenly across the egress
 // actors at sockets, one per sandbox. A sandbox has one address, so it can hold
 // at most ~64k egress connections at a time: atunnel's redirect makes every one
 // of them look the same but for the source port. whileHolding runs once, after

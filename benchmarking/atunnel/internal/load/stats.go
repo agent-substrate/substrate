@@ -122,6 +122,23 @@ func (a *admin) get(ctx context.Context, path string) (Stats, error) {
 	return s, json.NewDecoder(resp.Body).Decode(&s)
 }
 
+// post sends an empty POST to path.
+func (a *admin) post(ctx context.Context, path string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.base+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("POST %s%s: HTTP %d", a.base, path, resp.StatusCode)
+	}
+	return nil
+}
+
 // waitReady polls /healthz until it answers or ctx ends.
 func (a *admin) waitReady(ctx context.Context) error {
 	for {
@@ -193,6 +210,12 @@ func startWatch(ctx context.Context, read func(context.Context) (procstats.Snaps
 	w := &watch{read: read, stop: make(chan struct{}), done: make(chan struct{})}
 	w.start, w.err = read(ctx)
 	w.peak = w.start
+	if w.start.Cgroup != nil {
+		// observe raises the peak's cgroup figures in place; the start's
+		// must not move with them.
+		c := *w.start.Cgroup
+		w.peak.Cgroup = &c
+	}
 	go func() {
 		defer close(w.done)
 		ticker := time.NewTicker(interval)
@@ -236,6 +259,7 @@ func (w *watch) observe(s procstats.Snapshot) {
 			w.peak.Cgroup = &c
 		}
 		w.peak.Cgroup.MemoryCurrentBytes = max(w.peak.Cgroup.MemoryCurrentBytes, s.Cgroup.MemoryCurrentBytes)
+		w.peak.Cgroup.MemorySockBytes = max(w.peak.Cgroup.MemorySockBytes, s.Cgroup.MemorySockBytes)
 	}
 }
 
@@ -280,6 +304,9 @@ func (w *watch) finish(ctx context.Context, units uint64) (report.Resources, err
 		}
 		res.CgroupMemEndBytes = end.Cgroup.MemoryCurrentBytes
 		res.CgroupMemMaxBytes = w.peak.Cgroup.MemoryCurrentBytes
+		res.CgroupSockMaxBytes = w.peak.Cgroup.MemorySockBytes
+		res.CgroupMemStartBytes = w.start.Cgroup.MemoryCurrentBytes
+		res.CgroupSockStartBytes = w.start.Cgroup.MemorySockBytes
 		res.CgroupCPULimitCore = end.Cgroup.CPULimitCores
 	}
 	return res, nil
