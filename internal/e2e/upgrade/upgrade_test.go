@@ -59,10 +59,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/portforward"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -118,8 +118,8 @@ type actor struct {
 	calls int
 }
 
-func (a *actor) ref() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: a.atespace, Name: a.name}
+func (a *actor) ref() *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: a.atespace, Name: a.name}
 }
 
 func (a *actor) routerRef() resources.ActorRef {
@@ -127,7 +127,7 @@ func (a *actor) routerRef() resources.ActorRef {
 }
 
 func TestRollingUpgrade(t *testing.T) {
-	// The micro-VM counter pool has two workers, and the suite needs three.
+	// The microVM counter pool has two workers, and the suite needs three.
 	if e2e.IsMicroVM() {
 		t.Fatal("the upgrade suite runs on gVisor only")
 	}
@@ -167,7 +167,7 @@ func TestRollingUpgrade(t *testing.T) {
 	// answer, and a suspended one resumes onto the spare old worker.
 	router = newRouter(ctx, t)
 	for _, a := range actors[:2] {
-		if got := state(ctx, t, api, a); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		if got := state(ctx, t, api, a); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 			t.Fatalf("actor %q is %v after %s, want it still running", a.name, got, stepAtelet)
 		}
 		callCounter(ctx, t, router, a, "after "+stepAtelet)
@@ -187,7 +187,7 @@ func TestRollingUpgrade(t *testing.T) {
 		rollPool(ctx, t, api.get(), fixture.PoolNamespace, fixture.PoolName, newImage)
 		// Every old worker is gone, so the harness has suspended these.
 		for _, a := range onOldWorkers {
-			waitForState(ctx, t, api, a, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, stateTimeout)
+			waitForState(ctx, t, api, a, ateapi.ActorState_ACTOR_STATE_SUSPENDED, stateTimeout)
 		}
 		assertNoneCrashed(ctx, t, api, actors, stepPoolRoll)
 	})
@@ -291,18 +291,18 @@ func runStep(ctx context.Context, t *testing.T, api *api, h *harness, actors []*
 func createActor(ctx context.Context, t *testing.T, api *api, fixture e2e.SubstrateFixture, a *actor) {
 	t.Helper()
 	t.Logf("Creating Actor %q...", a.name)
-	if _, err := api.get().SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: a.atespace, Name: a.name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: fixture.Atespace, Name: fixture.Name},
+	if _, err := api.get().SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: a.atespace, Name: a.name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: fixture.Atespace, Name: fixture.Name},
 	}}); err != nil {
 		t.Fatalf("failed to create Actor %q: %v", a.name, err)
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		_, _ = api.get().SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: a.ref()})
+		_, _ = api.get().SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{Actor: a.ref()})
 	})
-	waitForState(ctx, t, api, a, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, stateTimeout)
+	waitForState(ctx, t, api, a, ateapi.ActorState_ACTOR_STATE_SUSPENDED, stateTimeout)
 }
 
 // seedActor runs a once and leaves it in its before state.
@@ -313,9 +313,9 @@ func seedActor(ctx context.Context, t *testing.T, api *api, router *e2e.RouterCl
 	switch a.before {
 	case startRunning:
 	case startPaused:
-		suspendActor(ctx, t, api, a, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS)
+		suspendActor(ctx, t, api, a, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS)
 	case startSuspended:
-		suspendActor(ctx, t, api, a, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+		suspendActor(ctx, t, api, a, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
 	default:
 		t.Fatalf("actor %q: unsupported starting state %v", a.name, a.before)
 	}
@@ -335,20 +335,20 @@ func verifyActor(ctx context.Context, t *testing.T, api *api, router *e2e.Router
 		t.Errorf("actor %q resumed on worker pod %s, which does not run %s", a.name, pod.Name, image)
 	}
 	callCounter(ctx, t, router, a, "after upgrade")
-	suspendActor(ctx, t, api, a, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+	suspendActor(ctx, t, api, a, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
 }
 
 // resumeActor brings a to RUNNING, or returns it as is when it already is.
-func resumeActor(ctx context.Context, t *testing.T, api *api, router *e2e.RouterClient, a *actor) *ateapipb.Actor {
+func resumeActor(ctx context.Context, t *testing.T, api *api, router *e2e.RouterClient, a *actor) *ateapi.Actor {
 	t.Helper()
-	if act := getActor(ctx, t, api, a); act.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if act := getActor(ctx, t, api, a); act.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING {
 		return act
 	}
 	t.Logf("Resuming Actor %q...", a.name)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, api.get(), &ateapipb.ResumeActorRequest{Actor: a.ref()}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, api.get(), &ateapi.ResumeActorRequest{Actor: a.ref()}); err != nil {
 		t.Fatalf("failed to resume Actor %q: %v", a.name, err)
 	}
-	act := waitForState(ctx, t, api, a, ateapipb.ActorState_ACTOR_STATE_RUNNING, stateTimeout)
+	act := waitForState(ctx, t, api, a, ateapi.ActorState_ACTOR_STATE_RUNNING, stateTimeout)
 	// Re-sent after every resume; a restore that fell back to a cold boot
 	// would otherwise start at the 15 s default.
 	body := routerCallRetry(ctx, t, router, a, http.MethodGet, fmt.Sprintf("/set-sigterm-sleep?duration=%d", sigtermSleepSeconds))
@@ -356,44 +356,44 @@ func resumeActor(ctx context.Context, t *testing.T, api *api, router *e2e.Router
 	return act
 }
 
-func suspendActor(ctx context.Context, t *testing.T, api *api, a *actor, mode ateapipb.DurabilityMode) {
+func suspendActor(ctx context.Context, t *testing.T, api *api, a *actor, mode ateapi.DurabilityMode) {
 	t.Helper()
 	t.Logf("Suspending Actor %q (%v)...", a.name, mode)
-	req := &ateapipb.SuspendActorRequest{Actor: a.ref(), Options: &ateapipb.SuspendOptions{Mode: mode}}
+	req := &ateapi.SuspendActorRequest{Actor: a.ref(), Options: &ateapi.SuspendOptions{Mode: mode}}
 	if _, err := api.get().SubstrateAPI.SuspendActor(ctx, req); err != nil {
 		t.Fatalf("failed to suspend Actor %q: %v", a.name, err)
 	}
-	waitForState(ctx, t, api, a, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, stateTimeout)
+	waitForState(ctx, t, api, a, ateapi.ActorState_ACTOR_STATE_SUSPENDED, stateTimeout)
 }
 
-func getActor(ctx context.Context, t *testing.T, api *api, a *actor) *ateapipb.Actor {
+func getActor(ctx context.Context, t *testing.T, api *api, a *actor) *ateapi.Actor {
 	t.Helper()
-	act, err := api.get().SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: a.ref()})
+	act, err := api.get().SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: a.ref()})
 	if err != nil {
 		t.Fatalf("failed to get Actor %q: %v", a.name, err)
 	}
 	return act
 }
 
-func state(ctx context.Context, t *testing.T, api *api, a *actor) ateapipb.ActorState {
+func state(ctx context.Context, t *testing.T, api *api, a *actor) ateapi.ActorState {
 	t.Helper()
 	return getActor(ctx, t, api, a).GetStatus().GetState()
 }
 
 // waitForState polls until a reaches want. A CRASHED actor fails the test at
 // once: there is no way back from it.
-func waitForState(ctx context.Context, t *testing.T, api *api, a *actor, want ateapipb.ActorState, timeout time.Duration) *ateapipb.Actor {
+func waitForState(ctx context.Context, t *testing.T, api *api, a *actor, want ateapi.ActorState, timeout time.Duration) *ateapi.Actor {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
-	var last ateapipb.ActorState
+	var last ateapi.ActorState
 	for time.Now().Before(deadline) {
-		act, err := api.get().SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: a.ref()})
+		act, err := api.get().SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: a.ref()})
 		if err == nil {
 			last = act.GetStatus().GetState()
 			if last == want {
 				return act
 			}
-			if last == ateapipb.ActorState_ACTOR_STATE_CRASHED {
+			if last == ateapi.ActorState_ACTOR_STATE_CRASHED {
 				t.Fatalf("actor %q is CRASHED (wanted %v)", a.name, want)
 			}
 		}
@@ -407,7 +407,7 @@ func assertNoneCrashed(ctx context.Context, t *testing.T, api *api, actors []*ac
 	t.Helper()
 	for _, a := range actors {
 		got := state(ctx, t, api, a)
-		if got == ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		if got == ateapi.ActorState_ACTOR_STATE_CRASHED {
 			t.Fatalf("%s: actor %q is CRASHED", step, a.name)
 		}
 		t.Logf("%s: actor %q is %v", step, a.name, got)
@@ -479,7 +479,7 @@ func routerCall(ctx context.Context, router *e2e.RouterClient, a *actor, method,
 
 func newRouter(ctx context.Context, t *testing.T) *e2e.RouterClient {
 	t.Helper()
-	router, err := e2e.NewRouterClient(ctx)
+	router, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("failed to connect to atenet-router: %v", err)
 	}
@@ -604,8 +604,8 @@ func (h *harness) run(ctx context.Context) {
 // keeps running for a day after SIGTERM.
 func (h *harness) check(ctx context.Context, a *actor) {
 	clients := h.api.get()
-	act, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: a.ref()})
-	if err != nil || act.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	act, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: a.ref()})
+	if err != nil || act.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		return
 	}
 	wa := act.GetStatus().GetWorkerAssignment()
@@ -624,7 +624,7 @@ func (h *harness) check(ctx context.Context, a *actor) {
 		return
 	}
 	h.t.Logf("harness: worker pod %s of actor %q is terminating during %q; suspending", pod.Name, a.name, step)
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: a.ref()}); err != nil {
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: a.ref()}); err != nil {
 		h.t.Logf("harness: failed to suspend actor %q: %v", a.name, err)
 		return
 	}
@@ -646,7 +646,7 @@ func describeInstall(ctx context.Context, t *testing.T, clients *e2e.Clients, fi
 	if err != nil || len(dss.Items) != 1 {
 		t.Fatalf("expected one atelet DaemonSet, found %d (err %v)", len(dss.Items), err)
 	}
-	pool, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(fixture.PoolNamespace).Get(ctx, fixture.PoolName, metav1.GetOptions{})
+	pool, err := clients.SubstrateK8s.AteV1().WorkerPools(fixture.PoolNamespace).Get(ctx, fixture.PoolName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("failed to get WorkerPool %s/%s (deploy with: %s): %v", fixture.PoolNamespace, fixture.PoolName, fixture.DeployWith, err)
 	}
@@ -759,7 +759,7 @@ func publishWorkerImage(t *testing.T) string {
 // rollPool points the pool at image and waits until every worker pod runs it.
 func rollPool(ctx context.Context, t *testing.T, clients *e2e.Clients, namespace, name, image string) {
 	t.Helper()
-	pools := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace)
+	pools := clients.SubstrateK8s.AteV1().WorkerPools(namespace)
 	pool, err := pools.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("failed to get WorkerPool %s/%s: %v", namespace, name, err)
@@ -780,7 +780,7 @@ func rollPool(ctx context.Context, t *testing.T, clients *e2e.Clients, namespace
 // stable.
 func waitForPoolRoll(ctx context.Context, t *testing.T, clients *e2e.Clients, namespace, name, image string, stable time.Duration) {
 	t.Helper()
-	pool, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace).Get(ctx, name, metav1.GetOptions{})
+	pool, err := clients.SubstrateK8s.AteV1().WorkerPools(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("failed to get WorkerPool %s/%s: %v", namespace, name, err)
 	}

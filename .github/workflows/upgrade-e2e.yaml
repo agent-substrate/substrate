@@ -40,6 +40,9 @@ jobs:
       # deploy ate-system requires a credential provider selection. The
       # record keeps it for the upgrade.
       ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
+      # deploy ate-system also requires an ingress allowlist. This is the
+      # suite's router client (internal/e2e/ingressauth.go).
+      ATE_INGRESS_ALLOWED_SPIFFE_IDS: spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client
       ARTIFACTS: ${{ github.workspace }}/_artifacts
     steps:
     - name: Checkout the release under test
