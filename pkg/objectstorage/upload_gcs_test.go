@@ -192,7 +192,7 @@ func TestUploaderGCSSnapshotBurstFitsDefaultBudget(t *testing.T) {
 		smallFiles = append(smallFiles, f)
 	}
 	pagesPath := filepath.Join(dir, "pages.img")
-	writeSparseSource(t, pagesPath, 2<<30, []region{{0, 2 * sparsePartTarget, 0x7f}})
+	writeSparseSource(t, pagesPath, 2<<30, []region{{0, sparsePartTarget + 16<<20, 0x7f}})
 	pages, err := os.Open(pagesPath)
 	if err != nil {
 		t.Fatal(err)
