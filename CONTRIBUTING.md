@@ -6,19 +6,30 @@ guidelines.
 
 ## Before you begin
 
-### Sign our Contributor License Agreement
+### Sign off your commits
 
-Contributions to this project must be accompanied by a
-[Contributor License Agreement](https://cla.developers.google.com/about) (CLA).
-You (or your employer) retain the copyright to your contribution; this simply
-gives us permission to use and redistribute your contributions as part of the
-project.
+Every commit must be signed off under the
+[Developer Certificate of Origin](https://developercertificate.org/) (DCO).
+The `Signed-off-by` line certifies that you wrote the change or otherwise have
+the right to submit it under the project's license.
 
-If you or your current employer have already signed the Google CLA (even if it
-was for a different project), you probably don't need to do it again.
+Sign off with your real name, not an anonymous ID or a false name. It doesn't
+need to be your legal name, just the name the community knows you by. See the
+[CNCF DCO guidelines](https://github.com/cncf/foundation/blob/main/policies-guidance/dco-guidelines.md).
 
-Visit <https://cla.developers.google.com/> to see your current agreements or to
-sign a new one.
+Git adds the line with `-s`, using `user.name` and `user.email` from your git
+config. The name and email must match the commit author.
+
+```sh
+git commit -s -m "fix typo in README"
+```
+
+The DCO check on your PR fails if any commit is missing a sign-off. To sign off
+the commits already on your branch, then force-push:
+
+```sh
+git rebase --signoff upstream/main
+```
 
 ### Review our Community Guidelines
 
