@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package pluginsocket connects a server to its plugin sidecar over a Unix
-// socket. It depends on no plugin implementation, so a server that only calls
-// a plugin does not link the plugin's storage SDKs.
+// Package pluginsocket connects a server to a local plugin, such as a sidecar
+// or a CSI node plugin, over a Unix socket. It depends on no plugin
+// implementation, so a server that only calls a plugin does not link the
+// plugin's storage SDKs.
 package pluginsocket
 
 import (
@@ -38,9 +39,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// ReadyWait is the ready wait servers pass to Dial. It rides through a sidecar
-// restart, including the first 10s step of kubelet's crash-loop back-off, and
-// fails a plugin that stays down well before a caller's deadline would.
+// ReadyWait is the ready wait servers pass to Dial or ReadyWaitOptions. It
+// rides through a plugin restart, including the first 10s step of kubelet's
+// crash-loop back-off, and fails a plugin that stays down well before a
+// caller's deadline would.
 const ReadyWait = 30 * time.Second
 
 // reconnectParams keeps reconnect attempts to the local socket frequent, so a
