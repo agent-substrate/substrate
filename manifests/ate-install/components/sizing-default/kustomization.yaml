@@ -24,196 +24,50 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
 patches:
-  - target:
+  - path: ate-api-server.yaml
+    target:
       kind: Deployment
       name: ate-api-server
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ate-api-server
-        namespace: ate-system
-      spec:
-        replicas: 2
-  # Allow voluntary disruptions (node drains, cluster upgrades) to take at
-  # most one API server pod at a time, at any replica count.
-  - target:
+  - path: ate-api-server-pdb.yaml
+    target:
       kind: PodDisruptionBudget
       name: ate-api-server
-    patch: |-
-      apiVersion: policy/v1
-      kind: PodDisruptionBudget
-      metadata:
-        name: ate-api-server
-        namespace: ate-system
-      spec:
-        maxUnavailable: 1
-  - target:
+  - path: ate-idp-server.yaml
+    target:
       kind: Deployment
       name: ate-idp-server
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ate-idp-server
-        namespace: ate-system
-      spec:
-        replicas: 2
-  - target:
+  - path: ate-idp-server-pdb.yaml
+    target:
       kind: PodDisruptionBudget
       name: ate-idp-server
-    patch: |-
-      apiVersion: policy/v1
-      kind: PodDisruptionBudget
-      metadata:
-        name: ate-idp-server
-        namespace: ate-system
-      spec:
-        maxUnavailable: 1
-  - target:
+  - path: ate-controller.yaml
+    target:
       kind: Deployment
       name: ate-controller
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ate-controller
-        namespace: ate-system
-      spec:
-        replicas: 1
-  - target:
+  - path: atelet.yaml
+    target:
       kind: DaemonSet
       name: atelet
-    patch: |-
-      apiVersion: apps/v1
-      kind: DaemonSet
-      metadata:
-        name: atelet
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            initContainers:
-            # Same reservation as atelet and no limits: the plugin does the
-            # zstd work for snapshot transfers, and must not get less CPU for it.
-            - name: objectstore-plugin
-              resources:
-                requests:
-                  cpu: 50m
-                  memory: 128Mi
-            containers:
-            # Keep per-node reservations small; omit limits to allow usage to
-            # grow with the number of hosted actors.
-            - name: atelet
-              resources:
-                requests:
-                  cpu: 50m
-                  memory: 128Mi
-  - target:
+  - path: atenet-router.yaml
+    target:
       kind: Deployment
       name: atenet-router
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: atenet-router
-        namespace: ate-system
-      spec:
-        replicas: 1
-  - target:
+  - path: atenet-egress.yaml
+    target:
       kind: Deployment
       name: atenet-egress
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: atenet-egress
-        namespace: ate-system
-      spec:
-        replicas: 1
   # The agentgateway egress has no sdsmint, and components/agentgateway-egress
   # labels it so this patch does not add one back.
-  - target:
+  - path: atenet-egress-sdsmint.yaml
+    target:
       kind: Deployment
       name: atenet-egress
       labelSelector: ate.dev/dataplane notin (agentgateway)
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: atenet-egress
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            initContainers:
-            - name: sdsmint
-              # Both of these scale with the live secret count, not with request rate.
-              #
-              # memory  ~44,750 B per live secret x 10,000 => ~427 MiB, against a
-              #         768Mi limit, mostly stream overhead rather than
-              #         certificates. The request is measured steady state rather than
-              #         a token floor, on purpose -- the scheduler places pods on
-              #         requests, so a 64Mi request on a container that grows to 427
-              #         MiB does not fail to schedule, it schedules onto a node it
-              #         will later destabilise. Understating it is how this pod takes
-              #         its neighbours down with it.
-              # cpu     ~126 mcore was the measured floor at 10k with no traffic at
-              #         all, when 50 re-mints a second ran on a rotation ticker. That
-              #         steady-state cost is now zero: nothing re-mints, so a name
-              #         costs one signature ever and an idle gateway signs nothing.
-              #         The request is sized for the burst instead. A single mint is
-              #         the ~600us the PoC measured, so a 500/s wave of cold names is
-              #         ~0.3 core -- which is why this is requested and not limited.
-              #         Throttling the signer turns a CPU shortage into handshake
-              #         timeouts across every cold SNI at once. Left at 200m rather
-              #         than trimmed to the new floor because the burst, not the
-              #         steady state, is what this has to absorb.
-              resources:
-                requests:
-                  cpu: 200m
-                  memory: 512Mi
-                limits:
-                  memory: 768Mi
-  - target:
+  - path: podcertificate-controller.yaml
+    target:
       kind: Deployment
       name: podcertificate-controller
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: podcertificate-controller
-        namespace: podcertificate-controller-system
-      spec:
-        replicas: 1
-  - target:
+  - path: postgres.yaml
+    target:
       kind: StatefulSet
       name: postgres
-    patch: |-
-      apiVersion: apps/v1
-      kind: StatefulSet
-      metadata:
-        name: postgres
-        namespace: ate-system
-      spec:
-        replicas: 1
-        template:
-          spec:
-            initContainers:
-            - name: tls-reloader
-              resources:
-                requests:
-                  cpu: 10m
-                  memory: 32Mi
-            containers:
-            # The whole control plane shares this one database; under
-            # activation load it sustains several cores. sizing-kind shrinks
-            # this back down to fit a CI runner.
-            - name: postgres
-              resources:
-                requests:
-                  cpu: "2"
-                  memory: "1Gi"
-                limits:
-                  cpu: "16"
-                  memory: "2Gi"

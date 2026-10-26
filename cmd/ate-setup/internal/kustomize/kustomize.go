@@ -62,6 +62,10 @@ func Build(dir string) ([]byte, error) {
 // objects that are already there. checkComponent rejects fields that add,
 // rename or move objects, change selectors, or fail on a manifest that lacks
 // the object they name. docs/operator-install.md lists them.
+//
+// TODO: let a Component add objects, so cloud providers can install their own
+// extensions. Every deploy path would apply them, and ate-setup delete must
+// remove them.
 func ComponentDirs(dirs []string) ([]string, error) {
 	out := make([]string, 0, len(dirs))
 	for _, dir := range dirs {

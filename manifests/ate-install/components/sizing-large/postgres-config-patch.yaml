@@ -16,7 +16,7 @@
 # replaced, without touching pg_hba.conf or reload-tls.sh, both defined in
 # manifests/ate-install/postgres/postgres.yaml.
 #
-# Sized to match the container resources in kustomization.yaml (140 GiB
+# Sized to match the container resources in sizing-large/postgres.yaml (140 GiB
 # memory, 80 vCPU request, no CPU limit, on a dedicated node). Every value
 # below depends on those numbers -- if the container is resized the tuning
 # has to move with it.

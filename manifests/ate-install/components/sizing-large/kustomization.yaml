@@ -22,39 +22,14 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
 patches:
-  # Deliberately no CPU limit: under --cordon-control-plane the dedicated
-  # ate-postgres pool keeps the pod alone on its node, so a limit would only
-  # add CFS throttling on checkpoint and autovacuum bursts. Without that flag
-  # the pod shares whatever node fits the request, and the missing limit lets
-  # it contend with its neighbors. Memory request == limit keeps eviction
-  # ordering equivalent to a Guaranteed pod, which matters because postgres
-  # cannot release shared_buffers under pressure. postgres-config-patch.yaml
-  # is tuned to these numbers, so they move together.
-  - target:
+  - path: postgres.yaml
+    target:
       kind: StatefulSet
       name: postgres
-    patch: |-
-      apiVersion: apps/v1
-      kind: StatefulSet
-      metadata:
-        name: postgres
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            containers:
-            - name: postgres
-              resources:
-                requests:
-                  cpu: "80"
-                  memory: 140Gi
-                limits:
-                  cpu: null
-                  memory: 140Gi
-  - target:
+  - path: postgres-config-patch.yaml
+    target:
       kind: ConfigMap
       name: postgres-config
-    path: postgres-config-patch.yaml
   # Raise the client-go rate limits above the built-in 5 QPS / 10 burst so
   # signing keeps up with the request volume the large postgres enables.
   - target:
