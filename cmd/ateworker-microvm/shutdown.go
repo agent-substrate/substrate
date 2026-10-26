@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/ateworker"
 )
 
 // workloadGracePeriod is the whole budget for draining the worker on shutdown:
@@ -48,19 +49,6 @@ const workloadGracePeriod = 30 * time.Minute
 // kata-agent must not hold shutdown open past this.
 // A var so tests can shorten it.
 var workloadKillTimeout = 5 * time.Second
-
-const (
-	// signalDeliveryTimeout bounds one SignalProcess round-trip. Delivering a signal
-	// is a local ttrpc call that returns in microseconds; if it has not come back by
-	// now the agent is not answering, and waiting longer will not change that.
-	//
-	// Separate from workloadGracePeriod on purpose. That is the allowance we owe the
-	// actor to save its state, not a budget for a stalled transport to spend, and
-	// sharing one number would both cheat the actor out of part of its grace period
-	// and silently lengthen how long a wedged agent can stall shutdown whenever the
-	// grace period is raised.
-	signalDeliveryTimeout = 10 * time.Second
-)
 
 // gracefulShutdown propagates SIGTERM into every running actor's guest and waits
 // for the workloads to exit, so the caller can exit cleanly. It takes no actor's
@@ -262,7 +250,7 @@ func stopGuestWorkload(ctx context.Context, agent guestAgent, id, wid string, de
 }
 
 // signalWorkload delivers one signal to a guest workload's init process, bounded
-// by signalDeliveryTimeout. ateworker sets ExecId equal to ContainerId, so passing wid
+// by ateworker.SignalDeliveryTimeout. ateworker sets ExecId equal to ContainerId, so passing wid
 // for both targets that init process.
 //
 // The bound is the point: the shutdown context has no deadline of its own, and
@@ -273,7 +261,7 @@ func stopGuestWorkload(ctx context.Context, agent guestAgent, id, wid string, de
 // never answers, and an unbounded call there would hang until the kubelet's
 // SIGKILL at the end of the pod's termination grace period.
 func signalWorkload(ctx context.Context, agent guestAgent, wid string, sig syscall.Signal) error {
-	sigCtx, cancel := context.WithTimeout(ctx, signalDeliveryTimeout)
+	sigCtx, cancel := context.WithTimeout(ctx, ateworker.SignalDeliveryTimeout)
 	defer cancel()
 	return agent.SignalProcess(sigCtx, wid, wid, uint32(sig))
 }
