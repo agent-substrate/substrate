@@ -40,8 +40,8 @@ var accessPolicyFlags struct {
 }
 
 const accessPolicyManifestHelp = `The manifest is a YAML or JSON AccessPolicy, as printed by
-"kubectl ate get access-policy -o yaml". Its metadata may be omitted. Members
-are principals with a "user:" prefix, e.g.
+"kubectl ate get access-policy -o yaml". Its metadata may be omitted. More than
+one record is an error. Members are principals with a "user:" prefix, e.g.
 "user:system:serviceaccount:team-a:alice".
 
   bindings:

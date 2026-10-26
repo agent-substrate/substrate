@@ -53,7 +53,7 @@ var createEgressPolicyCmd = &cobra.Command{
 
 The manifest is a YAML or JSON EgressPolicy, as printed by
 "kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
-Its metadata may be omitted.`,
+Its metadata may be omitted. More than one record is an error.`,
 	Args: exactlyOneArg("<actor-name>", "atespace", "filename"),
 	RunE: runCreateEgressPolicy,
 }
@@ -65,6 +65,7 @@ var updateEgressPolicyCmd = &cobra.Command{
 
 The manifest is a YAML or JSON EgressPolicy, as printed by
 "kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
+More than one record is an error.
 Its metadata.uid and metadata.version are required preconditions; the server
 rejects the update when they no longer match those of the stored egress policy.`,
 	Args: exactlyOneArg("<actor-name>", "atespace", "filename"),

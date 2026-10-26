@@ -32,6 +32,7 @@ func TestParse(t *testing.T) {
 		want            []*ateapi.Atespace
 		wantErrContains string
 	}{
+		// Supported.
 		{
 			name: "single block-style YAML",
 			manifest: `metadata:
@@ -135,17 +136,18 @@ metadata: { atespace: a, name: two, }
 			manifest: "metadata: { atespace: &x a, name: *x, }\n",
 			want:     []*ateapi.Atespace{{Metadata: &ateapi.ResourceMetadata{Atespace: "a", Name: "a"}}},
 		},
-		{name: "empty", manifest: "", wantErrContains: "manifest is empty"},
+		// Rejected.
+		{name: "empty input", manifest: "", wantErrContains: "manifest is empty"},
 		{name: "YAML: only document separators", manifest: "---\n---\n", wantErrContains: "manifest is empty"},
 		{name: "YAML: comment only", manifest: "# nothing\n", wantErrContains: "manifest is empty"},
-		{name: "not YAML", manifest: "\t{", wantErrContains: "invalid YAML"},
+		{name: "not YAML: stray tab", manifest: "\t{", wantErrContains: "invalid YAML"},
 		{
 			name:            "YAML: invalid second document",
 			manifest:        "metadata: { atespace: a, name: one, }\n---\n\t{\n",
 			wantErrContains: "invalid YAML",
 		},
 		{
-			name: "JSON documents with no separator are not supported",
+			name: "JSON objects with no separator",
 			manifest: `{"metadata": {"atespace": "a", "name": "one"}}
 {"metadata": {"atespace": "a", "name": "two"}}
 `,
@@ -164,8 +166,8 @@ metadata: { atespace: a, nmae: two, }
 `,
 			wantErrContains: "document 2: invalid Atespace",
 		},
-		{name: "not an object", manifest: "- a\n", wantErrContains: "invalid Atespace"},
-		{name: "JSON array of objects is not supported", manifest: `[{"metadata": {"atespace": "a", "name": "one"}}]`, wantErrContains: "invalid Atespace"},
+		{name: "YAML: top-level sequence", manifest: "- a\n", wantErrContains: "invalid Atespace"},
+		{name: "JSON: top-level array", manifest: `[{"metadata": {"atespace": "a", "name": "one"}}]`, wantErrContains: "invalid Atespace"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
