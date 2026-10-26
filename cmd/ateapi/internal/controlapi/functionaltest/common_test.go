@@ -527,7 +527,7 @@ func newDurableSnapshot(gen int32, owner ateapi.SnapshotOwner, fidelity ateapi.S
 		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
 		DurableSnapshot: &ateapi.SnapshotStorage{
-			Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 			Object: &ateapi.ObjectSnapshot{SnapshotUri: uri},
 		},
 	}
@@ -550,7 +550,7 @@ func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapi.SnapshotFidelity
 		ActorTemplateUid: templateUID,
 		Locality:         locality,
 		DurableSnapshot: &ateapi.SnapshotStorage{
-			Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+			State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
 			Object: &ateapi.ObjectSnapshot{SnapshotUri: uri.String()},
 		},
 	}
@@ -560,7 +560,7 @@ func durableSnapshot(status *ateapi.ActorStatus) *ateapi.Snapshot {
 	var best *ateapi.Snapshot
 	for _, snap := range status.GetSnapshots() {
 		st := snap.GetDurableSnapshot()
-		if st.GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+		if st.GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED &&
 			st.GetObject().GetSnapshotUri() != "" {
 			if best == nil || snap.GetGeneration() > best.GetGeneration() {
 				best = snap

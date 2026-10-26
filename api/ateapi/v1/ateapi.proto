@@ -291,24 +291,24 @@ enum SnapshotOwner {
   // Keep this in sync with Snapshot.owner's maximum.
 }
 
-// SnapshotStorageStatus indicates the lifecycle stage of a durable snapshot.
-enum SnapshotStorageStatus {
-  SNAPSHOT_STORAGE_STATUS_UNSPECIFIED = 0;
+// SnapshotStorageState indicates the lifecycle stage of a durable snapshot.
+enum SnapshotStorageState {
+  SNAPSHOT_STORAGE_STATE_UNSPECIFIED = 0;
   // Snapshot creation in durable storage is in progress.
-  SNAPSHOT_STORAGE_STATUS_PENDING = 1;
+  SNAPSHOT_STORAGE_STATE_PENDING = 1;
   // Snapshot is complete and ready for use in durable storage.
-  SNAPSHOT_STORAGE_STATUS_COMPLETED = 2;
-  // Keep this in sync with SnapshotStorage.status's maximum.
+  SNAPSHOT_STORAGE_STATE_COMPLETED = 2;
+  // Keep this in sync with SnapshotStorage.state's maximum.
 }
 
 // SnapshotStorage records the durable storage representation of a Snapshot.
 message SnapshotStorage {
-  // status is the lifecycle status of the durable snapshot.
+  // state is the lifecycle state of the durable snapshot.
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotStorageStatus enum
-  SnapshotStorageStatus status = 1;
+  // +k8s:maximum=2 # keep this in sync with the SnapshotStorageState enum
+  SnapshotStorageState state = 1;
 
   // object snapshot is stored in object storage.
   //

@@ -40,7 +40,7 @@ func createTestTag(t *testing.T, s *Persistence, tagAtespace, tagName string) *a
 				Owner:      ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG,
 				Fidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				DurableSnapshot: &ateapi.SnapshotStorage{
-					Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 					Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/tags/" + tagName},
 				},
 			},

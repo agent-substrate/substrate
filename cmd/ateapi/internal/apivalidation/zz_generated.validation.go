@@ -8499,10 +8499,10 @@ func Validate_SnapshotStorage(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *v1.SnapshotStorage) (errs field.ErrorList) {
 
-	{ // field v1.SnapshotStorage.Status
+	{ // field v1.SnapshotStorage.State
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *v1.SnapshotStorageStatus,
+			obj, oldObj *v1.SnapshotStorageState,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -8528,10 +8528,10 @@ func Validate_SnapshotStorage(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *v1.SnapshotStorage) *v1.SnapshotStorageStatus {
-				return &oldObj.Status
+			func(oldObj *v1.SnapshotStorage) *v1.SnapshotStorageState {
+				return &oldObj.State
 			})
-		errs = append(errs, fn(fldPath.Child("status"), &obj.Status, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("state"), &obj.State, oldVal, oldObj != nil)...)
 	}
 
 	{ // field v1.SnapshotStorage.Object

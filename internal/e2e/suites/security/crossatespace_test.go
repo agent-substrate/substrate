@@ -467,7 +467,7 @@ func durableSnapshotURI(status *ateapi.ActorStatus) string {
 
 func snapshotURI(snap *ateapi.Snapshot) string {
 	st := snap.GetDurableSnapshot()
-	if st.GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+	if st.GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
 		return st.GetObject().GetSnapshotUri()
 	}
 	return ""

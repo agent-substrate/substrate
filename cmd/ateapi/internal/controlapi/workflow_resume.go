@@ -641,7 +641,7 @@ func schedulingConstraints(actor *ateapi.Actor, tmpl *ateapi.ActorTemplate) sche
 // creation included), or nil when the actor has none and cold-boots.
 func snapshotToResume(status *ateapi.ActorStatus) *ateapi.Snapshot {
 	return latestSnapshot(status, func(s *ateapi.Snapshot) bool {
-		return s.GetLocality() != "" || s.GetDurableSnapshot().GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		return s.GetLocality() != "" || s.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 	})
 }
 
@@ -683,7 +683,7 @@ func canRelaxRuntime(actor *ateapi.Actor, constraints scheduling.Constraints) bo
 	if localElsewhere(snap, status.GetAssignedNode()) {
 		return true
 	}
-	return snap.GetDurableSnapshot().GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	return snap.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 }
 
 // appliesWithFallback reports whether worker satisfies constraints, or — when

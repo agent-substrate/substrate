@@ -255,18 +255,18 @@ func TestFinalizeRunning_UnrecordableUploadStillRuns(t *testing.T) {
 	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("state = %v, want RUNNING", got.GetStatus().GetState())
 	}
-	if snap := got.GetStatus().GetSnapshots()[0]; snap.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING || snap.GetLocality() != "node-3" {
+	if snap := got.GetStatus().GetSnapshots()[0]; snap.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING || snap.GetLocality() != "node-3" {
 		t.Errorf("snapshot = %v, want it unrecorded: PENDING on node-3", snap)
 	}
 }
 
 func TestRecordRestoredUpload(t *testing.T) {
 	memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	pending := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	snapshot := func(locality string, fidelity ateapi.SnapshotFidelity, storage ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
+	pending := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
+	completed := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+	snapshot := func(locality string, fidelity ateapi.SnapshotFidelity, storage ateapi.SnapshotStorageState) *ateapi.Snapshot {
 		snap := newPausedSnapshot(t, 1, fidelity, "", "snap-1", locality)
-		snap.DurableSnapshot.Status = storage
+		snap.DurableSnapshot.State = storage
 		return snap
 	}
 	for _, tt := range []struct {
@@ -1436,7 +1436,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	unspecScope := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 
 	extSnap := func(uri string, fidelity ateapi.SnapshotFidelity) *ateapi.Snapshot {
-		return newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", durableSnapshotName, uri, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		return newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", durableSnapshotName, uri, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 	}
 	localSnap := func(name string, fidelity ateapi.SnapshotFidelity) *ateapi.Snapshot {
 		return newPausedSnapshot(t, 1, fidelity, "", name, "node-1")
@@ -1451,7 +1451,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	uploadedLocalSnap := func(name string, fidelity ateapi.SnapshotFidelity) *ateapi.Snapshot {
 		snap := localSnap(name, fidelity)
 		snap.DurableSnapshot = &ateapi.SnapshotStorage{
-			Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 			Object: &ateapi.ObjectSnapshot{SnapshotUri: pauseUploadURI},
 		}
 		return snap
@@ -1525,7 +1525,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		},
 	}
 	stampedExtSnap := func(owner ateapi.SnapshotOwner, uri string, fidelity ateapi.SnapshotFidelity, rt *ateapi.ActorSandboxRuntime) *ateapi.Snapshot {
-		snap := newDurableSnapshot(1, owner, fidelity, "", durableSnapshotName, uri, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		snap := newDurableSnapshot(1, owner, fidelity, "", durableSnapshotName, uri, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 		snap.SandboxRuntime = rt
 		return snap
 	}
@@ -2707,7 +2707,7 @@ func seedRuntimeWorker(t *testing.T, ctx context.Context, st store.Interface, po
 // generation 1 under team-a/id1's own prefix, stamped with runtime.
 func durableMemorySnapshot(t *testing.T, runtime *ateapi.ActorSandboxRuntime) *ateapi.Snapshot {
 	t.Helper()
-	snap := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-1"), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	snap := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-1"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 	snap.SandboxRuntime = runtime
 	return snap
 }
@@ -3005,7 +3005,7 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 		// Re-entry must accept a previously allowed ROOTFS assignment.
 		local := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-arm")
 		local.SandboxRuntime = testSandboxRuntime()
-		local.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		local.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 		resumingActor := &ateapi.Actor{
 			Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1", Uid: "own-actor-uid"},
 			Status: &ateapi.ActorStatus{
@@ -3047,11 +3047,11 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 	memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	rootfs := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 	volumes := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	pending := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	completed := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+	pending := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
 
-	durable := func(gen int32, fidelity ateapi.SnapshotFidelity, capturedUnder string, status ateapi.SnapshotStorageStatus, rt *ateapi.ActorSandboxRuntime) *ateapi.Snapshot {
-		snap := newDurableSnapshot(gen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, capturedUnder, "snap", "gs://bucket/snap", status)
+	durable := func(gen int32, fidelity ateapi.SnapshotFidelity, capturedUnder string, state ateapi.SnapshotStorageState, rt *ateapi.ActorSandboxRuntime) *ateapi.Snapshot {
+		snap := newDurableSnapshot(gen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, capturedUnder, "snap", "gs://bucket/snap", state)
 		snap.SandboxRuntime = rt
 		return snap
 	}
@@ -3333,8 +3333,8 @@ func TestResume_ChecksMountedVolumesBeforeAttach(t *testing.T) {
 func TestCanRelaxRuntime(t *testing.T) {
 	rt := testSandboxRuntime()
 	memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	pending := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	completed := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+	pending := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
 	suspended := ateapi.ActorState_ACTOR_STATE_SUSPENDED
 	resuming := ateapi.ActorState_ACTOR_STATE_RESUMING
 
@@ -3344,9 +3344,9 @@ func TestCanRelaxRuntime(t *testing.T) {
 	local := func(gen int32) *ateapi.Snapshot {
 		return newPausedSnapshot(t, gen, memory, "", "local", "node-1")
 	}
-	localDurable := func(gen int32, storageStatus ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
+	localDurable := func(gen int32, storageState ateapi.SnapshotStorageState) *ateapi.Snapshot {
 		snap := local(gen)
-		snap.GetDurableSnapshot().Status = storageStatus
+		snap.GetDurableSnapshot().State = storageState
 		return snap
 	}
 	localNoDurable := func(gen int32) *ateapi.Snapshot {

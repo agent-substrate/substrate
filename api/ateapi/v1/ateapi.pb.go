@@ -89,55 +89,55 @@ func (SnapshotOwner) EnumDescriptor() ([]byte, []int) {
 	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{0}
 }
 
-// SnapshotStorageStatus indicates the lifecycle stage of a durable snapshot.
-type SnapshotStorageStatus int32
+// SnapshotStorageState indicates the lifecycle stage of a durable snapshot.
+type SnapshotStorageState int32
 
 const (
-	SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED SnapshotStorageStatus = 0
+	SnapshotStorageState_SNAPSHOT_STORAGE_STATE_UNSPECIFIED SnapshotStorageState = 0
 	// Snapshot creation in durable storage is in progress.
-	SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING SnapshotStorageStatus = 1
+	SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING SnapshotStorageState = 1
 	// Snapshot is complete and ready for use in durable storage.
-	SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED SnapshotStorageStatus = 2 // Keep this in sync with SnapshotStorage.status's maximum.
+	SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED SnapshotStorageState = 2 // Keep this in sync with SnapshotStorage.state's maximum.
 )
 
-// Enum value maps for SnapshotStorageStatus.
+// Enum value maps for SnapshotStorageState.
 var (
-	SnapshotStorageStatus_name = map[int32]string{
-		0: "SNAPSHOT_STORAGE_STATUS_UNSPECIFIED",
-		1: "SNAPSHOT_STORAGE_STATUS_PENDING",
-		2: "SNAPSHOT_STORAGE_STATUS_COMPLETED",
+	SnapshotStorageState_name = map[int32]string{
+		0: "SNAPSHOT_STORAGE_STATE_UNSPECIFIED",
+		1: "SNAPSHOT_STORAGE_STATE_PENDING",
+		2: "SNAPSHOT_STORAGE_STATE_COMPLETED",
 	}
-	SnapshotStorageStatus_value = map[string]int32{
-		"SNAPSHOT_STORAGE_STATUS_UNSPECIFIED": 0,
-		"SNAPSHOT_STORAGE_STATUS_PENDING":     1,
-		"SNAPSHOT_STORAGE_STATUS_COMPLETED":   2,
+	SnapshotStorageState_value = map[string]int32{
+		"SNAPSHOT_STORAGE_STATE_UNSPECIFIED": 0,
+		"SNAPSHOT_STORAGE_STATE_PENDING":     1,
+		"SNAPSHOT_STORAGE_STATE_COMPLETED":   2,
 	}
 )
 
-func (x SnapshotStorageStatus) Enum() *SnapshotStorageStatus {
-	p := new(SnapshotStorageStatus)
+func (x SnapshotStorageState) Enum() *SnapshotStorageState {
+	p := new(SnapshotStorageState)
 	*p = x
 	return p
 }
 
-func (x SnapshotStorageStatus) String() string {
+func (x SnapshotStorageState) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (SnapshotStorageStatus) Descriptor() protoreflect.EnumDescriptor {
+func (SnapshotStorageState) Descriptor() protoreflect.EnumDescriptor {
 	return file_api_ateapi_v1_ateapi_proto_enumTypes[1].Descriptor()
 }
 
-func (SnapshotStorageStatus) Type() protoreflect.EnumType {
+func (SnapshotStorageState) Type() protoreflect.EnumType {
 	return &file_api_ateapi_v1_ateapi_proto_enumTypes[1]
 }
 
-func (x SnapshotStorageStatus) Number() protoreflect.EnumNumber {
+func (x SnapshotStorageState) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use SnapshotStorageStatus.Descriptor instead.
-func (SnapshotStorageStatus) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use SnapshotStorageState.Descriptor instead.
+func (SnapshotStorageState) EnumDescriptor() ([]byte, []int) {
 	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{1}
 }
 
@@ -640,12 +640,12 @@ func (x *ObjectSnapshot) GetSnapshotUri() string {
 // SnapshotStorage records the durable storage representation of a Snapshot.
 type SnapshotStorage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// status is the lifecycle status of the durable snapshot.
+	// state is the lifecycle state of the durable snapshot.
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the SnapshotStorageStatus enum
-	Status SnapshotStorageStatus `protobuf:"varint,1,opt,name=status,proto3,enum=substrate.ateapi.v1.SnapshotStorageStatus" json:"status,omitempty"`
+	// +k8s:maximum=2 # keep this in sync with the SnapshotStorageState enum
+	State SnapshotStorageState `protobuf:"varint,1,opt,name=state,proto3,enum=substrate.ateapi.v1.SnapshotStorageState" json:"state,omitempty"`
 	// object snapshot is stored in object storage.
 	//
 	// +k8s:required
@@ -684,11 +684,11 @@ func (*SnapshotStorage) Descriptor() ([]byte, []int) {
 	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *SnapshotStorage) GetStatus() SnapshotStorageStatus {
+func (x *SnapshotStorage) GetState() SnapshotStorageState {
 	if x != nil {
-		return x.Status
+		return x.State
 	}
-	return SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED
+	return SnapshotStorageState_SNAPSHOT_STORAGE_STATE_UNSPECIFIED
 }
 
 func (x *SnapshotStorage) GetObject() *ObjectSnapshot {
@@ -10031,9 +10031,9 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\n" +
 	"\x1aapi/ateapi/v1/ateapi.proto\x12\x13substrate.ateapi.v1\x1a google/protobuf/descriptor.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"3\n" +
 	"\x0eObjectSnapshot\x12!\n" +
-	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\x92\x01\n" +
-	"\x0fSnapshotStorage\x12B\n" +
-	"\x06status\x18\x01 \x01(\x0e2*.substrate.ateapi.v1.SnapshotStorageStatusR\x06status\x12;\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\x8f\x01\n" +
+	"\x0fSnapshotStorage\x12?\n" +
+	"\x05state\x18\x01 \x01(\x0e2).substrate.ateapi.v1.SnapshotStorageStateR\x05state\x12;\n" +
 	"\x06object\x18\x02 \x01(\v2#.substrate.ateapi.v1.ObjectSnapshotR\x06object\"\xa9\x03\n" +
 	"\bSnapshot\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x1e\n" +
@@ -10533,11 +10533,11 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\rSnapshotOwner\x12\x1e\n" +
 	"\x1aSNAPSHOT_OWNER_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SNAPSHOT_OWNER_ACTOR\x10\x01\x12\x16\n" +
-	"\x12SNAPSHOT_OWNER_TAG\x10\x02*\x8c\x01\n" +
-	"\x15SnapshotStorageStatus\x12'\n" +
-	"#SNAPSHOT_STORAGE_STATUS_UNSPECIFIED\x10\x00\x12#\n" +
-	"\x1fSNAPSHOT_STORAGE_STATUS_PENDING\x10\x01\x12%\n" +
-	"!SNAPSHOT_STORAGE_STATUS_COMPLETED\x10\x02*\x90\x01\n" +
+	"\x12SNAPSHOT_OWNER_TAG\x10\x02*\x88\x01\n" +
+	"\x14SnapshotStorageState\x12&\n" +
+	"\"SNAPSHOT_STORAGE_STATE_UNSPECIFIED\x10\x00\x12\"\n" +
+	"\x1eSNAPSHOT_STORAGE_STATE_PENDING\x10\x01\x12$\n" +
+	" SNAPSHOT_STORAGE_STATE_COMPLETED\x10\x02*\x90\x01\n" +
 	"\x10SnapshotFidelity\x12!\n" +
 	"\x1dSNAPSHOT_FIDELITY_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19SNAPSHOT_FIDELITY_VOLUMES\x10\x01\x12\x1c\n" +
@@ -10699,7 +10699,7 @@ var file_api_ateapi_v1_ateapi_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
 var file_api_ateapi_v1_ateapi_proto_msgTypes = make([]protoimpl.MessageInfo, 144)
 var file_api_ateapi_v1_ateapi_proto_goTypes = []any{
 	(SnapshotOwner)(0),                         // 0: substrate.ateapi.v1.SnapshotOwner
-	(SnapshotStorageStatus)(0),                 // 1: substrate.ateapi.v1.SnapshotStorageStatus
+	(SnapshotStorageState)(0),                  // 1: substrate.ateapi.v1.SnapshotStorageState
 	(SnapshotFidelity)(0),                      // 2: substrate.ateapi.v1.SnapshotFidelity
 	(TagScope)(0),                              // 3: substrate.ateapi.v1.TagScope
 	(ActorState)(0),                            // 4: substrate.ateapi.v1.ActorState
@@ -10857,7 +10857,7 @@ var file_api_ateapi_v1_ateapi_proto_goTypes = []any{
 	(*descriptorpb.MethodOptions)(nil),         // 156: google.protobuf.MethodOptions
 }
 var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
-	1,   // 0: substrate.ateapi.v1.SnapshotStorage.status:type_name -> substrate.ateapi.v1.SnapshotStorageStatus
+	1,   // 0: substrate.ateapi.v1.SnapshotStorage.state:type_name -> substrate.ateapi.v1.SnapshotStorageState
 	10,  // 1: substrate.ateapi.v1.SnapshotStorage.object:type_name -> substrate.ateapi.v1.ObjectSnapshot
 	0,   // 2: substrate.ateapi.v1.Snapshot.owner:type_name -> substrate.ateapi.v1.SnapshotOwner
 	2,   // 3: substrate.ateapi.v1.Snapshot.fidelity:type_name -> substrate.ateapi.v1.SnapshotFidelity

@@ -362,7 +362,7 @@ func TestDetachFromFullNode(t *testing.T) {
 			snap := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", uuid, tt.node)
 			snap.SandboxRuntime = tt.snapRuntime
 			if tt.completed {
-				snap.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				snap.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 			}
 			actor := seedActorWithSnapshot(t, ctx, st, suspended, tt.node, snap)
 			w, atelet := newDetachTestWorkflow(t, ctx, st)
@@ -390,7 +390,7 @@ func TestDetachFromFullNode(t *testing.T) {
 					if err != nil {
 						t.Errorf("GetActor: %v", err)
 					} else if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(cur), func(a *ateapi.Actor) error {
-						a.Status.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+						a.Status.Snapshots[0].DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 						return nil
 					}); err != nil {
 						t.Errorf("UpdateActor: %v", err)
@@ -481,7 +481,7 @@ func TestDetachFromFullNode(t *testing.T) {
 			}
 			got := after.GetStatus().GetSnapshots()
 			if len(got) != 1 || got[0].GetLocality() != "" ||
-				got[0].GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+				got[0].GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
 				t.Errorf("snapshots = %v, want %s durable only and COMPLETED", got, uuid)
 			}
 		})
@@ -611,7 +611,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 			worker := seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", workerRuntime)
 			memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 			durable := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "durable-1",
-				someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1"), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+				someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 			pending := newPausedSnapshot(t, 2, memory, "", "pending-2", "node-3")
 			if tt.otherRuntime {
 				pending.SandboxRuntime = testRuntime("amd64", "")
@@ -647,7 +647,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 				}
 				// The restore proved the upload complete.
 				snap := findSnapshotByGeneration(s.GetSnapshots(), 2)
-				if snap.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED || snap.GetLocality() != "" {
+				if snap.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED || snap.GetLocality() != "" {
 					t.Errorf("generation 2 = %v, want COMPLETED with no locality", snap)
 				}
 				return
@@ -749,7 +749,7 @@ func TestDetachFromFullNode_ReentryRecordsAfterConflict(t *testing.T) {
 		t.Errorf("AssignedNode = %q, want none", got)
 	}
 	if got := stored.GetStatus().GetSnapshots(); len(got) != 1 || got[0].GetLocality() != "" ||
-		got[0].GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		got[0].GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
 		t.Errorf("snapshots = %v, want pause-snap-1 durable only and COMPLETED", got)
 	}
 }
