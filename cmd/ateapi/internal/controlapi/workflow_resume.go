@@ -769,7 +769,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	}
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
-	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
+	ateletConn, err := w.dialAtelet(assignment.GetNodeName())
 	if err != nil {
 		return tele, 0, err
 	}
