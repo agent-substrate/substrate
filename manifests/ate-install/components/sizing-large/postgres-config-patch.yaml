@@ -12,16 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Merged into postgres-config when --cluster-size=size10: hack/install-ate.sh
-# applies it with `kubectl patch --type merge`, cmd/ate-setup folds it into
-# the rendered ConfigMap before the apply. Either way only the postgresql.conf
-# key is replaced, without touching pg_hba.conf or reload-tls.sh, both defined
-# in manifests/ate-install/postgres/postgres.yaml.
+# Merged into postgres-config by sizing-large. Only the postgresql.conf key is
+# replaced, without touching pg_hba.conf or reload-tls.sh, both defined in
+# manifests/ate-install/postgres/postgres.yaml.
 #
-# Sized to match the size10 container resources both installers set (140 GiB
+# Sized to match the container resources in kustomization.yaml (140 GiB
 # memory, 80 vCPU request, no CPU limit, on a dedicated node). Every value
 # below depends on those numbers -- if the container is resized the tuning
 # has to move with it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: ate-system
 data:
   postgresql.conf: |
     # Repeated from manifests/ate-install/postgres/postgres.yaml: kubectl merge patch

@@ -18,26 +18,9 @@ kind: Kustomization
 resources:
   - ../../postgres/postgres.yaml
 
-# The base sizes the database for a real install under activation load. On a
-# kind node -- 4 vCPU and a small disk on a GitHub runner -- that would crowd
-# out everything else, so restore the small test-database footprint.
+# Shrink the data volume to fit a kind node's small disk. components/sizing-kind
+# shrinks the container resources.
 patches:
-  - patch: |-
-      apiVersion: apps/v1
-      kind: StatefulSet
-      metadata:
-        name: postgres
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            containers:
-            - name: postgres
-              resources:
-                requests:
-                  cpu: 250m
-                limits:
-                  cpu: "2"
   - target:
       kind: StatefulSet
       name: postgres

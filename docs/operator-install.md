@@ -371,6 +371,15 @@ the SandboxConfig manifests, or the CSI drivers. It has no environment
 variable or configuration key, and install records do not store it, so pass it
 again when you replay a record.
 
+### Sizing
+
+The base manifests under `manifests/ate-install` set no replicas, container
+resources, or PodDisruptionBudget budgets. ate-setup composes
+`components/sizing-default` over every deploy, then `components/sizing-large`
+under `--cluster-size=size10` and `components/sizing-kind` under `--kind`.
+To size the install differently, pass a Component that patches those fields.
+It applies after the sizing Components, so its values win.
+
 ## Snapshot storage
 
 ate-api-server stores every actor and tag snapshot under a cluster-wide

@@ -21,10 +21,9 @@ kind: Kustomization
 #
 # pod-certificate-controller.yaml is deliberately absent. The installers
 # (hack/install-ate.sh and cmd/ate-setup) apply it on their own before this
-# bundle, through the podcert-size10 overlay on large clusters, and then set
-# WORKERS_PER_SIGNER on the Deployment. Listing the base file here would
-# re-apply it after those steps and revert both the overlay's flags and the
-# env override. The same goes for the sandboxconfig and atenet-egress files:
+# bundle, and then set WORKERS_PER_SIGNER on the Deployment. Listing the base
+# file here would re-apply it after that step and revert the env override.
+# The same goes for the sandboxconfig and atenet-egress files:
 # the installers apply the variant they select, so they are not listed here
 # either.
 resources:

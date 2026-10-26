@@ -19,12 +19,10 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"sigs.k8s.io/yaml"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
@@ -88,20 +86,6 @@ func (e *Env) waitAndSetupBundledPostgres(ctx context.Context) error {
 	}
 	return e.setupBundledPostgres(ctx)
 }
-
-// The size10 PostgreSQL container. Deliberately no CPU limit: under
-// --cordon-control-plane the dedicated ate-postgres pool keeps the pod alone
-// on its node, so a limit would only add CFS throttling on checkpoint and
-// autovacuum bursts. Without that flag the pod shares whatever node fits the
-// request, and the missing limit lets it contend with its neighbors. Memory
-// request == limit keeps eviction ordering equivalent to a Guaranteed pod,
-// which matters because postgres cannot release shared_buffers under pressure.
-// postgres-size10/postgres-config-patch.yaml is tuned to these numbers, so they
-// move together.
-const (
-	size10PostgresCPURequest = "80"
-	size10PostgresMemory     = "140Gi"
-)
 
 // postgresPoolSelector selects the nodes of the pool the cordon-control-plane
 // component pins the bundled PostgreSQL to.
@@ -175,7 +159,7 @@ func (e *Env) applyPostgres(ctx context.Context) error {
 }
 
 // postgresObjects renders the bundled PostgreSQL objects with the configured
-// StorageClass and cluster size applied.
+// StorageClass applied.
 //
 // The changes are made to the rendered objects rather than patched onto the
 // cluster after a base apply: one apply means one rollout, and the pod the
@@ -194,16 +178,6 @@ func (e *Env) postgresObjects() ([]*unstructured.Unstructured, error) {
 	if class := e.Cfg.PostgresStorageClass; class != "" {
 		log.Stepf("Using StorageClass %s for the bundled PostgreSQL volume", class)
 		if err := setPostgresStorageClass(objs, class); err != nil {
-			return nil, err
-		}
-	}
-	if e.Cfg.Size10() {
-		log.Step("apply_postgres_size10_overrides")
-		conf, err := os.ReadFile(e.Cfg.Manifest("postgres-size10", "postgres-config-patch.yaml"))
-		if err != nil {
-			return nil, fmt.Errorf("while reading the size10 postgres config: %w", err)
-		}
-		if err := applyPostgresSize10Overrides(objs, conf); err != nil {
 			return nil, err
 		}
 	}
@@ -260,78 +234,6 @@ func (e *Env) requirePostgresPool(ctx context.Context) error {
 		return fmt.Errorf("--cordon-control-plane pins the bundled PostgreSQL to nodes labeled %s, and the cluster has none: "+
 			"create a one-node pool labeled and tainted %s:NoSchedule in the zone of the postgres volume first "+
 			"(see docs/upgrade.md#cordoned-control-plane-postgres-pool)", postgresPoolSelector, postgresPoolSelector)
-	}
-	return nil
-}
-
-// applyPostgresSize10Overrides resizes the bundled PostgreSQL objects in place
-// for a dedicated node: the postgresql.conf the ConfigMap carries is replaced
-// with the size10 tuning, and the StatefulSet container is given the size10
-// resources.
-//
-// confPatch is postgres-size10/postgres-config-patch.yaml, a merge patch over
-// the ConfigMap's data. Only the keys it names are replaced, so pg_hba.conf and
-// reload-tls.sh stay with the base file that owns them.
-func applyPostgresSize10Overrides(objs []*unstructured.Unstructured, confPatch []byte) error {
-	var patch struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := yaml.Unmarshal(confPatch, &patch); err != nil {
-		return fmt.Errorf("while parsing the size10 postgres config patch: %w", err)
-	}
-	if patch.Data["postgresql.conf"] == "" {
-		return fmt.Errorf("the size10 postgres config patch carries no postgresql.conf")
-	}
-
-	var configMap, statefulSet *unstructured.Unstructured
-	for _, obj := range objs {
-		if obj.GetNamespace() != NamespaceAteSystem {
-			continue
-		}
-		switch {
-		case obj.GetKind() == "ConfigMap" && obj.GetName() == "postgres-config":
-			configMap = obj
-		case obj.GetKind() == "StatefulSet" && obj.GetName() == "postgres":
-			statefulSet = obj
-		}
-	}
-	if configMap == nil {
-		return fmt.Errorf("the postgres manifest has no configmap/postgres-config to resize")
-	}
-	if statefulSet == nil {
-		return fmt.Errorf("the postgres manifest has no statefulset/postgres to resize")
-	}
-
-	for key, value := range patch.Data {
-		if err := unstructured.SetNestedField(configMap.Object, value, "data", key); err != nil {
-			return fmt.Errorf("while setting %s on %s: %w", key, kube.Describe(configMap), err)
-		}
-	}
-
-	containers, found, err := unstructured.NestedSlice(statefulSet.Object, "spec", "template", "spec", "containers")
-	if err != nil || !found || len(containers) == 0 {
-		return fmt.Errorf("%s has no containers to resize", kube.Describe(statefulSet))
-	}
-	container, ok := containers[0].(map[string]any)
-	if !ok {
-		return fmt.Errorf("%s: container 0 is not an object", kube.Describe(statefulSet))
-	}
-	unstructured.RemoveNestedField(container, "resources", "limits", "cpu")
-	for _, field := range []struct {
-		path  []string
-		value string
-	}{
-		{[]string{"resources", "requests", "cpu"}, size10PostgresCPURequest},
-		{[]string{"resources", "requests", "memory"}, size10PostgresMemory},
-		{[]string{"resources", "limits", "memory"}, size10PostgresMemory},
-	} {
-		if err := unstructured.SetNestedField(container, field.value, field.path...); err != nil {
-			return fmt.Errorf("while setting %v on %s: %w", field.path, kube.Describe(statefulSet), err)
-		}
-	}
-	containers[0] = container
-	if err := unstructured.SetNestedSlice(statefulSet.Object, containers, "spec", "template", "spec", "containers"); err != nil {
-		return fmt.Errorf("while resizing %s: %w", kube.Describe(statefulSet), err)
 	}
 	return nil
 }

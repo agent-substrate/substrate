@@ -459,9 +459,9 @@ func TestRenderCordonControlPlane(t *testing.T) {
 			want: []string{"podcertificate-controller"},
 		},
 		{
-			name: "podcert size10 overlay",
+			name: "podcert file under size10",
 			cfg:  config.Config{ClusterSize: config.ClusterSizeSize10},
-			path: func(e *Env) string { return e.Cfg.Manifest("podcert-size10") },
+			path: func(e *Env) string { return e.Cfg.Manifest("pod-certificate-controller.yaml") },
 			want: []string{"podcertificate-controller"},
 		},
 		{
@@ -545,8 +545,8 @@ func TestRenderBytesCordonControlPlane(t *testing.T) {
 	}
 }
 
-// Without the flag, render is a plain read or build and adds nothing.
-func TestRenderWithoutCordonLeavesManifestsAlone(t *testing.T) {
+// Without the flag, render pins nothing.
+func TestRenderWithoutCordonPinsNothing(t *testing.T) {
 	e := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
 	rendered, err := e.render(e.Cfg.Manifest("ate-api-server.yaml"))
 	if err != nil {
@@ -554,13 +554,6 @@ func TestRenderWithoutCordonLeavesManifestsAlone(t *testing.T) {
 	}
 	if pinned, _ := pinnedWorkloads(t, rendered); len(pinned) != 0 {
 		t.Errorf("render without --cordon-control-plane pinned %v", pinned)
-	}
-	raw, err := os.ReadFile(e.Cfg.Manifest("ate-api-server.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(rendered) != string(raw) {
-		t.Error("render of a plain file without --cordon-control-plane is not the file's bytes")
 	}
 }
 

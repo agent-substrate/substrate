@@ -1,0 +1,70 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The large-cluster sizing, selected by --cluster-size=size10 and composed
+# after sizing-default. It assumes a dedicated node for PostgreSQL and raises
+# the database and the podcertificate controller's API rate limits to match.
+# ate-setup also pins the bundled read/write connection pool, which lives in
+# a Secret rather than a manifest.
+
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  # Deliberately no CPU limit: under --cordon-control-plane the dedicated
+  # ate-postgres pool keeps the pod alone on its node, so a limit would only
+  # add CFS throttling on checkpoint and autovacuum bursts. Without that flag
+  # the pod shares whatever node fits the request, and the missing limit lets
+  # it contend with its neighbors. Memory request == limit keeps eviction
+  # ordering equivalent to a Guaranteed pod, which matters because postgres
+  # cannot release shared_buffers under pressure. postgres-config-patch.yaml
+  # is tuned to these numbers, so they move together.
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: postgres
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: postgres
+              resources:
+                requests:
+                  cpu: "80"
+                  memory: 140Gi
+                limits:
+                  cpu: null
+                  memory: 140Gi
+  - target:
+      kind: ConfigMap
+      name: postgres-config
+    path: postgres-config-patch.yaml
+  # Raise the client-go rate limits above the built-in 5 QPS / 10 burst so
+  # signing keeps up with the request volume the large postgres enables.
+  - target:
+      kind: Deployment
+      name: podcertificate-controller
+      namespace: podcertificate-controller-system
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --kube-api-qps=100
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --kube-api-burst=200
