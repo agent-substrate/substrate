@@ -15,10 +15,12 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -558,5 +560,61 @@ func TestStatReportsOwnerAndMode(t *testing.T) {
 
 	if got := doStat(t, filepath.Join(dir, "missing")); got.Error == "" {
 		t.Errorf("/stat of a missing path reported no error: %+v", got)
+	}
+}
+
+// The imagefs e2e suite asserts on /stdin, so these cases pin what readStdin
+// reports for each kind of stdin.
+func TestReadStdin(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { devNull.Close() })
+	closedPipe, closedWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedWriter.Close()
+	t.Cleanup(func() { closedPipe.Close() })
+	openPipe, openWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Closing the pipe at the end unblocks the read that readStdin leaves behind.
+	t.Cleanup(func() {
+		openPipe.Close()
+		openWriter.Close()
+	})
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name  string
+		ctx   context.Context
+		stdin io.Reader
+		want  stdinResponse
+	}{{
+		name:  "dev null",
+		ctx:   context.Background(),
+		stdin: devNull,
+		want:  stdinResponse{EOF: true},
+	}, {
+		name:  "pipe with its write end closed",
+		ctx:   context.Background(),
+		stdin: closedPipe,
+		want:  stdinResponse{EOF: true},
+	}, {
+		name:  "pipe with its write end open",
+		ctx:   canceled,
+		stdin: openPipe,
+		want:  stdinResponse{Error: "reading stdin: context canceled"},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := readStdin(tt.ctx, tt.stdin); got != tt.want {
+				t.Errorf("readStdin() = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
