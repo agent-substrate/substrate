@@ -92,6 +92,12 @@ func ValidateMintWorkerActorJwtRequest(ctx context.Context, req *ateapi.MintWork
 	return Validate_MintWorkerActorJwtRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateActorCreate(ctx context.Context, fldPath *field.Path, actor *ateapi.Actor) field.ErrorList {
+	// Call the generated validation.
+	op := MakeCreateOp(ctx)
+	return Validate_Actor(ctx, op, fldPath, actor, nil)
+}
+
 func ValidateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.Actor, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
 	op := MakeUpdateOp(ctx)
@@ -116,6 +122,10 @@ func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.O
 	// metadata. What we need is something like:
 	//   +k8s:subfield(metadata)=+k8s:validateType
 	return Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), actor.Metadata, nil)
+}
+
+func ValidateCustom_Actor_Labels(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+	return validateLabels(fldPath, value)
 }
 
 // This is needed because DV doesn't have a standard format for IP addresses yet.

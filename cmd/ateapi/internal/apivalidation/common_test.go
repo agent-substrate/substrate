@@ -76,3 +76,51 @@ func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) 
 	t.Helper()
 	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)
 }
+
+// labelsOfBytes returns 64 labels whose keys and values add up to 4096+extra
+// bytes: 4-byte keys and 60-byte values, with extra bytes on one value.
+func labelsOfBytes(extra int) map[string]string {
+	labels := make(map[string]string, 64)
+	for i := range 64 {
+		labels[fmt.Sprintf("k%03d", i)] = strings.Repeat("v", 60)
+	}
+	labels["k000"] = strings.Repeat("v", 60+extra)
+	return labels
+}
+
+func TestValidateLabels(t *testing.T) {
+	fldPath := field.NewPath("labels")
+	tests := []struct {
+		name   string
+		labels map[string]string
+		want   field.ErrorList
+	}{{
+		name: "none",
+	}, {
+		name:   "valid",
+		labels: map[string]string{"app": "billing", "example.com/team": "payments"},
+	}, {
+		name:   "ate.dev key is reserved",
+		labels: map[string]string{"ate.dev/agent": "a"},
+		want:   field.ErrorList{field.Invalid(fldPath, "ate.dev/agent", "")},
+	}, {
+		name:   "ate.dev subdomain key is reserved",
+		labels: map[string]string{"egress.ate.dev/agent": "a"},
+		want:   field.ErrorList{field.Invalid(fldPath, "egress.ate.dev/agent", "")},
+	}, {
+		name:   "a domain ending in ate.dev without the dot is not reserved",
+		labels: map[string]string{"private.dev/agent": "a", "notate.dev/agent": "a"},
+	}, {
+		name:   "exactly the size cap",
+		labels: labelsOfBytes(0),
+	}, {
+		name:   "over the size cap",
+		labels: labelsOfBytes(1),
+		want:   field.ErrorList{field.TooLong(fldPath, 4097, 4096)},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateLabels(fldPath, tt.labels), tt.want)
+		})
+	}
+}
