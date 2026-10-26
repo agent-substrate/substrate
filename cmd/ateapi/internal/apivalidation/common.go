@@ -124,8 +124,8 @@ func validateDualStackIPs(fldPath *field.Path, ips []string) field.ErrorList {
 const maxLabelsSizeBytes = 4096
 
 // validateLabels checks what the label tags cannot express: keys in ate.dev
-// and its subdomains are reserved, as on WorkerPool labels, and the set fits
-// maxLabelsSizeBytes. Count and per-entry formats are enforced by tags.
+// and its subdomains are reserved, and the set fits maxLabelsSizeBytes.
+// Count and per-entry formats are enforced by tags.
 func validateLabels(fldPath *field.Path, labels map[string]string) field.ErrorList {
 	var errs field.ErrorList
 	size := 0

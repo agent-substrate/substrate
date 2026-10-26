@@ -1239,8 +1239,9 @@ type Actor struct {
 	// the actor_labels of the ActorTemplate, the Actor's own value winning on
 	// a key conflict; a later change of actor_template does not touch them.
 	// Immutable after creation: an UpdateActor that changes them, including by
-	// omitting them, returns INVALID_ARGUMENT. Keys under ate.dev/ are
-	// reserved, and keys and values together may not exceed 4096 bytes.
+	// omitting them, returns INVALID_ARGUMENT. Keys in ate.dev and its
+	// subdomains are reserved, and keys and values together may not exceed
+	// 4096 bytes.
 	//
 	// +k8s:optional
 	// +k8s:maxProperties=64
@@ -2836,9 +2837,9 @@ type ActorTemplate struct {
 	// +k8s:optional
 	Status *ActorTemplateStatus `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
 	// actor_labels are the default labels of Actors created from this
-	// template. An Actor's own labels win on a key conflict. Keys under
-	// ate.dev/ are reserved, and keys and values together may not exceed
-	// 4096 bytes.
+	// template. An Actor's own labels win on a key conflict. Keys in ate.dev
+	// and its subdomains are reserved, and keys and values together may not
+	// exceed 4096 bytes.
 	//
 	// +k8s:optional
 	// +k8s:maxProperties=64
