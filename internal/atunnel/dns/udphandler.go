@@ -104,7 +104,9 @@ func (h *udpHandler) serve(ctx context.Context) error {
 	h.pool.mu.Unlock()
 
 	stop := context.AfterFunc(ctx, func() {
-		_ = h.pool.Close()
+		if err := h.pool.Close(); err != nil {
+			slog.InfoContext(ctx, "dns relay: closing UDP connection pool", slog.Any("err", err))
+		}
 	})
 	defer stop()
 
@@ -121,7 +123,9 @@ func (h *udpHandler) serve(ctx context.Context) error {
 	}()
 
 	wg.Wait()
-	_ = h.pool.Close()
+	if err := h.pool.Close(); err != nil {
+		slog.InfoContext(ctx, "dns relay: closing UDP connection pool", slog.Any("err", err))
+	}
 	readers.Wait()
 	h.pending.clearAll()
 	close(errCh)
@@ -186,15 +190,16 @@ func (h *udpHandler) sendToUpstream(ctx context.Context, conn net.PacketConn, up
 }
 
 func (h *udpHandler) processResponses(ctx context.Context, conn net.PacketConn) {
+	defer h.pool.Discard(conn)
+
 	buf := make([]byte, maxDatagramSize)
 	for {
 		n, from, err := conn.ReadFrom(buf)
 		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-				return
+			if ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
+				slog.WarnContext(ctx, "dns relay: upstream socket read error", slog.Any("err", err))
 			}
-			slog.DebugContext(ctx, "dns relay: upstream socket read error", slog.Any("err", err))
-			continue
+			return
 		}
 		raw := bytes.Clone(buf[:n])
 		act := h.dns.onUDPResponse(raw, from, conn)

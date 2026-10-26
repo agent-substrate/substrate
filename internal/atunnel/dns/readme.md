@@ -28,7 +28,7 @@ Actor DNS relays DNS requests from the actor to the external world.
 #### UDP handling
 
 - `udphandler.go`: `struct udpHandler`, `udpconnpool.go`: `struct udpConnPool`
-- `udpConnPool` leases worker-namespace `net.PacketConn` sockets bound to ephemeral ports (`:0`), returning the least-used idle socket when one is available and discarding each socket after `defaultMaxUDPConnUses` queries.
+- `udpConnPool` leases worker-namespace `net.PacketConn` sockets bound to ephemeral ports (`:0`), returning a random idle socket when one is available and discarding each socket after `defaultMaxUDPConnUses` queries.
 - Goroutines per `Server` (plus a sweep ticker for timeouts/failover):
   - **Ingress reader**: reads datagrams from the actor-facing gateway `net.PacketConn`, runs `onUDPRequest()` (which validates the query, leases a socket from `udpConnPool`, rewrites the transaction ID to `upstreamID`, and records the entry in `pendingRequests`), and sends the query on the leased socket.
   - **Egress readers** (one per open socket in `udpConnPool`): reads datagrams from the worker-namespace `net.PacketConn`, verifies the response arrived on the socket recorded for `upstreamID`, runs `onUDPResponse()` to match and validate against `pendingRequests`, and either fails over to the next upstream or restores `clientRequestID` and writes the answer back to `clientAddr`.

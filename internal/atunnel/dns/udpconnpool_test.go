@@ -32,7 +32,7 @@ func (c *fakePacketConn) Close() error {
 	return nil
 }
 
-func TestUDPConnPoolGetLeastUsedAndDiscardAfterMaxUses(t *testing.T) {
+func TestUDPConnPoolGetPutDiscardAndClose(t *testing.T) {
 	var created int
 	var newConnCalls int
 	pool := newUDPConnPool(func(network, address string) (net.PacketConn, error) {
@@ -42,7 +42,7 @@ func TestUDPConnPoolGetLeastUsedAndDiscardAfterMaxUses(t *testing.T) {
 		created++
 		return &fakePacketConn{id: created}, nil
 	})
-	pool.maxUses = 3
+	pool.maxUses = 2
 	pool.onNewConn = func(net.PacketConn) {
 		newConnCalls++
 	}
@@ -60,52 +60,49 @@ func TestUDPConnPoolGetLeastUsedAndDiscardAfterMaxUses(t *testing.T) {
 		t.Fatalf("created = %d, newConnCalls = %d; want 2 distinct sockets", created, newConnCalls)
 	}
 
-	// Return c1 and use it a second time so c1 has 2 uses while c2 has 1 use.
+	// Return c1 and c2 to the idle pool; two Get/Put cycles consume the 2nd
+	// (maxUses) use of both sockets and close them without creating a 3rd.
 	pool.Put(c1)
-	got, err := pool.Get()
-	if err != nil {
-		t.Fatal(err)
+	pool.Put(c2)
+	for range 2 {
+		got, err := pool.Get()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != c1 && got != c2 {
+			t.Fatalf("Get() = %v, want idle socket c1 or c2", got)
+		}
+		pool.Put(got)
 	}
-	if got != c1 {
-		t.Fatalf("Get() = %v, want idle socket c1", got)
+	if created != 2 {
+		t.Fatalf("created = %d while idle sockets remained, want 2", created)
 	}
-	pool.Put(c1) // c1 now has 2 uses
-	pool.Put(c2) // c2 now has 1 use
+	if !c1.(*fakePacketConn).closed.Load() || !c2.(*fakePacketConn).closed.Load() {
+		t.Error("c1 and c2 were not closed after reaching maxUses=2")
+	}
 
-	// With both c1 (2 uses) and c2 (1 use) idle, Get picks the least-used (c2).
-	got, err = pool.Get()
+	// Discard removes an idle socket from the pool and closes it so Get opens a new one.
+	c3, err := pool.Get()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != c2 {
-		t.Fatalf("Get() picked %v, want least-used socket c2", got)
-	}
-	pool.Put(c2) // c2 now has 2 uses
-
-	// Use c1 for its 3rd (maxUses) time; Put must discard and close it.
-	got, err = pool.Get()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != c1 {
-		t.Fatalf("Get() = %v, want c1", got)
-	}
-	pool.Put(c1)
-	if !c1.(*fakePacketConn).closed.Load() {
-		t.Error("c1 was not closed after reaching maxUses=3")
+	pool.Put(c3)
+	pool.Discard(c3)
+	if !c3.(*fakePacketConn).closed.Load() {
+		t.Error("c3 was not closed on Discard")
 	}
 
 	// Sockets returned beyond maxIdle are closed immediately instead of accumulating.
 	pool.maxIdle = 1
-	c3, err := pool.Get()
-	if err != nil || c3 != c2 {
-		t.Fatalf("Get() = %v, %v; want c2", c3, err)
-	}
 	c4, err := pool.Get()
+	if err != nil || c4 == c3 {
+		t.Fatalf("Get() after Discard = %v, %v; want a new socket", c4, err)
+	}
+	c5, err := pool.Get()
 	if err != nil {
 		t.Fatal(err)
 	}
-	c5, err := pool.Get()
+	c6, err := pool.Get()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,8 +118,8 @@ func TestUDPConnPoolGetLeastUsedAndDiscardAfterMaxUses(t *testing.T) {
 	if !c4.(*fakePacketConn).closed.Load() {
 		t.Error("idle socket c4 was not closed on pool.Close")
 	}
-	if !c3.(*fakePacketConn).closed.Load() {
-		t.Error("checked-out socket c3 was not closed on pool.Close")
+	if !c6.(*fakePacketConn).closed.Load() {
+		t.Error("checked-out socket c6 was not closed on pool.Close")
 	}
 	if _, err := pool.Get(); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("Get after Close = %v, want %v", err, net.ErrClosed)
