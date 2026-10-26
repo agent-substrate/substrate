@@ -856,7 +856,9 @@ groups:
       sets every state of that pool and class to 0. Thus a full pool reports 0
       for idle, and an alert on idle == 0 fires. A pool with no Worker has no
       series here; atecontroller reports ate.workerpool.desired_workers and
-      ate.workerpool.ready_workers for every WorkerPool.
+      ate.workerpool.ready_workers for every WorkerPool, and the idle query in
+      docs/observability.md uses ate.workerpool.desired_workers to take a pool
+      with no Worker as 0 idle.
       The states count workers, not actor slots. A worker with 1 of 20 slots
       used and one with 19 of 20 are both partial. Do not read utilization of
       the pool from this instrument.
@@ -868,7 +870,7 @@ groups:
       into the total. An unknown worker seeds no series. Thus a pool whose
       workers all count under unknown has no series for its class, and an alert
       on idle == 0 alone does not fire for it. The idle query in
-      docs/observability.md takes such a pool as 0 idle.
+      docs/observability.md takes such a pool as 0 idle too.
     annotations:
       substrate:
         emitted_by: [ateapi]
