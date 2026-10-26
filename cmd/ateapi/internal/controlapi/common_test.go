@@ -20,6 +20,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -65,8 +66,5 @@ func seedAssignment(t *testing.T, st store.Interface, workerName string, assignm
 	if assignment == nil {
 		return
 	}
-	ctx := context.Background()
-	if err := st.BindActorToWorker(ctx, workerName, assignment, nil); err != nil {
-		t.Fatalf("seed assignment on worker %q: %v", workerName, err)
-	}
+	storetest.MustSeedAssignment(t, context.Background(), st, workerName, assignment)
 }

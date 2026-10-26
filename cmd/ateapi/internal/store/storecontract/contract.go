@@ -2409,23 +2409,63 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	t.Helper()
 
-	// newTestAssignment describes one Actor's placement, sized so that a total
-	// over several of them is unambiguous about which were counted.
-	newTestAssignment := func(actorUID string, cpuMilli, memoryBytes int64) *ateapi.ActorAssignment {
+	// newTestAssignment stores the Actor named after key, unless an earlier call
+	// stored it, and describes its placement, sized so that a total over several
+	// of them is unambiguous about which were counted.
+	newTestAssignment := func(t *testing.T, s store.Interface, key string, cpuMilli, memoryBytes int64) *ateapi.ActorAssignment {
+		t.Helper()
+		ctx := context.Background()
+		ref := resources.ActorRef{Atespace: testAtespace, Name: "actor-" + key}
+		actor, err := s.GetActor(ctx, ref)
+		if errors.Is(err, store.ErrNotFound) {
+			if _, err := s.CreateAtespace(ctx, newTestAtespace(testAtespace)); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
+				t.Fatalf("CreateAtespace failed: %v", err)
+			}
+			actor, err = s.CreateActor(ctx, newTestSuspendedActor(testAtespace, ref.Name))
+		}
+		if err != nil {
+			t.Fatalf("storing actor %s failed: %v", ref, err)
+		}
 		return &ateapi.ActorAssignment{
-			Actor:     &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor-" + actorUID},
-			ActorUid:  actorUID,
+			Actor:     &ateapi.ObjectRef{Atespace: ref.Atespace, Name: ref.Name},
+			ActorUid:  actor.GetMetadata().GetUid(),
 			Resources: resources.CPUMemory(cpuMilli, memoryBytes),
 		}
+	}
+
+	// bindWith binds assignment against its Actor as last stored, leaving the
+	// Actor as it was but for its version.
+	bindWith := func(ctx context.Context, s store.Interface, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error) error {
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			return err
+		}
+		_, err = s.BindActorToWorker(ctx, workerName, assignment, admit, ref, store.PreconditionFrom(actor), nil)
+		return err
 	}
 
 	// bind binds one assignment with no admission check, for the tests that care
 	// about the outcome rather than about admission.
 	bind := func(t *testing.T, s store.Interface, workerName string, assignment *ateapi.ActorAssignment) {
 		t.Helper()
-		ctx := context.Background()
-		if err := s.BindActorToWorker(ctx, workerName, assignment, nil); err != nil {
+		if err := bindWith(context.Background(), s, workerName, assignment, nil); err != nil {
 			t.Fatalf("BindActorToWorker(%s) failed: %v", assignment.GetActorUid(), err)
+		}
+	}
+
+	// release releases assignment's Actor against the Actor as last stored,
+	// leaving it as it was but for its version.
+	release := func(t *testing.T, s store.Interface, assignment *ateapi.ActorAssignment) {
+		t.Helper()
+		ctx := context.Background()
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor(%s) failed: %v", ref, err)
+		}
+		if _, err := s.UpdateActorAndRelease(ctx, ref, store.PreconditionFrom(actor), nil); err != nil {
+			t.Fatalf("UpdateActorAndRelease(%s) failed: %v", ref, err)
 		}
 	}
 
@@ -2442,10 +2482,10 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 		defer watch.Close()
 
-		assignment := newTestAssignment("uid-1", 500, 1<<20)
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
 		bind(t, s, testWorkerName, assignment)
 
-		got, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-1")
+		got, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid())
 		if err != nil {
 			t.Fatalf("GetWorkerAssignment failed: %v", err)
 		}
@@ -2474,66 +2514,42 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 	})
 
-	t.Run("BindActorToWorker_ReplacesSameActor", func(t *testing.T) {
+	// A bound Actor is bound once. A second bind against the Actor as it now
+	// stands, even onto the same Worker, is refused and leaves the first
+	// booking and the Actor as they were.
+	t.Run("BindActorToWorker_AlreadyBound", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
 		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
-		// A retried claim binds the same Actor twice. It must be counted once,
-		// at its latest size, or the Worker leaks capacity it never gave out.
-		bind(t, s, testWorkerName, newTestAssignment("uid-1", 500, 1<<20))
-		bind(t, s, testWorkerName, newTestAssignment("uid-1", 250, 1<<21))
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		bind(t, s, testWorkerName, assignment)
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		bound, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		err = bindWith(ctx, s, testWorkerName, newTestAssignment(t, s, "1", 250, 1<<21), nil)
+		if err == nil || errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("binding a bound actor again = %v, want an error other than ErrVersionConflict", err)
+		}
+		after, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		if got, want := after.GetMetadata().GetVersion(), bound.GetMetadata().GetVersion(); got != want {
+			t.Errorf("actor version = %d after the refused bind, want %d", got, want)
+		}
 
 		worker, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		want := &ateapi.WorkerResources{Actors: 1, CpuMillicores: 250, MemoryBytes: 1 << 21}
+		want := &ateapi.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 1 << 20}
 		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
-			t.Errorf("allocated mismatch after rebinding the same actor (-want +got):\n%s", diff)
-		}
-		assignmentsPage, err := s.ListWorkerAssignments(ctx, testWorkerName, store.ListOptions{})
-		if err != nil {
-			t.Fatalf("ListWorkerAssignments failed: %v", err)
-		}
-		assignments := assignmentsPage.Items
-		if len(assignments) != 1 {
-			t.Errorf("worker holds %d assignments, want 1", len(assignments))
-		}
-	})
-
-	t.Run("BindActorToWorker_RebindKeepsAssignmentIdentity", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-		bind(t, s, testWorkerName, newTestAssignment("uid-1", 500, 1<<20))
-		first, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-1")
-		if err != nil {
-			t.Fatalf("GetWorkerAssignment failed: %v", err)
-		}
-
-		// A retried claim rebinds the same Actor, which updates the assignment
-		// already recorded. A reader watching uid or create_time must not see a
-		// different subresource.
-		bind(t, s, testWorkerName, newTestAssignment("uid-1", 250, 1<<21))
-		again, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-1")
-		if err != nil {
-			t.Fatalf("GetWorkerAssignment after rebind failed: %v", err)
-		}
-
-		if got, want := again.GetMetadata().GetUid(), first.GetMetadata().GetUid(); got != want {
-			t.Errorf("rebind changed the assignment uid to %q, want %q", got, want)
-		}
-		if diff := cmp.Diff(first.GetMetadata().GetCreateTime(), again.GetMetadata().GetCreateTime(), protocmp.Transform()); diff != "" {
-			t.Errorf("rebind moved create_time (-want +got):\n%s", diff)
-		}
-		if got, want := again.GetMetadata().GetVersion(), first.GetMetadata().GetVersion()+1; got != want {
-			t.Errorf("rebind left version at %d, want %d: an update advances it", got, want)
+			t.Errorf("allocated mismatch after a refused second bind (-want +got):\n%s", diff)
 		}
 	})
 
@@ -2546,14 +2562,12 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 
 		full := errors.New("worker is full")
-		err := s.BindActorToWorker(ctx, testWorkerName, newTestAssignment("uid-1", 500, 0),
-			func(*ateapi.Worker) error { return full })
+		assignment := newTestAssignment(t, s, "1", 500, 0)
+		err := bindWith(ctx, s, testWorkerName, assignment, func(*ateapi.Worker) error { return full })
 		if !errors.Is(err, full) {
 			t.Errorf("BindActorToWorker with a refusing admit = %v, want %v", err, full)
 		}
-		// The bind speculates the row in before it asks, so a refusal has to
-		// take it back out.
-		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-1"); !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("a refused bind left an assignment behind: %v", err)
 		}
 		worker, err := s.GetWorker(ctx, testWorkerName)
@@ -2569,48 +2583,6 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 	// bind will write it, so concurrent binds cannot both find room for the last
 	// place. Nothing outside the store can offer that -- a check made before the
 	// call is stale by the time it commits.
-	// An ActorTemplate is mutable, so a retried claim can come back bigger than
-	// the one already booked. Admission has to run on the replacement, judged
-	// against the Worker with the old reservation taken off.
-	t.Run("BindActorToWorker_AdmitsAReplacementThatGrew", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-		bind(t, s, testWorkerName, newTestAssignment("uid-1", 500, 0))
-
-		var admitted []*ateapi.WorkerResources
-		full := errors.New("worker is full")
-		err := s.BindActorToWorker(ctx, testWorkerName, newTestAssignment("uid-1", 5000, 0),
-			func(fresh *ateapi.Worker) error {
-				admitted = append(admitted, fresh.GetStatus().GetAllocated())
-				return full
-			})
-		if !errors.Is(err, full) {
-			t.Fatalf("rebinding a grown assignment = %v, want the admit refusal %v", err, full)
-		}
-		if len(admitted) != 1 {
-			t.Fatalf("admit ran %d times on a replacement, want once", len(admitted))
-		}
-		// Judged without the old reservation: otherwise the Actor is counted
-		// twice and a replacement that merely stayed the same size is refused.
-		if got := admitted[0].GetActors(); got != 0 {
-			t.Errorf("admit saw %d actors allocated, want 0: the previous reservation should be off", got)
-		}
-
-		// A refusal leaves the original booking exactly as it was.
-		worker, err := s.GetWorker(ctx, testWorkerName)
-		if err != nil {
-			t.Fatalf("GetWorker failed: %v", err)
-		}
-		want := &ateapi.WorkerResources{Actors: 1, CpuMillicores: 500, MemoryBytes: 0}
-		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
-			t.Errorf("a refused replacement changed the allocation (-want +got):\n%s", diff)
-		}
-	})
-
 	t.Run("BindActorToWorker_AdmitSeesConcurrentBinds", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -2628,13 +2600,15 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			return nil
 		}
 
+		assignments := make([]*ateapi.ActorAssignment, claims)
+		for i := range claims {
+			assignments[i] = newTestAssignment(t, s, fmt.Sprint(i), 0, 0)
+		}
 		var wg sync.WaitGroup
 		won := make([]bool, claims)
 		for i := range claims {
 			wg.Go(func() {
-				err := s.BindActorToWorker(ctx, testWorkerName,
-					newTestAssignment(fmt.Sprintf("uid-%d", i), 0, 0), roomForOne)
-				won[i] = err == nil
+				won[i] = bindWith(ctx, s, testWorkerName, assignments[i], roomForOne) == nil
 			})
 		}
 		wg.Wait()
@@ -2669,24 +2643,21 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 				t.Fatalf("CreateWorker(%s) failed: %v", name, err)
 			}
 		}
-		bind(t, s, testWorkerName, newTestAssignment("uid-1", 500, 1<<20))
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		bind(t, s, testWorkerName, assignment)
 
 		other, err := s.GetWorker(ctx, otherTestWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if err := s.BindActorToWorker(ctx, otherTestWorkerName, newTestAssignment("uid-1", 500, 1<<20), nil); err == nil {
+		if err := bindWith(ctx, s, otherTestWorkerName, newTestAssignment(t, s, "1", 500, 1<<20), nil); err == nil {
 			t.Fatal("BindActorToWorker onto a second worker succeeded, want an error")
 		}
 
 		// The refusal has to leave both Workers exactly as they were: the first
 		// still hosting the Actor and counting it, the second counting nothing.
-		holder, err := s.FindWorkerHostingActor(ctx, "uid-1")
-		if err != nil {
-			t.Fatalf("FindWorkerHostingActor failed: %v", err)
-		}
-		if holder != testWorkerName {
-			t.Errorf("actor moved to worker %q, want it left on %q", holder, testWorkerName)
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); err != nil {
+			t.Errorf("GetWorkerAssignment on the first worker = %v, want the actor left there", err)
 		}
 		first, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {
@@ -2727,6 +2698,11 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			versions[i] = created.GetMetadata().GetVersion()
 		}
 
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		actor, err := s.GetActor(ctx, resources.ActorRefFromObjectRef(assignment.GetActor()))
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
 		var start sync.WaitGroup
 		start.Add(1)
 		var wg sync.WaitGroup
@@ -2736,7 +2712,9 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			go func() {
 				defer wg.Done()
 				start.Wait()
-				won[i] = s.BindActorToWorker(ctx, name, newTestAssignment("uid-1", 500, 1<<20), nil) == nil
+				// Both claims read the same Actor, as two replicas would.
+				_, err := s.BindActorToWorker(ctx, name, proto.CloneOf(assignment), nil, resources.ActorRefFromActor(actor), store.PreconditionFrom(actor), nil)
+				won[i] = err == nil
 			}()
 		}
 		start.Done()
@@ -2770,41 +2748,57 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 
 	t.Run("BindActorToWorker_WorkerNotFound", func(t *testing.T) {
 		s := setup(t)
-		err := s.BindActorToWorker(context.Background(), "no-such-worker", newTestAssignment("uid-1", 0, 0), nil)
-		if !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("BindActorToWorker on a missing worker = %v, want ErrNotFound", err)
+		err := bindWith(context.Background(), s, "no-such-worker", newTestAssignment(t, s, "1", 0, 0), nil)
+		if !errors.Is(err, store.ErrWorkerNotFound) {
+			t.Errorf("BindActorToWorker on a missing worker = %v, want ErrWorkerNotFound", err)
 		}
 	})
 
-	t.Run("ReleaseActorFromWorker", func(t *testing.T) {
+	t.Run("BindActorToWorker_ActorNotFound", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
 		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
-		bind(t, s, testWorkerName, newTestAssignment("uid-1", 500, 1<<20))
-		bind(t, s, testWorkerName, newTestAssignment("uid-2", 250, 1<<21))
-
-		released, err := s.ReleaseActorFromWorker(ctx, testWorkerName, "uid-1")
+		assignment := newTestAssignment(t, s, "1", 0, 0)
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
 		if err != nil {
-			t.Fatalf("ReleaseActorFromWorker failed: %v", err)
+			t.Fatalf("GetActor failed: %v", err)
 		}
-		if released == nil {
-			t.Fatal("ReleaseActorFromWorker reported nothing to release")
+		if _, err := s.DeleteActor(ctx, ref, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor failed: %v", err)
 		}
-		// The returned Worker is what the caller feeds the cache, so it has to
-		// be the post-release state, not the copy that went in.
-		wantReleased := &ateapi.WorkerResources{Actors: 1, CpuMillicores: 250, MemoryBytes: 1 << 21}
-		if diff := cmp.Diff(wantReleased, released.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
-			t.Errorf("returned worker's allocated mismatch (-want +got):\n%s", diff)
+
+		_, err = s.BindActorToWorker(ctx, testWorkerName, assignment, nil, ref, store.PreconditionFrom(actor), nil)
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("BindActorToWorker of a deleted actor = %v, want ErrNotFound", err)
 		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetWorkerAssignment after the failed bind = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("UpdateActorAndRelease_LeavesOtherAssignments", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		first := newTestAssignment(t, s, "1", 500, 1<<20)
+		second := newTestAssignment(t, s, "2", 250, 1<<21)
+		bind(t, s, testWorkerName, first)
+		bind(t, s, testWorkerName, second)
+
+		release(t, s, first)
 
 		// Only the released Actor goes; the Worker's others are untouched.
-		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-1"); !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, first.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("released assignment is still readable: %v", err)
 		}
-		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, "uid-2"); err != nil {
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, second.GetActorUid()); err != nil {
 			t.Errorf("releasing one actor disturbed another: %v", err)
 		}
 		worker, err := s.GetWorker(ctx, testWorkerName)
@@ -2817,33 +2811,184 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 	})
 
-	t.Run("ReleaseActorFromWorker_AlreadyReleased", func(t *testing.T) {
+	// The Actor and its assignment commit together, so a bind whose Actor update
+	// fails leaves neither written.
+	t.Run("BindActorToWorker_ActorConflictLeavesNothingBehind", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		worker, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		stale, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		current, err := s.UpdateActor(ctx, ref, store.PreconditionFrom(stale), nil)
+		if err != nil {
+			t.Fatalf("UpdateActor failed: %v", err)
+		}
+
+		_, err = s.BindActorToWorker(ctx, testWorkerName, assignment, nil, ref, store.PreconditionFrom(stale), func(a *ateapi.Actor) error {
+			a.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+			return nil
+		})
+		if !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("BindActorToWorker under a stale precondition = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetWorkerAssignment after the failed bind = %v, want ErrNotFound", err)
+		}
+		after, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if got, want := after.GetMetadata().GetVersion(), worker.GetMetadata().GetVersion(); got != want {
+			t.Errorf("worker version = %d after the failed bind, want %d", got, want)
+		}
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		if got, want := actor.GetMetadata().GetVersion(), current.GetMetadata().GetVersion(); got != want {
+			t.Errorf("actor version = %d after the failed bind, want %d", got, want)
+		}
+	})
+
+	t.Run("BindActorToWorker_UpdatesActor", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
 		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		updated, err := s.BindActorToWorker(ctx, testWorkerName, assignment, nil, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+			a.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("BindActorToWorker failed: %v", err)
+		}
+		stored, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		if diff := cmp.Diff(stored, updated, protocmp.Transform()); diff != "" {
+			t.Errorf("returned actor differs from the stored one (-stored +returned):\n%s", diff)
+		}
+		if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RESUMING {
+			t.Errorf("actor state = %v, want RESUMING", got)
+		}
+	})
+
+	t.Run("UpdateActorAndRelease_ReleasesAndUpdates", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		bind(t, s, testWorkerName, assignment)
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+
+		updated, err := s.UpdateActorAndRelease(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+			a.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateActorAndRelease failed: %v", err)
+		}
+		if got := updated.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
+			t.Errorf("returned actor state = %v, want CRASHED", got)
+		}
 		worker, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		// Release runs on paths that retry, so a second pass has to converge
-		// rather than fail -- and must not advance the Worker either.
-		released, err := s.ReleaseActorFromWorker(ctx, testWorkerName, "uid-1")
-		if err != nil {
-			t.Fatalf("ReleaseActorFromWorker failed: %v", err)
+		if got := worker.GetStatus().GetAllocated().GetActors(); got != 0 {
+			t.Errorf("worker counts %d actors after the release, want 0", got)
 		}
-		if released != nil {
-			t.Error("ReleaseActorFromWorker reported releasing an assignment that was never there")
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetWorkerAssignment after the release = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("UpdateActorAndRelease_ActorConflictKeepsAssignment", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		bind(t, s, testWorkerName, assignment)
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		stale, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		if _, err := s.UpdateActor(ctx, ref, store.PreconditionFrom(stale), nil); err != nil {
+			t.Fatalf("UpdateActor failed: %v", err)
+		}
+
+		if _, err := s.UpdateActorAndRelease(ctx, ref, store.PreconditionFrom(stale), nil); !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("UpdateActorAndRelease under a stale precondition = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); err != nil {
+			t.Errorf("GetWorkerAssignment after the failed release = %v, want the assignment kept", err)
+		}
+		worker, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if got := worker.GetStatus().GetAllocated().GetActors(); got != 1 {
+			t.Errorf("worker counts %d actors after the failed release, want 1", got)
+		}
+	})
+
+	// Release runs on paths that retry, so a pass that finds nothing to release
+	// still updates the Actor, and leaves the Workers alone.
+	t.Run("UpdateActorAndRelease_NothingBound", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		worker, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		assignment := newTestAssignment(t, s, "1", 0, 0)
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		updated, err := s.UpdateActorAndRelease(ctx, ref, store.PreconditionFrom(actor), nil)
+		if err != nil {
+			t.Fatalf("UpdateActorAndRelease failed: %v", err)
+		}
+		if got, want := updated.GetMetadata().GetVersion(), actor.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("actor version = %d, want %d", got, want)
 		}
 		after, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if after.GetMetadata().GetVersion() != worker.GetMetadata().GetVersion() {
-			t.Errorf("worker version moved from %d to %d on a release that freed nothing",
-				worker.GetMetadata().GetVersion(), after.GetMetadata().GetVersion())
+		if got, want := after.GetMetadata().GetVersion(), worker.GetMetadata().GetVersion(); got != want {
+			t.Errorf("worker version moved from %d to %d on a release that freed nothing", want, got)
 		}
 	})
 
@@ -2856,9 +3001,12 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 				t.Fatalf("CreateWorker failed: %v", err)
 			}
 		}
-		bind(t, s, "worker-pod-1", newTestAssignment("uid-1", 0, 0))
-		bind(t, s, "worker-pod-1", newTestAssignment("uid-2", 0, 0))
-		bind(t, s, "worker-pod-2", newTestAssignment("uid-3", 0, 0))
+		first := newTestAssignment(t, s, "1", 0, 0)
+		second := newTestAssignment(t, s, "2", 0, 0)
+		third := newTestAssignment(t, s, "3", 0, 0)
+		bind(t, s, "worker-pod-1", first)
+		bind(t, s, "worker-pod-1", second)
+		bind(t, s, "worker-pod-2", third)
 
 		assignmentsPage, err := s.ListWorkerAssignments(ctx, "worker-pod-1", store.ListOptions{})
 		if err != nil {
@@ -2869,12 +3017,15 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		for _, assignment := range assignments {
 			got = append(got, assignment.GetActorUid())
 		}
-		if diff := cmp.Diff([]string{"uid-1", "uid-2"}, got); diff != "" {
+		// Listed in actor UID order.
+		want := []string{first.GetActorUid(), second.GetActorUid()}
+		slices.Sort(want)
+		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("assignments of worker-pod-1 (-want +got):\n%s", diff)
 		}
 
 		// An Actor is hosted by one Worker, and only that Worker's list has it.
-		if _, err := s.GetWorkerAssignment(ctx, "worker-pod-1", "uid-3"); !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.GetWorkerAssignment(ctx, "worker-pod-1", third.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("GetWorkerAssignment found another worker's actor: %v", err)
 		}
 	})
@@ -2891,7 +3042,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 		const total = 5
 		for i := range total {
-			bind(t, s, testWorkerName, newTestAssignment(fmt.Sprintf("uid-%d", i), 1, 1))
+			bind(t, s, testWorkerName, newTestAssignment(t, s, fmt.Sprint(i), 1, 1))
 		}
 
 		seen := map[string]int{}
@@ -2939,36 +3090,6 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 	})
 
-	t.Run("FindWorkerHostingActor", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-		if _, err := s.FindWorkerHostingActor(ctx, "uid-1"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("FindWorkerHostingActor before any bind = %v, want ErrNotFound", err)
-		}
-
-		bind(t, s, testWorkerName, newTestAssignment("uid-1", 0, 0))
-		got, err := s.FindWorkerHostingActor(ctx, "uid-1")
-		if err != nil {
-			t.Fatalf("FindWorkerHostingActor failed: %v", err)
-		}
-		if got != testWorkerName {
-			t.Errorf("FindWorkerHostingActor = %q, want %q", got, testWorkerName)
-		}
-
-		// Released, so nothing hosts it -- the recovery this exists for must
-		// not resurrect a placement that is over.
-		if _, err := s.ReleaseActorFromWorker(ctx, testWorkerName, "uid-1"); err != nil {
-			t.Fatalf("ReleaseActorFromWorker failed: %v", err)
-		}
-		if _, err := s.FindWorkerHostingActor(ctx, "uid-1"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("FindWorkerHostingActor after release = %v, want ErrNotFound", err)
-		}
-	})
-
 	t.Run("DeleteWorker_DropsItsAssignments", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -2976,7 +3097,8 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
-		bind(t, s, testWorkerName, newTestAssignment("uid-1", 0, 0))
+		assignment := newTestAssignment(t, s, "1", 0, 0)
+		bind(t, s, testWorkerName, assignment)
 		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{}); err != nil {
 			t.Fatalf("DeleteWorker failed: %v", err)
 		}
@@ -2991,8 +3113,8 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if len(assignments) != 0 {
 			t.Errorf("deleted worker still holds %d assignments", len(assignments))
 		}
-		if _, err := s.FindWorkerHostingActor(ctx, "uid-1"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("FindWorkerHostingActor still names a deleted worker: %v", err)
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetWorkerAssignment still finds the deleted worker's assignment: %v", err)
 		}
 	})
 
@@ -3001,8 +3123,8 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 	// -- it is that some sequence of binds and releases leaves it disagreeing
 	// with what it summarizes, quietly, forever after.
 	//
-	// So: churn a worker through hundreds of binds, rebinds and releases, and
-	// after every one require the total to equal the assignments.
+	// So: churn a worker through hundreds of binds and releases, at varying
+	// sizes, and after every one require the total to equal the assignments.
 	t.Run("Allocated_TracksAssignmentsUnderChurn", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -3013,19 +3135,18 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 
 		// Deterministic, so a failure reproduces.
 		rng := rand.New(rand.NewPCG(1, 2))
+		bound := map[string]bool{}
 		for step := range 300 {
-			actorUID := fmt.Sprintf("uid-%d", rng.IntN(12))
+			key := fmt.Sprint(rng.IntN(12))
+			assignment := newTestAssignment(t, s, key, int64(rng.IntN(4)+1)*500, int64(rng.IntN(4)+1)<<24)
+			actorUID := assignment.GetActorUid()
 
-			if rng.IntN(3) < 2 {
-				// Bind, sometimes over an actor already there and at a different
-				// size, which is the case that has to subtract before it adds.
-				assignment := newTestAssignment(actorUID, int64(rng.IntN(4)+1)*500, int64(rng.IntN(4)+1)<<24)
-				if err := s.BindActorToWorker(ctx, testWorkerName, assignment, nil); err != nil {
-					t.Fatalf("step %d: BindActorToWorker(%s) failed: %v", step, actorUID, err)
-				}
-			} else if _, err := s.ReleaseActorFromWorker(ctx, testWorkerName, actorUID); err != nil {
-				t.Fatalf("step %d: ReleaseActorFromWorker(%s) failed: %v", step, actorUID, err)
+			if bound[key] {
+				release(t, s, assignment)
+			} else {
+				bind(t, s, testWorkerName, assignment)
 			}
+			bound[key] = !bound[key]
 
 			worker, err := s.GetWorker(ctx, testWorkerName)
 			if err != nil {
@@ -3050,9 +3171,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 		assignments := assignmentsPage.Items
 		for _, assignment := range assignments {
-			if _, err := s.ReleaseActorFromWorker(ctx, testWorkerName, assignment.GetActorUid()); err != nil {
-				t.Fatalf("ReleaseActorFromWorker failed: %v", err)
-			}
+			release(t, s, assignment)
 		}
 		worker, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {

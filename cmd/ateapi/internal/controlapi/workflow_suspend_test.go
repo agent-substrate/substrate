@@ -361,35 +361,6 @@ func TestSuspendActor_MarkedSuspending_StateMatrix(t *testing.T) {
 	}
 }
 
-// TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod verifies that a
-// SUSPENDING actor with no worker pod recorded is moved to CRASHED by the
-// corrupted-assignment check before atelet is called, and the suspend fails
-// with FailedPrecondition.
-func TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod(t *testing.T) {
-	ctx := context.Background()
-	st, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
-	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
-
-	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDING)
-
-	_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendSync)
-	if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
-	}
-
-	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
-	if err != nil {
-		t.Fatalf("GetActor failed: %v", err)
-	}
-	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_CRASHED)
-	}
-	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageWorkerAssignmentMissing; msg != want {
-		t.Errorf("crash message = %q, want %q", msg, want)
-	}
-}
-
 // newTestPersistence returns an isolated PostgreSQL-backed store.
 func newTestPersistence(t *testing.T) store.Interface {
 	persistence, _ := storetest.SetupTestStore(t)
@@ -882,6 +853,10 @@ func (conflictingUpdateStore) UpdateActor(context.Context, resources.ActorRef, s
 	return nil, store.ErrVersionConflict
 }
 
+func (conflictingUpdateStore) UpdateActorAndRelease(context.Context, resources.ActorRef, store.Precondition, func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	return nil, store.ErrVersionConflict
+}
+
 // TestSuspendActor_Finalized_KeepsCrashFromWorkerDelete verifies that a crash the
 // DeleteWorker workflow commits while the suspend's finalize is freeing the
 // worker is kept: the finalize update is pinned to the actor version it
@@ -976,57 +951,6 @@ func TestSuspendActor_Finalized_ReleasesOnlyOwnWorker(t *testing.T) {
 				t.Errorf("worker released = %t, want %t (assignment: %v)", released, tt.wantReleased, stored)
 			}
 		})
-	}
-}
-
-// TestSuspendActor_Finalized_MissingDurableSnapshotClearsAssignment verifies that if the
-// latest generation snapshot entry is missing when the suspend finalizes, the
-// actor transitions to CRASHED and clears WorkerAssignment after releasing the
-// worker rather than getting stuck in SUSPENDING, and the suspend fails.
-func TestSuspendActor_Finalized_MissingDurableSnapshotClearsAssignment(t *testing.T) {
-	ctx := context.Background()
-	st := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, st, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation})
-	w, atelet := newWireCaptureWorkflow(t, st)
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	records := crashRecords(t)
-
-	created := storetest.MustCreateActor(t, ctx, st, &ateapi.Actor{
-		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: suspendTestTemplateRef(),
-		Status: &ateapi.ActorStatus{
-			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDING,
-			AssignedNode:           "node-1",
-			WorkerAssignment:       wireTestAssignment(),
-			LastAssignedGeneration: 1,
-			Snapshots: []*ateapi.Snapshot{
-				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
-			},
-		},
-	})
-	seedWireWorker(t, ctx, st, assignmentOf(created))
-	updateDuringCheckpoint(t, atelet, st, actorRef, func(s *ateapi.ActorStatus) {
-		s.Snapshots = nil
-	})
-
-	if _, err := w.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
-	}
-	got, err := st.GetActor(ctx, actorRef)
-	if err != nil {
-		t.Fatalf("GetActor: %v", err)
-	}
-	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
-	}
-	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageDurableSnapshotMissing; msg != want {
-		t.Errorf("crash message = %q, want %q", msg, want)
-	}
-	if got.GetStatus().GetWorkerAssignment() != nil {
-		t.Errorf("WorkerAssignment = %v, want nil", got.GetStatus().GetWorkerAssignment())
-	}
-	if len(*records) != 1 {
-		t.Fatalf("got %d crash records, want 1", len(*records))
 	}
 }
 
@@ -1252,8 +1176,9 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 }
 
 // TestSuspendAndPause_FinalizeWithoutAssignment verifies that both workflows
-// preserve an out-of-band crash and return FailedPrecondition when the crash
-// clears the worker assignment between the atelet call and finalize's read.
+// preserve a crash committed by a writer that took over the actor's lease, and
+// return FailedPrecondition, when the crash lands between the atelet call and
+// finalize's read.
 func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 	for _, mode := range suspendModes {
 		t.Run(mode.name, func(t *testing.T) {
@@ -1271,9 +1196,6 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 					WorkerAssignment: wireTestAssignment(),
 				},
 			})
-			// What a worker delete or the syncer commits: CRASHED with the
-			// crash recorded and the assignment cleared, landing after the
-			// atelet call and before finalize re-reads the actor.
 			originalCrash := newActorCrash(ateattr.OperationDelete, "original crash reason")
 			updateDuringCheckpoint(t, atelet, persistence, actorRef, func(s *ateapi.ActorStatus) {
 				s.State = ateapi.ActorState_ACTOR_STATE_CRASHED

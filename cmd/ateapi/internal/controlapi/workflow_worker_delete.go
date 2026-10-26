@@ -173,11 +173,10 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 	return nil
 }
 
-// releaseBoundActor resets one Actor bound to the Worker. An Actor that already
-// reached ACTOR_STATE_SUSPENDED saved its state cleanly during graceful
-// termination, so it is left untouched and remains resumable. An Actor that was
-// still running when the pod disappeared is moved to ACTOR_STATE_CRASHED and its
-// pod pointers are cleared.
+// releaseBoundActor resets one Actor bound to the Worker. An Actor that was
+// still running when the pod disappeared is moved to ACTOR_STATE_CRASHED, and a
+// DELETING one stays DELETING; either way its pod pointers are cleared with the
+// release.
 //
 // Nothing to release is the common case and reports success: a superseded
 // assignment and an Actor that has since moved elsewhere both leave no Actor
@@ -189,10 +188,6 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 // whose lease is held is left for a retry (errActorBusy). A write that still
 // races this one fails the version check as ABORTED.
 func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapi.Worker, assignment *ateapi.ActorAssignment) error {
-	if assignment.GetActor() == nil {
-		markSkipped(ctx, "assignment names no actor")
-		return nil
-	}
 	name := worker.GetMetadata().GetName()
 	actorRef := resources.ActorRefFromObjectRef(assignment.GetActor())
 	lease, err := w.store.AcquireLease(ctx, actorLeaseKey(actorRef))
@@ -205,6 +200,9 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapi.W
 	defer lease.Close()
 	ctx = lease.Context()
 
+	// The assignment was listed before the lease was taken. An Actor deleted,
+	// recreated, or released since then no longer points at this Worker, and
+	// its assignment went with that write.
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
 		markSkipped(ctx, "assigned actor no longer exists")
@@ -213,19 +211,9 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapi.W
 	if err != nil {
 		return fmt.Errorf("while getting actor to release from worker %s: %w", name, err)
 	}
-	if actor.GetMetadata().GetUid() != assignment.GetActorUid() {
-		markSkipped(ctx, "assignment names a superseded actor incarnation")
-		return nil
-	}
-	// Skip if a concurrent SuspendActor already cleared the pointer, or if the
-	// actor has since been placed on a different worker.
-	if actor.GetStatus().GetWorkerAssignment().GetWorker().GetName() != name {
+	if actor.GetMetadata().GetUid() != assignment.GetActorUid() ||
+		actor.GetStatus().GetWorkerAssignment().GetWorker().GetName() != name {
 		markSkipped(ctx, "actor no longer points at this worker")
-		return nil
-	}
-	// If the actor is suspended, it's already been released.
-	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
-		markSkipped(ctx, "actor suspended cleanly before the pod went away")
 		return nil
 	}
 
@@ -239,21 +227,24 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapi.W
 }
 
 // crashBoundActor moves an Actor that lost its sandbox on the Worker to
-// ACTOR_STATE_CRASHED and clears its pointers at the Worker. crashMsg is
-// recorded in the Actor's status. An Actor in ACTOR_STATE_DELETING is left
-// untouched. The Actor's assignment row in the worker is left for the caller to
+// ACTOR_STATE_CRASHED, clears its pointers at the Worker, and releases its
+// assignment in the same write. crashMsg is recorded in the Actor's status. An
+// Actor in ACTOR_STATE_DELETING only has its worker assignment cleared with the
 // release.
 // A concurrent write to the Actor fails this as ABORTED.
 func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Worker, actorRef resources.ActorRef, actor *ateapi.Actor, logMsg, crashMsg string) error {
+	name := worker.GetMetadata().GetName()
 	// DELETING is final. A CRASHED actor can be reverted and resumed, and the
-	// delete may already have collected its volumes and snapshots. The delete's
-	// retry clears the actor's pointers.
+	// delete may already have collected its volumes and snapshots. Its
+	// assigned node stays, for the delete to reclaim the actor's state there.
 	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_DELETING {
-		markSkipped(ctx, "actor is DELETING")
-		return nil
+		_, err := w.store.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+			toUpdate.Status.WorkerAssignment = nil
+			return nil
+		})
+		return releaseWriteError(name, err)
 	}
 
-	name := worker.GetMetadata().GetName()
 	opName := ateattr.OperationUnknown
 	switch actor.GetStatus().GetState() {
 	case ateapi.ActorState_ACTOR_STATE_RESUMING:
@@ -264,8 +255,6 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 		opName = ateattr.OperationRevert
 	}
 
-	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_CRASHED
-
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
 	sandboxClass := actor.GetStatus().GetWorkerAssignment().GetSandboxRuntime().GetSandboxClass()
 	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName)
@@ -273,30 +262,33 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 	slog.LogAttrs(ctx, slog.LevelInfo, logMsg,
 		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),
 			slog.String("worker", name))...)
-	_, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+	_, err := w.store.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
-		if !wasAlreadyCrashed {
-			toUpdate.Status.Crash = newActorCrash(opName, crashMsg)
-		}
+		toUpdate.Status.Crash = newActorCrash(opName, crashMsg)
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
 	})
+	if err != nil {
+		return releaseWriteError(name, err)
+	}
+
+	logActorCrashed(ctx, actor, opName)
+	recordActorCrash(ctx, crashAttrs)
+	return nil
+}
+
+// releaseWriteError maps a failed write releasing an Actor from the Worker
+// name. A write without the Actor's lease, such as the UpdateActor RPC, can
+// still move its version.
+func releaseWriteError(name string, err error) error {
 	switch {
-	case err == nil:
-	case errors.Is(err, store.ErrNotFound):
-		// The actor was deleted out from under us; nothing points here anymore.
+	case err == nil, errors.Is(err, store.ErrNotFound):
 		return nil
 	case errors.Is(err, store.ErrUIDConflict), errors.Is(err, store.ErrVersionConflict):
 		return apierror.Aborted("concurrent update conflict, please retry")
 	default:
 		return fmt.Errorf("while releasing actor from worker %s: %w", name, err)
 	}
-
-	if !wasAlreadyCrashed {
-		logActorCrashed(ctx, actor, opName)
-		recordActorCrash(ctx, crashAttrs)
-	}
-	return nil
 }
 
 // reclaimActorStateOnNode asks the atelet on the worker's node to terminate the

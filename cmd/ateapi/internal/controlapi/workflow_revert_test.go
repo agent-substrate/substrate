@@ -459,7 +459,7 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_CRASHED, func(a *ateapi.Actor) {
-		a.Status.Crash = newActorCrash("resume", crashMessageWorkerGone)
+		a.Status.Crash = newActorCrash("resume", crashMessageWorkerDraining)
 	})
 
 	reverted, err := w.RevertActor(ctx, actorRef)
@@ -669,5 +669,41 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 	}
 	if got := findLatestDurableSnapshot(finalized.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING); got != nil {
 		t.Errorf("in-progress durable snapshot = %v, want nil", got)
+	}
+}
+
+// TestRevertActor_LostLeaseKeepsNewAssignment runs the revert's steps after
+// another revert finished and a resume bound the actor to a worker. The stale
+// revert must leave that worker assignment alone.
+func TestRevertActor_LostLeaseKeepsNewAssignment(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w := &ActorWorkflow{store: persistence}
+
+	stale := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_REVERTING},
+	})
+	actorRef := resources.ActorRefFromActor(stale)
+	resuming := mustUpdateActorStatus(t, ctx, persistence, stale, func(s *ateapi.ActorStatus) {
+		s.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+		s.WorkerAssignment = wireTestAssignment()
+		s.AssignedNode = s.GetWorkerAssignment().GetNodeName()
+	})
+	seedWireWorker(t, ctx, persistence, assignmentOf(resuming))
+
+	if err := w.ensureWorkerDiscarded(ctx, actorRef, stale, nil); err != nil {
+		t.Fatalf("ensureWorkerDiscarded: %v", err)
+	}
+	if _, err := w.ensureRevertedFinalized(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ensureRevertedFinalized = %v, want FailedPrecondition", err)
+	}
+	wantWorker := wireTestAssignment().GetWorker().GetName()
+	if got := storetest.WorkerHostingActor(t, ctx, persistence, stale.GetMetadata().GetUid()); got != wantWorker {
+		t.Errorf("worker hosting the actor = %q, want %q", got, wantWorker)
+	}
+	if got := mustReadActor(t, ctx, persistence, actorRef).GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != wantWorker {
+		t.Errorf("status.worker_assignment names %q, want %q", got, wantWorker)
 	}
 }

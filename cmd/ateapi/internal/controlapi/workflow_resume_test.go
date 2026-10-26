@@ -199,21 +199,31 @@ func TestFinalizeRunning_StampsReportedEpochAndIPs(t *testing.T) {
 	}
 }
 
-// A restore that ran on a worker process that has since been replaced left no
-// sandbox behind, so RUNNING is not committed and the resume is retried.
+// A restore that ran on a worker process that has since been replaced or
+// deleted left no sandbox behind, so RUNNING is not committed and the resume
+// is retried.
 func TestFinalizeRunning_ReplacedWorkerProcess(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		reported int64
-		want     codes.Code
+		// deleteWorker deletes the worker, as a worker delete that took over
+		// the actor's lease does.
+		deleteWorker bool
+		want         codes.Code
 	}{
 		{name: "replaced process", reported: 1, want: codes.Unavailable},
 		{name: "epoch above the active one", reported: 3, want: codes.Internal},
+		{name: "deleted worker", reported: 2, deleteWorker: true, want: codes.Aborted},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 			seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
+			if tc.deleteWorker {
+				if _, err := persistence.DeleteWorker(ctx, testWorkerUID("pod-1"), store.DeletePreconditions{}); err != nil {
+					t.Fatalf("DeleteWorker: %v", err)
+				}
+			}
 			w := &ActorWorkflow{store: persistence}
 
 			_, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, tc.reported)
@@ -313,28 +323,47 @@ type bindErrorStore struct {
 	err error
 }
 
-func (s *bindErrorStore) BindActorToWorker(context.Context, string, *ateapi.ActorAssignment, func(*ateapi.Worker) error) error {
-	return s.err
+func (s *bindErrorStore) BindActorToWorker(context.Context, string, *ateapi.ActorAssignment, func(*ateapi.Worker) error, resources.ActorRef, store.Precondition, func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	return nil, s.err
 }
 
-func TestAssignWorkerAttempt_MissingSelectedWorkerIsRetried(t *testing.T) {
-	ctx := context.Background()
-	persistence := newTestPersistence(t)
-	actor, wc := seedAssignFixture(t, ctx, persistence)
-	st := &bindErrorStore{Interface: persistence, err: store.ErrNotFound}
-	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapi.ActorTemplate{}
+// TestAssignWorkerAttempt_BindNotFound covers a bind that finds the picked
+// Worker or the Actor gone. Only a gone Worker is forgotten and retried.
+func TestAssignWorkerAttempt_BindNotFound(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		bindErr error
+		// wantErr is matched with errors.Is when set, else wantCode is.
+		wantErr     error
+		wantCode    codes.Code
+		wantWorkers int
+	}{
+		{name: "worker gone", bindErr: store.ErrWorkerNotFound, wantErr: store.ErrVersionConflict, wantWorkers: 0},
+		{name: "actor gone", bindErr: store.ErrNotFound, wantCode: codes.NotFound, wantWorkers: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			actor, wc := seedAssignFixture(t, ctx, persistence)
+			st := &bindErrorStore{Interface: persistence, err: tc.bindErr}
+			w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
 
-	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
-	if !errors.Is(err, store.ErrVersionConflict) {
-		t.Fatalf("assignWorkerAttempt error = %v, want ErrVersionConflict", err)
-	}
-	workers, err := wc.Workers()
-	if err != nil {
-		t.Fatalf("Workers: %v", err)
-	}
-	if len(workers) != 0 {
-		t.Errorf("cached workers after missing claim = %d, want 0", len(workers))
+			_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("assignWorkerAttempt error = %v, want %v", err, tc.wantErr)
+				}
+			} else if got := apierror.Code(err); got != tc.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tc.wantCode, err)
+			}
+			workers, err := wc.Workers()
+			if err != nil {
+				t.Fatalf("Workers: %v", err)
+			}
+			if len(workers) != tc.wantWorkers {
+				t.Errorf("cached workers after the failed bind = %d, want %d", len(workers), tc.wantWorkers)
+			}
+		})
 	}
 }
 
@@ -466,85 +495,6 @@ func TestEnsureWorkerAssigned_MissingUploadClaimsNoWorker(t *testing.T) {
 	}
 }
 
-// TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker verifies that a worker
-// claimed by a previous failed attempt whose pool is no longer eligible is
-// released back to the free pool, without failing the resume, while a fresh
-// eligible worker is assigned.
-func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
-	ctx := context.Background()
-	persistence := newTestPersistence(t)
-
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
-		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
-		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
-	})
-
-	// stale-pod is claimed by this actor from a failed attempt but its labels
-	// do not match the template's selector; free-pod is eligible and free.
-	stale := &ateapi.Worker{
-		Metadata:        &ateapi.ResourceMetadata{Name: testWorkerUID("stale-pod")},
-		WorkerNamespace: "worker-ns",
-		WorkerPool:      "pool-a",
-		WorkerPod:       "stale-pod",
-		WorkerPodUid:    testWorkerUID("stale-pod"),
-		NodeName:        "node-1",
-		Status: registered(&ateapi.WorkerStatus{
-			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
-			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
-		}),
-	}
-	free := &ateapi.Worker{
-		Metadata:        &ateapi.ResourceMetadata{Name: testWorkerUID("free-pod")},
-		WorkerNamespace: "worker-ns",
-		WorkerPool:      "pool-b",
-		WorkerPod:       "free-pod",
-		WorkerPodUid:    testWorkerUID("free-pod"),
-		NodeName:        "node-1",
-		Labels:          map[string]string{"pool": "b"},
-		Status: registered(&ateapi.WorkerStatus{
-			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
-			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
-		}),
-	}
-	for _, w := range []*ateapi.Worker{stale, free} {
-		if _, err := persistence.CreateWorker(ctx, w); err != nil {
-			t.Fatalf("CreateWorker(%s): %v", w.GetWorkerPod(), err)
-		}
-	}
-	seedAssignment(t, persistence, testWorkerUID("stale-pod"), &ateapi.ActorAssignment{
-		Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "id1"},
-		ActorUid: actor.GetMetadata().GetUid(),
-	})
-
-	cacheCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	wc := workercache.New(persistence, time.Minute)
-	if err := wc.Start(cacheCtx); err != nil {
-		t.Fatalf("workercache.Start: %v", err)
-	}
-
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapi.ActorTemplate{
-		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"pool": "b"}},
-	}
-	_, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
-	if err != nil {
-		t.Fatalf("assignWorkerAttempt() error = %v, want nil (release must not fail the resume)", err)
-	}
-
-	if got := worker.GetWorkerPod(); got != "free-pod" {
-		t.Errorf("assigned worker = %q, want %q", got, "free-pod")
-	}
-
-	// The stale worker must already be released: the actor could not have been
-	// placed on another worker otherwise.
-	if stored := firstAssignment(t, persistence, testWorkerUID("stale-pod")); stored != nil {
-		t.Errorf("stale worker still assigned: %v", stored)
-	}
-}
-
 // TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker verifies an
 // assignment attempt carries no state from a conflicted predecessor: when a
 // concurrent resume wins the picked worker, the loser's retry re-selects from
@@ -652,6 +602,11 @@ type conflictInjectingStore struct {
 func (c *conflictInjectingStore) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	c.once.Do(c.inject)
 	return c.Interface.UpdateActor(ctx, actorRef, precondition, mutate)
+}
+
+func (c *conflictInjectingStore) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	c.once.Do(c.inject)
+	return c.Interface.BindActorToWorker(ctx, workerName, assignment, admit, actorRef, precondition, mutate)
 }
 
 func (c *conflictInjectingStore) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
@@ -775,6 +730,10 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 			}
 			if stored.GetStatus().GetState() != tc.wantStoredState {
 				t.Errorf("stored state = %v, want %v", stored.GetStatus().GetState(), tc.wantStoredState)
+			}
+			// The losing bind rolls back with the actor update.
+			if worker := storetest.WorkerHostingActor(t, ctx, persistence, stored.GetMetadata().GetUid()); worker != "" {
+				t.Errorf("worker %q holds the actor, want none: the losing bind leaves no claim", worker)
 			}
 		})
 	}
@@ -928,57 +887,11 @@ func TestResumeActor_MetricSkipsAlreadyRunningNoop(t *testing.T) {
 	}
 }
 
-// TestResumeActor_CrashesOnMissingWorkerAssignment verifies that a RESUMING
-// actor with no worker assignment is moved to CRASHED by
-// ensureWorkerAssigned's recovery validation and the resume fails with
-// Aborted. A RESUMING actor always has a worker assigned, so reaching this
-// state means the record is corrupt and the actor cannot be recovered.
-func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
-	ctx := context.Background()
-	st, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
-	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
-
-	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_RESUMING, func(a *ateapi.Actor) {
-		a.Status.WorkerAssignment = nil // RESUMING without a worker: corrupt record
-	})
-
-	_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
-	if got := apierror.Code(err); got != codes.Aborted {
-		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
-	}
-
-	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
-	if err != nil {
-		t.Fatalf("GetActor failed: %v", err)
-	}
-	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_CRASHED)
-	}
-	if msg, want := got.GetStatus().GetCrash().GetMessage(), "resume failed: "+crashMessageWorkerAssignmentMissing; msg != want {
-		t.Errorf("crash message = %q, want %q", msg, want)
-	}
-}
-
 // TestValidateAssignedWorker verifies that RESUMING recovery only proceeds on
-// a live, non-draining worker whose assignment still names this actor: the
-// recovery path loads the worker by pod name only, so the assignment may have
-// been cleared and the worker re-claimed by another actor in the meantime. On
-// a mismatch the actor is crashed and the worker — which is not ours — must
-// not be written.
+// a live, registered, non-draining worker that still suits the actor, and
+// crashes the actor, releasing its assignment, when the worker can never take
+// it back.
 func TestValidateAssignedWorker(t *testing.T) {
-	ownAssignment := &ateapi.ActorAssignment{
-		Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "shared"},
-		ActorUid: "own-actor-uid",
-	}
-	otherAssignment := &ateapi.ActorAssignment{
-		Actor:    &ateapi.ObjectRef{Atespace: "team-b", Name: "shared"},
-		ActorUid: "other-actor-uid",
-	}
-	staleIncarnationAssignment := &ateapi.ActorAssignment{
-		Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "shared"},
-		ActorUid: "stale-incarnation-uid",
-	}
 	activeStatus := registered(&ateapi.WorkerStatus{
 		State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
 		Capacity:       &ateapi.WorkerResources{Actors: 1},
@@ -988,45 +901,37 @@ func TestValidateAssignedWorker(t *testing.T) {
 	unavailableStatus := &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE, Capacity: &ateapi.WorkerResources{Actors: 1}, SandboxClasses: workerSandboxClasses(testSandboxRuntime())}
 
 	tests := []struct {
-		name string
-		// workerStatus is the stored worker's status, nil for a worker that
-		// is gone.
+		name         string
 		workerStatus *ateapi.WorkerStatus
+		// unbound leaves the worker without the actor's assignment, as a
+		// release by a writer that took over the actor's lease does.
+		unbound bool
+		// workerGone seeds no worker, as a worker delete that took over the
+		// actor's lease leaves.
+		workerGone   bool
 		tmplSelector map[string]string
-		assignment   *ateapi.ActorAssignment
 		// wantCode is codes.OK when validateAssignedWorker must return nil.
 		wantCode       codes.Code
 		wantActorState ateapi.ActorState
 		// wantCrashMessage is the crash recorded when the actor is crashed.
 		wantCrashMessage string
-		// wantAssignment is the assignment expected on the stored worker
-		// afterwards; wantWorkerWrite false additionally asserts the worker
-		// version did not move (no write at all).
-		wantAssignment  *ateapi.ActorAssignment
-		wantWorkerWrite bool
+		// wantReleased is whether the worker no longer holds the actor's
+		// assignment afterwards. Otherwise the worker version must not move.
+		wantReleased bool
 	}{
 		{
-			name:             "crashes actor when worker is gone",
-			wantCode:         codes.Aborted,
-			wantActorState:   ateapi.ActorState_ACTOR_STATE_CRASHED,
-			wantCrashMessage: "resume failed: " + crashMessageWorkerGone,
-		},
-		{
-			name:             "crashes actor and leaves worker untouched when worker is draining",
+			name:             "crashes actor and releases its assignment when worker is draining",
 			workerStatus:     drainingStatus,
-			assignment:       ownAssignment,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapi.ActorState_ACTOR_STATE_CRASHED,
 			wantCrashMessage: "resume failed: " + crashMessageWorkerDraining,
-			wantAssignment:   ownAssignment,
+			wantReleased:     true,
 		},
 		{
 			name:           "leaves actor and worker untouched when worker is unavailable",
 			workerStatus:   unavailableStatus,
-			assignment:     ownAssignment,
 			wantCode:       codes.Unavailable,
 			wantActorState: ateapi.ActorState_ACTOR_STATE_RESUMING,
-			wantAssignment: ownAssignment,
 		},
 		{
 			// A restarted worker process between registering and reporting
@@ -1037,56 +942,38 @@ func TestValidateAssignedWorker(t *testing.T) {
 				RegisteredEpoch: 2,
 				Capacity:        &ateapi.WorkerResources{Actors: 1},
 			},
-			assignment:     ownAssignment,
 			wantCode:       codes.Unavailable,
 			wantActorState: ateapi.ActorState_ACTOR_STATE_RESUMING,
-			wantAssignment: ownAssignment,
 		},
 		{
-			name:             "crashes actor and leaves worker untouched when assigned to another actor",
+			name:             "crashes actor whose worker no longer holds it",
 			workerStatus:     activeStatus,
-			assignment:       otherAssignment,
+			unbound:          true,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapi.ActorState_ACTOR_STATE_CRASHED,
 			wantCrashMessage: "resume failed: " + crashMessageWorkerReassigned,
-			wantAssignment:   otherAssignment,
+			wantReleased:     true,
 		},
 		{
-			name:             "crashes actor and leaves worker untouched when assigned to previous incarnation of same actor",
-			workerStatus:     activeStatus,
-			assignment:       staleIncarnationAssignment,
-			wantCode:         codes.Aborted,
-			wantActorState:   ateapi.ActorState_ACTOR_STATE_CRASHED,
-			wantCrashMessage: "resume failed: " + crashMessageWorkerReassigned,
-			wantAssignment:   staleIncarnationAssignment,
-		},
-		{
-			name:             "crashes actor and leaves worker untouched when assignment is cleared",
-			workerStatus:     activeStatus,
-			assignment:       nil,
-			wantCode:         codes.Aborted,
-			wantActorState:   ateapi.ActorState_ACTOR_STATE_CRASHED,
-			wantCrashMessage: "resume failed: " + crashMessageWorkerReassigned,
-			wantAssignment:   nil,
+			name:           "leaves actor untouched when its worker is gone",
+			workerGone:     true,
+			wantCode:       codes.Aborted,
+			wantActorState: ateapi.ActorState_ACTOR_STATE_RESUMING,
 		},
 		{
 			name:           "passes for own eligible worker",
 			workerStatus:   activeStatus,
-			assignment:     ownAssignment,
 			wantCode:       codes.OK,
 			wantActorState: ateapi.ActorState_ACTOR_STATE_RESUMING,
-			wantAssignment: ownAssignment,
 		},
 		{
 			name:             "releases own ineligible worker and crashes actor",
 			workerStatus:     activeStatus,
 			tmplSelector:     map[string]string{"pool": "other"},
-			assignment:       ownAssignment,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapi.ActorState_ACTOR_STATE_CRASHED,
 			wantCrashMessage: "resume failed: " + crashMessageWorkerIneligible,
-			wantAssignment:   nil,
-			wantWorkerWrite:  true,
+			wantReleased:     true,
 		},
 	}
 
@@ -1095,8 +982,15 @@ func TestValidateAssignedWorker(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 
+			seedWorkflowActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "shared"}, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_RESUMING)
+			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"})
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			uid := stored.GetMetadata().GetUid()
+
 			var seeded *ateapi.Worker
-			if tt.workerStatus != nil {
+			if !tt.workerGone {
 				if _, err := persistence.CreateWorker(ctx, &ateapi.Worker{
 					Metadata:        &ateapi.ResourceMetadata{Name: testWorkerUID("pod-1")},
 					WorkerNamespace: "worker-ns",
@@ -1107,20 +1001,22 @@ func TestValidateAssignedWorker(t *testing.T) {
 				}); err != nil {
 					t.Fatalf("CreateWorker: %v", err)
 				}
-				seedAssignment(t, persistence, testWorkerUID("pod-1"), tt.assignment)
+				if !tt.unbound {
+					seedAssignment(t, persistence, testWorkerUID("pod-1"), &ateapi.ActorAssignment{
+						Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "shared"},
+						ActorUid: uid,
+					})
+				}
 				// Fetch the stored version so the no-write assertion below can
 				// detect any optimistic update.
-				var err error
 				if seeded, err = persistence.GetWorker(ctx, testWorkerUID("pod-1")); err != nil {
 					t.Fatalf("GetWorker: %v", err)
 				}
 			}
 
-			seedWorkflowActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "shared"}, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_RESUMING)
-
 			w := &ActorWorkflow{store: persistence, scheduler: scheduling.New(nil)}
 			resumingActor := &ateapi.Actor{
-				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "own-actor-uid"},
+				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: uid},
 				Status: &ateapi.ActorStatus{
 					State: ateapi.ActorState_ACTOR_STATE_RESUMING,
 					WorkerAssignment: &ateapi.WorkerAssignment{
@@ -1136,7 +1032,7 @@ func TestValidateAssignedWorker(t *testing.T) {
 			if tt.tmplSelector != nil {
 				tmpl.WorkerSelector = &ateapi.Selector{MatchLabels: tt.tmplSelector}
 			}
-			_, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
+			_, err = w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
@@ -1151,19 +1047,19 @@ func TestValidateAssignedWorker(t *testing.T) {
 			if msg := actor.GetStatus().GetCrash().GetMessage(); msg != tt.wantCrashMessage {
 				t.Errorf("crash message = %q, want %q", msg, tt.wantCrashMessage)
 			}
-
-			if tt.workerStatus == nil {
+			if tt.workerGone {
 				return
 			}
-			stored, err := persistence.GetWorker(ctx, testWorkerUID("pod-1"))
+
+			storedWorker, err := persistence.GetWorker(ctx, testWorkerUID("pod-1"))
 			if err != nil {
 				t.Fatalf("GetWorker: %v", err)
 			}
-			if got := firstAssignment(t, persistence, testWorkerUID("pod-1")); !proto.Equal(got, tt.wantAssignment) {
-				t.Errorf("stored worker assignment = %v, want %v", got, tt.wantAssignment)
+			if released := firstAssignment(t, persistence, testWorkerUID("pod-1")) == nil; released != tt.wantReleased {
+				t.Errorf("assignment released = %v, want %v", released, tt.wantReleased)
 			}
-			if !tt.wantWorkerWrite && stored.GetMetadata().GetVersion() != seeded.GetMetadata().GetVersion() {
-				t.Errorf("worker version moved %d -> %d, want no write", seeded.GetMetadata().GetVersion(), stored.GetMetadata().GetVersion())
+			if !tt.wantReleased && storedWorker.GetMetadata().GetVersion() != seeded.GetMetadata().GetVersion() {
+				t.Errorf("worker version moved %d -> %d, want no write", seeded.GetMetadata().GetVersion(), storedWorker.GetMetadata().GetVersion())
 			}
 		})
 	}
@@ -2276,24 +2172,18 @@ type contentionStore struct {
 	actor   *ateapi.Actor
 }
 
-func (s *contentionStore) FindWorkerHostingActor(context.Context, string) (string, error) {
-	return "", store.ErrNotFound
-}
-
 // BindActorToWorker runs admit as the real store does under the Worker's row
 // lock, and returns its refusal unchanged.
-func (s *contentionStore) BindActorToWorker(_ context.Context, workerName string, _ *ateapi.ActorAssignment, admit func(*ateapi.Worker) error) error {
+func (s *contentionStore) BindActorToWorker(_ context.Context, workerName string, _ *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, _ resources.ActorRef, _ store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	worker, ok := s.workers[workerName]
 	if !ok {
-		return store.ErrNotFound
+		return nil, store.ErrNotFound
 	}
 	if admit != nil {
-		return admit(worker)
+		if err := admit(worker); err != nil {
+			return nil, err
+		}
 	}
-	return nil
-}
-
-func (s *contentionStore) UpdateActor(_ context.Context, _ resources.ActorRef, _ store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	updated := proto.Clone(s.actor).(*ateapi.Actor)
 	if err := mutate(updated); err != nil {
 		return nil, err
@@ -2905,8 +2795,8 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		if got := after.GetStatus().GetWorkerAssignment(); got != nil {
 			t.Errorf("WorkerAssignment = %v, want none", got)
 		}
-		if _, err := st.FindWorkerHostingActor(ctx, actor.GetMetadata().GetUid()); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("FindWorkerHostingActor() error = %v, want ErrNotFound", err)
+		if worker := storetest.WorkerHostingActor(t, ctx, st, actor.GetMetadata().GetUid()); worker != "" {
+			t.Errorf("worker %q holds the actor, want none", worker)
 		}
 	})
 

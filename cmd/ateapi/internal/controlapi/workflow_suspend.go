@@ -224,11 +224,6 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	defer func() { err = done(err) }()
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
-	if assignment == nil {
-		// Missing active worker pod reference in SUSPENDING state indicates corrupted store state.
-		return "", nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing)
-	}
-
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
 		return "", nil, fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
@@ -316,11 +311,9 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // node-local snapshot with its PENDING durable copy (async), and commits
 // SUSPENDED with the assignment cleared in a single update, then releases the
 // durable snapshot that update replaced.
-// When the latest snapshot cannot be recorded, it commits CRASHED instead and
-// fails the step.
-// It re-reads the actor first so an out-of-band transition (e.g. the syncer
-// crashing the actor after its worker died) is not overwritten: an actor that
-// is no longer SUSPENDING is left as it is and the step fails with
+// It re-reads the actor first so a write that landed after this workflow lost
+// its lease, such as a crash or a delete, is not overwritten: an actor that is
+// no longer SUSPENDING is left as it is and the step fails with
 // FailedPrecondition.
 // ateletState is the state atelet returned from Checkpoint, applied in the
 // same update. A state that conflicts with the record crashes the actor.
@@ -333,13 +326,12 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// that stalls and then fails still reports where the time went; steps not
 	// reached (or skipped) log zero.
 	start := time.Now()
-	var dGetActor, dReleaseWorker, dUpdateActor, dReleaseSnapshot time.Duration
+	var dGetActor, dUpdateActor, dReleaseSnapshot time.Duration
 	defer func() {
 		slog.InfoContext(ctx, "FinalizeSuspended store call durations",
 			slog.Any("actor", actorRef),
 			slog.Duration("total", time.Since(start)),
 			slog.Duration("get_actor", dGetActor),
-			slog.Duration("release_worker", dReleaseWorker),
 			slog.Duration("update_actor", dUpdateActor),
 			slog.Duration("release_snapshot", dReleaseSnapshot))
 	}()
@@ -353,21 +345,9 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	if state := latestActor.GetStatus().GetState(); state != ateapi.ActorState_ACTOR_STATE_SUSPENDING {
 		return nil, apierror.FailedPrecondition("FinalizeSuspended prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, state, ateapi.ActorState_ACTOR_STATE_SUSPENDING)
 	}
-	if mode == suspendAsync {
-		// A local snapshot on an unknown node can never be found by the scheduler.
-		if latestActor.GetStatus().GetAssignedNode() == "" {
-			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
-		}
-		if snapshotAtLatestGeneration(latestActor.GetStatus()) == nil {
-			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
-		}
-	}
-	// Both modes mark the durable copy PENDING up front. Without it a sync
-	// suspend has nothing to mark COMPLETED, and atelet's background upload of
-	// an async suspend's snapshot could never be recorded.
-	if snapshotAtLatestGeneration(latestActor.GetStatus()).GetDurableSnapshot() == nil {
-		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)
-	}
+	// A SUSPENDING actor is on the node the bind recorded, with the snapshot
+	// and its PENDING durable copy that ensureMarkedSuspending recorded at the
+	// latest generation: nothing else writes a SUSPENDING actor.
 
 	// A state that conflicts with the record crashes the actor. Atelet has
 	// already destroyed the workload, so a retried Checkpoint can't succeed.
@@ -379,23 +359,12 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 	}
 
-	// 1. Free the worker (if it hasn't been freed yet)
-	if latestActor.GetStatus().GetWorkerAssignment() != nil {
-		t = time.Now()
-		_, err := releaseWorker(ctx, w.store, latestActor)
-		dReleaseWorker = time.Since(t)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// 2. Finalize the actor: record its new snapshot and mark it SUSPENDED. This
-	// must run even with no worker assignment (nothing to free), or the actor
-	// would be left SUSPENDING forever with the workflow reporting success.
-	// The precondition pins the version checked above, so an out-of-band write
-	// since then fails the update instead of being overwritten.
+	// 1. Free the worker and finalize the actor in one write: record its new
+	// snapshot and mark it SUSPENDED. The precondition pins the version checked
+	// above, so an out-of-band write since then fails the update instead of
+	// being overwritten.
 	t = time.Now()
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
+	storedActor, err := w.store.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
 		// The precondition makes toUpdate the version applied was built from.
 		toUpdate.Status.Snapshots = applied.GetSnapshots()
@@ -418,14 +387,11 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	})
 	dUpdateActor = time.Since(t)
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
+		return nil, actorWriteError(actorRef, err)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 
-	// 3. Release the external snapshots this suspend replaced. Best-effort: the
+	// 2. Release the external snapshots this suspend replaced. Best-effort: the
 	// new snapshot is committed and the worker is gone, so failing the
 	// workflow here would only strand the actor.
 	t = time.Now()

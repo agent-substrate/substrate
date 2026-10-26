@@ -102,22 +102,6 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 	seedAssignment(t, st, "uid", assignment)
 }
 
-// seedUnboundActor stores a running actor whose worker-binding fields were
-// already cleared, e.g. by a prior release.
-func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
-	t.Helper()
-	storetest.MustCreateActor(t, ctx, st, &ateapi.Actor{
-		Metadata: &ateapi.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status: &ateapi.ActorStatus{
-			State:                  ateapi.ActorState_ACTOR_STATE_RUNNING,
-			LastAssignedGeneration: 1,
-			Snapshots: []*ateapi.Snapshot{
-				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
-			},
-		},
-	})
-}
-
 // assertCrashed reloads the actor and verifies it is CRASHED with its worker
 // binding cleared.
 func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
@@ -237,26 +221,6 @@ func TestCrashActor(t *testing.T) {
 			},
 		},
 		{
-			name: "skips release for actor with no worker binding",
-			seed: false,
-			setup: func(t *testing.T, ctx context.Context, st store.Interface) {
-				seedUnboundActor(t, ctx, st, actorRef)
-				seedWorker(t, ctx, st, actorRef)
-			},
-			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
-				if err != nil {
-					t.Fatalf("crashActor() = %v, want nil", err)
-				}
-				assertCrashed(t, ctx, st, actorRef)
-				// Without a binding the worker cannot be looked up, so its
-				// assignment must be left untouched even though it names
-				// the crashed actor.
-				if firstAssignment(t, st, "uid") == nil {
-					t.Error("worker assignment = nil, want untouched")
-				}
-			},
-		},
-		{
 			name: "actor not found",
 			seed: false,
 			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
@@ -317,7 +281,7 @@ func TestCrashActor_RecordsCrash(t *testing.T) {
 	}
 
 	// Crashing an already-crashed actor, as a concurrent crash does, keeps the first crash.
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, crashMessageWorkerGone); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, crashMessageWorkerIneligible); err != nil {
 		t.Fatalf("second crashActor() = %v, want nil", err)
 	}
 	second, err := st.GetActor(ctx, actorRef)
@@ -511,8 +475,8 @@ func TestNewActorCrash(t *testing.T) {
 		{
 			name:    "known operation prefixes the message",
 			opName:  ateattr.OperationResume,
-			message: crashMessageWorkerGone,
-			want:    resumeOpPrefix + crashMessageWorkerGone,
+			message: crashMessageWorkerDraining,
+			want:    resumeOpPrefix + crashMessageWorkerDraining,
 		},
 		{
 			name:    "unknown operation leaves the message bare",
@@ -667,59 +631,15 @@ func assertNoCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader) 
 	}
 }
 
-// failingReleaseStore wraps a store and fails every release, simulating a
-// transient state-store error while releasing a worker.
-type failingReleaseStore struct {
+// failingCrashStore wraps a store and fails every crash write, simulating a
+// transient state-store error.
+type failingCrashStore struct {
 	store.Interface
 	err error
 }
 
-func (f failingReleaseStore) ReleaseActorFromWorker(context.Context, string, string) (*ateapi.Worker, error) {
+func (f failingCrashStore) UpdateActorAndRelease(context.Context, resources.ActorRef, store.Precondition, func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	return nil, f.err
-}
-
-// A transient failure releasing the worker must not move the actor to the
-// CRASHED state: doing so would strand the still-assigned worker with
-// no actor left to drive a retry, permanently consuming the worker slot.
-// crashActor must return the error with the actor and worker left intact so the
-// caller retries and the worker is reclaimed.
-func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
-	ctx := context.Background()
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-
-	st, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
-	seedActor(t, ctx, st, actorRef)
-	seedWorker(t, ctx, st, actorRef)
-
-	releaseErr := errors.New("state store unavailable")
-	err := crashActor(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown, "test crash")
-
-	if err == nil {
-		t.Fatal("crashActor() = nil, want error")
-	}
-	if !errors.Is(err, releaseErr) {
-		t.Errorf("crashActor() error = %v, want it to wrap %v", err, releaseErr)
-	}
-
-	// The actor must stay RUNNING with its worker assignment intact, so a retry
-	// can re-release the worker.
-	got, gerr := st.GetActor(ctx, actorRef)
-	if gerr != nil {
-		t.Fatalf("GetActor() = %v, want nil", gerr)
-	}
-	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("status = %v, want %v (actor must not be crashed when the release fails)", got.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_RUNNING)
-	}
-	if got.GetStatus().GetWorkerAssignment() == nil {
-		t.Error("WorkerAssignment cleared, want preserved so the release can be retried")
-	}
-
-	// The worker must still be assigned to the actor (the failed release did not
-	// persist): it is not leaked, and a retry will reclaim it.
-	if firstAssignment(t, st, "uid") == nil {
-		t.Error("worker assignment = nil, want still assigned (release failed, must remain retriable)")
-	}
 }
 
 // TestCrashActorAndFail verifies the error a workflow step fails with when it
@@ -736,7 +656,7 @@ func TestCrashActorAndFail(t *testing.T) {
 		seedActor(t, ctx, st, actorRef)
 		seedWorker(t, ctx, st, actorRef)
 
-		err := crashActorAndFail(ctx, st, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+		err := crashActorAndFail(ctx, st, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 		}
@@ -750,7 +670,7 @@ func TestCrashActorAndFail(t *testing.T) {
 		seedWorker(t, ctx, st, actorRef)
 
 		releaseErr := errors.New("state store unavailable")
-		err := crashActorAndFail(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+		err := crashActorAndFail(ctx, failingCrashStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 		if !errors.Is(err, releaseErr) {
 			t.Fatalf("crashActorAndFail() = %v, want it to wrap %v", err, releaseErr)
 		}
@@ -763,6 +683,20 @@ func TestCrashActorAndFail(t *testing.T) {
 		}
 		if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
 			t.Errorf("status = %v, want %v (the crash did not commit)", got.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_RUNNING)
+		}
+	})
+
+	t.Run("conflicting crash is Aborted", func(t *testing.T) {
+		st, cleanup := storetest.SetupTestStore(t)
+		defer cleanup()
+		seedActor(t, ctx, st, actorRef)
+		seedWorker(t, ctx, st, actorRef)
+
+		for _, conflict := range []error{store.ErrVersionConflict, store.ErrUIDConflict} {
+			err := crashActorAndFail(ctx, failingCrashStore{Interface: st, err: conflict}, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
+			if got := apierror.Code(err); got != codes.Aborted {
+				t.Errorf("apierror.Code(err) for %v = %v, want %v (err: %v)", conflict, got, codes.Aborted, err)
+			}
 		}
 	})
 }

@@ -206,15 +206,15 @@ func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, preconditio
 	})
 }
 
-// The assignment operations are pass-throughs: an assignment is its own record,
-// so binding and releasing are single store calls rather than a read-modify-write
-// of the Worker.
-func (s *ServiceImpl) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error) error {
-	return s.store.BindActorToWorker(ctx, workerName, assignment, admit)
+// BindActorToWorker and UpdateActorAndRelease validate the Actor they write as
+// UpdateActor does. They return the store's errors unmapped, so callers can
+// tell a missing Worker from a missing Actor and retry a version conflict.
+func (s *ServiceImpl) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	return s.store.BindActorToWorker(ctx, workerName, assignment, admit, actorRef, precondition, s.validatedActorMutation(ctx, mutate))
 }
 
-func (s *ServiceImpl) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapi.Worker, error) {
-	return s.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
+func (s *ServiceImpl) UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	return s.store.UpdateActorAndRelease(ctx, actorRef, precondition, s.validatedActorMutation(ctx, mutate))
 }
 
 func (s *ServiceImpl) GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapi.ActorAssignment, error) {
@@ -223,10 +223,6 @@ func (s *ServiceImpl) GetWorkerAssignment(ctx context.Context, workerName, actor
 
 func (s *ServiceImpl) ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorAssignment], error) {
 	return s.store.ListWorkerAssignments(ctx, workerName, opts)
-}
-
-func (s *ServiceImpl) FindWorkerHostingActor(ctx context.Context, actorUID string) (string, error) {
-	return s.store.FindWorkerHostingActor(ctx, actorUID)
 }
 
 func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapi.DeleteWorkerRequest) (*ateapi.Worker, error) {

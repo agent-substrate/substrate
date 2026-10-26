@@ -83,19 +83,21 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-	return p.updateActor(ctx, actorRef, store.DeletePreconditions(precondition), mutate, false)
+	return updateActor(ctx, p.pool, actorRef, store.DeletePreconditions(precondition), mutate, false)
 }
 
 func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
-	return p.updateActor(ctx, actorRef, precondition, mutate, true)
+	return updateActor(ctx, p.pool, actorRef, precondition, mutate, true)
 }
 
-func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
+// updateActor applies mutate to the stored actor through q, which is the pool
+// or a transaction the write must commit with.
+func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
-	if err := p.pool.QueryRow(ctx, `
+	if err := q.QueryRow(ctx, `
 			SELECT uid, version, proto FROM actors
 			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -134,7 +136,7 @@ func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorR
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
-	commandTag, err := p.pool.Exec(ctx, `
+	commandTag, err := q.Exec(ctx, `
 			UPDATE actors
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,

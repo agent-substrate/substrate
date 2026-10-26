@@ -25,6 +25,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -95,13 +96,11 @@ func seedAPIWorker(t *testing.T, ctx context.Context, persistence store.Interfac
 	return created
 }
 
-// assignAPIWorker binds an Actor to a worker the way the resume workflow does:
-// in-process, through the store. There is no AssignWorker RPC to go through.
+// assignAPIWorker books an assignment of actorUID on a worker, leaving the
+// Actor, if any, as the test seeded it.
 func assignAPIWorker(t *testing.T, ctx context.Context, persistence store.Interface, name, actorUID string) *ateapi.Worker {
 	t.Helper()
-	if err := persistence.BindActorToWorker(ctx, name, newAPIAssignment(actorUID), nil); err != nil {
-		t.Fatalf("assigning worker %s: %v", name, err)
-	}
+	storetest.MustSeedAssignment(t, ctx, persistence, name, newAPIAssignment(actorUID))
 	assigned, err := persistence.GetWorker(ctx, name)
 	if err != nil {
 		t.Fatalf("re-reading worker %s after assigning: %v", name, err)
@@ -838,6 +837,77 @@ func TestServiceImplUpdateWorker_ImmutableFields(t *testing.T) {
 			}
 			if got.GetMetadata().GetVersion() != 1 {
 				t.Errorf("rejected mutation bumped the version to %d, want 1", got.GetMetadata().GetVersion())
+			}
+		})
+	}
+}
+
+// TestServiceImplAssignmentWrites_ValidateActor checks that binding and
+// releasing validate the Actor they write, as UpdateActor does, and that a
+// rejected write changes neither the Actor nor the assignment.
+func TestServiceImplAssignmentWrites_ValidateActor(t *testing.T) {
+	// invalid names a worker but none of the fields an assignment requires.
+	invalid := &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: apiWorkerName}}
+	for _, tc := range []struct {
+		name string
+		// bound seeds the Actor RESUMING on the worker, as a bind leaves it.
+		bound bool
+		write func(ctx context.Context, impl *ServiceImpl, actor *ateapi.Actor) error
+	}{
+		{
+			name: "bind",
+			write: func(ctx context.Context, impl *ServiceImpl, actor *ateapi.Actor) error {
+				_, err := impl.BindActorToWorker(ctx, apiWorkerName, assignmentOf(actor), nil, resources.ActorRefFromActor(actor), store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+					a.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+					a.Status.WorkerAssignment = invalid
+					return nil
+				})
+				return err
+			},
+		},
+		{
+			name:  "release",
+			bound: true,
+			write: func(ctx context.Context, impl *ServiceImpl, actor *ateapi.Actor) error {
+				_, err := impl.UpdateActorAndRelease(ctx, resources.ActorRefFromActor(actor), store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+					a.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
+					a.Status.WorkerAssignment = invalid
+					return nil
+				})
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			impl := newServiceImpl(persistence, nil)
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "tmpl-1"},
+				Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+			})
+			if tc.bound {
+				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+					s.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+					s.WorkerAssignment = wireTestAssignment()
+					s.AssignedNode = s.GetWorkerAssignment().GetNodeName()
+				})
+				storetest.MustSeedAssignment(t, ctx, persistence, apiWorkerName, assignmentOf(actor))
+			}
+
+			if got := apierror.Code(tc.write(ctx, impl, actor)); got != codes.InvalidArgument {
+				t.Fatalf("writing an invalid worker assignment returned %v, want %v", got, codes.InvalidArgument)
+			}
+			stored := mustReadActor(t, ctx, persistence, resources.ActorRefFromActor(actor))
+			if got, want := stored.GetMetadata().GetVersion(), actor.GetMetadata().GetVersion(); got != want {
+				t.Errorf("actor version = %d after the rejected write, want %d", got, want)
+			}
+			_, err := persistence.GetWorkerAssignment(ctx, apiWorkerName, actor.GetMetadata().GetUid())
+			if held := err == nil; held != tc.bound {
+				t.Errorf("worker holds the assignment = %v (err %v), want %v", held, err, tc.bound)
 			}
 		})
 	}

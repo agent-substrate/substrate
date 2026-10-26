@@ -704,3 +704,42 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 		t.Errorf("DeleteActor after the row is gone = %v, want NOT_FOUND", err)
 	}
 }
+
+// TestEnsureWorkerReleased_RecreatedActorKeepsAssignment runs the release of a
+// delete that lost its lease after another delete finished and the name was
+// recreated and resumed. The stale delete must leave the new Actor bound.
+func TestEnsureWorkerReleased_RecreatedActorKeepsAssignment(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w := &ActorWorkflow{store: persistence}
+	bound := func(uid string) *ateapi.Actor {
+		return &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1", Uid: uid},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "tmpl-1"},
+			Status: &ateapi.ActorStatus{
+				State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
+				AssignedNode:     wireTestAssignment().GetNodeName(),
+				WorkerAssignment: wireTestAssignment(),
+			},
+		}
+	}
+
+	deleted := storetest.MustCreateActor(t, ctx, persistence, bound(""))
+	actorRef := resources.ActorRefFromActor(deleted)
+	if _, err := persistence.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteActor: %v", err)
+	}
+	recreated := storetest.MustCreateActor(t, ctx, persistence, bound(""))
+	seedWireWorker(t, ctx, persistence, assignmentOf(recreated))
+
+	if _, err := w.ensureWorkerReleased(ctx, actorRef, deleted); apierror.Code(err) != codes.Aborted {
+		t.Fatalf("ensureWorkerReleased = %v, want ABORTED", err)
+	}
+	wantWorker := wireTestAssignment().GetWorker().GetName()
+	if got := storetest.WorkerHostingActor(t, ctx, persistence, recreated.GetMetadata().GetUid()); got != wantWorker {
+		t.Errorf("worker hosting the recreated actor = %q, want %q", got, wantWorker)
+	}
+	if got := mustReadActor(t, ctx, persistence, actorRef).GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != wantWorker {
+		t.Errorf("status.worker_assignment names %q, want %q", got, wantWorker)
+	}
+}

@@ -331,31 +331,19 @@ func (w *ActorWorkflow) recordExhaustedAssignment(ctx context.Context, elapsed t
 }
 
 // validateAssignedWorker checks a RESUMING actor's persisted assignment
-// against the current worker record. Every invalid outcome crashes the actor:
-// a RESUMING actor whose worker vanished, drained, was reassigned, or is no
-// longer eligible can never make progress on its own. A worker that is only
-// unavailable is reported as UNAVAILABLE for the caller to retry.
+// against the current worker record. It crashes an actor whose worker drained,
+// no longer holds it, or is no longer eligible, since such an actor can never
+// make progress on its own. A worker that is only unavailable is reported as
+// UNAVAILABLE for the caller to retry. A worker that is gone is reported as
+// ABORTED: deleting it already crashed the actor, under a lease this resume
+// lost.
 func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) (*ateapi.Worker, error) {
-	assignment := actor.GetStatus().GetWorkerAssignment()
-	if assignment == nil {
-		slog.ErrorContext(ctx, "expected a worker assignment on a RESUMING actor, found none")
-
-		// Crash the actor if its worker assignment is missing. We should never be in this state.
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerAssignmentMissing); cerr != nil {
-			return nil, cerr
-		}
-		return nil, apierror.Aborted("actor %s crashed", actorRef)
+	workerName := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
+	worker, err := w.store.GetWorker(ctx, workerName)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, apierror.Aborted("worker %s of actor %s is gone", workerName, actorRef)
 	}
-
-	worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
 	if err != nil {
-		// Crash the actor if it was assigned to a deleted pod.
-		if errors.Is(err, store.ErrNotFound) {
-			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerGone); cerr != nil {
-				return nil, cerr
-			}
-			return nil, apierror.Aborted("actor %s crashed", actorRef)
-		}
 		return nil, fmt.Errorf("failed to get already assigned worker for actor %w", err)
 	}
 	if worker.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_DRAINING {
@@ -376,7 +364,9 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if !scheduling.Registered(worker) {
 		return nil, apierror.Unavailable("worker %s assigned to actor %s has not finished registering", worker.GetMetadata().GetName(), actorRef)
 	}
-	// Verify the worker is still hosting this Actor.
+	// A writer that took over after this resume lost its lease may have
+	// released the actor since it was read. Restoring it then would start a
+	// sandbox no worker assignment books.
 	hosted, err := workerHostsActor(ctx, w.store, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
 	if err != nil {
 		return nil, err
@@ -392,50 +382,14 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	constraints := schedulingConstraints(actor, actorTemplate)
 	if !w.appliesWithFallback(worker, constraints, canRelaxRuntime(actor, constraints)) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
-		// If that worker's pool is no longer eligible (e.g. the actor's
-		// worker_selector was updated after the failed attempt), release it back
-		// to the free pool instead of leaving it claimed forever — nothing else
-		// reclaims a healthy worker whose actor moved on to a different pool.
-		if _, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid()); err != nil {
-			return nil, fmt.Errorf("while releasing stale worker assignment: %w", err)
-		}
+		// The crash releases the worker, e.g. one whose pool the actor's
+		// worker_selector no longer matches after the failed attempt.
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerIneligible); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef)
 	}
 	return worker, nil
-}
-
-// workerHoldingStaleClaim recovers a claim written before the Actor update.
-// It releases the claim if the Worker is no longer eligible.
-func (w *ActorWorkflow) workerHoldingStaleClaim(ctx context.Context, actor *ateapi.Actor, constraints scheduling.Constraints, relaxable bool) (*ateapi.Worker, error) {
-	actorUID := actor.GetMetadata().GetUid()
-	workerName, err := w.store.FindWorkerHostingActor(ctx, actorUID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("while looking for a worker already hosting actor %q: %w", actorUID, err)
-	}
-	worker, err := w.store.GetWorker(ctx, workerName)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil // the worker went away with its claim
-		}
-		return nil, fmt.Errorf("while reading worker %q holding a stale claim: %w", workerName, err)
-	}
-
-	// The Actor's allocation makes HasRoom unsuitable for an existing claim.
-	if worker.GetNodeName() != "" && w.appliesWithFallback(worker, constraints, relaxable) {
-		return worker, nil
-	}
-
-	_, err = w.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
-	if err != nil {
-		return nil, fmt.Errorf("while releasing stale claim on worker %q: %w", workerName, err)
-	}
-	return nil, nil
 }
 
 // schedulerRecordable excludes the two errors the assignment loop retries
@@ -472,31 +426,19 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	class = constraints.SandboxClass
 	relaxable := canRelaxRuntime(actor, constraints)
 
-	assignedWorker, err := w.workerHoldingStaleClaim(ctx, actor, constraints, relaxable)
+	assignedWorker, err := w.scheduler.Schedule(ctx, constraints)
+	if errors.Is(err, scheduling.ErrNoCapacity) && relaxable {
+		constraints.RequiredRuntime = hardware.Requirement{}
+		assignedWorker, err = w.scheduler.Schedule(ctx, constraints)
+	}
 	if err != nil {
+		if errors.Is(err, scheduling.ErrNoCapacity) {
+			outcome = ateattr.SchedulerOutcomeNoCapacity
+			return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
+		}
 		return nil, nil, err
 	}
-	if assignedWorker == nil {
-		pickedWorker, err := w.scheduler.Schedule(ctx, constraints)
-		if errors.Is(err, scheduling.ErrNoCapacity) && relaxable {
-			constraints.RequiredRuntime = hardware.Requirement{}
-			pickedWorker, err = w.scheduler.Schedule(ctx, constraints)
-		}
-		if err != nil {
-			if errors.Is(err, scheduling.ErrNoCapacity) {
-				outcome = ateattr.SchedulerOutcomeNoCapacity
-				return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
-			}
-			return nil, nil, err
-		}
-
-		assignedWorker = pickedWorker
-		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
-	} else if relaxable && !snapRuntime.WorkerMatches(assignedWorker.GetStatus()) {
-		// The stale claim only passed the relaxed check, so bind under it:
-		// admit asks the same question again under the row lock.
-		constraints.RequiredRuntime = hardware.Requirement{}
-	}
+	slog.InfoContext(ctx, "Picked worker", slog.Any("worker", assignedWorker.String()))
 
 	if assignedWorker.GetNodeName() == "" {
 		return nil, nil, apierror.FailedPrecondition("worker %s has no node name", assignedWorker.GetMetadata().GetName())
@@ -536,28 +478,30 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		bound = fresh
 		return nil
 	}
-	if err := w.store.BindActorToWorker(ctx, assignedWorker.GetMetadata().GetName(), assignment, admit); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			w.workerCache.Forget(assignedWorker.GetMetadata().GetName())
-			return nil, nil, fmt.Errorf("selected worker disappeared before claim: %w", store.ErrVersionConflict)
-		}
-		// errWorkerFilledUp leaves the cache alone: it reports no room for
-		// this actor's size, or an overhead the cache hasn't seen yet, so
-		// forgetting the worker would hide it from every smaller actor until
-		// the next watch event or relist.
-		return nil, nil, err
-	}
-
-	newAssignment := workerAssignmentFrom(bound, snapRuntime)
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+	// The Actor is updated in the bind's transaction, so a bind whose Actor
+	// changed since it was read fails the precondition and leaves no
+	// assignment behind.
+	storedActor, err := w.store.BindActorToWorker(ctx, assignedWorker.GetMetadata().GetName(), assignment, admit, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+		newAssignment := workerAssignmentFrom(bound, snapRuntime)
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
 		toUpdate.Status.WorkerAssignment = newAssignment
 		toUpdate.Status.AssignedNode = newAssignment.GetNodeName()
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrWorkerNotFound) {
+			w.workerCache.Forget(assignedWorker.GetMetadata().GetName())
+			return nil, nil, fmt.Errorf("selected worker disappeared before claim: %w", store.ErrVersionConflict)
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
+		}
+		// errWorkerFilledUp leaves the cache alone: it reports no room for
+		// this actor's size, or an overhead the cache hasn't seen yet, so
+		// forgetting the worker would hide it from every smaller actor until
+		// the next watch event or relist.
 		if !errors.Is(err, store.ErrVersionConflict) {
-			return nil, nil, err
+			return nil, nil, actorWriteError(actorRef, err)
 		}
 		// refresh the version of actor to avoid always failure in rest retries.
 		fresh, gerr := w.store.GetActor(ctx, actorRef)
@@ -923,7 +867,6 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	workerName := latestActor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
 	worker, err := w.store.GetWorker(ctx, workerName)
 	if errors.Is(err, store.ErrNotFound) {
-		// Deleting the Worker crashes the Actors bound to it.
 		return nil, apierror.Aborted("worker %s of actor %s is gone", workerName, actorRef)
 	}
 	if err != nil {

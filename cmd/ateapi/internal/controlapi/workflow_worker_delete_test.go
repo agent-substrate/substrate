@@ -151,11 +151,10 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	}
 }
 
-// The Actor's state when its pod vanished decides what the release does: one
-// that had already suspended saved its state cleanly and stays resumable, while
-// anything still in flight crashes and is counted. An Actor being deleted stays
-// DELETING so it can never be resumed. An Actor already counted as crashed is
-// released again without being counted twice.
+// The Actor's state when its pod vanished decides what the release does: an
+// Actor still in flight crashes and is counted, and an Actor being deleted
+// stays DELETING so it can never be resumed. Either way it no longer names the
+// Worker.
 func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -169,8 +168,6 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 		{name: "suspending becomes crashed", start: ateapi.ActorState_ACTOR_STATE_SUSPENDING, wantState: ateapi.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationSuspend, wantMetric: true},
 		{name: "reverting becomes crashed", start: ateapi.ActorState_ACTOR_STATE_REVERTING, wantState: ateapi.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationRevert, wantMetric: true},
 		{name: "deleting stays deleting", start: ateapi.ActorState_ACTOR_STATE_DELETING, wantState: ateapi.ActorState_ACTOR_STATE_DELETING, wantMetric: false},
-		{name: "suspended stays suspended", start: ateapi.ActorState_ACTOR_STATE_SUSPENDED, wantState: ateapi.ActorState_ACTOR_STATE_SUSPENDED, wantMetric: false},
-		{name: "crashed is not counted twice", start: ateapi.ActorState_ACTOR_STATE_CRASHED, wantState: ateapi.ActorState_ACTOR_STATE_CRASHED, wantMetric: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -196,8 +193,8 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 			if got.GetStatus().GetState() != tc.wantState {
 				t.Errorf("actor state = %v, want %v", got.GetStatus().GetState(), tc.wantState)
 			}
-			if tc.wantState == ateapi.ActorState_ACTOR_STATE_CRASHED && got.GetStatus().GetWorkerAssignment() != nil {
-				t.Errorf("crashed actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
+			if got.GetStatus().GetWorkerAssignment() != nil {
+				t.Errorf("actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
 			}
 			if tc.wantMetric {
 				assertCrashMetricDatapoint(t, reader, tc.wantOp, "ate-system", "tmpl", "pool-1", "gvisor", 1)
@@ -352,26 +349,6 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 	}
 }
 
-// An Actor deleted between the read and the write leaves nothing pointing at
-// the Worker, which is what the release was driving towards, so the delete
-// carries on.
-func TestDeleteWorkerWorkflow_ActorDeletedDuringRelease(t *testing.T) {
-	ctx := context.Background()
-	_, persistence := newWorkerDeleteWorkflow(t)
-	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING)
-	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
-
-	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: store.ErrNotFound}, newNodeAteletDialer(t, &capturingTerminator{}))
-	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
-		t.Fatalf("DeleteWorker() failed: %v", err)
-	}
-
-	if _, err := persistence.GetWorker(ctx, apiWorkerName); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("GetWorker() error = %v, want the worker deleted", err)
-	}
-}
-
 // Steps wrap what they return, which has to leave the gRPC code the caller
 // branches on intact — the worker-pod syncer reads NOT_FOUND off this call to
 // decide a deregistration is already done.
@@ -388,7 +365,7 @@ func TestDeleteWorkerWorkflow_AbsentReportsNotFoundThroughStepWrap(t *testing.T)
 	}
 }
 
-// failingUpdateActorStore wraps a store and fails every UpdateActor call,
+// failingUpdateActorStore wraps a store and fails every actor update,
 // simulating a state-store error while releasing an actor.
 type failingUpdateActorStore struct {
 	store.Interface
@@ -396,6 +373,10 @@ type failingUpdateActorStore struct {
 }
 
 func (f failingUpdateActorStore) UpdateActor(context.Context, resources.ActorRef, store.Precondition, func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	return nil, f.err
+}
+
+func (f failingUpdateActorStore) UpdateActorAndRelease(context.Context, resources.ActorRef, store.Precondition, func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	return nil, f.err
 }
 
@@ -437,38 +418,27 @@ func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
 		// seed further shapes the stored actor.
 		seed func(*ateapi.Actor)
 		// terminateErr is what the atelet answers, if anything.
-		terminateErr  error
-		wantTerminate bool
+		terminateErr error
 	}{
 		{
-			name:          "running actor is reclaimed",
-			state:         ateapi.ActorState_ACTOR_STATE_RUNNING,
-			wantTerminate: true,
+			name:  "running actor is reclaimed",
+			state: ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
 			// An actor resumed from a local snapshot keeps Locality on that
 			// snapshot while running. When its worker pod vanishes, it crashes
 			// and its node state is reclaimed along with any local snapshot.
-			name:          "running actor with a local snapshot is reclaimed",
-			state:         ateapi.ActorState_ACTOR_STATE_RUNNING,
-			seed:          withPausedShape(t, "node-1"),
-			wantTerminate: true,
-		},
-		{
-			// A cleanly suspended actor already ran Checkpoint's teardown,
-			// volume unmount, and resetActorDirs, and stays resumable.
-			name:          "cleanly suspended actor is left alone",
-			state:         ateapi.ActorState_ACTOR_STATE_SUSPENDED,
-			wantTerminate: false,
+			name:  "running actor with a local snapshot is reclaimed",
+			state: ateapi.ActorState_ACTOR_STATE_RUNNING,
+			seed:  withPausedShape(t, "node-1"),
 		},
 		{
 			// An unreachable or unhappy node must not wedge deregistration:
 			// the worker still goes, and the actor's revert or delete collects
 			// what this could not.
-			name:          "a failing terminate does not fail the delete",
-			state:         ateapi.ActorState_ACTOR_STATE_RUNNING,
-			terminateErr:  apierror.Internal("atelet is having a bad day"),
-			wantTerminate: true,
+			name:         "a failing terminate does not fail the delete",
+			state:        ateapi.ActorState_ACTOR_STATE_RUNNING,
+			terminateErr: apierror.Internal("atelet is having a bad day"),
 		},
 	}
 
@@ -494,12 +464,6 @@ func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
 			}
 
 			got := atelet.requests()
-			if !tt.wantTerminate {
-				if len(got) != 0 {
-					t.Fatalf("atelet received %d Terminate calls, want none: %v", len(got), got)
-				}
-				return
-			}
 			if len(got) != 1 {
 				t.Fatalf("atelet received %d Terminate calls, want exactly 1", len(got))
 			}
@@ -592,12 +556,10 @@ func TestDeleteWorkerWorkflow_BusyActorDoesNotHoldUpOthers(t *testing.T) {
 			a.Metadata.Name = name
 		})
 		ref := resources.ActorRefFromActor(actor)
-		if err := persistence.BindActorToWorker(ctx, apiWorkerName, &ateapi.ActorAssignment{
+		seedAssignment(t, persistence, apiWorkerName, &ateapi.ActorAssignment{
 			Actor:    &ateapi.ObjectRef{Atespace: ref.Atespace, Name: ref.Name},
 			ActorUid: actor.GetMetadata().GetUid(),
-		}, nil); err != nil {
-			t.Fatalf("assigning %s to worker %s: %v", ref, apiWorkerName, err)
-		}
+		})
 		refs = append(refs, ref)
 		uids = append(uids, actor.GetMetadata().GetUid())
 	}
@@ -659,12 +621,10 @@ func TestDeleteWorkerWorkflow_HungReclaimDoesNotWedgeDelete(t *testing.T) {
 					a.Status.WorkerAssignment.WorkerPodUid = workerName
 				})
 				ref := resources.ActorRefFromActor(actor)
-				if err := persistence.BindActorToWorker(ctx, workerName, &ateapi.ActorAssignment{
+				seedAssignment(t, persistence, workerName, &ateapi.ActorAssignment{
 					Actor:    &ateapi.ObjectRef{Atespace: ref.Atespace, Name: ref.Name},
 					ActorUid: actor.GetMetadata().GetUid(),
-				}, nil); err != nil {
-					t.Fatalf("assigning %s to worker %s: %v", ref, workerName, err)
-				}
+				})
 				return ref
 			}
 

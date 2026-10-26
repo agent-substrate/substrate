@@ -172,29 +172,16 @@ func TestReconcileAssignments_AlreadyObservedWritesNothing(t *testing.T) {
 }
 
 // Each assignment from an earlier epoch is released, but what happens to its
-// Actor depends on where the Actor stands.
+// Actor depends on where the Actor stands. A released Actor no longer names
+// the Worker.
 func TestReconcileAssignments_ReleasesByActorState(t *testing.T) {
-	const (
-		here = iota
-		unassigned
-		otherWorker
-	)
 	tests := []struct {
 		name        string
 		state       ateapi.ActorState
-		pointsAt    int
 		wantState   ateapi.ActorState
 		wantRelease bool
 	}{
-		// Suspended cleanly before the restart: still resumable.
-		{name: "suspended stays suspended", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, wantState: ateapi.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
-		{name: "crashed is released", state: ateapi.ActorState_ACTOR_STATE_CRASHED, wantState: ateapi.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
-		// Nothing it ran on the Worker: a claim a resume is still recording,
-		// or one its next resume recovers. Left alone.
-		{name: "crashed unassigned is left", state: ateapi.ActorState_ACTOR_STATE_CRASHED, pointsAt: unassigned, wantState: ateapi.ActorState_ACTOR_STATE_CRASHED},
-		{name: "suspended unassigned is left", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: unassigned, wantState: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
-		{name: "running elsewhere is left", state: ateapi.ActorState_ACTOR_STATE_RUNNING, pointsAt: otherWorker, wantState: ateapi.ActorState_ACTOR_STATE_RUNNING},
-		{name: "suspended elsewhere is left", state: ateapi.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: otherWorker, wantState: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+		{name: "suspending is crashed", state: ateapi.ActorState_ACTOR_STATE_SUSPENDING, wantState: ateapi.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
 		// Nothing it ran is kept: its resume restores it on the new process.
 		{name: "resuming is left to its resume", state: ateapi.ActorState_ACTOR_STATE_RESUMING, wantState: ateapi.ActorState_ACTOR_STATE_RESUMING},
 		{name: "deleting stays deleting", state: ateapi.ActorState_ACTOR_STATE_DELETING, wantState: ateapi.ActorState_ACTOR_STATE_DELETING, wantRelease: true},
@@ -204,52 +191,24 @@ func TestReconcileAssignments_ReleasesByActorState(t *testing.T) {
 			ctx := context.Background()
 			_, persistence := newWorkerAPIService(t)
 			seedEpochWorker(t, ctx, persistence, 1, 1)
-			actor := seedAPIActor(t, ctx, persistence, tc.state, func(a *ateapi.Actor) {
-				switch tc.pointsAt {
-				case unassigned:
-					a.Status.WorkerAssignment = nil
-				case otherWorker:
-					a.Status.WorkerAssignment.Worker = workerRef("other-worker")
-				}
-			})
+			actor := seedAPIActor(t, ctx, persistence, tc.state)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 			mustRaiseEpoch(t, ctx, persistence, 2)
 
 			mustReconcileAssignments(t, ctx, persistence)
 
-			if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != tc.wantState {
-				t.Errorf("actor state = %v, want %v", got, tc.wantState)
+			got := mustGetActor(t, ctx, persistence)
+			if got.GetStatus().GetState() != tc.wantState {
+				t.Errorf("actor state = %v, want %v", got.GetStatus().GetState(), tc.wantState)
 			}
 			released := firstAssignment(t, persistence, apiWorkerName) == nil
 			if released != tc.wantRelease {
 				t.Errorf("assignment released = %v, want %v", released, tc.wantRelease)
 			}
+			if backlink := got.GetStatus().GetWorkerAssignment() != nil; backlink == released {
+				t.Errorf("actor names a worker = %v with the assignment released = %v, want them to agree", backlink, released)
+			}
 		})
-	}
-}
-
-// An assignment whose Actor is gone, or has been recreated, names nothing
-// running, so it is released without touching the live Actor.
-func TestReconcileAssignments_ReleasesOrphanedAssignments(t *testing.T) {
-	ctx := context.Background()
-	_, persistence := newWorkerAPIService(t)
-	seedEpochWorker(t, ctx, persistence, 1, 1)
-	seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING)
-	assignAPIWorker(t, ctx, persistence, apiWorkerName, "11111111-1111-1111-1111-111111111111")
-	orphan := newAPIAssignment("22222222-2222-2222-2222-222222222222")
-	orphan.Actor = &ateapi.ObjectRef{Atespace: "team-a", Name: "gone"}
-	if err := persistence.BindActorToWorker(ctx, apiWorkerName, orphan, nil); err != nil {
-		t.Fatalf("BindActorToWorker() failed: %v", err)
-	}
-	mustRaiseEpoch(t, ctx, persistence, 2)
-
-	mustReconcileAssignments(t, ctx, persistence)
-
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("actor state = %v, want RUNNING: the assignment named another incarnation of it", got)
-	}
-	if a := firstAssignment(t, persistence, apiWorkerName); a != nil {
-		t.Errorf("worker still hosts %v, want every orphaned assignment released", a)
 	}
 }
 
@@ -260,11 +219,14 @@ func TestReconcileAssignments_WaitsForBusyActor(t *testing.T) {
 	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	seedRunningActor(t, ctx, persistence)
-	orphan := newAPIAssignment("22222222-2222-2222-2222-222222222222")
-	orphan.Actor = &ateapi.ObjectRef{Atespace: "team-a", Name: "gone"}
-	if err := persistence.BindActorToWorker(ctx, apiWorkerName, orphan, nil); err != nil {
-		t.Fatalf("BindActorToWorker() failed: %v", err)
+	other := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING, func(a *ateapi.Actor) {
+		a.Metadata.Name = "actor-2"
+	})
+	otherAssignment := &ateapi.ActorAssignment{
+		Actor:    &ateapi.ObjectRef{Atespace: apiActorRef.Atespace, Name: "actor-2"},
+		ActorUid: other.GetMetadata().GetUid(),
 	}
+	seedAssignment(t, persistence, apiWorkerName, otherAssignment)
 	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	lease, err := persistence.AcquireLease(ctx, actorLeaseKey(apiActorRef))
@@ -278,8 +240,8 @@ func TestReconcileAssignments_WaitsForBusyActor(t *testing.T) {
 	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state = %v, want RUNNING while its lease is held", got)
 	}
-	if _, err := persistence.GetWorkerAssignment(ctx, apiWorkerName, orphan.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("orphaned assignment: GetWorkerAssignment() = %v, want it released", err)
+	if _, err := persistence.GetWorkerAssignment(ctx, apiWorkerName, otherAssignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the other actor's assignment: GetWorkerAssignment() = %v, want it released", err)
 	}
 	if got := mustGetWorker(t, ctx, persistence).GetStatus().GetObservedEpoch(); got != 1 {
 		t.Errorf("observed_epoch = %d, want 1 until the busy actor is released", got)
@@ -332,20 +294,24 @@ func TestReconcileAssignments_KeepsActorReboundSinceList(t *testing.T) {
 	seedRunningActor(t, ctx, persistence)
 	mustRaiseEpoch(t, ctx, persistence, 2)
 
-	actorUID := mustGetActor(t, ctx, persistence).GetMetadata().GetUid()
 	rebinding := &hookedStore{Interface: persistence, beforeLease: func() {
-		if _, err := persistence.ReleaseActorFromWorker(ctx, apiWorkerName, actorUID); err != nil {
-			t.Fatalf("ReleaseActorFromWorker() failed: %v", err)
+		bound := mustGetActor(t, ctx, persistence)
+		previous := bound.GetStatus().GetWorkerAssignment()
+		released, err := persistence.UpdateActorAndRelease(ctx, apiActorRef, store.PreconditionFrom(bound), func(a *ateapi.Actor) error {
+			a.Status.WorkerAssignment = nil
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateActorAndRelease() failed: %v", err)
 		}
-		assignAPIWorker(t, ctx, persistence, apiWorkerName, actorUID)
 		// As finalizeRunning does, the Actor records the epoch of the
 		// process it was restored on.
-		actor := mustGetActor(t, ctx, persistence)
-		if _, err := persistence.UpdateActor(ctx, apiActorRef, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+		if _, err := persistence.BindActorToWorker(ctx, apiWorkerName, newAPIAssignment(bound.GetMetadata().GetUid()), nil, apiActorRef, store.PreconditionFrom(released), func(a *ateapi.Actor) error {
+			a.Status.WorkerAssignment = previous
 			a.Status.WorkerAssignment.WorkerEpoch = 2
 			return nil
 		}); err != nil {
-			t.Fatalf("UpdateActor() failed: %v", err)
+			t.Fatalf("BindActorToWorker() failed: %v", err)
 		}
 	}}
 	if err := NewWorkerWorkflow(rebinding, nil).ReconcileAssignments(ctx, apiWorkerName); err != nil {

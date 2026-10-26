@@ -293,7 +293,34 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 }
 
 func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
-	storedActor, err := s.store.UpdateActor(ctx, actorRef, precondition, func(toUpdate *ateapi.Actor) error {
+	storedActor, err := s.store.UpdateActor(ctx, actorRef, precondition, s.validatedActorMutation(ctx, mutate))
+	if err != nil {
+		if mapped := actorWriteError(actorRef, err); mapped != err {
+			return nil, mapped
+		}
+		return nil, fmt.Errorf("while updating actor: %w", err)
+	}
+	return storedActor, nil
+}
+
+// actorWriteError maps the store's errors for a write to the Actor actorRef to
+// API errors, and returns any other error unchanged.
+func actorWriteError(actorRef resources.ActorRef, err error) error {
+	switch {
+	case errors.Is(err, store.ErrVersionConflict), errors.Is(err, store.ErrUIDConflict):
+		return apierror.Aborted("concurrent update conflict, please retry")
+	case errors.Is(err, store.ErrNotFound):
+		return apierror.NotFound("actor %s not found", actorRef)
+	case errors.Is(err, store.ErrPreconditionRequired):
+		return apierror.InvalidArgument("while updating actor %s: %v", actorRef, err)
+	}
+	return err
+}
+
+// validatedActorMutation wraps mutate so the Actor it writes is validated as
+// an update of the stored Actor.
+func (s *ServiceImpl) validatedActorMutation(ctx context.Context, mutate func(*ateapi.Actor) error) func(*ateapi.Actor) error {
+	return func(toUpdate *ateapi.Actor) error {
 		// Apply the mutation function to the stored value.
 		oldVal := proto.CloneOf(toUpdate)
 		if err := mutate(toUpdate); err != nil {
@@ -346,23 +373,7 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		}
 
 		return nil
-	})
-	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("actor %s not found", actorRef)
-		}
-		if errors.Is(err, store.ErrPreconditionRequired) {
-			return nil, apierror.InvalidArgument("while updating actor %s: %v", actorRef, err)
-		}
-		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
-	return storedActor, nil
 }
 
 // validateTemplateVolumesUnchanged rejects a template repoint that changes

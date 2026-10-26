@@ -53,7 +53,7 @@ func TestValidateActorStatusCrash(t *testing.T) {
 		return withActorStatus(func(s *ateapi.ActorStatus) {
 			s.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 			s.Crash = &ateapi.ActorCrash{
-				Message:   crashMessageWorkerGone,
+				Message:   crashMessageWorkerDraining,
 				CrashTime: &timestamppb.Timestamp{Seconds: 867},
 			}
 			for _, m := range mutate {

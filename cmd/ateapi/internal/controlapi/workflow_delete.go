@@ -107,25 +107,9 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		return nil
 	}
 
-	workerPodUID := ""
-	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
-		workerPodUID = assignment.GetWorkerPodUid()
-		if workerName := assignment.GetWorker().GetName(); workerName != "" {
-			// Ask whether the worker still HOSTS this actor, not whether its one
-			// assignment happens to be this actor: a worker hosting several is the
-			// ordinary case, and the others are none of this delete's business.
-			hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
-			if err != nil {
-				return err
-			}
-			if !hosted {
-				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping worker workload termination",
-					slog.String("worker", workerName),
-					slog.Any("actor", actorRef))
-				workerPodUID = ""
-			}
-		}
-	}
+	// An actor names a worker only while the worker holds its assignment, so
+	// with no worker named there is no workload to terminate, only node state.
+	workerPodUID := actor.GetStatus().GetWorkerAssignment().GetWorkerPodUid()
 
 	conn, err := w.dialer.DialForAteletOnNode(nodeName)
 	if errors.Is(err, ErrNoAteletOnNode) {
@@ -229,90 +213,35 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
 }
 
-// ensureWorkerReleased releases the worker assigned to the actor.
-// releaseAssignmentWithoutBacklink releases an assignment the Actor does not
-// reference, found by Actor UID. Absent is the ordinary case and not an error:
-// most Actors reaching here really were released already.
-func (w *ActorWorkflow) releaseAssignmentWithoutBacklink(ctx context.Context, actor *ateapi.Actor) error {
-	actorUID := actor.GetMetadata().GetUid()
-	workerName, err := w.store.FindWorkerHostingActor(ctx, actorUID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			markSkipped(ctx, "worker already released")
-			return nil
-		}
-		return fmt.Errorf("while looking for a worker still hosting actor %s: %w", actorUID, err)
-	}
-
-	// Read only to learn whether the Worker is still there; the release itself
-	// is guarded by the assignment key.
-	if _, err := w.store.GetWorker(ctx, workerName); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			markSkipped(ctx, "worker already released")
-			return nil
-		}
-		return fmt.Errorf("while getting worker %s to release: %w", workerName, err)
-	}
-
-	slog.InfoContext(ctx, "Releasing an assignment the Actor does not reference",
-		slog.String("worker", workerName), slog.String("actor_uid", actorUID))
-	_, err = w.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
-		return fmt.Errorf("while releasing worker %s: %w", workerName, err)
-	}
-	return nil
-}
-
+// ensureWorkerReleased releases the worker assigned to the actor. An actor
+// with no worker assignment holds no assignment row either.
 func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor) (updated *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "ReleaseWorker")
 	defer func() { err = done(err) }()
 
 	if actor.GetStatus().GetWorkerAssignment() == nil {
-		// An Actor with no backlink may still be bound. The assignment commits
-		// before the Actor is updated to point at it, so a crash in between
-		// leaves a row nothing on the Actor names. Releasing by Actor UID is
-		// what recovers it; skipping would leave its share of the Worker's
-		// capacity booked until the Worker itself went away. The resume path
-		// recovers the same window through workerHoldingStaleClaim.
-		return actor, w.releaseAssignmentWithoutBacklink(ctx, actor)
+		markSkipped(ctx, "worker already released")
+		return actor, nil
 	}
 
+	// Read again for the version the earlier steps left.
 	latestActor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
-
-	if latestActor.GetStatus().GetWorkerAssignment() != nil {
-		_, err := releaseWorker(ctx, w.store, latestActor)
-		if err != nil {
-			return nil, err
-		}
-
-		latestActor, err = w.store.GetActor(ctx, actorRef)
-		if err != nil {
-			return nil, err
-		}
-
-		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapi.Actor) error {
-			if dbActor.Status != nil {
-				clearLocalSnapshots(dbActor.Status)
-				dbActor.Status.AssignedNode = ""
-				dbActor.Status.WorkerAssignment = nil
-			}
-			return nil
-		})
-		if err != nil {
-			if errors.Is(err, store.ErrVersionConflict) {
-				return nil, apierror.Aborted("concurrent update conflict, please retry")
-			}
-			return nil, err
-		}
-		latestActor = updatedActor
+	// The uid is the deleted Actor's. A delete that lost its lease can re-read
+	// an Actor recreated under the same name, and must not release it.
+	precondition := store.Precondition{UID: actor.GetMetadata().GetUid(), Version: latestActor.GetMetadata().GetVersion()}
+	updatedActor, err := w.store.UpdateActorAndRelease(ctx, actorRef, precondition, func(dbActor *ateapi.Actor) error {
+		clearLocalSnapshots(dbActor.Status)
+		dbActor.Status.AssignedNode = ""
+		dbActor.Status.WorkerAssignment = nil
+		return nil
+	})
+	if err != nil {
+		return nil, actorWriteError(actorRef, err)
 	}
-	return latestActor, nil
+	return updatedActor, nil
 }
 
 var errAlreadyMarked = errors.New("already marked for deletion")
