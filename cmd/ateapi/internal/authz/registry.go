@@ -324,6 +324,9 @@ var defaultRPCPermissions = map[string]rpcRule{
 		return onTag(RelationCanDelete, r.GetTag(), field.NewPath("tag"))
 	})),
 
+	// WhoAmI reveals only the caller's own principal.
+	ateapi.Authentication_WhoAmI_FullMethodName: inHandler("any authenticated caller"),
+
 	// WorkerService is served only to atelet, which each handler
 	// authenticates by its mTLS SPIFFE ID.
 	ateapi.WorkerService_AcquireWorkerEpoch_FullMethodName:         inHandler("ateletauth: caller is atelet on the Worker's node"),

@@ -1887,6 +1887,118 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	Authentication_WhoAmI_FullMethodName = "/substrate.ateapi.v1.Authentication/WhoAmI"
+)
+
+// AuthenticationClient is the client API for Authentication service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Authentication reports how ateapi authenticated the caller. It is separate
+// from Control because it operates on no resource.
+type AuthenticationClient interface {
+	// WhoAmI returns the principal ateapi authenticated the caller as. Any
+	// authenticated caller may call it.
+	WhoAmI(ctx context.Context, in *WhoAmIRequest, opts ...grpc.CallOption) (*WhoAmIResponse, error)
+}
+
+type authenticationClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewAuthenticationClient(cc grpc.ClientConnInterface) AuthenticationClient {
+	return &authenticationClient{cc}
+}
+
+func (c *authenticationClient) WhoAmI(ctx context.Context, in *WhoAmIRequest, opts ...grpc.CallOption) (*WhoAmIResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WhoAmIResponse)
+	err := c.cc.Invoke(ctx, Authentication_WhoAmI_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AuthenticationServer is the server API for Authentication service.
+// All implementations must embed UnimplementedAuthenticationServer
+// for forward compatibility.
+//
+// Authentication reports how ateapi authenticated the caller. It is separate
+// from Control because it operates on no resource.
+type AuthenticationServer interface {
+	// WhoAmI returns the principal ateapi authenticated the caller as. Any
+	// authenticated caller may call it.
+	WhoAmI(context.Context, *WhoAmIRequest) (*WhoAmIResponse, error)
+	mustEmbedUnimplementedAuthenticationServer()
+}
+
+// UnimplementedAuthenticationServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedAuthenticationServer struct{}
+
+func (UnimplementedAuthenticationServer) WhoAmI(context.Context, *WhoAmIRequest) (*WhoAmIResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WhoAmI not implemented")
+}
+func (UnimplementedAuthenticationServer) mustEmbedUnimplementedAuthenticationServer() {}
+func (UnimplementedAuthenticationServer) testEmbeddedByValue()                        {}
+
+// UnsafeAuthenticationServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to AuthenticationServer will
+// result in compilation errors.
+type UnsafeAuthenticationServer interface {
+	mustEmbedUnimplementedAuthenticationServer()
+}
+
+func RegisterAuthenticationServer(s grpc.ServiceRegistrar, srv AuthenticationServer) {
+	// If the following call panics, it indicates UnimplementedAuthenticationServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&Authentication_ServiceDesc, srv)
+}
+
+func _Authentication_WhoAmI_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WhoAmIRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthenticationServer).WhoAmI(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Authentication_WhoAmI_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthenticationServer).WhoAmI(ctx, req.(*WhoAmIRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// Authentication_ServiceDesc is the grpc.ServiceDesc for Authentication service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var Authentication_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "substrate.ateapi.v1.Authentication",
+	HandlerType: (*AuthenticationServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "WhoAmI",
+			Handler:    _Authentication_WhoAmI_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "api/ateapi/v1/ateapi.proto",
+}
+
+const (
 	WorkerService_AcquireWorkerEpoch_FullMethodName         = "/substrate.ateapi.v1.WorkerService/AcquireWorkerEpoch"
 	WorkerService_RegisterWorker_FullMethodName             = "/substrate.ateapi.v1.WorkerService/RegisterWorker"
 	WorkerService_SetWorkerSandboxRuntimes_FullMethodName   = "/substrate.ateapi.v1.WorkerService/SetWorkerSandboxRuntimes"

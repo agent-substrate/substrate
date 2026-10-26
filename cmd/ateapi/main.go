@@ -404,6 +404,7 @@ func main() {
 	)
 	reflection.Register(mux)
 	ateapi.RegisterControlServer(mux, controlSrv)
+	ateapi.RegisterAuthenticationServer(mux, apiauthn.AuthenticationService{})
 	ateapi.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool, *actorJWTIssuer, actorIDJWTAuthorityPool))
 
 	// Every RPC needs the store, so a replica that cannot reach it leaves the
