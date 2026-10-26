@@ -41,6 +41,9 @@ type ClientConfig struct {
 	ServerName           string
 	GetClientCertificate func(*tls.CertificateRequestInfo) (*tls.Certificate, error)
 	TrustBundlePath      string
+	// DialControl, when set, runs on each gateway socket before it connects,
+	// as net.Dialer.Control does.
+	DialControl func(network, address string, c syscall.RawConn) error
 }
 
 // dialFunc dials a network address. It matches net.Dialer.DialContext.
@@ -122,7 +125,7 @@ func NewClient(cfg ClientConfig, opts ...clientOption) (*Client, error) {
 
 	client := &Client{
 		gatewayAddress: cfg.GatewayAddress,
-		dialContext:    (&net.Dialer{}).DialContext,
+		dialContext:    (&net.Dialer{Control: cfg.DialControl}).DialContext,
 		tlsConfig: &tls.Config{
 			MinVersion:           tls.VersionTLS12,
 			RootCAs:              rootCAs,
