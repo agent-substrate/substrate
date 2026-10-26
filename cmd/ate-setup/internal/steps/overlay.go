@@ -39,10 +39,10 @@ const (
 	envoyDataplaneDockefile = "cmd/dataplane/envoy"
 )
 
-// cordonControlPlaneComponent is the kustomize component that pins each
-// control plane workload to its own node, layered over every control plane
-// apply under --cordon-control-plane.
-const cordonControlPlaneComponent = installDir + "/components/cordon-control-plane"
+// cordonSystemInfraComponent is the kustomize component that pins each
+// system infra workload to its own node pool, layered over every control
+// plane apply under --cordon-system-infra-components.
+const cordonSystemInfraComponent = installDir + "/components/cordon-system-infra-components"
 
 // fakeDataPlaneComponent is the kustomize component that puts fake-atelet in
 // atelet's DaemonSet and fake-workersync in place of ate-controller, layered
@@ -63,8 +63,8 @@ func (e *Env) components() []string {
 	if e.Cfg.Router == config.RouterAgentgateway {
 		components = append(components, e.Cfg.Path(agentgatewayStaticMTLSComponent))
 	}
-	if e.Cfg.CordonControlPlane {
-		components = append(components, e.Cfg.Path(cordonControlPlaneComponent))
+	if e.Cfg.CordonSystemInfraComponents {
+		components = append(components, e.Cfg.Path(cordonSystemInfraComponent))
 	}
 	return components
 }

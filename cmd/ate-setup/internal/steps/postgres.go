@@ -90,10 +90,11 @@ func (e *Env) waitAndSetupBundledPostgres(ctx context.Context) error {
 }
 
 // The size10 PostgreSQL container. Deliberately no CPU limit: under
-// --cordon-control-plane the dedicated ate-postgres pool keeps the pod alone
-// on its node, so a limit would only add CFS throttling on checkpoint and
-// autovacuum bursts. Without that flag the pod shares whatever node fits the
-// request, and the missing limit lets it contend with its neighbors. Memory
+// --cordon-system-infra-components the dedicated ate-postgres pool keeps the
+// pod alone on its node, so a limit would only add CFS throttling on
+// checkpoint and autovacuum bursts. Without that flag the pod shares whatever
+// node fits the request, and the missing limit lets it contend with its
+// neighbors. Memory
 // request == limit keeps eviction ordering equivalent to a Guaranteed pod,
 // which matters because postgres cannot release shared_buffers under pressure.
 // postgres-size10/postgres-config-patch.yaml is tuned to these numbers, so they
@@ -103,8 +104,8 @@ const (
 	size10PostgresMemory     = "140Gi"
 )
 
-// postgresPoolSelector selects the nodes of the pool the cordon-control-plane
-// component pins the bundled PostgreSQL to.
+// postgresPoolSelector selects the nodes of the pool the
+// cordon-system-infra-components component pins the bundled PostgreSQL to.
 const postgresPoolSelector = "ate.dev/workloadType=ate-postgres"
 
 // postgresPlan says where ateapi's store comes from: the bundled StatefulSet,
@@ -242,11 +243,12 @@ func setPostgresStorageClass(objs []*unstructured.Unstructured, class string) er
 }
 
 // requirePostgresPool refuses to apply the bundled PostgreSQL under
-// --cordon-control-plane when no node carries the ate-postgres label. The
-// StatefulSet deletes its running pod before creating the replacement, so
-// without the pool the database goes down and the new pod stays Pending.
+// --cordon-system-infra-components when no node carries the ate-postgres
+// label. The StatefulSet deletes its running pod before creating the
+// replacement, so without the pool the database goes down and the new pod
+// stays Pending.
 func (e *Env) requirePostgresPool(ctx context.Context) error {
-	if !e.Cfg.CordonControlPlane {
+	if !e.Cfg.CordonSystemInfraComponents {
 		return nil
 	}
 	nodes, err := e.Kube.Typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{
@@ -257,9 +259,9 @@ func (e *Env) requirePostgresPool(ctx context.Context) error {
 		return fmt.Errorf("while listing the %s nodes: %w", postgresPoolSelector, err)
 	}
 	if len(nodes.Items) == 0 {
-		return fmt.Errorf("--cordon-control-plane pins the bundled PostgreSQL to nodes labeled %s, and the cluster has none: "+
+		return fmt.Errorf("--cordon-system-infra-components pins the bundled PostgreSQL to nodes labeled %s, and the cluster has none: "+
 			"create a one-node pool labeled and tainted %s:NoSchedule in the zone of the postgres volume first "+
-			"(see docs/upgrade.md#cordoned-control-plane-postgres-pool)", postgresPoolSelector, postgresPoolSelector)
+			"(see docs/architecture.md#system-infra-isolation)", postgresPoolSelector, postgresPoolSelector)
 	}
 	return nil
 }

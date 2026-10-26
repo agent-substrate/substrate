@@ -203,12 +203,14 @@ type Config struct {
 	// or size10.
 	ClusterSize string
 
-	// CordonControlPlane keeps the control plane off the worker nodes
-	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a small shared pool
-	// labeled and tainted ate.dev/workloadType=ate-control-plane:NoSchedule,
-	// and a one-node pool labeled and tainted
-	// ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone.
-	CordonControlPlane bool
+	// CordonSystemInfraComponents keeps the system infra components, such as
+	// ate-api-server, atenet-router, atenet-egress and postgres, off the
+	// worker nodes (ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS). It assumes a
+	// small shared pool labeled and tainted
+	// ate.dev/workloadType=ate-system-infra:NoSchedule, and a one-node pool
+	// labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for
+	// postgres alone.
+	CordonSystemInfraComponents bool
 
 	// FakeDataPlane installs fake-atelet in place of atelet and
 	// fake-workersync in place of ate-controller
@@ -507,9 +509,9 @@ func (c *Config) ScriptEnv() []string {
 	if len(c.PreviewGates) > 0 {
 		merged["ATE_PREVIEW"] = strings.Join(c.PreviewGates, ",")
 	}
-	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
-	if c.CordonControlPlane {
-		merged["ATE_INSTALL_CORDON_CONTROL_PLANE"] = "true"
+	delete(merged, "ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS")
+	if c.CordonSystemInfraComponents {
+		merged["ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS"] = "true"
 	}
 	delete(merged, "ATE_INSTALL_FAKE_DATA_PLANE")
 	if c.FakeDataPlane {

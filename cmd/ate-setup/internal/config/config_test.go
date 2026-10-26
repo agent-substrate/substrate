@@ -65,7 +65,7 @@ func loadEnv(t *testing.T) {
 		"ATE_IMAGE_TAG",
 		"ATE_INGRESS_ALLOWED_SPIFFE_IDS",
 		"ATE_INSTALL_CLUSTER_SIZE",
-		"ATE_INSTALL_CORDON_CONTROL_PLANE",
+		"ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS",
 		"ATE_INSTALL_FAKE_DATA_PLANE",
 		"ATE_INSTALL_KIND",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
@@ -129,8 +129,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ClusterSize != ClusterSizeSize0 {
 		t.Errorf("ClusterSize = %q, want %q", cfg.ClusterSize, ClusterSizeSize0)
 	}
-	if cfg.CordonControlPlane {
-		t.Error("CordonControlPlane = true, want false")
+	if cfg.CordonSystemInfraComponents {
+		t.Error("CordonSystemInfraComponents = true, want false")
 	}
 }
 
@@ -191,30 +191,30 @@ func TestLoadClusterSize(t *testing.T) {
 	}
 }
 
-func TestLoadCordonControlPlane(t *testing.T) {
+func TestLoadCordonSystemInfraComponents(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		opts Options
 		env  string
 		want bool
 	}{
-		{name: "flag", opts: Options{CordonControlPlane: true}, want: true},
+		{name: "flag", opts: Options{CordonSystemInfraComponents: true}, want: true},
 		{name: "environment true", env: "true", want: true},
 		{name: "environment false", env: "false", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loadEnv(t)
-			t.Setenv("ATE_INSTALL_CORDON_CONTROL_PLANE", tc.env)
+			t.Setenv("ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS", tc.env)
 			cfg, err := Load(tc.opts)
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if cfg.CordonControlPlane != tc.want {
-				t.Errorf("CordonControlPlane = %v, want %v", cfg.CordonControlPlane, tc.want)
+			if cfg.CordonSystemInfraComponents != tc.want {
+				t.Errorf("CordonSystemInfraComponents = %v, want %v", cfg.CordonSystemInfraComponents, tc.want)
 			}
-			_, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_CORDON_CONTROL_PLANE"]
+			_, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS"]
 			if exported != tc.want {
-				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_CONTROL_PLANE = %v, want %v", exported, tc.want)
+				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS = %v, want %v", exported, tc.want)
 			}
 		})
 	}

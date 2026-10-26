@@ -128,8 +128,9 @@
 #   args           Optional. Postgres settings as name=value (e.g.
 #                  commit_delay=100), applied in the restart stats makes.
 # The block leaves placement to the install. A capacity run sets
-# --cordon-control-plane in ateArgs, which keeps ate-api-server and Postgres
-# off the nodes that run the load, on the tainted pools that flag expects.
+# --cordon-system-infra-components in ateArgs, which keeps ate-api-server and
+# Postgres off the nodes that run the load, on the tainted pools that flag
+# expects.
 #
 # ---- type: nighthawk-ingress --------------------------------------------------------
 #
@@ -722,7 +723,7 @@ tests:
     isolate:
       delay: 150ms
     ateArgs:
-      - "--cordon-control-plane"
+      - "--cordon-system-infra-components"
     controlPlane:
       apiServer:
         replicas: 1
@@ -750,7 +751,7 @@ tests:
     isolate:
       delay: 150ms
     ateArgs:
-      - "--cordon-control-plane"
+      - "--cordon-system-infra-components"
     controlPlane:
       apiServer:
         replicas: 1

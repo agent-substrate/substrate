@@ -184,11 +184,12 @@ model, so NotFound is ignored — and so is a kind that no longer resolves, sinc
 teardown after the CRDs are gone must not fail. Beyond that, deletes are
 strict.
 
-**Cluster profiles are new.** `--cluster-size` and `--cordon-control-plane`
+**Cluster profiles are new.** `--cluster-size` and `--cordon-system-infra-components`
 postdate the shell installer, which the shim forwards them to. `size10`
 renders the `podcert-size10` overlay and resizes the bundled PostgreSQL from
-`postgres-size10/postgres-config-patch.yaml`; `--cordon-control-plane`
-composes the `cordon-control-plane` component over every control plane apply
+`postgres-size10/postgres-config-patch.yaml`;
+`--cordon-system-infra-components` composes the
+`cordon-system-infra-components` component over every system infra apply
 path. The size10 PostgreSQL changes are made to the decoded objects before the
 one server-side apply, not patched on afterwards: one rollout, the rollout wait
 sees the resized pod, and there is no second field manager for a later apply to

@@ -371,15 +371,16 @@ Handles actor-aware routing and automatic re-animation.
 
   * **Latency**: The data plane is optimized for sub-100ms activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
 
-### Control Plane Isolation
+### System Infra Isolation
 
-Control plane components can be kept on nodes of their own,
-away from the workers, so a burst of worker or actor load cannot starve them.
-When configured via the installer, the control plane workloads select a
-node label and tolerate the matching `NoSchedule` taint:
+System infra components, such as ate-api-server, atenet-router, atenet-egress
+and postgres, can be kept on nodes of their own, away from the workers, so a
+burst of worker or actor load cannot starve them. Under
+`--cordon-system-infra-components`, these workloads select a node label and
+tolerate the matching `NoSchedule` taint:
 
-* `ate.dev/workloadType=ate-control-plane`: a small pool shared by every
-  control plane workload except postgres. Each workload's replicas are spread
+* `ate.dev/workloadType=ate-system-infra`: a small pool shared by every
+  system infra workload except postgres. Each workload's replicas are spread
   across its nodes on a best-effort basis.
 * `ate.dev/workloadType=ate-postgres`: a one-node pool for postgres alone.
 
