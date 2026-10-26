@@ -7,9 +7,9 @@ go run ./cmd/ate-setup [global flags] <command> [flags]
 go build -o bin/ate-setup ./cmd/ate-setup
 ```
 
-`ate-setup` is the installer. `hack/install-ate.sh` is a shim over it, kept so
-that existing command lines and CI jobs keep working; it holds no install logic
-of its own.
+`ate-setup` is the installer. `hack/install-ate.sh` is a thin wrapper that
+forwards its arguments directly to `go run ./cmd/ate-setup`; it holds no
+install logic of its own.
 
 ## Installing pre-built images
 
