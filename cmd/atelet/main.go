@@ -52,6 +52,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atelet"
+	"go.ate.dev/substrate/internal/checkpointabort"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/imagecache"
@@ -1089,6 +1090,11 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {
+		// The worker gave up without changing the actor, and so has atelet:
+		// pass the abort on so the control plane leaves the actor as it was.
+		if checkpointabort.Is(err) {
+			return nil, checkpointabort.Errorf("while calling worker CheckpointWorkload: %s", status.Convert(err).Message())
+		}
 		// TODO: Worker should classify checkpoint failures, and set "should-crash"
 		// in the metadata if the error is not retriable.
 		return nil, fmt.Errorf("while calling worker CheckpointWorkload: %w", err)
@@ -1893,15 +1899,21 @@ func (s *Atelet) DetachActor(ctx context.Context, req *ateletpb.DetachActorReque
 // restoreGuestReadyError), so report apierror.Unavailable to let the control
 // plane keep the actor in ACTOR_STATE_RESUMING and retry. A transport error,
 // such as from a worker pod that is restarting, arrives as codes.Unavailable
-// too. All other worker errors, including a worker-side Canceled or
-// DeadlineExceeded that may have come from any step of the restore, reach the
-// control plane as codes.Internal, crashing the actor.
+// too. A worker's codes.FailedPrecondition, a precondition of the placement
+// that no retry on this worker can fix, such as guest memory captured on
+// another hypervisor backend, keeps its code. All other worker errors,
+// including a worker-side Canceled or DeadlineExceeded that may have come from
+// any step of the restore, reach the control plane as codes.Internal. Both
+// crash the actor.
 func workerRestoreError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("while calling worker RestoreWorkload: %w: %w", err, ctx.Err())
 	}
-	if status.Code(err) == codes.Unavailable {
+	switch status.Code(err) {
+	case codes.Unavailable:
 		return apierror.Unavailable("while calling worker RestoreWorkload: %w", err)
+	case codes.FailedPrecondition:
+		return apierror.FailedPrecondition("while calling worker RestoreWorkload: %s", status.Convert(err).Message())
 	}
 	return fmt.Errorf("while calling worker RestoreWorkload: %w", err)
 }

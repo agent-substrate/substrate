@@ -17,6 +17,7 @@ package register
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -79,21 +80,109 @@ func TestFromFilesMissing(t *testing.T) {
 }
 
 func TestBuildCompat(t *testing.T) {
-	got := buildCompat(sandboxruntimes.Attributes{
+	fromFile := sandboxruntimes.Attributes{
 		hardware.AttrSandboxBundleHash: "sha256:abc",
 		hardware.AttrCPUFeatures:       "3f",
 		hardware.AttrArchitecture:      runtime.GOARCH,
-	})
-	want := &ateletpb.VersionedSandboxCompat{
-		SchemaVersion: hardware.SchemaVersionV1,
-		Attributes: []*ateletpb.AttributeEntry{
+	}
+	for _, tc := range []struct {
+		name  string
+		attrs sandboxruntimes.Attributes
+		extra sandboxruntimes.Attributes
+		want  []*ateletpb.AttributeEntry
+	}{{
+		name:  "file only",
+		attrs: fromFile,
+		want: []*ateletpb.AttributeEntry{
 			{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
 			{Key: hardware.AttrCPUFeatures, Value: "3f"},
 			{Key: hardware.AttrSandboxBundleHash, Value: "sha256:abc"},
 		},
+	}, {
+		// Runtime attributes extend atelet's so the control plane matches
+		// snapshots on both.
+		name:  "runtime attributes",
+		attrs: fromFile,
+		extra: sandboxruntimes.Attributes{hardware.AttrHypervisor: "mshv"},
+		want: []*ateletpb.AttributeEntry{
+			{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
+			{Key: hardware.AttrCPUFeatures, Value: "3f"},
+			{Key: hardware.AttrHypervisor, Value: "mshv"},
+			{Key: hardware.AttrSandboxBundleHash, Value: "sha256:abc"},
+		},
+	}, {
+		// The runtime knows its own attributes better than atelet does.
+		name:  "runtime attribute replaces atelet's",
+		attrs: sandboxruntimes.Attributes{hardware.AttrArchitecture: runtime.GOARCH, hardware.AttrHypervisor: "kvm"},
+		extra: sandboxruntimes.Attributes{hardware.AttrHypervisor: "mshv"},
+		want: []*ateletpb.AttributeEntry{
+			{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
+			{Key: hardware.AttrHypervisor, Value: "mshv"},
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := maps.Clone(tc.attrs)
+			got := buildCompat(tc.attrs, tc.extra)
+			want := &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: hardware.SchemaVersionV1,
+				Attributes:    tc.want,
+			}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("buildCompat() mismatch (-want +got):\n%s", diff)
+			}
+			if !maps.Equal(tc.attrs, before) {
+				t.Errorf("buildCompat() modified the file's attributes: got %v, want %v", tc.attrs, before)
+			}
+		})
 	}
-	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
-		t.Errorf("buildCompat() mismatch (-want +got):\n%s", diff)
+}
+
+// TestReconcilerRegistersRuntimeAttributes covers the runtime's own attributes
+// reaching every registered runtime. An assignment records the runtime the
+// actor matched, which can be a restorable one, and the actor's next
+// checkpoint is stamped with it. A restorable runtime without the hypervisor
+// would match no memory snapshot that carries one, and would stamp an MSHV
+// memory snapshot that a resume then reads as KVM.
+func TestReconcilerRegistersRuntimeAttributes(t *testing.T) {
+	f := &sandboxruntimes.File{SandboxClasses: []sandboxruntimes.Class{{
+		SandboxClass:       "microvm",
+		DefaultRuntime:     sandboxruntimes.Runtime{Version: sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v2"}},
+		RestorableRuntimes: []sandboxruntimes.Runtime{{Version: sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"}}},
+	}}}
+	var req *ateletpb.SetWorkerSandboxRuntimesRequest
+	r := newReconciler(
+		ReportConfig{
+			SandboxClass:      "microvm",
+			RuntimesFile:      "sandbox-runtimes.json",
+			RuntimeAttributes: sandboxruntimes.Attributes{hardware.AttrHypervisor: "mshv"},
+		},
+		1,
+		func() (*sandboxruntimes.File, error) { return f, nil },
+		func(_ context.Context, got *ateletpb.SetWorkerSandboxRuntimesRequest) error {
+			req = got
+			return nil
+		},
+	)
+	if retry, err := r.sync(t.Context()); retry || err != nil || req == nil {
+		t.Fatalf("sync() = (%v, %v), reported %v; want a report", retry, err, req)
+	}
+	if got := len(req.GetSandboxClasses()); got != 1 {
+		t.Fatalf("len(SandboxClasses) = %d, want 1", got)
+	}
+	class := req.GetSandboxClasses()[0]
+	for _, rt := range append([]*ateletpb.WorkerSandboxRuntime{class.GetDefaultRuntime()}, class.GetRestorableRuntimes()...) {
+		found := false
+		for _, a := range rt.GetVersion().GetAttributes() {
+			if a.GetKey() == hardware.AttrHypervisor && a.GetValue() == "mshv" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("runtime %v lacks %s=mshv", rt, hardware.AttrHypervisor)
+		}
+	}
+	if got := len(class.GetRestorableRuntimes()); got != 1 {
+		t.Errorf("len(RestorableRuntimes) = %d, want 1", got)
 	}
 }
 
@@ -279,8 +368,8 @@ func TestReconcilerSync(t *testing.T) {
 		hardware.AttrCPUFeatures:       "7",
 		hardware.AttrSandboxBundleHash: "sha256:v2",
 	}, v1.SandboxClasses[0].DefaultRuntime.Version)
-	reqV1 := buildRuntimesRequest(epoch, &v1.SandboxClasses[0])
-	reqV2 := buildRuntimesRequest(epoch, &v2.SandboxClasses[0])
+	reqV1 := buildRuntimesRequest(epoch, &v1.SandboxClasses[0], nil)
+	reqV2 := buildRuntimesRequest(epoch, &v2.SandboxClasses[0], nil)
 
 	tests := []struct {
 		name           string
@@ -746,7 +835,7 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	}
 	select {
 	case req := <-got:
-		if diff := cmp.Diff(buildRuntimesRequest(r.epoch, &v1.SandboxClasses[0]), req, protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(buildRuntimesRequest(r.epoch, &v1.SandboxClasses[0], nil), req, protocmp.Transform()); diff != "" {
 			t.Errorf("initial registration mismatch (-want +got):\n%s", diff)
 		}
 	case <-ctx.Done():
@@ -765,7 +854,7 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	}
 	select {
 	case req := <-got:
-		if diff := cmp.Diff(buildRuntimesRequest(r.epoch, &v2.SandboxClasses[0]), req, protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(buildRuntimesRequest(r.epoch, &v2.SandboxClasses[0], nil), req, protocmp.Transform()); diff != "" {
 			t.Errorf("updated registration mismatch (-want +got):\n%s", diff)
 		}
 	case <-ctx.Done():

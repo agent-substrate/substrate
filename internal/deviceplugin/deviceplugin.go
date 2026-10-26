@@ -54,6 +54,9 @@ const (
 	// ResourceKVM grants /dev/kvm, which the micro-VM runtime needs to create a
 	// VM (cloud-hypervisor fails with EPERM on VmCreate without it).
 	ResourceKVM = "ate.dev/kvm"
+	// ResourceMSHV grants /dev/mshv to Cloud Hypervisor builds using the
+	// Microsoft Hypervisor backend.
+	ResourceMSHV = "ate.dev/mshv"
 )
 
 // SandboxDevices are the host devices a sandbox runtime needs a grant for.
@@ -64,6 +67,7 @@ const (
 // default allow-list, so the worker gets it as an ordinary bind mount instead.
 var SandboxDevices = []HostDevice{
 	{ResourceName: ResourceKVM, Path: "/dev/kvm"},
+	{ResourceName: ResourceMSHV, Path: "/dev/mshv"},
 }
 
 // HostDevice is a device node advertised to kubelet under ResourceName.

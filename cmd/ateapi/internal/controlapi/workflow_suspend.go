@@ -25,6 +25,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/checkpointabort"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -269,6 +270,12 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 
 	resp, err := client.Checkpoint(ctx, req)
 	if err != nil {
+		// The worker gave up without changing the actor: it is still running.
+		// This is told apart from atelet's other Aborted, a stale snapshot
+		// request, by its reason (checkpointabort.Is).
+		if checkpointabort.Is(err) {
+			return wireFidelity, nil, w.rollBackAbortedCheckpoint(ctx, actorRef, actor, err)
+		}
 		// A snapshot conflict leaves the actor and its assignment intact for a retry.
 		if ctx.Err() == nil && status.Code(err) == codes.Aborted {
 			return wireFidelity, nil, apierror.Aborted("while calling atelet Checkpoint: %w", err)
