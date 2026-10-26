@@ -382,7 +382,8 @@ tolerate the matching `NoSchedule` taint:
 * `ate.dev/workloadType=ate-system-infra`: a small pool shared by every
   system infra workload except postgres. Each workload's replicas are spread
   across its nodes on a best-effort basis.
-* `ate.dev/workloadType=ate-postgres`: a one-node pool for postgres alone.
+* `ate.dev/workloadType=ate-postgres`: a one-node pool for postgres alone,
+  in the zone of the postgres volume.
 
 ## Actor Lifecycle
 

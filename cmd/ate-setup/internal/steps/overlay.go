@@ -40,8 +40,8 @@ const (
 )
 
 // cordonSystemInfraComponent is the kustomize component that pins each
-// system infra workload to its own node pool, layered over every control
-// plane apply under --cordon-system-infra-components.
+// system infra workload to its own node pool, layered over every system
+// infra apply under --cordon-system-infra-components.
 const cordonSystemInfraComponent = installDir + "/components/cordon-system-infra-components"
 
 // fakeDataPlaneComponent is the kustomize component that puts fake-atelet in

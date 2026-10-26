@@ -94,11 +94,10 @@ func (e *Env) waitAndSetupBundledPostgres(ctx context.Context) error {
 // pod alone on its node, so a limit would only add CFS throttling on
 // checkpoint and autovacuum bursts. Without that flag the pod shares whatever
 // node fits the request, and the missing limit lets it contend with its
-// neighbors. Memory
-// request == limit keeps eviction ordering equivalent to a Guaranteed pod,
-// which matters because postgres cannot release shared_buffers under pressure.
-// postgres-size10/postgres-config-patch.yaml is tuned to these numbers, so they
-// move together.
+// neighbors. Memory request == limit keeps eviction ordering equivalent to a
+// Guaranteed pod, which matters because postgres cannot release
+// shared_buffers under pressure. postgres-size10/postgres-config-patch.yaml
+// is tuned to these numbers, so they move together.
 const (
 	size10PostgresCPURequest = "80"
 	size10PostgresMemory     = "140Gi"
