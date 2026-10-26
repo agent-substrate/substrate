@@ -218,11 +218,15 @@ kubectl -n ate-system rollout status deploy/atenet-egress
 go run ./cmd/ate-setup deploy sandboxconfig --config ~/ate-upgrade/new.yaml
 ```
 
-This applies the SandboxConfig admission policy and the default SandboxConfig. It does not roll workers. If the release changes a sandbox version, new actors start on the new version, and actors suspended on the previous one still restore on it.
+This applies the SandboxConfig admission policy and creates this release's gVisor SandboxConfig, `substrate-$NEW_RELEASE-gvisor`, as the gVisor class default. The old release's config stays in the cluster. gVisor pools without a `configRef` move to the new config without rolling their workers. New actors start on its default version, and actors suspended on a version it still lists restore on it. Pools pinned to a config with `configRef` stay on it until you change their `configRef`.
+
+To create the config without moving any pool, add `--add-default-annotation=false`. Later, make it the default with `kubectl annotate sandboxconfig substrate-$NEW_RELEASE-gvisor sandboxconfig.ate.dev/is-class-default=true`.
+
+If the cluster runs microVM pools, also run `hack/install-microvm-deps.sh --install` from the new checkout. It creates `substrate-$NEW_RELEASE-microvm` the same way and takes the same `--add-default-annotation` flag. It first stages the assets at fixed paths in the bucket. If the release changes them, earlier microVM configs no longer match the bucket, and atelet cannot fetch their assets on nodes that have not cached them. MicroVM pools pinned to an earlier config, or left on one by `--add-default-annotation=false`, then need to move to the new config.
 
 - **Done:** the command exits 0.
 - **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
-- **Actors:** a suspended actor whose sandbox version the release drops resumes without its memory, keeping its files.
+- **Actors:** a suspended actor whose sandbox version the new config does not list resumes without its memory, keeping its files.
 
 #### 4e. The rest of the system bundle
 
@@ -268,14 +272,18 @@ cd ~/ate-upgrade/old
 Tell actor owners to stop using API fields new in this release, because the old API server rejects them. Then:
 
 ```bash
-go run ./cmd/ate-setup deploy sandboxconfig --config ~/ate-upgrade/old.yaml
+ROLLBACK=substrate-$NEW_RELEASE-gvisor-rollback
+sed "s/\${SANDBOXCONFIG_NAME}/$ROLLBACK/" manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl | kubectl create -f -
+kubectl annotate sandboxconfig $ROLLBACK sandboxconfig.ate.dev/is-class-default=true
 go run ./cmd/ate-setup deploy atenet --config ~/ate-upgrade/old.yaml
 go run ./cmd/ate-setup deploy ate-controller --config ~/ate-upgrade/old.yaml
 go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/old.yaml
 go install ./cmd/kubectl-ate
 ```
 
-`deploy sandboxconfig` removes a sandbox version new in this release, so actors suspended on it resume without their memory. `deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
+The first two `kubectl` commands create a new gVisor SandboxConfig from the old release's template and make it the class default. It is the newest default, so gVisor pools without a `configRef` move to it. Running `deploy sandboxconfig` from the old checkout does not do this. The old release's config already exists and is older than the new one, so it stays behind the new default even with the annotation, and `deploy sandboxconfig` warns about it. Actors suspended on a version the rollback config does not list resume without their memory. To keep restoring snapshots taken on a version new in this release, copy that version's entry from the new checkout's template into the rollback config before you create it. Pools pinned to `substrate-$NEW_RELEASE-gvisor` stay on it until you change their `configRef`. Roll back microVM pools the same way, from `manifests/microvm/sandboxconfig-microvm.yaml.tmpl`, with `${BUCKET_SCHEME}` and `${ASSET_BUCKET_NAME}` filled in as `hack/install-microvm-deps.sh` fills them. If the release changed the microVM assets, first stage the old ones from the old checkout with `hack/microvm-assets/assemble.sh` and the stage script, as `hack/install-microvm-deps.sh --install` runs them.
+
+`deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
 
 Fields that the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
 
