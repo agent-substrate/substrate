@@ -341,6 +341,8 @@ A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and e
 
   * **microVM** (`ateworker-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging. Container rootfs writes are host-backed: the overlay is assembled on the host (read-only OCI image lower plus a per-actor writable upper) and served to the guest over the single virtio-fs share, so they cost reclaimable host page cache rather than guest RAM, and `ROOTFS` and `MEMORY` snapshots ship the upper as its own tar (a `ROOTFS` restore puts it back and cold-boots on it). `DurableDir` volumes travel over that same share and are likewise shipped as a tar, so a `VOLUMES` snapshot can capture them without any guest memory. Each volume is a subdirectory of the share, so an actor can have several at no extra cost in devices.
 
+  * **kata** (`ateworker-kata`, preview): Runs the workload in a [Kata Containers](https://katacontainers.io/) VM by driving the Kata shim, on the hypervisor its Kata configuration names. It has no snapshots: a suspend fails and crashes the actor. See [docs/dev/kata.md](dev/kata.md).
+
 ### Networking Stack (`atenet` + `atunnel`)
 
 Handles actor-aware routing and automatic re-animation.
