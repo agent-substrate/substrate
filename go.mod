@@ -20,6 +20,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.101.0
 	github.com/aws/smithy-go v1.25.1
 	github.com/container-storage-interface/spec v1.12.0
+	github.com/containerd/containerd/api v1.11.1
 	github.com/containerd/ttrpc v1.2.8
 	github.com/distribution/reference v0.6.0
 	github.com/envoyproxy/go-control-plane v0.14.0
