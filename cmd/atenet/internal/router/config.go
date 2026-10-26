@@ -201,6 +201,12 @@ type routerConfig struct {
 	// 0 derives it from the parking lot — see extProcMaxRequests.
 	ExtProcMaxRequests int
 
+	// TCPNotSentLowat is the TCP_NOTSENT_LOWAT, in bytes, of the Envoy
+	// ingress router's TCP sockets: the ones its TLS listeners accept from
+	// clients, and the ones it dials to atunnel on the workers. 0 leaves the
+	// kernel default.
+	TCPNotSentLowat int
+
 	// DrainDelay is how long the router serves after SIGTERM before draining,
 	// allowing readiness flip propagation to Service endpoints. DrainTimeout
 	// bounds the ext_proc drain (0 derives it automatically — see drainTimeout).
@@ -292,6 +298,9 @@ func (c routerConfig) validate() error {
 	// Only the Envoy ingress router uses this flag; agentgateway always uses CONNECT.
 	if c.UpstreamConnect && c.UpstreamCredentialBundlePath == "" && c.Mode.ServesIngress() && c.atenetRouter() == atenetRouterEnvoy {
 		return fmt.Errorf("--upstream-connect (on by default) requires --upstream-credential-bundle: atunnel's CONNECT listener accepts only mTLS. Set --upstream-connect=false to dial atunnel without it")
+	}
+	if c.TCPNotSentLowat < 0 {
+		return fmt.Errorf("--router-tcp-notsent-lowat must not be negative, got %d (0 leaves the kernel default)", c.TCPNotSentLowat)
 	}
 	if c.EgressPolicyCacheTTL < 0 {
 		return fmt.Errorf("--egress-policy-cache-ttl must not be negative, got %s (0 disables the cache)", c.EgressPolicyCacheTTL)
