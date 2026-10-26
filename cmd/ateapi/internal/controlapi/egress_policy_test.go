@@ -71,7 +71,7 @@ func TestActorEgressPolicy(t *testing.T) {
 						ReplaceHeaders: []*ateapi.CredentialHeader{{
 							Header:        "Authorization",
 							Prefix:        "Bearer ",
-							CredentialUri: "ate-secret://kubernetes.io/provider/ns/name",
+							CredentialUri: proto.String("ate-secret://kubernetes.io/provider/ns/name"),
 						}},
 					},
 				},

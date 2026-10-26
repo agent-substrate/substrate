@@ -37,7 +37,7 @@ func validEgressPolicy() *ateapi.EgressPolicy {
 					ReplaceHeaders: []*ateapi.CredentialHeader{{
 						Header:        "Authorization",
 						Prefix:        "Bearer ",
-						CredentialUri: "ate-secret://kubernetes.io/provider/ns/name",
+						CredentialUri: proto.String("ate-secret://kubernetes.io/provider/ns/name"),
 					}},
 				},
 			},
@@ -806,7 +806,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders = append(
 				p.Rules[0].Http.Effects.ReplaceHeaders,
-				&ateapi.CredentialHeader{Header: "authorization", CredentialUri: "ate-secret://example.com/provider/secret"},
+				&ateapi.CredentialHeader{Header: "authorization", CredentialUri: proto.String("ate-secret://example.com/provider/secret")},
 			)
 		},
 		want: field.ErrorList{
@@ -826,7 +826,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			for i := range 16 {
 				injections = append(injections, &ateapi.CredentialHeader{
 					Header:        fmt.Sprintf("X-Header-%d", i),
-					CredentialUri: "ate-secret://example.com/provider/secret",
+					CredentialUri: proto.String("ate-secret://example.com/provider/secret"),
 				})
 			}
 			p.Rules[0].Http.Effects.ReplaceHeaders = injections
@@ -838,7 +838,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			for i := range 17 {
 				injections = append(injections, &ateapi.CredentialHeader{
 					Header:        fmt.Sprintf("X-Header-%d", i),
-					CredentialUri: "ate-secret://example.com/provider/secret",
+					CredentialUri: proto.String("ate-secret://example.com/provider/secret"),
 				})
 			}
 			p.Rules[0].Http.Effects.ReplaceHeaders = injections
@@ -857,15 +857,23 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "no credential source",
 		mutate: func(p *ateapi.EgressPolicy) {
-			p.Rules[0].Http.Effects.ReplaceHeaders[0].CredentialUri = ""
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].CredentialUri = nil
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader, nil, "one of").WithOrigin("union"),
 		},
 	}, {
+		name: "empty credential URI",
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].CredentialUri = proto.String("")
+		},
+		want: field.ErrorList{
+			field.Invalid(staticHeader.Child("credential_uri"), "", "must be ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
+		},
+	}, {
 		name: "invalid credential URI",
 		mutate: func(p *ateapi.EgressPolicy) {
-			p.Rules[0].Http.Effects.ReplaceHeaders[0].CredentialUri = "https://example.com/secret"
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].CredentialUri = proto.String("https://example.com/secret")
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader.Child("credential_uri"), "https://example.com/secret", "must be ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),

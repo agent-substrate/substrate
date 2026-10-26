@@ -2587,8 +2587,7 @@ func Validate_CredentialHeader(
 			if obj == nil {
 				return false
 			}
-			var z string
-			return obj.CredentialUri != z
+			return obj.CredentialUri != nil
 		},
 		func(obj *v1.CredentialHeader) bool {
 			if obj == nil {
@@ -2677,7 +2676,7 @@ func Validate_CredentialHeader(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -2691,9 +2690,9 @@ func Validate_CredentialHeader(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *v1.CredentialHeader) *string {
-				return &oldObj.CredentialUri
+				return oldObj.CredentialUri
 			})
-		errs = append(errs, fn(fldPath.Child("credential_uri"), &obj.CredentialUri, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("credential_uri"), obj.CredentialUri, oldVal, oldObj != nil)...)
 	}
 
 	{ // field v1.CredentialHeader.ActorJwt

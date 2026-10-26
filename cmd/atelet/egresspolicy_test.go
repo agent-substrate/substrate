@@ -20,13 +20,14 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
 func TestToAteletEgressPolicy(t *testing.T) {
 	effects := &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{{
 		Header:        "Authorization",
-		CredentialUri: "secret://team-a/token",
+		CredentialUri: proto.String("secret://team-a/token"),
 	}}}
 	for _, tc := range []struct {
 		name string

@@ -159,8 +159,8 @@ func TestInjectionReplacesOnlyCarriedHeaders(t *testing.T) {
 	policy := &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{Https: &ateapi.HttpsRule{
 		Hostnames: []string{"api.example.com"},
 		Effects: &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{
-			{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token"},
-			{Header: "X-Api-Key", CredentialUri: "ate-secret://k8s/default/api-key"},
+			{Header: "authorization", Prefix: "Bearer ", CredentialUri: proto.String("ate-secret://k8s/default/token")},
+			{Header: "X-Api-Key", CredentialUri: proto.String("ate-secret://k8s/default/api-key")},
 		}},
 	}}}}
 	provider := &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
@@ -310,7 +310,7 @@ func TestActorJWTInjection(t *testing.T) {
 		t.Run(leg, func(t *testing.T) {
 			client := &egressMockClient{actor: runningActor(), policy: replaceHeadersPolicy(leg,
 				actorJWTHeader("authorization"),
-				&ateapi.CredentialHeader{Header: "x-api-key", CredentialUri: "ate-secret://k8s/default/token"},
+				&ateapi.CredentialHeader{Header: "x-api-key", CredentialUri: proto.String("ate-secret://k8s/default/token")},
 			)}
 			h := New(client, nil, 0, nil, "")
 

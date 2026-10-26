@@ -1962,7 +1962,7 @@ type CredentialHeader struct {
 	// +k8s:optional
 	// +k8s:unionMember
 	// +k8s:customValidation # format
-	CredentialUri string `protobuf:"bytes,3,opt,name=credential_uri,json=credentialUri,proto3" json:"credential_uri,omitempty"`
+	CredentialUri *string `protobuf:"bytes,3,opt,name=credential_uri,json=credentialUri,proto3,oneof" json:"credential_uri,omitempty"`
 	// A Substrate-issued JWT asserting the identity of the Actor that sent the
 	// request.
 	//
@@ -2018,8 +2018,8 @@ func (x *CredentialHeader) GetPrefix() string {
 }
 
 func (x *CredentialHeader) GetCredentialUri() string {
-	if x != nil {
-		return x.CredentialUri
+	if x != nil && x.CredentialUri != nil {
+		return *x.CredentialUri
 	}
 	return ""
 }
@@ -10109,12 +10109,13 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\n" +
 	"\bAllPorts\"a\n" +
 	"\x0fHttpRuleEffects\x12N\n" +
-	"\x0freplace_headers\x18\x01 \x03(\v2%.substrate.ateapi.v1.CredentialHeaderR\x0ereplaceHeaders\"\xab\x01\n" +
+	"\x0freplace_headers\x18\x01 \x03(\v2%.substrate.ateapi.v1.CredentialHeaderR\x0ereplaceHeaders\"\xc3\x01\n" +
 	"\x10CredentialHeader\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\tR\x06header\x12\x16\n" +
-	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12%\n" +
-	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\x12@\n" +
-	"\tactor_jwt\x18\x04 \x01(\v2#.substrate.ateapi.v1.ActorJwtSourceR\bactorJwt\"]\n" +
+	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12*\n" +
+	"\x0ecredential_uri\x18\x03 \x01(\tH\x00R\rcredentialUri\x88\x01\x01\x12@\n" +
+	"\tactor_jwt\x18\x04 \x01(\v2#.substrate.ateapi.v1.ActorJwtSourceR\bactorJwtB\x11\n" +
+	"\x0f_credential_uri\"]\n" +
 	"\x0eActorJwtSource\x12\x1c\n" +
 	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
 	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\xbc\x03\n" +
@@ -11166,6 +11167,7 @@ func file_api_ateapi_v1_ateapi_proto_init() {
 	if File_api_ateapi_v1_ateapi_proto != nil {
 		return
 	}
+	file_api_ateapi_v1_ateapi_proto_msgTypes[17].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

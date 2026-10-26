@@ -368,7 +368,7 @@ func TestEgressPolicyManifest_RoundTrip(t *testing.T) {
 		Rules: []*ateapi.EgressRule{
 			{Http: &ateapi.HttpRule{Hostnames: []string{"*.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{80, 8080}}}},
 			{Https: &ateapi.HttpsRule{Hostnames: []string{"api.example.com"}, Effects: &ateapi.HttpRuleEffects{
-				ReplaceHeaders: []*ateapi.CredentialHeader{{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token"}},
+				ReplaceHeaders: []*ateapi.CredentialHeader{{Header: "authorization", Prefix: "Bearer ", CredentialUri: proto.String("ate-secret://k8s/default/token")}},
 			}}},
 			{TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapi.Ports{All: &ateapi.AllPorts{}}}},
 		},

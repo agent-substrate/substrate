@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
@@ -97,7 +98,7 @@ func replaceHeaderEffects(header, prefix, credentialURI string) *ateapi.HttpRule
 		ReplaceHeaders: []*ateapi.CredentialHeader{{
 			Header:        header,
 			Prefix:        prefix,
-			CredentialUri: credentialURI,
+			CredentialUri: proto.String(credentialURI),
 		}},
 	}
 }

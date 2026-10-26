@@ -24,6 +24,7 @@ import (
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -44,7 +45,7 @@ func testDialed(leg string) string {
 
 func sampleEffects() *ateapi.HttpRuleEffects {
 	return &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{{
-		Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token",
+		Header: "authorization", Prefix: "Bearer ", CredentialUri: proto.String("ate-secret://k8s/default/token"),
 	}}}
 }
 

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func httpRule(patterns ...string) *ateapi.EgressRule {
@@ -239,7 +240,7 @@ func TestEvaluateRequest(t *testing.T) {
 		ReplaceHeaders: []*ateapi.CredentialHeader{{
 			Header:        "authorization",
 			Prefix:        "Bearer ",
-			CredentialUri: "ate-secret://k8s/default/token",
+			CredentialUri: proto.String("ate-secret://k8s/default/token"),
 		}},
 	}
 	withEffects := &ateapi.EgressRule{Https: &ateapi.HttpsRule{

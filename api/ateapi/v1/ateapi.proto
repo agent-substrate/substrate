@@ -851,7 +851,7 @@ message CredentialHeader {
   // +k8s:optional
   // +k8s:unionMember
   // +k8s:customValidation # format
-  string credential_uri = 3;
+  optional string credential_uri = 3;
 
   // A Substrate-issued JWT asserting the identity of the Actor that sent the
   // request.
