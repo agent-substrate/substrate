@@ -15,6 +15,7 @@
 package ateworker
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -22,6 +23,18 @@ import (
 
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
+
+// CheckpointContext returns the context a CheckpointWorkload runs in once it
+// holds the actor's lock. It keeps ctx's values and deadline but not its
+// cancellation, so atelet going away does not cancel a checkpoint that may
+// already have stopped the workload.
+func CheckpointContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(detached, deadline)
+	}
+	return context.WithCancel(detached)
+}
 
 // checkpointDoneFile is written into checkpointDir after all snapshot files are
 // listed and the workload is torn down. It is wiped by os.RemoveAll(checkpointDir)

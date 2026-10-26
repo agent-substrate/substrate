@@ -779,7 +779,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		}
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := ateworker.CheckpointContext(ctx)
 	defer cancel()
 	// Not cancelable: a checkpoint is saving the actor's state.
 	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload, nil)()
