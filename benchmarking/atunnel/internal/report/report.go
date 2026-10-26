@@ -75,10 +75,20 @@ type Resources struct {
 	GoroutinesLive int    `json:"goroutines_live,omitempty"`
 
 	// Cgroup fields are set when the process runs in a cgroup v2 container.
-	CgroupCores        float64 `json:"cgroup_cores,omitempty"`
-	CgroupMemEndBytes  uint64  `json:"cgroup_mem_end_bytes,omitempty"`
-	CgroupMemMaxBytes  uint64  `json:"cgroup_mem_max_bytes,omitempty"`
-	CgroupCPULimitCore float64 `json:"cgroup_cpu_limit_cores,omitempty"`
+	CgroupCores       float64 `json:"cgroup_cores,omitempty"`
+	CgroupMemEndBytes uint64  `json:"cgroup_mem_end_bytes,omitempty"`
+	CgroupMemMaxBytes uint64  `json:"cgroup_mem_max_bytes,omitempty"`
+	// CgroupSockMaxBytes is the peak of memory.stat's sock: kernel socket
+	// buffers charged to the cgroup.
+	CgroupSockMaxBytes uint64 `json:"cgroup_sock_max_bytes,omitempty"`
+	// CgroupMemStartBytes and CgroupSockStartBytes are read as the measured
+	// window opens; a connection scenario's opens all come after.
+	CgroupMemStartBytes  uint64 `json:"cgroup_mem_start_bytes,omitempty"`
+	CgroupSockStartBytes uint64 `json:"cgroup_sock_start_bytes,omitempty"`
+	// CgroupMemLiveBytes and CgroupSockLiveBytes are read with HeapLiveBytes.
+	CgroupMemLiveBytes  uint64  `json:"cgroup_mem_live_bytes,omitempty"`
+	CgroupSockLiveBytes uint64  `json:"cgroup_sock_live_bytes,omitempty"`
+	CgroupCPULimitCore  float64 `json:"cgroup_cpu_limit_cores,omitempty"`
 }
 
 // Rung is one offered rate of a scenario.
@@ -142,7 +152,7 @@ func (r *Report) String() string {
 	header := fmt.Sprintf("%9s %9s %8s %8s %8s %6s | %6s %7s %9s %9s %6s",
 		"offered", "achieved", "p50", "p99", "max", "errs", "cores", "µs/unit", "rss-max", "heap-max", "gor")
 	if cgroup {
-		header += fmt.Sprintf(" %8s %9s", "cg-cores", "cg-mem")
+		header += fmt.Sprintf(" %8s %9s %9s", "cg-cores", "cg-mem", "cg-sock")
 	}
 	header += fmt.Sprintf(" | %7s %7s  %s", "A cores", "C cores", "verdict")
 	fmt.Fprintf(&b, "    %s\n", header)
@@ -156,24 +166,30 @@ func (r *Report) String() string {
 			offered, l.Achieved, msString(l.Latency.P50), msString(l.Latency.P99), msString(l.Latency.Max), l.Errors,
 			t.Cores, t.MicrosPerUnit, rssString(t), MiB(t.HeapMaxBytes), t.GoroutinesMax)
 		if cgroup {
-			line += fmt.Sprintf(" %8.2f %9s", t.CgroupCores, MiB(t.CgroupMemMaxBytes))
+			line += fmt.Sprintf(" %8.2f %9s %9s", t.CgroupCores, MiB(t.CgroupMemMaxBytes), MiB(t.CgroupSockMaxBytes))
 		}
 		line += fmt.Sprintf(" | %7.2f %7.2f  %s", g.Generator.Cores, g.Sink.Cores, g.Verdict)
 		if g.Reason != "" {
 			line += " (" + g.Reason + ")"
 		}
 		fmt.Fprintf(&b, "    %s\n", line)
-		if l.MBytesPerSec > 0 && r.Unit == "write" {
+		if l.MBytesPerSec > 0 && (r.Unit == "write" || r.Unit == "read") {
 			fmt.Fprintf(&b, "    %9s throughput %.0f MB/s\n", "", l.MBytesPerSec)
 		}
 		if t.HeapLiveBytes > 0 && l.Completed > 0 {
 			fmt.Fprintf(&b, "    %9s holding %d: live heap %s after GC, %.1f KiB and %.1f goroutines per connection\n", "",
 				l.Completed, MiB(t.HeapLiveBytes), float64(t.HeapLiveBytes)/float64(l.Completed)/1024, float64(t.GoroutinesLive)/float64(l.Completed))
+			if t.CgroupMemLiveBytes > 0 {
+				mem, sock := delta(t.CgroupMemLiveBytes, t.CgroupMemStartBytes), delta(t.CgroupSockLiveBytes, t.CgroupSockStartBytes)
+				fmt.Fprintf(&b, "    %9s holding %d: cgroup %s (%+.1fMiB over the rung), kernel sockets %s (%+.1fMiB); per connection %.1f KiB cgroup, %.1f KiB sockets\n", "",
+					l.Completed, MiB(t.CgroupMemLiveBytes), mem/(1<<20), MiB(t.CgroupSockLiveBytes), sock/(1<<20),
+					mem/float64(l.Completed)/1024, sock/float64(l.Completed)/1024)
+			}
 		}
 	}
 	tunnelColumns := "cores..gor"
 	if cgroup {
-		tunnelColumns = "cores..cg-mem"
+		tunnelColumns = "cores..cg-sock"
 	}
 	fmt.Fprintf(&b, "    %s are atunnel alone (process B); A and C are the traffic generator and the far end\n", tunnelColumns)
 	if len(r.Rungs) > 0 && r.Rungs[0].Tunnel.RSSIsPeak {
@@ -199,6 +215,11 @@ func rssString(r Resources) string {
 		s += "*"
 	}
 	return s
+}
+
+// delta is b minus a, signed.
+func delta(b, a uint64) float64 {
+	return float64(b) - float64(a)
 }
 
 // MiB formats bytes as mebibytes.

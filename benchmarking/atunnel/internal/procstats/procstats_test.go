@@ -52,8 +52,9 @@ func TestReadCgroup(t *testing.T) {
 	write("memory.current", "104857600\n")
 	write("memory.peak", "209715200\n")
 	write("cpu.max", "150000 100000\n")
+	write("memory.stat", "anon 1048576\nfile 0\nsock 4194304\nshmem 0\n")
 	got := readCgroup(dir)
-	want := Cgroup{CPUSeconds: 2.5, MemoryCurrentBytes: 100 << 20, MemoryPeakBytes: 200 << 20, CPULimitCores: 1.5}
+	want := Cgroup{CPUSeconds: 2.5, MemoryCurrentBytes: 100 << 20, MemoryPeakBytes: 200 << 20, MemorySockBytes: 4 << 20, CPULimitCores: 1.5}
 	if got == nil || *got != want {
 		t.Fatalf("readCgroup = %+v, want %+v", got, want)
 	}

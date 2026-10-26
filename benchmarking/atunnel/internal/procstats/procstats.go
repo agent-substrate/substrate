@@ -58,6 +58,9 @@ type Cgroup struct {
 	CPUSeconds         float64 `json:"cpu_seconds"`
 	MemoryCurrentBytes uint64  `json:"memory_current_bytes"`
 	MemoryPeakBytes    uint64  `json:"memory_peak_bytes,omitempty"`
+	// MemorySockBytes is memory.stat's sock: kernel socket buffers charged
+	// to the cgroup, which no heap profile shows.
+	MemorySockBytes uint64 `json:"memory_sock_bytes,omitempty"`
 	// CPULimitCores is cpu.max as cores; zero means unlimited.
 	CPULimitCores float64 `json:"cpu_limit_cores,omitempty"`
 }
@@ -151,6 +154,13 @@ func readCgroup(root string) *Cgroup {
 	}
 	if peak, err := readUint(root + "/memory.peak"); err == nil {
 		c.MemoryPeakBytes = peak
+	}
+	if b, err := os.ReadFile(root + "/memory.stat"); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(line, "sock "); ok {
+				c.MemorySockBytes, _ = strconv.ParseUint(v, 10, 64)
+			}
+		}
 	}
 	if b, err := os.ReadFile(root + "/cpu.max"); err == nil {
 		fields := strings.Fields(string(b))

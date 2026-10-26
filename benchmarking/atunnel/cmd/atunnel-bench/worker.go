@@ -203,7 +203,19 @@ func (s *supervisor) startSandboxProcesses(info workerhost.Info) ([]*exec.Cmd, e
 		cmds = append(cmds, cmd)
 		return nil
 	}
+	sysctls, err := tcpBufferSysctls()
+	if err != nil {
+		return nil, err
+	}
 	for i, sb := range info.Sandboxes {
+		// A new network namespace starts from the kernel's TCP buffer limits,
+		// not its creator's; on a node every namespace starts from the
+		// node's. Give each sandbox the worker container's, which
+		// run-docker.sh sets to a GKE node's.
+		set := exec.Command(s.self, append([]string{"netns-exec", sb.NetNS, s.self, "sysctl"}, sysctls...)...)
+		if out, err := set.CombinedOutput(); err != nil {
+			return cmds, fmt.Errorf("setting TCP buffer sysctls in %s: %v: %s", sb.NetNS, err, out)
+		}
 		socket := filepath.Join(s.shared, "ingress-actor-"+strconv.Itoa(i)+".sock")
 		if err := start(sb.NetNS, "ingress-actor", "--port", strconv.Itoa(info.ActorPort), "--body-bytes", strconv.Itoa(s.bodyBytes), "--stats-socket", socket); err != nil {
 			return cmds, err
@@ -215,6 +227,19 @@ func (s *supervisor) startSandboxProcesses(info workerhost.Info) ([]*exec.Cmd, e
 	}
 	fmt.Fprintf(os.Stderr, "worker: %d sandboxes, each with an ingress actor and an egress actor\n", len(info.Sandboxes))
 	return cmds, nil
+}
+
+// tcpBufferSysctls are this namespace's TCP buffer sysctls as NAME=VALUE.
+func tcpBufferSysctls() ([]string, error) {
+	var out []string
+	for _, name := range []string{"net.ipv4.tcp_rmem", "net.ipv4.tcp_wmem"} {
+		b, err := os.ReadFile(sysctlPath(name))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, name+"="+strings.Join(strings.Fields(string(b)), " "))
+	}
+	return out, nil
 }
 
 // logDeath records why atunnel stopped, with the OOM kills its cgroup

@@ -73,11 +73,20 @@ func TestPercentiles(t *testing.T) {
 
 func TestSelect(t *testing.T) {
 	all, err := Select("all")
-	if err != nil || len(all) != 7 {
-		t.Fatalf("Select(all) = %d scenarios, %v; want 7", len(all), err)
+	if err != nil || len(all) != len(Scenarios) {
+		t.Fatalf("Select(all) = %d scenarios, %v; want %d", len(all), err, len(Scenarios))
 	}
-	some, err := Select("ingressh1, EgressTCP")
-	if err != nil || len(some) != 2 || some[0].Name != "IngressH1" || some[1].Name != "EgressTCP" {
+	slow, err := Select("slow")
+	if err != nil || len(slow) != len(SlowScenarios) {
+		t.Fatalf("Select(slow) = %d scenarios, %v; want %d", len(slow), err, len(SlowScenarios))
+	}
+	for _, s := range slow {
+		if !s.holdsConnections || s.fill == 0 {
+			t.Errorf("slow scenario %s does not hold connections long enough to fill", s.Name)
+		}
+	}
+	some, err := Select("ingressh1, EgressTCP, egressslowreader")
+	if err != nil || len(some) != 3 || some[0].Name != "IngressH1" || some[1].Name != "EgressTCP" || some[2].Name != "EgressSlowReader" {
 		t.Fatalf("Select = %v, %v", some, err)
 	}
 	if _, err := Select("Nope"); err == nil {

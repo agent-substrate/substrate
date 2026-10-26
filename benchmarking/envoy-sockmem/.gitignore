@@ -1,0 +1,4 @@
+# Run output: keep only the tables.
+runs/*/*
+!runs/*/results.txt
+runs/.work-*
