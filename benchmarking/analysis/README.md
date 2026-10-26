@@ -74,14 +74,14 @@ A failed atelet operation still writes its record, marked with `error.type`
 **Phase percentiles.** Per layer, operation, sandbox class, snapshot kind,
 scope and phase: count, p50, p90, p95 and max. A `local` restore reads a
 node-local snapshot and a `latest` one a durable snapshot from object
-storage, so they are separate rows, as are gVisor and micro-VM operations.
+storage, so they are separate rows, as are gVisor and microVM operations.
 A restore from a template's golden snapshot reports `latest`, like the
 actor's own durable snapshot. The atelet rows split a
 checkpoint between `sandbox_assets`, `worker_checkpoint`, `persist` and
 `cleanup`, and a
 restore between `volume_mount`, `manifest_fetch`, `sandbox_assets`,
 `download`, `oci_unpack` and `worker_restore`. The ateworker rows split the
-`worker_*` phase further with the runtime's own phases: for micro-VM
+`worker_*` phase further with the runtime's own phases: for microVM
 `prep` / `pause` / `snapshot` / `durable_dir` / `rootfs_upper` / `teardown`
 on a checkpoint and `prep` / … / `vm_restore` / `wakeup_probe` on a restore;
 for gVisor `pause` / `checkpoint` / `fs_checkpoint` / `resume` / `teardown` and

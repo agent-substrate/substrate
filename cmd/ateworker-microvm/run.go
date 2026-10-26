@@ -33,6 +33,7 @@ import (
 	"go.ate.dev/substrate/internal/workerstats"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
@@ -498,7 +499,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// host upper, mounted into the shared dir) + durable-dir and CSI volumes (if any),
 	// and start the ONE virtiofsd that serves them all. CH connects to it at vm.create
 	// and demand-pages for the actor's lifetime, so ateworker owns the process (killed in teardownActor).
-	leaf, err := s.actorLeaf(actorUID, p.size)
+	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU)
 	if err != nil {
 		return err
 	}

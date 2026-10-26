@@ -11,22 +11,29 @@ go build -o bin/ate-setup ./cmd/ate-setup
 that existing command lines and CI jobs keep working; it holds no install logic
 of its own.
 
-## Installing a release
+## Installing pre-built images
 
 By default every image is built from the checkout with `ko`, which is what a
-developer wants and what the shell installer always did. To install published
-images instead, name the registry they were pushed to:
+developer wants and what the shell installer always did. To install images
+that are already published instead, name the registry that holds them and the
+tag they share:
 
 ```
 ate-setup deploy ate-system \
   --credential-provider='{"name":"k8s.io"}' \
   --image-repo registry.example.com/substrate \
-  --image-tag v0.0.0
+  --image-tag vX.Y.Z
 ```
 
-Nothing is built and no registry is pushed to; the manifests still come from the
-checkout. Each reference is pinned to the digest its tag names, so the registry
-has to be readable from here as well as from the cluster.
+The registry has to hold every image the install deploys. The images a release
+publishes to `ghcr.io/agent-substrate/substrate` are not enough on their own;
+see [`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images). An
+install that needs an image the registry lacks fails naming it.
+
+Nothing is built and no registry is pushed to; the manifests still come from
+the checkout, which should be the tag being installed. Each reference is pinned
+to the digest its tag names, so the registry has to be readable from here as
+well as from the cluster.
 
 - [`commands.md`](commands.md) — every command with its `hack/install-ate.sh`
   equivalent.

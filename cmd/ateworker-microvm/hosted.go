@@ -30,7 +30,6 @@ import (
 	"go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/internal/netns"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/workerstats"
 )
 
@@ -106,24 +105,14 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 	return hosted, nil
 }
 
-// actorLeaf opens the actor's cgroup, or returns nil when the worker has none.
-func (s *AteWorkerService) actorLeaf(actorUID string, size sizing.SandboxSize) (*cgroup.ActorLeaf, error) {
-	if !s.actorCgroups {
-		return nil, nil
-	}
-	return cgroup.OpenActorLeaf(actorUID, size.MilliCPU)
-}
-
 // cleanupSandboxState kills what is left of the actor's host processes and
 // clears its sandbox directories.
 func (s *AteWorkerService) cleanupSandboxState(ctx context.Context, actorUID string) {
-	if s.actorCgroups {
-		killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		if err := cgroup.KillActorLeaf(killCtx, actorUID); err != nil {
-			slog.WarnContext(ctx, "Failed to kill the actor's leftover processes", slog.Any("err", err))
-		}
-		cancel()
+	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	if err := cgroup.KillActorLeaf(killCtx, actorUID); err != nil {
+		slog.WarnContext(ctx, "Failed to kill the actor's leftover processes", slog.Any("err", err))
 	}
+	cancel()
 	kata.CleanupSandboxState(ctx, actorUID)
 }
 
@@ -147,10 +136,8 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 		s.actorsMu.Unlock()
 	}()
 
-	if s.actorCgroups {
-		if err := cgroup.RemoveActorLeaf(actorUID); err != nil {
-			slog.WarnContext(ctx, "Failed to remove the actor's cgroup", slog.Any("err", err))
-		}
+	if err := cgroup.RemoveActorLeaf(actorUID); err != nil {
+		slog.WarnContext(ctx, "Failed to remove the actor's cgroup", slog.Any("err", err))
 	}
 	if hosted.network == nil {
 		return nil

@@ -51,10 +51,6 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
-    # Unconditional: a released migration becoming permanent is exactly what
-    # this guards, and that happens on the push to main, not on the PR.
-    - name: Verify immutable PostgreSQL migrations
-      run: hack/verify/postgresql-migrations.sh
     # we only test on amd64, make sure everything still builds for arm64
     - name: build for arm64
       run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
@@ -145,6 +141,20 @@ jobs:
         if-no-files-found: error
     - name: verify
       run: hack/verify-all.sh
+  verify-migrations:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        fetch-depth: 0
+    # A merge group has no base_ref. It exposes the base branch as refs/heads/<branch>.
+    - name: Verify immutable PostgreSQL migrations
+      env:
+        BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
+      run: hack/verify/postgresql-migrations.sh "origin/${BASE_REF#refs/heads/}"
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
   # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
   # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.

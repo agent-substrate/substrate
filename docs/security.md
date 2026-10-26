@@ -40,7 +40,7 @@ Substrate is designed to safely run mutually hostile, untrusted actors from disp
 
 | Principle | Description | Status |
 | :--- | :--- | :--- |
-| **Always Sandboxed** | Every actor is required to run inside a strong compute sandbox. A linux container is not sufficient or supported. Our security design relies on strong containment. | Met (gVisor, CHV micro-VM) |
+| **Always Sandboxed** | Every actor is required to run inside a strong compute sandbox. A linux container is not sufficient or supported. Our security design relies on strong containment. | Met (gVisor, CHV microVM) |
 | **Per-Actor Storage Segregation** | Storage and persistent volume state must be strictly segregated per actor. Actors cannot traverse, enumerate, or access persistence belonging to other actors. Restoring a snapshot must re-validate the actor's current tenant authorization before execution resumes. | Met (Segregation)<br>Future (Per-Actor Encryption, Restore Authorization) |
 | **Per-Actor Network Isolation** | Guest network stacks are segregated per actor. Lateral peer-to-peer network communication between co-located actors on the same host or across the cluster is blocked by default; inter-actor communication must route through authenticated, policy-enforced gateways. | Met (Private netns, atunnel) |
 | **Delete Guarantee** | Reset, scrub, and sanitize local ephemeral volumes, cached state, and worker runtime environments between actor scheduling cycles to prevent cross-tenant data leakage. | In Progress (atelet resetActorDirs) |

@@ -319,10 +319,10 @@ func TestApplyActorSnapshotState(t *testing.T) {
 	}
 }
 
-// A reported durable snapshot older than the latest COMPLETED one, or at a
-// generation status no longer has, is logged at Info, once, with the
-// generation it named. A repeat of the latest, and one that is applied, aren't
-// logged.
+// A reported durable snapshot older than the latest COMPLETED one, at a
+// generation status no longer has, or of a CRASHED actor's crashed suspend, is
+// logged at Info, once, with the generation it named. A repeat of the latest,
+// and one that is applied, aren't logged.
 func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 	const (
 		pending   = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
@@ -352,6 +352,15 @@ func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 		wantMsg:   msgDurableNotRecorded,
 		wantAttrs: map[string]string{"generation": "2", "uuid": snapName(2)},
 	}, {
+		name: "a CRASHED actor's crashed suspend",
+		status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_CRASHED, LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
+			withDurable(t, 1, reportNode, completed),
+			withDurable(t, 2, "", pending),
+		}},
+		gen:       2,
+		wantMsg:   msgDurableCrashedSuspend,
+		wantAttrs: map[string]string{"generation": "2", "uuid": snapName(2)},
+	}, {
 		name: "the latest COMPLETED generation itself",
 		status: &ateapi.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapi.Snapshot{
 			withDurable(t, 2, reportNode, completed),
@@ -373,7 +382,7 @@ func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 			var got []logged
 			prev := slog.Default()
 			slog.SetDefault(slog.New(slogHandlerFunc(func(r slog.Record) {
-				if r.Message != msgDurableOlder && r.Message != msgDurableNotRecorded {
+				if r.Message != msgDurableOlder && r.Message != msgDurableNotRecorded && r.Message != msgDurableCrashedSuspend {
 					return
 				}
 				l := logged{msg: r.Message, attrs: map[string]string{}}
@@ -468,26 +477,22 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 			assertUnwritten(t)
 		})
 	}
-	// A transitioning actor gets Aborted, and a crashed one FailedPrecondition.
-	for _, tc := range []struct {
-		state ateapi.ActorState
-		want  codes.Code
-	}{
-		{ateapi.ActorState_ACTOR_STATE_SUSPENDING, codes.Aborted},
-		{ateapi.ActorState_ACTOR_STATE_RESUMING, codes.Aborted},
-		{ateapi.ActorState_ACTOR_STATE_DELETING, codes.Aborted},
-		{ateapi.ActorState_ACTOR_STATE_REVERTING, codes.Aborted},
-		{ateapi.ActorState_ACTOR_STATE_CRASHED, codes.FailedPrecondition},
+	// A transitioning actor gets Aborted.
+	for _, st := range []ateapi.ActorState{
+		ateapi.ActorState_ACTOR_STATE_SUSPENDING,
+		ateapi.ActorState_ACTOR_STATE_RESUMING,
+		ateapi.ActorState_ACTOR_STATE_DELETING,
+		ateapi.ActorState_ACTOR_STATE_REVERTING,
 	} {
-		t.Run("refused for a "+tc.state.String()+" actor", func(t *testing.T) {
-			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) { s.State = tc.state })
+		t.Run("refused for a "+st.String()+" actor", func(t *testing.T) {
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) { s.State = st })
 			defer func() {
 				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 					s.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
 				})
 			}()
-			if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, state); apierror.Code(err) != tc.want {
-				t.Fatalf("ApplyReportedSnapshotState() = %v, want %v", err, tc.want)
+			if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, state); apierror.Code(err) != codes.Aborted {
+				t.Fatalf("ApplyReportedSnapshotState() = %v, want Aborted", err)
 			}
 			assertUnwritten(t)
 		})
@@ -500,23 +505,96 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 		assertUnwritten(t)
 	})
 
-	if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, state); err != nil {
-		t.Fatalf("ApplyReportedSnapshotState() failed: %v", err)
-	}
-	got, err := persistence.GetActor(ctx, actorRef)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st := got.GetStatus().GetSnapshots()[0].GetDurableSnapshot().GetStatus(); st != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
-		t.Errorf("durable snapshot status = %v, want COMPLETED", st)
+	for _, st := range []ateapi.ActorState{ateapi.ActorState_ACTOR_STATE_SUSPENDED, ateapi.ActorState_ACTOR_STATE_CRASHED} {
+		t.Run("applied to a "+st.String()+" actor", func(t *testing.T) {
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+				s.State = st
+				s.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+			})
+			if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, state); err != nil {
+				t.Fatalf("ApplyReportedSnapshotState() failed: %v", err)
+			}
+			got, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st := got.GetStatus().GetSnapshots()[0].GetDurableSnapshot().GetStatus(); st != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+				t.Errorf("durable snapshot status = %v, want COMPLETED", st)
+			}
+
+			// A report that changes nothing writes nothing.
+			actor = got
+			if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, state); err != nil {
+				t.Fatalf("repeated ApplyReportedSnapshotState() failed: %v", err)
+			}
+			assertUnwritten(t)
+		})
 	}
 
-	// A report that changes nothing writes nothing.
-	actor = got
-	if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, state); err != nil {
-		t.Fatalf("repeated ApplyReportedSnapshotState() failed: %v", err)
+	// A suspend that crashed before it finalized leaves its snapshot on no node.
+	older := mustActorSnapshotURI(t, tmpl, actor, "snap-1")
+	snapshot := func(gen int32, uri resources.SnapshotURI, locality string, storage ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
+		snap := newDurableSnapshot(gen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", uri.Name(), uri.String(), storage)
+		snap.Locality = locality
+		return snap
 	}
-	assertUnwritten(t)
+	for _, tc := range []struct {
+		name      string
+		snapshots []*ateapi.Snapshot
+		state     *ateapi.ActorSnapshotState
+		want      []*ateapi.Snapshot
+	}{{
+		name: "a crashed suspend's upload stays pending",
+		snapshots: []*ateapi.Snapshot{
+			snapshot(1, older, reportNode, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		},
+		state: state,
+		want: []*ateapi.Snapshot{
+			snapshot(1, older, reportNode, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		},
+	}, {
+		name: "a crashed suspend's detach releases the older snapshot",
+		snapshots: []*ateapi.Snapshot{
+			snapshot(1, older, reportNode, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		},
+		state: &ateapi.ActorSnapshotState{LatestDurable: uploaded},
+		want: []*ateapi.Snapshot{
+			snapshot(1, older, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		},
+	}, {
+		name: "a crashed suspend's detach releases an older snapshot that isn't durable",
+		snapshots: []*ateapi.Snapshot{
+			snapshot(1, older, reportNode, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		},
+		state: &ateapi.ActorSnapshotState{LatestDurable: uploaded},
+		want: []*ateapi.Snapshot{
+			snapshot(1, older, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+				s.State = ateapi.ActorState_ACTOR_STATE_CRASHED
+				s.Snapshots = tc.snapshots
+			})
+			if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, tc.state); err != nil {
+				t.Fatalf("ApplyReportedSnapshotState() failed: %v", err)
+			}
+			got, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(tc.want, got.GetStatus().GetSnapshots(), protocmp.Transform()); diff != "" {
+				t.Errorf("snapshots mismatch (-want +got):\n%s", diff)
+			}
+			actor = got
+		})
+	}
 }
 
 func TestActorOnNode(t *testing.T) {
@@ -533,7 +611,7 @@ func TestActorOnNode(t *testing.T) {
 		want  bool
 	}{
 		{"placed on the node", actor(reportNode), true},
-		{"holds a snapshot on the node", actor(reportOther, "", reportNode), true},
+		{"holds only a snapshot on the node", actor(reportOther, "", reportNode), false},
 		{"neither", actor(reportOther, reportOther), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

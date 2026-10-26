@@ -40,6 +40,7 @@ import (
 	"go.ate.dev/substrate/internal/actorlog"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/ateworker"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
@@ -205,13 +206,10 @@ func do(ctx context.Context) error {
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
 	// it with real accounting.
-	cgroupDelegated, err := cgroup.Delegate(ctx)
-	if err != nil {
+	if err := cgroup.Delegate(ctx); err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
 	}
-	if cgroupDelegated {
-		removeStaleCheckpointCgroups(ctx, defaultCgroupRoot)
-	}
+	removeStaleCheckpointCgroups(ctx, defaultCgroupRoot)
 
 	// Clean up any old socket.
 	sockPath := nodepath.WorkerSocketPath(*podUID)
@@ -240,7 +238,10 @@ func do(ctx context.Context) error {
 		return err
 	}
 	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags)
-	ateworkerService.cgroupDelegated = cgroupDelegated
+	ateworkerService.throttleMemory = psiEnabled(defaultCgroupRoot)
+	if !ateworkerService.throttleMemory {
+		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so sandboxes keep memory.max and an OOM kill in one can restart the worker")
+	}
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -250,6 +251,9 @@ func do(ctx context.Context) error {
 	defer usageStdout.Close()
 	ateworkerService.usage = workerstats.NewUsageEmitter(lp, usageStdout, pool)
 	defer workerstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateworkerService.sweepUsage(ctx) })()
+	if ateworkerService.throttleMemory {
+		go ateworkerService.watchMemory(ctx)
+	}
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -365,9 +369,9 @@ type AteWorkerService struct {
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
 	cgroupRoot string
 
-	// cgroupDelegated is set when the worker's cgroup is delegated (false on
-	// privileged workers that inherit the host cgroup namespace).
-	cgroupDelegated bool
+	// throttleMemory is set when sandboxes get memory.high in place of
+	// memory.max, with watchMemory killing the ones stuck there.
+	throttleMemory bool
 
 	// readSandboxCgroup overrides cgroupstats.Read when set. Only tests set it:
 	// it is the seam that lets them interleave a lifecycle transition with the
@@ -629,6 +633,9 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := s.removeStaleSandboxLeaf(ctx, req.GetActorUid()); err != nil {
+		return nil, err
+	}
 
 	if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
@@ -663,6 +670,9 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
+			if hosted.oomKilled.Load() {
+				retErr = fmt.Errorf("killed for exceeding its memory limit: %w", retErr)
+			}
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			if err := s.tunnel.Deactivate(cleanupCtx, workerstats.ActorAttributionFromRequest(req)); err != nil {
@@ -698,6 +708,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, fmt.Errorf("while creating the sandbox: %w", err)
 	}
 	s.pinSandbox(ctx, hosted, req.GetActorDirs())
+	s.throttleSandboxMemory(ctx, hosted)
 	if err := rcmd.cmdStart(ctx, pw, ocispec.SandboxID); err != nil {
 		return nil, fmt.Errorf("while starting the sandbox: %w", err)
 	}
@@ -760,6 +771,13 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
+
+	if s.lookupActor(req.GetActorUid()) == nil {
+		if resp := ateworker.ReuseCheckpoint(req.GetActorDirs().GetCheckpointDir(), req.GetFidelity()); resp != nil {
+			slog.InfoContext(ctx, "Reusing completed checkpoint from previous attempt", slog.String("actorUID", req.GetActorUid()))
+			return resp, nil
+		}
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -901,7 +919,15 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	default:
 		return nil, fmt.Errorf("unsupported snapshot fidelity: %v", fidelity)
 	}
-	if err := checkpointIsolated(ctx, s.cgroupDelegated, s.cgroupRoot, req.GetActorUid(), req.GetActorDirs(), checkpointFn, terminate); err != nil {
+	// the sentry leaves its sandbox leaf for the checkpoint cgroup
+	var memoryLimit uint64
+	if hosted != nil {
+		memoryLimit = pauseMemoryWatch(hosted)
+	}
+	if err := checkpointIsolated(ctx, s.cgroupRoot, req.GetActorUid(), req.GetActorDirs(), checkpointFn, terminate); err != nil {
+		if hosted != nil && memoryLimit != 0 {
+			resumeMemoryWatch(hosted, memoryLimit)
+		}
 		return nil, err
 	}
 
@@ -916,7 +942,11 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 
-	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
+	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}
+	if err := ateworker.RecordCheckpoint(checkpointPath, fidelity, resp); err != nil {
+		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
+	}
+	return resp, nil
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under
@@ -1051,6 +1081,9 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := s.removeStaleSandboxLeaf(ctx, req.GetActorUid()); err != nil {
+		return nil, err
+	}
 
 	err = s.tunnel.Deactivate(ctx, attribution)
 	timing.prep = lap(&tLast)
@@ -1088,6 +1121,9 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
+			if hosted.oomKilled.Load() {
+				retErr = fmt.Errorf("killed for exceeding its memory limit: %w", retErr)
+			}
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			if err := s.tunnel.Deactivate(cleanupCtx, attribution); err != nil {
@@ -1131,6 +1167,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			return nil, fmt.Errorf("while creating the sandbox: %w", err)
 		}
 		s.pinSandbox(ctx, hosted, req.GetActorDirs())
+		s.throttleSandboxMemory(ctx, hosted)
 		err = rcmd.cmdStart(ctx, pw, ocispec.SandboxID)
 		timing.sandboxRestore = lap(&tLast)
 		if err != nil {
@@ -1145,6 +1182,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			return nil, fmt.Errorf("while creating the sandbox: %w", err)
 		}
 		s.pinSandbox(ctx, hosted, req.GetActorDirs())
+		s.throttleSandboxMemory(ctx, hosted)
 		err = rcmd.cmdRestore(ctx, pw, ocispec.SandboxID, checkpointDir)
 		timing.sandboxRestore = lap(&tLast)
 		if err != nil {

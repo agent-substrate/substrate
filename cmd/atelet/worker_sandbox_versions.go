@@ -19,9 +19,9 @@ package main
 //   - resolve: find the SandboxConfig of the pod's WorkerPool
 //   - plan: pick the config's versions this node can run
 //   - build: hash each version's asset digests into its sandbox_bundle_hash,
-//     and probe what a snapshot taken on the runtime must find again: the
-//     host CPU identity for microVM, the runsc binary's CPU features for
-//     gVisor
+//     verify its assets in the cache, and probe what a snapshot taken on the
+//     runtime must find again: the host CPU identity for microVM, the runsc
+//     binary's CPU features for gVisor
 //   - write: replace the file in the worker directory if its content changed
 //
 // worker_sandbox_syncer.go decides when each pod is synced, and creates and
@@ -231,14 +231,18 @@ func hashVersions(plan *sandboxPlan) []hashedVersion {
 //
 // TODO: write the file as soon as the default version's attributes are known
 // and add restorable runtimes on a later pass. On a fresh node the first
-// worker cannot register until every restorable version's runsc has been
+// worker cannot register until every restorable version's assets have been
 // fetched and probed, serially.
 //
-// Listing a runtime does not promise its assets are on the node: probing
-// fetches a gVisor version's runsc the first time this atelet sees it, and
-// nothing of a microVM version. The syncer has the default runtime prewarmed
-// once the file is written, and Run/Restore fetch any other version on
-// demand.
+// The first time this atelet process sees a gVisor runsc digest or a
+// restorable microVM bundle hash, buildFile fetches the version's assets into
+// the cache (and runs runsc for gVisor); a microVM default version is staged
+// on every build so promoting an evicted version to default verifies it in the
+// cache before unpinning the previous default. Once the file is written, the
+// syncer links the default runtime under the worker's directory so cache GC
+// never evicts it. Run and Restore fetch any evicted restorable version on
+// demand. A version with a bad sha256 fails verification without being cached
+// or memoized, so retries re-download it until the SandboxConfig is fixed.
 func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, hashed []hashedVersion) (*sandboxruntimes.File, error) {
 	class := sandboxruntimes.Class{SandboxClass: string(plan.sandboxClass)}
 	seen := make(map[string]bool, len(hashed))
@@ -247,7 +251,7 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, 
 		if seen[v.hash] {
 			continue
 		}
-		attrs, err := s.versionAttrs(ctx, plan.sandboxClass, v.rec, v.hash)
+		attrs, err := s.versionAttrs(ctx, plan.sandboxClass, v.rec, v.hash, v.isDefault)
 		if err != nil {
 			err = fmt.Errorf("SandboxConfig %q, version %q: %w", plan.config, v.name, err)
 			if v.isDefault {
@@ -280,9 +284,10 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, 
 
 // versionAttrs returns the attributes of one version's runtime, whose
 // sandbox_bundle_hash is hash: architecture and the hash for every class,
-// the host CPU identity for a microVM runtime, and the runsc binary's
-// cpu_features for a gVisor one.
-func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.SandboxClass, rec *sandboxAssetsRecord, hash string) (sandboxruntimes.Attributes, error) {
+// the host CPU identity for a microVM runtime (with its assets verified in
+// the local cache), and the runsc binary's cpu_features for a gVisor one.
+// isDefault makes the microVM asset check skip the memo.
+func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.SandboxClass, rec *sandboxAssetsRecord, hash string, isDefault bool) (sandboxruntimes.Attributes, error) {
 	attrs := sandboxruntimes.Attributes{
 		hardware.AttrArchitecture:      runtime.GOARCH,
 		hardware.AttrSandboxBundleHash: hash,
@@ -292,6 +297,9 @@ func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.Sand
 		vendor, model, err := s.hostCPUIdentity()
 		if err != nil {
 			return nil, fmt.Errorf("while probing host CPU identity: %w", err)
+		}
+		if err := s.ensureMicroVMAssets(ctx, rec, hash, isDefault); err != nil {
+			return nil, err
 		}
 		attrs[hardware.AttrCPUVendor], attrs[hardware.AttrCPUModel] = vendor, model
 	case atev1.SandboxClassGvisor:
@@ -323,6 +331,38 @@ func (s *workerSandboxSyncer) hostCPUIdentity() (vendor, model string, err error
 		s.hostCPU = &cpuIdentity{vendor: vendor, model: model}
 	}
 	return s.hostCPU.vendor, s.hostCPU.model, nil
+}
+
+// ensureMicroVMAssets stages a microVM version's assets into a scratch
+// directory so a version whose assets cannot be fetched or fail SHA256
+// verification is not advertised in the worker's sandbox runtimes file.
+// Restorable versions are checked once per atelet process; the default version
+// is checked on every sync (a cache hit once prewarmed) so promoting an
+// evicted version to default verifies it in the cache before unpinning the
+// previous default.
+func (s *workerSandboxSyncer) ensureMicroVMAssets(ctx context.Context, rec *sandboxAssetsRecord, hash string, isDefault bool) error {
+	if !isDefault {
+		s.mu.Lock()
+		ok := s.microvmAssets[hash]
+		s.mu.Unlock()
+		if ok {
+			return nil
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, probeFetchTimeout)
+	defer cancel()
+	scratch, err := os.MkdirTemp(s.scratchDir, "microvm-assets-")
+	if err != nil {
+		return fmt.Errorf("while creating microvm-assets scratch dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	if _, err := s.assets.ensureSandboxAssets(ctx, rec, scratch); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.microvmAssets[hash] = true
+	s.mu.Unlock()
+	return nil
 }
 
 // gvisorCPUFeatures returns the encoded cpu_features of rec's runsc binary.
@@ -367,14 +407,19 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	return mask, nil
 }
 
-// probeFetchTimeout bounds the fetch of a runsc binary for its probe, from
-// the first cache lookup to the staged link. The asset cache bounds each
-// download with its own fetch timeout, and the exec below has
-// cpuFeaturesTimeout; this is the backstop for everything around them,
-// such as waiting on a download another caller started, so a probe cannot
-// hold one of the syncer's few workers for longer than one download may
-// take.
-const probeFetchTimeout = 5 * time.Minute
+// probeFetchTimeout bounds staging a version's assets during buildFile (a
+// gVisor version's runsc binary for its probe, or a microVM version's kernel,
+// guest image, Cloud Hypervisor and virtiofsd), from the first cache lookup to
+// the staged links. The asset cache bounds each individual download with its
+// own detached --sandbox-asset-fetch-timeout, and the exec below has
+// cpuFeaturesTimeout. This is the backstop for the whole version so a slow
+// bucket or a download another caller started cannot hold one of the syncer's
+// few workers for longer than this before the sync fails and retries. Twice
+// the flag's default: one guest image at the flag's bound, then the three
+// small binaries. Raising the flag past this makes a cold build time out and
+// retry; its downloads continue detached, so the retry finds them cached or
+// joins one still in flight.
+const probeFetchTimeout = 10 * time.Minute
 
 // cpuFeaturesTimeout bounds one `runsc cpu-features` run, which takes
 // milliseconds. A runsc that hangs would hold a sync worker. A var so tests
@@ -431,12 +476,13 @@ func bundleHash(rec *sandboxAssetsRecord) string {
 //   - plan: resolve the pool's config and its versions for this node
 //   - hash: hash each version's runtime, and make each resolvable by its
 //     hash before the file can let the worker register it
-//   - build: probe what a snapshot taken on each runtime must find again
+//   - build: verify each version's assets in the cache and probe what a
+//     snapshot taken on the runtime must find again
 //   - write: replace the file if its content changed, then record what
 //     the worker now advertises in the index
 //   - prewarm: make the pod's default-runtime directories match what the
-//     file now advertises, and have each default's assets fetched and
-//     linked into its directory, off this goroutine
+//     file now advertises, and have each default's assets linked into its
+//     directory, off this goroutine
 //
 // A file missing restorable runtimes for a transient reason is written all
 // the same, and the errIncomplete from build is returned so finish retries.
@@ -466,9 +512,10 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 		return err
 	}
 	// Only now, with the file naming its defaults: a sync that failed above
-	// left the file, and so the directories, as they were. For a gVisor
-	// default the build fetched the release for its probe, so the prewarm
-	// is links; a micro-VM default downloads here.
+	// left the file, and so the directories, as they were. The build staged
+	// a microVM default just now and fetched a gVisor default the first time
+	// it saw its digest, so the prewarm is links unless an evicted gVisor
+	// version was promoted to default.
 	if s.prewarm != nil {
 		var defaults []string
 		for _, v := range writtenVersions(hashed, want) {

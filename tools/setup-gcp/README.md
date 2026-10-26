@@ -127,7 +127,7 @@ go run ./tools/setup-gcp create cluster [flags]
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
-| `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for micro-VM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
+| `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for microVM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 
@@ -208,7 +208,7 @@ one of the options below.
 ### 3. Create Bucket
 
 Creates the GCS bucket for snapshots and the asset bucket, `NAME-assets`, for
-micro-VM sandbox assets.
+microVM sandbox assets.
 
 ```bash
 go run ./tools/setup-gcp create bucket [flags]
@@ -217,7 +217,7 @@ go run ./tools/setup-gcp create bucket [flags]
 **Flags:**
 | Flag | Description | Default Env Var | Fallback Default |
 | :--- | :--- | :--- | :--- |
-| `--name` | Name of the GCS snapshot bucket. The micro-VM asset bucket is created beside it as `NAME-assets`. | `BUCKET_NAME` | None (Required*) |
+| `--name` | Name of the GCS snapshot bucket. The microVM asset bucket is created beside it as `NAME-assets`. | `BUCKET_NAME` | None (Required*) |
 
 *\*Note: Required unless the `BUCKET_NAME` environment variable is set.*
 
@@ -244,7 +244,7 @@ go run ./tools/setup-gcp create iam [flags]
 #### What `create iam` actually grants
 
 On a fresh GCP project these bindings do not exist, and nothing else creates
-them. Without them atelet cannot fetch micro-VM assets, ate-api cannot copy or
+them. Without them atelet cannot fetch microVM assets, ate-api cannot copy or
 collect snapshots or issue per-actor tokens for them (`403` from GCS on the
 first suspend/resume), and nodes cannot pull images. `bootstrap` and `create iam`
 apply them for you. The table below is the reference for auditing them, or for
@@ -271,7 +271,7 @@ have it enabled too, or their GCS calls fail with `401`.
 | snapshot transfer SA⁴ | `roles/storage.bucketViewer` | snapshot bucket | List/stat the snapshot bucket |
 | ate-api-server WI principal¹ | `roles/iam.serviceAccountTokenCreator` | snapshot transfer SA⁴ | The credential exchange impersonates it |
 | Cloud SQL GSA⁵ | `roles/iam.serviceAccountTokenCreator` | snapshot transfer SA⁴ | Granted by `create cloudsql`: with Cloud SQL, ate-api-server's pod runs as this account |
-| atelet WI principal¹ | `roles/storage.objectViewer` | asset bucket (`BUCKET_NAME-assets`) | Read micro-VM sandbox assets |
+| atelet WI principal¹ | `roles/storage.objectViewer` | asset bucket (`BUCKET_NAME-assets`) | Read microVM sandbox assets |
 | default compute SA³ | `roles/artifactregistry.reader` | project² | Nodes pull images from Artifact Registry, which also serves gcr.io |
 
 ¹ `principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/ate-system/sa/SERVICE_ACCOUNT` — note it is keyed to the **project number**, not the ID.
@@ -311,7 +311,7 @@ gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}-assets" \
 #### Upgrading an existing install
 
 Substrate does not support upgrading a cluster in place yet. A cluster with
-micro-VM workers has to be recreated: each node indexes a sandbox runtime by
+microVM workers has to be recreated: each node indexes a sandbox runtime by
 the digests of its assets, which do not change when the assets move to the
 asset bucket, so a node keeps fetching them from the snapshot bucket. The
 commands below still apply when the new cluster reuses the GCP project.
@@ -329,7 +329,7 @@ bucket. Upgrade Substrate first, to a release whose node plugin gets snapshot
 credentials from ate-api-server's credential exchange. On an older release,
 removing these grants makes every suspend and resume fail with `403`. Remove
 those grants after running `create bucket` and `create iam`, and after
-rerunning `hack/install-microvm-deps.sh --install` if you use micro-VM
+rerunning `hack/install-microvm-deps.sh --install` if you use microVM
 workers, so the assets are in the asset bucket. `ATELET` is set as in the
 manual equivalent above:
 
@@ -381,7 +381,7 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
-| `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for micro-VM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
+| `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for microVM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 | `--bucket-name` | Name of the GCS bucket for snapshots. | `BUCKET_NAME` | None (Required*) |
@@ -414,7 +414,7 @@ go run ./tools/setup-gcp bootstrap \
   --machine-type="n2-standard-8"
 ```
 
-### Bootstrap a cluster whose nodes cannot run micro-VM workers
+### Bootstrap a cluster whose nodes cannot run microVM workers
 
 Nested virtualization is on by default, so turning it off is the case that
 needs a flag:

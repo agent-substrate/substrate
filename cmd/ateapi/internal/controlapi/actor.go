@@ -257,6 +257,12 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 	actorRef := resources.ActorRefFromActor(inActor)
 	setSpanActorRefAttributes(ctx, actorRef)
 
+	ctx, lease, err := acquireLease(ctx, s.impl, actorLeaseKey(actorRef), "actor")
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+
 	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(inActor), func(toUpdate *ateapi.Actor) error {
 		// Status and Metadata are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()

@@ -38,9 +38,9 @@ const defaultPrewarmAttemptTimeout = 10 * time.Minute
 // without hammering a permanently broken runtime forever.
 const prewarmMaxRetries = 8
 
-// sandboxAssetFetcher is the slice of Atelet the prewarmer and the syncer's
-// probe need. Staging through the same methods as the Run/Restore path
-// keeps the fetches from ever diverging on cache layout or validation.
+// sandboxAssetFetcher is the slice of Atelet the prewarmer and the syncer
+// need. Staging through the same methods as the Run/Restore path keeps the
+// fetches from ever diverging on cache layout or validation.
 type sandboxAssetFetcher interface {
 	ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error)
 	stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error)
@@ -54,12 +54,13 @@ type prewarmItem struct {
 	dir  string
 }
 
-// runtimePrewarmer fetches the default runtime of each worker on this node
-// into the asset cache before any actor asks for it, so the
-// fetch inside the first Run/Restore on the node is a cache hit instead of
-// a download+extract on the critical path. The worker sandbox syncer hands
-// it each default runtime a worker advertises, once the worker's file says
-// so, with a directory to stage it into; the index holds the record.
+// runtimePrewarmer links the default runtime of each worker on this node
+// from the asset cache into the worker's default-runtime directory (fetching
+// on a cache miss after eviction), so the fetch inside the first Run/Restore
+// on the node is a cache hit instead of a download+extract on the critical
+// path. The worker sandbox syncer hands it each default runtime a worker
+// advertises, once the worker's file says so, with a directory to stage it
+// into; the index holds the record.
 //
 // The assets are linked into that directory and left there: the cache
 // never evicts a linked entry, so a default runtime stays cached while no
@@ -72,15 +73,13 @@ type prewarmItem struct {
 //
 // Prewarming is purely a latency optimization: every failure is logged and
 // left to the on-demand fetch in ensureSandboxAssets, which remains the
-// correctness path. Only default runtimes are prewarmed; the first restore of
-// another version a worker advertises pays its download.
+// correctness path. Only default runtimes are linked here; non-default
+// versions stay unlinked while no actor runs them.
 type runtimePrewarmer struct {
 	index  *runtimeIndex
 	assets sandboxAssetFetcher
 	// queue carries items. It dedupes while an item waits, and it
-	// rate-limits retries after failures. A single worker drains it, which
-	// also serializes downloads so concurrent prewarms never compete for
-	// node bandwidth.
+	// rate-limits retries after failures. A single worker drains it.
 	queue workqueue.TypedRateLimitingInterface[prewarmItem]
 	// done is closed when the worker goroutine exits; wait blocks on it.
 	done chan struct{}
@@ -174,11 +173,11 @@ func (p *runtimePrewarmer) process(ctx context.Context, item prewarmItem) {
 	p.queue.Forget(item)
 }
 
-// prewarm fetches the runtime's assets into the asset cache, linked into
-// the item's directory. Racing an on-demand ensureSandboxAssets for the same
-// assets is safe: the asset cache runs one download per asset and serves
-// every caller from it. A directory the syncer already filled costs a stat
-// per asset.
+// prewarm links the runtime's assets from the asset cache into the item's
+// directory, fetching on a cache miss after eviction. Racing an on-demand
+// ensureSandboxAssets for the same assets is safe: the asset cache runs one
+// download per asset and serves every caller from it. A directory the syncer
+// already filled costs a stat per asset.
 //
 // Nothing here creates a directory: the staging goes into the item's
 // directory as it is, so a directory removed before or during the work, by

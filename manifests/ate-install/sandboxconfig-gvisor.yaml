@@ -31,21 +31,21 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  defaultVersion: v4
+  defaultVersion: v5
   versions:
-  # gVisor nightly 2026-10-17, the first to include google/gvisor@b79256080dec
-  # (save and restore multiple filesystem checkpoint bundles). ateworker-gvisor
-  # uses it to save container rootfs overlays (rootfs/) and durable-dir volumes
-  # (fs/) as separate bundles, and to run the sandbox with no root container
-  # (google/gvisor#15551).
-  - name: v4
+  # gVisor release 20261019.0, the first tagged release with
+  # google/gvisor@b79256080dec (save and restore multiple filesystem checkpoint
+  # bundles). ateworker-gvisor uses it to save container rootfs overlays
+  # (rootfs/) and durable-dir volumes (fs/) as separate bundles, and to run the
+  # sandbox with no root container (google/gvisor#15551).
+  - name: v5
     state: Enabled
     assets:
       amd64:
         gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-17/x86_64/gvisor.tar.zstd"
-          sha256: "fa72f0d45756c69a30beec21222c78241b0d330c36f4f2185648617cc23415c8"
+          url: "gs://gvisor/releases/release/20261019.0/x86_64/gvisor.tar.zstd"
+          sha256: "8637abfb50f81552af25ca08f7172589c09292a7c881efe8d9e09a9f3b6bec7b"
       arm64:
         gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-17/aarch64/gvisor.tar.zstd"
-          sha256: "238634978d99f0dd3e631c4f88eae7b19fb36937065428467f0b6d6b10697689"
+          url: "gs://gvisor/releases/release/20261019.0/aarch64/gvisor.tar.zstd"
+          sha256: "88556c21468a066d872a055425958c83fcbafc79c6477a195b18070c77f856d0"

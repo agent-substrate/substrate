@@ -51,7 +51,7 @@ paths resolve in every pod) and a small per-bundle spec file.
 
 Because the consumer mounts the overlay **in its own mount namespace** —
 exactly where the workload resolves it (runsc's gofer for gVisor, virtiofsd
-for the micro-VM) — no Kubernetes mount-propagation configuration is needed
+for the microVM) — no Kubernetes mount-propagation configuration is needed
 anywhere.
 
 ## On-disk layout
@@ -129,7 +129,7 @@ bundle-local `rootfs/`, `upper/`, and `work/` directories.
 ## Compose path (ateworker: `SetupBundleRootfs`)
 
 Called immediately before `runsc create`/`runsc restore` (gVisor) and before
-staging the virtio-fs lower (micro-VM):
+staging the virtio-fs lower (microVM):
 
 1. **`FinalizeLayer`** for each referenced layer — materializes the recorded
    whiteouts as 0:0 char devices (`mknod`) and opaque dirs as
@@ -170,7 +170,7 @@ rootfs with ExtraDirs and no mount.
 Actor semantics are unchanged from the untar era: the upper is wiped by
 atelet's `resetActorDirs` between runs, so every run still starts from a
 bit-exact, pristine image rootfs — it just costs a mount instead of an
-extraction. The micro-VM path is nearly untouched: it bind-mounts the (now
+extraction. The microVM path is nearly untouched: it bind-mounts the (now
 overlay-composed) bundle rootfs into virtiofsd's shared dir and the guest
 keeps building its own tmpfs upper, as before.
 

@@ -47,7 +47,7 @@ the router capacity benchmark — see
      variable (a JSON object) if set. A `--metadata` in the test's own
      `flags` is merged in too, its keys winning on conflict.
    - Polls until complete/failed/timeout; tails logs; deletes the Job.
-   - Tears down workloads + micro-VM deps (if any) + substrate.
+   - Tears down workloads + microVM deps (if any) + substrate.
    - If not the last test, redeploys them so the next run starts clean.
 
 ## Choosing a sandbox class
@@ -57,7 +57,7 @@ Each entry in `tests.yaml` may set `sandboxClass: gvisor | microvm` (default
 and its `workerImage` (`ateworker-gvisor` vs `ateworker-microvm`).
 
 For `microvm` tests the target cluster must have KVM-capable nodes. The
-orchestrator uploads the micro-VM assets, so its Workload Identity principal
+orchestrator uploads the microVM assets, so its Workload Identity principal
 must be able to write to the bucket they go to. On GKE that is
 `<BUCKET_NAME>-assets`, where `BUCKET_NAME` comes from `.ate-dev-env.sh`.
 

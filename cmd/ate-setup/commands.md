@@ -60,7 +60,7 @@ rollout waits still diagnose workloads that cannot become ready. The shell shim
 runs actions in argument order, so put `--deploy-ate-system` before demo or
 benchmark deployment flags when combining them on one command line.
 
-## Installing a release
+## Installing pre-built images
 
 Without `--image-repo`, `ate-setup` builds every image from the checkout with
 `ko` and pushes it to `KO_DOCKER_REPO`. That is the developer install and is
@@ -69,29 +69,32 @@ unchanged.
 ```
 ate-setup deploy ate-system \
   --credential-provider='{"name":"k8s.io"}' \
-  --image-repo registry.example.com/substrate \
-  --image-tag v0.0.0
+  --image-repo REPO \
+  --image-tag TAG
 ```
 
-installs published images instead, and never invokes `ko`. The manifests still
-come from the checkout, so this needs one; what it removes is the build, the Go
-toolchain, and write access to a registry.
+installs images already published to `REPO` instead, and never invokes `ko`.
+The manifests still come from the checkout, so this needs one; what it removes
+is the build, the Go toolchain, and write access to a registry.
 
-`REPO` has to hold every component image the manifests reference, all under the
-same tag, which is how a release publishes them. A release that adds a component
-has to publish it alongside the others before a pre-built install can use it.
-`VERSION=TAG ate-setup publish release-images --ko-docker-repo REPO` publishes
-the full set, including `envoy-dataplane`, which is built from a Dockerfile with
-`docker buildx` rather than with `ko`. A build from source builds that image itself, so
-it needs `docker` as well as `ko`.
-Each reference is then pinned to the digest its tag names, which takes one HEAD
+`REPO` has to hold every image the install deploys, all under `TAG`, including
+`envoy-dataplane`, which a build from source builds from a Dockerfile with
+`docker buildx` (so that build needs `docker` as well as `ko`). An install that
+needs an image `REPO` lacks fails naming it.
+
+The images a release publishes to `ghcr.io/agent-substrate/substrate`, with
+`publish release-images`, are not a complete install; see
+[`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images). When an
+image releases do not publish is missing from `REPO`, the error says so.
+
+Each reference is pinned to the digest its tag names, which takes one HEAD
 request per image, so the installer needs read access to `REPO` and not only the
 cluster does.
 
 That read is authenticated with the docker config file and the credential
 helpers it names, plus gcloud's own credentials for GCR and Artifact Registry:
-Application Default Credentials, falling back to the `gcloud` CLI. Installing a
-release onto GKE therefore needs no `~/.docker/config.json` entry. Amazon ECR
+Application Default Credentials, falling back to the `gcloud` CLI. Installing
+from GCR or Artifact Registry therefore needs no `~/.docker/config.json` entry. Amazon ECR
 and Azure Container Registry need credential-helper modules this repository does
 not depend on, so those registries need a `docker login` first.
 
@@ -123,14 +126,21 @@ a running cluster.
 |---|---|
 | `publish worker-images` | (no shell equivalent) |
 | `publish release-images` | (no shell equivalent) |
+| `publish release-binaries` | (no shell equivalent) |
 
 `publish worker-images` builds and pushes the worker images for the
 checked-out build and prints their refs; a WorkerPool points `spec.workerImage`
 to a build to use the ateworker.
 
-`publish release-images` builds and pushes every image a pre-built install
-needs, all tagged with the build version; see [Installing a
-release](#installing-a-release).
+`publish release-images` builds and pushes every image a release publishes,
+all tagged with the build version; see [Installing pre-built
+images](#installing-pre-built-images).
+
+`publish release-binaries` builds `kubectl-ate` for linux and darwin on amd64
+and arm64 into `--out` (default `bin/release`), stamped with the build version, commit,
+and commit time, each with a `.sha256` file that `shasum -a 256 -c` checks. The
+version has to be a release tag. It uploads nothing; the release workflow
+attaches the files to the draft release.
 
 ## Delete
 
@@ -198,9 +208,9 @@ See
 |---|---|---|
 | `deploy demo counter` | `--deploy-demo-counter` | A counter actor exercising snapshot, resume, and atenet ingress |
 | `deploy demo counter --with-external-volume [--storage-class NAME]` | `--deploy-demo-counter-with-external-volume` (`STORAGE_CLASS=NAME`) | The same, plus an external volume and a pre-seeded file to validate (requires `--preview=ExternalVolumes`). Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
-| `deploy demo counter-microvm` | `--deploy-demo-counter-microvm` | The counter demo on micro-VM workers. Run `hack/install-microvm-deps.sh --install` first |
+| `deploy demo counter-microvm` | `--deploy-demo-counter-microvm` | The counter demo on microVM workers. Run `hack/install-microvm-deps.sh --install` first |
 | `deploy demo egress` | `--deploy-demo-egress` | Egress policy enforcement through atenet; the actors trust the egress gateway's CA |
-| `deploy demo egress-microvm` | `--deploy-demo-egress-microvm` | The same on micro-VM workers. Run `hack/install-microvm-deps.sh --install` first |
+| `deploy demo egress-microvm` | `--deploy-demo-egress-microvm` | The same on microVM workers. Run `hack/install-microvm-deps.sh --install` first |
 | `deploy demo jupyter` | `--deploy-demo-jupyter` | A Jupyter notebook server per actor, reached through atenet ingress |
 | `deploy demo sandbox` | `--deploy-demo-sandbox` | An on-demand sandbox actor driven by the sandbox client |
 | `deploy demo multi-template` | `--deploy-demo-multi-template` | Two ActorTemplates sharing one WorkerPool |

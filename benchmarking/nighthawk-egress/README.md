@@ -8,7 +8,7 @@ Benchmarks the Agent Substrate egress dataplane (`atunnel` -> `atenet-egress`) u
 flowchart LR
     client["nighthawk_client<br/>(host)"]
     invoker["traffic-driver-invoker<br/>(:19980, adds ate-target-actor)"]
-    router["atenet-router<br/>(:80)"]
+    router["atenet-router<br/>(:443)"]
 
     subgraph worker["WorkerPod (ateworker-gvisor)"]
         atunnel-ingress["ingress atunnel"]

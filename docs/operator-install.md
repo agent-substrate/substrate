@@ -15,7 +15,7 @@ namespace: ate-system
 atenet:
   dataplane: envoy
 images:
-  repo: ghcr.io/agent-substrate/substrate
+  repo: registry.example.com/substrate
   tag: v0.4.1
 ```
 
@@ -315,6 +315,8 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `otlpEndpoint`                               | `ATE_OTLP_ENDPOINT`                             | `--otlp-endpoint`                                  | —                     | (global)                                 |
 | `podcert.workersPerSigner`                   | `ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER`        | `--podcert-workers-per-signer`                     | `0`                   | (global)                                 |
 | `preview`                                    | `ATE_PREVIEW`                                   | `--preview`                                        | —                     | (global)                                 |
+| `publish.binariesDir`                        | `ATE_PUBLISH_BINARIES_DIR`                      | `--out`                                            | `bin/release`         | `publish release-binaries`               |
+| `publish.overwrite`                          | `ATE_PUBLISH_OVERWRITE`                         | `--overwrite`                                      | `false`               | `publish release-images`                 |
 | `record.dir`                                 | `ATE_RECORD_DIR`                                | `--record-dir`                                     | —                     | (global)                                 |
 | `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |
 | `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |
@@ -352,13 +354,13 @@ does not create the bucket or grant access to it: run
 [tools/setup-gcp](../tools/setup-gcp/README.md)).
 
 setup-gcp also creates an asset bucket, `<BUCKET_NAME>-assets`, where
-`hack/install-microvm-deps.sh` stages micro-VM sandbox assets, and gives atelet
+`hack/install-microvm-deps.sh` stages microVM sandbox assets, and gives atelet
 read access to it. atelet gets no access to the snapshot bucket: every snapshot
 transfer runs on a token scoped to its actor, issued by ate-api-server's
 credential exchange. A GCP project set up before the asset bucket existed
 keeps atelet's old grants, since setup-gcp only adds bindings. Remove them as
 [tools/setup-gcp](../tools/setup-gcp/README.md#upgrading-an-existing-install)
-shows, which also covers recreating a cluster with micro-VM workers.
+shows, which also covers recreating a cluster with microVM workers.
 
 With the `PerTemplateSnapshotLocation` preview gate, an ActorTemplate may set
 `snapshotConfig.storageLocation` to store its snapshots elsewhere; templates

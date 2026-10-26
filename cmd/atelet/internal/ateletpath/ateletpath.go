@@ -43,9 +43,10 @@ var (
 	SandboxAssetCacheDir = filepath.Join(nodepath.BasePath, "sandbox-asset-cache")
 
 	// SandboxAssetScratchDir holds short-lived destination directories for
-	// asset fetches that have no actor, such as prewarming a SandboxConfig's
-	// default version. Wiped at startup. Under BasePath so the links the
-	// cache serves into it are on the cache's mount.
+	// asset fetches that have no actor and no worker directory to link into:
+	// the assets the worker sandbox syncer stages when checking a version.
+	// Wiped at startup. Under BasePath so the links the cache serves into it
+	// are on the cache's mount.
 	SandboxAssetScratchDir = filepath.Join(nodepath.BasePath, "sandbox-asset-scratch")
 
 	// SandboxRuntimeIndexFile holds every sandbox runtime a worker on this

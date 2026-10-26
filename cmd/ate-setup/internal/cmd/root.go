@@ -59,15 +59,35 @@ var resolved *config.Resolved
 // Commands that install nothing -- delete, publish, setup -- are not marked.
 const recordAnnotation = "record"
 
+// clusterAnnotation says whether a command contacts a cluster: "no" for one
+// that does not. As with recordAnnotation, the nearest annotated command
+// decides. A command marked "no" gets an environment without a Kubernetes
+// client, so it runs on a host with no kubeconfig.
+const clusterAnnotation = "cluster"
+
+// nearestAnnotation returns the value of key on cmd or its nearest ancestor
+// that carries it.
+func nearestAnnotation(cmd *cobra.Command, key string) (string, bool) {
+	for c := cmd; c != nil; c = c.Parent() {
+		if v, ok := c.Annotations[key]; ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // recordsRun reports whether the nearest annotated command, cmd or an
 // ancestor, opted in.
 func recordsRun(cmd *cobra.Command) bool {
-	for c := cmd; c != nil; c = c.Parent() {
-		if v, ok := c.Annotations[recordAnnotation]; ok {
-			return v == "yes"
-		}
-	}
-	return false
+	v, _ := nearestAnnotation(cmd, recordAnnotation)
+	return v == "yes"
+}
+
+// needsCluster reports whether cmd contacts a cluster. Commands do unless
+// marked otherwise.
+func needsCluster(cmd *cobra.Command) bool {
+	v, _ := nearestAnnotation(cmd, clusterAnnotation)
+	return v != "no"
 }
 
 var rootCmd = &cobra.Command{
@@ -106,6 +126,11 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 		// Reported before the cluster is touched, so the settings are on
 		// screen even when connecting fails.
 		resolved.Report(log.Writer(), config.ReportOptions{OmitDefaults: noReportDefaults})
+
+		if !needsCluster(cmd) {
+			env = steps.NewLocalEnv(cfg)
+			return nil
+		}
 
 		// Populate the kubeconfig before any client is built, for the
 		// GKE-from-.ate-dev-env.sh flow.

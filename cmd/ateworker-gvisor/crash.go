@@ -57,7 +57,10 @@ func (s *AteWorkerService) watchSandbox(ctx context.Context, hosted *hostedActor
 			return
 		}
 		ctx := context.Background()
-		const message = "gVisor sandbox exited"
+		message := "gVisor sandbox exited"
+		if hosted.oomKilled.Load() {
+			message = "killed for exceeding its memory limit"
+		}
 
 		// stopping is checked under the actor's lock, so an exit during a
 		// checkpoint that then fails is still handled once it gives up.

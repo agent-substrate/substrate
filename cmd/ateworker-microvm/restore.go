@@ -33,6 +33,7 @@ import (
 	"go.ate.dev/substrate/internal/workerstats"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
@@ -339,7 +340,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		return untarErr
 	}
 	tUpper := time.Now()
-	leaf, err := s.actorLeaf(actorUID, p.size)
+	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU)
 	if err != nil {
 		return err
 	}

@@ -221,7 +221,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			true, f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, f.actorDirs,
 			func(context.Context) error {
 				if got := mustRead(t, filepath.Join(ckptDir, "cgroup.procs")); got != "101" {
 					t.Errorf("checkpoint cgroup.procs during checkpoint = %q, want 101", got)
@@ -246,17 +246,17 @@ func TestCheckpointIsolated(t *testing.T) {
 		}
 	})
 
-	t.Run("skips cgroup isolation when cgroup is not delegated", func(t *testing.T) {
+	t.Run("checkpoints without isolation when the sandbox pid is unknown", func(t *testing.T) {
 		f := newCkptFixture(t, "")
 		ckptDir := checkpointCgroupDir(f.root, testActorUID)
 		var terminated bool
 
 		err := checkpointIsolated(
 			context.Background(),
-			false, f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, f.actorDirs,
 			func(context.Context) error {
 				if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
-					t.Errorf("checkpoint cgroup should not be created when !cgroupDelegated: %v", err)
+					t.Errorf("checkpoint cgroup should not be created without a sandbox pid: %v", err)
 				}
 				return nil
 			},
@@ -280,7 +280,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			true, f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, f.actorDirs,
 			func(context.Context) error {
 				return errors.New("checkpoint boom")
 			},
@@ -310,7 +310,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			true, f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, f.actorDirs,
 			func(context.Context) error {
 				movePID = func(string, int) error { return unix.EACCES }
 				return errors.New("checkpoint boom")
@@ -339,7 +339,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			true, f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, f.actorDirs,
 			func(context.Context) error {
 				if err := os.RemoveAll(f.leaf); err != nil {
 					t.Fatal(err)
@@ -369,7 +369,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			true, f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, f.actorDirs,
 			func(context.Context) error { return nil },
 			func() error {
 				// Non-empty ckptDir emulates a sentry still alive in the cgroup.

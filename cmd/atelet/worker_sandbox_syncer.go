@@ -109,8 +109,9 @@ type workerSandboxSyncer struct {
 	// pods holds this node's worker pods, indexed by podUIDIndex.
 	pods   cache.Indexer
 	assets sandboxAssetFetcher
-	// scratchDir is where the runsc probe stages the binary it runs, read
-	// from ateletpath once here so a test can point a syncer elsewhere.
+	// scratchDir is where buildFile stages assets to verify them (and run
+	// the runsc probe), read from ateletpath once here so a test can point
+	// a syncer elsewhere.
 	scratchDir string
 	// queue carries pod UIDs. A workqueue never hands the same key to two
 	// workers at once, so a pod's file is never written and its directory
@@ -124,16 +125,18 @@ type workerSandboxSyncer struct {
 	probeCPUIdentity func() (vendor, model string, err error)
 	// runCPUFeatures is runRunscCPUFeatures. Overridable in tests.
 	runCPUFeatures func(ctx context.Context, runscPath string) ([]string, error)
-	// mu guards hostCPU and cpuFeatures across the syncWorkers in run:
-	// hostCPU is the probed host CPU identity, nil until a probe succeeds,
-	// and cpuFeatures the encoded cpu_features of each runsc binary by its
-	// gVisor asset's SHA256 digest. A binary is fetched and run once per
-	// digest, except that two workers meeting a digest before either has
-	// memoized it both probe it; the duplicate costs a fetch from the asset
-	// cache and a run of runsc, and both store the same mask.
-	mu          sync.Mutex
-	hostCPU     *cpuIdentity
-	cpuFeatures map[string]string
+	// mu guards hostCPU, cpuFeatures and microvmAssets across the syncWorkers
+	// in run: hostCPU is the probed host CPU identity, nil until a probe
+	// succeeds; cpuFeatures is the encoded cpu_features of each runsc binary
+	// by its gVisor asset's SHA256 digest; and microvmAssets holds the
+	// bundle hashes of microVM versions whose assets have been verified in
+	// this atelet process. Restorable microVM versions are verified once per
+	// atelet process (except when two workers meet a version before either
+	// memoizes it); the default version is staged on every sync.
+	mu            sync.Mutex
+	hostCPU       *cpuIdentity
+	cpuFeatures   map[string]string
+	microvmAssets map[string]bool
 }
 
 func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) *workerSandboxSyncer {
@@ -155,6 +158,7 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 		probeCPUIdentity: hardware.ProbeCPUIdentity,
 		runCPUFeatures:   runRunscCPUFeatures,
 		cpuFeatures:      make(map[string]string),
+		microvmAssets:    make(map[string]bool),
 	}
 }
 

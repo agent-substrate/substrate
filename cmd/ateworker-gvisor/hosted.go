@@ -21,11 +21,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -53,6 +55,15 @@ type hostedActor struct {
 	// nothing that waits on it later can be fooled by a reused pid. Nil if it
 	// could not be pinned. Set once, under the actor's lock.
 	sandbox *sandboxProcess
+	// memoryLimit is the sandbox leaf's memory.high, or 0 while watchMemory
+	// should leave it alone.
+	memoryLimit atomic.Uint64
+	// oomKilled is set before watchMemory kills the sandbox.
+	oomKilled atomic.Bool
+	// memoryMu is held while watchMemory checks or kills the sandbox, and
+	// guards memoryWatch.
+	memoryMu    sync.Mutex
+	memoryWatch cgroup.MemoryWatch
 }
 
 // admitActor reserves capacity before network setup. An actor that is already

@@ -97,7 +97,7 @@ func TestApplyPostgresSize10Overrides(t *testing.T) {
 
 	cm := findObject(objs, "ConfigMap", "postgres-config")
 	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-	if !strings.Contains(data["postgresql.conf"], "max_connections = 300") {
+	if !strings.Contains(data["postgresql.conf"], "max_connections = 500") {
 		t.Errorf("postgresql.conf was not replaced with the size10 tuning:\n%s", data["postgresql.conf"])
 	}
 	// The merge semantics: the base's other keys survive untouched.

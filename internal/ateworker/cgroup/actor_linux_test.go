@@ -92,15 +92,9 @@ func TestKillActorLeaf(t *testing.T) {
 // ownCgroup is the test process's own cgroup, under which it may create leaves.
 func ownCgroup(t *testing.T) string {
 	t.Helper()
-	b, err := os.ReadFile("/proc/self/cgroup")
+	p, err := cgroupPath("/proc/self/cgroup")
 	if err != nil {
-		t.Fatal(err)
+		t.Skip(err)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
-		if p, ok := strings.CutPrefix(line, "0::"); ok {
-			return filepath.Join(Root, p)
-		}
-	}
-	t.Skip("no cgroup v2")
-	return ""
+	return filepath.Join(Root, p)
 }

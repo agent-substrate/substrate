@@ -21,11 +21,7 @@ cmd/dataplane/envoy/
 
 During a build from source, `ate-setup` builds the image from this directory via `docker buildx`, pushes it to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the router and egress manifests (`manifests/ate-install/atenet-router.yaml`, `manifests/ate-install/atenet-egress.yaml`).
 
-A pre-built install (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing and pins `REPO/envoy-dataplane:TAG` instead, so a release publishes it with the other images:
-
-```bash
-VERSION=TAG go run ./cmd/ate-setup publish release-images --ko-docker-repo REPO
-```
+A pre-built install (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing and pins `REPO/envoy-dataplane:TAG` instead, so `REPO` has to hold it. Releases do not publish it; see [`docs/dev/releasing.md`](../../../docs/dev/releasing.md#release-images).
 
 The image targets the same platforms as the ko images: `KO_DEFAULTPLATFORMS`, else `defaultPlatforms` in `.ko.yaml` (linux/amd64 and linux/arm64), else `linux/amd64`. Building another architecture compiles Rust under QEMU, which must be registered with binfmt (e.g. `docker run --privileged --rm tonistiigi/binfmt --install arm64`).
 
