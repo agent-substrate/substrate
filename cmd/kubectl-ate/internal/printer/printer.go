@@ -264,6 +264,18 @@ func PrintWorkerTopYAML(out io.Writer, items []*WorkerTopItem) error {
 	return err
 }
 
+// PrintWhoAmITo prints the caller's principal to the provided writer.
+func PrintWhoAmITo(out io.Writer, resp *ateapi.WhoAmIResponse, format string) error {
+	if format == "json" || format == "yaml" {
+		return printProto(out, resp, format)
+	}
+	kind := strings.ToLower(strings.TrimPrefix(resp.GetKind().String(), "PRINCIPAL_KIND_"))
+	w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "PRINCIPAL\tMETHOD\tISSUER")
+	fmt.Fprintf(w, "%s\t%s\t%s\n", resp.GetId(), kind, resp.GetIssuer())
+	return w.Flush()
+}
+
 // PrintActorTo prints a single actor to the provided writer.
 func PrintActorTo(out io.Writer, actor *ateapi.Actor, format string) error {
 	if format == "json" || format == "yaml" {

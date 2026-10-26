@@ -941,3 +941,29 @@ func TestPrintWorkerTopTo_Invalid(t *testing.T) {
 		t.Errorf("expected error for invalid format, got nil")
 	}
 }
+
+func TestPrintWhoAmITo(t *testing.T) {
+	resp := &ateapi.WhoAmIResponse{
+		Id:     "system:serviceaccount:ate-users:alice",
+		Kind:   ateapi.PrincipalKind_PRINCIPAL_KIND_JWT,
+		Issuer: "https://kubernetes.default.svc",
+	}
+	var buf bytes.Buffer
+	if err := PrintWhoAmITo(&buf, resp, "table"); err != nil {
+		t.Fatal(err)
+	}
+	want := "PRINCIPAL                               METHOD   ISSUER\n" +
+		"system:serviceaccount:ate-users:alice   jwt      https://kubernetes.default.svc\n"
+	if diff := cmp.Diff(want, buf.String()); diff != "" {
+		t.Errorf("table (-want +got):\n%s", diff)
+	}
+
+	buf.Reset()
+	if err := PrintWhoAmITo(&buf, resp, "yaml"); err != nil {
+		t.Fatal(err)
+	}
+	want = "id: system:serviceaccount:ate-users:alice\nissuer: https://kubernetes.default.svc\nkind: PRINCIPAL_KIND_JWT\n"
+	if diff := cmp.Diff(want, buf.String()); diff != "" {
+		t.Errorf("yaml (-want +got):\n%s", diff)
+	}
+}

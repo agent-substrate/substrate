@@ -140,6 +140,11 @@ func (c *Client) WorkerService() ateapi.WorkerServiceClient {
 	return ateapi.NewWorkerServiceClient(c.conn)
 }
 
+// Authentication returns an Authentication client on the same connection.
+func (c *Client) Authentication() ateapi.AuthenticationClient {
+	return ateapi.NewAuthenticationClient(c.conn)
+}
+
 // NewClient creates a new Ate API client. If endpoint is empty, it automatically
 // port-forwards to the ate-api-server pod in substrate's system namespace.
 // extraOpts are appended to the options used to dial the server.
