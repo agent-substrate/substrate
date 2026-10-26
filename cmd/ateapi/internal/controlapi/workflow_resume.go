@@ -662,10 +662,13 @@ func snapshotSandboxClass(actor *ateapi.Actor) string {
 }
 
 // requiredSnapshotRuntime returns the ActorSandboxRuntime stamped on snap, the
-// snapshotToResume, when the resume restores its memory state, or nil when it
-// does not (cold boot, ROOTFS or VOLUMES fidelity, or replaced template).
+// snapshotToResume, when the resume restores its memory or rootfs state, or nil
+// when it does not (cold boot, VOLUMES fidelity, or replaced template). A rootfs
+// upper can hold binaries for the architecture it was written on, and
+// compatibility is not yet judged per attribute, so ROOTFS pins the runtime
+// like MEMORY.
 func requiredSnapshotRuntime(snap *ateapi.Snapshot, tmpl *ateapi.ActorTemplate) *ateapi.ActorSandboxRuntime {
-	if snap.GetFidelity() != ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY || templateReplaced(snap, tmpl) {
+	if snap.GetFidelity() == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES || templateReplaced(snap, tmpl) {
 		return nil
 	}
 	return snap.GetSandboxRuntime()
@@ -678,7 +681,7 @@ func canRelaxRuntime(actor *ateapi.Actor, constraints scheduling.Constraints) bo
 	}
 	status := actor.GetStatus()
 	// A pinned actor detaches first, so a compatible worker elsewhere can keep
-	// its memory state.
+	// its memory or rootfs state.
 	if status.GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED && status.GetAssignedNode() != "" {
 		return false
 	}
@@ -841,7 +844,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	case runtimeIncompatible:
 		logRuntimeFallback(ctx, actorRef, assignment, requiredRuntime)
-		fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	}
 	tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 	req := &ateletpb.RestoreRequest{
@@ -884,11 +887,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	return tele, resp.GetWorkerEpoch(), nil
 }
 
-// logRuntimeFallback records a resume that restores without memory state
-// because the assigned worker does not run the runtime the snapshot's memory
-// state was captured under.
+// logRuntimeFallback records a resume that restores volumes only because the
+// assigned worker does not run the runtime the snapshot was captured under.
 func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapi.WorkerAssignment, required *ateapi.ActorSandboxRuntime) {
-	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring without memory state",
+	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring volumes only",
 		slog.String("actor", actorRef.String()),
 		slog.String("worker", assignment.GetWorkerPod()),
 		slog.Any("required_runtime", required),

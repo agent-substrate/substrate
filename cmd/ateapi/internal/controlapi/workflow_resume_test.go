@@ -1810,11 +1810,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "20 stamped actor-owned Full durable snapshot on incompatible worker drops to Rootfs",
+			name: "19a stamped Rootfs durable snapshot on matching worker restores as Rootfs",
 			actor: actorSeed{
-				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, amd64RT),
+				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, rootfsScope, amd64RT),
 				tmplUID:          "current",
-				assignedRuntime:  arm64RT,
+				assignedRuntime:  amd64RT,
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
@@ -1824,7 +1824,21 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "21 stamped borrowed golden snapshot on incompatible worker drops to Rootfs",
+			name: "20 stamped actor-owned Full durable snapshot on incompatible worker drops to Volumes",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, amd64RT),
+				tmplUID:          "current",
+				assignedRuntime:  arm64RT,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+		{
+			name: "21 stamped borrowed golden snapshot on incompatible worker drops to Volumes",
 			actor: actorSeed{
 				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, goldenURI, fullScope, amd64RT),
 				tmplUID:          "current",
@@ -1835,11 +1849,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotName: durableSnapshotName,
 				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  goldenURI,
-				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
-			name: "22 stamped explicit source_tag clone on incompatible worker drops to Rootfs",
+			name: "22 stamped explicit source_tag clone on incompatible worker drops to Volumes",
 			actor: actorSeed{
 				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, actorURI, fullScope, amd64RT),
 				tmplUID:          "current",
@@ -1850,7 +1864,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotName: durableSnapshotName,
 				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
-				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -1869,7 +1883,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "24 stamped Rootfs durable snapshot on worker with different runtime stays Rootfs",
+			name: "24 stamped Rootfs durable snapshot on incompatible worker drops to Volumes",
 			actor: actorSeed{
 				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, rootfsScope, amd64RT),
 				tmplUID:          "current",
@@ -1879,11 +1893,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotName: durableSnapshotName,
 				kind:         ateattr.SnapshotKindLatest,
 				snapshotURI:  actorURI,
-				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
-			name: "24a stamped local snapshot on incompatible worker drops to Rootfs",
+			name: "24a stamped local snapshot on incompatible worker drops to Volumes",
 			actor: actorSeed{
 				localSnapshot:   stampedLocalSnap(localSnapshotName, fullScope, amd64RT),
 				localTmplUID:    "current",
@@ -1893,7 +1907,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotName: localSnapshotName,
 				kind:         ateattr.SnapshotKindLocal,
 				snapshotURI:  pauseUploadURI,
-				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -2851,7 +2865,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		if got := worker.GetWorkerPod(); got != "arm-pod" {
 			t.Errorf("assigned worker = %q, want %q", got, "arm-pod")
 		}
-		// The restore without memory state runs under the fallback worker's default.
+		// The volumes-only restore runs under the fallback worker's default.
 		assertAssignedRuntime(t, stored, arm64RT)
 	})
 
@@ -3002,7 +3016,7 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 			ActorUid: "own-actor-uid",
 		})
 
-		// Re-entry must accept a previously allowed ROOTFS assignment.
+		// Re-entry must accept a previously allowed VOLUMES assignment.
 		local := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-arm")
 		local.SandboxRuntime = testSandboxRuntime()
 		local.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
@@ -3075,12 +3089,13 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			wantClass: "gvisor",
 		},
 		{
-			name:      "completed ROOTFS durable snapshot restores no memory state",
+			name:      "completed ROOTFS durable snapshot requires its runtime",
 			snapshots: []*ateapi.Snapshot{durable(1, rootfs, tmplUID, completed, durableRT)},
+			want:      durableRT,
 			wantClass: "gvisor",
 		},
 		{
-			name:      "VOLUMES durable snapshot restores no memory state",
+			name:      "VOLUMES durable snapshot restores no memory or rootfs state",
 			snapshots: []*ateapi.Snapshot{durable(1, volumes, tmplUID, completed, durableRT)},
 			wantClass: "gvisor",
 		},
@@ -3139,11 +3154,12 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			wantClass: "microvm",
 		},
 		{
-			name: "ROOTFS local checkpoint imposes no constraint beside a stamped durable snapshot",
+			name: "ROOTFS local checkpoint requires its runtime",
 			snapshots: []*ateapi.Snapshot{
 				local(2, rootfs, tmplUID, localRT),
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
+			want:      localRT,
 			wantClass: "microvm",
 		},
 		{

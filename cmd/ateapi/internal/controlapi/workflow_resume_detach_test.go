@@ -582,12 +582,12 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 		// uploaded is false when atelet finds no upload to restore.
 		uploaded bool
 		// otherRuntime gives the only free worker a runtime other than the
-		// snapshot's, so the restore falls back to ROOTFS.
+		// snapshot's, so the restore falls back to VOLUMES.
 		otherRuntime bool
 	}{
 		{name: "uploaded: restores on another node", assignedNode: "node-3", uploaded: true},
 		{name: "released by an earlier resume: restores on another node", uploaded: true},
-		{name: "uploaded, only another runtime has room: restores at ROOTFS", assignedNode: "node-3", uploaded: true, otherRuntime: true},
+		{name: "uploaded, only another runtime has room: restores at VOLUMES", assignedNode: "node-3", uploaded: true, otherRuntime: true},
 		{name: "never uploaded: crashes, then revert and resume restore the older snapshot", assignedNode: "node-3"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -606,7 +606,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 			wantFidelity := ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 			if tt.otherRuntime {
 				workerRuntime = testRuntime("arm64", "")
-				wantFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+				wantFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 			}
 			worker := seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", workerRuntime)
 			memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY

@@ -222,7 +222,7 @@ This applies the SandboxConfig admission policy and the default SandboxConfig. I
 
 - **Done:** the command exits 0.
 - **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
-- **Actors:** a suspended actor whose sandbox version the release drops resumes without its memory, keeping its files.
+- **Actors:** a suspended actor whose sandbox version the release drops resumes without its memory and rootfs writes, keeping its volumes.
 
 #### 4e. The rest of the system bundle
 
@@ -275,7 +275,7 @@ go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/old.yaml
 go install ./cmd/kubectl-ate
 ```
 
-`deploy sandboxconfig` removes a sandbox version new in this release, so actors suspended on it resume without their memory. `deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
+`deploy sandboxconfig` removes a sandbox version new in this release, so actors suspended on it resume without their memory and rootfs writes. `deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
 
 Fields that the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
 
