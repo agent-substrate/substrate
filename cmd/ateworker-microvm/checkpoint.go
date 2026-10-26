@@ -440,10 +440,10 @@ func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDi
 
 	var errs []error
 	if ra != nil {
-		// Close the kata-agent client kept open for stdout/stderr forwarding. This
-		// fails the forwarding goroutines' in-flight ReadStdout/ReadStderr calls, so
-		// they return io.EOF and exit (no goroutine leak). Guarded so a second
-		// teardown / a never-forwarded actor is a no-op.
+		// Close the kata-agent connection kept open for stdout/stderr forwarding.
+		// This fails the forwarding goroutines' in-flight ReadStdout/ReadStderr
+		// calls and waits for the goroutines to exit. Guarded so a second teardown
+		// or a never-forwarded actor is a no-op.
 		s.actorsMu.Lock()
 		agent := ra.guestAgent
 		ra.guestAgent = nil

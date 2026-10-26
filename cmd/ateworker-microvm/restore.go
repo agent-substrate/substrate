@@ -480,6 +480,13 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	}
 	tReseeded := time.Now()
 
+	// Re-attach stdout/stderr forwarding after CRNG reseed (the last retryable
+	// step) and before the wakeup probe so pre-probe logs are captured.
+	attribution := p.actorAttribution()
+	for _, c := range ctrs {
+		guestAC.startLogForwarding(s.actorLogger, attribution, c.id, c.name)
+	}
+
 	// Block until every wakeup-probe-enabled container reports 200.
 	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
 		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
@@ -531,14 +538,6 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		// shutdown with InvalidContainerId, so these must be what the guest runs.
 		workloadIDs: workloadIDs(ctrs),
 		guestAgent:  guestAC,
-	}
-
-	// Re-attach stdout/stderr forwarding for each container over the agent
-	// connection dialed after resume: the restored guest's containers are alive, so
-	// ReadStdout/ReadStderr pick up where they left off.
-	attribution := p.actorAttribution()
-	for _, c := range ctrs {
-		s.startActorLogForwarding(guestAC, attribution, c.id, c.name)
 	}
 
 	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
