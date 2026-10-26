@@ -77,6 +77,10 @@ data:
           socket_address: { address: "::", ipv4_compat: true, port_value: 443 }
         # Limit single I/O read to 64 Kb to prevent overly active actors from starving other actors.
         per_connection_buffer_limit_bytes: 65535
+        # TCP_NOTSENT_LOWAT on the sockets from atunnel, as on the forward
+        # proxy clusters below. See docs/network-socket-memory.md.
+        socket_options:
+        - { description: TCP_NOTSENT_LOWAT, level: 6, name: 25, int_value: 16384, state: STATE_PREBIND }
         filter_chains:
         # Named so ext_proc can read it back as xds.filter_chain_name. Must
         # match EgressFilterChainName in
@@ -990,6 +994,12 @@ data:
       - name: egress_forward_proxy
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        # TCP_NOTSENT_LOWAT: accept writes only while fewer than 16 KiB wait
+        # unsent, so data for a slow destination stays upstream instead of in
+        # the kernel. See docs/network-socket-memory.md.
+        upstream_bind_config:
+          socket_options:
+          - { description: TCP_NOTSENT_LOWAT, level: 6, name: 25, int_value: 16384, state: STATE_PREBIND }
         # Fits 1000 destinations x 32 worker threads x 2 requests at once per
         # destination per thread = 64000 connections.
         circuit_breakers:
@@ -1039,6 +1049,10 @@ data:
       - name: egress_forward_proxy_grpc
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        # TCP_NOTSENT_LOWAT, as on egress_forward_proxy.
+        upstream_bind_config:
+          socket_options:
+          - { description: TCP_NOTSENT_LOWAT, level: 6, name: 25, int_value: 16384, state: STATE_PREBIND }
         cluster_type:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
@@ -1075,6 +1089,10 @@ data:
       - name: egress_forward_proxy_cleartext
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        # TCP_NOTSENT_LOWAT, as on egress_forward_proxy.
+        upstream_bind_config:
+          socket_options:
+          - { description: TCP_NOTSENT_LOWAT, level: 6, name: 25, int_value: 16384, state: STATE_PREBIND }
         # Sized like egress_forward_proxy, for the same reason.
         circuit_breakers:
           thresholds:
@@ -1112,6 +1130,10 @@ data:
       - name: egress_forward_proxy_passthrough
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        # TCP_NOTSENT_LOWAT, as on egress_forward_proxy.
+        upstream_bind_config:
+          socket_options:
+          - { description: TCP_NOTSENT_LOWAT, level: 6, name: 25, int_value: 16384, state: STATE_PREBIND }
         cluster_type:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
