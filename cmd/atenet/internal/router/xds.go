@@ -280,6 +280,9 @@ type XdsServer struct {
 	// that hold a request open for a long turn — an LLM streaming a response,
 	// say — need this above the default or Envoy cuts the turn off with a 504.
 	routeTimeout time.Duration
+
+	// tcp: see SetTCPBufferOptions.
+	tcp tcpBufferOptions
 }
 
 func NewXdsServer(xdsPort int) *XdsServer {
@@ -335,6 +338,15 @@ func (x *XdsServer) SetExtProcMaxRequests(n int) {
 	if n > 0 {
 		x.extProcMaxRequests = uint32(n)
 	}
+}
+
+// SetTCPBufferOptions sets the kernel queue bounds of the sockets the TLS
+// listeners accept and the sockets the actor clusters dial to atunnel.
+// Internal listeners and clusters have no kernel sockets and get none.
+func (x *XdsServer) SetTCPBufferOptions(tcp tcpBufferOptions) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.tcp = tcp
 }
 
 // SetRouteTimeout sets Envoy's end-to-end timeout on the workload route.
@@ -874,8 +886,9 @@ func (x *XdsServer) buildMainInternalCluster() *clusterv3.Cluster {
 // the shared upstream transport socket (SPIFFE URI validation).
 func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
 	cluster := &clusterv3.Cluster{
-		Name:           OriginalDstClusterName,
-		ConnectTimeout: durationpb.New(5 * time.Second),
+		Name:               OriginalDstClusterName,
+		ConnectTimeout:     durationpb.New(5 * time.Second),
+		UpstreamBindConfig: x.tcp.upstreamBindConfig(),
 		ClusterDiscoveryType: &clusterv3.Cluster_Type{
 			Type: clusterv3.Cluster_ORIGINAL_DST,
 		},
@@ -969,8 +982,9 @@ func buildActorTunnelCluster(name string, http2 bool) *clusterv3.Cluster {
 // connection.
 func (x *XdsServer) buildActorConnectCluster() *clusterv3.Cluster {
 	return &clusterv3.Cluster{
-		Name:           ActorConnectName,
-		ConnectTimeout: durationpb.New(5 * time.Second),
+		Name:               ActorConnectName,
+		ConnectTimeout:     durationpb.New(5 * time.Second),
+		UpstreamBindConfig: x.tcp.upstreamBindConfig(),
 		ClusterDiscoveryType: &clusterv3.Cluster_Type{
 			Type: clusterv3.Cluster_ORIGINAL_DST,
 		},
@@ -1568,7 +1582,8 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 	alpn := []string{"h2", "http/1.1"}
 
 	return &listenerv3.Listener{
-		Name: IngressHTTPSListener,
+		Name:          IngressHTTPSListener,
+		SocketOptions: x.tcp.envoy(),
 		Address: &corev3.Address{
 			Address: &corev3.Address_SocketAddress{
 				SocketAddress: &corev3.SocketAddress{
@@ -1603,7 +1618,8 @@ func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 	hcm := x.buildConnectTerminateHCM("connect_terminate_tls")
 
 	return &listenerv3.Listener{
-		Name: "connect_terminate_tls",
+		Name:          "connect_terminate_tls",
+		SocketOptions: x.tcp.envoy(),
 		Address: &corev3.Address{
 			Address: &corev3.Address_SocketAddress{
 				SocketAddress: &corev3.SocketAddress{
