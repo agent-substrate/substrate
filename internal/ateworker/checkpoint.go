@@ -42,16 +42,20 @@ func CheckpointContext(ctx context.Context) (context.Context, context.CancelFunc
 const checkpointDoneFile = ".checkpoint-done.json"
 
 type checkpointRecord struct {
+	// BootID is the node's boot ID when the checkpoint finished. The worker
+	// does not sync the snapshot files, so after a reboot they may be torn.
+	BootID            string                       `json:"boot_id"`
 	Fidelity          ateworkerpb.SnapshotFidelity `json:"fidelity"`
 	SnapshotFiles     []string                     `json:"snapshot_files,omitempty"`
 	DataSnapshotFiles []string                     `json:"data_snapshot_files,omitempty"`
 }
 
 // RecordCheckpoint writes the completion marker into checkpointDir so a retry
-// after a caller timeout or atelet restart can reuse the finished
-// CheckpointWorkloadResponse.
-func RecordCheckpoint(checkpointDir string, fidelity ateworkerpb.SnapshotFidelity, resp *ateworkerpb.CheckpointWorkloadResponse) error {
+// after a caller timeout or atelet restart on the boot bootID can reuse the
+// finished CheckpointWorkloadResponse.
+func RecordCheckpoint(checkpointDir, bootID string, fidelity ateworkerpb.SnapshotFidelity, resp *ateworkerpb.CheckpointWorkloadResponse) error {
 	b, err := json.Marshal(checkpointRecord{
+		BootID:            bootID,
 		Fidelity:          fidelity,
 		SnapshotFiles:     resp.GetSnapshotFiles(),
 		DataSnapshotFiles: resp.GetDataSnapshotFiles(),
@@ -67,15 +71,16 @@ func RecordCheckpoint(checkpointDir string, fidelity ateworkerpb.SnapshotFidelit
 }
 
 // ReuseCheckpoint returns the recorded CheckpointWorkloadResponse from
-// checkpointDir if the completion marker exists, its fidelity matches, and all
-// listed snapshot files are still present on disk.
-func ReuseCheckpoint(checkpointDir string, fidelity ateworkerpb.SnapshotFidelity) *ateworkerpb.CheckpointWorkloadResponse {
+// checkpointDir if the completion marker exists, was recorded on the boot
+// bootID, its fidelity matches, and all listed snapshot files are still present
+// on disk.
+func ReuseCheckpoint(checkpointDir, bootID string, fidelity ateworkerpb.SnapshotFidelity) *ateworkerpb.CheckpointWorkloadResponse {
 	b, err := os.ReadFile(filepath.Join(checkpointDir, checkpointDoneFile))
 	if err != nil {
 		return nil
 	}
 	var rec checkpointRecord
-	if err := json.Unmarshal(b, &rec); err != nil || rec.Fidelity != fidelity {
+	if err := json.Unmarshal(b, &rec); err != nil || rec.BootID != bootID || rec.Fidelity != fidelity {
 		return nil
 	}
 	// DataSnapshotFiles is the VOLUMES subset of SnapshotFiles: the same file

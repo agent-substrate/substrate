@@ -14,15 +14,15 @@
 
 //go:build linux
 
-package main
+package bootid
 
 import "testing"
 
-// TestReadBootIDFromHost reads the boot ID atelet reads at startup, which
-// only Linux exposes.
-func TestReadBootIDFromHost(t *testing.T) {
-	got, err := readBootID(bootIDPath)
+// TestReadFromHost reads the boot ID atelet and the workers read at startup,
+// which only Linux exposes.
+func TestReadFromHost(t *testing.T) {
+	got, err := Read(Path)
 	if err != nil || got == "" {
-		t.Errorf("readBootID(%q) = (%q, %v), want a non-empty boot ID", bootIDPath, got, err)
+		t.Errorf("Read(%q) = (%q, %v), want a non-empty boot ID", Path, got, err)
 	}
 }

@@ -49,6 +49,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/register"
 	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/bootid"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -239,7 +240,11 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags)
+	bootID, err := bootid.Read(bootid.Path)
+	if err != nil {
+		return err
+	}
+	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags, bootID)
 	ateworkerService.throttleMemory = psiEnabled(defaultCgroupRoot)
 	if !ateworkerService.throttleMemory {
 		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so sandboxes keep memory.max and an OOM kill in one can restart the worker")
@@ -345,6 +350,9 @@ type AteWorkerService struct {
 	// crashReporter reports actors whose sandbox died. Nil if it could not be
 	// set up.
 	crashReporter crashReporter
+	// bootID is the node's boot ID, recorded with each completed checkpoint so
+	// a retry after a reboot does not reuse it.
+	bootID string
 
 	// Guards actors and draining against concurrent stats reads.
 	actorsMu sync.RWMutex
@@ -394,7 +402,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteWorkerService {
+func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore, bootID string) *AteWorkerService {
 	s := &AteWorkerService{
 		locks:            actorlock.New(),
 		inFlight:         actorlock.NewInFlight(),
@@ -405,6 +413,7 @@ func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxAc
 		cgroupRoot:       defaultCgroupRoot,
 		flags:            flags,
 		checkpointWrites: make(chan struct{}, checkpointWriteSlots),
+		bootID:           bootID,
 	}
 	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
 	return s
@@ -787,7 +796,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	defer s.locks.Unlock(req.GetActorUid())
 
 	if s.lookupActor(req.GetActorUid()) == nil {
-		if resp := ateworker.ReuseCheckpoint(req.GetActorDirs().GetCheckpointDir(), req.GetFidelity()); resp != nil {
+		if resp := ateworker.ReuseCheckpoint(req.GetActorDirs().GetCheckpointDir(), s.bootID, req.GetFidelity()); resp != nil {
 			slog.InfoContext(ctx, "Reusing completed checkpoint from previous attempt", slog.String("actorUID", req.GetActorUid()))
 			return resp, nil
 		}
@@ -980,7 +989,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 
 	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}
-	if err := ateworker.RecordCheckpoint(checkpointPath, fidelity, resp); err != nil {
+	if err := ateworker.RecordCheckpoint(checkpointPath, s.bootID, fidelity, resp); err != nil {
 		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
 	}
 	return resp, nil

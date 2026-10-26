@@ -15,31 +15,8 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"strings"
-
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 )
-
-// bootIDPath is where Linux exposes the boot ID: a random UUID generated once
-// per boot, so it changes on every reboot, clean or not, and on nothing else.
-// It is not namespaced, so atelet reads the node's.
-const bootIDPath = "/proc/sys/kernel/random/boot_id"
-
-// readBootID returns the boot ID read from path. It is never empty, so a local
-// snapshot whose manifest records none never matches it.
-func readBootID(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("while reading the boot ID: %w", err)
-	}
-	id := strings.TrimSpace(string(b))
-	if id == "" {
-		return "", fmt.Errorf("boot ID file %s is empty", path)
-	}
-	return id, nil
-}
 
 // localSnapshotBootCheck returns the snapshot tracker's check of whether an
 // actor's local snapshot was written on the boot bootID: whether the

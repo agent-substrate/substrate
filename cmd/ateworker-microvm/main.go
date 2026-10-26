@@ -49,6 +49,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
 	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/bootid"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/otlprelay"
 	"go.ate.dev/substrate/internal/preview"
@@ -233,7 +234,11 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, tunnel, actorLogger)
+	bootID, err := bootid.Read(bootid.Path)
+	if err != nil {
+		return err
+	}
+	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, tunnel, actorLogger, bootID)
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -357,6 +362,9 @@ type AteWorkerService struct {
 	// crashReporter reports actors whose micro-VM died. Nil if it could not
 	// be set up.
 	crashReporter crashReporter
+	// bootID is the node's boot ID, recorded with each completed checkpoint so
+	// a retry after a reboot does not reuse it.
+	bootID string
 
 	// shuttingDown is set once SIGTERM has been received. While true, new workload
 	// RPCs are rejected with codes.Unavailable so the control plane reschedules.
@@ -402,7 +410,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
+func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string) *AteWorkerService {
 	s := &AteWorkerService{
 		locks:          actorlock.New(),
 		inFlight:       actorlock.NewInFlight(),
@@ -415,6 +423,7 @@ func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel 
 		snapshotWrites: make(chan struct{}, snapshotWriteSlots),
 		tunnel:         tunnel,
 		actorLogger:    actorLogger,
+		bootID:         bootID,
 	}
 	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
 	return s

@@ -52,6 +52,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atelet"
+	"go.ate.dev/substrate/internal/bootid"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/imagecache"
@@ -384,7 +385,7 @@ func main() {
 	defer ateapiConn.Close()
 	workerService := ateapi.NewWorkerServiceClient(ateapiConn)
 
-	bootID, err := readBootID(bootIDPath)
+	bootID, err := bootid.Read(bootid.Path)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to read the node's boot ID", err)
 	}
@@ -752,7 +753,7 @@ type Atelet struct {
 	// failures, so a restore that can never succeed stops being retried (see
 	// boundRetryableRestoreError).
 	restoreFailures restoreFailureCounter
-	// bootID is the node's boot ID (see readBootID), recorded in the manifest
+	// bootID is the node's boot ID (see bootid.Read), recorded in the manifest
 	// of each local snapshot. A local snapshot recording another, or none,
 	// was written before the node last rebooted.
 	bootID string

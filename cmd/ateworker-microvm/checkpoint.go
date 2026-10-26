@@ -82,7 +82,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	defer s.locks.Unlock(req.GetActorUid())
 
 	if s.lookupActor(req.GetActorUid()) == nil {
-		if resp := ateworker.ReuseCheckpoint(req.GetActorDirs().GetCheckpointDir(), req.GetFidelity()); resp != nil {
+		if resp := ateworker.ReuseCheckpoint(req.GetActorDirs().GetCheckpointDir(), s.bootID, req.GetFidelity()); resp != nil {
 			slog.InfoContext(ctx, "Reusing completed checkpoint from previous attempt", slog.String("actorUID", req.GetActorUid()))
 			return resp, nil
 		}
@@ -263,7 +263,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		slog.Duration("teardown", dTeardown))
 	s.recordFinalIfEnded(ctx, hosted)
 	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}
-	if err := ateworker.RecordCheckpoint(checkpointDir, scope, resp); err != nil {
+	if err := ateworker.RecordCheckpoint(checkpointDir, s.bootID, scope, resp); err != nil {
 		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", actorUID), slog.Any("err", err))
 	}
 	return resp, nil
