@@ -453,6 +453,12 @@ func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec
 	}); err != nil {
 		return fmt.Errorf("creating rootfs container %q: %w", cid, err)
 	}
+	// The agent gives every non-tty process a stdin pipe and keeps the write end
+	// open, so a read from stdin would block forever. Close it so the workload
+	// reads EOF, as it does from /dev/null on gVisor.
+	if err := a.CloseStdin(ctx, cid, cid); err != nil {
+		return fmt.Errorf("closing stdin of rootfs container %q: %w", cid, err)
+	}
 	if err := a.StartContainer(ctx, cid); err != nil {
 		return fmt.Errorf("starting rootfs container %q: %w", cid, err)
 	}

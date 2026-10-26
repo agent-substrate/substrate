@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // Package imagefs checks the actor's view of its image's filesystem and
-// process identity against what the image records.
+// process identity against what the image records, and that a read from the
+// actor's stdin returns EOF.
 package imagefs
 
 import (
@@ -28,6 +29,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/protobuf/proto"
 )
 
 // statResponse mirrors the probe's /stat payload.
@@ -191,6 +193,61 @@ func TestImageUserAndWorkdir(t *testing.T) {
 	}
 }
 
+// stdinResponse mirrors the probe's /stdin payload.
+type stdinResponse struct {
+	EOF   bool   `json:"eof"`
+	Error string `json:"error"`
+}
+
+// TestStdinReadsEOF asserts that a read from the actor's stdin returns EOF, as
+// it does from /dev/null on gVisor. The actor cold-boots from a copy of the
+// probe template with the golden snapshot disabled, so on microVM the check
+// covers the CloseStdin call in StartRootfsContainer.
+func TestStdinReadsEOF(t *testing.T) {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
+		t.Fatalf("CheckEnv failed: %v", err)
+	}
+	ctx := context.Background()
+	clients := e2e.GetClients()
+
+	atespace, tmpl := e2e.DeployProbe(t, "imagefs-stdin")
+	coldRef := &ateapi.ObjectRef{Atespace: atespace, Name: "probe-no-golden"}
+	cold := proto.CloneOf(tmpl)
+	cold.Metadata = &ateapi.ResourceMetadata{Atespace: coldRef.Atespace, Name: coldRef.Name}
+	cold.Status = nil
+	cold.SnapshotConfig.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}
+	if _, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: cold}); err != nil {
+		t.Fatalf("CreateActorTemplate %q: %v", coldRef.Name, err)
+	}
+	t.Cleanup(func() {
+		_, _ = clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: coldRef})
+	})
+
+	ref := &ateapi.ObjectRef{Atespace: atespace, Name: "imagefs-stdin-actor"}
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
+		ActorTemplate: coldRef,
+	}}); err != nil {
+		t.Fatalf("CreateActor %q: %v", ref.Name, err)
+	}
+	t.Cleanup(func() {
+		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref})
+	})
+
+	rc, err := e2e.NewRouterClient(t, ctx)
+	if err != nil {
+		t.Fatalf("NewRouterClient: %v", err)
+	}
+	defer rc.Close()
+
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
+		t.Fatalf("ResumeActor %q: %v", ref.Name, err)
+	}
+	if got := probeStdin(t, ctx, rc, ref); !got.EOF {
+		t.Errorf("read from stdin = %+v, want EOF", got)
+	}
+}
+
 func probeIdentity(t *testing.T, ctx context.Context, rc *e2e.RouterClient, ref *ateapi.ObjectRef) identityResponse {
 	t.Helper()
 	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: ref.Atespace, Name: ref.Name}, "/identity")
@@ -238,6 +295,24 @@ func probeStat(t *testing.T, ctx context.Context, rc *e2e.RouterClient, ref *ate
 	var out statResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decoding /stat %s: %v", path, err)
+	}
+	return out
+}
+
+func probeStdin(t *testing.T, ctx context.Context, rc *e2e.RouterClient, ref *ateapi.ObjectRef) stdinResponse {
+	t.Helper()
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: ref.Atespace, Name: ref.Name}, "/stdin")
+	if err != nil {
+		t.Fatalf("GET /stdin: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET /stdin: status %d, body %q", resp.StatusCode, body)
+	}
+	var out stdinResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decoding /stdin: %v", err)
 	}
 	return out
 }

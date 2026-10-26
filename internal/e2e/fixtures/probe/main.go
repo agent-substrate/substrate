@@ -167,6 +167,46 @@ func capabilities(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, resp)
 }
 
+// stdinTimeout bounds how long /stdin waits for the read, so a read that blocks
+// is reported as an error.
+const stdinTimeout = 5 * time.Second
+
+// stdinResponse reports what a read from stdin returned.
+type stdinResponse struct {
+	EOF   bool   `json:"eof"`
+	Error string `json:"error,omitempty"`
+}
+
+// stdin reports whether a read from stdin returns EOF.
+func stdin(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), stdinTimeout)
+	defer cancel()
+	writeJSON(w, readStdin(ctx, os.Stdin))
+}
+
+// readStdin reads one byte from r and reports whether the read returned EOF.
+// It gives up when ctx is done and leaves the read goroutine blocked.
+func readStdin(ctx context.Context, r io.Reader) stdinResponse {
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Read(make([]byte, 1))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		switch {
+		case errors.Is(err, io.EOF):
+			return stdinResponse{EOF: true}
+		case err != nil:
+			return stdinResponse{Error: err.Error()}
+		default:
+			return stdinResponse{Error: "read a byte from stdin, want EOF"}
+		}
+	case <-ctx.Done():
+		return stdinResponse{Error: fmt.Sprintf("reading stdin: %v", ctx.Err())}
+	}
+}
+
 // heldIdentity is identityFile opened at startup and held open for the
 // probe's whole life, deliberately violating the read-at-time-of-use
 // guidance. It exists so a snapshot taken after startup carries live guest
@@ -662,6 +702,7 @@ func main() {
 	mux.HandleFunc("/stat", stat)
 	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/capabilities", capabilities)
+	mux.HandleFunc("/stdin", stdin)
 	mux.HandleFunc("/healthz", healthz)
 
 	const addr = ":80"
