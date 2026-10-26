@@ -64,6 +64,10 @@ func Build(dir string) ([]byte, error) {
 // the object they name. docs/guides/operator-install.md lists them. It then
 // builds each Component over a stand-in object, so a missing patch file or an
 // invalid patch fails here rather than partway through a deploy.
+//
+// TODO: let a Component add objects, so cloud providers can install their own
+// extensions. Every deploy path would apply them, and ate-setup delete must
+// remove them.
 func ComponentDirs(dirs []string) ([]string, error) {
 	out := make([]string, 0, len(dirs))
 	for _, dir := range dirs {
