@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -344,14 +345,15 @@ func TestSandboxConfigUpdateRemovingDefaultVersion(t *testing.T) {
 	}
 }
 
-// TestShippedSandboxConfigManifests guards the SandboxConfigs the install ships
-// against the CRD schema and the shipped ValidatingAdmissionPolicy.
+// TestShippedSandboxConfigManifests guards the SandboxConfig templates the
+// install renders against the CRD schema and the shipped
+// ValidatingAdmissionPolicy.
 func TestShippedSandboxConfigManifests(t *testing.T) {
 	ctx := t.Context()
 	applyVAP(t, ctx)
 
 	for _, path := range []string{
-		"../../../../../manifests/ate-install/sandboxconfig-gvisor.yaml",
+		"../../../../../manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl",
 		"../../../../../manifests/microvm/sandboxconfig-microvm.yaml.tmpl",
 	} {
 		t.Run(path, func(t *testing.T) {
@@ -359,13 +361,14 @@ func TestShippedSandboxConfigManifests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read manifest: %v", err)
 			}
-			raw = []byte(strings.NewReplacer("${BUCKET_SCHEME}", "s3", "${BUCKET_NAME}", "test-bucket", "${ASSET_BUCKET_NAME}", "test-bucket").Replace(string(raw)))
+			raw = []byte(strings.NewReplacer("${SANDBOXCONFIG_NAME}", "test-"+filepath.Base(path), "${BUCKET_SCHEME}", "s3", "${ASSET_BUCKET_NAME}", "test-bucket").Replace(string(raw)))
 			sc := &SandboxConfig{}
 			if err := yaml.UnmarshalStrict(raw, sc); err != nil {
 				t.Fatalf("decode manifest: %v", err)
 			}
-			if sc.Annotations[SandboxConfigClassDefaultAnnotation] != "true" {
-				t.Errorf("manifest is not annotated %s=true", SandboxConfigClassDefaultAnnotation)
+			// The installers add the annotation only with --add-default-annotation.
+			if _, ok := sc.Annotations[SandboxConfigClassDefaultAnnotation]; ok {
+				t.Errorf("template sets %s; the installers add it", SandboxConfigClassDefaultAnnotation)
 			}
 			if err := k8sClient.Create(ctx, sc); err != nil {
 				t.Fatalf("Create() unexpected error: %v", err)

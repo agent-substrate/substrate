@@ -14,26 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Install (or delete) the cluster-wide micro-VM (kata + cloud-hypervisor)
-# dependencies. This is opt-in on top of ate-setup deploy ate-system,
-# which only installs the default gVisor SandboxConfig. Used by:
+# Install the cluster-wide micro-VM (kata + cloud-hypervisor) dependencies.
+# This is opt-in on top of ate-setup deploy ate-system, which only installs
+# the gVisor SandboxConfig. Used by:
 #   * hack/run-microvm-demo.sh (before applying the counter-microvm demo)
 #   * benchmarking/automation/orchestrator.py (before deploying a microvm
 #     benchmark workload)
 #
 # On --install: assembles the asset set (assemble.sh; skipped if OUT already
 # has them), stages the assets under kata-assets/ to the cluster's object
-# store bucket (rustfs on kind, GCS on GKE), and applies the cluster-wide
-# `microvm` SandboxConfig referencing those assets. Every asset sha256 is
-# pinned in the manifest, so the apply only substitutes the bucket name.
+# store bucket (rustfs on kind, GCS on GKE), and creates this release's
+# SandboxConfig, substrate-<version>-microvm, from the template. The version
+# is VERSION, else `git describe`, as for the gVisor config `ate-setup`
+# creates. Every asset sha256 is pinned in the template, so the apply only
+# substitutes the name and the bucket. With --add-default-annotation (the
+# default) the config gets the sandboxconfig.ate.dev/is-class-default
+# annotation.
 #
-# On --delete: removes the SandboxConfig from the cluster. The delete is best
-# effort. A SandboxConfig that a WorkerPool uses carries a protection
-# finalizer, which atecontroller releases only once no pool's status names
-# the config. So the script leaves the config in place if any WorkerPool
-# still uses it. Otherwise it waits a bounded time for the finalizer to go.
-# Bucket contents are left alone (they're inert until a SandboxConfig points
-# at them, and re-staging is cheap on next install).
+# Nothing here deletes the configs. Like the gVisor configs, they stay until
+# the SandboxConfig CRD is deleted with the control plane.
 #
 # Like the other hack scripts, this sources .ate-dev-env.sh for the cluster /
 # registry / bucket settings unless NO_DEV_ENV is set.
@@ -49,6 +48,8 @@
 #   OUT              asset dir (default: $PWD/bin/microvm-assets/$ARCH, gitignored).
 #   ATE_INSTALL_KIND "true" for the kind path (stage assets to rustfs); default
 #                    false uploads assets to GCS.
+#   VERSION          (optional) Substrate version in the SandboxConfig name
+#                    (default: git describe).
 
 set -o errexit -o nounset -o pipefail
 
@@ -67,22 +68,25 @@ ATE_INSTALL_KIND="${ATE_INSTALL_KIND:-false}"
 
 usage() {
   cat <<EOF
-Usage: $0 (--install | --delete)
+Usage: $0 --install [--add-default-annotation=true|false]
 
 Options:
-  --install   Assemble + stage micro-VM assets and apply the cluster-wide
-              microvm SandboxConfig.
-  --delete    Remove the microvm SandboxConfig from the cluster.
-              (Bucket contents are left alone.)
-  -h, --help  Show this message.
+  --install                 Assemble + stage micro-VM assets and create this
+                            release's microvm SandboxConfig,
+                            substrate-<version>-microvm.
+  --add-default-annotation  With --install, add the class-default annotation
+                            to the config (default: true).
+  -h, --help                Show this message.
 EOF
 }
 
 action=""
+add_default_annotation=true
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install) action="install" ;;
-    --delete)  action="delete"  ;;
+    --add-default-annotation|--add-default-annotation=true) add_default_annotation=true ;;
+    --add-default-annotation=false) add_default_annotation=false ;;
     -h|--help) usage; exit 0    ;;
     *) echo "Error: unknown argument $1" >&2; usage; exit 1 ;;
   esac
@@ -129,40 +133,67 @@ else
   ASSET_BUCKET_NAME="${BUCKET_NAME}-assets"
 fi
 
-if [[ "${action}" == "delete" ]]; then
-  # A WorkerPool that uses the config holds it. The delete would only mark
-  # the config Terminating, and `kubectl delete` would wait for it without
-  # end. A Terminating config also cannot be recreated under its name. So no
-  # delete is issued at all. The config is left in place and the pools are
-  # named instead. A cluster without the WorkerPool CRD has no users.
-  users="$(run_kubectl get workerpools --all-namespaces \
-    -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.sandboxClasses[*].configRef.name}{"\n"}{end}' 2>/dev/null \
-    | awk '{ for (i = 2; i <= NF; i++) if ($i == "microvm") { print $1; break } }' || true)"
-  if [[ -n "${users}" ]]; then
-    echo "Warning: the microvm SandboxConfig is left in place; these WorkerPools" >&2
-    echo "         still use it:" >&2
-    while IFS= read -r pool; do echo "           ${pool}" >&2; done <<<"${users}"
-    echo "         Delete them, or point their spec.sandboxClasses[].configRef at" >&2
-    echo "         another microvm SandboxConfig, and run this again." >&2
-    exit 0
-  fi
-  log "Deleting microvm SandboxConfig..."
-  # Delete by name rather than by manifest so a missing/edited template file
-  # doesn't block cleanup on an older cluster. atecontroller releases the
-  # protection finalizer within a reconcile. The timeout turns a missing
-  # atecontroller into an error instead of a hang.
-  if ! run_kubectl delete --ignore-not-found --timeout=60s sandboxconfig microvm; then
-    echo "Error: the microvm SandboxConfig did not finish deleting. It stays" >&2
-    echo "       Terminating until atecontroller releases its protection" >&2
-    echo "       finalizer; check that atecontroller is running, then run this" >&2
-    echo "       again." >&2
-    exit 1
-  fi
-  log "Done. (Bucket assets at ${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/ left in place.)"
-  exit 0
-fi
+DEFAULT_ANNOTATION="sandboxconfig.ate.dev/is-class-default"
+
+# One line per microvm SandboxConfig:
+# name|creationTimestamp|default annotation|deletionTimestamp.
+# This fails before the slow assemble and stage if the control plane, and
+# with it the SandboxConfig CRD, is not installed.
+microvm_configs="$(run_kubectl get sandboxconfigs \
+  -o jsonpath='{range .items[?(@.spec.sandboxClass=="microvm")]}{.metadata.name}{"|"}{.metadata.creationTimestamp}{"|"}{.metadata.annotations.sandboxconfig\.ate\.dev/is-class-default}{"|"}{.metadata.deletionTimestamp}{"\n"}{end}')"
 
 # --- install ----------------------------------------------------------------
+
+# Name this release's config the way `ate-setup` names the gVisor one when it
+# builds from source: VERSION, else `git describe`, lower-cased, with every
+# character a name cannot hold replaced by '-'. Checked here so a bad name
+# fails before the stage overwrites the bucket's assets.
+version="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || true)}"
+version="$(tr '[:upper:]' '[:lower:]' <<<"${version:-dev}" | sed 's/[^a-z0-9.-]/-/g')"
+SANDBOXCONFIG_NAME="substrate-${version}-microvm"
+dns_label='[a-z0-9]([-a-z0-9]*[a-z0-9])?'
+if [[ ! "${SANDBOXCONFIG_NAME}" =~ ^${dns_label}(\.${dns_label})*$ || ${#SANDBOXCONFIG_NAME} -gt 253 ]]; then
+  echo "Error: version '${version}' gives the invalid SandboxConfig name ${SANDBOXCONFIG_NAME}." >&2
+  exit 1
+fi
+
+# Check the config before the slow assemble and stage, as
+# `ate-setup deploy sandboxconfig` checks the gVisor one:
+#   * a config of this name must not be being deleted
+#   * with --add-default-annotation, warn when a newer config has the
+#     annotation. The newest one is the class default, so this one would not be.
+#   * without it, warn when no config of the class has the annotation
+# Names compare byte by byte, as atecontroller compares them.
+export LC_ALL=C
+existing_created=""
+newest_name=""
+newest_created=""
+while IFS='|' read -r name created is_default deleting; do
+  [[ -n "${name}" ]] || continue
+  if [[ "${name}" == "${SANDBOXCONFIG_NAME}" ]]; then
+    existing_created="${created}"
+    if [[ -n "${deleting}" ]]; then
+      echo "Error: SandboxConfig ${SANDBOXCONFIG_NAME} is being deleted; wait until it" >&2
+      echo "       is gone, then run this again." >&2
+      exit 1
+    fi
+  fi
+  [[ "${is_default}" == "true" && -z "${deleting}" ]] || continue
+  # RFC 3339 timestamps in UTC sort as strings.
+  if [[ -z "${newest_name}" || "${created}" > "${newest_created}" ]] ||
+    [[ "${created}" == "${newest_created}" && "${name}" < "${newest_name}" ]]; then
+    newest_name="${name}"
+    newest_created="${created}"
+  fi
+done <<<"${microvm_configs}"
+warning=""
+if [[ "${add_default_annotation}" == "false" && -z "${newest_name}" ]]; then
+  warning="no microvm SandboxConfig has the ${DEFAULT_ANNOTATION} annotation, so microvm WorkerPools without a configRef resolve no config."
+elif [[ "${add_default_annotation}" == "true" && -n "${existing_created}" && -n "${newest_name}" && "${newest_name}" != "${SANDBOXCONFIG_NAME}" ]] &&
+  { [[ "${newest_created}" > "${existing_created}" ]] ||
+    [[ "${newest_created}" == "${existing_created}" && "${newest_name}" < "${SANDBOXCONFIG_NAME}" ]]; }; then
+  warning="SandboxConfig ${SANDBOXCONFIG_NAME} has the ${DEFAULT_ANNOTATION} annotation but is not the microvm class default, because ${newest_name} is newer."
+fi
 
 # Target arch: match the images' platform (KO_DEFAULTPLATFORMS is set by
 # .ate-dev-env.sh on GKE and by the kind wrapper); fall back to the host arch.
@@ -215,14 +246,23 @@ else
   OUT="${OUT}" BUCKET="${ASSET_BUCKET_NAME}" hack/microvm-assets/stage-to-gcs.sh
 fi
 
-# --- 3. apply the cluster-wide microvm SandboxConfig -----------------------
+# --- 3. create this release's microvm SandboxConfig -------------------------
 # Every asset is downloaded rather than built, so all four carry committed,
-# reproducible per-arch shas and the bucket's scheme and name are the only
-# substitutions left.
-log "Applying microvm SandboxConfig from ${MANIFEST_TEMPLATE}..."
-sed -e "s|\${BUCKET_SCHEME}|${BUCKET_SCHEME}|g" \
+# reproducible per-arch shas and the name and the bucket's scheme and name are
+# the only substitutions left.
+log "Applying SandboxConfig ${SANDBOXCONFIG_NAME} from ${MANIFEST_TEMPLATE}..."
+sed -e "s|\${SANDBOXCONFIG_NAME}|${SANDBOXCONFIG_NAME}|g" \
+    -e "s|\${BUCKET_SCHEME}|${BUCKET_SCHEME}|g" \
     -e "s|\${ASSET_BUCKET_NAME}|${ASSET_BUCKET_NAME}|g" \
     "${MANIFEST_TEMPLATE}" \
   | run_kubectl apply -f -
 
-log "Done. Installed cluster-wide microvm SandboxConfig."
+# Annotated outside the template, so a later apply of the template leaves the
+# annotation in place.
+if [[ "${add_default_annotation}" == "true" ]]; then
+  run_kubectl annotate --overwrite sandboxconfig "${SANDBOXCONFIG_NAME}" "${DEFAULT_ANNOTATION}=true"
+fi
+if [[ -n "${warning}" ]]; then
+  echo "Warning: ${warning}" >&2
+fi
+log "Done. Installed SandboxConfig ${SANDBOXCONFIG_NAME}."

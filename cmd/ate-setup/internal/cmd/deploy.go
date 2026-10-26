@@ -84,6 +84,9 @@ Shape the install with the global --atenet-dataplane, --cluster-size,
 		if err != nil {
 			return err
 		}
+		if opts.AddSandboxConfigDefaultAnnotation, err = cmd.Flags().GetBool(addDefaultAnnotationFlag); err != nil {
+			return err
+		}
 		return env.DeployAteSystem(cmd.Context(), opts)
 	},
 }
@@ -136,12 +139,31 @@ var deployPodCertControllerCmd = &cobra.Command{
 	},
 }
 
+// addDefaultAnnotationFlag names the flag that adds the class-default
+// annotation to the release's gVisor SandboxConfig. It is a plain flag rather
+// than a recorded setting: each run decides it anew.
+const addDefaultAnnotationFlag = "add-default-annotation"
+
+const addDefaultAnnotationUsage = "Add the sandboxconfig.ate.dev/is-class-default annotation to this release's gVisor SandboxConfig"
+
 var deploySandboxConfigCmd = &cobra.Command{
 	Use:   "sandboxconfig",
-	Short: "Deploy the SandboxConfig admission policy and the default gVisor SandboxConfig only",
-	Args:  cobra.NoArgs,
+	Short: "Deploy the SandboxConfig admission policy and this release's gVisor SandboxConfig only",
+	Long: `Deploy the SandboxConfig admission policy and this release's gVisor
+SandboxConfig, substrate-<version>-gvisor, rendered from
+manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl.
+
+With --add-default-annotation (the default) the config gets the
+sandboxconfig.ate.dev/is-class-default annotation. Every gVisor WorkerPool
+without a configRef follows the newest config with the annotation, so a
+warning names a newer one if it exists.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.DeploySandboxConfig(cmd.Context())
+		addDefaultAnnotation, err := cmd.Flags().GetBool(addDefaultAnnotationFlag)
+		if err != nil {
+			return err
+		}
+		return env.DeploySandboxConfig(cmd.Context(), addDefaultAnnotation)
 	},
 }
 
@@ -181,4 +203,6 @@ func init() {
 	})
 	config.BindCommandFlags(deployAteSystemPath, deployAteSystemCmd.Flags())
 	deployAteSystemCmd.Flags().Lookup("setup-csi").NoOptDefVal = "none"
+	deployAteSystemCmd.Flags().Bool(addDefaultAnnotationFlag, true, addDefaultAnnotationUsage)
+	deploySandboxConfigCmd.Flags().Bool(addDefaultAnnotationFlag, true, addDefaultAnnotationUsage)
 }

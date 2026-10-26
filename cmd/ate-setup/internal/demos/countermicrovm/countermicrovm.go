@@ -14,7 +14,7 @@
 
 // Package countermicrovm installs the micro-VM variant of the counter demo.
 //
-// It needs the cluster-wide `microvm` SandboxConfig that
+// It needs the microvm class default SandboxConfig that
 // hack/install-microvm-deps.sh --install creates. It has no external-volume
 // option: the CSI path is covered by demo-counter.
 package countermicrovm

@@ -43,6 +43,9 @@ type DeployOptions struct {
 	// SetupCSI additionally installs the CSI driver (nfs, hostpath, both, none).
 	// Kind only. The hostpath driver is Kind only.
 	SetupCSI string
+	// AddSandboxConfigDefaultAnnotation adds the class-default annotation to
+	// the release's gVisor SandboxConfig. See DeploySandboxConfig.
+	AddSandboxConfigDefaultAnnotation bool
 }
 
 // Validate checks the options that can be checked without configuration or a
@@ -86,6 +89,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.requireNoWorkerPods(ctx); err != nil {
 		return err
 	}
+	// DeploySandboxConfig checks the config again partway through. Checking
+	// here keeps a refusal from leaving a half-upgraded system.
+	if _, _, err := e.checkSandboxConfig(ctx, opts.AddSandboxConfigDefaultAnnotation); err != nil {
+		return err
+	}
 
 	// The namespace has to exist before RBAC or CRDs are applied.
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
@@ -112,7 +120,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	if err := e.DeploySandboxConfig(ctx); err != nil {
+	if err := e.DeploySandboxConfig(ctx, opts.AddSandboxConfigDefaultAnnotation); err != nil {
 		return err
 	}
 
@@ -579,26 +587,6 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// DeploySandboxConfig applies the SandboxConfig admission policy, then the
-// default gVisor SandboxConfig.
-func (e *Env) DeploySandboxConfig(ctx context.Context) error {
-	log.Step("deploy_sandboxconfig")
-
-	if err := e.EnsureCRDs(ctx); err != nil {
-		return err
-	}
-
-	// Enforce per-class SandboxConfig asset requirements. This is applied
-	// before any SandboxConfig so the config below is validated too.
-	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
-		return err
-	}
-
-	// Install the cluster-wide default gVisor SandboxConfig that gVisor
-	// WorkerPools resolve by default unless they pin their own configRef.
-	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
 }
 
 // EnsureCRDs creates the generated CRDs that are missing. Existing CRDs and

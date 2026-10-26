@@ -12,26 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Cluster-wide SandboxConfig for the gVisor (runsc) sandbox class, shipped with
-# the platform as the class default so gVisor WorkerPools resolve it unless
-# they pin a specific configRef. atelet fetches the gVisor release tarball
-# (gvisor.tar.zstd: runsc plus the gvisor-bin/ helpers runsc requires next to
-# it) matching the worker node's architecture and extracts it locally. To pin a
-# different release, add a version below and point defaultVersion at it, or
-# create another SandboxConfig and reference it from the WorkerPool.
+# Template for the gVisor (runsc) SandboxConfig each Substrate release
+# installs. `ate-setup deploy sandboxconfig` and `deploy ate-system` create
+# substrate-<release>-gvisor from it, and by default annotate it as the class
+# default. Editing this file changes only the configs that later releases
+# create, and a rerun of the same release updates its own config.
 #
-# A bump adds a version and points defaultVersion at it. Keep the
-# previous version unless it has a known vulnerability: an actor restores its
-# memory only on the version its snapshot was taken with.
+# atelet fetches the gVisor release tarball (gvisor.tar.zstd: runsc plus the
+# gvisor-bin/ helpers runsc requires next to it) matching the worker node's
+# architecture and extracts it locally.
+#
+# To change the sandbox, add a new version and point defaultVersion at it.
+# Do not edit or remove the versions already listed. An actor restores its
+# memory only on a version with the same assets as the one its snapshot was
+# taken on, so dropping that version makes the actor cold boot and lose its
+# memory. Remove a version only when it has a known vulnerability, or to make
+# room under the limit of 16 versions.
 apiVersion: ate.dev/v1
 kind: SandboxConfig
 metadata:
-  name: gvisor-default
-  annotations:
-    sandboxconfig.ate.dev/is-class-default: "true"
+  name: ${SANDBOXCONFIG_NAME}
 spec:
   sandboxClass: gvisor
-  defaultVersion: v6
+  defaultVersion: gvisor-6
   versions:
   # gVisor release 20261026.0. ateworker-gvisor saves container rootfs overlays
   # (rootfs/) and durable-dir volumes (fs/) as separate checkpoint bundles. That
@@ -39,7 +42,7 @@ spec:
   # ateworker-gvisor also runs the sandbox with no root container
   # (google/gvisor#15551). This release's restore picks each container's init
   # process correctly in such a sandbox (google/gvisor@29b97c66d945).
-  - name: v6
+  - name: gvisor-6
     state: Enabled
     assets:
       amd64:

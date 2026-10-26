@@ -70,9 +70,9 @@ func (e *Env) DeployBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	}
 	log.Stepf("deploy_benchmarks (worker_count=%d, sandbox_class=%s)", opts.WorkerCount, opts.SandboxClass)
 
-	// The microvm SandboxConfig lives outside the default set installed by
-	// `deploy ate-system`, which only installs gvisor-default. The workloads
-	// deploy references it by name and would fail if this were skipped.
+	// `deploy ate-system` installs only the gVisor SandboxConfig. The
+	// microvm workload pool follows the microvm class default and would not
+	// resolve if this were skipped.
 	if opts.SandboxClass == config.SandboxClassMicrovm {
 		if err := e.runScript(ctx, installMicrovmDepScript, "--install"); err != nil {
 			return err
@@ -110,17 +110,9 @@ func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	}
 	log.Stepf("delete_benchmarks (sandbox_class=%s)", opts.SandboxClass)
 
-	if err := e.runScript(ctx, deployLocustScript, "--delete"); err != nil {
-		return err
-	}
-	// The microvm SandboxConfig is cluster-wide. It is only torn down when
-	// the caller opted into microvm, and only after the benchmark pool is
-	// gone. The script leaves it in place if another pool still uses it.
-	// `delete all` tries again once every demo is gone.
-	if opts.SandboxClass == config.SandboxClassMicrovm {
-		return e.runScript(ctx, installMicrovmDepScript, "--delete")
-	}
-	return nil
+	// The microvm SandboxConfigs stay. They are cluster-wide and go with the
+	// SandboxConfig CRD when the control plane is deleted.
+	return e.runScript(ctx, deployLocustScript, "--delete")
 }
 
 // runScript executes a repository script from the repository root with the
