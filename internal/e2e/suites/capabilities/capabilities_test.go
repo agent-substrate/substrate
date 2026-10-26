@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"testing"
 
@@ -47,7 +48,8 @@ type capabilitiesResponse struct {
 // securityContext.capabilities is actually in force inside the sandbox, as the
 // kernel reports it — not merely present in the OCI spec atelet writes. atelet
 // does not spawn containers, so the spec being right and the sandbox applying
-// it are separate claims; only this test covers the second.
+// it are separate claims; only this test covers the second. It also checks
+// that uid 0 cannot write /proc/sys.
 //
 // It runs against whichever sandbox class E2E_SANDBOX_CLASS selects, so CI
 // covers both gvisor and micro-VM from one suite.
@@ -122,6 +124,13 @@ func TestActorCapabilities(t *testing.T) {
 			if got.NoNewPrivs {
 				t.Error("no_new_privs = 1, want 0")
 			}
+
+			// uid 0 must not write /proc/sys. gVisor's procfs makes this file
+			// 0444. On microVM the container is root in the guest kernel, so
+			// this relies on the read-only path.
+			if msg := probeWriteFile(t, ctx, rc, namespace, actor, "/proc/sys/kernel/domainname"); msg == "" {
+				t.Error("writing /proc/sys/kernel/domainname succeeded, want an error")
+			}
 		})
 	}
 }
@@ -191,4 +200,23 @@ func probeCapabilities(t *testing.T, ctx context.Context, rc *e2e.RouterClient, 
 		t.Fatalf("decoding /capabilities for %q: %v", id, err)
 	}
 	return out
+}
+
+// probeWriteFile asks the probe to write path and returns the error it reports.
+func probeWriteFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, namespace, id, path string) string {
+	t.Helper()
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: namespace, Name: id}, "/writefile?path="+url.QueryEscape(path))
+	if err != nil {
+		t.Fatalf("GET /writefile for %q: %v", id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET /writefile for %q: status %d, body %q", id, resp.StatusCode, body)
+	}
+	var out map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decoding /writefile for %q: %v", id, err)
+	}
+	return out["error"]
 }
