@@ -14,7 +14,7 @@
 
 // Package egressmicrovm installs the micro-VM variant of the egress demo.
 //
-// It needs the microvm class default SandboxConfig that
+// It needs the microVM class default SandboxConfig that
 // hack/install-microvm-deps.sh --install creates. It is a demo of its own
 // rather than a flag on demo-egress so that it appears in help and in the
 // `delete all` sweep, and so that both can be installed side by side: the

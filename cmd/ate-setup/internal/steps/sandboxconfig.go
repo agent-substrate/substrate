@@ -22,7 +22,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -51,7 +50,7 @@ func (e *Env) DeploySandboxConfig(ctx context.Context, addDefaultAnnotation bool
 		return err
 	}
 
-	name, warning, err := e.checkSandboxConfig(ctx, addDefaultAnnotation)
+	name, err := e.checkSandboxConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -79,35 +78,54 @@ func (e *Env) DeploySandboxConfig(ctx context.Context, addDefaultAnnotation bool
 		}
 		log.Infof("annotated SandboxConfig %s %s=true", name, atev1.SandboxConfigClassDefaultAnnotation)
 	}
+	// Checked after the apply, against the config's real creation time and
+	// annotations.
+	configs, err := e.listSandboxConfigs(ctx)
+	if err != nil {
+		return err
+	}
+	warning, err := checkClassDefault(configs, name, atev1.SandboxClassGvisor)
 	if warning != "" {
 		log.Warnf("%s", warning)
 	}
-	return nil
+	return err
 }
 
-// checkSandboxConfig returns the name of this release's gVisor SandboxConfig
-// and checkClassDefault's result for applying it with addDefaultAnnotation. A
-// cluster without the SandboxConfig CRD has no configs.
-func (e *Env) checkSandboxConfig(ctx context.Context, addDefaultAnnotation bool) (name, warning string, err error) {
+// checkSandboxConfig returns the name of this release's gVisor SandboxConfig.
+// It fails when checkClassDefault does.
+func (e *Env) checkSandboxConfig(ctx context.Context) (string, error) {
 	class := atev1.SandboxClassGvisor
-	name, err = sandboxConfigName(e.SubstrateVersion(), class)
+	name, err := sandboxConfigName(e.SubstrateVersion(), class)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
+	configs, err := e.listSandboxConfigs(ctx)
+	if err != nil {
+		return "", err
+	}
+	// The warning is about the cluster before the apply.
+	if _, err := checkClassDefault(configs, name, class); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// listSandboxConfigs returns the SandboxConfigs in the cluster. A cluster
+// without the SandboxConfig CRD has none.
+func (e *Env) listSandboxConfigs(ctx context.Context) ([]atev1.SandboxConfig, error) {
 	list, err := e.sandboxConfigs().List(ctx, metav1.ListOptions{})
 	if apierrors.IsNotFound(err) {
-		list = &unstructured.UnstructuredList{}
+		return nil, nil
 	} else if err != nil {
-		return "", "", fmt.Errorf("while listing SandboxConfigs: %w", err)
+		return nil, fmt.Errorf("while listing SandboxConfigs: %w", err)
 	}
 	configs := make([]atev1.SandboxConfig, len(list.Items))
 	for i := range list.Items {
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(list.Items[i].Object, &configs[i]); err != nil {
-			return "", "", fmt.Errorf("while decoding SandboxConfig %s: %w", list.Items[i].GetName(), err)
+			return nil, fmt.Errorf("while decoding SandboxConfig %s: %w", list.Items[i].GetName(), err)
 		}
 	}
-	warning, err = checkClassDefault(configs, name, class, addDefaultAnnotation)
-	return name, warning, err
+	return configs, nil
 }
 
 func (e *Env) sandboxConfigs() dynamic.ResourceInterface {
@@ -134,17 +152,17 @@ func sandboxConfigName(version string, class atev1.SandboxClass) (string, error)
 	return name, nil
 }
 
-// checkClassDefault checks applying the SandboxConfig named name, of class,
-// with addDefaultAnnotation. configs are the SandboxConfigs in the cluster.
+// checkClassDefault checks the SandboxConfig named name, of class. configs
+// are the SandboxConfigs in the cluster.
 //
-//   - It returns an error when a config named name is being deleted. Applying
-//     it would only update the terminating object.
-//   - It warns when the config gets the annotation but is not the class
-//     default afterwards, because a newer default exists. That happens when
-//     an older release's config is applied again.
-//   - It warns when the config does not get the annotation and the class has
-//     no default, so pools of the class without a configRef resolve none.
-func checkClassDefault(configs []atev1.SandboxConfig, name string, class atev1.SandboxClass, addDefaultAnnotation bool) (string, error) {
+//   - It returns an error when the config is being deleted. Applying it would
+//     only update the terminating object.
+//   - It warns when the config has the class-default annotation but is not
+//     the class default, because a newer default exists. That happens when an
+//     older release's config is applied again.
+//   - It warns when the class has no default, so pools of the class without a
+//     configRef resolve none.
+func checkClassDefault(configs []atev1.SandboxConfig, name string, class atev1.SandboxClass) (string, error) {
 	var existing, newest *atev1.SandboxConfig
 	for i := range configs {
 		sc := &configs[i]
@@ -159,14 +177,11 @@ func checkClassDefault(configs []atev1.SandboxConfig, name string, class atev1.S
 	if existing != nil && !existing.DeletionTimestamp.IsZero() {
 		return "", fmt.Errorf("SandboxConfig %s is being deleted; wait until it is gone, then run this again", name)
 	}
-	if !addDefaultAnnotation {
-		if newest == nil {
-			return fmt.Sprintf("no SandboxConfig of sandbox class %q has the %s annotation, so WorkerPools of the class without a configRef resolve no config",
-				class, atev1.SandboxConfigClassDefaultAnnotation), nil
-		}
-		return "", nil
+	if newest == nil {
+		return fmt.Sprintf("no SandboxConfig of sandbox class %q has the %s annotation, so WorkerPools of the class without a configRef resolve no config",
+			class, atev1.SandboxConfigClassDefaultAnnotation), nil
 	}
-	if existing != nil && newest != nil && newest.Name != name && newerSandboxConfig(newest, existing) {
+	if existing != nil && existing.Annotations[atev1.SandboxConfigClassDefaultAnnotation] == "true" && newest.Name != name {
 		return fmt.Sprintf("SandboxConfig %s has the %s annotation but is not the %s class default, because %s is newer",
 			name, atev1.SandboxConfigClassDefaultAnnotation, class, newest.Name), nil
 	}

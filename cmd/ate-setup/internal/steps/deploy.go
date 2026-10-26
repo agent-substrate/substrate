@@ -91,7 +91,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	}
 	// DeploySandboxConfig checks the config again partway through. Checking
 	// here keeps a refusal from leaving a half-upgraded system.
-	if _, _, err := e.checkSandboxConfig(ctx, opts.AddSandboxConfigDefaultAnnotation); err != nil {
+	if _, err := e.checkSandboxConfig(ctx); err != nil {
 		return err
 	}
 

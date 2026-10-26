@@ -20,7 +20,7 @@
 #
 # Composes:
 #   1. ate-setup deploy ate-system              (control plane)
-#   2. hack/install-microvm-deps.sh --install   (asset build/stage + the microvm
+#   2. hack/install-microvm-deps.sh --install   (asset build/stage + the microVM
 #                                                class default SandboxConfig)
 #   3. Deploy the counter-microvm demo (worker pool manifest, atespace, and
 #      ActorTemplate through the ate API).

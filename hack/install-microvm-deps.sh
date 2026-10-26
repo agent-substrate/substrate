@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Install the cluster-wide micro-VM (kata + cloud-hypervisor) dependencies.
+# Install the cluster-wide microVM (kata + cloud-hypervisor) dependencies.
 # This is opt-in on top of ate-setup deploy ate-system, which only installs
 # the gVisor SandboxConfig. Used by:
 #   * hack/run-microvm-demo.sh (before applying the counter-microvm demo)
@@ -71,8 +71,8 @@ usage() {
 Usage: $0 --install [--add-default-annotation=true|false]
 
 Options:
-  --install                 Assemble + stage micro-VM assets and create this
-                            release's microvm SandboxConfig,
+  --install                 Assemble + stage microVM assets and create this
+                            release's microVM SandboxConfig,
                             substrate-<version>-microvm.
   --add-default-annotation  With --install, add the class-default annotation
                             to the config (default: true).
@@ -135,12 +135,16 @@ fi
 
 DEFAULT_ANNOTATION="sandboxconfig.ate.dev/is-class-default"
 
-# One line per microvm SandboxConfig:
+# Prints one line per microVM SandboxConfig:
 # name|creationTimestamp|default annotation|deletionTimestamp.
+get_microvm_configs() {
+  run_kubectl get sandboxconfigs \
+    -o jsonpath='{range .items[?(@.spec.sandboxClass=="microvm")]}{.metadata.name}{"|"}{.metadata.creationTimestamp}{"|"}{.metadata.annotations.sandboxconfig\.ate\.dev/is-class-default}{"|"}{.metadata.deletionTimestamp}{"\n"}{end}'
+}
+
 # This fails before the slow assemble and stage if the control plane, and
 # with it the SandboxConfig CRD, is not installed.
-microvm_configs="$(run_kubectl get sandboxconfigs \
-  -o jsonpath='{range .items[?(@.spec.sandboxClass=="microvm")]}{.metadata.name}{"|"}{.metadata.creationTimestamp}{"|"}{.metadata.annotations.sandboxconfig\.ate\.dev/is-class-default}{"|"}{.metadata.deletionTimestamp}{"\n"}{end}')"
+microvm_configs="$(get_microvm_configs)"
 
 # --- install ----------------------------------------------------------------
 
@@ -157,43 +161,45 @@ if [[ ! "${SANDBOXCONFIG_NAME}" =~ ^${dns_label}(\.${dns_label})*$ || ${#SANDBOX
   exit 1
 fi
 
-# Check the config before the slow assemble and stage, as
-# `ate-setup deploy sandboxconfig` checks the gVisor one:
-#   * a config of this name must not be being deleted
-#   * with --add-default-annotation, warn when a newer config has the
-#     annotation. The newest one is the class default, so this one would not be.
-#   * without it, warn when no config of the class has the annotation
+# check_configs checks this release's config against the microVM configs in
+# $1, as `ate-setup deploy sandboxconfig` checks the gVisor one:
+#   * it exits when the config is being deleted
+#   * it sets warning when the config has the annotation but a newer config
+#     has it too. The newest one is the class default, so this one is not.
+#   * it sets warning when no config of the class has the annotation
 # Names compare byte by byte, as atecontroller compares them.
-export LC_ALL=C
-existing_created=""
-newest_name=""
-newest_created=""
-while IFS='|' read -r name created is_default deleting; do
-  [[ -n "${name}" ]] || continue
-  if [[ "${name}" == "${SANDBOXCONFIG_NAME}" ]]; then
-    existing_created="${created}"
-    if [[ -n "${deleting}" ]]; then
-      echo "Error: SandboxConfig ${SANDBOXCONFIG_NAME} is being deleted; wait until it" >&2
-      echo "       is gone, then run this again." >&2
-      exit 1
+check_configs() {
+  local name created is_default deleting
+  local existing_default="" newest_name="" newest_created=""
+  while IFS='|' read -r name created is_default deleting; do
+    [[ -n "${name}" ]] || continue
+    if [[ "${name}" == "${SANDBOXCONFIG_NAME}" ]]; then
+      existing_default="${is_default}"
+      if [[ -n "${deleting}" ]]; then
+        echo "Error: SandboxConfig ${SANDBOXCONFIG_NAME} is being deleted; wait until it" >&2
+        echo "       is gone, then run this again." >&2
+        exit 1
+      fi
     fi
+    [[ "${is_default}" == "true" && -z "${deleting}" ]] || continue
+    # RFC 3339 timestamps in UTC sort as strings.
+    if [[ -z "${newest_name}" || "${created}" > "${newest_created}" ]] ||
+      [[ "${created}" == "${newest_created}" && "${name}" < "${newest_name}" ]]; then
+      newest_name="${name}"
+      newest_created="${created}"
+    fi
+  done <<<"$1"
+  warning=""
+  if [[ -z "${newest_name}" ]]; then
+    warning="no microVM SandboxConfig has the ${DEFAULT_ANNOTATION} annotation, so microVM WorkerPools without a configRef resolve no config."
+  elif [[ "${existing_default}" == "true" && "${newest_name}" != "${SANDBOXCONFIG_NAME}" ]]; then
+    warning="SandboxConfig ${SANDBOXCONFIG_NAME} has the ${DEFAULT_ANNOTATION} annotation but is not the microVM class default, because ${newest_name} is newer."
   fi
-  [[ "${is_default}" == "true" && -z "${deleting}" ]] || continue
-  # RFC 3339 timestamps in UTC sort as strings.
-  if [[ -z "${newest_name}" || "${created}" > "${newest_created}" ]] ||
-    [[ "${created}" == "${newest_created}" && "${name}" < "${newest_name}" ]]; then
-    newest_name="${name}"
-    newest_created="${created}"
-  fi
-done <<<"${microvm_configs}"
-warning=""
-if [[ "${add_default_annotation}" == "false" && -z "${newest_name}" ]]; then
-  warning="no microvm SandboxConfig has the ${DEFAULT_ANNOTATION} annotation, so microvm WorkerPools without a configRef resolve no config."
-elif [[ "${add_default_annotation}" == "true" && -n "${existing_created}" && -n "${newest_name}" && "${newest_name}" != "${SANDBOXCONFIG_NAME}" ]] &&
-  { [[ "${newest_created}" > "${existing_created}" ]] ||
-    [[ "${newest_created}" == "${existing_created}" && "${newest_name}" < "${SANDBOXCONFIG_NAME}" ]]; }; then
-  warning="SandboxConfig ${SANDBOXCONFIG_NAME} has the ${DEFAULT_ANNOTATION} annotation but is not the microvm class default, because ${newest_name} is newer."
-fi
+}
+export LC_ALL=C
+# Checked before the slow assemble and stage. The warning is about the
+# cluster before the apply.
+check_configs "${microvm_configs}"
 
 # Target arch: match the images' platform (KO_DEFAULTPLATFORMS is set by
 # .ate-dev-env.sh on GKE and by the kind wrapper); fall back to the host arch.
@@ -246,7 +252,7 @@ else
   OUT="${OUT}" BUCKET="${ASSET_BUCKET_NAME}" hack/microvm-assets/stage-to-gcs.sh
 fi
 
-# --- 3. create this release's microvm SandboxConfig -------------------------
+# --- 3. create this release's microVM SandboxConfig -------------------------
 # Every asset is downloaded rather than built, so all four carry committed,
 # reproducible per-arch shas and the name and the bucket's scheme and name are
 # the only substitutions left.
@@ -262,6 +268,9 @@ sed -e "s|\${SANDBOXCONFIG_NAME}|${SANDBOXCONFIG_NAME}|g" \
 if [[ "${add_default_annotation}" == "true" ]]; then
   run_kubectl annotate --overwrite sandboxconfig "${SANDBOXCONFIG_NAME}" "${DEFAULT_ANNOTATION}=true"
 fi
+# Checked again against the config's real creation time and annotations.
+microvm_configs="$(get_microvm_configs)"
+check_configs "${microvm_configs}"
 if [[ -n "${warning}" ]]; then
   echo "Warning: ${warning}" >&2
 fi

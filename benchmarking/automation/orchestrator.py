@@ -421,8 +421,8 @@ def teardown_substrate() -> None:
 
 
 def install_microvm_deps() -> None:
-    """Stage kata/cloud-hypervisor assets and create this release's microvm
-    SandboxConfig as the class default. Required before a microvm WorkerPool
+    """Stage kata/cloud-hypervisor assets and create this release's microVM
+    SandboxConfig as the class default. Required before a microVM WorkerPool
     can run actors; must run after deploy_substrate() (which installs the
     CRDs)."""
     run(["hack/install-microvm-deps.sh", "--install"])
@@ -627,7 +627,7 @@ def main() -> None:
             # state behind) would otherwise leak its substrate + workloads
             # into this run. All teardowns use --ignore-not-found, so
             # this is cheap on a clean cluster. teardown_substrate also
-            # removes the microvm SandboxConfigs with their CRD.
+            # removes the microVM SandboxConfigs with their CRD.
             teardown_workloads()
             teardown_substrate()
 

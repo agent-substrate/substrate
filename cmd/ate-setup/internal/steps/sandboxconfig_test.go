@@ -69,91 +69,100 @@ func TestCheckClassDefault(t *testing.T) {
 	gvisor, microvm := atev1.SandboxClassGvisor, atev1.SandboxClassMicroVM
 
 	tests := []struct {
-		name                 string
-		configs              []atev1.SandboxConfig
-		addDefaultAnnotation bool
+		name    string
+		configs []atev1.SandboxConfig
 		// wantWarning is a substring of the warning, empty for none.
 		wantWarning string
 		wantErr     bool
 	}{
 		{
-			name:                 "fresh cluster, annotated",
-			addDefaultAnnotation: true,
-		},
-		{
-			name:        "fresh cluster, not annotated",
+			name:        "fresh cluster",
 			wantWarning: "no SandboxConfig",
 		},
 		{
-			name:    "not annotated with an existing default",
-			configs: []atev1.SandboxConfig{config("substrate-v1-gvisor", gvisor, t0, true, false)},
+			name:    "the only config, annotated",
+			configs: []atev1.SandboxConfig{config(name, gvisor, t0, true, false)},
 		},
 		{
-			name:        "not annotated when only another class has a default",
-			configs:     []atev1.SandboxConfig{config("substrate-v1-microvm", microvm, t0, true, false)},
+			name:        "the only config, not annotated",
+			configs:     []atev1.SandboxConfig{config(name, gvisor, t0, false, false)},
 			wantWarning: "no SandboxConfig",
 		},
 		{
-			name:        "not annotated when the only default is being deleted",
-			configs:     []atev1.SandboxConfig{config("substrate-v1-gvisor", gvisor, t0, true, true)},
+			name: "not annotated with an existing default",
+			configs: []atev1.SandboxConfig{
+				config("substrate-v1-gvisor", gvisor, t0, true, false),
+				config(name, gvisor, t0.Add(time.Hour), false, false),
+			},
+		},
+		{
+			name: "not annotated when only another class has a default",
+			configs: []atev1.SandboxConfig{
+				config("substrate-v1-microvm", microvm, t0, true, false),
+				config(name, gvisor, t0.Add(time.Hour), false, false),
+			},
 			wantWarning: "no SandboxConfig",
 		},
 		{
-			name:                 "new config annotated over an older default",
-			configs:              []atev1.SandboxConfig{config("substrate-v1-gvisor", gvisor, t0, true, false)},
-			addDefaultAnnotation: true,
+			name: "not annotated when the only default is being deleted",
+			configs: []atev1.SandboxConfig{
+				config("substrate-v1-gvisor", gvisor, t0, true, true),
+				config(name, gvisor, t0.Add(time.Hour), false, false),
+			},
+			wantWarning: "no SandboxConfig",
 		},
 		{
-			name: "rerun on the config that is already the newest default",
+			name: "annotated over an older default",
 			configs: []atev1.SandboxConfig{
 				config("substrate-v1-gvisor", gvisor, t0, true, false),
 				config(name, gvisor, t0.Add(time.Hour), true, false),
 			},
-			addDefaultAnnotation: true,
 		},
 		{
-			name: "existing config older than the newest of two newer defaults",
+			name: "annotated, older than the newest of two newer defaults",
 			configs: []atev1.SandboxConfig{
-				config(name, gvisor, t0, false, false),
+				config(name, gvisor, t0, true, false),
 				config("substrate-v3-gvisor", gvisor, t0.Add(time.Hour), true, false),
 				config("substrate-v4-gvisor", gvisor, t0.Add(2*time.Hour), true, false),
 			},
-			addDefaultAnnotation: true,
-			wantWarning:          "because substrate-v4-gvisor is newer",
+			wantWarning: "because substrate-v4-gvisor is newer",
 		},
 		{
-			name: "existing config created with the current default, which has the smaller name",
+			name: "annotated, created in the same second as a default with a smaller name",
 			configs: []atev1.SandboxConfig{
-				config(name, gvisor, t0, false, false),
 				config("substrate-v1-gvisor", gvisor, t0, true, false),
+				config(name, gvisor, t0, true, false),
 			},
-			addDefaultAnnotation: true,
-			wantWarning:          "because substrate-v1-gvisor is newer",
+			wantWarning: "because substrate-v1-gvisor is newer",
 		},
 		{
-			name: "existing config older than a newer default being deleted",
+			name: "not annotated, older than a newer default",
 			configs: []atev1.SandboxConfig{
 				config(name, gvisor, t0, false, false),
+				config("substrate-v3-gvisor", gvisor, t0.Add(time.Hour), true, false),
+			},
+		},
+		{
+			name: "annotated, older than a newer default being deleted",
+			configs: []atev1.SandboxConfig{
+				config(name, gvisor, t0, true, false),
 				config("substrate-v3-gvisor", gvisor, t0.Add(time.Hour), true, true),
 			},
-			addDefaultAnnotation: true,
 		},
 		{
-			name: "existing config older than a newer default of another class",
+			name: "annotated, older than a newer default of another class",
 			configs: []atev1.SandboxConfig{
-				config(name, gvisor, t0, false, false),
+				config(name, gvisor, t0, true, false),
 				config("substrate-v3-microvm", microvm, t0.Add(time.Hour), true, false),
 			},
-			addDefaultAnnotation: true,
 		},
 		{
-			name:                 "existing config being deleted, annotated",
-			configs:              []atev1.SandboxConfig{config(name, gvisor, t0, true, true)},
-			addDefaultAnnotation: true,
-			wantErr:              true,
+			name:    "being deleted, annotated",
+			configs: []atev1.SandboxConfig{config(name, gvisor, t0, true, true)},
+			wantErr: true,
 		},
 		{
-			name: "existing config being deleted, not annotated",
+			name: "being deleted, not annotated",
 			configs: []atev1.SandboxConfig{
 				config("substrate-v1-gvisor", gvisor, t0, true, false),
 				config(name, gvisor, t0.Add(time.Hour), false, true),
@@ -163,7 +172,7 @@ func TestCheckClassDefault(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			warning, err := checkClassDefault(tt.configs, name, gvisor, tt.addDefaultAnnotation)
+			warning, err := checkClassDefault(tt.configs, name, gvisor)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("checkClassDefault() error = %v, wantErr %v", err, tt.wantErr)
 			}

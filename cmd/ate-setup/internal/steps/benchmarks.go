@@ -71,7 +71,7 @@ func (e *Env) DeployBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	log.Stepf("deploy_benchmarks (worker_count=%d, sandbox_class=%s)", opts.WorkerCount, opts.SandboxClass)
 
 	// `deploy ate-system` installs only the gVisor SandboxConfig. The
-	// microvm workload pool follows the microvm class default and would not
+	// microVM workload pool follows the microVM class default and would not
 	// resolve if this were skipped.
 	if opts.SandboxClass == config.SandboxClassMicrovm {
 		if err := e.runScript(ctx, installMicrovmDepScript, "--install"); err != nil {
@@ -110,7 +110,7 @@ func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	}
 	log.Stepf("delete_benchmarks (sandbox_class=%s)", opts.SandboxClass)
 
-	// The microvm SandboxConfigs stay. They are cluster-wide and go with the
+	// The microVM SandboxConfigs stay. They are cluster-wide and go with the
 	// SandboxConfig CRD when the control plane is deleted.
 	return e.runScript(ctx, deployLocustScript, "--delete")
 }
@@ -120,7 +120,9 @@ func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 func (e *Env) runScript(ctx context.Context, relPath string, args ...string) error {
 	cmd := exec.CommandContext(ctx, e.Cfg.Path(relPath), args...)
 	cmd.Dir = e.Cfg.Root
-	cmd.Env = e.Cfg.ScriptEnv()
+	// install-microvm-deps.sh names its SandboxConfig after VERSION. Set it
+	// so the name matches the gVisor config's, also with prebuilt images.
+	cmd.Env = append(e.Cfg.ScriptEnv(), "VERSION="+e.SubstrateVersion())
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
