@@ -69,7 +69,6 @@ import (
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/internal/volume/csi"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
-	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	"go.ate.dev/substrate/pkg/objectstorage"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -85,7 +84,6 @@ import (
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
@@ -122,6 +120,7 @@ var (
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(), "Unix socket to serve the OTLP relay on, which forwards the node's worker telemetry to OTEL_EXPORTER_OTLP_ENDPOINT so worker pods need no network path to the collector. Empty disables the relay.")
 
 	actorStatsPollInterval = pflag.Duration("actor-stats-poll-interval", time.Minute, fmt.Sprintf("Actor resource utilization sampling frequency. 0 disables the sampling entirely; minimum accepted value is %v.", minActorStatsPollInterval))
+	watchNamespace         = pflag.String("watch-namespace", "", "Namespace containing the WorkerPools and worker Pods to watch. Empty watches all namespaces. Does not scope cluster resources.")
 
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
@@ -154,6 +153,10 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
 	slog.InfoContext(ctx, "atelet starting", slog.String("version", version.Version))
+	if err := serverboot.ValidateWatchNamespace(*watchNamespace); err != nil {
+		serverboot.Fatal(ctx, "Invalid --watch-namespace", err)
+	}
+	slog.InfoContext(ctx, "Resolved workload watch scope", "watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "")
 	if err := rejectStorageEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid environment", err)
 	}
@@ -318,7 +321,7 @@ func main() {
 			// crash-looping every actor operation on the node.
 			slog.ErrorContext(ctx, "Actor stats sampling disabled: failed to create instruments", slog.Any("err", err))
 		} else {
-			startStatsPoller(ctx, interval, statsInst, k8sClient)
+			startStatsPoller(ctx, interval, statsInst, k8sClient, *watchNamespace)
 		}
 	}
 
@@ -463,15 +466,7 @@ func main() {
 	// binary) is logged by the informer and leaves the files as they are.
 	//
 	// 0 disables periodic resync. Both react to watch events and retry on their own.
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	// Watch only worker pods on this node, the same way the kubelet watches only its own pods.
-	// The apiserver indexes pods by spec.nodeName, so list and watch cost scales with
-	// the pods on this node, not the whole cluster.
-	workerPodFactory := kubeinformers.NewSharedInformerFactoryWithOptions(k8sClient, 0,
-		kubeinformers.WithTweakListOptions(func(o *metav1.ListOptions) {
-			o.FieldSelector = "spec.nodeName=" + ateletIdentity.NodeName
-			o.LabelSelector = workerPoolLabel
-		}))
+	ateFactory, workerPodFactory := newWorkerInformers(ateClient, k8sClient, *watchNamespace, ateletIdentity.NodeName)
 	// Link each local worker's default runtime under the worker's directory
 	// as the syncer plans the worker, so it stays cached while no actor runs
 	// it.

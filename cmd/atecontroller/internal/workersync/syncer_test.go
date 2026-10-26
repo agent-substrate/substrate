@@ -15,10 +15,14 @@
 package workersync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,12 +129,12 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset()
-	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
+	workerFactory, workerInformer := WorkerPodInformer(fakeK8s, "")
 	poolClient, poolFactory, workerPoolInformer := newWorkerPoolInformer(initPools...)
 
 	// Start before the factories: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, 2).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, "", 2).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	poolFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
@@ -149,7 +153,7 @@ func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1.Work
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset()
-	_, workerInformer := WorkerPodInformer(fakeK8s)
+	_, workerInformer := WorkerPodInformer(fakeK8s, "")
 	_, _, workerPoolInformer := newWorkerPoolInformer()
 	poolIndexer := workerPoolInformer.GetIndexer()
 	for _, pool := range initPools {
@@ -158,7 +162,83 @@ func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1.Work
 		}
 	}
 
-	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, 2), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, "", 2), workerInformer.GetIndexer(), poolIndexer
+}
+
+func TestStartupScanRespectsNamespace(t *testing.T) {
+	for _, namespace := range []string{"agent-workloads", ""} {
+		t.Run("namespace="+namespace, func(t *testing.T) {
+			var logs bytes.Buffer
+			oldLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(oldLogger) })
+			api := newFakeControl()
+			// Put the out-of-scope worker on the first page, so skipping it
+			// must still advance to the in-scope worker on the next page.
+			api.listPageSize = 1
+			api.put(registeredWorker("other", "pool", "live", testPodUID))
+			api.put(registeredWorker("agent-workloads", "pool", "deleted", otherPodUID))
+			const thirdPodUID = "33333333-3333-3333-3333-333333333333"
+			api.put(registeredWorker("other", "pool", "also-live", thirdPodUID))
+			kc := fake.NewClientset()
+			_, pods := WorkerPodInformer(kc, namespace)
+			_, _, pools := newWorkerPoolInformer()
+			s := NewWorkerPoolSyncer(api, kc.CoreV1(), kc.AppsV1(), pods, pools, namespace, 2)
+			defer s.queue.ShutDown()
+			s.enqueueRegisteredWorkers(t.Context())
+			for s.queue.Len() > 0 {
+				key, _ := s.queue.Get()
+				if err := s.reconcile(t.Context(), key); err != nil {
+					t.Fatal(err)
+				}
+				s.queue.Done(key)
+			}
+			var want []string
+			if namespace != "" {
+				want = []string{testPodUID, thirdPodUID}
+				for _, fragment := range []string{`"level":"WARN"`, `"count":2`, `"watch-namespace":"agent-workloads"`} {
+					if !strings.Contains(logs.String(), fragment) {
+						t.Errorf("skipped-worker warning lacks %q: %s", fragment, logs.String())
+					}
+				}
+				if count := strings.Count(logs.String(), "skipped registered workers"); count != 1 {
+					t.Errorf("got %d skipped-worker warnings across pages, want one", count)
+				}
+			} else if strings.Contains(logs.String(), "skipped registered workers") {
+				t.Errorf("unexpected skipped-worker warning for all namespaces: %s", logs.String())
+			}
+			if got := api.names(); !slices.Equal(got, want) {
+				t.Fatalf("workers after startup scan = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestReconcileIgnoresWorkerOutsideNamespace(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+	api := newFakeControl()
+	api.put(registeredWorker("other", "pool", "live", testPodUID))
+	s, _, _ := setupReconcileTest(t, api)
+	defer s.queue.ShutDown()
+	s.watchNamespace = "agent-workloads"
+	// An unexpected queue source must not turn absence from our scoped Pod
+	// cache into deletion of a Worker that belongs to another namespace.
+	if err := s.reconcile(t.Context(), workerKey{namespace: "other", name: "live", uid: testPodUID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := api.names(); !slices.Equal(got, []string{testPodUID}) {
+		t.Fatalf("out-of-scope Worker was deregistered: %v", got)
+	}
+	// The skip is a should-never-happen path: it must be visible in the logs,
+	// not silent.
+	for _, fragment := range []string{`"level":"ERROR"`, "should not happen", `"pod":"other/live"`, `"watch-namespace":"agent-workloads"`} {
+		if !strings.Contains(logs.String(), fragment) {
+			t.Errorf("out-of-scope key diagnostic lacks %q: %s", fragment, logs.String())
+		}
+	}
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered
@@ -935,10 +1015,10 @@ func TestSyncer_StartWaitsForWorkerPoolCache(t *testing.T) {
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset(workerPod(ns, podName, poolName, testPodUID, "10.0.0.8"))
-	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
+	workerFactory, workerInformer := WorkerPodInformer(fakeK8s, "")
 	_, poolFactory, workerPoolInformer := newWorkerPoolInformer(workerPool(ns, poolName, poolLabels))
 
-	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, 2).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, "", 2).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
 
