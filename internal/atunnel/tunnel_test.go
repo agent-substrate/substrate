@@ -25,6 +25,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"flag"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -39,6 +40,7 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/substratex509"
 	"go.opentelemetry.io/otel/metric/noop"
+	"golang.org/x/sys/unix"
 )
 
 func TestRegisterFlags(t *testing.T) {
@@ -95,6 +97,74 @@ func TestRegisterFlags(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTunedDialAppliesActorOptions(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		if conn, err := listener.Accept(); err == nil {
+			defer conn.Close()
+			_, _ = io.Copy(io.Discard, conn)
+		}
+	}()
+
+	conn, err := tunedDial((&net.Dialer{}).DialContext)(context.Background(), "tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if got := readNotSentLowat(t, conn); got != 16384 {
+		t.Errorf("dialed connection TCP_NOTSENT_LOWAT = %d, want 16384", got)
+	}
+}
+
+func TestServeSetsTCPNotSentLowatOnAcceptedConnections(t *testing.T) {
+	accepted := make(chan net.Conn, 1)
+	address := freeAddress(t)
+	if err := serve(t.Context(), "test", address, func(_ context.Context, lis net.Listener) error {
+		conn, err := lis.Accept()
+		if err != nil {
+			return nil
+		}
+		accepted <- conn
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client, err := net.DialTimeout("tcp", address, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	conn := <-accepted
+	defer conn.Close()
+	if got := readNotSentLowat(t, conn); got != 16384 {
+		t.Errorf("accepted connection TCP_NOTSENT_LOWAT = %d, want 16384", got)
+	}
+}
+
+// readNotSentLowat returns the TCP_NOTSENT_LOWAT in effect on conn.
+func readNotSentLowat(t *testing.T, conn net.Conn) int {
+	t.Helper()
+	rawConn, err := conn.(*net.TCPConn).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	var sockoptErr error
+	if err := rawConn.Control(func(fd uintptr) {
+		got, sockoptErr = unix.GetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_NOTSENT_LOWAT)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if sockoptErr != nil {
+		t.Fatal(sockoptErr)
+	}
+	return got
 }
 
 // testConfig returns a Config over fresh credentials and free loopback ports.
