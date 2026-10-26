@@ -93,16 +93,24 @@ func Listen(path string) (net.Listener, error) {
 // The connection is unauthenticated: the socket is reachable only from
 // inside the pod, and only by its owner.
 func Dial(path string, readyWait time.Duration) (*grpc.ClientConn, error) {
-	conn, err := grpc.NewClient("unix://"+path,
+	opts := append([]grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-		grpc.WithConnectParams(reconnectParams),
-		grpc.WithUnaryInterceptor(boundedWaitForReady(readyWait)),
-	)
+	}, ReadyWaitOptions(readyWait)...)
+	conn, err := grpc.NewClient("unix://"+path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("while dialing plugin at %s: %w", path, err)
 	}
 	return conn, nil
+}
+
+// ReadyWaitOptions returns the reconnect and ready wait options that Dial
+// uses, for a client that dials its own target and credentials.
+func ReadyWaitOptions(readyWait time.Duration) []grpc.DialOption {
+	return []grpc.DialOption{
+		grpc.WithConnectParams(reconnectParams),
+		grpc.WithUnaryInterceptor(boundedWaitForReady(readyWait)),
+	}
 }
 
 // boundedWaitForReady waits up to wait for cc to become ready before issuing
