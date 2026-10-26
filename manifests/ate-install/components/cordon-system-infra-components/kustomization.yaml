@@ -13,9 +13,8 @@
 # limitations under the License.
 
 # Keeps the system infra components off the worker nodes. Selected by
-# hack/install-ate.sh and cmd/ate-setup under
-# --cordon-system-infra-components; both wrap every system infra apply in a
-# kustomization that includes this component.
+# cmd/ate-setup under --cordon-system-infra-components, which wraps every
+# system infra apply in a kustomization that includes this component.
 #
 # Assumes two node pools, each carrying its label as a matching NoSchedule
 # taint:
