@@ -20,6 +20,7 @@ import (
 	"net/url"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"go.ate.dev/substrate/internal/pluginsocket"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -59,7 +60,7 @@ func parseEndpoint(endpoint string) (string, string, error) {
 // NewCSIClient establishes a gRPC connection to the CSI driver over UDS or TCP
 // and returns a client initialized with Identity, Controller, and Node service clients.
 func NewCSIClient(endpoint string, tlsCfg *tls.Config) (*Client, error) {
-	_, target, err := parseEndpoint(endpoint)
+	scheme, target, err := parseEndpoint(endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +72,14 @@ func NewCSIClient(endpoint string, tlsCfg *tls.Config) (*Client, error) {
 		creds = insecure.NewCredentials()
 	}
 
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(creds))
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	if scheme == "unix" {
+		// A unary call waits for a local driver to come back, so a node
+		// plugin restart does not fail the volume operations that start
+		// during it.
+		opts = append(opts, pluginsocket.ReadyWaitOptions(pluginsocket.ReadyWait)...)
+	}
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial CSI endpoint %q: %w", target, err)
 	}
