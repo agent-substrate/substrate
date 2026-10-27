@@ -134,6 +134,9 @@ func findActorRef(volume *ateapi.ExternalVolume, actorUID string) *ateapi.ActorR
 func setActorRef(volume *ateapi.ExternalVolume, ref *ateapi.ActorRef) {
 	if existing := findActorRef(volume, ref.GetActorUid()); existing != nil {
 		existing.ActorName, existing.Active = ref.GetActorName(), ref.GetActive()
+		if ref.GetNode() != "" {
+			existing.Node = ref.GetNode()
+		}
 		return
 	}
 	volume.Refs = append(volume.Refs, ref)
@@ -170,8 +173,11 @@ func bindExternalVolumes(ctx context.Context, st externalVolumeRefStore, actor *
 var errExternalVolumeHeld = errors.New("shared volume is held by another actor")
 
 // claimExternalVolumes marks the actor's references active and refreshes the
-// recorded mounts. A volume another actor holds active is refused.
-// TODO: let volumes whose access mode allows it carry several active references.
+// recorded mounts. A READ_WRITE_ONCE volume another actor holds active is
+// refused. The node is recorded later by recordExternalVolumeNode, once the
+// actor is assigned, and a re-entered claim keeps the node already recorded.
+// The refs are a hint for detach, not a lock: a holder that records its node
+// between another holder's volumesHeldOnNode read and its detach is not seen.
 func claimExternalVolumes(ctx context.Context, st externalVolumeRefStore, actor *ateapi.Actor) ([]*ateapi.ExternalVolumeStatus, error) {
 	volumes := slices.Clone(actor.GetStatus().GetExternalVolumes().GetVolumes())
 	actorUID := actor.GetMetadata().GetUid()
@@ -182,10 +188,12 @@ func claimExternalVolumes(ctx context.Context, st externalVolumeRefStore, actor 
 		volumeRef := resources.ExternalVolumeRef{Atespace: actor.GetMetadata().GetAtespace(), Name: mount.GetExternalVolumeName()}
 		var holder string
 		claimed, err := updateExternalVolumeRefs(ctx, st, volumeRef, func(toUpdate *ateapi.ExternalVolume) error {
-			for _, ref := range toUpdate.GetRefs() {
-				if ref.GetActive() && ref.GetActorUid() != actorUID {
-					holder = ref.GetActorName()
-					return errExternalVolumeHeld
+			if toUpdate.GetAccessMode() != ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY {
+				for _, ref := range toUpdate.GetRefs() {
+					if ref.GetActive() && ref.GetActorUid() != actorUID {
+						holder = ref.GetActorName()
+						return errExternalVolumeHeld
+					}
 				}
 			}
 			setActorRef(toUpdate, actorRefOf(actor, true))
@@ -207,13 +215,43 @@ func claimExternalVolumes(ctx context.Context, st externalVolumeRefStore, actor 
 	return volumes, nil
 }
 
+// recordExternalVolumeNode stamps the actor's assigned node on its active
+// references, so detach can tell whether another holder shares the node.
+func recordExternalVolumeNode(ctx context.Context, st externalVolumeRefStore, actor *ateapi.Actor) error {
+	node := actor.GetStatus().GetAssignedNode()
+	var errs []error
+	for _, volumeRef := range borrowedVolumeRefs(actor) {
+		_, err := updateExternalVolumeRefs(ctx, st, volumeRef, func(toUpdate *ateapi.ExternalVolume) error {
+			if ref := findActorRef(toUpdate, actor.GetMetadata().GetUid()); ref != nil && ref.GetActive() {
+				ref.Node = node
+			}
+			return nil
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("while recording the node of shared volume %s: %w", volumeRef, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// otherHolderOnNode reports whether an actor other than actorUID holds volume
+// active on node.
+func otherHolderOnNode(volume *ateapi.ExternalVolume, actorUID, node string) bool {
+	for _, ref := range volume.GetRefs() {
+		if ref.GetActive() && ref.GetActorUid() != actorUID && ref.GetNode() == node {
+			return true
+		}
+	}
+	return false
+}
+
 // deactivateExternalVolumes marks the actor's references inactive.
 func deactivateExternalVolumes(ctx context.Context, st externalVolumeRefStore, actor *ateapi.Actor) error {
 	var errs []error
 	for _, volumeRef := range borrowedVolumeRefs(actor) {
 		_, err := updateExternalVolumeRefs(ctx, st, volumeRef, func(toUpdate *ateapi.ExternalVolume) error {
 			if ref := findActorRef(toUpdate, actor.GetMetadata().GetUid()); ref != nil {
-				ref.Active = false
+				ref.Active, ref.Node = false, ""
 			}
 			return nil
 		})

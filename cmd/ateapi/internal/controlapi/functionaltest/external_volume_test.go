@@ -77,12 +77,18 @@ func setupExternalVolumeTest(t *testing.T, ns string) (*testContext, *externalVo
 
 func createExternalVolume(t *testing.T, tc *testContext, name string, trigger ateapi.DeleteTrigger) *ateapi.ExternalVolume {
 	t.Helper()
+	return createExternalVolumeWithMode(t, tc, name, trigger, ateapi.AccessMode_ACCESS_MODE_UNSPECIFIED)
+}
+
+func createExternalVolumeWithMode(t *testing.T, tc *testContext, name string, trigger ateapi.DeleteTrigger, mode ateapi.AccessMode) *ateapi.ExternalVolume {
+	t.Helper()
 	created, err := tc.client.CreateExternalVolume(context.Background(), &ateapi.CreateExternalVolumeRequest{
 		ExternalVolume: &ateapi.ExternalVolume{
 			Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name},
 			VolumeId:      "disk/" + name,
 			VolumeType:    "substrate.io/mock",
 			DeleteTrigger: trigger,
+			AccessMode:    mode,
 		},
 	})
 	if err != nil {
@@ -329,6 +335,59 @@ func TestExternalVolume_SequentialHandoff(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, fmt.Sprintf("ExternalVolume %s/handoff not found", testAtespace))
 	if deleted, _, _ := plugin.snapshot(); !cmp.Equal([]string{shared.GetVolumeId()}, deleted) {
 		t.Errorf("deleted volumes = %v, want the LAST_ACTOR trigger to delete %q", deleted, shared.GetVolumeId())
+	}
+}
+
+func TestExternalVolume_ReadWriteMany(t *testing.T) {
+	ns := namespaceForTest("ns-extvol-rwx")
+	tc, _ := setupExternalVolumeTest(t, ns)
+	defer tc.cleanup()
+
+	shared := createExternalVolumeWithMode(t, tc, "many", ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL, ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY)
+	if got := shared.GetAccessMode(); got != ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY {
+		t.Fatalf("access_mode = %v, want READ_WRITE_MANY", got)
+	}
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapi.Volume{{Name: "work", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "many"}}}},
+		[]*ateapi.VolumeMount{{Name: "work", MountPath: "/mnt/work"}})
+	ctx := context.Background()
+	for i, name := range []string{"reader-1", "reader-2"} {
+		createBorrowingActor(t, tc, name, nil)
+		waitForWorkerAvailable(t, tc, createWorkerPod(t, tc, ns, fmt.Sprintf("worker-%d", i+1), "node1", "pool1"))
+		if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name}}); err != nil {
+			t.Fatalf("ResumeActor(%s) failed: %v", name, err)
+		}
+	}
+	if diff := cmp.Diff(map[string]bool{"reader-1": true, "reader-2": true}, refStates(t, tc, "many")); diff != "" {
+		t.Errorf("refs with both readers resumed mismatch (-want +got):\n%s", diff)
+	}
+	for _, ref := range getExternalVolume(t, tc, "many").GetRefs() {
+		if ref.GetNode() != "node1" {
+			t.Errorf("ref %s node = %q, want node1", ref.GetActorName(), ref.GetNode())
+		}
+	}
+
+	held := getExternalVolume(t, tc, "many")
+	held.AccessMode = ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE
+	_, err := tc.client.UpdateExternalVolume(ctx, &ateapi.UpdateExternalVolumeRequest{ExternalVolume: held})
+	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, "access mode cannot change while a reference is active")
+
+	for _, name := range []string{"reader-1", "reader-2"} {
+		if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+			Actor:   &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
+			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		}); err != nil {
+			t.Fatalf("SuspendActor(%s) failed: %v", name, err)
+		}
+	}
+	released := getExternalVolume(t, tc, "many")
+	released.AccessMode = ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE
+	updated, err := tc.client.UpdateExternalVolume(ctx, &ateapi.UpdateExternalVolumeRequest{ExternalVolume: released})
+	if err != nil {
+		t.Fatalf("UpdateExternalVolume with no active reference failed: %v", err)
+	}
+	if got := updated.GetAccessMode(); got != ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE {
+		t.Errorf("access_mode after update = %v, want READ_WRITE_ONCE", got)
 	}
 }
 

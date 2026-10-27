@@ -1815,6 +1815,7 @@ func newTestExternalVolume(atespace, name string) *ateapi.ExternalVolume {
 	return &ateapi.ExternalVolume{
 		Metadata:      &ateapi.ResourceMetadata{Atespace: atespace, Name: name},
 		DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL,
+		AccessMode:    ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE,
 		VolumeId:      "filestore-" + name,
 		VolumeType:    "filestore.csi.storage.gke.io",
 		VolumeContext: map[string]string{"ip": "10.0.0.2"},

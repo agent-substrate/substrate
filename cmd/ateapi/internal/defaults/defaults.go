@@ -126,6 +126,9 @@ func applyExternalVolumeDefaults(v *ateapi.ExternalVolume) {
 	if v.DeleteTrigger == ateapi.DeleteTrigger_DELETE_TRIGGER_UNSPECIFIED {
 		v.DeleteTrigger = ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL
 	}
+	if v.AccessMode == ateapi.AccessMode_ACCESS_MODE_UNSPECIFIED {
+		v.AccessMode = ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE
+	}
 }
 
 func applyTagDefaults(*ateapi.Tag) {}

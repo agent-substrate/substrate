@@ -34,8 +34,10 @@ var (
 	createExternalVolumeTypeFlag          string
 	createExternalVolumeContextFlag       map[string]string
 	createExternalVolumeDeleteTriggerFlag string
+	createExternalVolumeAccessModeFlag    string
 	updateExternalVolumeAtespaceFlag      string
 	updateExternalVolumeDeleteTriggerFlag string
+	updateExternalVolumeAccessModeFlag    string
 	deleteExternalVolumeAtespaceFlag      string
 )
 
@@ -110,6 +112,10 @@ var createExternalVolumeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		mode, err := parseAccessMode(createExternalVolumeAccessModeFlag)
+		if err != nil {
+			return err
+		}
 		ctx := cmd.Context()
 		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 		if err != nil {
@@ -121,6 +127,7 @@ var createExternalVolumeCmd = &cobra.Command{
 			ExternalVolume: &ateapi.ExternalVolume{
 				Metadata:      &ateapi.ResourceMetadata{Atespace: createExternalVolumeAtespaceFlag, Name: args[0]},
 				DeleteTrigger: trigger,
+				AccessMode:    mode,
 				VolumeId:      createExternalVolumeVolumeIDFlag,
 				VolumeType:    createExternalVolumeTypeFlag,
 				VolumeContext: createExternalVolumeContextFlag,
@@ -136,10 +143,17 @@ var createExternalVolumeCmd = &cobra.Command{
 var updateExternalVolumeCmd = &cobra.Command{
 	Use:     "externalvolume <volume-name>",
 	Aliases: []string{"externalvolumes", "ev"},
-	Short:   "Change a shared volume's delete trigger",
+	Short:   "Change a shared volume's delete trigger or access mode",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if updateExternalVolumeDeleteTriggerFlag == "" && updateExternalVolumeAccessModeFlag == "" {
+			return fmt.Errorf("specify --delete-trigger, --access-mode, or both")
+		}
 		trigger, err := parseDeleteTrigger(updateExternalVolumeDeleteTriggerFlag)
+		if err != nil {
+			return err
+		}
+		mode, err := parseAccessMode(updateExternalVolumeAccessModeFlag)
 		if err != nil {
 			return err
 		}
@@ -151,7 +165,7 @@ var updateExternalVolumeCmd = &cobra.Command{
 		defer client.Close()
 
 		ref := &ateapi.ObjectRef{Atespace: updateExternalVolumeAtespaceFlag, Name: args[0]}
-		resp, err := updateExternalVolumeDeleteTrigger(ctx, client, ref, trigger)
+		resp, err := updateExternalVolume(ctx, client, ref, trigger, mode)
 		if err != nil {
 			return err
 		}
@@ -188,14 +202,20 @@ type externalVolumeClient interface {
 	UpdateExternalVolume(ctx context.Context, in *ateapi.UpdateExternalVolumeRequest, opts ...grpc.CallOption) (*ateapi.ExternalVolume, error)
 }
 
-// updateExternalVolumeDeleteTrigger reads the volume first so the update carries
-// the uid and version the server requires as preconditions.
-func updateExternalVolumeDeleteTrigger(ctx context.Context, client externalVolumeClient, ref *ateapi.ObjectRef, trigger ateapi.DeleteTrigger) (*ateapi.ExternalVolume, error) {
+// updateExternalVolume reads the volume first so the update carries the uid
+// and version the server requires as preconditions. An unspecified trigger or
+// mode keeps the stored value.
+func updateExternalVolume(ctx context.Context, client externalVolumeClient, ref *ateapi.ObjectRef, trigger ateapi.DeleteTrigger, mode ateapi.AccessMode) (*ateapi.ExternalVolume, error) {
 	volume, err := client.GetExternalVolume(ctx, &ateapi.GetExternalVolumeRequest{ExternalVolume: ref})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get shared volume %q: %w", ref.GetName(), err)
 	}
-	volume.DeleteTrigger = trigger
+	if trigger != ateapi.DeleteTrigger_DELETE_TRIGGER_UNSPECIFIED {
+		volume.DeleteTrigger = trigger
+	}
+	if mode != ateapi.AccessMode_ACCESS_MODE_UNSPECIFIED {
+		volume.AccessMode = mode
+	}
 
 	resp, err := client.UpdateExternalVolume(ctx, &ateapi.UpdateExternalVolumeRequest{ExternalVolume: volume})
 	if err != nil {
@@ -217,6 +237,19 @@ func parseDeleteTrigger(value string) (ateapi.DeleteTrigger, error) {
 	}
 }
 
+func parseAccessMode(value string) (ateapi.AccessMode, error) {
+	switch strings.ToLower(value) {
+	case "":
+		return ateapi.AccessMode_ACCESS_MODE_UNSPECIFIED, nil
+	case "rwo", "readwriteonce":
+		return ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE, nil
+	case "rwx", "readwritemany":
+		return ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY, nil
+	default:
+		return ateapi.AccessMode_ACCESS_MODE_UNSPECIFIED, fmt.Errorf("invalid access mode %q; must be rwo or rwx", value)
+	}
+}
+
 func init() {
 	getExternalVolumesCmd.Flags().StringVarP(&externalVolumeAtespaceFlag, "atespace", "a", "", "Atespace to list/get shared volumes in")
 	getExternalVolumesCmd.Flags().BoolVarP(&externalVolumeAllAtespacesFlag, "all-atespaces", "A", false, "List shared volumes across all atespaces")
@@ -230,12 +263,13 @@ func init() {
 	_ = createExternalVolumeCmd.MarkFlagRequired("volume-type")
 	createExternalVolumeCmd.Flags().StringToStringVar(&createExternalVolumeContextFlag, "volume-context", nil, "Driver metadata for mounting, as key=value pairs")
 	createExternalVolumeCmd.Flags().StringVar(&createExternalVolumeDeleteTriggerFlag, "delete-trigger", "", "What removes the volume: manual (default) or last-actor")
+	createExternalVolumeCmd.Flags().StringVar(&createExternalVolumeAccessModeFlag, "access-mode", "", "How many resumed actors may hold the volume: rwo (default) or rwx")
 	createCmd.AddCommand(createExternalVolumeCmd)
 
 	updateExternalVolumeCmd.Flags().StringVarP(&updateExternalVolumeAtespaceFlag, "atespace", "a", "", "Atespace owning the shared volume (required)")
-	updateExternalVolumeCmd.Flags().StringVar(&updateExternalVolumeDeleteTriggerFlag, "delete-trigger", "", "What removes the volume: manual or last-actor (required)")
+	updateExternalVolumeCmd.Flags().StringVar(&updateExternalVolumeDeleteTriggerFlag, "delete-trigger", "", "What removes the volume: manual or last-actor")
+	updateExternalVolumeCmd.Flags().StringVar(&updateExternalVolumeAccessModeFlag, "access-mode", "", "How many resumed actors may hold the volume: rwo or rwx; refused while a reference is active")
 	_ = updateExternalVolumeCmd.MarkFlagRequired("atespace")
-	_ = updateExternalVolumeCmd.MarkFlagRequired("delete-trigger")
 	updateCmd.AddCommand(updateExternalVolumeCmd)
 
 	deleteExternalVolumeCmd.Flags().StringVarP(&deleteExternalVolumeAtespaceFlag, "atespace", "a", "", "Atespace owning the shared volume (required)")

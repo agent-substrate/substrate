@@ -712,6 +712,7 @@ func TestPrintExternalVolumesTo_Table(t *testing.T) {
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
 			DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR,
+			AccessMode:    ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY,
 			VolumeId:      "projects/p/zones/z/disks/substrate-1",
 			VolumeType:    "pd.csi.storage.gke.io",
 			Refs: []*ateapi.ActorRef{
@@ -726,6 +727,7 @@ func TestPrintExternalVolumesTo_Table(t *testing.T) {
 				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
 			},
 			DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL,
+			AccessMode:    ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE,
 			VolumeId:      "projects/p/zones/z/disks/preexisting",
 			VolumeType:    "pd.csi.storage.gke.io",
 		},
@@ -735,9 +737,9 @@ func TestPrintExternalVolumesTo_Table(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `ATESPACE   NAME      VOLUME TYPE             VOLUME ID                              DELETE TRIGGER   REFS   AGE
-team-a     adopted   pd.csi.storage.gke.io   projects/p/zones/z/disks/preexisting   Manual           0/0    5h
-team-a     shared    pd.csi.storage.gke.io   projects/p/zones/z/disks/substrate-1   LastActor        1/2    5m
+	expected := `ATESPACE   NAME      VOLUME TYPE             VOLUME ID                              ACCESS MODE   DELETE TRIGGER   REFS   AGE
+team-a     adopted   pd.csi.storage.gke.io   projects/p/zones/z/disks/preexisting   RWO           Manual           0/0    5h
+team-a     shared    pd.csi.storage.gke.io   projects/p/zones/z/disks/substrate-1   RWX           LastActor        1/2    5m
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

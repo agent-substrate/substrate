@@ -58,6 +58,7 @@ func registeredVolume(atespace, name string) *ateapi.ExternalVolume {
 	return &ateapi.ExternalVolume{
 		Metadata:      &ateapi.ResourceMetadata{Atespace: atespace, Name: name},
 		DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL,
+		AccessMode:    ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE,
 		VolumeId:      "projects/p/zones/z/disks/" + name,
 		VolumeType:    "mock",
 		VolumeContext: map[string]string{"fsType": "ext4"},

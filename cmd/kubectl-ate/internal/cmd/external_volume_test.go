@@ -53,6 +53,7 @@ func testExternalVolume() *ateapi.ExternalVolume {
 			Version:  1,
 		},
 		DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR,
+		AccessMode:    ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE,
 		VolumeId:      "projects/p/zones/z/disks/substrate-8ba9b6ee",
 		VolumeType:    "pd.csi.storage.gke.io",
 	}
@@ -63,9 +64,9 @@ func TestUpdateExternalVolumeDeleteTrigger(t *testing.T) {
 	ref := &ateapi.ObjectRef{Atespace: "space-1", Name: "vol-1"}
 	want := ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL
 
-	resp, err := updateExternalVolumeDeleteTrigger(context.Background(), client, ref, want)
+	resp, err := updateExternalVolume(context.Background(), client, ref, want, ateapi.AccessMode_ACCESS_MODE_UNSPECIFIED)
 	if err != nil {
-		t.Fatalf("updateExternalVolumeDeleteTrigger() error = %v", err)
+		t.Fatalf("updateExternalVolume() error = %v", err)
 	}
 
 	if client.getCalls != 1 {
@@ -82,6 +83,46 @@ func TestUpdateExternalVolumeDeleteTrigger(t *testing.T) {
 	wantResp.Metadata.Version = 2
 	if diff := cmp.Diff(wantResp, resp, protocmp.Transform()); diff != "" {
 		t.Errorf("returned shared volume mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestUpdateExternalVolumeAccessMode(t *testing.T) {
+	client := &fakeExternalVolumeClient{volume: testExternalVolume()}
+	ref := &ateapi.ObjectRef{Atespace: "space-1", Name: "vol-1"}
+
+	resp, err := updateExternalVolume(context.Background(), client, ref, ateapi.DeleteTrigger_DELETE_TRIGGER_UNSPECIFIED, ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY)
+	if err != nil {
+		t.Fatalf("updateExternalVolume() error = %v", err)
+	}
+	if got := resp.GetDeleteTrigger(); got != ateapi.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR {
+		t.Errorf("delete_trigger = %v, want the stored LAST_ACTOR kept", got)
+	}
+	if got := resp.GetAccessMode(); got != ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY {
+		t.Errorf("access_mode = %v, want READ_WRITE_MANY", got)
+	}
+}
+
+func TestParseAccessMode(t *testing.T) {
+	tests := []struct {
+		value   string
+		want    ateapi.AccessMode
+		wantErr bool
+	}{
+		{value: "", want: ateapi.AccessMode_ACCESS_MODE_UNSPECIFIED},
+		{value: "rwo", want: ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE},
+		{value: "ReadWriteMany", want: ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY},
+		{value: "rox", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.value, func(t *testing.T) {
+			got, err := parseAccessMode(tc.value)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("parseAccessMode(%q) error = %v, wantErr %v", tc.value, err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("parseAccessMode(%q) = %v, want %v", tc.value, got, tc.want)
+			}
+		})
 	}
 }
 

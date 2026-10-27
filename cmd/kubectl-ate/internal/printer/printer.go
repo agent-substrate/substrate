@@ -398,16 +398,28 @@ func PrintExternalVolumesTo(out io.Writer, volumes []*ateapi.ExternalVolume, for
 		return printProto(out, &ateapi.ListExternalVolumesResponse{ExternalVolumes: volumes}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ATESPACE\tNAME\tVOLUME TYPE\tVOLUME ID\tDELETE TRIGGER\tREFS\tAGE")
+		fmt.Fprintln(w, "ATESPACE\tNAME\tVOLUME TYPE\tVOLUME ID\tACCESS MODE\tDELETE TRIGGER\tREFS\tAGE")
 		for _, volume := range volumes {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				volume.GetMetadata().GetAtespace(), volume.GetMetadata().GetName(),
-				volume.GetVolumeType(), volume.GetVolumeId(), deleteTriggerLabel(volume.GetDeleteTrigger()),
-				externalVolumeRefs(volume), formatAge(volume.GetMetadata().GetCreateTime()))
+				volume.GetVolumeType(), volume.GetVolumeId(), accessModeLabel(volume.GetAccessMode()),
+				deleteTriggerLabel(volume.GetDeleteTrigger()), externalVolumeRefs(volume),
+				formatAge(volume.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()
 	default:
 		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+
+func accessModeLabel(mode ateapi.AccessMode) string {
+	switch mode {
+	case ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE:
+		return "RWO"
+	case ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY:
+		return "RWX"
+	default:
+		return "<unknown>"
 	}
 }
 

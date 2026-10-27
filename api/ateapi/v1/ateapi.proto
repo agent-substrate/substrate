@@ -1236,6 +1236,25 @@ message ExternalVolume {
   // +k8s:listType=map
   // +k8s:listMapKey=actor_uid
   repeated ActorRef refs = 6;
+
+  // access_mode is how many resumed actors may hold the volume at once.
+  // Defaults to READ_WRITE_ONCE. It cannot change while any reference is
+  // active.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the AccessMode enum
+  // +k8s:mutable
+  AccessMode access_mode = 7;
+}
+
+// AccessMode is how many resumed actors may hold an ExternalVolume at once.
+enum AccessMode {
+  ACCESS_MODE_UNSPECIFIED = 0;
+  // At most one resumed actor holds the volume.
+  ACCESS_MODE_READ_WRITE_ONCE = 1;
+  // Any number of resumed actors hold the volume, on any node.
+  ACCESS_MODE_READ_WRITE_MANY = 2;
 }
 
 // ActorRef is one actor's reference to an ExternalVolume.
@@ -1256,6 +1275,13 @@ message ActorRef {
   //
   // +k8s:optional
   bool active = 3;
+
+  // node is the worker node the actor holds the volume on. Set once the
+  // actor is assigned, cleared when the reference goes inactive.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-long-name
+  string node = 4;
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:

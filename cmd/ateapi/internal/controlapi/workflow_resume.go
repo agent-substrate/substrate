@@ -116,6 +116,9 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	actor = assigned
+	if err = recordExternalVolumeNode(leaseCtx, w.store, actor); err != nil {
+		return nil, false, err
+	}
 	volumePublishContexts, err := w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate)
 	if err != nil {
 		return nil, false, err

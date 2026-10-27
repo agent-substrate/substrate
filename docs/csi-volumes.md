@@ -218,10 +218,15 @@ Each volume records:
 - `deleteTrigger`: `MANUAL`, the default, removes the volume only on an
   explicit delete; `LAST_ACTOR` removes it when the last actor referencing it
   is deleted. Deleting the volume also deletes the storage.
-- `refs`: every actor referencing the volume, with `active` set while the
-  actor is resumed. At most one reference is active at a time: a resume that
-  would take a held volume fails and names the holder. A referenced volume
-  cannot be deleted.
+- `accessMode`: `READ_WRITE_ONCE`, the default, lets one resumed actor hold
+  the volume at a time; a resume that would take a held volume fails and
+  names the holder. `READ_WRITE_MANY` lets any number of resumed actors hold
+  it, on any node. The mode cannot change while a reference is active.
+  Updates replace the record, so an omitted `accessMode` or `deleteTrigger`
+  takes its default; `kubectl ate update externalvolume` reads the volume
+  first and keeps what it does not change.
+- `refs`: every actor referencing the volume, with `active` set and `node`
+  recorded while the actor is resumed. A referenced volume cannot be deleted.
 
 A template mounts an `ExternalVolume` with `external.ref`. Name the volume
 in the template, or leave the name empty and bind it per actor at creation:

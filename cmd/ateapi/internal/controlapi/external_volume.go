@@ -92,15 +92,27 @@ func (s *RPCService) UpdateExternalVolume(ctx context.Context, req *ateapi.Updat
 	in := req.GetExternalVolume()
 	volumeRef := resources.ExternalVolumeRefFromExternalVolume(in)
 
+	var holder string
 	stored, err := s.impl.UpdateExternalVolume(ctx, volumeRef, store.PreconditionFrom(in), func(toUpdate *ateapi.ExternalVolume) error {
-		metadata, refs := toUpdate.GetMetadata(), toUpdate.GetRefs()
+		metadata, refs, mode := toUpdate.GetMetadata(), toUpdate.GetRefs(), toUpdate.GetAccessMode()
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, in)
 		toUpdate.Metadata, toUpdate.Refs = metadata, refs
 		defaults.Apply(toUpdate)
+		if toUpdate.GetAccessMode() != mode {
+			for _, ref := range refs {
+				if ref.GetActive() {
+					holder = ref.GetActorName()
+					return errExternalVolumeHeld
+				}
+			}
+		}
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errExternalVolumeHeld) {
+			return nil, apierror.FailedPrecondition("ExternalVolume %s is held by actor %q; its access mode cannot change while a reference is active", volumeRef, holder)
+		}
 		if errors.Is(err, store.ErrImmutableField) || errors.Is(err, store.ErrPreconditionRequired) {
 			return nil, apierror.InvalidArgument("while updating shared volume %s: %v", volumeRef, err)
 		}
