@@ -220,7 +220,7 @@ func TestPlugin_CreateVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, "mock.csi")
 
 	ctx := context.Background()
 	resp, err := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
@@ -247,7 +247,7 @@ func TestPlugin_DeleteVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, "mock.csi")
 
 	ctx := context.Background()
 	err = plugin.DeleteVolume(ctx, "test-vol")
@@ -267,7 +267,7 @@ func TestPlugin_AttachVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, "mock.csi")
 
 	ctx := context.Background()
 	plugin.InitControllerCapabilities(ctx)
@@ -326,7 +326,7 @@ func TestPlugin_DetachVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, "mock.csi")
 
 	ctx := context.Background()
 	plugin.InitControllerCapabilities(ctx)
@@ -377,7 +377,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, "mock.csi")
 	tmpDir, err := os.MkdirTemp("", "csi-mount-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -385,6 +385,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	plugin.stagingDirPrefix = filepath.Join(tmpDir, "staging")
+	plugin.holdersDirPrefix = filepath.Join(tmpDir, "holders")
 	targetPath := filepath.Join(tmpDir, "target")
 
 	ctx := context.Background()
@@ -393,15 +394,19 @@ func TestPlugin_MountVolume(t *testing.T) {
 		VolumeID:       "test-vol",
 		TargetPath:     targetPath,
 		PublishContext: map[string]string{"devicePath": "/dev/xvdba"},
+		Holder:         "actor-1",
 	})
 	if err != nil {
 		t.Fatalf("MountVolume failed: %v", err)
 	}
 
-	// Verify staging directory was created
-	stagingPath := filepath.Join(plugin.stagingDirPrefix, "test-vol")
+	// Verify staging directory and holder marker were created
+	stagingPath := plugin.stagingPath("test-vol")
 	if _, err := os.Stat(stagingPath); os.IsNotExist(err) {
 		t.Errorf("staging directory %q was not created", stagingPath)
+	}
+	if _, err := os.Stat(filepath.Join(plugin.holdersDir("test-vol"), "actor-1")); err != nil {
+		t.Errorf("holder marker for actor-1 was not created: %v", err)
 	}
 
 	// Test NodeStageVolume Unimplemented bypass
@@ -429,7 +434,7 @@ func TestPlugin_UnmountVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, "mock.csi")
 	tmpDir, err := os.MkdirTemp("", "csi-unmount-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -437,17 +442,18 @@ func TestPlugin_UnmountVolume(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	plugin.stagingDirPrefix = filepath.Join(tmpDir, "staging")
+	plugin.holdersDirPrefix = filepath.Join(tmpDir, "holders")
 	targetPath := filepath.Join(tmpDir, "target")
 
 	// Pre-create staging directory to test cleanup
-	stagingPath := filepath.Join(plugin.stagingDirPrefix, "test-vol")
+	stagingPath := plugin.stagingPath("test-vol")
 	if err := os.MkdirAll(stagingPath, 0750); err != nil {
 		t.Fatalf("failed to create staging path: %v", err)
 	}
 
 	ctx := context.Background()
 	plugin.InitNodeCapabilities(ctx)
-	err = plugin.UnmountVolume(ctx, "test-vol", targetPath)
+	err = plugin.UnmountVolume(ctx, volume.UnmountVolumeRequest{VolumeID: "test-vol", TargetPath: targetPath})
 	if err != nil {
 		t.Fatalf("UnmountVolume failed: %v", err)
 	}
@@ -465,9 +471,61 @@ func TestPlugin_UnmountVolume(t *testing.T) {
 	if err := os.MkdirAll(stagingPath, 0750); err != nil {
 		t.Fatalf("failed to create staging path: %v", err)
 	}
-	err = plugin.UnmountVolume(ctx, "test-vol", targetPath)
+	err = plugin.UnmountVolume(ctx, volume.UnmountVolumeRequest{VolumeID: "test-vol", TargetPath: targetPath})
 	if err != nil {
 		t.Errorf("UnmountVolume should have succeeded when NodeUnstageVolume is unimplemented, got: %v", err)
+	}
+}
+
+// TestPlugin_UnstageAfterLastHolder checks that a volume two actors publish on
+// the node is unstaged only after the second actor unpublishes it.
+func TestPlugin_UnstageAfterLastHolder(t *testing.T) {
+	driver := &mockCSIDriver{}
+	unstaged := 0
+	driver.nodeUnstageVolumeFunc = func(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+		unstaged++
+		return &csi.NodeUnstageVolumeResponse{}, nil
+	}
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	if err != nil {
+		t.Fatalf("failed to create CSI client: %v", err)
+	}
+	defer client.Close()
+
+	plugin := NewPlugin(client, "mock.csi")
+	tmpDir := t.TempDir()
+	plugin.stagingDirPrefix = filepath.Join(tmpDir, "staging")
+	plugin.holdersDirPrefix = filepath.Join(tmpDir, "holders")
+	ctx := context.Background()
+	plugin.InitNodeCapabilities(ctx)
+
+	for _, holder := range []string{"actor-1", "actor-2"} {
+		if err := plugin.MountVolume(ctx, volume.MountVolumeRequest{VolumeID: "shared#vol/1", TargetPath: filepath.Join(tmpDir, holder), Holder: holder}); err != nil {
+			t.Fatalf("MountVolume(%s): %v", holder, err)
+		}
+	}
+	if err := plugin.UnmountVolume(ctx, volume.UnmountVolumeRequest{VolumeID: "shared#vol/1", TargetPath: filepath.Join(tmpDir, "actor-1"), Holder: "actor-1"}); err != nil {
+		t.Fatalf("UnmountVolume(actor-1): %v", err)
+	}
+	if unstaged != 0 {
+		t.Fatalf("NodeUnstageVolume called %d times while actor-2 still holds the volume, want 0", unstaged)
+	}
+	if _, err := os.Stat(plugin.stagingPath("shared#vol/1")); err != nil {
+		t.Errorf("staging directory removed while actor-2 still holds the volume: %v", err)
+	}
+	if err := plugin.UnmountVolume(ctx, volume.UnmountVolumeRequest{VolumeID: "shared#vol/1", TargetPath: filepath.Join(tmpDir, "actor-2"), Holder: "actor-2"}); err != nil {
+		t.Fatalf("UnmountVolume(actor-2): %v", err)
+	}
+	if unstaged != 1 {
+		t.Errorf("NodeUnstageVolume called %d times after the last holder left, want 1", unstaged)
+	}
+	for _, dir := range []string{plugin.stagingPath("shared#vol/1"), plugin.holdersDir("shared#vol/1")} {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Errorf("%q still exists after the last holder left", dir)
+		}
 	}
 }
 
@@ -544,7 +602,7 @@ func TestPlugin_Capabilities_SkipAttachDetachWhenUnsupported(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, "mock.csi")
 	ctx := context.Background()
 
 	plugin.InitControllerCapabilities(ctx)
@@ -605,7 +663,7 @@ func TestPlugin_Capabilities_SkipStageUnstageWhenUnsupported(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, "mock.csi")
 	ctx := context.Background()
 
 	plugin.InitNodeCapabilities(ctx)
@@ -629,7 +687,7 @@ func TestPlugin_Capabilities_SkipStageUnstageWhenUnsupported(t *testing.T) {
 	}
 
 	// UnmountVolume should skip NodeUnstageVolume entirely
-	if err := plugin.UnmountVolume(ctx, "test-vol", targetPath); err != nil {
+	if err := plugin.UnmountVolume(ctx, volume.UnmountVolumeRequest{VolumeID: "test-vol", TargetPath: targetPath}); err != nil {
 		t.Errorf("UnmountVolume failed: %v", err)
 	}
 	if unstageCalled != 0 {
@@ -671,7 +729,7 @@ func TestPlugin_Capabilities_AllEnabledWhenQueryFailsOrEmpty(t *testing.T) {
 			}
 			defer client.Close()
 
-			plugin := NewPlugin(client)
+			plugin := NewPlugin(client, "mock.csi")
 			ctx := context.Background()
 			plugin.InitControllerCapabilities(ctx)
 			plugin.InitNodeCapabilities(ctx)
@@ -707,7 +765,7 @@ func TestPlugin_Capabilities_DisableAttachDetachAfterUnimplemented(t *testing.T)
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, "mock.csi")
 	ctx := context.Background()
 	plugin.InitControllerCapabilities(ctx)
 
@@ -758,7 +816,7 @@ func TestPlugin_Capabilities_DisableStageUnstageAfterUnimplemented(t *testing.T)
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, "mock.csi")
 	tmpDir := t.TempDir()
 	plugin.stagingDirPrefix = filepath.Join(tmpDir, "staging")
 	targetPath := filepath.Join(tmpDir, "target")
@@ -781,7 +839,7 @@ func TestPlugin_Capabilities_DisableStageUnstageAfterUnimplemented(t *testing.T)
 		t.Errorf("expected staging directory %q to be removed, got err: %v", stagingPath, err)
 	}
 
-	if err := plugin.UnmountVolume(ctx, "test-vol", targetPath); err != nil {
+	if err := plugin.UnmountVolume(ctx, volume.UnmountVolumeRequest{VolumeID: "test-vol", TargetPath: targetPath}); err != nil {
 		t.Errorf("UnmountVolume failed: %v", err)
 	}
 	if unstageCalled != 0 {

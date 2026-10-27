@@ -62,10 +62,10 @@ func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, req volume.MountVolu
 	return f.mountErr
 }
 
-func (f *fakeWorkerPlugin) UnmountVolume(ctx context.Context, volumeID string, targetPath string) error {
-	f.unmounted = append(f.unmounted, volumeID)
+func (f *fakeWorkerPlugin) UnmountVolume(ctx context.Context, req volume.UnmountVolumeRequest) error {
+	f.unmounted = append(f.unmounted, req.VolumeID)
 	if f.unmountErrs != nil {
-		if err, ok := f.unmountErrs[volumeID]; ok {
+		if err, ok := f.unmountErrs[req.VolumeID]; ok {
 			return err
 		}
 	}

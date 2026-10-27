@@ -60,6 +60,7 @@ func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volu
 			TargetPath:     hostPath,
 			VolumeContext:  ext.GetVolumeContext(),
 			PublishContext: ext.GetPublishContext(),
+			Holder:         actorUID,
 		}); err != nil {
 			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
 		}
@@ -98,7 +99,7 @@ func (s *Atelet) unmountExternalVolumes(ctx context.Context, actorUID string, vo
 			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q (volume %q): %w", ext.GetVolumeType(), ext.GetStorageVolumeId(), err))
 			continue
 		}
-		if err := plugin.UnmountVolume(ctx, ext.GetStorageVolumeId(), hostPath); err != nil {
+		if err := plugin.UnmountVolume(ctx, volume.UnmountVolumeRequest{VolumeID: ext.GetStorageVolumeId(), TargetPath: hostPath, Holder: actorUID}); err != nil {
 			if status.Code(err) == codes.NotFound || errors.Is(err, os.ErrNotExist) {
 				slog.WarnContext(ctx, "Volume not found during unmount, assuming already unmounted", slog.String("volume_id", ext.GetStorageVolumeId()), slog.Any("error", err))
 			} else {

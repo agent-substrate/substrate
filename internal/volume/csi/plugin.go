@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,7 +54,13 @@ var defaultTLSPaths = tlsPaths{
 // Plugin implements volume.VolumePluginWorkerPlane using the CSI Client.
 type Plugin struct {
 	client           *Client
+	driverName       string
 	stagingDirPrefix string
+	holdersDirPrefix string
+
+	// volumeLocks serializes stage and unstage per volume, so one actor's
+	// unstage cannot race another actor's stage of the same volume.
+	volumeLocks sync.Map
 
 	// capsMu guards controllerCaps and nodeCaps. The maps are built by
 	// InitControllerCapabilities and InitNodeCapabilities, and an RPC is
@@ -67,13 +74,82 @@ type Plugin struct {
 var _ volume.VolumePluginControlPlane = (*Plugin)(nil)
 var _ volume.VolumePluginWorkerPlane = (*Plugin)(nil)
 
-// NewPlugin creates a new Plugin adapter. Call InitControllerCapabilities or
-// InitNodeCapabilities before use; until then, no optional RPC is reported as supported.
-func NewPlugin(client *Client) *Plugin {
+// NewPlugin creates a new Plugin adapter for driverName. Call
+// InitControllerCapabilities or InitNodeCapabilities before use; until then, no
+// optional RPC is reported as supported.
+func NewPlugin(client *Client, driverName string) *Plugin {
 	return &Plugin{
 		client:           client,
+		driverName:       driverName,
 		stagingDirPrefix: filepath.Join(nodepath.BasePath, "staging"),
+		holdersDirPrefix: filepath.Join(nodepath.BasePath, "holders"),
 	}
+}
+
+// volumeDir is the per-volume directory under prefix. Volume IDs are the
+// driver's own and may contain path separators, so they are encoded.
+func (p *Plugin) volumeDir(prefix, volumeID string) string {
+	return filepath.Join(prefix, p.driverName, base64.RawURLEncoding.EncodeToString([]byte(volumeID)))
+}
+
+// stagingPath is the one staged mount per volume per node.
+func (p *Plugin) stagingPath(volumeID string) string {
+	return p.volumeDir(p.stagingDirPrefix, volumeID)
+}
+
+// holdersDir holds one marker file per actor currently publishing volumeID.
+func (p *Plugin) holdersDir(volumeID string) string {
+	return p.volumeDir(p.holdersDirPrefix, volumeID)
+}
+
+// lockVolume takes the per-volume lock and returns its unlock.
+func (p *Plugin) lockVolume(volumeID string) func() {
+	mu, _ := p.volumeLocks.LoadOrStore(volumeID, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
+}
+
+// addHolder records holder before the volume is staged and published, so a
+// live mount always has a marker. A crashed actor keeps its marker until it
+// is deleted and atelet unmounts its volumes, which delays the unstage.
+// TODO: drop markers whose actor directory is gone when atelet starts, so a
+// node reboot does not leave a volume staged forever.
+func (p *Plugin) addHolder(volumeID, holder string) error {
+	if holder == "" {
+		return nil
+	}
+	dir := p.holdersDir(volumeID)
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		return fmt.Errorf("failed to create holders directory %q: %w", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, holder), nil, 0640); err != nil {
+		return fmt.Errorf("failed to record holder %q of volume %q: %w", holder, volumeID, err)
+	}
+	return nil
+}
+
+// removeHolder drops holder's marker and reports whether any holder remains.
+func (p *Plugin) removeHolder(volumeID, holder string) (bool, error) {
+	dir := p.holdersDir(volumeID)
+	if holder != "" {
+		if err := os.Remove(filepath.Join(dir, holder)); err != nil && !os.IsNotExist(err) {
+			return false, fmt.Errorf("failed to remove holder %q of volume %q: %w", holder, volumeID, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to list holders of volume %q: %w", volumeID, err)
+	}
+	if len(entries) > 0 {
+		return true, nil
+	}
+	if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
+		slog.Warn("failed to remove holders directory", slog.String("path", dir), slog.Any("error", err))
+	}
+	return false, nil
 }
 
 // SupportsControllerCapability reports whether the driver supports the given controller RPC.
@@ -258,6 +334,10 @@ func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string)
 // MountVolume maps to CSI Node NodePublishVolume.
 // It also handles NodeStageVolume staging if required by the driver.
 func (p *Plugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
+	defer p.lockVolume(req.VolumeID)()
+	if err := p.addHolder(req.VolumeID, req.Holder); err != nil {
+		return err
+	}
 	stagingPath, err := p.stageVolume(ctx, req)
 	if err != nil {
 		return err
@@ -286,7 +366,7 @@ func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest)
 		return "", nil
 	}
 
-	stagingPath := filepath.Join(p.stagingDirPrefix, req.VolumeID)
+	stagingPath := p.stagingPath(req.VolumeID)
 	if err := os.MkdirAll(stagingPath, 0750); err != nil {
 		return "", fmt.Errorf("failed to create staging directory %q: %w", stagingPath, err)
 	}
@@ -312,19 +392,33 @@ func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest)
 	return stagingPath, nil
 }
 
-// UnmountVolume maps to CSI Node NodeUnpublishVolume.
-// It also handles NodeUnstageVolume if staging was used.
-func (p *Plugin) UnmountVolume(ctx context.Context, volumeID string, targetPath string) error {
-	req := &csi.NodeUnpublishVolumeRequest{
-		VolumeId:   volumeID,
-		TargetPath: targetPath,
+// UnmountVolume maps to CSI Node NodeUnpublishVolume. It also handles
+// NodeUnstageVolume if staging was used, once no holder of the volume remains
+// on the node. A volume the driver no longer knows counts as unpublished, so
+// its holder marker still goes.
+func (p *Plugin) UnmountVolume(ctx context.Context, req volume.UnmountVolumeRequest) error {
+	defer p.lockVolume(req.VolumeID)()
+	csiReq := &csi.NodeUnpublishVolumeRequest{
+		VolumeId:   req.VolumeID,
+		TargetPath: req.TargetPath,
 	}
 
-	if _, err := p.client.NodeUnpublishVolume(ctx, req); err != nil {
-		return fmt.Errorf("CSI NodeUnpublishVolume failed: %w", err)
+	if _, err := p.client.NodeUnpublishVolume(ctx, csiReq); err != nil {
+		if status.Code(err) != codes.NotFound {
+			return fmt.Errorf("CSI NodeUnpublishVolume failed: %w", err)
+		}
+		slog.WarnContext(ctx, "Volume not found during unpublish, assuming already unpublished", slog.String("volume_id", req.VolumeID))
 	}
 
-	return p.unstageVolume(ctx, volumeID)
+	held, err := p.removeHolder(req.VolumeID, req.Holder)
+	if err != nil {
+		return err
+	}
+	if held {
+		slog.InfoContext(ctx, "Volume still has holders on this node, skipping unstage", slog.String("volume_id", req.VolumeID))
+		return nil
+	}
+	return p.unstageVolume(ctx, req.VolumeID)
 }
 
 // unstageVolume calls NodeUnstageVolume and removes the staging directory if the
@@ -334,7 +428,7 @@ func (p *Plugin) unstageVolume(ctx context.Context, volumeID string) error {
 		return nil
 	}
 
-	stagingPath := filepath.Join(p.stagingDirPrefix, volumeID)
+	stagingPath := p.stagingPath(volumeID)
 	req := &csi.NodeUnstageVolumeRequest{
 		VolumeId:          volumeID,
 		StagingTargetPath: stagingPath,
@@ -420,7 +514,7 @@ func newCSIPlugin(ctx context.Context, getter CSIDriverConfigGetter, driverName 
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize CSI client from endpoint %q: %w", endpoint, err)
 	}
-	csiPlugin := NewPlugin(csiClient)
+	csiPlugin := NewPlugin(csiClient, driverName)
 
 	// Verify CSI plugin reported name matches requested name.
 	reportedName, err := csiPlugin.DriverName(ctx)
