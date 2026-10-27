@@ -41,7 +41,7 @@ var (
 	rnd                 = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
 
-// randomnamepaceName returns a random namespace name.
+// randomNamespaceName returns a random namespace name.
 // Format is "aaaa-ddd" where a is a random letter and d is a random digit.
 func randomNamespaceName() string {
 	const letters = "abcdefghijklmnopqrstuvwxyz"

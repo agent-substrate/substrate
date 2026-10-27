@@ -39,8 +39,7 @@ func SandboxClass() string { return os.Getenv(sandboxClassEnv) }
 func IsMicroVM() bool { return SandboxClass() == SandboxClassMicroVM }
 
 // Fixture identifies an installed WorkerPool + ActorTemplate pair (both carry
-// the same name) that suites either create Actors from directly or copy the
-// resolved runtime — sandbox class, worker image, container images — out of.
+// the same name) that suites create Actors from.
 type Fixture struct {
 	Namespace string
 	Name      string
@@ -185,8 +184,6 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 	}
 	blocks = map[string]string{
 		"${WORKERPOOL_RUNTIME}": "  sandboxClasses:\n  - name: gvisor",
-		// Off unless the caller opts in; see WithTrustBundle.
-		"${TEMPLATE_TRUST_BUNDLE}": "",
 	}
 	if !IsMicroVM() {
 		return inline, blocks
