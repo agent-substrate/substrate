@@ -102,12 +102,17 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 
 		var secret []byte
 		var err error
-		if src := inj.GetActorJwt(); src != nil {
-			secret, err = h.actorJWT(ctx, ref, dest, src)
+		switch {
+		case inj.GetActorJwt() != nil:
+			secret, err = h.actorJWT(ctx, ref, dest, inj.GetActorJwt())
 			if err != nil {
 				return nil, fmt.Errorf("minting an actor JWT for header %s: %w", inj.GetHeader(), err)
 			}
-		} else {
+		case inj.GetTokenExchange() != nil:
+			slog.ErrorContext(ctx, "egress denied: token exchange is not supported by this gateway",
+				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("header", inj.GetHeader()))
+			return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
+		default:
 			secret, err = h.providerCredential(ctx, ref, dest, inj.GetCredentialUri())
 			if err != nil {
 				return nil, fmt.Errorf("fetching credential %s for header %s: %w", inj.GetCredentialUri(), inj.GetHeader(), err)

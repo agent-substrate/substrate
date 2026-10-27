@@ -395,3 +395,24 @@ func TestActorJWTInjectionDenials(t *testing.T) {
 		})
 	}
 }
+
+// A token exchange entry denies even with a provider configured, so its empty
+// credential_uri is never fetched.
+func TestTokenExchangeInjectionDenied(t *testing.T) {
+	for _, leg := range requestLegs {
+		t.Run(leg, func(t *testing.T) {
+			provider := &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
+			h := injectionHandlerFor(replaceHeadersPolicy(leg, &ateapi.CredentialHeader{
+				Header:        "authorization",
+				Prefix:        "Bearer ",
+				TokenExchange: &ateapi.TokenExchangeSource{TokenUrl: "https://sts.example.com/token", Audience: "https://api.example.com"},
+			}), provider, "")
+			_, err := h.HandleRequestHeaders(context.Background(),
+				withAuthorization(innerMetadata(leg, "GET", "api.example.com", nil)))
+			wantStatus(t, err, envoy_type.StatusCode_InternalServerError)
+			if provider.got != nil {
+				t.Errorf("provider was asked for %v, want no fetch", provider.got)
+			}
+		})
+	}
+}
