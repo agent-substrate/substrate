@@ -127,18 +127,13 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	//
 	// Durable-dir volumes are host-backed, so they are captured the same way
 	// under every fidelity — and are the ONLY thing a VOLUMES snapshot
-	// captures. ROOTFS and MEMORY always have something to capture: every
-	// container has a rootfs upper.
+	// captures. Without them a VOLUMES snapshot is empty. ROOTFS and MEMORY
+	// always have something to capture: every container has a rootfs upper.
 	durable := hasDurableVolumes(req.GetSpec().GetContainers())
-	csi := hasCsiVolumes(req.GetSpec().GetContainers())
 	switch scope {
-	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-		// TODO: Revisit handling for CSI volumes since snapshots are currently quietly ignored.
-		if !durable && !csi {
-			return nil, apierror.FailedPrecondition(
-				"no durable-dir or CSI volumes found for a VOLUMES snapshot")
-		}
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 	default:
 		return nil, apierror.InvalidArgument("unsupported snapshot fidelity: %v", scope)
 	}

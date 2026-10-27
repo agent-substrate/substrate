@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -392,6 +393,21 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 			runActorLifecycleTestCase(t, "extvol-lifecycle", createActorTemplateWithExternalVolume, test.tc)
 		})
 	}
+}
+
+// TestExternalVolumeOnlyLifecycle suspends and resumes a VOLUMES actor with no
+// durable-dir volume. The file counter lives on the external volume.
+func TestExternalVolumeOnlyLifecycle(t *testing.T) {
+	e2e.RequirePreview(t, preview.GateExternalVolumes)
+	t.Parallel()
+	runActorLifecycleTestCase(t, "extvol-only-lifecycle", createActorTemplateWithOnlyExternalVolume, actorLifecycleTestCase{
+		fidelity:               ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		wantMemoryAfterPause:   1,
+		wantFileAfterPause:     2,
+		wantMemoryAfterSuspend: 1,
+		wantFileAfterSuspend:   3,
+		wantSnapshotFidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	})
 }
 
 func TestDeleteRunningActorWithExternalVolume(t *testing.T) {
@@ -1371,8 +1387,40 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 	if !hasStorageClass(ctx, clients, scName) {
 		t.Fatalf("StorageClass %q not found in cluster; provide a valid --storage-class or install the CSI driver via --setup-csi", scName)
 	}
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-vol", fidelity, withExternalVolume(scName))
+}
 
+// createActorTemplateWithOnlyExternalVolume is createActorTemplateWithExternalVolume
+// without the durable-dir volume.
+func createActorTemplateWithOnlyExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, fidelity ateapi.SnapshotFidelity) (*ateapi.ActorTemplate, error) {
+	scName := e2e.StorageClass
+	if !hasStorageClass(ctx, clients, scName) {
+		t.Fatalf("StorageClass %q not found in cluster; provide a valid --storage-class or install the CSI driver via --setup-csi", scName)
+	}
+	addExternalVolume := withExternalVolume(scName)
 	modify := func(at *ateapi.ActorTemplate) {
+		addExternalVolume(at)
+		durable := map[string]bool{}
+		at.Volumes = slices.DeleteFunc(at.Volumes, func(v *ateapi.Volume) bool {
+			if v.GetDurableDir() != nil {
+				durable[v.GetName()] = true
+				return true
+			}
+			return false
+		})
+		for _, c := range at.GetContainers() {
+			c.VolumeMounts = slices.DeleteFunc(c.VolumeMounts, func(m *ateapi.VolumeMount) bool {
+				return durable[m.GetName()]
+			})
+		}
+	}
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-only", fidelity, modify)
+}
+
+// withExternalVolume mounts an external volume at /external-data and keeps the
+// file counter there.
+func withExternalVolume(scName string) func(*ateapi.ActorTemplate) {
+	return func(at *ateapi.ActorTemplate) {
 		for _, c := range at.GetContainers() {
 			if c.GetName() != "counter" {
 				continue
@@ -1411,7 +1459,6 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 			})
 		}
 	}
-	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-vol", fidelity, modify)
 }
 
 // secondDurableDirVolume is the extra durable-dir volume (and where the counter

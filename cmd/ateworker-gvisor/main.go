@@ -858,7 +858,9 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		if len(durablePaths) == 0 {
-			return nil, fmt.Errorf("no durable-dir volumes found for VOLUMES snapshot")
+			// Nothing to capture. The restore cold-boots the actor.
+			checkpointFn = func(context.Context) error { return nil }
+			break
 		}
 		checkpointFn = func(ctx context.Context) error {
 			err := rcmd.cmdFsCheckpoint(ctx, ocispec.SandboxID, checkpointPath, durablePaths)
