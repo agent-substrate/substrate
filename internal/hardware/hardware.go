@@ -107,6 +107,34 @@ func (r Requirement) Runtime() *ateapi.ActorSandboxRuntime {
 	return r.snap
 }
 
+// ArchRuntime returns a copy of snap keeping only its AttrArchitecture
+// attribute, or nil when snap is nil. If snap has no Version or no non-empty
+// AttrArchitecture entry, Version on the returned stamp is nil so nothing
+// matches it.
+func ArchRuntime(snap *ateapi.ActorSandboxRuntime) *ateapi.ActorSandboxRuntime {
+	if snap == nil {
+		return nil
+	}
+	out := &ateapi.ActorSandboxRuntime{SandboxClass: snap.GetSandboxClass()}
+	v := snap.GetVersion()
+	for _, a := range v.GetAttributes() {
+		if a.GetKey() == AttrArchitecture && a.GetValue() != "" {
+			out.Version = &ateapi.VersionedSandboxCompat{
+				SchemaVersion: v.GetSchemaVersion(),
+				Attributes:    []*ateapi.AttributeEntry{{Key: AttrArchitecture, Value: a.GetValue()}},
+			}
+			break
+		}
+	}
+	return out
+}
+
+// ArchOnly returns a Requirement that checks only snap's sandbox class, schema
+// version, and AttrArchitecture. The zero Requirement returns itself.
+func (r Requirement) ArchOnly() Requirement {
+	return NewRequirement(ArchRuntime(r.snap))
+}
+
 // Matches reports whether rt, the runtime an assignment records, can restore
 // the snapshot. A requirement of nothing is met by any runtime. Otherwise the
 // sandbox classes must be equal and the compat must match.
@@ -284,6 +312,12 @@ func SandboxClass(status *ateapi.WorkerStatus) string {
 // no constraint.
 func Matches(rt, snap *ateapi.ActorSandboxRuntime) bool {
 	return NewRequirement(snap).Matches(rt)
+}
+
+// MatchesArch reports whether rt shares snap's sandbox class, schema version,
+// and non-empty AttrArchitecture. A nil snap imposes no constraint.
+func MatchesArch(rt, snap *ateapi.ActorSandboxRuntime) bool {
+	return NewRequirement(ArchRuntime(snap)).Matches(rt)
 }
 
 // MatchesCompat reports whether worker can restore a snapshot stamped with
