@@ -30,7 +30,7 @@ every setting with its environment variable.
 | `--egress-gateway-extra-spiffe-ids IDS` | Comma-separated SPIFFE IDs that hold ate-api-server's `egress_gateway` role next to atenet-egress, such as a credential provider that mints actor JWTs. ate-setup passes atenet-egress's ID and then each listed ID as repeated `--egress-gateway-spiffe-id` flags; unset passes none, leaving ate-api-server's default. `ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS` when the flag is absent |
 | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | External processor authorization filter |
 | `--credential-provider JSON` | Required by `deploy ate-system` and `deploy atenet`. A JSON object: `{"name":"k8s.io"}` deploys and uses the bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only the egress gateway; `{"enabled":false}` turns egress credential injection off; `{"name":"<provider>","address":"<host>:<port>"}` uses a provider you deploy yourself. See [`docs/guides/egress-credential-injection.md`](../../docs/guides/egress-credential-injection.md). `ATE_CREDENTIAL_PROVIDER` when the flag is absent |
-| `--ateapi-log-level LEVEL` | ate-api-server log level: `debug`, `info`, `warn`, or `error`. Written to the `ate-api-config` ConfigMap on every deploy when set; unset keeps the installed level (`info` on a new install). The server picks up a change without restarting. `ATE_API_LOG_LEVEL` when the flag is absent |
+| `--ateapi-log-level LEVEL` | ate-api-server log level: `debug`, `info`, `warn`, or `error`. Written to the `ate-api-config` ConfigMap on every deploy when set; unset keeps the installed level (`info` on a new install). Changing the level updates the env-hash annotation and rolls `ate-api-server`. `ATE_API_LOG_LEVEL` when the flag is absent |
 | `--otlp-endpoint URL` | Send control plane telemetry to `URL` instead of the cluster default (see [`benchmarking/telemetry/README.md`](../../benchmarking/telemetry/README.md)). `ATE_OTLP_ENDPOINT` when the flag is absent |
 | `--preview GATES` | Preview gates passed as `--preview` to every substrate component: comma-separated gate names, or `ALL` for all. `ATE_PREVIEW` or `config.preview` when the flag is absent. An explicit `--preview=''` turns them all off, even when `ATE_PREVIEW` is set |
 | `--context NAME` | Kubeconfig context. `KUBECTL_CONTEXT` when the flag is absent |
@@ -154,6 +154,8 @@ Individual secrets and config that `deploy ate-system` creates automatically.
 - `create api-server-env-vars`
 - `create api-authentication-config`
 - `create api-config`
+
+`create api-server-env-vars`, `create api-authentication-config`, and `create api-config` also update `Deployment/ate-api-server`'s env-hash annotation and roll any running pods onto the new configuration.
 
 ## Setup
 

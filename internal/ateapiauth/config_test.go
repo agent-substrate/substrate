@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package apiauthn
+package ateapiauth
 
 import (
 	"os"
@@ -20,6 +20,52 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestParseAuthenticationConfig(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		cfg, err := ParseAuthenticationConfig([]byte(`
+jwtProviders:
+- name: kubernetes
+  issuer: https://kubernetes.default.svc
+  audiences: [api.ate-system.svc]
+- name: google
+  issuer: https://accounts.google.com
+  audiences: [cloud-sdk-client]
+`))
+		if err != nil {
+			t.Fatalf("ParseAuthenticationConfig() error = %v", err)
+		}
+		if got := len(cfg.JWTProviders); got != 2 {
+			t.Fatalf("len(JWTProviders) = %d, want 2", got)
+		}
+	})
+
+	t.Run("unknown field", func(t *testing.T) {
+		_, err := ParseAuthenticationConfig([]byte(`
+jwtProviders:
+- name: kubernetes
+  issuer: https://kubernetes.default.svc
+  audiences: [api.ate-system.svc]
+future_field: true
+`))
+		if err == nil || !strings.Contains(err.Error(), `unknown field "future_field"`) {
+			t.Fatalf("ParseAuthenticationConfig() error = %v, want unknown-field error", err)
+		}
+	})
+
+	t.Run("legacy field", func(t *testing.T) {
+		_, err := ParseAuthenticationConfig([]byte(`
+actorIdentityJWTProvider: kubernetes
+jwtProviders:
+- name: kubernetes
+  issuer: https://kubernetes.default.svc
+  audiences: [api.ate-system.svc]
+`))
+		if err == nil || !strings.Contains(err.Error(), `unknown field "actorIdentityJWTProvider"`) {
+			t.Fatalf("ParseAuthenticationConfig() error = %v, want unknown-field error", err)
+		}
+	})
+}
 
 func TestLoadAuthenticationConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "authentication.yaml")

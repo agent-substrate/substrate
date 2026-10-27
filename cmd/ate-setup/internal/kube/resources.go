@@ -216,6 +216,9 @@ func (c *Client) ServiceAccountAnnotation(ctx context.Context, namespace, name, 
 // An empty string means the endpoint is unavailable or has no issuer, which
 // callers treat as "fall back to the in-cluster default".
 func (c *Client) OIDCIssuer(ctx context.Context) string {
+	if c == nil || c.Typed == nil || c.Typed.Discovery() == nil || c.Typed.Discovery().RESTClient() == nil {
+		return ""
+	}
 	raw, err := c.Typed.Discovery().RESTClient().
 		Get().AbsPath("/.well-known/openid-configuration").
 		DoRaw(ctx)
