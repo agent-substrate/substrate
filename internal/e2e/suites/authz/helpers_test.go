@@ -64,8 +64,9 @@ func exactly(c codes.Code) outcome {
 }
 
 var (
-	allowed = exactly(codes.OK)
-	denied  = exactly(codes.PermissionDenied)
+	allowed         = exactly(codes.OK)
+	denied          = exactly(codes.PermissionDenied)
+	unauthenticated = exactly(codes.Unauthenticated)
 	// passedCheck is any outcome but a permission or authentication failure.
 	// The permission check runs before the handler validates or looks
 	// anything up, so a request the handler then rejects (an invalid
