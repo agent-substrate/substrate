@@ -44,6 +44,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/credprovider/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/egress/actorjwt"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/egress/tokenexchange"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/resources"
@@ -85,6 +86,9 @@ type Handler struct {
 	policies *policyCache
 	// actorJWTs mints the actor JWTs that credential injections ask for.
 	actorJWTs *actorjwt.Minter
+	// tokens exchanges actor JWTs for the access tokens token_exchange
+	// injections ask for.
+	tokens *tokenexchange.Broker
 	// provider resolves an egress policy's credential_uri injections. Nil
 	// means none are configured, and a request that needs one is denied.
 	provider credprovider.CredentialProviderClient
@@ -104,18 +108,20 @@ type Handler struct {
 // TLS-terminated MITM leg; nil leaves them off, so a request that needs one is
 // denied. Actor JWT injections need no provider. providerName, when set, is
 // the provider this gateway serves; a credential URI naming another provider
-// is refused.
-func New(apiClient ateapi.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, provider credprovider.CredentialProviderClient, providerName string) *Handler {
+// is refused. tokenClient sends the exchanges of token_exchange injections.
+func New(apiClient ateapi.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, provider credprovider.CredentialProviderClient, providerName string, tokenClient *tokenexchange.Client) *Handler {
 	if loadActorIdentityRoots == nil {
 		loadActorIdentityRoots = func() (*x509.CertPool, error) {
 			return nil, errors.New("no actor-identity CA configured")
 		}
 	}
+	actorJWTs := actorjwt.New(apiClient)
 	return &Handler{
 		apiClient:              apiClient,
 		loadActorIdentityRoots: loadActorIdentityRoots,
 		policies:               newPolicyCache(apiClient, policyCacheTTL),
-		actorJWTs:              actorjwt.New(apiClient),
+		actorJWTs:              actorJWTs,
+		tokens:                 tokenexchange.NewBroker(actorJWTs, tokenClient),
 		provider:               provider,
 		providerName:           providerName,
 	}

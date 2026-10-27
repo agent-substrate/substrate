@@ -1462,6 +1462,105 @@ func TestRenderAtenetEgressManifestEnvoyConcurrency(t *testing.T) {
 	})
 }
 
+func TestRenderAtenetEgressManifestTokenExchangeCA(t *testing.T) {
+	const digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+	render := func(t *testing.T, configMap string) (corev1.Container, []corev1.Volume) {
+		t.Helper()
+		e := &Env{
+			Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterEnvoy, Images: src, TokenExchangeCAConfigMap: configMap},
+			resolver: images.NewPrebuilt(src, func(context.Context, string) (string, error) {
+				return digest, nil
+			}),
+		}
+		// No credential provider: the CA does not depend on one.
+		out, err := e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
+		if err != nil {
+			t.Fatalf("renderAtenetEgressManifest() error = %v", err)
+		}
+		for _, doc := range strings.Split(string(out), "\n---\n") {
+			var dep appsv1.Deployment
+			if err := yaml.Unmarshal([]byte(doc), &dep); err != nil || dep.Kind != "Deployment" || dep.Name != "atenet-egress" {
+				continue
+			}
+			for _, c := range dep.Spec.Template.Spec.Containers {
+				if c.Name == "ext-proc" {
+					return c, dep.Spec.Template.Spec.Volumes
+				}
+			}
+			t.Fatal("atenet-egress Deployment has no ext-proc container")
+		}
+		t.Fatal("rendered manifest has no atenet-egress Deployment")
+		return corev1.Container{}, nil
+	}
+	const flag = "--token-exchange-ca-file=/run/token-exchange-ca/ca.crt"
+
+	t.Run("unset", func(t *testing.T) {
+		extProc, volumes := render(t, "")
+		if slices.Contains(extProc.Args, flag) {
+			t.Errorf("ext-proc args contain %s with no ConfigMap set", flag)
+		}
+		if slices.ContainsFunc(extProc.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == "token-exchange-ca" }) {
+			t.Error("ext-proc mounts token-exchange-ca with no ConfigMap set")
+		}
+		if slices.ContainsFunc(volumes, func(v corev1.Volume) bool { return v.Name == "token-exchange-ca" }) {
+			t.Error("atenet-egress has a token-exchange-ca volume with no ConfigMap set")
+		}
+	})
+
+	t.Run("set", func(t *testing.T) {
+		extProc, volumes := render(t, "corp-ca")
+		if !slices.Contains(extProc.Args, flag) {
+			t.Errorf("ext-proc args = %v, want %s", extProc.Args, flag)
+		}
+		wantMount := corev1.VolumeMount{Name: "token-exchange-ca", MountPath: "/run/token-exchange-ca", ReadOnly: true}
+		if !slices.ContainsFunc(extProc.VolumeMounts, func(m corev1.VolumeMount) bool { return reflect.DeepEqual(m, wantMount) }) {
+			t.Errorf("ext-proc volume mounts = %v, want %v", extProc.VolumeMounts, wantMount)
+		}
+		wantVolume := corev1.Volume{Name: "token-exchange-ca", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "corp-ca"},
+			Items:                []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}},
+		}}}
+		if !slices.ContainsFunc(volumes, func(v corev1.Volume) bool { return reflect.DeepEqual(v, wantVolume) }) {
+			t.Errorf("atenet-egress volumes = %v, want one equal to %v", volumes, wantVolume)
+		}
+	})
+
+	if _, err := patchAtenetEgressTokenExchangeCA([]byte("kind: ConfigMap\n"), "corp-ca"); err == nil {
+		t.Error("patchAtenetEgressTokenExchangeCA accepted a manifest without the markers")
+	}
+}
+
+func TestRequireTokenExchangeCA(t *testing.T) {
+	configMap := func(data, binaryData map[string]string) *corev1.ConfigMap {
+		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: "corp-ca"}, Data: data}
+		for k, v := range binaryData {
+			cm.BinaryData = map[string][]byte{k: []byte(v)}
+		}
+		return cm
+	}
+	for _, tc := range []struct {
+		name      string
+		configMap string
+		objects   []runtime.Object
+		wantErr   bool
+	}{
+		{name: "unset"},
+		{name: "present", configMap: "corp-ca", objects: []runtime.Object{configMap(map[string]string{"ca.crt": "pem"}, nil)}},
+		{name: "present as binary data", configMap: "corp-ca", objects: []runtime.Object{configMap(nil, map[string]string{"ca.crt": "der"})}},
+		{name: "missing", configMap: "corp-ca", wantErr: true},
+		{name: "without ca.crt", configMap: "corp-ca", objects: []runtime.Object{configMap(map[string]string{"tls.crt": "pem"}, nil)}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{Cfg: &config.Config{Root: repoRoot(t), TokenExchangeCAConfigMap: tc.configMap}, Kube: fakeKube(t, tc.objects...)}
+			err := e.requireTokenExchangeCA(t.Context())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("requireTokenExchangeCA() = %v, want error %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 // Without --fake-data-plane there is no fake-workersync rollout to wait for.
 func TestWaitFakeWorkersyncWithoutTheFlagIsANoOp(t *testing.T) {
 	e := &Env{Cfg: &config.Config{Root: repoRoot(t)}, Kube: fakeKube(t)}
