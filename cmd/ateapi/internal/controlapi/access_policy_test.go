@@ -341,7 +341,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	if _, err := invoke(aliceCtx, ateapi.Control_UpdateAtespaceAccessPolicy_FullMethodName, updateSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.UpdateAtespaceAccessPolicy(c, r.(*ateapi.UpdateAtespaceAccessPolicyRequest))
-	}); apierror.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "UID conflict") {
+	}); apierror.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "has a different uid") {
 		t.Fatalf("expected Aborted UID conflict for UpdateAtespaceAccessPolicy with old UID, got %v", err)
 	}
 }

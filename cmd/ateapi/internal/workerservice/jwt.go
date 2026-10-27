@@ -17,7 +17,6 @@ package workerservice
 import (
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -26,7 +25,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
-	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
@@ -51,10 +49,8 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapi.MintWorkerA
 	// The actor doesn't need to be running: tokens are needed to fetch a
 	// snapshot before resume and to upload a checkpoint during or after suspend.
 	dbActor, err := s.store.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("actor not found")
-	} else if err != nil {
-		return nil, fmt.Errorf("while retrieving actor: %w", err)
+	if err != nil {
+		return nil, controlapi.MapStoreError(fmt.Errorf("while retrieving actor: %w", err), "actor")
 	}
 	// The node check comes first so a node that does not host the actor gets
 	// NotFound whatever UID it sends, and cannot use the UID check to learn

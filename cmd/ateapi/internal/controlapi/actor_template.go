@@ -48,13 +48,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapi.Create
 
 	stored, err := s.impl.CreateActorTemplate(ctx, in)
 	if err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, apierror.AlreadyExists("ActorTemplate %s already exists", templateRef)
-		}
-		if errors.Is(err, store.ErrFailedPrecondition) {
-			return nil, apierror.FailedPrecondition("%v", err)
-		}
-		return nil, fmt.Errorf("while recording actor template: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while recording actor template: %w", err), "ActorTemplate %s", templateRef)
 	}
 
 	return stored, nil
@@ -86,10 +80,8 @@ func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapi.GetActorT
 
 	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
 	template, err := s.impl.GetActorTemplate(ctx, templateRef)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("ActorTemplate %s not found", templateRef)
-	} else if err != nil {
-		return nil, fmt.Errorf("while getting actor template from DB: %w", err)
+	if err != nil {
+		return nil, MapStoreError(fmt.Errorf("while getting actor template from DB: %w", err), "ActorTemplate %s", templateRef)
 	}
 
 	return template, nil
@@ -107,7 +99,7 @@ func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapi.ListAct
 
 	page, err := s.impl.ListActorTemplates(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
 	if err != nil {
-		return nil, mapListError(fmt.Errorf("while listing actor templates in db: %w", err))
+		return nil, MapStoreError(fmt.Errorf("while listing actor templates in db: %w", err), "ActorTemplates")
 	}
 	return &ateapi.ListActorTemplatesResponse{
 		ActorTemplates: page.Items,

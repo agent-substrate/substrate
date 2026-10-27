@@ -56,10 +56,7 @@ func (s *RPCService) GetGlobalAccessPolicy(ctx context.Context, req *ateapi.GetG
 func (s *ServiceImpl) GetGlobalAccessPolicy(ctx context.Context) (*ateapi.AccessPolicy, error) {
 	policy, err := s.store.GetGlobalAccessPolicy(ctx)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Global AccessPolicy not found")
-		}
-		return nil, fmt.Errorf("while getting Global access policy: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while getting Global access policy: %w", err), "Global AccessPolicy")
 	}
 	return policy, nil
 }
@@ -114,10 +111,7 @@ func (s *RPCService) GetAtespaceAccessPolicy(ctx context.Context, req *ateapi.Ge
 func (s *ServiceImpl) GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapi.AccessPolicy, error) {
 	policy, err := s.store.GetAtespaceAccessPolicy(ctx, name)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("AccessPolicy for atespace %s not found", name)
-		}
-		return nil, fmt.Errorf("while getting Atespace access policy: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while getting Atespace access policy: %w", err), "AccessPolicy for atespace %s", name)
 	}
 	return policy, nil
 }
@@ -172,19 +166,9 @@ func mapAccessPolicyWrite(policy *ateapi.AccessPolicy, err error) (*ateapi.Acces
 	switch {
 	case err == nil:
 		return policy, nil
-	case errors.Is(err, store.ErrNotFound):
-		return nil, apierror.NotFound("AccessPolicy not found")
-	case errors.Is(err, store.ErrAlreadyExists):
-		return nil, apierror.AlreadyExists("AccessPolicy already exists")
-	case errors.Is(err, store.ErrVersionConflict):
-		return nil, apierror.Aborted("AccessPolicy version conflict")
-	case errors.Is(err, store.ErrUIDConflict):
-		return nil, apierror.Aborted("AccessPolicy UID conflict")
-	case errors.Is(err, store.ErrPreconditionRequired):
-		return nil, apierror.InvalidArgument("AccessPolicy UID and version are required")
 	case errors.Is(err, store.ErrFailedPrecondition):
 		return nil, apierror.FailedPrecondition("parent Atespace does not exist")
 	default:
-		return nil, fmt.Errorf("while writing AccessPolicy: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while writing AccessPolicy: %w", err), "AccessPolicy")
 	}
 }

@@ -274,8 +274,8 @@ func TestDeleteAtespace_Preconditions(t *testing.T) {
 
 	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
 	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Atespace team-a does not have uid "+foreignUID)
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Atespace team-a does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Atespace team-a has a different uid")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Atespace team-a has a different uid")
 	if _, err := tc.client.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: ref}); err != nil {
 		t.Fatalf("a refused delete removed the atespace: %v", err)
 	}

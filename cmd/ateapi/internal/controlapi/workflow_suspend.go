@@ -16,7 +16,6 @@ package controlapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -201,10 +200,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
+		return nil, MapStoreError(err, "Actor %s", actorRef)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 	return storedActor, nil
@@ -418,10 +414,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	})
 	dUpdateActor = time.Since(t)
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
+		return nil, MapStoreError(err, "Actor %s", actorRef)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 

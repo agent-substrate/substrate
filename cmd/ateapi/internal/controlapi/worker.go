@@ -42,15 +42,12 @@ func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapi
 	// NOT_FOUND rather than an empty page, which a caller cannot tell from a
 	// Worker hosting nothing.
 	if _, err := s.impl.GetWorker(ctx, name); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Worker %s not found", name)
-		}
-		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
+		return nil, MapStoreError(fmt.Errorf("while fetching worker %s: %w", name, err), "Worker %s", name)
 	}
 
 	page, err := s.impl.ListWorkerAssignments(ctx, name, toStoreListOptions(req.GetOptions()))
 	if err != nil {
-		return nil, mapListError(fmt.Errorf("while listing the assignments of worker %s: %w", name, err))
+		return nil, MapStoreError(fmt.Errorf("while listing the assignments of worker %s: %w", name, err), "Worker %s", name)
 	}
 	return &ateapi.ListWorkerActorAssignmentsResponse{
 		ActorAssignments: page.Items,
@@ -65,7 +62,7 @@ func (s *RPCService) ListWorkers(ctx context.Context, req *ateapi.ListWorkersReq
 
 	page, err := s.impl.ListWorkers(ctx, toStoreListOptions(req.GetOptions()))
 	if err != nil {
-		return nil, mapListError(fmt.Errorf("while listing workers in db: %w", err))
+		return nil, MapStoreError(fmt.Errorf("while listing workers in db: %w", err), "Workers")
 	}
 	return &ateapi.ListWorkersResponse{
 		Workers:       page.Items,
@@ -84,11 +81,8 @@ func (s *RPCService) GetWorker(ctx context.Context, req *ateapi.GetWorkerRequest
 	name := req.GetWorker().GetName()
 
 	worker, err := s.impl.GetWorker(ctx, name)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Worker %s not found", name)
-	}
 	if err != nil {
-		return nil, fmt.Errorf("while getting worker: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while getting worker: %w", err), "Worker %s", name)
 	}
 	return worker, nil
 }
@@ -136,10 +130,7 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapi.Worker)
 	// Save the data in the storage layer.
 	created, err := s.store.CreateWorker(ctx, outWorker)
 	if err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, apierror.AlreadyExists("Worker %s already exists", inWorker.GetMetadata().GetName())
-		}
-		return nil, fmt.Errorf("while creating worker: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while creating worker: %w", err), "Worker %s", inWorker.GetMetadata().GetName())
 	}
 	return created, nil
 }
@@ -317,11 +308,8 @@ var errWorkerDraining = errors.New("worker is draining")
 // conflict for the caller to retry, the same as any other guarded update.
 func (s *RPCService) mutateNamedWorker(ctx context.Context, name string, mutate func(toUpdate *ateapi.Worker) error) (*ateapi.Worker, error) {
 	observed, err := s.impl.GetWorker(ctx, name)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Worker %s not found", name)
-	}
 	if err != nil {
-		return nil, fmt.Errorf("while getting worker %s: %w", name, err)
+		return nil, MapStoreError(fmt.Errorf("while getting worker %s: %w", name, err), "Worker %s", name)
 	}
 	return s.mutateWorker(ctx, name, store.PreconditionFrom(observed), mutate)
 }
@@ -339,19 +327,10 @@ func (s *RPCService) mutateWorker(ctx context.Context, name string, precondition
 	if errors.As(err, &unchanged) {
 		return unchanged.worker, nil
 	}
-	switch {
-	case errors.Is(err, errWorkerDraining):
+	if errors.Is(err, errWorkerDraining) {
 		return nil, apierror.FailedPrecondition("Worker %s is draining", name)
-	case errors.Is(err, store.ErrNotFound):
-		return nil, apierror.NotFound("Worker %s not found", name)
-	case errors.Is(err, store.ErrUIDConflict):
-		return nil, apierror.Aborted("Worker %s is not the one the request describes", name)
-	case errors.Is(err, store.ErrVersionConflict):
-		return nil, apierror.Aborted("concurrent update conflict, please retry")
-	case errors.Is(err, store.ErrPreconditionRequired):
-		return nil, apierror.InvalidArgument("while updating worker %s: %v", name, err)
 	}
-	return nil, fmt.Errorf("while updating worker: %w", err)
+	return nil, MapStoreError(fmt.Errorf("while updating worker: %w", err), "Worker %s", name)
 }
 
 // workerUnchanged ends an UpdateWorker mutation that found its work already

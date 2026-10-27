@@ -16,7 +16,6 @@ package controlapi
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	"google.golang.org/protobuf/proto"
@@ -79,10 +78,7 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 		toUpdate.Status = applied.GetStatus()
 		return nil
 	}); err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return err
+		return MapStoreError(err, "Actor %s", actorRef)
 	}
 	return nil
 }
@@ -93,10 +89,7 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 func (w *ActorWorkflow) loadReportedActor(ctx context.Context, actorRef resources.ActorRef, actorUID, node string) (*ateapi.Actor, error) {
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, err
+		return nil, MapStoreError(err, "Actor %s", actorRef)
 	}
 	if got := actor.GetMetadata().GetUid(); got != actorUID {
 		slog.WarnContext(ctx, "Refusing a snapshot state report naming a stale actor incarnation",

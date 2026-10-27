@@ -356,8 +356,8 @@ func TestDeleteActorTemplate_Preconditions(t *testing.T) {
 
 	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
 	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "ActorTemplate "+templateRef.String()+" does not have uid "+foreignUID)
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "ActorTemplate "+templateRef.String()+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "ActorTemplate "+templateRef.String()+" has a different uid")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "ActorTemplate "+templateRef.String()+" has a different uid")
 	if _, err := tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: ref}); err != nil {
 		t.Fatalf("a refused delete removed the template: %v", err)
 	}
