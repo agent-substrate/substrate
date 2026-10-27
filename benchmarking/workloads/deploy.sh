@@ -39,8 +39,8 @@ SWEPERF_TEMPLATE_DIR="${MANIFEST_DIR}/sweperf/generated"
 # overrides the default set — the usermem and kernelmem templates (for the
 # matching locust tests) are not deployed by default. The glutton-storage
 # template is added when a StorageClass is set, because it needs a CSI driver
-# that not every cluster has.
-read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full ate-env}"
+# that not every cluster has; ate-env is added when ATE_ENV_IMAGE is set.
+read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
 
 # template_manifest prints the manifest path for ActorTemplate NAME.
 template_manifest() {
@@ -72,9 +72,9 @@ WORKER_MEMORY=""
 # The StorageClass for the glutton-storage external volume. Empty means the
 # template is not deployed.
 STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-}"
-# The image for the ate-env benchmark ActorTemplate. Defaults to the pinned
-# release guest image; set ATE_ENV_IMAGE to override with a custom build.
-ATE_ENV_IMAGE="${ATE_ENV_IMAGE:-us-docker.pkg.dev/gke-substrate-release/benchmark/ate-env-guest@sha256:1d38934ef1dac71fcb1f1286de734e06ab2e19747279bccbd37bfe69e0d5bc72}"
+# The image for the ate-env benchmark ActorTemplate. Empty means the
+# template is not deployed.
+ATE_ENV_IMAGE="${ATE_ENV_IMAGE:-}"
 # The address to which an instrumented actor container sends its telemetry.
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
@@ -473,6 +473,13 @@ fi
 if [[ -z "${WORKLOAD_TEMPLATES:-}" ]] \
   && { [[ -n "${STORAGE_CLASS_NAME}" ]] || [[ "${action}" == "delete" ]]; }; then
   TEMPLATES+=(glutton-storage)
+fi
+
+# ate-env joins the default set only when ATE_ENV_IMAGE is set. Delete always
+# includes it, because deleting a template that does not exist is a no-op.
+if [[ -z "${WORKLOAD_TEMPLATES:-}" ]] \
+  && { [[ -n "${ATE_ENV_IMAGE}" ]] || [[ "${action}" == "delete" ]]; }; then
+  TEMPLATES+=(ate-env)
 fi
 
 if [[ "${action}" == "deploy" && -z "${STORAGE_CLASS_NAME}" && " ${TEMPLATES[*]} " == *" glutton-storage "* ]]; then

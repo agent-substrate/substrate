@@ -273,16 +273,21 @@ nothing. Durations are in milliseconds.
 ### ate-env Benchmark
 
 The `ate-env` benchmark (`--user-class ate_env`) exercises the
-[`ate-env-guest`](https://github.com/agent-substrate/env/tree/main/cmd/ate-env-guest)
-sandbox image from `agent-substrate/env`. `workloads/deploy.sh` deploys and
-deletes the `ate-env` `ActorTemplate` by default using the pinned release guest
-image (see
-[`workloads/manifests/ate-env-template.yaml.tmpl`](workloads/manifests/ate-env-template.yaml.tmpl)
-to override the guest image with a custom build). It follows `glutton`'s
+[`ate-env-guest`](https://github.com/agent-substrate/env/tree/1c08a7a578afd896373511a83beb242aec1425c0/cmd/ate-env-guest)
+sandbox image from `agent-substrate/env`. It follows `glutton`'s
 wake/hold/hibernate lifecycle, but replaces synthetic HTTP `/ping` calls with a
 real `"hello world"` process execution inside the guest (`StartProcess(["echo",
 "hello world"])` + `StreamProcessOutput(follow: true)`) over gRPC directly
 through `atenet-router` (`1 dns:///` gRPC channel per VU).
+
+Build the guest image from `agent-substrate/env` at commit `1c08a7a` (see
+[`workloads/manifests/ate-env-template.yaml.tmpl`](workloads/manifests/ate-env-template.yaml.tmpl)),
+then deploy the `ate-env` template and user class:
+
+```bash
+ATE_ENV_IMAGE=<image> WORKLOAD_TEMPLATES=ate-env ./benchmarking/workloads/deploy.sh --deploy
+./benchmarking/locust/deploy.sh --deploy --user-class ate_env
+```
 
 #### ate-env Configuration Knobs
 
