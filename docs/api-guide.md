@@ -446,13 +446,16 @@ a `Snapshot` with the following fields:
   attribute recorded on the snapshot present on the worker with the same
   value, except `cpu_features`, whose hexadecimal bitmask on the snapshot must be
   a bitwise subset of the worker's; attributes only the worker reports are
-  ignored). When no compatible worker has
+  ignored). A `SNAPSHOT_FIDELITY_ROOTFS` snapshot requires only the same schema
+  version and `architecture`. When no compatible worker has
   capacity:
   - A durable snapshot — the actor's own, a `sourceTag` clone, or the
-    template's golden snapshot a new actor starts from — falls back to any eligible
-    worker and downgrades the restore to `SNAPSHOT_FIDELITY_ROOTFS`, preserving
-    the snapshot's rootfs and volume data while booting the guest fresh under the
-    `defaultRuntime` of that class on the new worker.
+    template's golden snapshot a new actor starts from — first falls back to an
+    eligible worker of the same `architecture` and downgrades the restore to
+    `SNAPSHOT_FIDELITY_ROOTFS`, preserving the snapshot's rootfs and volume data
+    while booting the guest fresh under the `defaultRuntime` of that class on the
+    new worker. If only a worker of another `architecture` has capacity, the
+    restore downgrades to `SNAPSHOT_FIDELITY_VOLUMES`.
   - A local checkpoint first tries compatible workers on its attached node.
     If that fails, `ResumeActor` checks capacity without the node and runtime
     restrictions. When that capacity exists, it detaches the checkpoint and
@@ -462,10 +465,8 @@ a `Snapshot` with the following fields:
     unless its node was deleted. See [`ResumeActor`](#resumeactor) for that
     case.
 
-  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
-  `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime placement constraint. Because a
-  `ROOTFS` restore reuses the container's rootfs upper layer over the template's
-  image, pools selected by an `ActorTemplate` must share a CPU architecture.
+  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_VOLUMES` imposes
+  no runtime placement constraint.
 
 An `ActorTemplate` references its golden tag with the `ObjectRef` in
 `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned

@@ -605,7 +605,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 			workerRuntime := testSandboxRuntime()
 			wantFidelity := ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 			if tt.otherRuntime {
-				workerRuntime = testRuntime("arm64", "")
+				workerRuntime = testRuntime("amd64", "other-bundle")
 				wantFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 			}
 			worker := seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", workerRuntime)
@@ -614,7 +614,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 				someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 			pending := newPausedSnapshot(t, 2, memory, "", "pending-2", "node-3")
 			if tt.otherRuntime {
-				pending.SandboxRuntime = testRuntime("amd64", "")
+				pending.SandboxRuntime = testRuntime("amd64", "orig-bundle")
 			}
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
 				a.Status.AssignedNode = tt.assignedNode

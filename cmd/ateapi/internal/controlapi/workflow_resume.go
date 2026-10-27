@@ -479,8 +479,16 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	if assignedWorker == nil {
 		pickedWorker, err := w.scheduler.Schedule(ctx, constraints)
 		if errors.Is(err, scheduling.ErrNoCapacity) && relaxable {
-			constraints.RequiredRuntime = hardware.Requirement{}
-			pickedWorker, err = w.scheduler.Schedule(ctx, constraints)
+			// Same architecture first, which keeps the rootfs, then any
+			// worker. A ROOTFS requirement is architecture-only already.
+			if archReq := snapRuntime.ArchOnly(); !proto.Equal(archReq.Runtime(), snapRuntime.Runtime()) {
+				constraints.RequiredRuntime = archReq
+				pickedWorker, err = w.scheduler.Schedule(ctx, constraints)
+			}
+			if errors.Is(err, scheduling.ErrNoCapacity) {
+				constraints.RequiredRuntime = hardware.Requirement{}
+				pickedWorker, err = w.scheduler.Schedule(ctx, constraints)
+			}
 		}
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
@@ -661,14 +669,22 @@ func snapshotSandboxClass(actor *ateapi.Actor) string {
 	return snapshotToResume(actor.GetStatus()).GetSandboxRuntime().GetSandboxClass()
 }
 
-// requiredSnapshotRuntime returns the ActorSandboxRuntime stamped on snap, the
-// snapshotToResume, when the resume restores its memory state, or nil when it
-// does not (cold boot, ROOTFS or VOLUMES fidelity, or replaced template).
+// requiredSnapshotRuntime returns the ActorSandboxRuntime constraint for
+// restoring snap under tmpl: the full stamp for MEMORY, architecture-only for
+// ROOTFS, or nil when neither is restored (cold boot, VOLUMES, or replaced
+// template).
 func requiredSnapshotRuntime(snap *ateapi.Snapshot, tmpl *ateapi.ActorTemplate) *ateapi.ActorSandboxRuntime {
-	if snap.GetFidelity() != ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY || templateReplaced(snap, tmpl) {
+	if templateReplaced(snap, tmpl) {
 		return nil
 	}
-	return snap.GetSandboxRuntime()
+	switch snap.GetFidelity() {
+	case ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return snap.GetSandboxRuntime()
+	case ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return hardware.ArchRuntime(snap.GetSandboxRuntime())
+	default:
+		return nil
+	}
 }
 
 // canRelaxRuntime reports whether scheduling may drop its runtime requirement.
@@ -840,8 +856,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	case templateReplaced(snap, actorTemplate):
 		fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	case runtimeIncompatible:
-		logRuntimeFallback(ctx, actorRef, assignment, requiredRuntime)
-		fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		if hardware.MatchesArch(assignment.GetSandboxRuntime(), requiredRuntime) {
+			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		} else {
+			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		}
+		logRuntimeFallback(ctx, actorRef, assignment, requiredRuntime, fidelity)
 	}
 	tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 	req := &ateletpb.RestoreRequest{
@@ -884,13 +904,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	return tele, resp.GetWorkerEpoch(), nil
 }
 
-// logRuntimeFallback records a resume that restores without memory state
-// because the assigned worker does not run the runtime the snapshot's memory
-// state was captured under.
-func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapi.WorkerAssignment, required *ateapi.ActorSandboxRuntime) {
-	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring without memory state",
+// logRuntimeFallback records a resume downgraded to fidelity because the
+// assigned worker does not run the runtime the snapshot was captured under.
+func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapi.WorkerAssignment, required *ateapi.ActorSandboxRuntime, fidelity ateletpb.SnapshotFidelity) {
+	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring at a lower fidelity",
 		slog.String("actor", actorRef.String()),
 		slog.String("worker", assignment.GetWorkerPod()),
+		slog.String("fidelity", fidelity.String()),
 		slog.Any("required_runtime", required),
 		slog.Any("assigned_runtime", assignment.GetSandboxRuntime()))
 }

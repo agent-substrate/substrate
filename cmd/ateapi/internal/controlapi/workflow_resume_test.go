@@ -1506,14 +1506,31 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		kind string
 	}
 
-	amd64RT := testSandboxRuntime()
+	// amd64RT carries a bundle hash so that amd64OtherRT, the same architecture
+	// with another bundle, does not match a snapshot stamped with it: a match
+	// checks the snapshot's keys only.
+	amd64RT := testRuntime("amd64", "bundle")
+	amd64OtherRT := testRuntime("amd64", "other-bundle")
 	arm64RT := testRuntime("arm64", "")
 	wantAteletRuntime := map[*ateapi.ActorSandboxRuntime]*ateletpb.ActorSandboxRuntime{
 		amd64RT: {
 			SandboxClass: "gvisor",
 			Version: &ateletpb.VersionedSandboxCompat{
 				SchemaVersion: "v1",
-				Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+				Attributes: []*ateletpb.AttributeEntry{
+					{Key: "architecture", Value: "amd64"},
+					{Key: hardware.AttrSandboxBundleHash, Value: "bundle"},
+				},
+			},
+		},
+		amd64OtherRT: {
+			SandboxClass: "gvisor",
+			Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes: []*ateletpb.AttributeEntry{
+					{Key: "architecture", Value: "amd64"},
+					{Key: hardware.AttrSandboxBundleHash, Value: "other-bundle"},
+				},
 			},
 		},
 		arm64RT: {
@@ -1810,11 +1827,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "20 stamped actor-owned Full durable snapshot on incompatible worker drops to Rootfs",
+			name: "20 stamped actor-owned Full durable snapshot on same-arch incompatible worker drops to Rootfs",
 			actor: actorSeed{
 				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, amd64RT),
 				tmplUID:          "current",
-				assignedRuntime:  arm64RT,
+				assignedRuntime:  amd64OtherRT,
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
@@ -1824,11 +1841,25 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "21 stamped borrowed golden snapshot on incompatible worker drops to Rootfs",
+			name: "20a stamped actor-owned Full durable snapshot on cross-arch worker drops to Volumes",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, amd64RT),
+				tmplUID:          "current",
+				assignedRuntime:  arm64RT,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+		{
+			name: "21 stamped borrowed golden snapshot on same-arch incompatible worker drops to Rootfs",
 			actor: actorSeed{
 				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, goldenURI, fullScope, amd64RT),
 				tmplUID:          "current",
-				assignedRuntime:  arm64RT,
+				assignedRuntime:  amd64OtherRT,
 			},
 			tmpl: templateSeed{golden: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, goldenURI, fullScope, amd64RT)},
 			want: restoreWant{
@@ -1839,12 +1870,12 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "22 stamped explicit source_tag clone on incompatible worker drops to Rootfs",
+			name: "22 stamped explicit source_tag clone on same-arch incompatible worker drops to Rootfs",
 			actor: actorSeed{
 				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, actorURI, fullScope, amd64RT),
 				tmplUID:          "current",
 				sourceTag:        &ateapi.ObjectRef{Atespace: "team-a", Name: "user-tag"},
-				assignedRuntime:  arm64RT,
+				assignedRuntime:  amd64OtherRT,
 			},
 			want: restoreWant{
 				snapshotName: durableSnapshotName,
@@ -1859,6 +1890,34 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor: actorSeed{
 				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, amd64RT),
 				tmplUID:          "mismatch",
+				assignedRuntime:  amd64OtherRT,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+		{
+			name: "24 stamped Rootfs durable snapshot on same-arch worker with different runtime stays Rootfs",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, rootfsScope, amd64RT),
+				tmplUID:          "current",
+				assignedRuntime:  amd64OtherRT,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+		},
+		{
+			name: "24_crossarch stamped Rootfs durable snapshot on cross-arch worker drops to Volumes",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, rootfsScope, amd64RT),
+				tmplUID:          "current",
 				assignedRuntime:  arm64RT,
 			},
 			want: restoreWant{
@@ -1869,25 +1928,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "24 stamped Rootfs durable snapshot on worker with different runtime stays Rootfs",
-			actor: actorSeed{
-				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, rootfsScope, amd64RT),
-				tmplUID:          "current",
-				assignedRuntime:  arm64RT,
-			},
-			want: restoreWant{
-				snapshotName: durableSnapshotName,
-				kind:         ateattr.SnapshotKindLatest,
-				snapshotURI:  actorURI,
-				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
-			},
-		},
-		{
-			name: "24a stamped local snapshot on incompatible worker drops to Rootfs",
+			name: "24a stamped local snapshot on same-arch incompatible worker drops to Rootfs",
 			actor: actorSeed{
 				localSnapshot:   stampedLocalSnap(localSnapshotName, fullScope, amd64RT),
 				localTmplUID:    "current",
-				assignedRuntime: arm64RT,
+				assignedRuntime: amd64OtherRT,
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
@@ -2838,7 +2883,24 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		assertAssignedRuntime(t, stored, oldRestorableRT)
 	})
 
-	t.Run("falls back to incompatible worker when no runtime-matching worker has room", func(t *testing.T) {
+	t.Run("prefers same-architecture worker over cross-architecture worker on fallback", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		seedRuntimeWorker(t, ctx, st, "arm-pod", "node-arm", arm64RT)
+		seedRuntimeWorker(t, ctx, st, "amd-v2-pod", "node-amd", newDefaultRT)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
+
+		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+		if err != nil {
+			t.Fatalf("assignWorkerAttempt: %v", err)
+		}
+		if got := worker.GetWorkerPod(); got != "amd-v2-pod" {
+			t.Errorf("assigned worker = %q, want %q", got, "amd-v2-pod")
+		}
+		assertAssignedRuntime(t, stored, newDefaultRT)
+	})
+
+	t.Run("falls back to cross-architecture worker when no same-architecture worker has room", func(t *testing.T) {
 		ctx := context.Background()
 		st := newTestPersistence(t)
 		seedRuntimeWorker(t, ctx, st, "arm-pod", "node-arm", arm64RT)
@@ -3075,8 +3137,9 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			wantClass: "gvisor",
 		},
 		{
-			name:      "completed ROOTFS durable snapshot restores no memory state",
+			name:      "completed ROOTFS durable snapshot requires its architecture",
 			snapshots: []*ateapi.Snapshot{durable(1, rootfs, tmplUID, completed, durableRT)},
+			want:      hardware.ArchRuntime(durableRT),
 			wantClass: "gvisor",
 		},
 		{
@@ -3139,11 +3202,12 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			wantClass: "microvm",
 		},
 		{
-			name: "ROOTFS local checkpoint imposes no constraint beside a stamped durable snapshot",
+			name: "ROOTFS local checkpoint requires its architecture beside a stamped durable snapshot",
 			snapshots: []*ateapi.Snapshot{
 				local(2, rootfs, tmplUID, localRT),
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
+			want:      hardware.ArchRuntime(localRT),
 			wantClass: "microvm",
 		},
 		{
