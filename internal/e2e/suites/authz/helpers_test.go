@@ -24,7 +24,6 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,7 +31,6 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/e2e"
-	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -150,21 +148,21 @@ func newPrincipal(t *testing.T, ctx context.Context, clients *e2e.Clients, names
 // for the existing ServiceAccount namespace/name.
 func principalFor(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, name string) *principal {
 	t.Helper()
-	expiration := int64(3600)
-	token, err := clients.K8s.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, name, &authv1.TokenRequest{
-		Spec: authv1.TokenRequestSpec{
-			Audiences:         []string{installdefaults.APIServiceName + "." + installdefaults.SystemNamespace + ".svc"},
-			ExpirationSeconds: &expiration,
-		},
-	}, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatalf("minting a token for %s/%s: %v", namespace, name, err)
-	}
 	return &principal{
 		name:   name,
 		member: fmt.Sprintf("user:system:serviceaccount:%s:%s", namespace, name),
-		api:    clientWithToken(t, ctx, token.Status.Token),
+		api:    clientWithToken(t, ctx, mintToken(t, ctx, clients, namespace, name)),
 	}
+}
+
+// mintToken returns an ateapi token for the ServiceAccount namespace/name.
+func mintToken(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, name string) string {
+	t.Helper()
+	token, _, err := ateclient.MintServiceAccountToken(ctx, clients.K8s, namespace, name, ateclient.DefaultAudience(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
 }
 
 // clientWithToken returns an ateapi client that sends token as its bearer
@@ -175,11 +173,19 @@ func clientWithToken(t *testing.T, ctx context.Context, token string) *ateclient
 	if err := os.WriteFile(tokenFile, []byte(token), 0o600); err != nil {
 		t.Fatalf("writing token: %v", err)
 	}
+	return dial(t, ctx, ateclient.DialOptions{TokenFile: tokenFile})
+}
+
+// dial returns an ateapi client for the cluster under test, authenticated as
+// opts describes.
+func dial(t *testing.T, ctx context.Context, opts ateclient.DialOptions) *ateclient.Client {
+	t.Helper()
+	opts.Kubeconfig, opts.KubeContext = e2e.KubeConfig, e2e.KubeContext
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	api, err := ateclient.NewClient(connectCtx, e2e.KubeConfig, e2e.KubeContext, "", tokenFile, false)
+	api, err := ateclient.Dial(connectCtx, opts)
 	if err != nil {
-		t.Fatalf("ateclient.NewClient: %v", err)
+		t.Fatalf("ateclient.Dial: %v", err)
 	}
 	t.Cleanup(api.Close)
 	return api

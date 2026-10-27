@@ -170,11 +170,13 @@ type DialOptions struct {
 	// Service.
 	Endpoint string
 	// TokenFile is a bearer token file, re-read on every RPC, or "-" to read
-	// one token from stdin. Without it, the client mints a token for the
-	// default ServiceAccount.
-	TokenFile   string
-	Trace       bool
-	GRPCOptions []grpc.DialOption
+	// one token from stdin.
+	TokenFile string
+	// CredentialPlugin is used when TokenFile is empty. Without either, the
+	// client mints a token for the default ServiceAccount.
+	CredentialPlugin *CredentialPlugin
+	Trace            bool
+	GRPCOptions      []grpc.DialOption
 }
 
 // Dial creates a new Ate API client as opts describes.
@@ -321,6 +323,8 @@ func clientCredentials(opts DialOptions, clientset kubernetes.Interface) (creden
 		return creds, nil
 	case opts.TokenFile != "":
 		return fileBearerTokenCreds(opts.TokenFile), nil
+	case opts.CredentialPlugin != nil:
+		return &pluginCreds{plugin: *opts.CredentialPlugin}, nil
 	}
 	return newMintedTokenCreds(func(ctx context.Context) (string, time.Time, error) {
 		return MintServiceAccountToken(ctx, clientset, systemNamespace(), clientServiceAccount(), DefaultAudience(), time.Hour)

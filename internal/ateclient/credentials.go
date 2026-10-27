@@ -16,9 +16,12 @@ package ateclient
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -26,9 +29,11 @@ import (
 	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	clientauthv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 )
 
-// tokenExpiryMargin is how long before expiry a minted token is replaced.
+// tokenExpiryMargin is how long before expiry a minted or plugin token is
+// replaced.
 const tokenExpiryMargin = time.Minute
 
 func readBearerToken(r io.Reader) (bearerTokenCreds, error) {
@@ -120,3 +125,78 @@ func (c *mintedTokenCreds) GetRequestMetadata(ctx context.Context, _ ...string) 
 }
 
 func (c *mintedTokenCreds) RequireTransportSecurity() bool { return true }
+
+// CredentialPlugin is a kubectl credential plugin: a command that prints a
+// client.authentication.k8s.io/v1 ExecCredential holding a bearer token.
+type CredentialPlugin struct {
+	Command string
+	Args    []string
+	// Env is added to the plugin's environment, as KEY=value pairs.
+	Env []string
+	// Stdin, if set, is the plugin's standard input, and the plugin is told
+	// it may prompt the user.
+	Stdin io.Reader
+}
+
+// pluginCreds runs a credential plugin and reuses its token until shortly
+// before the token's expirationTimestamp, or for the life of the process if
+// it has none.
+type pluginCreds struct {
+	plugin CredentialPlugin
+
+	mu     sync.Mutex
+	token  string
+	expiry time.Time
+}
+
+func (c *pluginCreds) GetRequestMetadata(ctx context.Context, _ ...string) (map[string]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.token == "" || (!c.expiry.IsZero() && !time.Now().Before(c.expiry.Add(-tokenExpiryMargin))) {
+		token, expiry, err := c.run(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("credential plugin %s: %w", c.plugin.Command, err)
+		}
+		c.token, c.expiry = token, expiry
+	}
+	return map[string]string{"authorization": "Bearer " + c.token}, nil
+}
+
+func (c *pluginCreds) RequireTransportSecurity() bool { return true }
+
+// run runs the plugin and returns its token and the token's expiry, which is
+// zero if the plugin gave none.
+func (c *pluginCreds) run(ctx context.Context) (string, time.Time, error) {
+	apiVersion := clientauthv1.SchemeGroupVersion.String()
+	info, err := json.Marshal(clientauthv1.ExecCredential{
+		TypeMeta: metav1.TypeMeta{APIVersion: apiVersion, Kind: "ExecCredential"},
+		Spec:     clientauthv1.ExecCredentialSpec{Interactive: c.plugin.Stdin != nil},
+	})
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	cmd := exec.CommandContext(ctx, c.plugin.Command, c.plugin.Args...)
+	cmd.Env = append(os.Environ(), c.plugin.Env...)
+	cmd.Env = append(cmd.Env, "KUBERNETES_EXEC_INFO="+string(info))
+	cmd.Stdin = c.plugin.Stdin
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	var cred clientauthv1.ExecCredential
+	if err := json.Unmarshal(out, &cred); err != nil {
+		return "", time.Time{}, fmt.Errorf("parse its output: %w", err)
+	}
+	if cred.APIVersion != apiVersion || cred.Kind != "ExecCredential" {
+		return "", time.Time{}, fmt.Errorf("printed apiVersion %q kind %q, want an ExecCredential of %s", cred.APIVersion, cred.Kind, apiVersion)
+	}
+	if cred.Status == nil || cred.Status.Token == "" {
+		return "", time.Time{}, errors.New("printed no bearer token")
+	}
+	var expiry time.Time
+	if t := cred.Status.ExpirationTimestamp; t != nil {
+		expiry = t.Time
+	}
+	return cred.Status.Token, expiry, nil
+}
