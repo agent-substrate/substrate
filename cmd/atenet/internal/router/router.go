@@ -256,13 +256,12 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				slog.String("provider_name", providerName))
 		}
 
-		// TODO(#1661): pass the client to egress.New once the handler injects
-		// exchanged tokens.
-		if _, err := tokenexchange.New(s.cfg.TokenExchangeCAFile); err != nil {
+		tokenClient, err := tokenexchange.New(s.cfg.TokenExchangeCAFile)
+		if err != nil {
 			return fmt.Errorf("loading --token-exchange-ca-file: %w", err)
 		}
 
-		egressHandler := egress.New(s.apiClient, loadActorIdentityRoots, s.cfg.EgressPolicyCacheTTL, providers)
+		egressHandler := egress.New(s.apiClient, loadActorIdentityRoots, s.cfg.EgressPolicyCacheTTL, providers, tokenClient)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 
