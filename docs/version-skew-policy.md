@@ -82,9 +82,9 @@ Each release creates its own SandboxConfig per sandbox class, such as `substrate
 
 A kept version's assets must stay fetchable, so a release does not overwrite them. The microVM assets live at fixed paths in the cluster's bucket, so a microVM release that changes them replaces the version instead. Moving a pool to a new config does not change the pod template, so workers do not roll.
 
-An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets a version with the same assets as the one its snapshot was taken on, and stays on it until it next starts without memory state. If the pool's config has no such version, the actor cold boots, keeping its files and losing its memory. Rollback creates a new config from the N template and makes it the class default, which removes the N+1 versions unless the rollback config keeps them.
+An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets a version with the same assets as the one its snapshot was taken on, and stays on it until it next starts without memory state. If the pool's config has no such version, the actor cold boots, keeping its files and losing its memory. Rollback removes the class-default annotation from the N+1 config, so the previous default config before N+1 rollout is the class default again. That config does not list the sandbox versions new in N+1. An actor suspended on one of them resumes without its memory, unless you first add that version to the config.
 
-<!-- TODO: Link the SandboxConfig upgrade guide, which covers the details. -->
+The [SandboxConfig upgrade guide](sandboxconfig-upgrade.md) covers the details.
 
 ### Database schema
 
