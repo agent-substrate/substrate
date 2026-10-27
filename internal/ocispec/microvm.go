@@ -94,6 +94,8 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	if _, ok := spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"]; !ok {
 		spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"] = "0"
 	}
+	// gVisor needs neither list: its procfs and sysfs leave out the masked
+	// files and keep most of /proc/sys read-only.
 	spec.Linux.MaskedPaths = guestMaskedPaths()
 	spec.Linux.ReadonlyPaths = guestReadonlyPaths()
 	// The container's own declared limits survive the merge; StartRootfsContainer
@@ -181,7 +183,13 @@ func guestMaskedPaths() []string {
 
 // guestReadonlyPaths returns containerd's default read-only paths.
 func guestReadonlyPaths() []string {
-	return []string{"/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"}
+	return []string{
+		"/proc/bus",
+		"/proc/fs",
+		"/proc/irq",
+		"/proc/sys",
+		"/proc/sysrq-trigger",
+	}
 }
 
 // guestResources returns the standard kata device allowlist and CPU shares.
