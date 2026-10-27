@@ -225,6 +225,8 @@ If you need to delete the resources created by the setup script, you can use the
 ./hack/teardown.sh --all
 ```
 
+`--all` deletes the cluster, its buckets and the bindings on them. It keeps the dashboards, the snapshot transfer service account and the project-level IAM bindings, because every Substrate cluster in the project shares them. Once no cluster in the project uses them, remove them with the command that `--all` prints.
+
 Or run individual teardown steps as needed (see `./hack/teardown.sh` for available options).
 
 #### Tearing down local `kind` resources

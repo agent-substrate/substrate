@@ -50,15 +50,16 @@ transfer_service_account() {
 function usage() {
   echo "Usage: $0 [options]"
   echo "Options:"
-  echo "  --revoke-gke-node-permissions         Revoke GKE nodes permission to pull images"
-  echo "  --revoke-atelet-permissions           Revoke atelet's project-level IAM bindings"
   echo "  --delete-iam-policy-bindings          Delete bucket IAM policy bindings for atelet, ate-api-server and the transfer account"
-  echo "  --delete-transfer-service-account     Delete the snapshot transfer service account"
   echo "  --delete-snapshot-bucket              Delete snapshot bucket"
   echo "  --delete-gvisor-node-pool             Delete gVisor node pool"
   echo "  --delete-cluster                      Delete GKE cluster"
+  echo "  --all                                 Run the steps above (reverse order of setup)"
+  echo "Project-wide options. These affect every Substrate cluster in the project, so --all skips them:"
   echo "  --delete-dashboards                   Delete the Substrate monitoring dashboards"
-  echo "  --all                                 Run all teardown steps (reverse order of setup)"
+  echo "  --delete-transfer-service-account     Delete the snapshot transfer service account"
+  echo "  --revoke-atelet-permissions           Revoke atelet's project-level IAM bindings"
+  echo "  --revoke-gke-node-permissions         Revoke GKE nodes permission to pull images, on every cluster that uses the default compute service account"
   exit 1
 }
 
@@ -205,11 +206,7 @@ while [[ "$#" -gt 0 ]]; do
     --delete-cluster) delete_cluster ;;
     --delete-dashboards) delete_dashboards ;;
     --all)
-      delete_dashboards
       delete_iam_policy_bindings
-      delete_transfer_service_account
-      revoke_atelet_permissions
-      revoke_gke_node_permissions
       delete_snapshot_bucket
       # Deleting the cluster removes its node pools, so --all does not insist
       # on a pool name a caller (e.g. an installer) may not track.
@@ -219,6 +216,10 @@ while [[ "$#" -gt 0 ]]; do
         echo "NODE_POOL_NAME not set; skipping node pool deletion (the cluster deletion removes its pools)"
       fi
       delete_cluster
+      echo "Kept the dashboards, the transfer service account and the project-level IAM bindings, which every Substrate cluster in ${PROJECT_ID} shares."
+      echo "Once no cluster uses them, remove them with:"
+      echo "  $0 --delete-dashboards --delete-transfer-service-account --revoke-atelet-permissions"
+      echo "--revoke-gke-node-permissions also removes the default compute service account's image pull grants, which other workloads in the project may use."
       ;;
     *) usage ;;
   esac
