@@ -199,7 +199,7 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	}
 	// TODO: Permit compatible VOLUMES snapshots when runtimes can extract portable data.
 	if tag.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
-		return nil, apierror.FailedPrecondition("source Tag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
+		return nil, apierror.FailedPrecondition("source Tag must be taken from an actor with ActorTemplate uid %q (tag has %q)", template.GetMetadata().GetUid(), tag.GetStatus().GetActorTemplateUid())
 	}
 	return tag, nil
 }
