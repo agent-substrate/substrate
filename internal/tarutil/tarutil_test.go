@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/roottest"
 	"golang.org/x/sys/unix"
 )
 
@@ -452,7 +452,7 @@ func TestRoundTripDeviceNode(t *testing.T) {
 // records a replaced lower-layer directory as a trusted.overlay.opaque xattr
 // on the upper directory, and dropping it would merge the old lower contents
 // back in after a restore. trusted.* needs CAP_SYS_ADMIN on both sides, as
-// ateom has.
+// worker has.
 func TestRoundTripTrustedOverlayXattrs(t *testing.T) {
 	roottest.Require(t, "trusted.* xattrs require root")
 

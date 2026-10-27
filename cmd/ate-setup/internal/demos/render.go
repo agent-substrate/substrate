@@ -15,8 +15,8 @@
 package demos
 
 import (
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/render"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/render"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 )
 
 // bucketNamePlaceholder is substituted into every demo template with the
@@ -24,7 +24,7 @@ import (
 const bucketNamePlaceholder = "BUCKET_NAME"
 
 // ExternalVolumePlaceholders are the optional external-volume hooks in the
-// counter and autoscaled-workerpool templates. Every path except
+// counter templates. Every path except
 // `deploy demo counter --with-external-volume` drops them, which removes the
 // lines entirely.
 var ExternalVolumePlaceholders = []string{

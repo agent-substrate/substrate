@@ -32,9 +32,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/pkg/postgressetup"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/pkg/postgressetup"
 )
 
 // Enumerated values for the install-shaping flags.
@@ -117,6 +117,10 @@ type Config struct {
 	// follows neither form.
 	ExpectedJWTIssuer string
 
+	// APIAuthzBootstrapOwners is the comma-separated principal list granted
+	// owner on global:root (ATE_API_AUTHZ_BOOTSTRAP_OWNERS).
+	APIAuthzBootstrapOwners string
+
 	// ActorJWTAlgorithm is the signing algorithm of the key in a new actor JWT
 	// pool (ACTOR_JWT_ALGORITHM): ES256 or RS256.
 	ActorJWTAlgorithm string
@@ -127,6 +131,18 @@ type Config struct {
 
 	// BucketName is the snapshot bucket demos are templated with.
 	BucketName string
+
+	// SnapshotLocation is ate-api-server's --snapshot-location
+	// (SNAPSHOT_LOCATION): the cluster-wide object-storage URI actor snapshots
+	// are stored under. Required unless the PerTemplateSnapshotLocation
+	// preview gate is enabled, which also lets a
+	// template's snapshotConfig.storageLocation override it.
+	SnapshotLocation string
+
+	// TransferGSAName is the name of the Google service account snapshot
+	// transfers run as on GCS, in ProjectID (SNAPSHOT_TRANSFER_GSA_NAME).
+	// Only the in-tree GCS backend uses it. See TransferServiceAccount.
+	TransferGSAName string
 
 	// KODockerRepo is where ko pushes images (KO_DOCKER_REPO).
 	KODockerRepo string
@@ -187,17 +203,24 @@ type Config struct {
 	// or size10.
 	ClusterSize string
 
-	// CordonControlPlane keeps the control plane off the worker nodes
-	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a small shared pool
-	// labeled and tainted ate.dev/workloadType=ate-control-plane:NoSchedule,
-	// and a one-node pool labeled and tainted
-	// ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone.
-	CordonControlPlane bool
+	// CordonSystemInfraComponents keeps the system infra components, such as
+	// ate-api-server, atenet-router, atenet-egress and postgres, off the
+	// worker nodes (ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS). It assumes a
+	// small shared pool labeled and tainted
+	// ate.dev/workloadType=ate-system-infra:NoSchedule, and a one-node pool
+	// labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for
+	// postgres alone.
+	CordonSystemInfraComponents bool
 
 	// FakeDataPlane installs fake-atelet in place of atelet and
 	// fake-workersync in place of ate-controller
 	// (ATE_INSTALL_FAKE_DATA_PLANE), for control-plane benchmarks.
 	FakeDataPlane bool
+
+	// IngressAllowedSPIFFEIDs are the SPIFFE IDs the ingress router lets
+	// reach actors over its TLS listeners (ATE_INGRESS_ALLOWED_SPIFFE_IDS).
+	// See RequireIngressAllowedSPIFFEIDs.
+	IngressAllowedSPIFFEIDs []string
 
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
@@ -212,6 +235,16 @@ type Config struct {
 	// OtlpEndpoint is where the control plane ships telemetry
 	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
 	OtlpEndpoint string
+
+	// PreviewGates is the --preview value (ATE_PREVIEW) every substrate
+	// component is deployed with: gate names, or "ALL" for all of them.
+	PreviewGates []string
+
+	// APILogLevel is the ate-api-server log level: debug, info, warn, or
+	// error. Empty means none was asked for, which keeps the level an
+	// existing install already has.
+	APILogLevel string
+
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.
 	BenchmarkActorMemory string
@@ -243,6 +276,44 @@ func (c *Config) Resolved() *Resolved {
 		c.resolved = defaultsOnly()
 	}
 	return c.resolved
+}
+
+// RequireIngressAllowedSPIFFEIDs fails when the install would deploy an
+// ingress router without an allowlist. Envoy and
+// AgentGateway both authenticate clients on their TLS listeners and use the
+// allowlist to decide which authenticated identities may reach actors.
+func (c *Config) RequireIngressAllowedSPIFFEIDs() error {
+	if len(c.IngressAllowedSPIFFEIDs) > 0 {
+		return nil
+	}
+	return c.Resolved().Require("ingressAllowedSPIFFEIDs")
+}
+
+// TransferServiceAccount is the email of the snapshot transfer service
+// account, built from TransferGSAName and ProjectID as tools/setup-gcp builds
+// it. It is empty when either is.
+func (c *Config) TransferServiceAccount() string {
+	if c.TransferGSAName == "" || c.ProjectID == "" {
+		return ""
+	}
+	return c.TransferGSAName + "@" + c.ProjectID + ".iam.gserviceaccount.com"
+}
+
+// RequireTransferServiceAccount fails when the install would deploy
+// ate-api-server on GCS without a transfer service account. Its credential
+// exchange impersonates the account and refuses to start without one.
+// ate-setup installs GCS everywhere but kind, which uses S3.
+func (c *Config) RequireTransferServiceAccount() error {
+	if c.Kind {
+		return nil
+	}
+	if c.TransferGSAName == "" {
+		return c.Resolved().Require("storage.transferGSAName")
+	}
+	if c.ProjectID == "" {
+		return c.Resolved().Require("gcp.projectID")
+	}
+	return nil
 }
 
 // SetResolved attaches resolved settings to a Config built directly. Load
@@ -401,6 +472,7 @@ func (c *Config) ScriptEnv() []string {
 		"KUBECTL_CONTEXT":     c.Context,
 		"KUBECONFIG":          c.kubeconfigEnv,
 		"BUCKET_NAME":         c.BucketName,
+		"SNAPSHOT_LOCATION":   c.SnapshotLocation,
 		"KO_DOCKER_REPO":      c.KODockerRepo,
 		"KO_DEFAULTPLATFORMS": c.KODefaultPlatforms,
 		"PROJECT_ID":          c.ProjectID,
@@ -433,13 +505,21 @@ func (c *Config) ScriptEnv() []string {
 	if c.ClusterSize != "" && c.ClusterSize != ClusterSizeSize0 {
 		merged["ATE_INSTALL_CLUSTER_SIZE"] = c.ClusterSize
 	}
-	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
-	if c.CordonControlPlane {
-		merged["ATE_INSTALL_CORDON_CONTROL_PLANE"] = "true"
+	delete(merged, "ATE_PREVIEW")
+	if len(c.PreviewGates) > 0 {
+		merged["ATE_PREVIEW"] = strings.Join(c.PreviewGates, ",")
+	}
+	delete(merged, "ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS")
+	if c.CordonSystemInfraComponents {
+		merged["ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS"] = "true"
 	}
 	delete(merged, "ATE_INSTALL_FAKE_DATA_PLANE")
 	if c.FakeDataPlane {
 		merged["ATE_INSTALL_FAKE_DATA_PLANE"] = "true"
+	}
+	delete(merged, "ATE_INGRESS_ALLOWED_SPIFFE_IDS")
+	if len(c.IngressAllowedSPIFFEIDs) > 0 {
+		merged["ATE_INGRESS_ALLOWED_SPIFFE_IDS"] = strings.Join(c.IngressAllowedSPIFFEIDs, ",")
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService

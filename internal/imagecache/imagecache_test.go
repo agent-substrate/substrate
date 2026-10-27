@@ -44,7 +44,13 @@ import (
 // over plain HTTP).
 func newTestRegistry(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
-	srv := httptest.NewServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
+	return newWrappedRegistry(t, func(h http.Handler) http.Handler { return h })
+}
+
+// newWrappedRegistry starts an in-memory OCI registry behind wrap.
+func newWrappedRegistry(t *testing.T, wrap func(http.Handler) http.Handler) (*httptest.Server, string) {
+	t.Helper()
+	srv := httptest.NewServer(wrap(registry.New(registry.Logger(log.New(io.Discard, "", 0)))))
 	t.Cleanup(srv.Close)
 	u, err := url.Parse(srv.URL)
 	if err != nil {

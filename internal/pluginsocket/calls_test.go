@@ -18,7 +18,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/apierror"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

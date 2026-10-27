@@ -26,7 +26,7 @@ import (
 )
 
 // substrateModule is the module this one is hosted in until it moves out.
-const substrateModule = "github.com/agent-substrate/substrate"
+const substrateModule = "go.ate.dev/substrate"
 
 // This module moves to a repository of its own by being copied, so it may
 // import only substrate's public packages. Go's internal rule goes by import
@@ -63,9 +63,9 @@ func TestImportsOnlySubstratePublicPackages(t *testing.T) {
 			}
 			switch {
 			case imp == self || strings.HasPrefix(imp, self+"/"):
-			case strings.HasPrefix(imp, substrateModule+"/pkg/"):
+			case strings.HasPrefix(imp, substrateModule+"/api/"), strings.HasPrefix(imp, substrateModule+"/pkg/"):
 			case imp == substrateModule || strings.HasPrefix(imp, substrateModule+"/"):
-				t.Errorf("%s imports %s; this module may import only %s/pkg/...", path, imp, substrateModule)
+				t.Errorf("%s imports %s; this module may import only %s/api/... and %s/pkg/...", path, imp, substrateModule, substrateModule)
 			}
 		}
 		return nil

@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -44,20 +44,17 @@ import (
 // Worker surface so this satisfies the interface, and panics if the syncer ever
 // reaches for one of them.
 type fakeControl struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 
 	mu      sync.Mutex
-	workers map[string]*ateapipb.Worker
+	workers map[string]*ateapi.Worker
 	uidSeq  int
-	// history holds every Worker written, in order, so a test can check the
-	// states in between the ones it reads back.
-	history []*ateapipb.Worker
 
 	// createHook, when set, decides CreateWorker's outcome: a non-nil error is
 	// returned and nothing is registered.
-	createHook func(*ateapipb.Worker) error
+	createHook func(*ateapi.Worker) error
 	// listHook, when set, runs before each ListWorkers and can fail the call.
-	listHook func(*ateapipb.ListWorkersRequest) error
+	listHook func(*ateapi.ListWorkersRequest) error
 	// updateHook, when set, runs once before an UpdateWorker applies, so a test
 	// can land a concurrent write and make the precondition fail.
 	updateHook func(name string)
@@ -67,18 +64,18 @@ type fakeControl struct {
 }
 
 func newFakeControl() *fakeControl {
-	return &fakeControl{workers: map[string]*ateapipb.Worker{}}
+	return &fakeControl{workers: map[string]*ateapi.Worker{}}
 }
 
 // get returns the registered worker by name, or nil if there is none.
-func (f *fakeControl) get(name string) *ateapipb.Worker {
+func (f *fakeControl) get(name string) *ateapi.Worker {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	w, ok := f.workers[name]
 	if !ok {
 		return nil
 	}
-	return proto.Clone(w).(*ateapipb.Worker)
+	return proto.Clone(w).(*ateapi.Worker)
 }
 
 // names returns the names of every registered worker, sorted.
@@ -90,50 +87,39 @@ func (f *fakeControl) names() []string {
 
 // put registers a worker as if it had been created through the API, assigning
 // it a uid and version, so a test can start from a worker that already exists.
-func (f *fakeControl) put(w *ateapipb.Worker) *ateapipb.Worker {
+func (f *fakeControl) put(w *ateapi.Worker) *ateapi.Worker {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.putLocked(w)
 }
 
-func (f *fakeControl) putLocked(w *ateapipb.Worker) *ateapipb.Worker {
-	stored := proto.Clone(w).(*ateapipb.Worker)
+func (f *fakeControl) putLocked(w *ateapi.Worker) *ateapi.Worker {
+	stored := proto.Clone(w).(*ateapi.Worker)
 	f.uidSeq++
-	stored.Metadata = &ateapipb.ResourceMetadata{
+	stored.Metadata = &ateapi.ResourceMetadata{
 		Name:    w.GetMetadata().GetName(),
 		Uid:     fmt.Sprintf("worker-uid-%d", f.uidSeq),
 		Version: 1,
 	}
 	if stored.GetStatus() == nil {
-		stored.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+		stored.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_ACTIVE}
 	}
 	f.storeLocked(stored)
-	return proto.Clone(stored).(*ateapipb.Worker)
+	return proto.Clone(stored).(*ateapi.Worker)
 }
 
-// storeLocked writes w and records it in the write history.
-func (f *fakeControl) storeLocked(w *ateapipb.Worker) {
+// storeLocked writes w.
+func (f *fakeControl) storeLocked(w *ateapi.Worker) {
 	f.workers[w.GetMetadata().GetName()] = w
-	f.history = append(f.history, proto.Clone(w).(*ateapipb.Worker))
 }
 
-// writes returns every Worker written since the history was last taken, in
-// order, and clears it.
-func (f *fakeControl) writes() []*ateapipb.Worker {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	history := f.history
-	f.history = nil
-	return history
-}
-
-func (f *fakeControl) setCreateHook(hook func(*ateapipb.Worker) error) {
+func (f *fakeControl) setCreateHook(hook func(*ateapi.Worker) error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createHook = hook
 }
 
-func (f *fakeControl) setListHook(hook func(*ateapipb.ListWorkersRequest) error) {
+func (f *fakeControl) setListHook(hook func(*ateapi.ListWorkersRequest) error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listHook = hook
@@ -156,7 +142,7 @@ func (f *fakeControl) takeUpdateHook() func(string) {
 	return hook
 }
 
-func (f *fakeControl) GetWorker(_ context.Context, in *ateapipb.GetWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) GetWorker(_ context.Context, in *ateapi.GetWorkerRequest, _ ...grpc.CallOption) (*ateapi.Worker, error) {
 	name := in.GetWorker().GetName()
 	if w := f.get(name); w != nil {
 		return w, nil
@@ -164,7 +150,7 @@ func (f *fakeControl) GetWorker(_ context.Context, in *ateapipb.GetWorkerRequest
 	return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
 }
 
-func (f *fakeControl) CreateWorker(_ context.Context, in *ateapipb.CreateWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) CreateWorker(_ context.Context, in *ateapi.CreateWorkerRequest, _ ...grpc.CallOption) (*ateapi.Worker, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -178,12 +164,12 @@ func (f *fakeControl) CreateWorker(_ context.Context, in *ateapipb.CreateWorkerR
 		return nil, status.Errorf(codes.AlreadyExists, "Worker %s already exists", name)
 	}
 	// status is output-only: every Worker is born UNAVAILABLE.
-	created := proto.Clone(in.GetWorker()).(*ateapipb.Worker)
-	created.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
+	created := proto.Clone(in.GetWorker()).(*ateapi.Worker)
+	created.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE}
 	return f.putLocked(created), nil
 }
 
-func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapi.UpdateWorkerRequest, _ ...grpc.CallOption) (*ateapi.Worker, error) {
 	md := in.GetWorker().GetMetadata()
 	// Outside the lock: the hook is how a test lands a concurrent write, and it
 	// does that by calling back in.
@@ -210,30 +196,25 @@ func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerR
 	// UpdateWorker replaces the whole resource: the request's Worker is taken
 	// wholesale and only the server-owned metadata and status are kept as
 	// stored.
-	updated := proto.Clone(in.GetWorker()).(*ateapipb.Worker)
-	updated.Metadata = proto.Clone(stored.GetMetadata()).(*ateapipb.ResourceMetadata)
-	updated.Status = proto.Clone(stored.GetStatus()).(*ateapipb.WorkerStatus)
+	updated := proto.Clone(in.GetWorker()).(*ateapi.Worker)
+	updated.Metadata = proto.Clone(stored.GetMetadata()).(*ateapi.ResourceMetadata)
+	updated.Status = proto.Clone(stored.GetStatus()).(*ateapi.WorkerStatus)
 
-	// labels and epoch are the only fields an update may change, so pinning
-	// them to what is stored leaves any remaining difference on a field that is
-	// immutable after create — including one the request cleared by omitting
-	// it.
-	if updated.GetEpoch() < stored.GetEpoch() {
-		return nil, status.Error(codes.InvalidArgument, "update decreased epoch")
-	}
-	probe := proto.Clone(updated).(*ateapipb.Worker)
+	// labels are the only field an update may change, so pinning them to what
+	// is stored leaves any remaining difference on a field that is immutable
+	// after create, including one the request cleared by omitting it.
+	probe := proto.Clone(updated).(*ateapi.Worker)
 	probe.Labels = stored.GetLabels()
-	probe.Epoch = stored.GetEpoch()
 	if !proto.Equal(probe, stored) {
 		return nil, status.Error(codes.InvalidArgument, "update changed a field that is immutable after create")
 	}
 
 	updated.Metadata.Version++
 	f.storeLocked(updated)
-	return proto.Clone(updated).(*ateapipb.Worker), nil
+	return proto.Clone(updated).(*ateapi.Worker), nil
 }
 
-func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapi.DeleteWorkerRequest, _ ...grpc.CallOption) (*ateapi.Worker, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -246,7 +227,7 @@ func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerR
 	return stored, nil
 }
 
-func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error) {
+func (f *fakeControl) DrainWorker(_ context.Context, in *ateapi.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapi.DrainWorkerResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -255,36 +236,36 @@ func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerReq
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
 	}
-	if stored.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	if stored.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_DRAINING {
 		// Already draining: no write, and specifically no version bump.
-		return &ateapipb.DrainWorkerResponse{Worker: proto.Clone(stored).(*ateapipb.Worker)}, nil
+		return &ateapi.DrainWorkerResponse{Worker: proto.Clone(stored).(*ateapi.Worker)}, nil
 	}
-	drained := proto.Clone(stored).(*ateapipb.Worker)
-	drained.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+	drained := proto.Clone(stored).(*ateapi.Worker)
+	drained.Status.State = ateapi.WorkerState_WORKER_STATE_DRAINING
 	drained.Metadata.Version++
 	f.storeLocked(drained)
-	return &ateapipb.DrainWorkerResponse{Worker: proto.Clone(drained).(*ateapipb.Worker)}, nil
+	return &ateapi.DrainWorkerResponse{Worker: proto.Clone(drained).(*ateapi.Worker)}, nil
 }
 
-func (f *fakeControl) MarkWorkerAvailable(_ context.Context, in *ateapipb.MarkWorkerAvailableRequest, _ ...grpc.CallOption) (*ateapipb.MarkWorkerAvailableResponse, error) {
-	w, err := f.markWorker(in.GetWorker().GetName(), ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+func (f *fakeControl) MarkWorkerAvailable(_ context.Context, in *ateapi.MarkWorkerAvailableRequest, _ ...grpc.CallOption) (*ateapi.MarkWorkerAvailableResponse, error) {
+	w, err := f.markWorker(in.GetWorker().GetName(), ateapi.WorkerState_WORKER_STATE_ACTIVE)
 	if err != nil {
 		return nil, err
 	}
-	return &ateapipb.MarkWorkerAvailableResponse{Worker: w}, nil
+	return &ateapi.MarkWorkerAvailableResponse{Worker: w}, nil
 }
 
-func (f *fakeControl) MarkWorkerUnavailable(_ context.Context, in *ateapipb.MarkWorkerUnavailableRequest, _ ...grpc.CallOption) (*ateapipb.MarkWorkerUnavailableResponse, error) {
-	w, err := f.markWorker(in.GetWorker().GetName(), ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+func (f *fakeControl) MarkWorkerUnavailable(_ context.Context, in *ateapi.MarkWorkerUnavailableRequest, _ ...grpc.CallOption) (*ateapi.MarkWorkerUnavailableResponse, error) {
+	w, err := f.markWorker(in.GetWorker().GetName(), ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 	if err != nil {
 		return nil, err
 	}
-	return &ateapipb.MarkWorkerUnavailableResponse{Worker: w}, nil
+	return &ateapi.MarkWorkerUnavailableResponse{Worker: w}, nil
 }
 
 // markWorker moves a Worker between ACTIVE and UNAVAILABLE as the Mark RPCs
 // do: idempotent down to leaving the version alone, with DRAINING final.
-func (f *fakeControl) markWorker(name string, state ateapipb.WorkerState) (*ateapipb.Worker, error) {
+func (f *fakeControl) markWorker(name string, state ateapi.WorkerState) (*ateapi.Worker, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -294,18 +275,18 @@ func (f *fakeControl) markWorker(name string, state ateapipb.WorkerState) (*atea
 	}
 	switch stored.GetStatus().GetState() {
 	case state:
-		return proto.Clone(stored).(*ateapipb.Worker), nil
-	case ateapipb.WorkerState_WORKER_STATE_DRAINING:
+		return proto.Clone(stored).(*ateapi.Worker), nil
+	case ateapi.WorkerState_WORKER_STATE_DRAINING:
 		return nil, status.Errorf(codes.FailedPrecondition, "Worker %s is draining", name)
 	}
-	marked := proto.Clone(stored).(*ateapipb.Worker)
+	marked := proto.Clone(stored).(*ateapi.Worker)
 	marked.Status.State = state
 	marked.Metadata.Version++
 	f.storeLocked(marked)
-	return proto.Clone(marked).(*ateapipb.Worker), nil
+	return proto.Clone(marked).(*ateapi.Worker), nil
 }
 
-func (f *fakeControl) ListWorkers(_ context.Context, in *ateapipb.ListWorkersRequest, _ ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error) {
+func (f *fakeControl) ListWorkers(_ context.Context, in *ateapi.ListWorkersRequest, _ ...grpc.CallOption) (*ateapi.ListWorkersResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -334,9 +315,9 @@ func (f *fakeControl) ListWorkers(_ context.Context, in *ateapipb.ListWorkersReq
 	}
 	end := min(start+size, len(names))
 
-	resp := &ateapipb.ListWorkersResponse{}
+	resp := &ateapi.ListWorkersResponse{}
 	for _, name := range names[start:end] {
-		resp.Workers = append(resp.Workers, proto.Clone(f.workers[name]).(*ateapipb.Worker))
+		resp.Workers = append(resp.Workers, proto.Clone(f.workers[name]).(*ateapi.Worker))
 	}
 	if end < len(names) {
 		resp.NextPageToken = strconv.Itoa(end)

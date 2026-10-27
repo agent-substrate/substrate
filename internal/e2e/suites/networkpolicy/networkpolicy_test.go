@@ -16,10 +16,13 @@ package networkpolicy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"os/exec"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,11 +31,14 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/portforward"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -45,20 +51,20 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 	clients := e2e.GetClients()
 
 	wpName := "test-wp-netpol"
-	wp := &v1alpha1.WorkerPool{
+	wp := &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      wpName,
 			Namespace: nsObj.Name,
 		},
-		Spec: v1alpha1.WorkerPoolSpec{
+		Spec: atev1.WorkerPoolSpec{
 			Replicas:       1,
-			WorkerImage:    "ateom:v1",
-			SandboxClasses: []v1alpha1.WorkerPoolSandboxClass{{Name: v1alpha1.SandboxClassGvisor}},
+			WorkerImage:    "worker:v1",
+			SandboxClasses: []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassGvisor}},
 		},
 	}
 
 	t.Logf("Creating WorkerPool %s/%s...", nsObj.Name, wpName)
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
+	if _, err := clients.SubstrateK8s.AteV1().WorkerPools(nsObj.Name).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("failed to create WorkerPool: %v", err)
 	}
 
@@ -117,7 +123,7 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 
 	// Verify Garbage Collection upon deletion
 	t.Logf("Deleting WorkerPool %s/%s and verifying NetworkPolicy GC...", nsObj.Name, wpName)
-	if err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Delete(ctx, wpName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+	if err := clients.SubstrateK8s.AteV1().WorkerPools(nsObj.Name).Delete(ctx, wpName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		t.Fatalf("failed to delete WorkerPool: %v", err)
 	}
 
@@ -150,24 +156,24 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 	// Create and Resume Actor
 	actorName := "netpol-dataplane-" + nsObj.Name
 	t.Logf("Creating Actor %q in Atespace %q...", actorName, nsObj.Name)
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: nsObj.Name, Name: actorName},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: nsObj.Name, Name: actorName},
 		ActorTemplate: e2e.TemplateRef(at),
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
 	defer func() {
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: nsObj.Name, Name: actorName},
 		})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
+		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: nsObj.Name, Name: actorName},
 		})
 	}()
 
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: nsObj.Name, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
@@ -175,7 +181,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 
 	// === Positive Data Plane Verification (Authorized Ingress) ===
 	t.Log("=== Verifying authorized ingress via atenet-router ===")
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}
@@ -207,7 +213,6 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 
 	// === Negative Data Plane Verification (Unauthorized Ingress Blocking) ===
 	t.Log("=== Verifying unauthorized ingress blocking ===")
-	rogueNsObj := e2e.CreateNamespace(t)
 
 	// Find the IP address of the worker pod backing our WorkerPool
 	pods, err := clients.K8s.CoreV1().Pods(nsObj.Name).List(ctx, metav1.ListOptions{
@@ -228,46 +233,121 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 		t.Fatalf("no running worker pod with IP found for worker pool %q", poolName)
 	}
 
-	// Deploy an unauthorized probe pod in an external test namespace
-	probePod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "unauthorized-probe",
-			Namespace: rogueNsObj.Name,
-		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name:    "probe",
-					Image:   "busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e",
-					Command: []string{"/bin/sleep", "3600"},
-				},
-			},
-			RestartPolicy: corev1.RestartPolicyNever,
-		},
+	// The probe runs in a new namespace, which the policy does not allow in.
+	// The control pod runs in the worker's namespace, but no policy selects
+	// it. If the probe can reach the control pod, a failed dial to the worker
+	// is caused by the policy, not by a probe that cannot connect at all.
+	probe := e2e.DeployServerPod(t, ctx, testserverPod("unauthorized-probe", ""))
+	control := e2e.DeployServerPod(t, ctx, testserverPod("netpol-control", nsObj.Name))
+	controlPod, err := clients.K8s.CoreV1().Pods(control.Namespace).Get(ctx, control.Name, metav1.GetOptions{})
+	if err != nil || controlPod.Status.PodIP == "" {
+		t.Fatalf("failed to get the IP of control pod %s/%s: %v", control.Namespace, control.Name, err)
 	}
-	t.Logf("Creating unauthorized probe pod %s/%s...", rogueNsObj.Name, probePod.Name)
-	if _, err := clients.K8s.CoreV1().Pods(rogueNsObj.Name).Create(ctx, probePod, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("failed to create probe pod: %v", err)
-	}
-	waitForPodRunning(ctx, t, clients, rogueNsObj.Name, probePod.Name)
+	pc := newProbeClient(t, ctx, probe)
 
-	// Attempt direct connection to worker pod IP from unauthorized probe pod
-	execArgs := []string{"exec", "-n", rogueNsObj.Name, probePod.Name}
-	if e2e.KubeContext != "" {
-		execArgs = append([]string{"--context=" + e2e.KubeContext}, execArgs...)
+	controlAddress := net.JoinHostPort(controlPod.Status.PodIP, strconv.Itoa(testserverPort))
+	t.Logf("Dialing control pod %s/%s at %s from probe pod %s/%s...", control.Namespace, control.Name, controlAddress, probe.Namespace, probe.Name)
+	var result dialResult
+	controlDeadline := time.Now().Add(30 * time.Second)
+	for {
+		result = pc.dial(t, ctx, controlAddress)
+		if result.OK || time.Now().After(controlDeadline) {
+			break
+		}
+		time.Sleep(1 * time.Second)
 	}
-	if e2e.KubeConfig != "" {
-		execArgs = append([]string{"--kubeconfig=" + e2e.KubeConfig}, execArgs...)
+	if !result.OK {
+		t.Fatalf("Probe control failed: probe pod %s/%s cannot reach control pod %s, which no NetworkPolicy selects (%s), so a blocked dial to the worker would prove nothing", probe.Namespace, probe.Name, controlAddress, result.Error)
 	}
-	execArgs = append(execArgs, "--", "sh", "-c", fmt.Sprintf("wget -T 3 -q -O - http://%s:8080/ || nc -z -w 3 %s 8080", workerIP, workerIP))
 
-	t.Logf("Executing unauthorized connection attempt from %s/%s to %s:8080...", rogueNsObj.Name, probePod.Name, workerIP)
-	cmd := exec.Command("kubectl", execArgs...)
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("Negative Data Plane Verification failed: unauthorized probe pod successfully connected to worker pod %s:8080 (output: %s). NetworkPolicy did not block the connection!", workerIP, string(output))
+	workerAddress := net.JoinHostPort(workerIP, workerReadyzPort)
+	t.Logf("Attempting unauthorized connection from %s/%s to worker %s...", probe.Namespace, probe.Name, workerAddress)
+	result = pc.dial(t, ctx, workerAddress)
+	if result.OK {
+		t.Fatalf("Negative Data Plane Verification failed: unauthorized probe pod %s/%s successfully connected to worker pod %s. NetworkPolicy did not block the connection!", probe.Namespace, probe.Name, workerAddress)
 	}
-	t.Logf("Negative Data Plane Verification PASSED: Unauthorized connection attempt from %s/%s to %s:8080 was blocked as expected (err: %v)", rogueNsObj.Name, probePod.Name, workerIP, err)
+	t.Logf("Negative Data Plane Verification PASSED: Unauthorized connection attempt from %s/%s to %s was blocked as expected (%s)", probe.Namespace, probe.Name, workerAddress, result.Error)
+}
+
+const (
+	// testserverPort is the port the probe and control pods listen on.
+	testserverPort = 8080
+	// workerReadyzPort is the port of worker's /readyz server.
+	workerReadyzPort = "8080"
+)
+
+// testserverPod describes a testserver http pod, used for both the probe,
+// which serves /dial, and the control, which is the dial target. An empty
+// namespace makes DeployServerPod create a new one.
+func testserverPod(name, namespace string) e2e.ServerPod {
+	return e2e.ServerPod{
+		Name:       name,
+		Namespace:  namespace,
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http"},
+		Port:       testserverPort,
+	}
+}
+
+// dialResult mirrors testserver's /dial response.
+type dialResult struct {
+	Address string `json:"address"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error"`
+}
+
+// probeClient calls a testserver pod's /dial over a port-forward, so the
+// connection is made from that pod.
+type probeClient struct {
+	baseURL string
+	http    *http.Client
+}
+
+func newProbeClient(t *testing.T, ctx context.Context, probe e2e.Server) *probeClient {
+	t.Helper()
+	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
+	if err != nil {
+		t.Fatalf("loading kubeconfig: %v", err)
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		t.Fatalf("creating k8s client for port-forward: %v", err)
+	}
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, probe.Namespace, probe.Name, testserverPort)
+	if err != nil {
+		t.Fatalf("port-forwarding %s/%s: %v", probe.Namespace, probe.Name, err)
+	}
+	t.Cleanup(stop)
+	return &probeClient{
+		baseURL: fmt.Sprintf("http://127.0.0.1:%d", localPort),
+		http:    &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// dial asks the probe to open a TCP connection to address. A refused or
+// timed-out connection comes back as a result with OK false. Anything else
+// going wrong fails the test, so a broken probe is not mistaken for a blocked
+// connection.
+func (c *probeClient) dial(t *testing.T, ctx context.Context, address string) dialResult {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/dial?address="+url.QueryEscape(address), nil)
+	if err != nil {
+		t.Fatalf("building probe request for %s: %v", address, err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		t.Fatalf("calling probe /dial for %s: %v", address, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		t.Fatalf("probe /dial for %s returned %d: %s", address, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var out dialResult
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decoding probe /dial response for %s: %v", address, err)
+	}
+	return out
 }
 
 // setupDemoCounterTemplate provisions the per-test WorkerPool and substrate
@@ -275,7 +355,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 // the template. The template lives in an atespace named after the test's k8s
 // namespace, so its name needs no per-test suffix. SnapshotConfig is copied
 // from the source, as the CRD-era setup did.
-func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (string, *ateapipb.ActorTemplate) {
+func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (string, *ateapi.ActorTemplate) {
 	t.Helper()
 	const poolName = "counter"
 	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, ns, e2e.SubstrateTemplateOptions{
@@ -292,28 +372,14 @@ func waitForActorRunning(ctx context.Context, t *testing.T, clients *e2e.Clients
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
+		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: atespace, Name: actorName},
 		})
-		if err == nil && resp.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		if err == nil && resp.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING {
 			t.Logf("Actor %q reached RUNNING state", actorName)
 			return
 		}
 		time.Sleep(1 * time.Second)
 	}
 	t.Fatalf("timed out waiting for actor %q to reach RUNNING state", actorName)
-}
-
-func waitForPodRunning(ctx context.Context, t *testing.T, clients *e2e.Clients, namespace, podName string) {
-	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		pod, err := clients.K8s.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
-		if err == nil && pod.Status.Phase == corev1.PodRunning {
-			t.Logf("Pod %s/%s is RUNNING", namespace, podName)
-			return
-		}
-		time.Sleep(1 * time.Second)
-	}
-	t.Fatalf("timed out waiting for pod %s/%s to reach RUNNING status", namespace, podName)
 }

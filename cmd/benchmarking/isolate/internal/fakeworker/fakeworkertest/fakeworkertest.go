@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localca"
 )
 
 // CA is a throwaway signer whose files live in a test's temp dir.

@@ -24,7 +24,6 @@ import (
 func TestLoadAuthenticationConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "authentication.yaml")
 	if err := os.WriteFile(path, []byte(`
-actorIdentityJWTProvider: kubernetes
 jwtProviders:
 - name: kubernetes
   issuer: https://kubernetes.default.svc
@@ -47,7 +46,6 @@ jwtProviders:
 func TestLoadAuthenticationConfigRejectsUnknownField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "authentication.yaml")
 	if err := os.WriteFile(path, []byte(`
-actorIdentityJWTProvider: kubernetes
 jwtProviders:
 - name: kubernetes
   issuer: https://kubernetes.default.svc
@@ -65,7 +63,6 @@ jwtProviders:
 func TestValidateAuthenticationConfig(t *testing.T) {
 	valid := func() *AuthenticationConfig {
 		return &AuthenticationConfig{
-			ActorIdentityJWTProvider: "kubernetes",
 			JWTProviders: []JWTProviderConfig{{
 				Name:      "kubernetes",
 				Issuer:    "https://kubernetes.default.svc",
@@ -79,7 +76,6 @@ func TestValidateAuthenticationConfig(t *testing.T) {
 		mutate func(*AuthenticationConfig)
 	}{
 		{name: "no providers", mutate: func(c *AuthenticationConfig) { c.JWTProviders = nil }},
-		{name: "unknown actor identity provider", mutate: func(c *AuthenticationConfig) { c.ActorIdentityJWTProvider = "missing" }},
 		{name: "insecure issuer", mutate: func(c *AuthenticationConfig) { c.JWTProviders[0].Issuer = "http://issuer.example" }},
 		{name: "no audiences", mutate: func(c *AuthenticationConfig) { c.JWTProviders[0].Audiences = nil }},
 		{name: "duplicate provider", mutate: func(c *AuthenticationConfig) { c.JWTProviders = append(c.JWTProviders, c.JWTProviders[0]) }},

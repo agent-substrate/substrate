@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"google.golang.org/grpc"
 )
 
@@ -40,15 +40,10 @@ var getTagsCmd = &cobra.Command{
 	Use:     "tag [tag-name ...]",
 	Aliases: []string{"tags"},
 	Short:   "List or get tags",
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if getTagAllAtespacesFlag && getTagAtespaceFlag != "" {
-			return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
-		}
-		if len(args) > 0 && getTagAtespaceFlag == "" {
-			return fmt.Errorf("--atespace is required when getting tags")
-		}
-		if len(args) == 0 && !getTagAllAtespacesFlag && getTagAtespaceFlag == "" {
-			return fmt.Errorf("specify --atespace <name>, or -A/--all-atespaces")
+		if err := validateAtespaceFlags("tags", args, getTagAtespaceFlag, getTagAllAtespacesFlag); err != nil {
+			return err
 		}
 
 		ctx := cmd.Context()
@@ -59,10 +54,10 @@ var getTagsCmd = &cobra.Command{
 		defer client.Close()
 
 		if len(args) > 0 {
-			tags := make([]*ateapipb.Tag, 0, len(args))
+			tags := make([]*ateapi.Tag, 0, len(args))
 			for _, name := range args {
-				tag, err := client.GetTag(ctx, &ateapipb.GetTagRequest{
-					Tag: &ateapipb.ObjectRef{Atespace: getTagAtespaceFlag, Name: name},
+				tag, err := client.GetTag(ctx, &ateapi.GetTagRequest{
+					Tag: &ateapi.ObjectRef{Atespace: getTagAtespaceFlag, Name: name},
 				})
 				if err != nil {
 					return fmt.Errorf("failed to get tag %q: %w", name, err)
@@ -75,10 +70,10 @@ var getTagsCmd = &cobra.Command{
 			return printer.PrintTagsTo(cmd.OutOrStdout(), tags, outputFmt)
 		}
 
-		var tags []*ateapipb.Tag
+		var tags []*ateapi.Tag
 		pageToken := ""
 		for {
-			resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: getTagAtespaceFlag, Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken}})
+			resp, err := client.ListTags(ctx, &ateapi.ListTagsRequest{Atespace: getTagAtespaceFlag, Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken}})
 			if err != nil {
 				return fmt.Errorf("failed to list tags: %w", err)
 			}
@@ -98,11 +93,11 @@ var createTagCmd = &cobra.Command{
 	Long: "Tag the external snapshot a suspended actor holds.\n\n" +
 		"The tag gets its own copy of that snapshot, so suspending the actor\n" +
 		"again or deleting it cannot collect what the tag names.",
-	Args: cobra.ExactArgs(1),
+	Args: exactlyOneArg("<tag-name>", "atespace", "actor"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, err := parseTagScope(createTagScopeFlag)
 		if err != nil {
-			return err
+			return wrapUsageError(err)
 		}
 		ctx := cmd.Context()
 		client, err := newAPIClient(cmd)
@@ -111,11 +106,11 @@ var createTagCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		tag, err := client.CreateTag(ctx, &ateapipb.CreateTagRequest{
-			Tag: &ateapipb.Tag{
-				Metadata:    &ateapipb.ResourceMetadata{Atespace: createTagAtespaceFlag, Name: args[0]},
+		tag, err := client.CreateTag(ctx, &ateapi.CreateTagRequest{
+			Tag: &ateapi.Tag{
+				Metadata:    &ateapi.ResourceMetadata{Atespace: createTagAtespaceFlag, Name: args[0]},
 				Scope:       scope,
-				SourceActor: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagActorFlag},
+				SourceActor: &ateapi.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagActorFlag},
 			},
 		})
 		if err != nil {
@@ -128,11 +123,11 @@ var createTagCmd = &cobra.Command{
 var updateTagCmd = &cobra.Command{
 	Use:   "tag <tag-name>",
 	Short: "Publish or unpublish a tag",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<tag-name>", "atespace", "scope"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, err := parseTagScope(updateTagScopeFlag)
 		if err != nil {
-			return err
+			return wrapUsageError(err)
 		}
 		ctx := cmd.Context()
 		client, err := newAPIClient(cmd)
@@ -141,7 +136,7 @@ var updateTagCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		ref := &ateapipb.ObjectRef{Atespace: updateTagAtespaceFlag, Name: args[0]}
+		ref := &ateapi.ObjectRef{Atespace: updateTagAtespaceFlag, Name: args[0]}
 		resp, err := updateTagScope(ctx, client, ref, scope)
 		if err != nil {
 			return err
@@ -153,7 +148,7 @@ var updateTagCmd = &cobra.Command{
 var deleteTagCmd = &cobra.Command{
 	Use:   "tag <tag-name>",
 	Short: "Delete a tag",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<tag-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		client, err := newAPIClient(cmd)
@@ -162,7 +157,7 @@ var deleteTagCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		_, err = client.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: &ateapipb.ObjectRef{Atespace: deleteTagAtespaceFlag, Name: args[0]}})
+		_, err = client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: &ateapi.ObjectRef{Atespace: deleteTagAtespaceFlag, Name: args[0]}})
 		if err != nil {
 			return fmt.Errorf("failed to delete tag: %w", err)
 		}
@@ -172,54 +167,49 @@ var deleteTagCmd = &cobra.Command{
 }
 
 type tagClient interface {
-	GetTag(ctx context.Context, in *ateapipb.GetTagRequest, opts ...grpc.CallOption) (*ateapipb.Tag, error)
-	UpdateTag(ctx context.Context, in *ateapipb.UpdateTagRequest, opts ...grpc.CallOption) (*ateapipb.Tag, error)
+	GetTag(ctx context.Context, in *ateapi.GetTagRequest, opts ...grpc.CallOption) (*ateapi.Tag, error)
+	UpdateTag(ctx context.Context, in *ateapi.UpdateTagRequest, opts ...grpc.CallOption) (*ateapi.Tag, error)
 }
 
-func updateTagScope(ctx context.Context, client tagClient, ref *ateapipb.ObjectRef, scope ateapipb.TagScope) (*ateapipb.Tag, error) {
-	tag, err := client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: ref})
+func updateTagScope(ctx context.Context, client tagClient, ref *ateapi.ObjectRef, scope ateapi.TagScope) (*ateapi.Tag, error) {
+	tag, err := client.GetTag(ctx, &ateapi.GetTagRequest{Tag: ref})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tag %q: %w", ref.GetName(), err)
 	}
 	tag.Scope = scope
 
-	resp, err := client.UpdateTag(ctx, &ateapipb.UpdateTagRequest{Tag: tag})
+	resp, err := client.UpdateTag(ctx, &ateapi.UpdateTagRequest{Tag: tag})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update tag: %w", err)
 	}
 	return resp, nil
 }
 
-func parseTagScope(value string) (ateapipb.TagScope, error) {
+func parseTagScope(value string) (ateapi.TagScope, error) {
 	switch strings.ToLower(value) {
 	case "atespace":
-		return ateapipb.TagScope_TAG_SCOPE_ATESPACE, nil
+		return ateapi.TagScope_TAG_SCOPE_ATESPACE, nil
 	case "published":
-		return ateapipb.TagScope_TAG_SCOPE_PUBLISHED, nil
+		return ateapi.TagScope_TAG_SCOPE_PUBLISHED, nil
 	default:
-		return ateapipb.TagScope_TAG_SCOPE_UNSPECIFIED, fmt.Errorf("invalid scope %q; must be atespace or published", value)
+		return ateapi.TagScope_TAG_SCOPE_UNSPECIFIED, fmt.Errorf("invalid scope %q; must be atespace or published", value)
 	}
 }
 
 func init() {
-	getTagsCmd.Flags().StringVarP(&getTagAtespaceFlag, "atespace", "a", "", "Atespace to list/get tags in")
-	getTagsCmd.Flags().BoolVarP(&getTagAllAtespacesFlag, "all-atespaces", "A", false, "List tags across all atespaces")
+	getTagsCmd.Flags().StringVarP(&getTagAtespaceFlag, "atespace", "a", "", "get tags in a specific atespace (mutually exclusive with --all-atespaces)")
+	getTagsCmd.Flags().BoolVarP(&getTagAllAtespacesFlag, "all-atespaces", "A", false, "get tags across all atespaces (mutually exclusive with --atespace)")
 	getCmd.AddCommand(getTagsCmd)
 
-	createTagCmd.Flags().StringVarP(&createTagAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in; the tag is created here (required)")
-	_ = createTagCmd.MarkFlagRequired("atespace")
-	createTagCmd.Flags().StringVar(&createTagActorFlag, "actor", "", "Name of the suspended actor whose external snapshot to tag (required)")
-	_ = createTagCmd.MarkFlagRequired("actor")
-	createTagCmd.Flags().StringVar(&createTagScopeFlag, "scope", "atespace", "Tag scope: atespace or published")
+	createTagCmd.Flags().StringVarP(&createTagAtespaceFlag, "atespace", "a", "", "the actor's atespace; the tag is created here")
+	createTagCmd.Flags().StringVar(&createTagActorFlag, "actor", "", "suspended actor whose external snapshot to tag")
+	createTagCmd.Flags().StringVar(&createTagScopeFlag, "scope", "atespace", "tag scope: atespace or published")
 	createCmd.AddCommand(createTagCmd)
 
-	updateTagCmd.Flags().StringVarP(&updateTagAtespaceFlag, "atespace", "a", "", "Atespace owning the tag (required)")
-	updateTagCmd.Flags().StringVar(&updateTagScopeFlag, "scope", "", "Tag scope: atespace or published (required)")
-	_ = updateTagCmd.MarkFlagRequired("atespace")
-	_ = updateTagCmd.MarkFlagRequired("scope")
+	updateTagCmd.Flags().StringVarP(&updateTagAtespaceFlag, "atespace", "a", "", "the tag's atespace")
+	updateTagCmd.Flags().StringVar(&updateTagScopeFlag, "scope", "", "tag scope: atespace or published")
 	updateCmd.AddCommand(updateTagCmd)
 
-	deleteTagCmd.Flags().StringVarP(&deleteTagAtespaceFlag, "atespace", "a", "", "Atespace owning the tag (required)")
-	_ = deleteTagCmd.MarkFlagRequired("atespace")
+	deleteTagCmd.Flags().StringVarP(&deleteTagAtespaceFlag, "atespace", "a", "", "the tag's atespace")
 	deleteCmd.AddCommand(deleteTagCmd)
 }

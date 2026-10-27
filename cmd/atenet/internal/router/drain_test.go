@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/serverboot"
 )
 
 // drainFunc adapts a bare function to the dataplaneDrainer interface.

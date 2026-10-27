@@ -26,8 +26,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -35,6 +33,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // imageVolumeTestRegistry starts an in-memory OCI registry. Its 127.0.0.1 host
@@ -103,7 +103,7 @@ func newImageVolumeStore(t *testing.T) *imagecache.Store {
 	return s
 }
 
-// A mounted image volume records its layers for ateom to compose, and its
+// A mounted image volume records its layers for worker to compose, and its
 // digest so the cache GC can protect them.
 func TestResolveImageVolumes_RecordsLayersAndDigest(t *testing.T) {
 	host := imageVolumeTestRegistry(t)

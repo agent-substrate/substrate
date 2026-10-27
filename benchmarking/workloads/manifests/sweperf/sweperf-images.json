@@ -1,0 +1,27 @@
+[
+  {
+    "name": "astropy-7336",
+    "image": "us-docker.pkg.dev/gke-substrate-release/benchmark/sweperf@sha256:c265bfba3bea40c99e7baad734579b75d02dab6dbe6910cb1f9ed71c8b08f5b1",
+    "steps": 21
+  },
+  {
+    "name": "django-11099",
+    "image": "us-docker.pkg.dev/gke-substrate-release/benchmark/sweperf@sha256:7e4baaf61a7482d6d09e2fcccecd1529f47488aa52821d507cc8d6ad0ba31eea",
+    "steps": 15
+  },
+  {
+    "name": "matplotlib-20826",
+    "image": "us-docker.pkg.dev/gke-substrate-release/benchmark/sweperf@sha256:74989c4921831f9fbf3fb95924e210bf6616ede00cf30cc9cf0bad945342174b",
+    "steps": 49
+  },
+  {
+    "name": "sphinx-8638",
+    "image": "us-docker.pkg.dev/gke-substrate-release/benchmark/sweperf@sha256:ca801ef886f07f92598f576b875e6f5b5ce4d7d8ed4da607d210e7f0caa23210",
+    "steps": 64
+  },
+  {
+    "name": "sympy-13647",
+    "image": "us-docker.pkg.dev/gke-substrate-release/benchmark/sweperf@sha256:89ed518b85efaf063cd3a515c33bc293a4883964d9af7cc21c4e34824ee171f1",
+    "steps": 33
+  }
+]

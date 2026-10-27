@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/substratex509"
+	"go.ate.dev/substrate/internal/substratex509"
 )
 
 const ateletSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/atelet"

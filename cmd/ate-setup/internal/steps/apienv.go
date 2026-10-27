@@ -22,11 +22,15 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // envHashAnnotation carries a digest of the apiserver's environment on the pod
@@ -38,7 +42,7 @@ const envHashAnnotation = "ate.dev/env-hash"
 // store: both DSNs and the schema into the ate-api-server-secret-envvars Secret,
 // stable roles and Cloud SQL settings into the ConfigMap,
 // and an external server CA into postgres-server-ca. The ConfigMap also
-// carries the actor JWT issuer.
+// carries the actor JWT issuer and the snapshot location.
 //
 // ate-api-server.yaml pulls both in through optional envFrom sources and
 // resolves the PostgreSQL connection, role, and schema flags from
@@ -50,6 +54,13 @@ const envHashAnnotation = "ate.dev/env-hash"
 // applies no Deployment.
 func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	log.Step("create_api_server_env_vars")
+	snapshotLocation, err := clusterSnapshotLocation(e.Cfg.SnapshotLocation, e.Cfg.PreviewGates)
+	if err != nil {
+		return err
+	}
+	if err := e.Cfg.RequireTransferServiceAccount(); err != nil {
+		return err
+	}
 	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
 		return err
 	}
@@ -127,6 +138,12 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}
 	configVars["ATE_API_ACTOR_JWT_ISSUER"] = e.Cfg.ActorJWTIssuer
+	// Written empty on kind, so the sidecar's argument is never the literal
+	// $(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT).
+	configVars["ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT"] = e.Cfg.TransferServiceAccount()
+	if snapshotLocation != "" {
+		configVars["ATE_API_SNAPSHOT_LOCATION"] = snapshotLocation
+	}
 	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
 		return err
 	}
@@ -145,6 +162,49 @@ func (e *Env) UpdateAPIServerEnvVars(ctx context.Context) error {
 		return err
 	}
 	return e.annotateAPIServerEnvHash(ctx)
+}
+
+// sharedBootstrapOwnerWarning returns a warning when the shared client
+// ServiceAccount is a bootstrap owner, and "" otherwise.
+// It is the default so demos, benchmarks and e2e work, but everyone who can
+// mint its token, including every kubectl-ate user without --token-file, is
+// then a global owner.
+func sharedBootstrapOwnerWarning(bootstrapOwners, namespace string) string {
+	shared := installdefaults.ClientPrincipal(namespace)
+	for owner := range strings.SplitSeq(bootstrapOwners, ",") {
+		if strings.TrimSpace(owner) == shared {
+			return fmt.Sprintf("%s is a bootstrap owner, so anyone who can mint a token for it is a global owner of this install. "+
+				"It is the default so the demos, benchmarks and e2e tests work; for a shared or production install, "+
+				"set --ateapi-authz-bootstrap-owners (ATE_API_AUTHZ_BOOTSTRAP_OWNERS) to your operators' own principals. "+
+				"See docs/authorization.md.", shared)
+		}
+	}
+	return ""
+}
+
+// clusterSnapshotLocation validates location and returns it as ate-api-server's
+// --snapshot-location, the cluster-wide default storage location for actor
+// snapshots. It is used whether or not the PerTemplateSnapshotLocation preview
+// gate is enabled; with the gate, an actor template's
+// snapshotConfig.storageLocation overrides it. It may be empty only when the
+// gate is enabled, in which case every template must set its own.
+func clusterSnapshotLocation(location string, gates []string) (string, error) {
+	if location != "" {
+		if err := resources.ValidateSnapshotLocation(location); err != nil {
+			return "", fmt.Errorf("invalid --snapshot-location: %w", err)
+		}
+		return location, nil
+	}
+	// Snapshot location should always be set by --snapshot-location flag when not using preview mode.
+	if !previewGateEnabled(gates, preview.GatePerTemplateSnapshotLocation) {
+		return "", fmt.Errorf("--snapshot-location (SNAPSHOT_LOCATION) must be set unless --preview=%s is enabled", preview.GatePerTemplateSnapshotLocation)
+	}
+	return "", nil
+}
+
+// previewGateEnabled reports whether gates, a --preview value, enables gate.
+func previewGateEnabled(gates []string, gate preview.Gate) bool {
+	return slices.Contains(gates, preview.All) || slices.Contains(gates, string(gate))
 }
 
 // buildAPIServerEnvVars is the Secret payload. ate-api-server takes both
@@ -292,7 +352,58 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 	if err := stampAPIServerEnvHash(objs, hash); err != nil {
 		return err
 	}
+	if err := setAPIServerAuthzArgs(objs, e.Cfg.APIAuthzBootstrapOwners); err != nil {
+		return err
+	}
+	if msg := sharedBootstrapOwnerWarning(e.Cfg.APIAuthzBootstrapOwners, e.Namespace()); msg != "" {
+		log.Warnf("%s", msg)
+	}
 	return e.Kube.Apply(ctx, objs)
+}
+
+// apiServerAuthzFlag is the ate-api-server flag setAPIServerAuthzArgs owns.
+const apiServerAuthzFlag = "--authz-bootstrap-owners"
+
+// setAPIServerAuthzArgs sets ate-api-server's bootstrap owners flag on its
+// container in objs, replacing any the manifest already carries. A changed
+// flag changes the pod template, so it rolls the Deployment.
+func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners string) error {
+	var dep *unstructured.Unstructured
+	for _, obj := range objs {
+		if obj.GetKind() == "Deployment" && obj.GetName() == "ate-api-server" {
+			dep = obj
+			break
+		}
+	}
+	if dep == nil {
+		return fmt.Errorf("the manifest has no deployment/ate-api-server to set authorization flags on")
+	}
+	containers, found, err := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return fmt.Errorf("%s has no containers", kube.Describe(dep))
+	}
+	for i, c := range containers {
+		container, ok := c.(map[string]any)
+		if !ok || container["name"] != "ate-api-server" {
+			continue
+		}
+		args, _, err := unstructured.NestedStringSlice(container, "args")
+		if err != nil {
+			return fmt.Errorf("%s: %w", kube.Describe(dep), err)
+		}
+		args = slices.DeleteFunc(args, func(arg string) bool {
+			return arg == apiServerAuthzFlag || strings.HasPrefix(arg, apiServerAuthzFlag+"=")
+		})
+		if strings.Trim(bootstrapOwners, " ,") != "" {
+			args = append(args, apiServerAuthzFlag+"="+bootstrapOwners)
+		}
+		if err := unstructured.SetNestedStringSlice(container, args, "args"); err != nil {
+			return fmt.Errorf("%s: %w", kube.Describe(dep), err)
+		}
+		containers[i] = container
+		return unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers")
+	}
+	return fmt.Errorf("%s has no ate-api-server container", kube.Describe(dep))
 }
 
 // stampAPIServerEnvHash sets the digest on the ate-api-server Deployment's pod

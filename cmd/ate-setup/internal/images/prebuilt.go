@@ -22,8 +22,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 )
 
 // koRef matches a whole ko:// reference: the prefix plus everything up to the
@@ -68,19 +66,6 @@ func NewPrebuilt(src Source, digest Digester) *Prebuilt {
 	return &Prebuilt{src: src, digest: digest, pinned: make(map[string]string)}
 }
 
-// ResolvePath rewrites the manifests a path covers.
-func (p *Prebuilt) ResolvePath(ctx context.Context, path string) ([]byte, error) {
-	manifest, err := kube.ReadPath(path)
-	if err != nil {
-		return nil, err
-	}
-	out, err := p.rewrite(ctx, manifest)
-	if err != nil {
-		return nil, fmt.Errorf("in %s: %w", path, err)
-	}
-	return out, nil
-}
-
 // ResolveBytes rewrites an in-memory manifest, such as kustomize output.
 func (p *Prebuilt) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, error) {
 	return p.rewrite(ctx, manifest)
@@ -94,13 +79,13 @@ func (p *Prebuilt) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, e
 // it, such as envoy-dataplane: a release publishes that under the same
 // repository and tag as the rest, so it is found the same way.
 //
-// The digest is not decoration. An ActorTemplate's container image, an image
-// volume's reference, and a SandboxConfig's pauseImage each carry the CEL rule
-// self.contains('@'), so a tag on its own is rejected by admission and every
-// demo would fail to deploy. Pinning also restores what ko gave the control
-// plane deployments for free: an install that cannot shift under a tag someone
-// moves later. Keeping the tag alongside the digest is ko's own output shape,
-// and leaves the reference legible in `kubectl get`.
+// The digest is not decoration. An ActorTemplate's container image and an image
+// volume's reference each carry the CEL rule self.contains('@'), so a tag on
+// its own is rejected by admission and every demo would fail to deploy. Pinning
+// also restores what ko gave the control plane deployments for free: an install
+// that cannot shift under a tag someone moves later. Keeping the tag alongside
+// the digest is ko's own output shape, and leaves the reference legible in
+// `kubectl get`.
 func (p *Prebuilt) Pin(ctx context.Context, image string) (string, error) {
 	tagged := p.src.Repo + "/" + image + ":" + p.src.Tag
 	// A tag that already carries one is pinned as it stands. Looking it up
@@ -144,6 +129,13 @@ func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error)
 		}
 		ref, err := p.Pin(ctx, image)
 		if err != nil {
+			// The registry may hold an image releases do not publish, so it is
+			// looked up like any other, and only a failed lookup says why it
+			// might be missing.
+			if pkg := strings.TrimPrefix(string(match), "ko://"+ModulePath+"/"); !IsReleased(pkg) {
+				err = fmt.Errorf("%w; releases do not publish %s, so publish it to %s yourself or build it from source by dropping --image-repo",
+					err, image, p.src.Repo)
+			}
 			unpinned[image] = err
 			return match
 		}

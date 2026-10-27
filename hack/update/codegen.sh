@@ -53,22 +53,21 @@ function codegen::protobuf() {
         | uniq)
     )
 
+    # Compile from the repo root so each file registers under its repo path,
+    # like api/ateapi/v1/ateapi.proto.
     echo "Generating protobuf code"
     for dir in "${proto_dirs[@]}"; do
         local protoc_gen_go
         protoc_gen_go="$(./hack/run-tool.sh --print-bin-path protoc-gen-go)"
         local protoc_gen_go_rpc
         protoc_gen_go_rpc="$(./hack/run-tool.sh --print-bin-path protoc-gen-go-grpc)"
-        (
-            cd "${dir}" || exit 1
-            "${ROOT}"/hack/protoc.sh \
-                -I "${ROOT}" -I . \
-                --plugin=protoc-gen-go="${protoc_gen_go}" \
-                --plugin=protoc-gen-go-grpc="${protoc_gen_go_rpc}" \
-                --go_out=paths=source_relative:. \
-                --go-grpc_out=paths=source_relative:. \
-                ./*.proto
-        )
+        "${ROOT}"/hack/protoc.sh \
+            -I . \
+            --plugin=protoc-gen-go="${protoc_gen_go}" \
+            --plugin=protoc-gen-go-grpc="${protoc_gen_go_rpc}" \
+            --go_out=paths=source_relative:. \
+            --go-grpc_out=paths=source_relative:. \
+            "${dir}"/*.proto
     done
 }
 codegen::protobuf

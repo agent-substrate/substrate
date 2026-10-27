@@ -82,7 +82,11 @@ func (envoyAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body 
 func (envoyAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
 
 func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
-	return (status == http.StatusForbidden && strings.Contains(body, "egress denied")) ||
+	return isEgressPolicyDenied(status, body)
+}
+
+func isEgressPolicyDenied(status int, body string) bool {
+	return (status == http.StatusForbidden && (strings.Contains(body, "egress denied") || strings.Contains(body, "actor egress policy denied"))) ||
 		(status == http.StatusBadGateway && strings.Contains(body, "request failed"))
 }
 
@@ -145,13 +149,13 @@ func (agentGatewayAtenetDataplane) NewParkingObserver(context.Context) (ParkingO
 }
 
 func (agentGatewayAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body string) bool {
-	return status == http.StatusGatewayTimeout && strings.Contains(body, "request timed out")
+	return status == http.StatusServiceUnavailable && strings.Contains(body, "no worker has room for the actor")
 }
 
-func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusGatewayTimeout }
+func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
 
 func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
-	return status == http.StatusForbidden && strings.Contains(body, "actor egress policy denied")
+	return isEgressPolicyDenied(status, body)
 }
 
 // IsWebSocketEgressDenied also accepts agentgateway's own denial: it applies

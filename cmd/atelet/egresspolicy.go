@@ -15,14 +15,14 @@
 package main
 
 import (
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // toAteletEgressPolicy copies the destinations each rule of the control
 // plane's policy allows. Metadata and rule effects are dropped: the worker
 // does not apply them, and they name credentials it has no need to see.
-func toAteletEgressPolicy(in *ateapipb.EgressPolicy) *ateletpb.EgressPolicy {
+func toAteletEgressPolicy(in *ateapi.EgressPolicy) *ateletpb.EgressPolicy {
 	if in == nil {
 		return nil
 	}
@@ -43,7 +43,7 @@ func toAteletEgressPolicy(in *ateapipb.EgressPolicy) *ateletpb.EgressPolicy {
 	return out
 }
 
-func toEgressDestinations(hostnames []string, ports *ateapipb.Ports) *ateletpb.EgressDestinations {
+func toEgressDestinations(hostnames []string, ports *ateapi.Ports) *ateletpb.EgressDestinations {
 	out := &ateletpb.EgressDestinations{Hostnames: hostnames}
 	if ports != nil {
 		out.Ports = &ateletpb.EgressPorts{Numbers: ports.GetNumbers()}

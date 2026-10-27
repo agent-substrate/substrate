@@ -28,11 +28,15 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.ate.dev/substrate/internal/actoridjwt"
 )
 
 const testAudience = "ate-api"
@@ -76,7 +80,7 @@ func TestVerifierRetriesInitialDiscoveryFailure(t *testing.T) {
 	key := testRSAKey(t)
 	ti.addRSA("key", &key.PublicKey)
 	ti.jwksFailures.Store(1)
-	verifier := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client())
+	verifier := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()))
 	token := mintJWT(t, "RS256", "key", key, validClaims(ti.issuer()))
 	now := time.Now()
 
@@ -98,7 +102,7 @@ func TestVerifierUsesCachedKeyWhenRefreshFails(t *testing.T) {
 	ti := newTestIssuer(t)
 	key := testRSAKey(t)
 	ti.addRSA("key", &key.PublicKey)
-	verifier := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client())
+	verifier := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()))
 	token := mintJWT(t, "RS256", "key", key, validClaims(ti.issuer()))
 	now := time.Now()
 
@@ -128,7 +132,7 @@ func TestVerifierReturnsKubernetesClaims(t *testing.T) {
 	}
 	token := mintJWT(t, "RS256", "key", key, claims)
 
-	got, err := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client()).Verify(t.Context(), token, time.Now())
+	got, err := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client())).Verify(t.Context(), token, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +145,7 @@ func TestVerifierCachesAndRefreshesKeys(t *testing.T) {
 	ti := newTestIssuer(t)
 	key1 := testRSAKey(t)
 	ti.addRSA("key-1", &key1.PublicKey)
-	verifier := NewVerifier(ti.issuer(), []string{"other", testAudience}, ti.server.Client())
+	verifier := NewVerifier(ti.issuer(), []string{"other", testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()))
 	now := time.Now()
 
 	token1 := mintJWT(t, "RS256", "key-1", key1, validClaims(ti.issuer()))
@@ -359,7 +363,7 @@ func TestVerifyECDSA(t *testing.T) {
 			ti.addEC(t, "ec-1", tc.crv, &key.PublicKey)
 			tok := mintJWT(t, tc.alg, "ec-1", key, validClaims(ti.issuer()))
 
-			if _, err := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client()).Verify(context.Background(), tok, time.Now()); err != nil {
+			if _, err := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client())).Verify(context.Background(), tok, time.Now()); err != nil {
 				t.Fatalf("Verify(%s) = %v, want nil", tc.alg, err)
 			}
 		})
@@ -379,7 +383,7 @@ func TestVerifyRejectsECKeyForRSAlg(t *testing.T) {
 	// RS256 header pointing at the EC key; the RSA signing key is irrelevant because
 	// the key-type check fails before signature verification.
 	tok := mintJWT(t, "RS256", "ec-1", testRSAKey(t), validClaims(ti.issuer()))
-	if _, err := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client()).Verify(context.Background(), tok, time.Now()); err == nil {
+	if _, err := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client())).Verify(context.Background(), tok, time.Now()); err == nil {
 		t.Fatal("Verify accepted an RS256 token whose kid names an EC key")
 	}
 }
@@ -398,7 +402,7 @@ func TestVerifyMixedJWKS(t *testing.T) {
 	ti.addEC(t, "ec-1", "P-256", &ecKey.PublicKey)
 
 	tok := mintJWT(t, "RS256", "rsa-1", rsaKey, validClaims(ti.issuer()))
-	if _, err := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client()).Verify(context.Background(), tok, time.Now()); err != nil {
+	if _, err := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client())).Verify(context.Background(), tok, time.Now()); err != nil {
 		t.Fatalf("Verify with a mixed RSA+EC JWKS = %v, want nil", err)
 	}
 }
@@ -417,12 +421,12 @@ func TestVerifyUnusableJWKSKeySkipped(t *testing.T) {
 	})
 
 	good := mintJWT(t, "RS256", "rsa-1", rsaKey, validClaims(ti.issuer()))
-	if _, err := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client()).Verify(context.Background(), good, time.Now()); err != nil {
+	if _, err := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client())).Verify(context.Background(), good, time.Now()); err != nil {
 		t.Fatalf("Verify with an unusable key in the JWKS = %v, want nil (bad key should be skipped)", err)
 	}
 
 	referencesSkipped := mintJWT(t, "RS256", "ec-bad", rsaKey, validClaims(ti.issuer()))
-	if _, err := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client()).Verify(context.Background(), referencesSkipped, time.Now()); err == nil {
+	if _, err := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client())).Verify(context.Background(), referencesSkipped, time.Now()); err == nil {
 		t.Fatal("Verify accepted a token whose kid names a key that was skipped")
 	}
 }
@@ -487,5 +491,175 @@ func TestEllipticCurveForJWK(t *testing.T) {
 	}
 	if _, err := ellipticCurveForJWK("P-192"); err == nil {
 		t.Error("ellipticCurveForJWK(P-192) = nil, want error")
+	}
+}
+
+// writeJWKSFile writes the issuer's current JWK set to a file and returns the
+// path, standing in for the public key file a signer publishes next to its
+// pool.
+func writeJWKSFile(t *testing.T, ti *testIssuer) string {
+	t.Helper()
+	b, err := json.Marshal(ti.jwks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "jwks.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestFileKeySource(t *testing.T) {
+	ti := newTestIssuer(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ti.addEC(t, "ec-1", "P-256", &key.PublicKey)
+	path := writeJWKSFile(t, ti)
+
+	v := NewVerifier(ti.issuer(), []string{testAudience}, FileKeySource(path))
+	if _, err := v.Verify(context.Background(), mintJWT(t, "ES256", "ec-1", key, validClaims(ti.issuer())), time.Now()); err != nil {
+		t.Fatalf("Verify = %v, want nil", err)
+	}
+	if ti.jwksRequests.Load() != 0 {
+		t.Errorf("the file source fetched the JWKS over HTTP %d times", ti.jwksRequests.Load())
+	}
+
+	// Rotation: a key added to the file is found on the unknown-kid refresh.
+	next, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ti.addEC(t, "ec-2", "P-256", &next.PublicKey)
+	b, _ := json.Marshal(ti.jwks)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Verify(context.Background(), mintJWT(t, "ES256", "ec-2", next, validClaims(ti.issuer())), time.Now()); err != nil {
+		t.Fatalf("Verify after rotation = %v, want nil", err)
+	}
+}
+
+func TestFileKeySourceErrors(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty.json")
+	if err := os.WriteFile(empty, []byte(`{"keys":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	garbage := filepath.Join(dir, "garbage.json")
+	if err := os.WriteFile(garbage, []byte(`not json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{
+		"missing file": filepath.Join(dir, "absent.json"),
+		"empty set":    empty,
+		"not JSON":     garbage,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := FileKeySource(path).Keys(context.Background()); err == nil {
+				t.Fatal("Keys succeeded, want error")
+			}
+		})
+	}
+}
+
+func TestVerifySubstrateClaims(t *testing.T) {
+	ti := newTestIssuer(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ti.addEC(t, "ec-1", "P-256", &key.PublicKey)
+	v := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()), WithSubstrateClaims())
+
+	withClaim := func(name string, value any) map[string]any {
+		c := validClaims(ti.issuer())
+		c[name] = value
+		return c
+	}
+	for _, tc := range []struct {
+		name    string
+		claims  map[string]any
+		wantErr string
+		check   func(*Claims) bool
+	}{
+		{"absent", validClaims(ti.issuer()), "", func(c *Claims) bool { return c.Kind == actoridjwt.KindUnspecified && c.Substrate == nil }},
+		{"actor", withClaim("actor.ate.dev", map[string]string{"atespace": "a", "actorName": "b", "actorUID": "u"}), "",
+			func(c *Claims) bool {
+				return c.Kind == actoridjwt.KindActor && c.Substrate != nil && c.Substrate.ActorUID == "u"
+			}},
+		{"worker-for-actor", withClaim("worker-for-actor.ate.dev", map[string]string{"atespace": "a"}), "",
+			func(c *Claims) bool {
+				return c.Kind == actoridjwt.KindWorkerForActor && c.Substrate != nil && c.Substrate.Atespace == "a"
+			}},
+		{"not an object", withClaim("actor.ate.dev", "junk"), "actor.ate.dev", nil},
+		{"null", withClaim("actor.ate.dev", nil), "", func(c *Claims) bool { return c.Kind == actoridjwt.KindUnspecified && c.Substrate == nil }},
+		{"both", func() map[string]any {
+			c := withClaim("actor.ate.dev", map[string]string{"atespace": "a"})
+			c["worker-for-actor.ate.dev"] = map[string]string{"atespace": "a"}
+			return c
+		}(), "both", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := v.Verify(context.Background(), mintJWT(t, "ES256", "ec-1", key, tc.claims), time.Now())
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want it to mention %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Verify = %v", err)
+			}
+			if !tc.check(got) {
+				t.Errorf("claims = %+v", got.SubstrateClaims)
+			}
+		})
+	}
+}
+
+func TestVerifyIgnoresSubstrateClaimsOnBadSignature(t *testing.T) {
+	// A malformed Substrate claim on a token with a bad signature must fail on
+	// the signature, proving the claim is not parsed before verification.
+	ti := newTestIssuer(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ti.addEC(t, "ec-1", "P-256", &key.PublicKey)
+	stranger, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims := validClaims(ti.issuer())
+	claims["actor.ate.dev"] = "junk"
+	v := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()), WithSubstrateClaims())
+	_, err = v.Verify(context.Background(), mintJWT(t, "ES256", "ec-1", stranger, claims), time.Now())
+	if err == nil || !strings.Contains(err.Error(), "signature") || strings.Contains(err.Error(), "actor.ate.dev") {
+		t.Fatalf("err = %v, want a signature error that does not mention the claim", err)
+	}
+}
+
+func TestVerifyLeavesSubstrateClaimsAloneByDefault(t *testing.T) {
+	// A verifier for another issuer must not fail on, or expose, whatever that
+	// issuer put under Substrate's claim names.
+	ti := newTestIssuer(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ti.addEC(t, "ec-1", "P-256", &key.PublicKey)
+	v := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()))
+	claims := validClaims(ti.issuer())
+	claims["actor.ate.dev"] = "junk"
+	claims["worker-for-actor.ate.dev"] = map[string]string{"atespace": "a"}
+	got, err := v.Verify(context.Background(), mintJWT(t, "ES256", "ec-1", key, claims), time.Now())
+	if err != nil {
+		t.Fatalf("Verify = %v, want nil", err)
+	}
+	if got.Kind != actoridjwt.KindUnspecified || got.Substrate != nil {
+		t.Errorf("Substrate claims = %+v, want none", got.SubstrateClaims)
 	}
 }

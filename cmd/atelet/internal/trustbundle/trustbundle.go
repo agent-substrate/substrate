@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 
-	"github.com/agent-substrate/substrate/internal/pemutil"
+	"go.ate.dev/substrate/internal/pemutil"
 	certsv1 "k8s.io/api/certificates/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )

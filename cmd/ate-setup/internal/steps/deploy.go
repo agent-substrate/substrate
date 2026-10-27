@@ -27,8 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // crdGVK is the kind of a CustomResourceDefinition.
@@ -68,10 +68,23 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return err
 	}
+	// Likewise a router that would refuse to start without an allowlist, and
+	// a credential exchange without a transfer service account.
+	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
+		return err
+	}
+	if err := e.Cfg.RequireTransferServiceAccount(); err != nil {
+		return err
+	}
 	// Likewise the CSI request, even though it is only acted on partway
 	// through: a driver this cluster cannot run is worth knowing before the
 	// control plane goes up, not after.
 	if err := e.CheckCSIDriver(opts.SetupCSI); err != nil {
+		return err
+	}
+	// The snapshot location is only written into ate-api-server's ConfigMap
+	// partway through, so check it before the cluster is touched.
+	if _, err := clusterSnapshotLocation(e.Cfg.SnapshotLocation, e.Cfg.PreviewGates); err != nil {
 		return err
 	}
 	if err := e.requireNoWorkerPods(ctx); err != nil {
@@ -167,6 +180,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	var waits []rollout
 	waits = append(waits,
 		rollout{kube.KindDeployment, "ate-api-server"},
+		rollout{kube.KindDeployment, "ate-idp-server"},
 		rollout{kube.KindDeployment, "ate-controller"},
 		rollout{kube.KindDeployment, "atenet-router"},
 		rollout{kube.KindDeployment, "atenet-egress"},
@@ -186,8 +200,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	return e.applyOtelEndpointOverride(ctx)
 }
 
-// DeployPodCertificateController applies the podcertificate controller and
-// waits until it is rolling and has published its trust bundles.
+// DeployPodCertificateController creates any missing signer CA pools, applies
+// the podcertificate controller, and waits until it is rolling and has
+// published its trust bundles.
 //
 // size10 clusters render the podcert-size10 overlay instead of the base file.
 // It appends --kube-api-qps=100 / --kube-api-burst=200 so the controller keeps
@@ -200,6 +215,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 // reason: one apply means one rollout, and the rollout wait sees the pod that
 // will actually serve.
 func (e *Env) DeployPodCertificateController(ctx context.Context) error {
+	// The controller mounts every pool, so one that an older release did not
+	// create keeps the new pod in ContainerCreating.
+	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
+		return err
+	}
 	path := e.Cfg.Manifest("pod-certificate-controller.yaml")
 	if e.Cfg.Size10() {
 		path = e.Cfg.Manifest("podcert-size10")
@@ -272,10 +292,18 @@ func setPodcertWorkersPerSigner(objs []*unstructured.Unstructured, workers int) 
 	return unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers")
 }
 
-// DeployAteAPIServer redeploys only ate-api-server.
+// DeployAteAPIServer redeploys ate-api-server and ate-idp-server.
 func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	log.Step("deploy_ate_apiserver")
 
+	// Checked before the CRDs, namespace and Secrets go in, rather than when
+	// the ConfigMap is written.
+	if _, err := clusterSnapshotLocation(e.Cfg.SnapshotLocation, e.Cfg.PreviewGates); err != nil {
+		return err
+	}
+	if err := e.Cfg.RequireTransferServiceAccount(); err != nil {
+		return err
+	}
 	if err := e.EnsureCRDs(ctx); err != nil {
 		return err
 	}
@@ -300,7 +328,7 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 			return err
 		}
 	}
-	manifest, err := e.renderResolve(ctx, e.Cfg.Manifest("ate-api-server.yaml"))
+	manifest, err := e.renderResolve(ctx, e.apiServerManifestPath())
 	if err != nil {
 		return err
 	}
@@ -311,7 +339,25 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.reconcileCloudSQLProxySidecar(ctx); err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-api-server", e.Cfg.RolloutTimeout)
+	// ate-idp-server shares only the actor JWT pool with ate-api-server. It
+	// comes along so that redeploying an older release rolls it back too.
+	if err := e.deployIDPServer(ctx); err != nil {
+		return err
+	}
+	for _, name := range []string{"ate-api-server", "ate-idp-server"} {
+		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), name, e.Cfg.RolloutTimeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// apiServerManifestPath is the ate-api-server manifest for the environment.
+func (e *Env) apiServerManifestPath() string {
+	if e.Cfg.Kind {
+		return e.Cfg.Manifest("kind", "ate-api-server")
+	}
+	return e.Cfg.Manifest("ate-api-server.yaml")
 }
 
 // DeployAteController redeploys only ate-controller.
@@ -330,7 +376,7 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
-	manifest, err := e.renderDataPlane(e.Cfg.Manifest("ate-controller.yaml"))
+	manifest, err := e.render(e.Cfg.Manifest("ate-controller.yaml"))
 	if err != nil {
 		return err
 	}
@@ -459,12 +505,7 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 		return err
 	}
 
-	path := e.Cfg.Manifest("atelet.yaml")
-	if e.Cfg.Kind {
-		// The kind overlay patches the DaemonSet for the local node layout.
-		path = e.Cfg.Path(installDir + "/kind/atelet")
-	}
-	manifest, err := e.renderDataPlane(path)
+	manifest, err := e.render(e.ateletManifestPath())
 	if err != nil {
 		return err
 	}
@@ -481,12 +522,23 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 	return e.waitFakeWorkersync(ctx)
 }
 
+// ateletManifestPath is the atelet manifest for the environment.
+func (e *Env) ateletManifestPath() string {
+	if e.Cfg.Kind {
+		return e.Cfg.Manifest("kind", "atelet")
+	}
+	return e.Cfg.Manifest("atelet.yaml")
+}
+
 // DeployAtenet redeploys the atenet dataplane: router and egress.
 func (e *Env) DeployAtenet(ctx context.Context) error {
 	log.Step("deploy_atenet")
 
 	provider, err := e.Cfg.CredentialProvider()
 	if err != nil {
+		return err
+	}
+	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
 		return err
 	}
 	if err := e.EnsureCRDs(ctx); err != nil {
@@ -551,10 +603,8 @@ func (e *Env) DeploySandboxConfig(ctx context.Context) error {
 		return err
 	}
 
-	// Install the cluster-wide sandbox config. Sandbox binaries live on
-	// cluster-scoped SandboxConfigs each ActorTemplate names via
-	// sandboxConfig.configName; gVisor templates name this one unless they
-	// create their own SandboxConfig.
+	// Install the cluster-wide default gVisor SandboxConfig that gVisor
+	// WorkerPools resolve by default unless they pin their own configRef.
 	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
 }
 

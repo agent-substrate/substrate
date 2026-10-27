@@ -98,8 +98,9 @@ func Unimplemented(format string, args ...any) error {
 	return newf(codes.Unimplemented, format, args...)
 }
 
-// Unavailable reports that the request was not acted on, so retrying it, here
-// or elsewhere, is safe. Never use it for a failure partway through.
+// Unavailable reports that the request was not acted on, or that the attempt
+// was rolled back so retrying it, here or elsewhere, is safe. Never use it for
+// a failure that leaves partial state behind.
 func Unavailable(format string, args ...any) error {
 	return newf(codes.Unavailable, format, args...)
 }

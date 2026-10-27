@@ -1,6 +1,8 @@
-module github.com/agent-substrate/substrate/hack/tools/kube-api-linter
+module go.ate.dev/substrate/hack/tools/kube-api-linter
 
 go 1.27.0
+
+toolchain go1.27.3
 
 tool sigs.k8s.io/kube-api-linter/cmd/golangci-lint-kube-api-linter
 

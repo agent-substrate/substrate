@@ -130,7 +130,7 @@ spec:
       serviceAccountName: fake-workersync
       containers:
       - name: fake-workersync
-        image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/isolate/fake-workersync
+        image: ko://go.ate.dev/substrate/cmd/benchmarking/isolate/fake-workersync
         # Ready once it has adopted the registered fake Workers, which needs
         # ate-api-server serving.
         readinessProbe:

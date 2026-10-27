@@ -1,25 +1,13 @@
-> The PR title becomes the release note. Write it for users: what changed for them, not how the code changed.
+<!-- The PR title becomes the release note. Write it for users. -->
 
-#### Breaking change
+Why is this needed? (Or link the issue. Open one first for features, API, install or CI changes.)
 
-<!--
+Fixes #
 
-If users must act when they upgrade, describe what they must do, and ask for the `breaking-change` label.
-Otherwise delete this section.
+<!-- e.g. "AI-assisted, I reviewed and tested it." No AI co-author trailers. -->
+AI use:
 
-What is a breaking change? Something that requires customer code/configuration changes to make their agents work.
-But more broadly it might include any behavior change that customers were relying on (Hyrum’s law). Examples of
-breaking changes:
-
-- Moving from 1:1 pods to actors to multiple actors in one pod.
-- Changing actor primary keys or identity formats.
-- Adding authorization or authentication where none was required before.
-
--->
-
-Fixes #<issue_number_goes_here>
-
-> It's a good idea to open an issue first for discussion.
+<!-- Breaking change? Describe what users must do on upgrade and ask for the `breaking-change` label. -->
 
 - [ ] Tests pass
-- [ ] Appropriate changes to documentation are included in the PR
+- [ ] Docs updated

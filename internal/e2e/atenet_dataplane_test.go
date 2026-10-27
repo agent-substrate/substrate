@@ -32,6 +32,9 @@ func TestAtenetDataplaneEgressPolicyDenial(t *testing.T) {
 		if !CurrentAtenetDataplane().IsEgressPolicyDenied(http.StatusForbidden, "actor egress policy denied destination") {
 			t.Error("AgentGateway direct policy denial was not recognized")
 		}
+		if !CurrentAtenetDataplane().IsEgressPolicyDenied(http.StatusBadGateway, `{"error":"request failed: EOF"}`) {
+			t.Error("AgentGateway ClientHello refusal was not recognized")
+		}
 	})
 }
 
@@ -58,6 +61,24 @@ func TestAtenetDataplaneWebSocketEgressDenial(t *testing.T) {
 			t.Setenv(AtenetDataplaneEnv, tt.dataplane)
 			if got := CurrentAtenetDataplane().IsWebSocketEgressDenied(tt.status, tt.body); got != tt.want {
 				t.Errorf("IsWebSocketEgressDenied(%d, %q) = %v, want %v", tt.status, tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAtenetDataplaneParkingBudget(t *testing.T) {
+	for _, dataplane := range []string{"envoy", "agentgateway"} {
+		t.Run(dataplane, func(t *testing.T) {
+			t.Setenv(AtenetDataplaneEnv, dataplane)
+			d := CurrentAtenetDataplane()
+			if got := d.ParkingBudgetStatus(); got != http.StatusServiceUnavailable {
+				t.Errorf("parking budget status = %d, want 503", got)
+			}
+			if !d.IsRetryableParkingBudgetExhaustion(http.StatusServiceUnavailable, "no worker has room for the actor") {
+				t.Error("parking budget exhaustion was not recognized")
+			}
+			if d.IsRetryableParkingBudgetExhaustion(http.StatusGatewayTimeout, "request timed out") {
+				t.Error("transport timeout was recognized as parking budget exhaustion")
 			}
 		})
 	}

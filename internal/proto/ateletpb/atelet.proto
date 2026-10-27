@@ -18,13 +18,13 @@ package atelet;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
+option go_package = "go.ate.dev/substrate/internal/proto/ateletpb";
 
-// AteomSupport provides callouts for ateom.
+// WorkerSupport provides callouts for worker implementations.
 //
-// Called by individual ateom pods over a local connection, authenticated with
-// ateom's k8s pod identity mTLS certificate.
-service AteomSupport {
+// Called by individual worker pods over a local connection, authenticated with
+// the worker's k8s pod identity mTLS certificate.
+service WorkerSupport {
   // Request an atunnel certificate for the given actor.
   //
   // TODO(identity): Rename to MintAtunnelCertificate, as distinct from
@@ -32,8 +32,20 @@ service AteomSupport {
   // the actor filesystem, when/if we support those).
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
 
-  // Register capacity and supported sandbox runtimes for this worker with atelet.
+  // AcquireWorkerEpoch hands out a new epoch for this worker process, for
+  // atelet to forward to the control plane's WorkerService, which this
+  // mirrors. A worker process calls it once at startup, before RegisterWorker.
+  rpc AcquireWorkerEpoch(AcquireWorkerEpochRequest) returns (AcquireWorkerEpochResponse) {}
+
+  // RegisterWorker activates the epoch this worker process acquired and
+  // records its pod IPs and capacity. A worker process registers once, and
+  // takes no workloads until it has. FAILED_PRECONDITION means another worker
+  // process has registered since; this one must not serve.
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
+
+  // SetWorkerSandboxRuntimes records the sandbox runtimes this worker process
+  // can run. Called after RegisterWorker, and again whenever they change.
+  rpc SetWorkerSandboxRuntimes(SetWorkerSandboxRuntimesRequest) returns (SetWorkerSandboxRuntimesResponse) {}
 
   // RequestActorSuspend asks that the actor this worker hosts be suspended,
   // for atelet to forward to the control plane's WorkerService, which this
@@ -43,7 +55,7 @@ service AteomSupport {
   // passed through as it was given, so a worker can tell a decision from a
   // failure to ask. Callers must not hold a lock the resulting Checkpoint
   // would need: the control plane answers this by driving a suspend back
-  // through atelet into the calling ateom.
+  // through atelet into the calling worker.
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse) {}
 
   // GetActorEgressPolicy returns the egress policy of the actor this
@@ -51,55 +63,147 @@ service AteomSupport {
   // Control.GetActorEgressPolicy. An error is the control plane's, passed
   // through as it was given.
   rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (GetActorEgressPolicyResponse) {}
+
+  // ReportActorCrashed reports that the sandbox of the actor this worker
+  // hosts died on its own, for atelet to forward to the control plane's
+  // WorkerService, which this mirrors.
+  rpc ReportActorCrashed(ReportActorCrashedRequest) returns (ReportActorCrashedResponse) {}
+}
+
+message AcquireWorkerEpochRequest {
+}
+
+message AcquireWorkerEpochResponse {
+  // The epoch handed out, for this worker process to register with.
+  int64 epoch = 1;
 }
 
 message RegisterWorkerRequest {
+  // The epoch this worker process acquired through AcquireWorkerEpoch.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int64 epoch = 2;
+
+  // The worker pod's IPs, at most one per IP family, in the order Kubernetes
+  // reports them.
+  //
+  // +k8s:required
+  // +k8s:maxItems=2
+  // +k8s:listType=atomic
+  repeated string ips = 3;
+
   // What the worker can supply. atelet converts it to the control plane's
   // WorkerResources when forwarding.
   //
   // +k8s:required
   WorkerResources capacity = 1;
-
-  // Runtime that new and cold-booted actors start under.
-  // Snapshots matching default_runtime can also warm-boot on this worker.
-  // atelet converts it to the control plane's SandboxRuntime when forwarding.
-  //
-  // +k8s:required
-  SandboxRuntime default_runtime = 2;
-
-  // Additional runtimes (excluding default_runtime) that this worker can
-  // restore snapshots from right now.
-  //
-  // +k8s:optional
-  // +k8s:maxItems=32
-  // +k8s:listType=atomic
-  repeated SandboxRuntime restorable_runtimes = 3;
 }
 
-// SandboxRuntime describes a sandbox runtime and its compatibility identity as
-// reported by a worker. It mirrors the control plane's SandboxRuntime and is
+message SetWorkerSandboxRuntimesRequest {
+  // The epoch this worker process registered with.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int64 epoch = 1;
+
+  // The sandbox classes this worker runs and the compatibility versions it
+  // runs them under. atelet converts it to the control plane's
+  // WorkerSandboxClass when forwarding.
+  //
+  // +k8s:required
+  // +k8s:minItems=1
+  // +k8s:maxItems=1 # keep in sync with WorkerPoolSpec.sandboxClasses
+  // +k8s:listType=map
+  // +k8s:listMapKey=sandbox_class
+  repeated WorkerSandboxClass sandbox_classes = 2;
+}
+
+message SetWorkerSandboxRuntimesResponse {
+}
+
+// WorkerSandboxClass is one sandbox class a worker runs, with the runtimes
+// it runs it under. It mirrors the control plane's WorkerSandboxClass and is
 // validated by the same rules.
-message SandboxRuntime {
+message WorkerSandboxClass {
   // e.g. "gvisor", "microvm"
   //
   // +k8s:required
   // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
-  // Primary compatibility version stamped onto an actor's snapshot when a
-  // checkpoint is taken on this runtime. Snapshots matching `version`
-  // can warm-boot on this runtime.
-  // TODO: Add support for additional compatibility versions.
+  // Runtime new and cold-booted actors of this class start under. Snapshots
+  // matching its version can also warm-boot on this worker.
+  //
+  // +k8s:required
+  WorkerSandboxRuntime default_runtime = 2;
+
+  // Additional runtimes of this class (excluding default_runtime) that this
+  // worker can restore snapshots from right now.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated WorkerSandboxRuntime restorable_runtimes = 3;
+}
+
+// WorkerSandboxRuntime is one runtime a worker runs for the class of its
+// WorkerSandboxClass entry. It mirrors the control plane's
+// WorkerSandboxRuntime and is validated by the same rules.
+message WorkerSandboxRuntime {
+  // Compatibility version stamped onto an actor's snapshot when a checkpoint
+  // is taken on this runtime. Snapshots matching it can warm-boot on this
+  // runtime.
+  //
+  // +k8s:required
+  VersionedSandboxCompat version = 1;
+
+  // The resource overhead incurred by the worker for each actor running under
+  // this runtime, on top of the actor's stated limits.
+  //
+  // +k8s:optional
+  RuntimeOverhead actor_overhead = 2;
+}
+
+// RuntimeOverhead is the memory an actor uses on its worker outside its own
+// limits. It mirrors the control plane's RuntimeOverhead.
+message RuntimeOverhead {
+  // memory_bytes is a fixed amount of memory for each actor.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=1099511627776 # 1TiB
+  int64 memory_bytes = 1;
+
+  // memory_bytes_per_gib is memory per GiB of the actor's memory limit, in
+  // proportion and rounded down to a byte.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=1073741824 # 1GiB
+  int64 memory_bytes_per_gib = 2;
+}
+
+// ActorSandboxRuntime is the runtime an actor runs under, as named on Run and
+// Restore. It mirrors the control plane's ActorSandboxRuntime and is validated by
+// the same rules.
+message ActorSandboxRuntime {
+  // e.g. "gvisor", "microvm"
+  //
+  // +k8s:required
+  // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
+  string sandbox_class = 1;
+
+  // Compatibility version of the runtime.
   //
   // +k8s:required
   VersionedSandboxCompat version = 2;
-
-  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
-  // once workers report one.
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
-// key-value compatibility attributes for a SandboxRuntime.
+// key-value compatibility attributes of a sandbox runtime.
 message VersionedSandboxCompat {
   // Compatibility schema version (e.g. "v1") defining which runtime and
   // hardware attributes are recorded and how they are computed.
@@ -109,12 +213,14 @@ message VersionedSandboxCompat {
   string schema_version = 1;
 
   // Key-value compatibility attributes defined by this schema version, covering
-  // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
-  // features after masking (e.g. "architecture", "cpu_features").
+  // both runtime assets (e.g. "sandbox_bundle_hash") and effective guest
+  // hardware features after masking (e.g. "architecture", "cpu_features").
   // Matched against a snapshot under the same schema_version: every attribute
-  // on the snapshot must be present on the worker with an equal value; keys
-  // only the worker has are ignored. Bump schema_version when a key's meaning
-  // changes or older snapshots must no longer match.
+  // on the snapshot must be present on the worker with an equal value (except
+  // "cpu_features", where the snapshot's hexadecimal bitmask must be a bitwise
+  // subset of the worker's); keys only the worker has are ignored. Bump
+  // schema_version when a key's meaning changes or older snapshots must no
+  // longer match.
   // Order as sent does not matter: ate-api-server sorts attributes by key
   // before recording them.
   //
@@ -127,7 +233,7 @@ message VersionedSandboxCompat {
 
 // AttributeEntry is a single key-value compatibility attribute.
 message AttributeEntry {
-  // Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+  // Attribute name (e.g. "architecture", "cpu_features", "sandbox_bundle_hash").
   //
   // +k8s:required
   // +k8s:maxLength=128
@@ -143,10 +249,20 @@ message AttributeEntry {
 // WorkerResources is what a worker can supply. It mirrors the control plane's
 // WorkerResources and is validated by the same rules.
 message WorkerResources {
-  // Resources are matched by name against actors' resources for placement.
+  // cpu_millicores is CPU in millicores (1000 = one core). Compared against
+  // actors' resource limits for placement.
   //
   // +k8s:optional
-  Resources resources = 1;
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. Compared against actors' resource
+  // limits for placement.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 
   // A count of Actors. Workers can use this to limit the number of Actors
   // that can be placed on them, constraining costs not captured in the
@@ -154,33 +270,31 @@ message WorkerResources {
   //
   // +k8s:optional
   // +k8s:minimum=1
-  int32 actors = 2;
+  int32 actors = 3;
 }
 
-message Resources {
-  // limits is the maximum amount of compute resources allowed. Only "cpu"
-  // and "memory" are supported, each at most once, and each quantity must be
-  // greater than zero; the cpu limit must be less than 1000 cores.
+// ResourceRequirements are the compute resources a workload may use.
+message ResourceRequirements {
+  // limits is the maximum amount of compute resources allowed.
   //
   // +k8s:optional
-  // +k8s:maxItems=2
-  // +k8s:listType=map
-  // +k8s:listMapKey=name
-  repeated Limits limits = 1;
+  Resources limits = 1;
 }
 
-// +k8s:customValidation # names, quantity parse/positivity, cpu bound
-message Limits {
-  // +k8s:required
-  // +k8s:maxLength=16 # the Limits hook restricts values to cpu/memory
-  string name = 1;
-
-  // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
-  // "2Gi").
+// Resources is an amount of each compute resource.
+message Resources {
+  // cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
   //
-  // +k8s:required
-  // +k8s:maxLength=32 # the Limits hook requires a parseable quantity
-  string quantity = 2;
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. 0 means none.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 }
 
 message RegisterWorkerResponse {
@@ -208,6 +322,31 @@ message RequestActorSuspendRequest {
 }
 
 message RequestActorSuspendResponse {
+}
+
+message ReportActorCrashedRequest {
+  // The actor the calling worker is hosting, as for RequestActorSuspend.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 3;
+
+  // What the worker saw, e.g. how the sandbox exited.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096
+  string message = 4;
+}
+
+message ReportActorCrashedResponse {
 }
 
 message GetActorEgressPolicyRequest {
@@ -280,25 +419,25 @@ message MintActorCertificateRequest {
   //
   // +k8s:required
   // +k8s:format=k8s-short-name
-  string actor_atespace = 3;
+  string actor_atespace = 1;
 
   // +k8s:required
   // +k8s:format=k8s-short-name
-  string actor_name = 4;
+  string actor_name = 2;
 
   // The UID of the actor --- used to guard against deletion and recreation of
   // an actor with the same name.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
-  string actor_uid = 5;
+  string actor_uid = 3;
 
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
   //
   // +k8s:required
   // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
-  bytes certificate_signing_request = 1;
+  bytes certificate_signing_request = 4;
 }
 
 message MintActorCertificateResponse {
@@ -306,40 +445,64 @@ message MintActorCertificateResponse {
   repeated bytes actor_certificates = 1;
 }
 
-// AteomHerder allows ate-apiserver to issue control calls to the atelet.
+// Atelet allows ate-apiserver to issue control calls to the atelet.
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
-service AteomHerder {
-  // Run tells atelet to create a new containerized workload from scratch on an
-  // ateom.
+//
+// atelet runs at most one Run, Restore, Checkpoint, PromoteSnapshot,
+// DetachActor, or Terminate of an actor at a time. A call waits for the one in
+// progress, up to the call's deadline.
+service Atelet {
+  // Run tells atelet to create a new containerized workload from scratch on a
+  // worker.
   rpc Run(RunRequest) returns (RunResponse) {}
 
   // Checkpoint saves the workload's state as a new snapshot of the actor and
-  // returns the ateom to a blank state. upload_config says when the snapshot
-  // becomes durable. Once ateom has captured the workload, and before the new
-  // snapshot is uploaded or stored locally, atelet deletes the actor's older
-  // local snapshots, except one still being uploaded, which it deletes when
-  // that upload ends. A Checkpoint that then fails to upload or store the new
-  // snapshot leaves the actor with no local snapshot.
+  // returns the worker to a blank state. upload_config says when the snapshot
+  // becomes durable. Once the new snapshot is uploaded or stored locally,
+  // atelet deletes the actor's older local snapshots, except one still being
+  // uploaded, which it deletes after that upload ends. A Checkpoint that fails
+  // before then leaves the actor's previous local snapshot in place.
+  //
+  // A Checkpoint of a snapshot already committed, as a retry's is, returns the
+  // actor's state without checkpointing the workload again; under
+  // UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+  // yet.
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
 
-  // Restore restores a workload from a snapshot onto an ateom.
+  // Restore restores a workload from a snapshot onto a worker.
   rpc Restore(RestoreRequest) returns (RestoreResponse) {}
 
   // PromoteSnapshot makes `snapshot` durable in object storage while keeping
   // its local copy on this node. Used when a snapshot needs to be in object
-  // storage (e.g. for tagging) without evicting the paused actor from the
-  // node. Waits for an in-flight detach, and fails for an actor running on
-  // this node.
+  // storage (e.g. for tagging) without evicting the suspended actor's local
+  // snapshot from the node. Waits for an in-flight detach, and fails for an
+  // actor running on this node.
+  //
+  // atelet never uploads a local copy written before the node last rebooted,
+  // since its files may be torn: it answers from the manifest at
+  // `snapshot.object` instead, and fails with NOT_FOUND if there is none.
   //
   // Idempotent: once the snapshot is durable, atelet answers from the
   // manifest at `snapshot.object`, and fails if there is none.
   //
-  // TODO: Temporarily, this deletes all of the actor's local snapshots after
-  // the upload and does not check whether the actor is running. Its only
-  // caller, the suspend of a paused actor, relies on the deletion.
+  // TODO: Temporarily, this does not check whether the actor is running.
   rpc PromoteSnapshot(PromoteSnapshotRequest) returns (PromoteSnapshotResponse) {}
+
+  // DetachActor makes the actor's latest local snapshot durable, then deletes
+  // the actor's local snapshots on this node, so it can resume on any node.
+  // atelet also detaches a suspended actor on its own after its detach delay.
+  // It reports either detach with WorkerService.ReportActorSnapshotState, so
+  // the control plane records a DetachActor call's detach even if the caller
+  // does not, and once reported, forgets the actor. The detach doesn't end with
+  // the call: if the caller's context ends first, DetachActor returns that
+  // error and the detach runs on. Waits for an operation already in progress on
+  // the actor, such as an upload or a detach. Does nothing when atelet holds no
+  // local snapshot for the actor. Returns ABORTED when the actor runs on this
+  // node, and FAILED_PRECONDITION when atelet cannot make the latest local
+  // snapshot durable, such as when it has no `snapshot.object`.
+  rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
   // unmount its volumes, and clean up actor state on the node.
@@ -347,8 +510,8 @@ service AteomHerder {
 }
 
 message TerminateRequest {
-  // The UID of the worker pod whose ateom hosts the actor. If unset, atelet
-  // only cleans up the actor's node resources; it does not reach an ateom.
+  // The UID of the worker pod whose the worker hosts the actor. If unset, atelet
+  // only cleans up the actor's node resources; it does not reach a worker.
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
@@ -387,7 +550,7 @@ message TerminateResponse {
 }
 
 message RunRequest {
-  // The UID of the worker pod whose ateom hosts the actor.
+  // The UID of the worker pod whose the worker hosts the actor.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
@@ -418,13 +581,6 @@ message RunRequest {
   // +k8s:required
   WorkloadSpec spec = 7;
 
-  // The sandbox binaries to use for booting this actor from scratch. atelet
-  // fetches the relevant assets and records them with the actor's on-node state
-  // so a later Checkpoint can pin the same version into the snapshot manifest.
-  //
-  // +k8s:required
-  SandboxAssets sandbox_assets = 8;
-
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
@@ -432,16 +588,18 @@ message RunRequest {
 
   // The actor's declared size, from the ActorTemplate's resource limits. atelet
   // passes these through to the sandbox so it is sized to the actor (not the
-  // whole host or worker pod). Zero means "unset": keep the runtime default.
+  // whole host or worker pod). A zero limit keeps the runtime default.
   //
   // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
+  ResourceRequirements resources = 10;
 
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 11; // Memory limit in bytes.
+  // The runtime the assigned worker runs this actor under, from
+  // WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+  // through its advertised-runtime index and records the runtime for the
+  // actor so a later Checkpoint pins the snapshot to it.
+  //
+  // +k8s:required
+  ActorSandboxRuntime sandbox_runtime = 12;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -453,64 +611,6 @@ message EgressGateway {
   // +k8s:maxLength=261 # a bracketed or 253-character host, ':' and a 5-digit port
   // +k8s:customValidation # host:port shape
   string address = 1;
-}
-
-// AssetFile is one content-addressed file atelet fetches for a sandbox runtime
-// (e.g. the gVisor release tarball).
-message AssetFile {
-  // URL to download the asset from. atelet fetches every URL through the
-  // node's object-store plugin, and reads a gs:// URL anonymously only when
-  // the plugin cannot serve it.
-  // Masked in logged requests, since a signed URL carries its credential in
-  // the query.
-  //
-  // +k8s:required
-  // +k8s:maxLength=2048 # matches the SandboxConfig asset url's bound
-  string url = 1 [ debug_redact = true ];
-
-  // Lower-case hex SHA256; names the cached file and verifies its integrity.
-  //
-  // +k8s:required
-  // +k8s:maxLength=64
-  // +k8s:customValidation # 64 hex characters
-  string sha256 = 2;
-}
-
-// ArchAssets is the set of assets for a single architecture, keyed by asset
-// name (a wrapper message because proto map values cannot themselves be maps).
-message ArchAssets {
-  // +k8s:required
-  // +k8s:maxProperties=16
-  // +k8s:eachKey=+k8s:maxLength=64
-  map<string, AssetFile> files = 1; // asset name -> file
-}
-
-// SandboxAssets is the generic, backend-agnostic description of the sandbox
-// an actor runs in: a sandbox class, the pause image holding its namespaces,
-// and binaries keyed first by architecture (GOARCH) and then by asset name.
-// atelet's backend code interprets the asset names (gVisor expects "gvisor",
-// the release tarball; legacy "runsc", a bare binary, is still accepted).
-message SandboxAssets {
-  // +k8s:required
-  // +k8s:maxLength=63 # guardrail; the class names are a few characters
-  // +k8s:customValidation # gvisor or microvm
-  string sandbox_class = 1; // e.g. "gvisor"
-
-  // +k8s:required
-  // +k8s:maxProperties=8 # one entry per architecture
-  // +k8s:eachKey=+k8s:maxLength=16
-  map<string, ArchAssets> assets = 2; // arch -> {name -> file}
-
-  // pause_image is the image for the sandbox's root container. Like the
-  // binaries above it is sandbox configuration, not workload configuration,
-  // and atelet pins it into the snapshot manifest so a restore rebuilds the
-  // sandbox from the same image. Empty for sandboxes without a pause
-  // container (microvm).
-  //
-  // +k8s:optional
-  // +k8s:maxLength=512
-  // +k8s:customValidation # must be a well-formed image reference, pinned by digest
-  string pause_image = 3;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -530,7 +630,7 @@ message WorkloadSpec {
   repeated Volume volumes = 2;
 }
 
-message DurableDirVolume {
+message DurableDirVolumeSource {
 }
 
 message ExternalVolumeSource {
@@ -538,12 +638,12 @@ message ExternalVolumeSource {
   // sends volumes that finished provisioning.
   //
   // +k8s:required
-  // +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+  // +k8s:maxLength=256 # matches ExternalVolumeStatus.storage_volume_id's bound
   // +k8s:customValidation # no control characters
   string storage_volume_id = 1;
 
   // +k8s:optional
-  // +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+  // +k8s:maxLength=253 # matches ExternalVolumeStatus.volume_type's bound
   // +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
   string volume_type = 2;
 
@@ -628,9 +728,7 @@ message TrustBundleDataSource {
   // +k8s:listType=set
   // +k8s:eachVal=+k8s:minLength=1
   // +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
-  repeated string names = 3;
-  reserved 2;
-  reserved "name";
+  repeated string names = 2;
 }
 
 // SystemInfoDataSource selects exactly one projection to place in the
@@ -647,10 +745,10 @@ message SystemInfoDataSource {
   TrustBundleDataSource trust_bundle = 2;
 }
 
-// SystemInfoVolume is a read-only volume whose files are generated by atelet
-// on every Run/Restore, so they carry the values of the actor actually being
-// started, whatever checkpointed state it boots from.
-message SystemInfoVolume {
+// SystemInfoVolumeSource is a read-only volume whose files are generated by
+// atelet on every Run/Restore, so they carry the values of the actor actually
+// being started, whatever checkpointed state it boots from.
+message SystemInfoVolumeSource {
   // +k8s:optional
   // +k8s:maxItems=8 # matches the template's data_sources bound
   // +k8s:listType=atomic
@@ -668,7 +766,7 @@ message Volume {
   //
   // +k8s:optional
   // +k8s:unionMember
-  DurableDirVolume durable_dir = 2;
+  DurableDirVolumeSource durable_dir = 2;
 
   // +k8s:optional
   // +k8s:unionMember
@@ -676,7 +774,7 @@ message Volume {
 
   // +k8s:optional
   // +k8s:unionMember
-  SystemInfoVolume system_info = 4;
+  SystemInfoVolumeSource system_info = 4;
 
   // +k8s:optional
   // +k8s:unionMember
@@ -724,7 +822,7 @@ message Container {
   // +k8s:maxItems=32 # matches the template's env bound
   // +k8s:listType=map # each variable is set at most once
   // +k8s:listMapKey=name
-  repeated EnvEntry env = 4;
+  repeated EnvVar env = 4;
 
   // +k8s:optional
   WakeupProbe wakeup_probe = 5;
@@ -742,11 +840,11 @@ message Container {
   // +k8s:optional
   SecurityContext security_context = 8;
 
-  // resources are the cgroup limits for this container, resolved by
-  // ate-api-server from the ActorTemplate. Unset means no limits.
+  // resources are the cgroup limits for this container, from the
+  // ActorTemplate. Unset means no limits.
   //
   // +k8s:optional
-  ResourceLimits resources = 9;
+  ResourceRequirements resources = 9;
 }
 
 // SecurityContext holds security settings for a container's process.
@@ -771,24 +869,7 @@ message Capabilities {
   repeated string drop = 2;
 }
 
-// ResourceLimits are the cgroup limits for one container. Scalars rather than a
-// map so each resource.Quantity is parsed exactly once, in ate-api-server.
-message ResourceLimits {
-  // memory_bytes is the memory limit in bytes. 0 means unset.
-  //
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 1;
-
-  // cpu_millis is the CPU limit in milli-cores (1000 = one core). 0 means unset.
-  //
-  // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_millis = 2;
-}
-
-message EnvEntry {
+message EnvVar {
   // name may be any printable ASCII character except '='.
   //
   // +k8s:required
@@ -833,6 +914,9 @@ message HttpGetAction {
 }
 
 message RunResponse {
+  // The epoch of the worker process that started the workload, as it
+  // registered with the control plane.
+  int64 worker_epoch = 1;
 }
 
 // SnapshotFidelity mirrors the public ateapi enum: the state layers a
@@ -844,8 +928,7 @@ enum SnapshotFidelity {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_FIDELITY_VOLUMES = 1;
-  // Volumes plus the root filesystem changes made since boot. Served by the
-  // micro-VM runtime only; other runtimes reject requests carrying it.
+  // Volumes plus the root filesystem changes made since boot.
   SNAPSHOT_FIDELITY_ROOTFS = 2;
   // Capture process memory plus the full filesystem delta on top of the OCI
   // image (including any attached DurableDir volumes).
@@ -861,6 +944,28 @@ message ObjectStorage {
   // +k8s:maxLength=2048
   // +k8s:customValidation # a parseable snapshot URI
   string snapshot_uri = 1;
+
+  // How the snapshot at snapshot_uri may be consumed, as the control plane
+  // knows it. Read on Restore, where it decides whether atelet may serve the
+  // snapshot's files from its node-local cache; meaningless where atelet
+  // writes to the snapshot.
+  //
+  // +k8s:optional
+  // +k8s:maximum=2 # keep this in sync with the SnapshotSharing enum
+  SnapshotSharing sharing = 2;
+}
+
+// SnapshotSharing is how a snapshot in object storage may be consumed, as
+// known by the control plane. atelet never infers it from the URI.
+enum SnapshotSharing {
+  // Not stated: treated as PRIVATE.
+  SNAPSHOT_SHARING_UNSPECIFIED = 0;
+  // Read by one actor and replaced by its next suspend. Never cached.
+  SNAPSHOT_SHARING_PRIVATE = 1;
+  // Immutable once published and read by many actors, such as a tag's
+  // snapshot borrowed at creation. atelet may serve its files from the
+  // node-local snapshot cache.
+  SNAPSHOT_SHARING_SHARED = 2;
 }
 
 // Snapshot identifies one snapshot of an actor, and where its durable copy
@@ -879,10 +984,8 @@ message Snapshot {
   // for the actor, or for its newest under another snapshot_uuid: the
   // caller's view is stale.
   //
-  // TODO: Temporarily, the control plane does not set this and atelet does
-  // not check it.
-  //
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:minimum=1
   int32 generation = 2;
 
   // On Checkpoint: the fidelity to capture.
@@ -900,14 +1003,10 @@ message Snapshot {
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
   SnapshotFidelity fidelity = 3;
 
-  // The snapshot's durable copy in object storage. Required on every
-  // request: atelet uploads there, or reads from there when it holds no
-  // usable local copy.
+  // The snapshot's durable copy in object storage: atelet uploads there, or
+  // reads from there when it holds no usable local copy.
   //
-  // TODO: Temporarily, this is optional while we haven't implemented deferred
-  // uploads.
-  //
-  // +k8s:optional
+  // +k8s:required
   ObjectStorage object = 4;
 }
 
@@ -925,31 +1024,33 @@ message SnapshotReport {
 }
 
 // ActorSnapshotState is what atelet holds for one actor on this node.
-// Returned by Checkpoint, PromoteSnapshot.
+// Returned by Checkpoint, PromoteSnapshot, DetachActor.
 message ActorSnapshotState {
-  // The snapshot atelet restores the actor from locally. Unset when the
-  // latest checkpoint kept no local copy, and once a detach has made the
-  // snapshot durable and begun deleting it. Either way, latest_durable is
-  // then the actor's latest snapshot.
+  // The snapshot atelet restores the actor from locally. Unset when an
+  // UPLOAD_MODE_IMMEDIATE checkpoint could not keep a local copy, and once a
+  // detach has made the snapshot durable and begun deleting it. Either way,
+  // latest_durable is then the actor's latest snapshot.
   SnapshotReport latest_local = 1;
 
-  // The snapshot an in-flight upload is reading, if any. If it is
-  // latest_local, its local copy stays after the upload. If it is an older
-  // snapshot, whose upload began before latest_local was taken, atelet
-  // deletes its local copy once the upload ends.
+  // The snapshot a background upload has begun making durable, if any. Once
+  // begun, atelet keeps uploading it across checkpoints and restarts until
+  // it succeeds, fails and a newer local snapshot replaces it, or a newer
+  // snapshot becomes durable. If it is latest_local, its local copy stays
+  // after the upload. If it is an older snapshot, atelet deletes its local
+  // copy once the upload ends or is replaced.
   SnapshotReport uploading = 2;
 
   // The newest snapshot atelet knows is durable, whether or not the control
   // plane has recorded it: one atelet uploaded since it started, or one a
-  // PromoteSnapshot found already uploaded. Unset if there is none, which says
-  // nothing about older durable snapshots.
+  // PromoteSnapshot found already uploaded, while atelet still tracks the
+  // actor. Unset if there is none (or once the actor is detached and
+  // reported), which says nothing about older durable snapshots.
   SnapshotReport latest_durable = 3;
 
-  // When atelet next plans to trigger a background upload, which will upload
-  // whichever snapshot is latest_local at the time of triggering. Unset when
-  // there is no latest_local, or it is already durable or being uploaded.
-  // Advisory: a promote or detach can upload it sooner, and an older
-  // snapshot's upload can delay it.
+  // When atelet next plans to trigger a background upload, of `uploading` if
+  // it is waiting to resume or retry, or of `latest_local` otherwise. Unset
+  // when neither needs an upload. Advisory: a promote or detach can upload
+  // it sooner, and an upload or promote in progress can delay it.
   google.protobuf.Timestamp upload_due_time = 4;
 }
 
@@ -965,28 +1066,29 @@ message UploadConfig {
 enum UploadMode {
   UPLOAD_MODE_UNSPECIFIED = 0;
 
-  // Keep the snapshot locally and upload it on atelet's schedule: at most
-  // for atelet's upload-delay after the oldest snapshot of the actor
-  // that is not yet durable was taken. Snapshots superseded before then
-  // are never uploaded.
+  // Keep the snapshot locally and upload it on atelet's schedule: about
+  // atelet's upload-delay after the oldest snapshot of the actor that is not
+  // yet durable was taken, or later while an upload is in progress or
+  // failing. Snapshots superseded before then are never uploaded.
   //
-  // Once the actor has stayed suspended on this node for
-  // atelet's detach-delay, atelet detaches it (deletes all the local snapshots).
+  // Once the actor has stayed suspended on this node for atelet's
+  // detach-delay, atelet detaches it: it uploads the latest local snapshot
+  // unless that is durable already, then deletes all the local snapshots.
   //
-  // TODO: Temporarily the deferred upload and detach are unimplemented. Only a local
-  // copy is taken.
+  // atelet reports the actor's state with
+  // WorkerService.ReportActorSnapshotState once such an upload makes a newer
+  // snapshot durable, and once such a detach has deleted the local snapshots.
   UPLOAD_MODE_DEFERRED = 1;
 
-  // Upload the snapshot synchronously before Checkpoint returns, while keeping the local copy.
-  //
-  // TODO: Temporarily this deletes the local snapshot after the upload.
+  // Upload the snapshot synchronously before Checkpoint returns, and keep a
+  // local copy if atelet can: failing to store it does not fail the
+  // Checkpoint.
   UPLOAD_MODE_IMMEDIATE = 2;
   // Keep this in sync with the maximums on fields of this type.
 }
 
-// +k8s:customValidation # immediate upload requires snapshot.object
 message CheckpointRequest {
-  // The UID of the worker pod whose ateom hosts the actor.
+  // The UID of the worker pod whose the worker hosts the actor.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
@@ -1042,17 +1144,19 @@ message CheckpointRequest {
 
 message CheckpointResponse {
   // The actor's state once the checkpoint is taken: latest_local is the new
-  // snapshot, unless UPLOAD_MODE_IMMEDIATE kept no local copy. The control
-  // plane can drop its entries for any local-only generation not named here:
-  // atelet has deleted it, and will never upload it.
+  // snapshot, unless UPLOAD_MODE_IMMEDIATE could not keep a local copy.
+  // atelet has deleted any local snapshot not named here, or deletes it once
+  // uploading ends.
   //
-  // TODO: Temporarily, atelet leaves this unset. An unset state says nothing
-  // about which snapshots atelet holds.
+  // TODO: Add a snapshot garbage collection system for orphaned objects in
+  // object storage. atelet reports a background upload only when it records
+  // a newer durable snapshot, so an upload that a newer durable snapshot
+  // superseded while it ran leaves objects ateapi never learned were durable.
   ActorSnapshotState state = 1;
 }
 
 message RestoreRequest {
-  // The UID of the worker pod whose ateom hosts the actor.
+  // The UID of the worker pod whose the worker hosts the actor.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
@@ -1085,13 +1189,14 @@ message RestoreRequest {
 
   // Snapshot to restore from. atelet reads its local copy if it holds a
   // usable one, and `snapshot.object` otherwise. A local copy is unusable if
-  // its manifest does not parse or lists a missing file. While atelet is
-  // detaching the actor, it waits for the detach to finish and then reads
-  // `snapshot.object`. Fails if neither copy exists: that generation is lost.
+  // its manifest does not parse, lists a missing file, or was written before
+  // the node last rebooted. While atelet is detaching the actor, it waits for
+  // the detach to finish and then reads `snapshot.object`. Fails if neither
+  // copy exists: that generation is lost.
   //
-  // TODO: Temporarily, the control plane does not set `snapshot.object` when
-  // it restores a paused actor, so atelet has nothing to fall back to if that
-  // actor's local copy is missing or unusable.
+  // `snapshot.object` is required even while the control plane has not
+  // recorded the snapshot's upload complete: atelet may have uploaded the
+  // snapshot and detached the actor before its report of the upload landed.
   //
   // +k8s:required
   Snapshot snapshot = 8;
@@ -1099,7 +1204,7 @@ message RestoreRequest {
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  optional EgressGateway egress_gateway = 13;
+  optional EgressGateway egress_gateway = 9;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For
   // gVisor and micro-VM VOLUMES restores the sandbox is (re)sized to these;
@@ -1107,30 +1212,27 @@ message RestoreRequest {
   // means "unset": keep the runtime default.
   //
   // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
+  ResourceRequirements resources = 10;
 
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 15; // Memory limit in bytes.
-
-  // The sandbox binaries and pause image to restore with, resolved from the
-  // ActorTemplate's SandboxConfig.
+  // The runtime the assigned worker restores this actor under, from
+  // WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+  // through its advertised-runtime index and records the runtime for the
+  // actor so the next Checkpoint pins the snapshot to what ran this
+  // activation, not what the restored snapshot was taken under.
   //
   // +k8s:required
-  SandboxAssets sandbox_assets = 16;
+  ActorSandboxRuntime sandbox_runtime = 12;
 }
 
 message RestoreResponse {
+  // The epoch of the worker process that restored the workload, as it
+  // registered with the control plane.
+  int64 worker_epoch = 1;
 }
 
 message PromoteSnapshotRequest {
-  // Golden actors are never paused, so the golden atespace is rejected.
-  //
   // +k8s:required
   // +k8s:format=k8s-short-name
-  // +k8s:customValidation # not the golden atespace
   string atespace = 1;
 
   // +k8s:required
@@ -1155,15 +1257,34 @@ message PromoteSnapshotRequest {
   // it is, or will be, uploaded.
   //
   // +k8s:required
-  // +k8s:subfield(object)=+k8s:required
   Snapshot snapshot = 6;
 }
 
 message PromoteSnapshotResponse {
   // The actor's state once promoted: latest_durable is its latest snapshot,
   // and latest_local remains set if atelet still holds the local copy.
+  ActorSnapshotState state = 1;
+}
+
+message DetachActorRequest {
+  // Golden actors are accepted: an IMMEDIATE checkpoint keeps a local copy.
   //
-  // TODO: Temporarily, atelet leaves this unset. An unset state says nothing
-  // about which snapshots atelet holds.
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 3;
+}
+
+message DetachActorResponse {
+  // The actor's state from the detach: latest_local is unset, and
+  // latest_durable is its latest snapshot. Once detached and reported, atelet
+  // forgets the actor, so calling DetachActor again returns an empty state.
   ActorSnapshotState state = 1;
 }

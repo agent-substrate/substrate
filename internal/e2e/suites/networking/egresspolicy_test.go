@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -168,7 +168,7 @@ func TestActorEgressHTTPSByHostname(t *testing.T) {
 		if !dataplane.IsEgressPolicyDenied(status, string(body)) {
 			t.Fatalf("fetch of %s, outside the policy, returned HTTP %d, want an egress-policy denial; body: %s", url, status, body)
 		}
-		// Envoy denies by closing the connection, which the actor reports as
+		// Denied TLS closes at ClientHello, which the actor reports as
 		// the same 502 as any failed fetch; a certificate error in it means the
 		// handshake reached the origin.
 		if got := decodeEgressFetch(t, body); strings.Contains(got.Error, "x509") || strings.Contains(got.Error, "certificate") {
@@ -183,9 +183,9 @@ func TestActorEgressHTTPSByHostname(t *testing.T) {
 func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	ctx := t.Context()
 	dataplane := e2e.CurrentAtenetDataplane()
-	_, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
+	origin, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name:       "passthrough-origin",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http"},
 		Port:       80,
 		TargetPort: 8080,
@@ -220,7 +220,8 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	// Allow connection to be fully established before changing the policy.
 	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, "443")
 
-	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef(), e2e.EgressAllowPassthrough("foo.bar.baz"))
+	// Keep DNS authorized so the second connection tests the PEP, not the DNS relay.
+	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef(), e2e.EgressAllowHTTP(origin.SvcName()+".cluster.local"))
 	// Wait for the policy cached in ext_proc server to expire, so it will fetch the new one.
 	// ext_proc cache freshness interval is 10 seconds.
 	time.Sleep(11 * time.Second)
@@ -289,7 +290,7 @@ func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
 	}
 }
 
-// TestActorDNSRequiresPolicy: the sandbox's DNS relay refuses the queries of an
+// TestActorDNSRequiresPolicy: the sandbox's DNS relay denies the queries of an
 // actor with no EgressPolicy or for a host outside its policy, and answers them
 // once a rule in the policy matches the host, without a restart.
 func TestActorDNSRequiresPolicy(t *testing.T) {
@@ -306,10 +307,10 @@ func TestActorDNSRequiresPolicy(t *testing.T) {
 	waitForActorRoute(t, ctx, router, actorRef)
 
 	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, notTransient)
-	if status != http.StatusBadGateway || !isRefusedLookup(string(body), name) {
-		t.Fatalf("fetch of %s by an actor with no policy returned HTTP %d, want its lookup refused; body: %s", url, status, body)
+	if status != http.StatusBadGateway || !isDeniedLookup(string(body), name) {
+		t.Fatalf("fetch of %s by an actor with no policy returned HTTP %d, want its lookup denied; body: %s", url, status, body)
 	}
-	t.Logf("lookup was refused as expected: %s", body)
+	t.Logf("lookup was denied as expected: %s", body)
 
 	// The relay fetches the policy again within seconds, so the retries below
 	// see it. A wildcard rule covering the target namespace's Services allows
@@ -323,81 +324,16 @@ func TestActorDNSRequiresPolicy(t *testing.T) {
 
 	const unlisted = "unlisted.example.com"
 	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "http://"+unlisted+"/healthz", notTransient)
-	if status != http.StatusBadGateway || !isRefusedLookup(string(body), unlisted) {
-		t.Fatalf("fetch of unlisted host %s returned HTTP %d, want its lookup refused; body: %s", unlisted, status, body)
+	if status != http.StatusBadGateway || !isDeniedLookup(string(body), unlisted) {
+		t.Fatalf("fetch of unlisted host %s returned HTTP %d, want its lookup denied; body: %s", unlisted, status, body)
 	}
 }
 
-// isRefusedLookup reports whether body is the egress demo's report of a lookup
-// of name that the resolver refused. Go's resolver reports a REFUSED answer as
-// "server misbehaving".
-func isRefusedLookup(body, name string) bool {
-	return strings.Contains(body, "lookup "+name) && strings.Contains(body, "server misbehaving")
-}
-
-// hostnamePolicyActor creates an actor whose policy allows HTTPS to
-// example.com, TLS passthrough to example.edu, and cleartext HTTP to
-// example.org (so example.org resolves in DNS while still being denied over
-// HTTPS on 443), and waits until it is routable.
-func hostnamePolicyActor(t *testing.T, ctx context.Context) (*e2e.RouterClient, resources.ActorRef) {
-	t.Helper()
-	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-sni", e2e.EgressFixture(),
-		e2e.EgressAllowHTTPS("example.com"),
-		e2e.EgressAllowPassthrough("example.edu"),
-		e2e.EgressAllowHTTP("example.org"),
-	)
-	router := mustRouterClient(t, ctx)
-	t.Cleanup(func() { router.Close() })
-	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
-	waitForActorRoute(t, ctx, router, actorRef)
-	return router, actorRef
-}
-
-func isMitmCert(body string) bool {
-	// example.* domains use certs signed by Google Trust Services
-	// If this substring is not present it means dataplane used a minted cert
-	return !strings.Contains(body, "O=Google Trust Services")
-}
-
-// TestActorEgressHTTPSByHostnameMITM: the gateway terminates the TLS and decides
-// each request by name: example.com 200, example.org 403.
-func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
-	ctx := context.Background()
-	dataplane := e2e.CurrentAtenetDataplane()
-	router, actorRef := hostnamePolicyActor(t, ctx)
-
-	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.com/", reached)
-	if status != http.StatusOK {
-		t.Fatalf("fetch of the allowed host returned HTTP %d, want 200; body: %s", status, body)
-	}
-	if !isMitmCert(string(body)) {
-		t.Fatalf("request did not use minted cert; body: %s", body)
-	}
-	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.org/", notTransient)
-	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
-		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
-	}
-	t.Logf("denied on the decrypted request: %s", body)
-}
-
-// TestActorEgressHTTPSByHostnamePassthrough: the gateway acts as TCP proxy fetching
-// allowed SNI.
-func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
-	ctx := context.Background()
-	dataplane := e2e.CurrentAtenetDataplane()
-	router, actorRef := hostnamePolicyActor(t, ctx)
-
-	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.edu/", reached)
-	if status != http.StatusOK {
-		t.Fatalf("fetch of the allowed host returned HTTP %d, want 200; body: %s", status, body)
-	}
-	if isMitmCert(string(body)) {
-		t.Fatalf("request used minted cert; body: %s", body)
-	}
-	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.org/", notTransient)
-	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
-		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
-	}
+// isDeniedLookup reports whether body is the egress demo's report of a lookup
+// of name that the DNS relay denied. The relay answers NXDOMAIN, which Go's
+// resolver reports as "no such host".
+func isDeniedLookup(body, name string) bool {
+	return strings.Contains(body, "lookup "+name) && strings.Contains(body, "no such host")
 }
 
 // fetchThroughEgressActorUntil is fetchThroughEgressActor with the caller

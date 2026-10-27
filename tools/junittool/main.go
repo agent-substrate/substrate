@@ -17,6 +17,7 @@
 //
 //	junittool register <path>          record a file this run will write
 //	junittool verify -manifest <file>  require every recorded file to hold tests
+//	junittool report <dir>             summarize failures from the go test -json files
 //
 // An exit code cannot distinguish "all tests passed" from "no test ran".
 // `go test ./...` passes the e2e suites with no cluster, and a package filter
@@ -38,6 +39,7 @@ import (
 const usage = `usage:
   junittool register [-manifest FILE] [-reject-duplicate] <junit.xml>
   junittool verify (-manifest FILE | <junit.xml|dir>...) [-min N]
+  junittool report [-summary FILE] [-annotate] [-root DIR] <test.json|dir>...
 `
 
 func main() {
@@ -50,6 +52,8 @@ func main() {
 		os.Exit(runRegister(os.Args[2:]))
 	case "verify":
 		os.Exit(runVerify(os.Args[2:]))
+	case "report":
+		os.Exit(runReport(os.Args[2:]))
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		os.Exit(0)
@@ -114,7 +118,7 @@ func runVerify(args []string) int {
 		}
 	case fs.NArg() > 0:
 		var err error
-		if paths, err = expand(fs.Args()); err != nil {
+		if paths, err = expand(fs.Args(), ".xml"); err != nil {
 			fmt.Fprintf(os.Stderr, "junittool verify: %v\n", err)
 			return 1
 		}
@@ -127,6 +131,54 @@ func runVerify(args []string) int {
 	res.write(os.Stdout, os.Stderr, *min)
 	if !res.ok() {
 		return 1
+	}
+	return 0
+}
+
+// runReport lists each failed test with its t.Error and t.Fatal output. It
+// only reports, the test steps and verify decide whether the job fails.
+//
+// NOTE: the go test -json files must come from runs without -v, which
+// replaces the -test.v=test2json that marks error output.
+func runReport(args []string) int {
+	fs := flag.NewFlagSet("report", flag.ExitOnError)
+	summary := fs.String("summary", os.Getenv("GITHUB_STEP_SUMMARY"),
+		"file to append a markdown summary to, defaults to $GITHUB_STEP_SUMMARY")
+	annotate := fs.Bool("annotate", os.Getenv("GITHUB_ACTIONS") == "true",
+		"print GitHub error annotations for failures (defaults true in GitHub Actions)")
+	root := fs.String("root", os.Getenv("GITHUB_WORKSPACE"),
+		"repository root, for annotation file paths, defaults to $GITHUB_WORKSPACE")
+	_ = fs.Parse(args)
+
+	if fs.NArg() == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return 2
+	}
+	paths, err := expand(fs.Args(), ".json")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "junittool report: %v\n", err)
+		return 1
+	}
+	var runs []run
+	for _, p := range paths {
+		r := parseRun(p)
+		r.writeText(os.Stdout)
+		runs = append(runs, r)
+	}
+	if *annotate {
+		writeAnnotations(os.Stdout, runs, *root)
+	}
+	if *summary != "" {
+		f, err := os.OpenFile(*summary, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "junittool report: %v\n", err)
+			return 1
+		}
+		defer f.Close()
+		if err := writeMarkdown(f, runs, summaryBudget); err != nil {
+			fmt.Fprintf(os.Stderr, "junittool report: failed to write summary: %v\n", err)
+			return 1
+		}
 	}
 	return 0
 }

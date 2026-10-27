@@ -17,6 +17,12 @@ kind: Namespace
 metadata:
   name: podcertificate-controller-system
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: podcertificate-controller
+  namespace: podcertificate-controller-system
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -87,7 +93,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   namespace: podcertificate-controller-system
-  name: default
+  name: podcertificate-controller
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -119,7 +125,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   namespace: podcertificate-controller-system
-  name: default
+  name: podcertificate-controller
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -140,7 +146,7 @@ spec:
     spec:
       containers:
       - name: controller
-        image: ko://github.com/agent-substrate/substrate/cmd/podcertcontroller
+        image: ko://go.ate.dev/substrate/cmd/podcertcontroller
         args:
         - --in-cluster=true
         - --sharding-pod-namespace=$(POD_NAMESPACE)
@@ -172,6 +178,7 @@ spec:
           mountPath: "/run/ca-state"
         securityContext:
           allowPrivilegeEscalation: false
+          runAsNonRoot: true
           capabilities:
             add:
             - NET_BIND_SERVICE
@@ -203,5 +210,5 @@ spec:
       restartPolicy: Always
       schedulerName: default-scheduler
       securityContext: {}
-      serviceAccountName: default
+      serviceAccountName: podcertificate-controller
       terminationGracePeriodSeconds: 30

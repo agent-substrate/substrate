@@ -39,7 +39,7 @@ type File struct {
 }
 
 var (
-	cachestatUnsupportedOnce sync.Once
+	cachestatWarnOnce sync.Once
 
 	// cachestatFn and fadviseFn are seams for unit tests so eviction logic can
 	// be verified deterministically regardless of the backing filesystem (ext4,
@@ -77,34 +77,44 @@ func FindFiles(dir string, match func(name string) bool) []File {
 	return targets
 }
 
-// DropFile unlinks t.Path if it still refers to the same inode and size.
-func DropFile(t File) {
+// DropFile unlinks t.Path if it still refers to the same inode and size, and
+// reports whether the file was removed.
+func DropFile(t File) bool {
 	st, err := os.Stat(t.Path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			slog.Debug("could not stat staged snapshot file", slog.String("path", t.Path), slog.Any("err", err))
 		}
-		return
+		return false
 	}
 	if !os.SameFile(st, t.Info) || st.Size() != t.Info.Size() {
-		return
+		return false
 	}
-	if err := os.Remove(t.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Warn("could not drop staged snapshot file", slog.String("path", t.Path), slog.Any("err", err))
+	if err := os.Remove(t.Path); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("could not drop staged snapshot file", slog.String("path", t.Path), slog.Any("err", err))
+		}
+		return false
 	}
+	return true
 }
 
-// DropFiles calls DropFile for each file in files.
-func DropFiles(files []File) {
+// DropFiles calls DropFile for each file in files and reports whether any file
+// was removed.
+func DropFiles(files []File) bool {
+	dropped := false
 	for _, t := range files {
-		DropFile(t)
+		if DropFile(t) {
+			dropped = true
+		}
 	}
+	return dropped
 }
 
 // EvictFiles evicts clean cached pages of targets via POSIX_FADV_DONTNEED and
-// returns true if any target still exists and has pages (clean or dirty)
-// remaining in cache. Files with dirty or writeback pages are skipped so
-// FADV_DONTNEED never forces synchronous disk writeback I/O.
+// returns true if any target still has dirty or writeback pages remaining in
+// cache (or if fadvise failed). Files with dirty or writeback pages are skipped
+// so FADV_DONTNEED never forces synchronous disk writeback I/O.
 func EvictFiles(targets []File) bool {
 	anyRemaining := false
 	for _, t := range targets {
@@ -116,10 +126,13 @@ func EvictFiles(targets []File) bool {
 		if err == nil && os.SameFile(info, t.Info) && info.Size() == t.Info.Size() {
 			var cstat unix.Cachestat_t
 			if err := cachestatFn(uint(f.Fd()), &unix.CachestatRange{}, &cstat, 0); err != nil {
-				if errors.Is(err, unix.ENOSYS) {
-					cachestatUnsupportedOnce.Do(func() {
-						slog.Warn("cachestat(2) syscall not supported by kernel; skipping preserved snapshot page-cache eviction", slog.Any("err", err))
-					})
+				loggedWarn := false
+				cachestatWarnOnce.Do(func() {
+					loggedWarn = true
+					slog.Warn("cachestat(2) syscall failed; skipping preserved snapshot page-cache eviction", slog.String("path", t.Path), slog.Any("err", err))
+				})
+				if !loggedWarn {
+					slog.Debug("cachestat(2) syscall failed; skipping preserved snapshot page-cache eviction", slog.String("path", t.Path), slog.Any("err", err))
 				}
 				_ = f.Close()
 				continue
@@ -128,13 +141,15 @@ func EvictFiles(targets []File) bool {
 				_ = f.Close()
 				continue
 			}
-			anyRemaining = true
 			if cstat.Dirty > 0 || cstat.Writeback > 0 {
+				anyRemaining = true
 				_ = f.Close()
 				continue
 			}
 			// length zero extends the Fadvise to the whole file.
-			_ = fadviseFn(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+			if err := fadviseFn(int(f.Fd()), 0, 0, unix.FADV_DONTNEED); err != nil {
+				anyRemaining = true
+			}
 		}
 		_ = f.Close()
 	}

@@ -44,8 +44,7 @@ func TestGCSGetObjectCloseCancelsInitialRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	g := &gcsClient{client: client}
-	g.poolOnce.Do(func() {}) // Use the same test client for every range.
+	g := &gcsClient{client: client} // No pool: the test client serves every range.
 	r, err := g.GetObject(t.Context(), "snapshots", "object")
 	if err != nil {
 		t.Fatal(err)

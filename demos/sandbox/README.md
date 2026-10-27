@@ -29,7 +29,7 @@ It allows you to run arbitrary commands in an sandboxed, isolated container (run
 Use the core installation script to build the image and deploy the demo to your cluster:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-sandbox
+go run ./cmd/ate-setup deploy demo sandbox
 ```
 
 This command will:
@@ -109,5 +109,5 @@ kubectl ate delete actor my-sandbox-1 -a ate-demo-sandbox
 To remove the sandbox demo resources (actors, template, atespace, workerpool, and namespace) from your cluster, run:
 
 ```bash
-./hack/install-ate.sh --delete-demo-sandbox
+go run ./cmd/ate-setup delete demo sandbox
 ```

@@ -32,13 +32,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/pkg/postgressetup"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/pkg/postgressetup"
 	"sigs.k8s.io/yaml"
 )
 

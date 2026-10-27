@@ -13,7 +13,7 @@ See [docs/request-parking.md](../../docs/request-parking.md) for the design.
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed (`./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`).
+- A k8s cluster with Agent Substrate installed.
 - `ko` installed for building images.
 - A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
 
@@ -27,7 +27,7 @@ See [docs/request-parking.md](../../docs/request-parking.md) for the design.
 > deployment.
 
 ```bash
-./hack/install-ate.sh --deploy-demo-parking
+go run ./cmd/ate-setup deploy demo parking
 ```
 
 This command will:
@@ -166,5 +166,5 @@ Remove the demo — this deletes the demo's actors (suspending running ones
 first) and then the template, atespace, pool, and namespace:
 
 ```bash
-./hack/install-ate.sh --delete-demo-parking
+go run ./cmd/ate-setup delete demo parking
 ```

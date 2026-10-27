@@ -1,6 +1,6 @@
 # Envoy Dataplane Image
 
-This directory contains the build definition and custom extensions for the Envoy dataplane container image (`envoy-dataplane`) used by Agent Substrate's `atenet-egress` gateway.
+This directory contains the build definition and custom extensions for the Envoy dataplane container image (`envoy-dataplane`) used by Agent Substrate's `atenet-router` and `atenet-egress` gateways.
 
 ## Directory Contents
 
@@ -8,25 +8,22 @@ This directory contains the build definition and custom extensions for the Envoy
 cmd/dataplane/envoy/
 ├── Dockerfile                       # Multi-stage build for the Envoy dataplane image
 └── dynamic-modules/
+    ├── Cargo.toml                   # Rust Cargo workspace manifest
     └── egress-policy/               # Rust Envoy Dynamic Module for egress policy enforcement
 ```
 
 - **`Dockerfile`**: Multi-stage container build that:
   1. Compiles the Rust dynamic module (`envoy-substrate-egress-policy`) into a shared library (`libenvoy_substrate_egress_policy.so`) in a `rust:bookworm` builder stage.
-  2. Packages the compiled `.so` into the `envoyproxy/envoy:v1.39.4` runtime image under `/usr/local/lib/libenvoy_substrate_egress_policy.so` and sets `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib`.
+  2. Packages the compiled `.so` into the `envoyproxy/envoy:v1.39.5` runtime image under `/usr/local/lib/libenvoy_substrate_egress_policy.so` and sets `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib`.
 - **`dynamic-modules/egress-policy/`**: A Rust crate using the Envoy Dynamic Modules SDK (`envoy-proxy-dynamic-modules-rust-sdk`) that implements a custom Envoy listener filter for Substrate egress policy evaluation. See [`dynamic-modules/egress-policy/README.md`](dynamic-modules/egress-policy/README.md) for module-specific build, test, and Envoy configuration details.
 
 ## Building and Deployment
 
-During a build from source, `ate-setup` builds the image from this directory via `docker buildx`, pushes it to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the egress manifest (`manifests/ate-install/atenet-egress.yaml`).
+During a build from source, `ate-setup` builds the image from this directory via `docker buildx`, pushes it to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the router and egress manifests (`manifests/ate-install/atenet-router.yaml`, `manifests/ate-install/atenet-egress.yaml`).
 
-A pre-built install (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing and pins `REPO/envoy-dataplane:TAG` instead, so a release publishes it with the other images:
+A pre-built install (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing and pins `REPO/envoy-dataplane:TAG` instead, so `REPO` has to hold it. Releases publish it there with the other images; see [`docs/dev/releasing.md`](../../../docs/dev/releasing.md#release-images).
 
-```bash
-VERSION=TAG go run ./cmd/ate-setup publish release-images --ko-docker-repo REPO
-```
-
-The image targets the same platforms as the ko images: `KO_DEFAULTPLATFORMS`, else `defaultPlatforms` in `.ko.yaml` (linux/amd64 and linux/arm64), else `linux/amd64`. Building another architecture compiles Rust under QEMU, which must be registered with binfmt (e.g. `docker run --privileged --rm tonistiigi/binfmt --install arm64`).
+The image targets the same platforms as the ko images: `KO_DEFAULTPLATFORMS`, else `defaultPlatforms` in `.ko.yaml` (linux/amd64 and linux/arm64), else `linux/amd64`. The builder stage runs on the build machine's platform and cross-compiles the Rust module, so building another architecture needs no QEMU.
 
 To build the image locally without pushing it:
 

@@ -28,7 +28,7 @@ import requests
 
 from common import ateapi_pb2
 from common import ateapi_pb2_grpc
-from common.ateapi_channel import CA_FILE, SERVER_NAME, ateapi_channel
+from common.ateapi_channel import CA_FILE, CRED_BUNDLE, SERVER_NAME, ateapi_channel
 
 import spec as spec_mod
 
@@ -115,6 +115,8 @@ def _warm_actor(
     returns FailedPrecondition/Unavailable until a worker frees up."""
     ref = ateapi_pb2.ObjectRef(atespace=atespace, name=name)
     session = requests.Session()
+    session.verify = CA_FILE
+    session.cert = CRED_BUNDLE
     last_err: str = "not attempted"
     while time.time() < deadline:
         try:

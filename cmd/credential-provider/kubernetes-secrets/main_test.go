@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/installdefaults"
 	"google.golang.org/grpc/credentials"
 )
 

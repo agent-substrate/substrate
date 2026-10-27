@@ -21,33 +21,31 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
-	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // validActorTemplate returns the smallest template that passes create
 // validation; mutations tweak it per test case. The snapshot scopes and
 // resume policy are set explicitly because TestValidateActorTemplate
 // exercises validation directly, without defaulting.
-func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate {
-	template := &ateapipb.ActorTemplate{
-		Metadata:   &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tmpl-a"},
-		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-		SnapshotConfig: &ateapipb.SnapshotConfig{
+func validActorTemplate(mutations ...func(*ateapi.ActorTemplate)) *ateapi.ActorTemplate {
+	template := &ateapi.ActorTemplate{
+		Metadata:   &ateapi.ResourceMetadata{Atespace: "ns1", Name: "tmpl-a"},
+		Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+		SnapshotConfig: &ateapi.SnapshotConfig{
 			StorageLocation:   "gs://my-bucket/snapshots",
-			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
+		Resources: &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 	}
 	for _, m := range mutations {
 		m(template)
@@ -55,80 +53,15 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 	return template
 }
 
-// gvisorDefaultLister returns a SandboxConfig lister seeded with the
-// "gvisor-default" config that validActorTemplate names.
-func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
-	t.Helper()
-	return sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
-		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
-		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass:   atev1alpha1.SandboxClassGvisor,
-			DefaultVersion: "v1",
-			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: "registry.k8s.io/pause@sha256:x",
-				Assets:     testAssets(),
-			}},
-		},
-	}})
-}
-
-// TestCreateActorTemplate_SandboxConfigChecks pins the create-time checks on
-// the template's named SandboxConfig: it must exist and match the template's
-// class, both FailedPrecondition — they depend on cluster state, and the
-// lister may briefly lag a just-created config, so the error is retryable.
-func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
-	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
-	ctx := context.Background()
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
-		t.Fatalf("CreateAtespace failed: %v", err)
-	}
-
-	tests := []struct {
-		name     string
-		sandbox  *ateapipb.SandboxConfig
-		wantCode codes.Code
-	}{{
-		name:     "named config exists and matches",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
-		wantCode: codes.OK,
-	}, {
-		name:     "empty config_name is rejected",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "microvm"},
-		wantCode: codes.InvalidArgument,
-	}, {
-		name:     "named config missing",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "does-not-exist"},
-		wantCode: codes.FailedPrecondition,
-	}, {
-		name:     "named config class mismatch",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "microvm", ConfigName: "gvisor-default"},
-		wantCode: codes.FailedPrecondition,
-	}}
-	for i, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "ns1", Name: fmt.Sprintf("tmpl-%d", i)}
-				tmpl.SandboxConfig = tt.sandbox
-			})}
-			_, err := s.CreateActorTemplate(ctx, req)
-			if apierror.Code(err) != tt.wantCode {
-				t.Errorf("CreateActorTemplate error = %v, want code %v", err, tt.wantCode)
-			}
-		})
-	}
-}
-
 // TestCreateActorTemplate covers the atespace precondition: creation fails
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
+	s := &RPCService{impl: newServiceImpl(persistence, nil)}
 	ctx := context.Background()
-	req := func(atespace, name string) *ateapipb.CreateActorTemplateRequest {
-		return &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: atespace, Name: name}
+	req := func(atespace, name string) *ateapi.CreateActorTemplateRequest {
+		return &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: atespace, Name: name}
 		})}
 	}
 
@@ -136,7 +69,7 @@ func TestCreateActorTemplate(t *testing.T) {
 		t.Errorf("CreateActorTemplate in missing atespace = %v, want FailedPrecondition", err)
 	}
 
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
 	created, err := s.CreateActorTemplate(ctx, req("ns1", "tmpl-a"))
@@ -148,50 +81,143 @@ func TestCreateActorTemplate(t *testing.T) {
 	}
 }
 
+// TestCreateActorTemplate_RequiresSnapshotLocation pins that create rejects,
+// with FailedPrecondition, a template whose actors would have no snapshot
+// location: neither an honored storageLocation nor --snapshot-location.
+func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
+	tests := []struct {
+		name                    string
+		gates                   []string
+		optOut                  bool
+		clusterSnapshotLocation string
+		location                string
+		wantCode                codes.Code
+	}{{
+		name:                    "gate off, cluster location set",
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		location:                "gs://my-bucket/snapshots",
+		wantCode:                codes.OK,
+	}, {
+		name:     "gate off, no cluster location",
+		location: "gs://my-bucket/snapshots",
+		wantCode: codes.FailedPrecondition,
+	}, {
+		name:     "gate on, location set, no cluster location",
+		gates:    []string{"PerTemplateSnapshotLocation"},
+		location: "gs://my-bucket/snapshots",
+		wantCode: codes.OK,
+	}, {
+		name:                    "gate on, no location, cluster location set",
+		gates:                   []string{"PerTemplateSnapshotLocation"},
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		wantCode:                codes.OK,
+	}, {
+		name:                    "gate on, opted out, no location, cluster location set",
+		gates:                   []string{"PerTemplateSnapshotLocation"},
+		optOut:                  true,
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		wantCode:                codes.OK,
+	}, {
+		name:     "gate on, no location, no cluster location",
+		gates:    []string{"PerTemplateSnapshotLocation"},
+		wantCode: codes.FailedPrecondition,
+	}}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, tt.gates...)
+			persistence := newTestPersistence(t)
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
+			s := &RPCService{impl: impl}
+			ctx := context.Background()
+			if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
+				t.Fatalf("CreateAtespace failed: %v", err)
+			}
+			if tt.optOut {
+				ctx = preview.ContextWithOptOut(ctx)
+			}
+			req := &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "ns1", Name: fmt.Sprintf("tmpl-%d", i)}
+				tmpl.SnapshotConfig.StorageLocation = tt.location
+			})}
+			if _, err := s.CreateActorTemplate(ctx, req); apierror.Code(err) != tt.wantCode {
+				t.Errorf("CreateActorTemplate error = %v, want code %v", err, tt.wantCode)
+			}
+		})
+	}
+}
+
 // TestCreateActorTemplateIgnoresServerOwnedFields pins the create contract:
 // status on the request is dropped and new templates start with an empty
 // status. The store persists whatever the handler hands it, so the handler is
 // the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
+	s := &RPCService{impl: newServiceImpl(persistence, nil)}
 	ctx := context.Background()
 
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
 
-	in := validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+	in := validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 		tmpl.Metadata.Uid = "11111111-1111-1111-1111-111111111111"
 		tmpl.Metadata.Version = 42
-		tmpl.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"pool": "default"}}
-		tmpl.Containers = []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
-		tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "1Gi"}}}
+		tmpl.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"pool": "default"}}
+		tmpl.Containers = []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+		tmpl.Resources = &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)}
 		// Server-owned status a client must not be able to set.
-		tmpl.Status = &ateapipb.ActorTemplateStatus{
-			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-				GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+		tmpl.Status = &ateapi.ActorTemplateStatus{
+			GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{
+				GoldenTag: &ateapi.ObjectRef{Atespace: "ns1", Name: "golden-tag"},
 			},
 		}
 	})
-	created, err := s.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: in})
+	created, err := s.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: in})
 	if err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
 
-	want := validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+	want := validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 		tmpl.Metadata.Version = 1
-		tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED}
+		tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED}
 		tmpl.WorkerSelector = in.GetWorkerSelector()
 		tmpl.Containers = in.GetContainers()
 		tmpl.Resources = in.GetResources()
-		tmpl.Status = &ateapipb.ActorTemplateStatus{}
+		tmpl.Status = &ateapi.ActorTemplateStatus{}
 	})
 	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("CreateActorTemplate response mismatch (-want +got):\n%s", diff)
 	}
 	if got := created.GetMetadata().GetUid(); got == "" || got == in.GetMetadata().GetUid() {
 		t.Errorf("created uid = %q, want a fresh server-assigned uid", got)
+	}
+}
+
+// TestCreateActorTemplateDefaultsOmittedSnapshotConfig pins that
+// snapshot_config is optional: create fills an omitted one with every default.
+func TestCreateActorTemplateDefaultsOmittedSnapshotConfig(t *testing.T) {
+	persistence := newTestPersistence(t)
+	impl := newServiceImpl(persistence, nil)
+	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+	s := &RPCService{impl: impl}
+	ctx := context.Background()
+	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+
+	created, err := s.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+		tmpl.SnapshotConfig = nil
+	})})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	want := &ateapi.SnapshotConfig{
+		PreferredFidelity:    ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+	}
+	if diff := cmp.Diff(want, created.GetSnapshotConfig(), protocmp.Transform()); diff != "" {
+		t.Errorf("CreateActorTemplate snapshot_config mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -221,22 +247,22 @@ func TestDeleteActorTemplate(t *testing.T) {
 			persistence := newTestPersistence(t)
 			tmpl := seedSubstrateTemplate(t, ctx, persistence, "tmpl")
 			templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
-			goldenRef := resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
-			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: goldenRef.Atespace, Name: goldenRef.Name},
+			goldenRef := resources.ActorRef{Atespace: "team-a", Name: tmpl.GetMetadata().GetUid()}
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: goldenRef.Atespace, Name: goldenRef.Name},
 				ActorTemplate: templateRef.ToObjectRef(),
-				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+				Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 			})
 			workflow, objects := newFinalizeWorkflow(persistence)
 			actorURI := mustActorSnapshotURI(t, tmpl, actor, "snapshot")
 			objects.PutSnapshot(t, actorURI, "manifest.json")
-			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.LastAssignedGeneration = 1
-				s.Snapshots = []*ateapipb.Snapshot{
-					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), actorURI.Name(), actorURI.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+				s.Snapshots = []*ateapi.Snapshot{
+					newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), actorURI.Name(), actorURI.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 				}
 			})
-			var tag *ateapipb.Tag
+			var tag *ateapi.Tag
 			if tt.pendingTag {
 				tag = storetest.MustCreateTag(t, ctx, persistence, newPendingTestTag(t, goldenRef.Name, actor))
 			} else {
@@ -250,17 +276,17 @@ func TestDeleteActorTemplate(t *testing.T) {
 			tagURI := mustReservedTagSnapshotURI(t, tag)
 			objects.PutSnapshot(t, tagURI, "manifest.json")
 			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
-			// The handler must request AnyState to clean up an active golden actor.
-			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-				s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+			// The handler must clean up an active golden actor.
+			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+				s.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 			})
 			if tt.actorDeleted {
-				if _, err := workflow.DeleteActor(ctx, goldenRef, true, store.DeletePreconditions{}); err != nil {
+				if _, err := workflow.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if tt.tagDeleted {
-				if _, err := svc.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); err != nil {
+				if _, err := svc.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -287,15 +313,22 @@ func TestDeleteActorTemplate(t *testing.T) {
 				if _, err := persistence.GetTag(ctx, tagRef); err != nil {
 					t.Fatalf("golden tag after the refused delete: %v", err)
 				}
+				if current, err := persistence.GetActorTemplate(ctx, templateRef); err != nil || current.GetMetadata().GetDeleteTime() != nil {
+					t.Fatalf("template after the refused delete = %v, %v; want it present and not marked", current, err)
+				}
 			}
-			req := &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}
+			req := &ateapi.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}
 			deleted, err := svc.DeleteActorTemplate(ctx, req)
 			if tt.failPrefix != "" {
 				if !isObjectStoreErr(err) {
 					t.Fatalf("DeleteActorTemplate = %v, want object storage error", err)
 				}
-				if _, err := persistence.GetActorTemplate(ctx, templateRef); err != nil {
-					t.Fatalf("template lost after cleanup failure: %v", err)
+				admitted, getErr := persistence.GetActorTemplate(ctx, templateRef)
+				if getErr != nil {
+					t.Fatalf("template lost after cleanup failure: %v", getErr)
+				}
+				if admitted.GetMetadata().GetDeleteTime() == nil {
+					t.Fatal("a failed delete left delete_time unset")
 				}
 				if _, err := persistence.GetTag(ctx, tagRef); err != nil {
 					t.Fatalf("tag lost after cleanup failure: %v", err)
@@ -304,14 +337,27 @@ func TestDeleteActorTemplate(t *testing.T) {
 				if tt.wantActorAfterFailure && actorErr != nil || !tt.wantActorAfterFailure && !errors.Is(actorErr, store.ErrNotFound) {
 					t.Fatalf("GetActor after failure = %v, want present %v", actorErr, tt.wantActorAfterFailure)
 				}
+				if _, err := svc.DeleteActorTemplate(ctx, req); !isObjectStoreErr(err) {
+					t.Fatalf("retried DeleteActorTemplate = %v, want object storage error", err)
+				}
+				retried, retryErr := persistence.GetActorTemplate(ctx, templateRef)
+				if retryErr != nil {
+					t.Fatalf("template lost after a retried cleanup failure: %v", retryErr)
+				}
+				if got, want := retried.GetMetadata().GetVersion(), admitted.GetMetadata().GetVersion(); got != want {
+					t.Errorf("a retried delete moved the version to %d, want %d", got, want)
+				}
 				objects.OnDelete = nil
 				deleted, err = svc.DeleteActorTemplate(ctx, req)
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if diff := cmp.Diff(tmpl, deleted, protocmp.Transform()); diff != "" {
+			if diff := cmp.Diff(tmpl, deleted, protocmp.Transform(), ignoreVersion, ignoreTimestamps); diff != "" {
 				t.Fatalf("deleted template mismatch (-want +got):\n%s", diff)
+			}
+			if deleted.GetMetadata().GetDeleteTime() == nil {
+				t.Fatal("the deleted template carries no delete_time")
 			}
 			if _, err := persistence.GetActorTemplate(ctx, templateRef); !errors.Is(err, store.ErrNotFound) {
 				t.Fatalf("GetActorTemplate after delete = %v, want NotFound", err)
@@ -335,16 +381,12 @@ func TestDeleteActorTemplate(t *testing.T) {
 }
 
 // seedSubstrateTemplate stores a minimal substrate ActorTemplate in team-a.
-func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.Interface, name string) *ateapipb.ActorTemplate {
+func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.Interface, name string) *ateapi.ActorTemplate {
 	t.Helper()
-	created, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
-		SnapshotConfig: &ateapipb.SnapshotConfig{
+	created, err := persistence.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: name},
+		SnapshotConfig: &ateapi.SnapshotConfig{
 			StorageLocation: "gs://ate-snapshots/team-a/",
-		},
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor",
 		},
 	})
 	if err != nil {
@@ -365,7 +407,7 @@ func TestResolveActorTemplate(t *testing.T) {
 	stored := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 
 	t.Run("ref reads the store", func(t *testing.T) {
-		actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}
+		actor := &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}
 		got, err := resolveActorTemplate(ctx, persistence, actor)
 		if err != nil {
 			t.Fatalf("resolveActorTemplate: %v", err)
@@ -376,7 +418,7 @@ func TestResolveActorTemplate(t *testing.T) {
 	})
 
 	t.Run("ref to a missing template is FailedPrecondition", func(t *testing.T) {
-		actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "absent"}}
+		actor := &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "absent"}}
 		_, err := resolveActorTemplate(ctx, persistence, actor)
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v, want FailedPrecondition (err: %v)", got, err)
@@ -394,12 +436,12 @@ func TestResolveActorTemplate_NotFound(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		actor        *ateapipb.Actor
+		actor        *ateapi.Actor
 		wantNotFound bool
 	}{
-		{"ref resolves", &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}, false},
-		{"ref to deleted template", &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone"}}, true},
-		{"no template named at all", &ateapipb.Actor{}, true},
+		{"ref resolves", &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}, false},
+		{"ref to deleted template", &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "gone"}}, true},
+		{"no template named at all", &ateapi.Actor{}, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -427,7 +469,7 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	persistence := newTestPersistence(t)
 	ctx := context.Background()
 
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
 	created, err := persistence.CreateActorTemplate(ctx, validActorTemplate())
@@ -437,9 +479,9 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	ref := resources.ActorTemplateRefFromActorTemplate(created)
 
 	// A server-owned status write passes validation and bumps the version.
-	updated, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapipb.ActorTemplate) error {
-		tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-			GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+	updated, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapi.ActorTemplate) error {
+		tmpl.Status = &ateapi.ActorTemplateStatus{GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{
+			GoldenTag: &ateapi.ObjectRef{Atespace: "ns1", Name: "golden-tag"},
 		}}
 		return nil
 	})
@@ -452,9 +494,9 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 
 	// A mutation that touches an immutable field is a server bug, rejected by
 	// the store.
-	for name, mutate := range map[string]func(*ateapipb.ActorTemplate) error{
-		"atespace": func(tmpl *ateapipb.ActorTemplate) error { tmpl.Metadata.Atespace = "ns2"; return nil },
-		"name":     func(tmpl *ateapipb.ActorTemplate) error { tmpl.Metadata.Name = "tmpl-b"; return nil },
+	for name, mutate := range map[string]func(*ateapi.ActorTemplate) error{
+		"atespace": func(tmpl *ateapi.ActorTemplate) error { tmpl.Metadata.Atespace = "ns2"; return nil },
+		"name":     func(tmpl *ateapi.ActorTemplate) error { tmpl.Metadata.Name = "tmpl-b"; return nil },
 	} {
 		if _, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(updated), mutate); err == nil {
 			t.Errorf("mutating %s succeeded, want error", name)
@@ -463,7 +505,7 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 
 	// Server-assigned metadata edits are overwritten, not errors: the store
 	// restores them from the stored value.
-	reverted, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(updated), func(tmpl *ateapipb.ActorTemplate) error {
+	reverted, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(updated), func(tmpl *ateapi.ActorTemplate) error {
 		tmpl.Metadata.Uid = "1e186271-b829-4085-b2b1-6b665c1a4f42"
 		return nil
 	})

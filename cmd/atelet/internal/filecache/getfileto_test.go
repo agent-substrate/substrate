@@ -365,6 +365,9 @@ func TestGetFileToHitTouchesLastUse(t *testing.T) {
 }
 
 func TestGetFileToPublishedCopyIsWriteProtected(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions, so the write cannot fail")
+	}
 	s := newTestStore(t)
 	key := URIKey("gs://bucket/golden", "mem.img")
 	fetch, _ := countingFetcher("precious")
@@ -377,5 +380,36 @@ func TestGetFileToPublishedCopyIsWriteProtected(t *testing.T) {
 	// not silently poison the shared copy.
 	if err := os.WriteFile(dst, []byte("mutated"), 0o444); err == nil {
 		t.Error("write through consumer link succeeded, want permission error")
+	}
+}
+
+func TestGetFileToKeepsExecuteBits(t *testing.T) {
+	s := newTestStore(t)
+	for _, tc := range []struct {
+		name      string
+		fetched   os.FileMode
+		published os.FileMode
+	}{
+		{"binary", 0o755, 0o555},
+		{"data", 0o644, 0o444},
+		{"private binary", 0o700, 0o544},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := URIKey("test://mode/" + tc.name)
+			fetch := func(ctx context.Context, dstPath string) error {
+				return os.WriteFile(dstPath, []byte("bits"), tc.fetched)
+			}
+			dst := dstPath(t, s, "mode-"+tc.name)
+			if err := s.GetFileTo(context.Background(), key, dst, fetch); err != nil {
+				t.Fatal(err)
+			}
+			fi, err := os.Stat(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fi.Mode().Perm() != tc.published {
+				t.Errorf("published mode = %v, want %v", fi.Mode().Perm(), tc.published)
+			}
+		})
 	}
 }

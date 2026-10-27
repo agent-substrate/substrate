@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
+	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

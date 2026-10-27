@@ -42,23 +42,23 @@ func TestInvalidateDiscoveryRebuildsTheRESTMapper(t *testing.T) {
 	}
 
 	sandboxConfig := schema.GroupKind{Group: "ate.dev", Kind: "SandboxConfig"}
-	if _, err := c.mapper.RESTMapping(sandboxConfig, "v1alpha1"); err == nil {
+	if _, err := c.mapper.RESTMapping(sandboxConfig, "v1"); err == nil {
 		t.Fatal("RESTMapping() resolved SandboxConfig before its CRD was installed, want an error")
 	}
 
 	// The CRD lands, as `deploy crds` would install it.
 	cs.Fake.Resources = append(cs.Fake.Resources, &metav1.APIResourceList{
-		GroupVersion: "ate.dev/v1alpha1",
+		GroupVersion: "ate.dev/v1",
 		APIResources: []metav1.APIResource{{Name: "sandboxconfigs", Kind: "SandboxConfig", Namespaced: true}},
 	})
 
 	c.InvalidateDiscovery()
 
-	mapping, err := c.mapper.RESTMapping(sandboxConfig, "v1alpha1")
+	mapping, err := c.mapper.RESTMapping(sandboxConfig, "v1")
 	if err != nil {
 		t.Fatalf("RESTMapping() after InvalidateDiscovery() error = %v, want the new CRD to be mappable", err)
 	}
-	want := schema.GroupVersionResource{Group: "ate.dev", Version: "v1alpha1", Resource: "sandboxconfigs"}
+	want := schema.GroupVersionResource{Group: "ate.dev", Version: "v1", Resource: "sandboxconfigs"}
 	if mapping.Resource != want {
 		t.Errorf("mapping.Resource = %v, want %v", mapping.Resource, want)
 	}
@@ -70,7 +70,7 @@ func TestInvalidateDiscoveryRebuildsTheRESTMapper(t *testing.T) {
 	cs.Fake.Resources = cs.Fake.Resources[:1]
 	c.InvalidateDiscovery()
 
-	if _, err := c.mapper.RESTMapping(sandboxConfig, "v1alpha1"); err == nil {
+	if _, err := c.mapper.RESTMapping(sandboxConfig, "v1"); err == nil {
 		t.Error("RESTMapping() still resolved SandboxConfig after its CRD left discovery, want an error")
 	}
 }

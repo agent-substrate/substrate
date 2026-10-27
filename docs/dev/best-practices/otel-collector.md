@@ -298,7 +298,7 @@ spec:
       # A node with no collector pod silently blackholes telemetry under
       # internalTrafficPolicy: Local, so tolerate everything. Any tainted pool
       # that runs Substrate workloads -- a dedicated sandbox pool, for
-      # instance -- would otherwise lose its actor and ateom spans.
+      # instance -- would otherwise lose its actor and ateworker spans.
       tolerations:
       - operator: Exists
       containers:
@@ -424,25 +424,30 @@ these manifests:
 Setting the variable is sufficient for every component. Two also expose a flag
 that defaults to it, so you should not normally need either:
 `ate-controller`'s `--otel-exporter-otlp-endpoint`, which it also propagates to
-the `ateom` worker pods it creates, and `atenet-router`'s
+the worker pods it creates, and `atenet-router`'s
 `--otlp-collector-address`, which is what its Envoy is given over xDS.
+`ateworker` uses the propagated endpoint only when its node's `atelet` serves no
+OTLP relay. It exports through the relay whenever `atelet` has a collector,
+and exports nothing when it has neither.
 
 Rather than editing the base manifests, prefer a kustomize overlay that
-patches the variable — see `manifests/ate-install/kind/kustomization.yaml`
-for a worked example.
+replaces the `ate-otel-config` ConfigMap — see
+`manifests/ate-install/kind/ate-otel-config.yaml`, which the kind overlay
+lists instead of the base file, for a worked example.
 
 ### A Note on Logs
 
 **Substrate exports one thing over OTLP: the actor events**, ateapi's
-lifecycle records and the ateoms' usage samples, through
+lifecycle records and the ateworkers' usage samples, through
 `serverboot.InitLogging`. `OTEL_LOGS_EXPORTER=otlp` sends them over OTLP
 instead of stdout, and `otlp,console` to both; only the kind overlay sets it, to
-`otlp,console`. See
+`otlp,console`, together with `ATE_WORKER_OTEL_LOGS_EXPORTER` for the
+ateworkers. See
 [the same records over OTLP](../../observability.md#the-same-records-over-otlp).
 
 Everything else is stdout. `serverboot.InitLogger` writes structured JSON there,
-and `ateom` wraps actor container output with the `ate.*` metadata labels
-described in [Actor Observability](../../observability.md). The ateom relay
+and `ateworker` wraps actor container output with the `ate.*` metadata labels
+described in [Actor Observability](../../observability.md). The ateworker relay
 carries logs, traces, and metrics.
 
 Those labels sit in a nested group (`labels`, or `logging.googleapis.com/labels`
@@ -499,7 +504,7 @@ failure.
 
 ## Local Development (kind)
 
-`hack/install-ate-kind.sh` installs a collector plus a Jaeger all-in-one into
+`hack/install-ate-kind.sh` installs a collector plus Jaeger into
 the `otel-system` namespace — see
 `manifests/ate-install/kind/otel-collector.yaml`. It is a single-replica
 Deployment, which is appropriate for a one-node kind cluster. The kind
@@ -545,7 +550,7 @@ quantity of work that they do:
 datapoints/min ≈  nodes                  × atelet_dp
                 + ateapi_replicas        × ateapi_dp
                 + router_replicas        × router_dp
-                + worker_pods            × ateom_dp
+                + worker_pods            × worker_dp
                 + instrumented_actors    × actor_dp
 ```
 
@@ -583,7 +588,7 @@ it from the meter for the scenario you run.
 > [!IMPORTANT]
 > **With `ParentBased`, the caller makes the root decision.** Since
 > [#711](https://github.com/agent-substrate/substrate/pull/711) the defaults are
-> `ParentBased(TraceIDRatioBased)` at 0.1 for `ateapi`, `atelet`, and `ateom-*`,
+> `ParentBased(TraceIDRatioBased)` at 0.1 for `ateapi`, `atelet`, and `ateworker-*`,
 > and 0.01 for `atenet-router` and Envoy. These rates apply only to an operation
 > that arrives with no `traceparent`. A client that sends a `traceparent` makes
 > the decision for the full chain, and the defaults of substrate do not apply.

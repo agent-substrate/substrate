@@ -161,3 +161,22 @@ func TestActorLocksForgetIdleActors(t *testing.T) {
 		t.Errorf("locks retained for %d idle actors, want none", len(locks.held))
 	}
 }
+
+// A zero-value Locks works without New, and an already-canceled context never
+// takes a free lock.
+func TestActorLocksZeroValueAndCanceledContext(t *testing.T) {
+	var locks Locks
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if locks.Lock(canceled, "actor-a") {
+		locks.Unlock("actor-a")
+		t.Fatal("Lock with an already-canceled context succeeded")
+	}
+	if locks.Busy("actor-a") {
+		t.Fatal("Busy(actor-a) = true after canceled Lock")
+	}
+	if !locks.Lock(context.Background(), "actor-a") {
+		t.Fatal("Lock on zero-value Locks failed")
+	}
+	locks.Unlock("actor-a")
+}

@@ -22,7 +22,7 @@ workerSelector:
     workload: probe-multiactor
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   volumeMounts:
   # Identity returned by /whoami.
@@ -48,10 +48,7 @@ volumes:
 # Allow multiple actors to fit on one worker.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 256Mi
-${TEMPLATE_SANDBOX_CONFIG}
+    cpuMillicores: 1000
+    memoryBytes: 268435456 # 256Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e${FIXTURE_SUFFIX}/

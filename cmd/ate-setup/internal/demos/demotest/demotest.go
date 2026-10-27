@@ -22,10 +22,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // Env builds an Env with no cluster connection. The render paths only read
@@ -71,7 +71,7 @@ func AssertRendered(t *testing.T, manifest []byte) {
 
 // AssertRenderedActorTemplate checks that a rendered protojson ActorTemplate
 // manifest has every placeholder resolved and strictly parses into the
-// ateapipb.ActorTemplate it will be created as, and that it names the given
+// ateapi.ActorTemplate it will be created as, and that it names the given
 // (atespace, name). ko:// image references are left as written: they are
 // plain strings to the proto, resolved only at deploy time.
 func AssertRenderedActorTemplate(t *testing.T, manifest []byte, want resources.ActorTemplateRef) {

@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # Assemble the micro-VM (kata + cloud-hypervisor) runtime asset set that
-# ateom-microvm fetches at runtime (fetch-not-bake). Run this on a Linux
+# ateworker-microvm fetches at runtime (fetch-not-bake). Run this on a Linux
 # host of the TARGET arch.
 #
 # Produces, under $OUT, the four assets named as the SandboxConfig expects:
@@ -24,15 +24,15 @@
 # paste their sha256 sums into the manifest
 # (manifests/microvm/sandboxconfig-microvm.yaml.tmpl).
 #
-# ateom drives the kata-agent directly (the kata containerd shim is NOT an asset). The
+# ateworker drives the kata-agent directly (the kata containerd shim is NOT an asset). The
 # actor rootfs is overlay(virtio-fs RO lower + guest-tmpfs upper), so virtiofsd IS an
 # asset. CH's restore handshake hangs against virtiofsd v1.13.3, which kata bundled up
-# to and including 4.0.0; kata 4.1.0 bundles v1.14.0, the first release carrying the
+# to and including 4.0.0; kata 4.1.0 and later bundle v1.14.0, the first release carrying the
 # vhost-0.16 / vhost-user-backend-0.22 snapshot-restore fix (REPLY_ACK). So virtiofsd
 # now comes out of kata-static with the kernel and rootfs instead of being sourced
 # separately per arch.
 #
-# Env: ARCH (arm64|amd64, default arm64), KATA_VER (4.1.0), CH_VER (v53.0),
+# Env: ARCH (arm64|amd64, default arm64), KATA_VER (4.3.1), CH_VER (v53.0),
 #      OUT (default ./bin/microvm-assets/$ARCH, under the gitignored bin/).
 #
 # Always re-downloads and overwrites — there is no incremental mode. It clears
@@ -47,7 +47,7 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 
 ARCH="${ARCH:-arm64}"
-KATA_VER="${KATA_VER:-4.1.0}"
+KATA_VER="${KATA_VER:-4.3.1}"
 CH_VER="${CH_VER:-v53.0}"
 # Not env-overridable: this is whatever KATA_VER bundles. It is declared rather than
 # read off the binary because --print-stamp has to answer before anything is
@@ -99,7 +99,7 @@ tar --zstd -xf kata-static.tar.zst -C kata
 KROOT="kata/opt/kata"
 
 cp "$(readlink -f "${KROOT}/share/kata-containers/vmlinux.container")" "${OUT}/vmlinux"
-# rootfs.img is attached over virtio-pmem and mounted with DAX (cmd/ateom-microvm/run.go).
+# rootfs.img is attached over virtio-pmem and mounted with DAX (cmd/ateworker-microvm/run.go).
 # The image must meet the following requirements:
 #   - a size that is a multiple of 2 MiB (cloud-hypervisor)
 #   - partition 1 aligned to the guest page size

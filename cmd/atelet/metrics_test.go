@@ -17,8 +17,6 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -26,9 +24,8 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 const (
@@ -153,19 +150,83 @@ func TestCheckpointDurationShape(t *testing.T) {
 		kind:              ateattr.SnapshotKindLocal,
 		fidelity:          ateattr.SnapshotFidelityMemory,
 		sandboxClass:      "microvm",
-	}, phase{ateattr.SnapshotPhasePersist, time.Second})
+	},
+		phase{ateattr.SnapshotPhasePersist, time.Second},
+		phase{ateattr.SnapshotPhaseCleanup, 20 * time.Millisecond},
+	)
 
 	m := collectHistogram(t, reader, checkpointDurationMetric)
 	if m.Unit != "s" {
 		t.Errorf("unit = %q, want %q", m.Unit, "s")
 	}
-	set := phaseValues(t, m)[ateattr.SnapshotPhasePersist]
-	if v := attrString(t, set, ateattr.SnapshotKindKey); v != ateattr.SnapshotKindLocal {
-		t.Errorf("snapshot kind = %q, want %q", v, ateattr.SnapshotKindLocal)
+	byPhase := phaseValues(t, m)
+	for _, wantPhase := range []string{ateattr.SnapshotPhasePersist, ateattr.SnapshotPhaseCleanup} {
+		set, ok := byPhase[wantPhase]
+		if !ok {
+			t.Fatalf("missing phase %q", wantPhase)
+		}
+		if v := attrString(t, set, ateattr.SnapshotKindKey); v != ateattr.SnapshotKindLocal {
+			t.Errorf("%s snapshot kind = %q, want %q", wantPhase, v, ateattr.SnapshotKindLocal)
+		}
+		if v := attrString(t, set, ateattr.SandboxClassKey); v != "microvm" {
+			t.Errorf("%s sandbox class = %q, want microvm", wantPhase, v)
+		}
 	}
-	if v := attrString(t, set, ateattr.SandboxClassKey); v != "microvm" {
-		t.Errorf("sandbox class = %q, want microvm", v)
+}
+
+// TestCheckpointRecordsCleanup drives a Checkpoint: the node cleanup it does
+// once the snapshot commits lands in the cleanup phase, a failed upload returns
+// before it, and the phases fit in the total.
+func TestCheckpointRecordsCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		putErr      error
+		wantCleanup bool
+	}{
+		{name: "succeeded", wantCleanup: true},
+		{name: "upload failed", putErr: errors.New("object store unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			var reader *sdkmetric.ManualReader
+			a.s.instruments, reader = newTestInstruments(t)
+			a.store.putErr = tc.putErr
+			_, err := a.checkpoint(t, a.snapshot("suspend-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+			if (err != nil) != (tc.putErr != nil) {
+				t.Fatalf("Checkpoint = %v, want an error only from the upload", err)
+			}
+
+			sums := phaseSums(t, collectHistogram(t, reader, checkpointDurationMetric))
+			if timed := sums[ateattr.SnapshotPhaseCleanup] > 0; timed != tc.wantCleanup {
+				t.Errorf("cleanup = %vs, want it timed: %v", sums[ateattr.SnapshotPhaseCleanup], tc.wantCleanup)
+			}
+			var parts float64
+			for name, v := range sums {
+				if name != ateattr.SnapshotPhaseTotal {
+					parts += v
+				}
+			}
+			if total := sums[ateattr.SnapshotPhaseTotal]; parts > total {
+				t.Errorf("phases sum to %vs, more than the %vs total", parts, total)
+			}
+		})
 	}
+}
+
+// phaseSums maps each recorded phase to the sum of its observations.
+func phaseSums(t *testing.T, m metricdata.Metrics) map[string]float64 {
+	t.Helper()
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("%s is %T, want a float64 histogram", m.Name, m.Data)
+	}
+	sums := make(map[string]float64, len(hist.DataPoints))
+	for _, dp := range hist.DataPoints {
+		if v, ok := dp.Attributes.Value(ateattr.SnapshotPhaseKey); ok {
+			sums[v.AsString()] += dp.Sum
+		}
+	}
+	return sums
 }
 
 // TestRecordPhasesSkipsZeroPhases pins the absence rule: a phase that never
@@ -177,11 +238,11 @@ func TestRecordPhasesSkipsZeroPhases(t *testing.T) {
 		snapshotOp{fidelity: ateattr.SnapshotFidelityMemory},
 		phase{ateattr.SnapshotPhaseManifestFetch, 50 * time.Millisecond},
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
-		phase{ateattr.SnapshotPhaseAteomRestore, 0},
+		phase{ateattr.SnapshotPhaseWorkerRestore, 0},
 		phase{ateattr.SnapshotPhaseTotal, 2 * time.Second})
 
 	byPhase := phaseValues(t, collectHistogram(t, reader, restoreDurationMetric))
-	if _, ok := byPhase[ateattr.SnapshotPhaseAteomRestore]; ok {
+	if _, ok := byPhase[ateattr.SnapshotPhaseWorkerRestore]; ok {
 		t.Error("a phase that never started was recorded as a zero observation")
 	}
 	if len(byPhase) != 3 {
@@ -293,15 +354,15 @@ func TestRestoreSnapshotKind(t *testing.T) {
 			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name:        "a golden actor's snapshot served locally is still local",
+			name:        "a snapshot from another atespace served locally is still local",
 			directLocal: true,
-			rec:         &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
+			rec:         &sandboxAssetsRecord{Atespace: "team-b"},
 			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "external snapshot written by a golden actor",
-			rec:  &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
-			want: ateattr.SnapshotKindGolden,
+			name: "external snapshot written in another atespace",
+			rec:  &sandboxAssetsRecord{Atespace: "team-b"},
+			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "external snapshot written by a tenant actor",
@@ -347,13 +408,13 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
-			name: "a golden actor's commit writes the template's golden",
-			req:  &ateletpb.CheckpointRequest{UploadConfig: immediate, Atespace: resources.GoldenActorAtespace},
-			want: ateattr.SnapshotKindGolden,
+			name: "a durable checkpoint in another atespace is latest",
+			req:  &ateletpb.CheckpointRequest{UploadConfig: immediate, Atespace: "team-b"},
+			want: ateattr.SnapshotKindLatest,
 		},
 		{
-			name: "a local checkpoint in the golden atespace is still local",
-			req:  &ateletpb.CheckpointRequest{UploadConfig: deferred, Atespace: resources.GoldenActorAtespace},
+			name: "a local checkpoint in another atespace is still local",
+			req:  &ateletpb.CheckpointRequest{UploadConfig: deferred, Atespace: "team-b"},
 			want: ateattr.SnapshotKindLocal,
 		},
 	}
@@ -363,75 +424,5 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 				t.Errorf("checkpointSnapshotKind() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-// patternBytes returns a byte slice of length n filled with a repeating
-// non-zero byte pattern so test data is incompressible and not treated as zero
-// blocks.
-func patternBytes(n int64) []byte {
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = byte(i%251 + 1)
-	}
-	return b
-}
-
-func TestAllocatedBytesSparseImage(t *testing.T) {
-	const (
-		apparent = 2 << 30 // 2 GiB
-		written  = 1 << 20 // 1 MiB
-	)
-
-	path := filepath.Join(t.TempDir(), "memory-ranges")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("create sparse image: %v", err)
-	}
-	if _, err := f.Write(patternBytes(written)); err != nil {
-		f.Close()
-		t.Fatalf("write initial pages: %v", err)
-	}
-	if err := f.Truncate(apparent); err != nil {
-		f.Close()
-		t.Fatalf("extend sparse image: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close sparse image: %v", err)
-	}
-
-	fi, err := os.Lstat(path)
-	if err != nil {
-		t.Fatalf("lstat sparse image: %v", err)
-	}
-	if fi.Size() != apparent {
-		t.Fatalf("fi.Size() = %d, want %d", fi.Size(), int64(apparent))
-	}
-
-	got := allocatedBytes(fi)
-	if got >= apparent/2 {
-		t.Skipf("file did not end up sparse (%d of %d bytes allocated); "+
-			"this filesystem cannot report holes", got, int64(apparent))
-	}
-	if got == 0 || got > written*16 {
-		t.Errorf("allocatedBytes() = %d, want > 0 and << %d (wrote %d)", got, int64(apparent), int64(written))
-	}
-}
-
-func TestAllocatedBytesDenseImage(t *testing.T) {
-	const size = 64 << 10
-
-	path := filepath.Join(t.TempDir(), "state.json")
-	if err := os.WriteFile(path, patternBytes(size), 0o600); err != nil {
-		t.Fatalf("write dense image: %v", err)
-	}
-	fi, err := os.Lstat(path)
-	if err != nil {
-		t.Fatalf("lstat dense image: %v", err)
-	}
-
-	got := allocatedBytes(fi)
-	if got < size || got > size*2 {
-		t.Errorf("allocatedBytes() = %d, want ~%d", got, size)
 	}
 }

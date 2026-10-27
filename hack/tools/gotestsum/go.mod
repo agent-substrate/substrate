@@ -1,6 +1,8 @@
-module github.com/agent-substrate/substrate/hack/tools/gotestsum
+module go.ate.dev/substrate/hack/tools/gotestsum
 
 go 1.27.0
+
+toolchain go1.27.3
 
 tool gotest.tools/gotestsum
 

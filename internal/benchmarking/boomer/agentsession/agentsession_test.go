@@ -17,6 +17,7 @@ package agentsession
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,14 +30,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/prometheus/client_golang/prometheus"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
+	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestEmbeddedScriptsAreValid keeps every built-in variant loadable: a file
@@ -221,7 +225,7 @@ func TestExecOpAgainstFake(t *testing.T) {
 			HTTPClient: http.DefaultClient,
 			RouterURL:  ts.URL,
 			Atespace:   "benchmark",
-			Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+			Dyn:        dynconfig.Static(knobs{}),
 		},
 		actorName: "agent-test",
 	}
@@ -270,7 +274,7 @@ func TestExecOpAgainstFake(t *testing.T) {
 // error that leaves the previous script in place, and a changed knob loads
 // the new script for sessions that start afterwards.
 func TestLoadScriptFollowsTheKnob(t *testing.T) {
-	rt := &runtime{cfg: &userclass.Config{Dyn: dynconfig.NewHolder(dynconfig.Config{AgentSessionScript: "no-such-script"})}}
+	rt := &runtime{cfg: &userclass.Config{Dyn: dynconfig.Static(knobs{Script: "no-such-script"})}}
 	if _, err := rt.loadScript(); err == nil {
 		t.Fatal("loadScript accepted an unknown script name")
 	}
@@ -278,7 +282,7 @@ func TestLoadScriptFollowsTheKnob(t *testing.T) {
 		t.Fatal("a failed load must not cache a script")
 	}
 
-	rt.cfg.Dyn.Store(dynconfig.Config{})
+	rt.cfg.Dyn = dynconfig.Static(knobs{})
 	s, err := rt.loadScript()
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +299,7 @@ func TestLoadScriptFollowsTheKnob(t *testing.T) {
 
 	// A knob that names something that does not load is an error, and the
 	// previous script stays available to sessions that already run on it.
-	rt.cfg.Dyn.Store(dynconfig.Config{AgentSessionScript: "no-such-script"})
+	rt.cfg.Dyn = dynconfig.Static(knobs{Script: "no-such-script"})
 	if _, err := rt.loadScript(); err == nil {
 		t.Error("loadScript accepted an unknown name after a successful load")
 	}
@@ -308,7 +312,7 @@ func TestLoadScriptFollowsTheKnob(t *testing.T) {
 	if err := os.WriteFile(path, []byte(validScript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rt.cfg.Dyn.Store(dynconfig.Config{AgentSessionScriptFile: path})
+	rt.cfg.Dyn = dynconfig.Static(knobs{ScriptFile: path})
 	next, err := rt.loadScript()
 	if err != nil {
 		t.Fatal(err)
@@ -337,13 +341,98 @@ func TestLoadScriptFollowsTheKnob(t *testing.T) {
 	}
 }
 
+// A VU still in its phase-in wait when the run ends wakes after shutdown
+// has swept the sessions. It must not start one then, or the actor would
+// outlive the run with nothing left to delete it.
+func TestIterateAfterShutdownStartsNoSession(t *testing.T) {
+	ctl := &fakeControlClient{}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
+	rt := &runtime{cfg: u.cfg}
+	rt.shutdown(context.Background())
+	rt.iterate()
+	if got := countCalls(ctl.recordedCalls(), "CreateActor"); got != 0 {
+		t.Fatalf("CreateActor calls after shutdown = %d, want 0", got)
+	}
+	if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
+		t.Error("a session was stored after shutdown")
+	}
+}
+
+// A VU that is inside startUser when shutdown runs is not in users yet, so
+// the sweep cannot see its session. shutdown waits for the start, and the
+// VU finds stopping set once the session is stored and cleans it up itself,
+// exactly once, before shutdown returns and the process exits.
+func TestShutdownWaitsForSessionStartedDuringIt(t *testing.T) {
+	ctl := &fakeControlClient{createStarted: make(chan struct{}, 1), createGate: make(chan struct{})}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
+	rt := &runtime{cfg: u.cfg}
+
+	iterated := make(chan struct{})
+	go func() {
+		defer close(iterated)
+		rt.iterate()
+	}()
+	<-ctl.createStarted
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		rt.shutdown(context.Background()) // the sweep sees no session yet
+	}()
+	select {
+	case <-shutdownDone:
+		t.Fatal("shutdown returned with a session start in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(ctl.createGate)
+	<-shutdownDone
+
+	// Checked as soon as shutdown returns: that is when main exits.
+	if got := countCalls(ctl.recordedCalls(), "DeleteActor"); got != 1 {
+		t.Errorf("DeleteActor calls when shutdown returned = %d, want the session started during it cleaned up once", got)
+	}
+	left := 0
+	rt.users.Range(func(any, any) bool { left++; return true })
+	if left != 0 {
+		t.Errorf("%d sessions left in users after shutdown, want 0", left)
+	}
+	<-iterated
+}
+
+// The wait for in-flight starts is bounded by shutdown's context, as the
+// sweep is, so a start that never finishes cannot hold the process past
+// boomer's shutdown budget.
+func TestShutdownStopsWaitingForStartsWhenCtxExpires(t *testing.T) {
+	ctl := &fakeControlClient{createStarted: make(chan struct{}, 1), createGate: make(chan struct{})}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
+	rt := &runtime{cfg: u.cfg}
+
+	iterated := make(chan struct{})
+	go func() {
+		defer close(iterated)
+		rt.iterate()
+	}()
+	<-ctl.createStarted
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	rt.shutdown(ctx)
+	if waited := time.Since(start); waited > 2*time.Second {
+		t.Errorf("shutdown waited %v on a start that never finished, want to stop at the context", waited)
+	}
+	if got := countCalls(ctl.recordedCalls(), "DeleteActor"); got != 0 {
+		t.Errorf("DeleteActor calls = %d while the start was still gated, want 0", got)
+	}
+	close(ctl.createGate)
+	<-iterated
+}
+
 // TestShutdownFansOut: at thousands of sessions a serial suspend+delete
 // sweep leaks most actors before boomer's shutdown budget runs out, so the
 // hook must run sessions concurrently and still clean up every one.
 func TestShutdownFansOut(t *testing.T) {
 	const sessions = 40
 	ctl := &fakeControlClient{deleteDelay: 20 * time.Millisecond}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 	rt := &runtime{cfg: u.cfg}
 	for i := range sessions {
 		rt.users.Store(int64(i), &sessionUser{cfg: u.cfg, actorName: "agent-" + strconv.Itoa(i)})
@@ -403,9 +492,9 @@ func TestLoadScriptPrefersFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte(validScript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rt := &runtime{cfg: &userclass.Config{Dyn: dynconfig.NewHolder(dynconfig.Config{
-		AgentSessionScript:     DefaultScript,
-		AgentSessionScriptFile: path,
+	rt := &runtime{cfg: &userclass.Config{Dyn: dynconfig.Static(knobs{
+		Script:     DefaultScript,
+		ScriptFile: path,
 	})}}
 	s, err := rt.loadScript()
 	if err != nil {
@@ -417,29 +506,29 @@ func TestLoadScriptPrefersFile(t *testing.T) {
 }
 
 // TestStartUserChecksTemplateMemory: a template smaller than the script's
-// floor, or with a limit that does not parse, is refused before any actor
-// is created; a big enough one, or one with no limit, proceeds.
+// floor is refused before any actor is created; a big enough one, or one with
+// no limit, proceeds.
 func TestStartUserChecksTemplateMemory(t *testing.T) {
 	script, err := Load(DefaultScript)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name, memory string
-		wantStart    bool
-		wantErr      string
+		name      string
+		memory    int64
+		wantStart bool
+		wantErr   string
 	}{
-		{"too small", "512Mi", false, "min_actor_memory"},
-		{"unparseable", "1Gi-ish", false, "memory limit"},
-		{"exact", "1Gi", true, ""},
-		{"no limit", "", true, ""},
+		{"too small", 512 << 20, false, "min_actor_memory"},
+		{"exact", 1 << 30, true, ""},
+		{"no limit", 0, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctl := &fakeControlClient{templateMemory: tc.memory}
-			u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+			u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 			rt := &runtime{cfg: u.cfg}
 
-			started, err := rt.startUser(context.Background(), &loadedScript{Script: script, ingestBuf: makeIngestBuf(script.Steps)})
+			started, err := rt.startUser(context.Background(), 0, &loadedScript{Script: script, ingestBuf: makeIngestBuf(script.Steps)})
 			created := countCalls(ctl.recordedCalls(), "CreateActor") > 0
 			if tc.wantStart {
 				if err != nil || !created {
@@ -468,14 +557,14 @@ func TestTemplateMemoryRefusalExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctl := &fakeControlClient{templateMemory: "512Mi"}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+	ctl := &fakeControlClient{templateMemory: 512 << 20}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 	rt := &runtime{cfg: u.cfg}
 
 	if err := rt.checkTemplateMemory(context.Background(), script); err == nil {
 		t.Fatal("512Mi template passed the check")
 	}
-	ctl.templateMemory = "1Gi" // the operator redeployed
+	ctl.templateMemory = 1 << 30 // the operator redeployed
 	if err := rt.checkTemplateMemory(context.Background(), script); err == nil {
 		t.Fatal("refusal must stand for templateRecheckInterval")
 	}
@@ -494,14 +583,14 @@ func TestTemplateMemoryRefusalExpires(t *testing.T) {
 // TestRunningSessionKeepsItsScript: changing the knob affects sessions that
 // start afterwards, not one already walking its steps.
 func TestRunningSessionKeepsItsScript(t *testing.T) {
-	ctl := &fakeControlClient{templateMemory: "1Gi"}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+	ctl := &fakeControlClient{templateMemory: 1 << 30}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 	rt := &runtime{cfg: u.cfg}
 	first, err := rt.loadScript()
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := rt.startUser(context.Background(), first)
+	session, err := rt.startUser(context.Background(), 0, first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +599,7 @@ func TestRunningSessionKeepsItsScript(t *testing.T) {
 	if err := os.WriteFile(path, []byte(validScript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rt.cfg.Dyn.Store(dynconfig.Config{AgentSessionScriptFile: path})
+	rt.cfg.Dyn = dynconfig.Static(knobs{ScriptFile: path})
 	second, err := rt.loadScript()
 	if err != nil {
 		t.Fatal(err)
@@ -524,7 +613,7 @@ func TestRunningSessionKeepsItsScript(t *testing.T) {
 func TestThinkScaling(t *testing.T) {
 	r := &runtime{
 		cfg: &userclass.Config{
-			Dyn: dynconfig.NewHolder(dynconfig.Config{AgentSessionThinkScale: 0.5}),
+			Dyn: dynconfig.Static(knobs{ThinkScale: 0.5}),
 		},
 	}
 	s := Step{Think: 10 * time.Second}
@@ -536,7 +625,7 @@ func TestThinkScaling(t *testing.T) {
 	}
 
 	// Zero scale reads as 1.0.
-	r.cfg.Dyn.Store(dynconfig.Config{})
+	r.cfg.Dyn = dynconfig.Static(knobs{})
 	for i := 0; i < 100; i++ {
 		got := r.think(s)
 		if got < 8*time.Second || got > 12*time.Second {
@@ -548,21 +637,28 @@ func TestThinkScaling(t *testing.T) {
 // fakeControlClient records control-plane calls and fails ResumeActor /
 // SuspendActor with queued errors, in order, until each queue drains.
 type fakeControlClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 	mu          sync.Mutex
 	calls       []string
 	resumeErrs  []error
 	suspendErrs []error
+	// suspendReqs holds every SuspendActor request, in arrival order.
+	suspendReqs []*ateapi.SuspendActorRequest
 	// sawDeadline is set when a call arrived with a context deadline.
 	sawDeadline bool
-	// templateMemory is the memory limit GetActorTemplate reports; "" means
+	// templateMemory is the memory limit GetActorTemplate reports in bytes; 0 means
 	// the template sets none.
-	templateMemory string
+	templateMemory int64
 	// deleteDelay stalls each DeleteActor; inFlight and maxInFlight count
 	// concurrent DeleteActor calls, to prove shutdown fans out.
 	deleteDelay time.Duration
 	inFlight    atomic.Int32
 	maxInFlight atomic.Int32
+	// createStarted, when set, receives once a CreateActor has begun, and
+	// createGate, when set, holds every CreateActor until it is closed, so
+	// a test can run shutdown while a session start is in flight.
+	createStarted chan struct{}
+	createGate    chan struct{}
 }
 
 func nextErr(errs *[]error) error {
@@ -583,51 +679,56 @@ func (f *fakeControlClient) record(ctx context.Context, name string) {
 	}
 }
 
-func (f *fakeControlClient) GetActorTemplate(ctx context.Context, in *ateapipb.GetActorTemplateRequest, opts ...grpc.CallOption) (*ateapipb.ActorTemplate, error) {
+func (f *fakeControlClient) GetActorTemplate(ctx context.Context, in *ateapi.GetActorTemplateRequest, opts ...grpc.CallOption) (*ateapi.ActorTemplate, error) {
 	f.record(ctx, "GetActorTemplate")
-	tmpl := &ateapipb.ActorTemplate{}
-	if f.templateMemory != "" {
-		tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: f.templateMemory}}}
+	tmpl := &ateapi.ActorTemplate{}
+	if f.templateMemory != 0 {
+		tmpl.Resources = &ateapi.ResourceRequirements{Limits: &ateapi.Resources{MemoryBytes: f.templateMemory}}
 	}
 	return tmpl, nil
 }
 
-func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
+func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
 	f.record(ctx, "CreateAtespace")
-	return &ateapipb.Atespace{}, nil
+	return &ateapi.Atespace{}, nil
 }
 
-func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.record(ctx, "CreateActor")
-	return &ateapipb.Actor{}, nil
+	if f.createStarted != nil {
+		select {
+		case f.createStarted <- struct{}{}:
+		default:
+		}
+	}
+	if f.createGate != nil {
+		<-f.createGate
+	}
+	return &ateapi.Actor{}, nil
 }
 
-func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 	f.record(ctx, "ResumeActor")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := nextErr(&f.resumeErrs); err != nil {
 		return nil, err
 	}
-	return &ateapipb.ResumeActorResponse{}, nil
+	return &ateapi.ResumeActorResponse{}, nil
 }
 
-func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapi.SuspendActorRequest, opts ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
 	f.record(ctx, "SuspendActor")
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.suspendReqs = append(f.suspendReqs, in)
 	if err := nextErr(&f.suspendErrs); err != nil {
 		return nil, err
 	}
-	return &ateapipb.SuspendActorResponse{}, nil
+	return &ateapi.SuspendActorResponse{}, nil
 }
 
-func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseActorRequest, opts ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
-	f.record(ctx, "PauseActor")
-	return &ateapipb.PauseActorResponse{}, nil
-}
-
-func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.record(ctx, "DeleteActor")
 	n := f.inFlight.Add(1)
 	defer f.inFlight.Add(-1)
@@ -640,7 +741,13 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 	if f.deleteDelay > 0 {
 		time.Sleep(f.deleteDelay)
 	}
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
+}
+
+func (f *fakeControlClient) recordedSuspendReqs() []*ateapi.SuspendActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapi.SuspendActorRequest(nil), f.suspendReqs...)
 }
 
 func (f *fakeControlClient) recordedCalls() []string {
@@ -659,7 +766,7 @@ func countCalls(calls []string, name string) int {
 	return n
 }
 
-func newTestUser(t *testing.T, srv *fake.Server, ctl *fakeControlClient, dyn dynconfig.Config) *sessionUser {
+func newTestUser(t *testing.T, srv *fake.Server, ctl *fakeControlClient, dyn knobs) *sessionUser {
 	t.Helper()
 	ts := srv.Start(t)
 	return &sessionUser{
@@ -668,7 +775,7 @@ func newTestUser(t *testing.T, srv *fake.Server, ctl *fakeControlClient, dyn dyn
 			HTTPClient: ts.Client(),
 			RouterURL:  ts.URL,
 			Atespace:   "benchmark",
-			Dyn:        dynconfig.NewHolder(dyn),
+			Dyn:        dynconfig.Static(dyn),
 			Tracer:     otel.Tracer("test"),
 		},
 		actorName: "agent-test",
@@ -683,7 +790,7 @@ var pingStep = Step{Name: "01_test", Agent: "testing", Think: time.Second, Ops: 
 func TestRunStep_RetriesStrandedHibernate(t *testing.T) {
 	srv := &fake.Server{}
 	ctl := &fakeControlClient{suspendErrs: []error{status.Error(codes.Unavailable, "ate-api-server restarting")}}
-	u := newTestUser(t, srv, ctl, dynconfig.Config{})
+	u := newTestUser(t, srv, ctl, knobs{})
 
 	if !u.runStep(context.Background(), pingStep) {
 		t.Fatal("runStep = false; the step's ops succeeded and must count")
@@ -712,11 +819,61 @@ func TestRunStep_RetriesStrandedHibernate(t *testing.T) {
 	}
 }
 
+// A step ends with an async SuspendActor in async LifecycleMode and a sync
+// one in sync LifecycleMode.
+func TestRunStep_HibernateMode(t *testing.T) {
+	ref := &ateapi.ObjectRef{Atespace: "benchmark", Name: "agent-test"}
+	for _, tt := range []struct {
+		name          string
+		lifecycleMode string
+		want          *ateapi.SuspendActorRequest
+	}{
+		{
+			name:          "default",
+			lifecycleMode: "",
+			want: &ateapi.SuspendActorRequest{
+				Actor:   ref,
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			},
+		},
+		{
+			name:          "async",
+			lifecycleMode: dynconfig.LifecycleModeAsync,
+			want: &ateapi.SuspendActorRequest{
+				Actor:   ref,
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			},
+		},
+		{
+			name:          "sync",
+			lifecycleMode: dynconfig.LifecycleModeSync,
+			want: &ateapi.SuspendActorRequest{
+				Actor:   ref,
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctl := &fakeControlClient{}
+			u := newTestUser(t, &fake.Server{}, ctl, knobs{Lifecycle: dynconfig.Lifecycle{LifecycleMode: tt.lifecycleMode}})
+
+			if !u.runStep(context.Background(), pingStep) {
+				t.Fatal("runStep = false")
+			}
+
+			got := ctl.recordedSuspendReqs()
+			if len(got) != 1 || !proto.Equal(got[0], tt.want) {
+				t.Errorf("SuspendActor requests = %v, want [%v]", got, tt.want)
+			}
+		})
+	}
+}
+
 // ateapi reports a CRASHED actor on ResumeActor; it never recovers, so the
 // session must replace it on the first failure, not the third.
 func TestRunStep_ReplacesCrashedActorImmediately(t *testing.T) {
 	ctl := &fakeControlClient{resumeErrs: []error{status.Error(codes.Aborted, "actor benchmark/agent-test crashed")}}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit})
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit}})
 
 	if u.runStep(context.Background(), pingStep) {
 		t.Fatal("runStep = true with a crashed actor")
@@ -731,7 +888,8 @@ func TestRunStep_ReplacesCrashedActorImmediately(t *testing.T) {
 // a state nothing the driver can call moves the actor out of.
 func TestRunStep_ReplacesStuckActorAfterFailedWake(t *testing.T) {
 	ctl := &fakeControlClient{suspendErrs: []error{status.Error(codes.FailedPrecondition, "MarkSuspending prerequisite not met (got: ACTOR_STATE_CRASHED)")}}
-	u := newTestUser(t, &fake.Server{Status: 503}, ctl, dynconfig.Config{})
+	// A zero budget gives the wake one attempt: the router never recovers here.
+	u := newTestUser(t, &fake.Server{Status: 503}, ctl, knobs{ResumeRetryBudget: 0})
 
 	if u.runStep(context.Background(), pingStep) {
 		t.Fatal("runStep = true with a failing router")
@@ -750,7 +908,9 @@ func TestRunStep_KeepsActorThroughCapacityShortage(t *testing.T) {
 		errs[i] = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 	}
 	ctl := &fakeControlClient{resumeErrs: errs}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit})
+	// A budget too short for a second attempt: this test is about the actor
+	// being kept, not about the retry.
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit}, ResumeRetryBudget: 0})
 
 	for range rounds {
 		if u.runStep(context.Background(), pingStep) {
@@ -759,6 +919,212 @@ func TestRunStep_KeepsActorThroughCapacityShortage(t *testing.T) {
 	}
 	if u.broken || u.consecutiveFailures != 0 {
 		t.Errorf("broken=%v consecutiveFailures=%d after capacity errors, want false/0", u.broken, u.consecutiveFailures)
+	}
+	if got := countCalls(ctl.recordedCalls(), "ResumeActor"); got != rounds {
+		t.Errorf("ResumeActor calls = %d with a budget that fits one attempt, want %d", got, rounds)
+	}
+}
+
+// A fleet with no room is retried within the budget, as glutton's spawn path
+// does: the step goes through once a slot opens, with one ResumeActor sample
+// per attempt.
+func TestRunStep_RetriesWakeWhileFleetIsFull(t *testing.T) {
+	const full = 3
+	errs := make([]error, full)
+	for i := range errs {
+		errs[i] = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
+	}
+	ctl := &fakeControlClient{resumeErrs: errs}
+	srv := &fake.Server{}
+	u := newTestUser(t, srv, ctl, knobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit}, ResumeRetryBudget: dynconfig.Seconds(10 * time.Second)})
+
+	// One TimeToWake row for the whole wake, not one per attempt.
+	expectRows(t, "TimeToWake", 1, 0, func() {
+		if !u.runStep(context.Background(), pingStep) {
+			t.Fatal("runStep = false; the resume succeeded within the budget and the step must count")
+		}
+	})
+	if got := countCalls(ctl.recordedCalls(), "ResumeActor"); got != full+1 {
+		t.Errorf("ResumeActor calls = %d, want %d failed attempts and one success", got, full+1)
+	}
+	if u.broken || u.consecutiveFailures != 0 {
+		t.Errorf("broken=%v consecutiveFailures=%d, want false/0", u.broken, u.consecutiveFailures)
+	}
+	// The wake ping and the step's one op: nothing reached the actor while
+	// the resume was being retried.
+	if got := len(srv.RecordedPaths()); got != 2 {
+		t.Errorf("actor requests = %d, want 2", got)
+	}
+}
+
+// When the budget runs out the step is given up as before: the actor is
+// kept, nothing counts toward replacement, and the session retries the step
+// after its next think gap.
+func TestRunStep_GivesUpWakeAfterRetryBudget(t *testing.T) {
+	errs := make([]error, 100)
+	for i := range errs {
+		errs[i] = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
+	}
+	ctl := &fakeControlClient{resumeErrs: errs}
+	srv := &fake.Server{}
+	const budget = 200 * time.Millisecond
+	u := newTestUser(t, srv, ctl, knobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit}, ResumeRetryBudget: dynconfig.Seconds(budget)})
+
+	start := time.Now()
+	// The given-up wake is one failed TimeToWake row.
+	expectRows(t, "TimeToWake", 1, 1, func() {
+		if u.runStep(context.Background(), pingStep) {
+			t.Fatal("runStep = true while every resume fails")
+		}
+	})
+	if waited := time.Since(start); waited > budget+wakeRetryMaxBackoff {
+		t.Errorf("runStep took %v, want at most the budget plus one backoff", waited)
+	}
+	attempts := countCalls(ctl.recordedCalls(), "ResumeActor")
+	// Backoff 50ms, 100ms, ... fits two or three waits in 200ms.
+	if attempts < 2 || attempts > 5 {
+		t.Errorf("ResumeActor attempts = %d, want a few within a %v budget", attempts, budget)
+	}
+	if u.broken || u.consecutiveFailures != 0 {
+		t.Errorf("broken=%v consecutiveFailures=%d, want false/0", u.broken, u.consecutiveFailures)
+	}
+	if got := len(srv.RecordedPaths()); got != 0 {
+		t.Errorf("actor requests = %d, want none while the resume never succeeded", got)
+	}
+	if calls := ctl.recordedCalls(); calls[len(calls)-1] == "SuspendActor" {
+		t.Error("SuspendActor issued after a resume that never succeeded")
+	}
+}
+
+// capacityThenServe fails the first n requests with a router capacity status
+// and passes the rest to the actor, the implicit-mode shape of a full fleet.
+type capacityThenServe struct {
+	next   http.RoundTripper
+	status int
+	n      int
+	mu     sync.Mutex
+	failed int
+}
+
+func (c *capacityThenServe) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.mu.Lock()
+	fail := c.failed < c.n
+	if fail {
+		c.failed++
+	}
+	c.mu.Unlock()
+	if !fail {
+		return c.next.RoundTrip(req)
+	}
+	return &http.Response{
+		StatusCode: c.status,
+		Status:     http.StatusText(c.status),
+		Body:       io.NopCloser(strings.NewReader("no worker has room for the actor")),
+		Header:     http.Header{},
+		Request:    req,
+	}, nil
+}
+
+// In implicit mode the capacity error is the router's 503 on the wake ping;
+// it is retried the same way, and the step counts once the ping lands.
+func TestRunStep_RetriesWakePingOnRouterCapacityError(t *testing.T) {
+	srv := &fake.Server{}
+	ctl := &fakeControlClient{}
+	u := newTestUser(t, srv, ctl, knobs{ResumeRetryBudget: dynconfig.Seconds(10 * time.Second)})
+	rt := &capacityThenServe{next: u.cfg.HTTPClient.Transport, status: http.StatusServiceUnavailable, n: 2}
+	u.cfg.HTTPClient = &http.Client{Transport: rt}
+
+	expectRows(t, "TimeToWake", 1, 0, func() {
+		if !u.runStep(context.Background(), pingStep) {
+			t.Fatal("runStep = false; the wake ping succeeded within the budget and the step must count")
+		}
+	})
+	if rt.failed != 2 {
+		t.Errorf("router failures served = %d, want 2", rt.failed)
+	}
+	// The wake ping that got through and the step's one op.
+	if got := len(srv.RecordedPaths()); got != 2 {
+		t.Errorf("actor requests = %d, want 2", got)
+	}
+	if u.broken || u.consecutiveFailures != 0 {
+		t.Errorf("broken=%v consecutiveFailures=%d, want false/0", u.broken, u.consecutiveFailures)
+	}
+}
+
+func TestIsCapacityError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"no room", status.Error(codes.ResourceExhausted, "no worker has room for the actor"), true},
+		{"api server restarting", status.Error(codes.Unavailable, "connection refused"), true},
+		{"router 503", &httpError{route: "/ping", status: http.StatusServiceUnavailable}, true},
+		{"router 504", &httpError{route: "/ping", status: http.StatusGatewayTimeout}, true},
+		{"router 429", &httpError{route: "/ping", status: http.StatusTooManyRequests}, true},
+		{"router 404", &httpError{route: "/ping", status: http.StatusNotFound}, false},
+		{"router 500", &httpError{route: "/ping", status: http.StatusInternalServerError}, false},
+		{"crashed", status.Error(codes.Aborted, "actor benchmark/agent-test crashed"), false},
+		{"deadline", status.Error(codes.DeadlineExceeded, "context deadline exceeded"), false},
+		{"plain error", errors.New("dial tcp: connection refused"), false},
+		{"nil", nil, false},
+	}
+	for _, tc := range cases {
+		if got := isCapacityError(tc.err); got != tc.want {
+			t.Errorf("%s: isCapacityError = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A capacity error that stops being one is returned at once.
+func TestRetryWhileFull_StopsOnOtherErrors(t *testing.T) {
+	calls := 0
+	boom := errors.New("sandbox exploded")
+	err := retryWhileFull(context.Background(), time.Now().Add(time.Minute), func() error {
+		calls++
+		if calls == 1 {
+			return status.Error(codes.ResourceExhausted, "no worker has room for the actor")
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) || calls != 2 {
+		t.Errorf("err=%v calls=%d, want the second error after two calls", err, calls)
+	}
+}
+
+func TestPhaseInDelay(t *testing.T) {
+	off := &runtime{cfg: &userclass.Config{Dyn: dynconfig.Static(knobs{})}}
+	if got := off.phaseInDelay(); got != 0 {
+		t.Fatalf("phaseInDelay = %v with no window, want 0", got)
+	}
+
+	const window = 10 * time.Second
+	r := &runtime{cfg: &userclass.Config{Dyn: dynconfig.Static(knobs{PhaseIn: dynconfig.Seconds(window)})}}
+	lo, hi := window, time.Duration(0)
+	for range 200 {
+		got := r.phaseInDelay()
+		if got < 0 || got >= window {
+			t.Fatalf("phaseInDelay = %v, want within [0, %v)", got, window)
+		}
+		lo, hi = min(lo, got), max(hi, got)
+	}
+	if hi-lo < window/4 {
+		t.Errorf("200 draws spanned only %v of a %v window; want them spread", hi-lo, window)
+	}
+}
+
+// A VU waits once: a start that failed and is retried does not wait again.
+func TestPhaseInWaitsOnce(t *testing.T) {
+	const window = 40 * time.Millisecond
+	r := &runtime{cfg: &userclass.Config{Dyn: dynconfig.Static(knobs{PhaseIn: dynconfig.Seconds(window)})}}
+	r.phaseIn(7)
+	start := time.Now()
+	r.phaseIn(7)
+	if again := time.Since(start); again > window/4 {
+		t.Errorf("second phaseIn waited %v, want none", again)
+	}
+	if _, ok := r.phasedIn.Load(int64(7)); !ok {
+		t.Error("phasedIn does not record the goroutine")
 	}
 }
 
@@ -769,7 +1135,9 @@ func TestRunStep_KeepsActorThroughRouterCapacityErrors(t *testing.T) {
 	for _, status := range []int{503, 504, 429} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			ctl := &fakeControlClient{}
-			u := newTestUser(t, &fake.Server{Status: status}, ctl, dynconfig.Config{})
+			// A zero budget gives the wake one attempt: this test is about
+			// the actor being kept, not about the retry.
+			u := newTestUser(t, &fake.Server{Status: status}, ctl, knobs{ResumeRetryBudget: 0})
 			for range maxConsecutiveStepFailures + 2 {
 				if u.runStep(context.Background(), pingStep) {
 					t.Fatal("runStep = true with a failing router")
@@ -786,7 +1154,7 @@ func TestRunStep_KeepsActorThroughRouterCapacityErrors(t *testing.T) {
 // brings it back, so it is replaced on the first failure.
 func TestRunStep_ReplacesActorOnRouterNotFound(t *testing.T) {
 	ctl := &fakeControlClient{}
-	u := newTestUser(t, &fake.Server{Status: 404}, ctl, dynconfig.Config{})
+	u := newTestUser(t, &fake.Server{Status: 404}, ctl, knobs{})
 	u.runStep(context.Background(), pingStep)
 	if !u.broken {
 		t.Error("broken = false after a 404 wake; want immediate replacement")
@@ -798,7 +1166,7 @@ func TestRunStep_ReplacesActorOnRouterNotFound(t *testing.T) {
 // after maxConsecutiveStepFailures steps.
 func TestRunStep_ReplacesActorAfterRepeatedStepFailures(t *testing.T) {
 	ctl := &fakeControlClient{}
-	u := newTestUser(t, &fake.Server{Status: 502}, ctl, dynconfig.Config{})
+	u := newTestUser(t, &fake.Server{Status: 502}, ctl, knobs{})
 
 	for i := 1; i <= maxConsecutiveStepFailures; i++ {
 		u.runStep(context.Background(), pingStep)
@@ -810,7 +1178,7 @@ func TestRunStep_ReplacesActorAfterRepeatedStepFailures(t *testing.T) {
 
 func TestControlRPCsCarryADeadline(t *testing.T) {
 	ctl := &fakeControlClient{}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit})
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit}})
 
 	u.runStep(context.Background(), pingStep)
 	u.suspendAndDelete(context.Background())
@@ -845,7 +1213,7 @@ func TestDwell(t *testing.T) {
 			HTTPClient: http.DefaultClient,
 			RouterURL:  ts.URL,
 			Atespace:   "benchmark",
-			Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+			Dyn:        dynconfig.Static(knobs{}),
 		},
 		actorName: "agent-test",
 	}
@@ -863,5 +1231,182 @@ func TestDwell(t *testing.T) {
 	cancel()
 	if err := u.execOp(ctx, op{kind: opDwell, millis: 10_000}); !errors.Is(err, context.Canceled) {
 		t.Errorf("canceled dwell returned %v, want context.Canceled", err)
+	}
+}
+
+// rowCount returns the cumulative count of the locust stats row `name`
+// recorded in Prometheus so far, and how many of those were failures.
+func rowCount(t *testing.T, name string) (total, failures float64) {
+	t.Helper()
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "locust_requests_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			var isRow, failed bool
+			for _, lp := range m.GetLabel() {
+				switch lp.GetName() {
+				case "name":
+					isRow = lp.GetValue() == name
+				case "status":
+					failed = lp.GetValue() == "failure"
+				}
+			}
+			if !isRow {
+				continue
+			}
+			total += m.GetCounter().GetValue()
+			if failed {
+				failures += m.GetCounter().GetValue()
+			}
+		}
+	}
+	return total, failures
+}
+
+// wakeFirstTouchCount returns the cumulative WakeFirstTouch count (success +
+// failure) recorded in Prometheus so far.
+func wakeFirstTouchCount(t *testing.T) float64 {
+	t.Helper()
+	total, _ := rowCount(t, "WakeFirstTouch")
+	return total
+}
+
+// expectRows runs fn and checks it recorded wantTotal rows named `name`,
+// wantFailed of them failures.
+func expectRows(t *testing.T, name string, wantTotal, wantFailed float64, fn func()) {
+	t.Helper()
+	totalBefore, failedBefore := rowCount(t, name)
+	fn()
+	total, failed := rowCount(t, name)
+	if total-totalBefore != wantTotal || failed-failedBefore != wantFailed {
+		t.Errorf("%s rows recorded = %v (%v failed), want %v (%v failed)",
+			name, total-totalBefore, failed-failedBefore, wantTotal, wantFailed)
+	}
+}
+
+// TestLifecycleModeNone: in resident mode, startUser and runStep never park
+// or explicitly resume the actor, never record WakeFirstTouch, and
+// suspendAndDelete still suspends before deleting on teardown.
+func TestLifecycleModeNone(t *testing.T) {
+	ctl := &fakeControlClient{templateMemory: 1 << 30}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{
+		Lifecycle: dynconfig.Lifecycle{
+			LifecycleMode: dynconfig.LifecycleModeNone,
+			ResumeMode:    dynconfig.ResumeModeExplicit,
+		},
+	})
+	rt := &runtime{cfg: u.cfg}
+	loaded, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := rt.startUser(context.Background(), 0, loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !session.awake {
+		t.Error("session.awake = false after startUser in LifecycleModeNone")
+	}
+	wakesBefore := wakeFirstTouchCount(t)
+	// A resident step is no wake, so it records no TimeToWake either.
+	expectRows(t, "TimeToWake", 0, 0, func() {
+		for range 3 {
+			if !session.runStep(context.Background(), pingStep) {
+				t.Fatal("runStep = false in LifecycleModeNone")
+			}
+		}
+	})
+	if got := wakeFirstTouchCount(t) - wakesBefore; got != 0 {
+		t.Errorf("WakeFirstTouch recorded %v times in LifecycleModeNone, want 0", got)
+	}
+	for _, call := range []string{"SuspendActor", "ResumeActor"} {
+		if got := countCalls(ctl.recordedCalls(), call); got != 0 {
+			t.Errorf("%s called %d times in LifecycleModeNone, want 0; calls = %v", call, got, ctl.recordedCalls())
+		}
+	}
+
+	session.suspendAndDelete(context.Background())
+	if got := countCalls(ctl.recordedCalls(), "SuspendActor"); got != 1 {
+		t.Errorf("SuspendActor on teardown = %d, want 1", got)
+	}
+	if got := countCalls(ctl.recordedCalls(), "DeleteActor"); got != 1 {
+		t.Errorf("DeleteActor on teardown = %d, want 1", got)
+	}
+}
+
+// TestSnapshotSteps: when SnapshotSteps is set, the actor stays
+// resident at start and between non-snapshot steps, parking only after the
+// configured 1-based step numbers and recording WakeFirstTouch only on the
+// steps that actually wake from a parked state. A step number past the
+// script length is rejected in startUser before CreateActor.
+func TestSnapshotSteps(t *testing.T) {
+	ctl := &fakeControlClient{templateMemory: 1 << 30}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{
+		Lifecycle: dynconfig.Lifecycle{
+			LifecycleMode: dynconfig.LifecycleModeAsync,
+			ResumeMode:    dynconfig.ResumeModeExplicit,
+		},
+		SnapshotSteps: "2,4",
+	})
+	rt := &runtime{cfg: u.cfg}
+	loaded, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := rt.startUser(context.Background(), 0, loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ctl.recordedSuspendReqs(); len(got) != 0 {
+		t.Fatalf("SuspendActor requests after startUser = %v, want none", got)
+	}
+
+	// Run 4 steps (1-based 1..4). Only steps 2 and 4 should park; only step 3
+	// starts from a parked actor, so only step 3 should issue ResumeActor and
+	// record WakeFirstTouch.
+	wakesBefore := wakeFirstTouchCount(t)
+	for i := range 4 {
+		session.stepIndex = i
+		if !session.runStep(context.Background(), pingStep) {
+			t.Fatalf("step %d failed", i+1)
+		}
+	}
+	wantSuspend := &ateapi.SuspendActorRequest{
+		Actor:   session.ref(),
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	}
+	gotSuspends := ctl.recordedSuspendReqs()
+	if len(gotSuspends) != 2 {
+		t.Errorf("SuspendActor requests across 4 steps = %v, want 2 (steps 2 and 4)", gotSuspends)
+	}
+	for _, got := range gotSuspends {
+		if !proto.Equal(got, wantSuspend) {
+			t.Errorf("SuspendActor request = %v, want %v", got, wantSuspend)
+		}
+	}
+	if got := countCalls(ctl.recordedCalls(), "ResumeActor"); got != 1 {
+		t.Errorf("ResumeActor calls across 4 steps = %d, want 1 (at step 3 after step 2 parked); calls = %v", got, ctl.recordedCalls())
+	}
+	if got := wakeFirstTouchCount(t) - wakesBefore; got != 1 {
+		t.Errorf("WakeFirstTouch recorded %v times across 4 steps, want 1 (at step 3 after step 2 parked)", got)
+	}
+
+	// A step number beyond len(loaded.Steps) is rejected before CreateActor.
+	badCtl := &fakeControlClient{templateMemory: 1 << 30}
+	badUser := newTestUser(t, &fake.Server{}, badCtl, knobs{
+		Lifecycle:     dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeAsync},
+		SnapshotSteps: "2,99",
+	})
+	badRT := &runtime{cfg: badUser.cfg}
+	if _, err := badRT.startUser(context.Background(), 0, loaded); err == nil || !strings.Contains(err.Error(), "exceeds script") {
+		t.Errorf("startUser with out-of-range snapshot step = %v, want error mentioning 'exceeds script'", err)
+	}
+	if got := countCalls(badCtl.recordedCalls(), "CreateActor"); got != 0 {
+		t.Errorf("CreateActor called %d times on out-of-range snapshot step, want 0", got)
 	}
 }

@@ -23,8 +23,8 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/egress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 )
 
 const websocketDenialBody = "WebSocket egress is not supported"

@@ -43,7 +43,9 @@ func TestFindAndDropFiles(t *testing.T) {
 		t.Fatalf("FindFiles() = %d files, want 3", len(files))
 	}
 
-	DropFiles(files)
+	if !DropFiles(files) {
+		t.Fatalf("DropFiles() = false, want true")
+	}
 
 	for _, name := range []string{"checkpoint.img", "pages.img", "durable-dir.tar"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
@@ -74,7 +76,9 @@ func TestDropFileSkipsReplacedInode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	DropFiles(files)
+	if DropFiles(files) {
+		t.Fatalf("DropFiles() = true after inode replacement, want false")
+	}
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("replaced file was deleted: %v", err)
@@ -115,8 +119,8 @@ func TestEvictFiles(t *testing.T) {
 			fadviseCalls++
 			return nil
 		}
-		if !EvictFiles(targets) {
-			t.Errorf("EvictFiles() = false, want true when pages were cached")
+		if EvictFiles(targets) {
+			t.Errorf("EvictFiles() = true, want false when clean pages were evicted")
 		}
 		if fadviseCalls != 1 {
 			t.Errorf("fadviseCalls = %d, want 1", fadviseCalls)

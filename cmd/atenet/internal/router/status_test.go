@@ -36,8 +36,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 )
 
 func TestStatuszEndpoint(t *testing.T) {
@@ -65,11 +65,16 @@ func TestStatuszEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := routerConfig{
-		Mode:               ModeIngress,
-		Namespace:          "default",
-		StatusPort:         httpPort,
-		StatusAddr:         statusAddr,
-		HttpPort:           8080,
+		Mode:          ModeIngress,
+		Namespace:     "default",
+		StatusPort:    httpPort,
+		StatusAddr:    statusAddr,
+		HttpsPort:     8443,
+		EnvoyCertPath: clientCertPath,
+		IngressAuth: ingressAuthConfig{
+			ClientCAFile:     caPath,
+			AllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/test/sa/client"},
+		},
 		XdsPort:            18000,
 		ExtprocPort:        50051,
 		ExtProcMaxRequests: defaultExtProcMaxRequests,

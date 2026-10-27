@@ -41,7 +41,7 @@ Note the setup (victim run/write/suspend, attacker reuse) runs regardless — th
 
 
 kubectl get ns -l ate.dev/e2e
-kubectl -n <ns> logs <worker-pod> -c ateom
+kubectl -n <ns> logs <worker-pod> -c ateworker
 KIND_CLUSTER_NAME=kind hack/cleanup-e2e.sh   # reclaim when done
 
 
@@ -105,13 +105,13 @@ The shared worker pod on the host
 # The pod hosting both actors in turn
 kubectl get pods -n ate-e2e-sec-a -o wide
 
-# ateom logs — the sandbox lifecycle, checkpoints, resumes
-kubectl logs -n ate-e2e-sec-a -l app=ateom -c ateom -f
+# worker logs — the sandbox lifecycle, checkpoints, resumes
+kubectl logs -n ate-e2e-sec-a -l app=ateworker -c ateworker -f
 
 # The on-host per-actor layout the host-state probes assert against.
 # Two UID-keyed durable dirs (victim's + attacker's) live side by side here:
-POD=$(kubectl get pods -n ate-e2e-sec-a -l app=ateom -o name | head -1)
-kubectl exec -n ate-e2e-sec-a "$POD" -c ateom -- ls -la /var/lib/ateom-gvisor/actors
+POD=$(kubectl get pods -n ate-e2e-sec-a -l app=ateworker -o name | head -1)
+kubectl exec -n ate-e2e-sec-a "$POD" -c ateworker -- ls -la /var/lib/ateworker-gvisor/actors
 Control plane / snapshots (for the tag-scope subtest)
 
 kubectl ate get tags -a ate-e2e-sec-a          # atespace-a-tag appears during the last subtest

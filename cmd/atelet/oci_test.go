@@ -18,8 +18,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 func TestResolveActorEnv(t *testing.T) {

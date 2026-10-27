@@ -24,11 +24,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -646,10 +646,10 @@ func TestSpawnRunBatch_DynConfigOverride(t *testing.T) {
 
 	t.Run("overrides when set", func(t *testing.T) {
 		fakeAPI := &fakeControlClient{}
-		dyn := dynconfig.NewHolder(dynconfig.Config{
+		dyn := dynconfig.Static(spawnKnobs{
 			TotalActors:      3,
 			SpawnConcurrency: 2,
-			ActorDeadline:    5 * time.Second,
+			ActorDeadline:    dynconfig.Seconds(5 * time.Second),
 		})
 		cfg := &userclass.Config{
 			APIStub:          fakeAPI,
@@ -684,7 +684,7 @@ func TestSpawnRunBatch_DynConfigOverride(t *testing.T) {
 
 	t.Run("falls back to cfg when dynconfig is zero", func(t *testing.T) {
 		fakeAPI := &fakeControlClient{}
-		dyn := dynconfig.NewHolder(dynconfig.Config{
+		dyn := dynconfig.Static(spawnKnobs{
 			TotalActors:      0, // 0 = unset
 			SpawnConcurrency: 0,
 			ActorDeadline:    0,

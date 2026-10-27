@@ -60,6 +60,7 @@ func bindFlags() {
 	pflag.StringVar(&KubeConfig, "kube-config", "", "Location of the kubeconfig")
 	pflag.StringVar(&KubeContext, "kube-context", "", "Kubernetes context to use")
 	pflag.StringVar(&StorageClass, "storage-class", "csi-nfs-sc", "StorageClass to use for external volume tests")
+	pflag.StringVar(&previewFlag, "preview", "", `Preview gates the install under test enabled, as in ATE_PREVIEW ("ALL" for all, "" for none); required in CI`)
 }
 
 // RunTestMain should be used to run your e2e test suite.
@@ -78,6 +79,11 @@ func RunTestMain(m *testing.M) int {
         Run with "go test ./internal/e2e/... -args --e2e"</yellow>`))
 		fmt.Println()
 		return 0
+	}
+
+	if err := initPreview(); err != nil {
+		fmt.Println(Colorf("<red>%v</red>\n", err))
+		return 1
 	}
 
 	return runAndCleanup(m)
@@ -102,7 +108,7 @@ func runAndCleanup(m *testing.M) int {
 	}
 
 	// Namespaces are deleted only on success. A failed run keeps them: the actor
-	// lives in a worker pod there, and its ateom logs (for a micro-VM worker, the
+	// lives in a worker pod there, and its worker logs (for a micro-VM worker, the
 	// guest's console tail too) are the only record of why it failed. Deleting the
 	// namespace takes those pods with it before anyone — a developer or CI's
 	// post-failure log dump — can read them.

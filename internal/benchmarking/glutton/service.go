@@ -34,7 +34,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 )
 
 // diskKeyRE rejects anything that could escape the data dir or hit a

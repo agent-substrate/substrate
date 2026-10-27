@@ -20,21 +20,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 )
 
 // noWorkers is a workerWatcher that never delivers a Worker.
 type noWorkers struct{}
 
-func (noWorkers) AddHandler(func(*ateapipb.Worker)) {}
+func (noWorkers) AddHandler(func(*ateapi.Worker)) {}
 
-func epochWorker(name string, epoch, observed int64) *ateapipb.Worker {
-	return &ateapipb.Worker{
-		Metadata: &ateapipb.ResourceMetadata{Name: name},
-		Epoch:    epoch,
-		Status:   &ateapipb.WorkerStatus{ObservedEpoch: observed},
+func epochWorker(name string, registered, observed int64) *ateapi.Worker {
+	return &ateapi.Worker{
+		Metadata: &ateapi.ResourceMetadata{Name: name},
+		Status:   &ateapi.WorkerStatus{RegisteredEpoch: registered, ObservedEpoch: observed},
 	}
 }
 
@@ -42,11 +41,11 @@ func TestWorkerAssignmentReconciler_QueuesUnobservedWorkers(t *testing.T) {
 	r := NewWorkerAssignmentReconciler(nil, noWorkers{})
 	defer r.queue.ShutDown()
 
-	for _, w := range []*ateapipb.Worker{
+	for _, w := range []*ateapi.Worker{
 		epochWorker("observed", 2, 2),
 		epochWorker("restarted", 3, 2),
 		epochWorker("unreported", 0, 0),
-		epochWorker("registered-before-epochs", 4, 0),
+		epochWorker("first-registration", 1, 0),
 	} {
 		r.enqueue(w)
 	}
@@ -57,8 +56,8 @@ func TestWorkerAssignmentReconciler_QueuesUnobservedWorkers(t *testing.T) {
 		got[name] = true
 		r.queue.Done(name)
 	}
-	want := map[string]bool{"restarted": true, "registered-before-epochs": true}
-	if len(got) != len(want) || !got["restarted"] || !got["registered-before-epochs"] {
+	want := map[string]bool{"restarted": true, "first-registration": true}
+	if len(got) != len(want) || !got["restarted"] || !got["first-registration"] {
 		t.Errorf("queued %v, want %v", got, want)
 	}
 }
@@ -67,10 +66,10 @@ func TestWorkerAssignmentReconciler_QueuesUnobservedWorkers(t *testing.T) {
 // retried.
 func TestWorkerAssignmentReconciler_SkipsWorkerLeasedElsewhere(t *testing.T) {
 	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	seedRunningActor(t, ctx, persistence)
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	lease, err := persistence.AcquireLease(ctx, workerAssignmentLeaseKey(apiWorkerName))
 	if err != nil {
@@ -83,7 +82,7 @@ func TestWorkerAssignmentReconciler_SkipsWorkerLeasedElsewhere(t *testing.T) {
 	if err := r.reconcileOne(ctx, apiWorkerName); !errors.Is(err, errWorkerLeased) {
 		t.Fatalf("reconcileOne() = %v, want errWorkerLeased", err)
 	}
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state = %v, want RUNNING: the lease holder releases it", got)
 	}
 }
@@ -116,15 +115,15 @@ func startAssignmentReconciler(t *testing.T, ctx context.Context, persistence st
 func TestWorkerAssignmentReconciler_ReleasesRestartedWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	seedRunningActor(t, ctx, persistence)
 	startAssignmentReconciler(t, ctx, persistence)
 
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	waitForObservedEpoch(t, ctx, persistence, 2)
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state = %v, want CRASHED", got)
 	}
 	if a := firstAssignment(t, persistence, apiWorkerName); a != nil {
@@ -137,7 +136,7 @@ func TestWorkerAssignmentReconciler_ReleasesRestartedWorker(t *testing.T) {
 func TestWorkerAssignmentReconciler_RetriesAfterLeaseFrees(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	seedRunningActor(t, ctx, persistence)
 
@@ -146,12 +145,12 @@ func TestWorkerAssignmentReconciler_RetriesAfterLeaseFrees(t *testing.T) {
 		t.Fatalf("AcquireLease() failed: %v", err)
 	}
 	startAssignmentReconciler(t, ctx, persistence)
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+	mustRaiseEpoch(t, ctx, persistence, 2)
 	time.Sleep(200 * time.Millisecond)
 	lease.Close()
 
 	waitForObservedEpoch(t, ctx, persistence, 2)
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state = %v, want CRASHED", got)
 	}
 }
@@ -160,15 +159,15 @@ func TestWorkerAssignmentReconciler_RetriesAfterLeaseFrees(t *testing.T) {
 func TestWorkerAssignmentReconciler_ReleasesWorkerRaisedBeforeStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	svc, persistence := newWorkerAPIService(t)
+	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	seedRunningActor(t, ctx, persistence)
-	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+	mustRaiseEpoch(t, ctx, persistence, 2)
 
 	startAssignmentReconciler(t, ctx, persistence)
 
 	waitForObservedEpoch(t, ctx, persistence, 2)
-	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("actor state = %v, want CRASHED", got)
 	}
 }

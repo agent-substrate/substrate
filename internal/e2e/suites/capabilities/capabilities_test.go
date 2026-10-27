@@ -22,9 +22,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // defaultCapabilities mirrors atelet's default set (cmd/atelet/oci.go). It is
@@ -39,6 +39,7 @@ type capabilitiesResponse struct {
 	Permitted   []string `json:"permitted"`
 	Inheritable []string `json:"inheritable"`
 	Ambient     []string `json:"ambient"`
+	NoNewPrivs  bool     `json:"noNewPrivs"`
 	Error       string   `json:"error"`
 }
 
@@ -76,6 +77,13 @@ func TestActorCapabilities(t *testing.T) {
 		name:     "drop ALL plus add yields exactly the added capability",
 		template: "caps-exact",
 		want:     []string{"NET_BIND_SERVICE"},
+	}, {
+		// The golden bake in deployFixture is what proves port 80 binds without
+		// NET_BIND_SERVICE; this row checks the restored actor still answers
+		// with an empty set.
+		name:     "drop ALL still binds port 80",
+		template: "caps-none",
+		want:     nil,
 	}}
 
 	for _, tt := range tests {
@@ -83,7 +91,7 @@ func TestActorCapabilities(t *testing.T) {
 			actor := tt.template + "-actor"
 			createAndResumeActor(t, ctx, clients, namespace, tt.template, actor)
 
-			rc, err := e2e.NewRouterClient(ctx)
+			rc, err := e2e.NewRouterClient(t, ctx)
 			if err != nil {
 				t.Fatalf("NewRouterClient: %v", err)
 			}
@@ -110,6 +118,10 @@ func TestActorCapabilities(t *testing.T) {
 			if len(got.Ambient) != 0 {
 				t.Errorf("ambient = %v, want empty (ambient capabilities are not supported)", got.Ambient)
 			}
+			// Neither runtime sets no_new_privileges; gVisor runs with --allow-suid.
+			if got.NoNewPrivs {
+				t.Error("no_new_privs = 1, want 0")
+			}
 		})
 	}
 }
@@ -128,8 +140,8 @@ func assertSameCapabilities(t *testing.T, set string, got, want []string) {
 
 // deployFixture installs the fixture for the sandbox class under test and
 // returns its atespace (which also names the namespace it created, carrying
-// the class suffix so the gVisor and micro-VM lanes never share one). Both
-// templates are golden-snapshotted when this returns; a template whose
+// the class suffix so the gVisor and micro-VM lanes never share one). Every
+// template is golden-snapshotted when this returns; a template whose
 // container cannot start — for example because a needed capability was
 // dropped — fails the deploy with the template's error message rather than
 // timing out per subtest.
@@ -144,20 +156,20 @@ func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients, buck
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, template, id string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: namespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: namespace, Name: template},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: namespace, Name: id},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: namespace, Name: template},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
 	t.Cleanup(func() {
 		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id}})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id}})
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: &ateapi.ObjectRef{Atespace: namespace, Name: id}})
+		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: &ateapi.ObjectRef{Atespace: namespace, Name: id}})
 	})
 
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id},
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: namespace, Name: id},
 	}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}

@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
+	"go.ate.dev/substrate/pkg/objectstorage"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
