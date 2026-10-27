@@ -1138,6 +1138,31 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			field.Duplicate(staticHeader.Child("token_exchange", "scopes").Index(1), "read"),
 		},
 	}, {
+		name: "16 token exchanges",
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules = []*ateapi.EgressRule{httpsRule(nil, "sts.example.com")}
+			for i := range 16 {
+				p.Rules = append(p.Rules, &ateapi.EgressRule{Https: &ateapi.HttpsRule{
+					Hostnames: []string{fmt.Sprintf("api-%d.example.com", i)},
+					Effects:   &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{tokenExchangeHeader("https://sts.example.com/token")}},
+				}})
+			}
+		},
+	}, {
+		name: "too many token exchanges",
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules = []*ateapi.EgressRule{httpsRule(nil, "sts.example.com")}
+			for i := range 17 {
+				p.Rules = append(p.Rules, &ateapi.EgressRule{Https: &ateapi.HttpsRule{
+					Hostnames: []string{fmt.Sprintf("api-%d.example.com", i)},
+					Effects:   &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{tokenExchangeHeader("https://sts.example.com/token")}},
+				}})
+			}
+		},
+		want: field.ErrorList{
+			field.Invalid(rules, nil, ""),
+		},
+	}, {
 		name: "credential URI and token exchange in one header",
 		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].TokenExchange = tokenExchangeHeader("https://sts.example.com/token").TokenExchange
