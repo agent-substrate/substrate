@@ -39,6 +39,8 @@ func toStatus(err error) error {
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, objectstore.ErrEmptySource):
 		return status.Error(codes.FailedPrecondition, err.Error())
+	case refused(err):
+		return status.Error(codes.PermissionDenied, err.Error())
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, err.Error())
 	case errors.Is(err, context.DeadlineExceeded):
