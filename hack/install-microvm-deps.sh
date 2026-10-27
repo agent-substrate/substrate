@@ -177,7 +177,7 @@ OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
 
 # --- 1. assets: assemble (if missing or stale) -----------------------------
 need_assemble=false
-for f in cloud-hypervisor virtiofsd vmlinux rootfs.img; do
+for f in cloud-hypervisor virtiofsd vmlinux rootfs.img upper-disk.ext4.zst; do
   if [[ ! -f "${OUT}/${f}" ]]; then
     need_assemble=true
     break
@@ -205,7 +205,7 @@ else
 fi
 
 # --- 2. stage assets to rustfs (kind) / GCS (GKE) --------------------------
-# Upload the four assets under kata-assets/, where atelet fetches them: the
+# Upload the assets under kata-assets/, where atelet fetches them: the
 # in-cluster rustfs (S3 API) on kind, or the GCS asset bucket on GKE.
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   log "Staging assets to in-cluster rustfs bucket ${BUCKET_NAME} (kata-assets/)..."
@@ -216,7 +216,7 @@ else
 fi
 
 # --- 3. apply the cluster-wide microvm SandboxConfig -----------------------
-# Every asset is downloaded rather than built, so all four carry committed,
+# Every asset is downloaded or copied from the repo, so all five carry committed,
 # reproducible per-arch shas and the bucket's scheme and name are the only
 # substitutions left.
 log "Applying microvm SandboxConfig from ${MANIFEST_TEMPLATE}..."

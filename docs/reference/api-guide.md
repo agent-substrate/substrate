@@ -489,7 +489,12 @@ a `Snapshot` with the following fields:
     template's golden snapshot a new actor starts from — falls back to any eligible
     worker and downgrades the restore to `SNAPSHOT_FIDELITY_ROOTFS`, preserving
     the snapshot's rootfs and volume data while booting the guest fresh under the
-    `defaultRuntime` of that class on the new worker.
+    `defaultRuntime` of that class on the new worker. A microVM snapshot taken
+    with the `RootfsUpperDisks` preview gate restores at
+    `SNAPSHOT_FIDELITY_VOLUMES` instead, because its rootfs disks are only
+    consistent with its memory. To keep rootfs writes across a runtime upgrade,
+    leave the old `SandboxConfig` version enabled until those actors have
+    resumed.
   - A local checkpoint first tries compatible workers on its attached node.
     If that fails, `ResumeActor` checks capacity without the node and runtime
     restrictions. When that capacity exists, it detaches the checkpoint and
@@ -603,7 +608,7 @@ spec:
 
 ### MicroVM SandboxConfig
 
-A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture of each version must define the full asset set — `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, and `kata-image` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a microVM pool require `/dev/kvm` and nested-virtualization-capable nodes. The controller requests those devices on the pod automatically, and atelet advertises them only where they exist, so placement follows the hardware rather than a node label. Clusters that reserve nested-virt nodes with an `ate.dev/sandboxClass=microvm` taint are still tolerated: advertising a device attracts these pods to capable nodes but repels nothing else from them. The same convention applies to every class: worker pods of a pool tolerate `ate.dev/sandboxClass=<its class>:NoSchedule`, so a cluster can reserve a node pool per sandbox class with that taint, and the atelet DaemonSet tolerates the key for any value. On GKE, a pool can also select a ComputeClass with `template.nodeSelector` (`cloud.google.com/compute-class: <class>`): GKE taints the nodes it creates for the class `cloud.google.com/compute-class=<class>:NoSchedule` and adds the matching toleration to the worker pods, and the atelet DaemonSet tolerates that key as well.
+A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture of each version must define the full asset set — `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, and `kata-image` — which a `ValidatingAdmissionPolicy` enforces at apply time. The `RootfsUpperDisks` preview gate also needs a `rootfs-upper-disk` asset, the empty ext4 image each container's rootfs upper starts from. Its size is each container's rootfs write limit. Worker pods for a microVM pool require `/dev/kvm` and nested-virtualization-capable nodes. The controller requests those devices on the pod automatically, and atelet advertises them only where they exist, so placement follows the hardware rather than a node label. Clusters that reserve nested-virt nodes with an `ate.dev/sandboxClass=microvm` taint are still tolerated: advertising a device attracts these pods to capable nodes but repels nothing else from them. The same convention applies to every class: worker pods of a pool tolerate `ate.dev/sandboxClass=<its class>:NoSchedule`, so a cluster can reserve a node pool per sandbox class with that taint, and the atelet DaemonSet tolerates the key for any value. On GKE, a pool can also select a ComputeClass with `template.nodeSelector` (`cloud.google.com/compute-class: <class>`): GKE taints the nodes it creates for the class `cloud.google.com/compute-class=<class>:NoSchedule` and adds the matching toleration to the worker pods, and the atelet DaemonSet tolerates that key as well.
 
 See [`hack/microvm-assets/`](../../hack/microvm-assets/) for scripts that assemble and stage these assets, plus a worked counter demo (`demos/counter/counter-microvm.yaml.tmpl`) that suspends and resumes an in-RAM counter across worker pods.
 

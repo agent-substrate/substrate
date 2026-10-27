@@ -238,7 +238,7 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, tunnel, actorLogger, bootID)
+	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, preview.IsEnabled(preview.GateRootfsUpperDisks), *maxActors, tunnel, actorLogger, bootID)
 	ateworkerService.throttleMemory = cgroup.PSIEnabled(cgroup.Root)
 	if !ateworkerService.throttleMemory {
 		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so actor cgroups get no memory limit and an actor over its booking can restart the worker")
@@ -388,6 +388,9 @@ type AteWorkerService struct {
 	podUID     string
 	chBinary   string
 	guestDebug bool
+	// upperDisks puts cold-booted containers' rootfs uppers on virtio-blk
+	// disks (rootfsdisk.go).
+	upperDisks bool
 
 	// snapshotWrites holds a slot per CH snapshot write in flight, whose page
 	// cache memoryReservedBytes budgets for.
@@ -420,7 +423,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string) *AteWorkerService {
+func NewService(podUID, chBinary string, guestDebug, upperDisks bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string) *AteWorkerService {
 	s := &AteWorkerService{
 		locks:          actorlock.New(),
 		inFlight:       actorlock.NewInFlight(),
@@ -430,6 +433,7 @@ func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel 
 		podUID:         podUID,
 		chBinary:       chBinary,
 		guestDebug:     guestDebug,
+		upperDisks:     upperDisks,
 		snapshotWrites: make(chan struct{}, snapshotWriteSlots),
 		tunnel:         tunnel,
 		actorLogger:    actorLogger,

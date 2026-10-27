@@ -37,7 +37,7 @@ BUCKET="${BUCKET:?set BUCKET to the asset bucket, BUCKET_NAME-assets}"
 # gcloud uses its active config project. ${PROJECT_ID:+...} elides the flag entirely
 # when unset (same idiom as KUBECTL_CONTEXT in hack/run-microvm-demo.sh).
 echo ">> Uploading assets to gs://${BUCKET}/kata-assets/ ..."
-for f in cloud-hypervisor virtiofsd vmlinux rootfs.img; do
+for f in cloud-hypervisor virtiofsd vmlinux rootfs.img upper-disk.ext4.zst; do
   echo "   $f"
   gcloud storage cp ${PROJECT_ID:+--project="${PROJECT_ID}"} "${OUT}/${f}" "gs://${BUCKET}/kata-assets/${f}"
 done

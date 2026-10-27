@@ -124,7 +124,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
-		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, "/upper"); err != nil {
 			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		if got, want := readFsSockets(t, dir)[kata.FsTag], kata.VirtiofsdSocketPath(id); got != want {
@@ -140,7 +140,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 			dir := writeSnapshotConfig(t, []map[string]any{
 				{"tag": tag, "socket": "/run/vc/vm/golden/other.sock"},
 			})
-			if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+			if err := rewriteSnapshotPaths(dir, id, kernel, image, "/upper"); err == nil {
 				t.Fatalf("rewriteSnapshotPaths accepted fs tag %q, want an error", tag)
 			}
 		}
@@ -161,7 +161,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 				{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 			})
 			mutateSnapshotConfig(t, dir, mutate)
-			if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+			if err := rewriteSnapshotPaths(dir, id, kernel, image, "/upper"); err == nil {
 				t.Fatalf("rewriteSnapshotPaths accepted a config with %s, want an error", name)
 			}
 		})
@@ -188,7 +188,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 		if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, "/upper"); err == nil {
 			t.Fatal("rewriteSnapshotPaths accepted a pmem device it does not know, want an error")
 		}
 	})
@@ -197,7 +197,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
-		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, "/upper"); err != nil {
 			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		b, err := os.ReadFile(filepath.Join(dir, "config.json"))
@@ -253,7 +253,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 			t.Fatalf("linking config.json: %v", err)
 		}
 
-		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, "/upper"); err != nil {
 			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		if got, want := readFsSockets(t, dir)[kata.FsTag], kata.VirtiofsdSocketPath(id); got != want {
@@ -304,7 +304,7 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 		}
 		inoBefore := fiBefore.Sys().(*syscall.Stat_t).Ino
 
-		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+		if err := rewriteSnapshotPaths(dir, id, kernel, image, "/upper"); err != nil {
 			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 

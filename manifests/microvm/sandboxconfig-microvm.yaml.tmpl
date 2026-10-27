@@ -20,8 +20,9 @@
 # resolves it as its class default (or names it via configRef: microvm), so
 # a missing/stale config shows on the pool's status.
 #
-# The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs)
-# are FETCHED at runtime from the asset bucket ${ASSET_BUCKET_NAME} under
+# The sandbox assets (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs,
+# upper disk image) are FETCHED at runtime from the asset bucket
+# ${ASSET_BUCKET_NAME} under
 # kata-assets/ (the rustfs bucket on kind, its own GCS bucket on GKE), through
 # the node's object-store plugin - NOT baked into the worker image.
 # ${BUCKET_SCHEME} is that store's URL scheme (s3 on kind, gs on GKE): the
@@ -62,6 +63,11 @@ spec:
         kata-image:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/rootfs.img"
           sha256: "69f9a76e5a2563b7c74d1f271f3a904240f50ef405465f832021525894519f97"
+        # The empty ext4 image the RootfsUpperDisks preview gate copies for each
+        # container's rootfs upper (hack/microvm-assets/upper-disk-image.sh).
+        rootfs-upper-disk:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/upper-disk.ext4.zst"
+          sha256: "5faa52d6f283c021010bae89f0d7ef665610b3c3b974b0bd505a1cbdec12ff8d"
       # amd64 assets are kata 4.3.1 (assemble.sh ARCH=amd64).
       amd64:
         cloud-hypervisor:
@@ -76,3 +82,6 @@ spec:
         kata-image:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/rootfs.img"
           sha256: "6770db2cca5710593f27c9ac5e1d9d7aab836422695a5e5c4807496a92a0f24d"
+        rootfs-upper-disk:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/upper-disk.ext4.zst"
+          sha256: "5faa52d6f283c021010bae89f0d7ef665610b3c3b974b0bd505a1cbdec12ff8d"

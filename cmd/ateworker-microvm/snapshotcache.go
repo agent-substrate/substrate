@@ -30,11 +30,11 @@ func isSnapshotDataFile(name string, includeMemory bool) bool {
 	if includeMemory && name == memoryRangesFile {
 		return true
 	}
-	return strings.HasSuffix(name, ".tar")
+	return strings.HasSuffix(name, ".tar") || strings.HasSuffix(name, ".ext4")
 }
 
-// dropStagedMemoryImage drops the staged memory-ranges file and already-extracted
-// tar archives in a scratch restoreDir once an eager ("Copy") restore has
+// dropStagedMemoryImage drops the staged memory-ranges file, tar archives, and
+// upper disk images in a scratch restoreDir once an eager ("Copy") restore has
 // finished reading guest memory.
 func dropStagedMemoryImage(ctx context.Context, restoreDir string) {
 	targets := snapshotcache.FindFiles(restoreDir, func(name string) bool {

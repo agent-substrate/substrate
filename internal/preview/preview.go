@@ -50,6 +50,10 @@ const (
 	// field and snapshots are stored under ate-api-server's
 	// --snapshot-location.
 	GatePerTemplateSnapshotLocation Gate = "PerTemplateSnapshotLocation"
+
+	// GateRootfsUpperDisks controls whether a microVM worker puts a cold-booted
+	// container's writable rootfs upper on its own virtio-blk ext4 disk.
+	GateRootfsUpperDisks Gate = "RootfsUpperDisks"
 )
 
 // All is the pseudo-gate name that enables every known gate.
@@ -61,6 +65,7 @@ var realKnownGates = []Gate{
 	GateExternalVolumes,
 	GateGoldenEgressPolicy,
 	GatePerTemplateSnapshotLocation,
+	GateRootfsUpperDisks,
 }
 
 var globalKnownGates []Gate           // all known gates

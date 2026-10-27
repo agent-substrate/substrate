@@ -881,6 +881,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		return tele, 0, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
 	}
+	if got := resp.GetFidelity(); got != fidelity {
+		slog.WarnContext(ctx, "Worker restored the snapshot at a lower fidelity than requested",
+			slog.String("actor", actorRef.String()),
+			slog.String("requested_fidelity", ateattr.SnapshotFidelityValue(fidelity)),
+			slog.String("restored_fidelity", ateattr.SnapshotFidelityValue(got)))
+	}
 	return tele, resp.GetWorkerEpoch(), nil
 }
 

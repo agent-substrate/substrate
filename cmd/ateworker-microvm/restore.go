@@ -145,6 +145,11 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 	defer release()
 
+	fidelity, err := restorableFidelity(ctx, req.GetFidelity(), req.GetActorDirs().GetRestoreDir(), containerNames(req.GetSpec().GetContainers()))
+	if err != nil {
+		return nil, err
+	}
+
 	if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
 	}
@@ -174,7 +179,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	// attributed. Only a MEMORY restore resumes the guest and its CPU counters,
 	// so only it counts from the first reading; the lower fidelities cold-boot
 	// a fresh guest whose CPU counts from zero.
-	resumesGuest := includesMemory(req.GetFidelity())
+	resumesGuest := includesMemory(fidelity)
 	if _, err := s.hostActor(ctx, attribution, resumesGuest, p.size.MemoryBytes); err != nil {
 		return nil, err
 	}
@@ -199,7 +204,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		}
 	}
 
-	switch scope := req.GetFidelity(); scope {
+	switch scope := fidelity; scope {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		if err := s.restoreMemoryFidelity(ctx, p, scope, restoreDir, req.GetPreserveRestoreDir(), tStart); err != nil {
 			return nil, err
@@ -237,7 +242,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
-	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch, Fidelity: fidelity}, nil
 }
 
 // restoreMemoryFidelity restores a whole-guest snapshot: relaunch cloud-hypervisor
@@ -288,7 +293,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// Repoint the snapshot's per-actor paths to this actor's: its VMDir
 	// sockets and files, and the kernel and guest image atelet staged under
 	// this actor's own directory.
-	if err := rewriteSnapshotPaths(restoreDir, actorUID, kernel, image); err != nil {
+	if err := rewriteSnapshotPaths(restoreDir, actorUID, kernel, image, rootfsUpperDir(p.actorDirs)); err != nil {
 		return fmt.Errorf("while rewriting snapshot paths: %w", err)
 	}
 	srcID := actorUID
@@ -313,7 +318,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	untarDone := make(chan error, 1)
 	untarJoined := false
 	go func() {
-		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers))
+		untarDone <- untarRootfsUpper(ctx, rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers))
 	}()
 	defer func() {
 		if !untarJoined {
@@ -638,8 +643,9 @@ func restoreGuestReadyError(ctx context.Context, step string, err error) error {
 // image, which atelet stages under each actor's own directory and removes
 // with the actor, so the source actor's copies may be gone. How atelet
 // identifies the runtime (asset URLs today, a SandboxConfig hash later)
-// changes none of this. The overlay has no per-actor disk to repoint.
-func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
+// changes none of this. Upper disks (rootfsdisk.go) are in the actor's
+// upper dir, upperBase, so they are repointed too.
+func rewriteSnapshotPaths(snapshotDir, id, kernel, image, upperBase string) error {
 	cfgPath := filepath.Join(snapshotDir, "config.json")
 	b, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -730,6 +736,11 @@ func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
 	if !guestImage {
 		return fmt.Errorf("snapshot config %q has no %q pmem device", cfgPath, guestImagePmemID)
 	}
+	disksChanged, err := rewriteUpperDiskPaths(cfg, cfgPath, upperBase)
+	if err != nil {
+		return err
+	}
+	changed = changed || disksChanged
 	if !changed {
 		// Same-actor resume: nothing to rewrite, so leave a preserved snapshot untouched.
 		return nil
