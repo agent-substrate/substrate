@@ -94,11 +94,11 @@ func New(caFile string) (*Client, error) {
 	}}, nil
 }
 
-// Exchange trades subjectToken, a JWT, for an access token at tokenURL. ctx
-// bounds the whole exchange. Errors carry a gRPC status code:
-// PermissionDenied when the endpoint refuses the exchange, FailedPrecondition
-// when the request or endpoint is misconfigured, and Unavailable or
-// DeadlineExceeded when a retry may succeed.
+// Exchange trades subjectToken, a JWT, for an access token at tokenURL within
+// ctx. Errors carry a gRPC code: PermissionDenied for an OAuth denial,
+// FailedPrecondition for another 4xx or a 3xx, DeadlineExceeded when ctx
+// expires, and Unavailable for 429, 5xx, a failed connection, or an unusable
+// 200 response.
 func (c *Client) Exchange(ctx context.Context, tokenURL, subjectToken, audience string, scopes []string) (Token, error) {
 	form := url.Values{
 		"grant_type":           {grantTypeTokenExchange},
@@ -157,7 +157,7 @@ func parseToken(body []byte) (Token, error) {
 		ExpiresIn       *int64 `json:"expires_in"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
-		return Token{}, status.Errorf(codes.Unavailable, "parsing token exchange response: %v", err)
+		return Token{}, status.Errorf(codes.Unavailable, "parsing token exchange response: %s", clip(err.Error()))
 	}
 	if r.IssuedTokenType != "" && r.IssuedTokenType != tokenTypeAccessToken {
 		return Token{}, status.Errorf(codes.Unavailable, "token endpoint issued token type %q, want %q", clip(r.IssuedTokenType), tokenTypeAccessToken)
