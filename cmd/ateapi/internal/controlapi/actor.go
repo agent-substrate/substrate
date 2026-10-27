@@ -92,6 +92,12 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 	tagRef := inActor.GetSourceTag()
 	if tagRef == nil {
 		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
+		if tagRef != nil {
+			// Record the borrowed golden tag on the stored Actor. Stamp a
+			// copy so the caller's request still reflects what was sent.
+			inActor = proto.CloneOf(inActor)
+			inActor.SourceTag = proto.CloneOf(tagRef)
+		}
 	} else {
 		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
 		// support cloning from a tag that has external volumes.
