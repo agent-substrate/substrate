@@ -77,10 +77,11 @@ func newServer(
 		limiter:     newLimiter(),
 	}
 
-	s.pendingRequests = newPendingRequests(s.limiter)
+	pool := newUDPConnPool(netC.listenPacket)
+	s.pendingRequests = newPendingRequests(s.limiter, pool)
 	// The check fetches with serveCtx, so that Stop cancels one in progress.
 	s.dns = newDNSHandler(s.pendingRequests, s.limiter, egressPolicyCheck(serveCtx, config.policy))
-	s.udp = newUDPHandler(netC.udp, newUDPConnPool(netC.listenPacket), udpAddrs, s.dns, s.pendingRequests)
+	s.udp = newUDPHandler(netC.udp, pool, udpAddrs, s.dns, s.pendingRequests)
 	s.tcp = newTCPHandler(config.upstreams, netC.tcpListener, netC.dialer, s.dns, s.limiter)
 
 	s.serving.Add(2)

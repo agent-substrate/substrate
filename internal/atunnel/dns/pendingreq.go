@@ -79,11 +79,12 @@ type pendingRequests struct {
 }
 
 // newPendingRequests returns an empty pendingRequests table using lim for
-// in-flight slot accounting.
-func newPendingRequests(lim *limiter) *pendingRequests {
+// in-flight slot accounting and pool for outbound UDP sockets.
+func newPendingRequests(lim *limiter, pool *udpConnPool) *pendingRequests {
 	return &pendingRequests{
 		entries:         make(map[uint16]*pendingRequest),
 		limiter:         lim,
+		pool:            pool,
 		exchangeTimeout: dnsExchangeTimeout,
 	}
 }
@@ -121,15 +122,11 @@ func (p *pendingRequests) record(
 	_, _ = rand.Read(buf[:])
 	start := binary.BigEndian.Uint16(buf[:])
 
-	var conn net.PacketConn
-	if p.pool != nil {
-		var err error
-		conn, err = p.pool.Get()
-		if err != nil {
-			slog.Warn("dns relay: could not get upstream UDP socket", slog.Any("err", err))
-			p.limiter.inFlight.release()
-			return 0, nil, false
-		}
+	conn, err := p.pool.Get()
+	if err != nil {
+		slog.Warn("dns relay: could not get upstream UDP socket", slog.Any("err", err))
+		p.limiter.inFlight.release()
+		return 0, nil, false
 	}
 
 	p.mu.Lock()
@@ -137,9 +134,7 @@ func (p *pendingRequests) record(
 
 	upstreamID, ok := p.inUse.FindFirstUnsetFrom(start)
 	if !ok {
-		if conn != nil {
-			p.pool.Put(conn)
-		}
+		p.pool.Put(conn)
 		p.limiter.inFlight.release()
 		return 0, nil, false
 	}
@@ -171,9 +166,7 @@ func (p *pendingRequests) deleteEntryLocked(upstreamID uint16) {
 	}
 	delete(p.entries, upstreamID)
 	p.inUse.Clear(upstreamID)
-	if p.pool != nil && entry.conn != nil {
-		p.pool.Put(entry.conn)
-	}
+	p.pool.Put(entry.conn)
 	p.limiter.inFlight.release()
 }
 

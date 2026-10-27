@@ -33,6 +33,12 @@ var exampleQuestion = dnsmessage.Question{
 	Class: dnsmessage.ClassINET,
 }
 
+func newFakeUDPConnPool() *udpConnPool {
+	return newUDPConnPool(func(string, string) (net.PacketConn, error) {
+		return &fakePacketConn{}, nil
+	})
+}
+
 // recordQuery records dnsQuery(clientID) holding an in-flight slot, as a
 // forwarded query does, and returns its upstream ID and the rewritten query.
 func recordQuery(t *testing.T, p *pendingRequests, clientID uint16, client net.Addr, upstreams []string) (uint16, []byte) {
@@ -114,7 +120,7 @@ func TestPendingRequestsTimeoutForAttempt(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := newPendingRequests(nil)
+			p := newPendingRequests(nil, newFakeUDPConnPool())
 			p.exchangeTimeout = tc.exchangeTimeout
 			p.attemptTimeout = tc.attemptTimeout
 			if got := p.timeoutForAttempt(tc.upstreamIdx, tc.numUpstreams); got != tc.want {
@@ -126,7 +132,7 @@ func TestPendingRequestsTimeoutForAttempt(t *testing.T) {
 
 func TestPendingRequestsRecord(t *testing.T) {
 	lim := newLimiter()
-	p := newPendingRequests(lim)
+	p := newPendingRequests(lim, newFakeUDPConnPool())
 	client := &net.UDPAddr{IP: net.ParseIP("169.254.0.2"), Port: 54321}
 	// Responses are matched on their unmapped source address, so the key must
 	// be normalized.
@@ -135,7 +141,7 @@ func TestPendingRequestsRecord(t *testing.T) {
 	lim.inFlight.tryAcquire()
 	raw := dnsQuery(0xbeef)
 	before := time.Now()
-	id, _, ok := p.record(raw, 0xbeef, exampleQuestion, client, upstreams)
+	id, conn, ok := p.record(raw, 0xbeef, exampleQuestion, client, upstreams)
 	after := time.Now()
 	if !ok {
 		t.Fatal("record failed")
@@ -150,11 +156,18 @@ func TestPendingRequestsRecord(t *testing.T) {
 	want := &pendingRequest{
 		clientRequestID: 0xbeef,
 		clientAddr:      client,
+		conn:            conn,
 		question:        exampleQuestion,
 		rawQuery:        raw,
 		upstreams:       upstreams,
 	}
-	if diff := cmp.Diff(want, entry, cmp.AllowUnexported(pendingRequest{}), cmpopts.IgnoreFields(pendingRequest{}, "expiry")); diff != "" {
+	if diff := cmp.Diff(
+		want,
+		entry,
+		cmp.AllowUnexported(pendingRequest{}),
+		cmp.Comparer(func(a, b *fakePacketConn) bool { return a == b }),
+		cmpopts.IgnoreFields(pendingRequest{}, "expiry"),
+	); diff != "" {
 		t.Errorf("entry mismatch (-want +got):\n%s", diff)
 	}
 	checkExpiry(t, entry.expiry, before, after, p.timeoutForAttempt(0, len(upstreams)))
@@ -176,7 +189,7 @@ func TestPendingRequestsRecord(t *testing.T) {
 // in flight.
 func TestPendingRequestsRecordAllocatesFreeID(t *testing.T) {
 	lim := newLimiter()
-	p := newPendingRequests(lim)
+	p := newPendingRequests(lim, newFakeUDPConnPool())
 	upstreams := []string{"10.96.0.10:53"}
 	const free = 0xabcd
 	for id := range 1 << 16 {
@@ -201,7 +214,7 @@ func TestPendingRequestsRecordAllocatesFreeID(t *testing.T) {
 
 func TestPendingRequestsDeleteEntryReleasesSlotOnce(t *testing.T) {
 	lim := newLimiter()
-	p := newPendingRequests(lim)
+	p := newPendingRequests(lim, newFakeUDPConnPool())
 	upstreams := []string{"10.96.0.10:53"}
 	lim.inFlight.tryAcquire() // held by another query
 	id, _ := recordQuery(t, p, 0x1234, nil, upstreams)
@@ -221,7 +234,7 @@ func TestPendingRequestsDeleteEntryReleasesSlotOnce(t *testing.T) {
 
 func TestPendingRequestsFailOverOnSendError(t *testing.T) {
 	lim := newLimiter()
-	p := newPendingRequests(lim)
+	p := newPendingRequests(lim, newFakeUDPConnPool())
 	upstreams := []string{"10.96.0.10:53", "10.96.0.11:53"}
 	id, raw := recordQuery(t, p, 0x1234, nil, upstreams)
 
@@ -274,7 +287,7 @@ func TestPendingRequestsFailOverOnSendError(t *testing.T) {
 
 func TestPendingRequestsClearAll(t *testing.T) {
 	lim := newLimiter()
-	p := newPendingRequests(lim)
+	p := newPendingRequests(lim, newFakeUDPConnPool())
 	upstreams := []string{"10.96.0.10:53", "10.96.0.11:53"}
 	for i := range 3 {
 		recordQuery(t, p, uint16(i), nil, upstreams)
@@ -291,7 +304,7 @@ func TestPendingRequestsClearAll(t *testing.T) {
 
 func TestPendingRequestsSweep(t *testing.T) {
 	lim := newLimiter()
-	p := newPendingRequests(lim)
+	p := newPendingRequests(lim, newFakeUDPConnPool())
 	upstreams := []string{"10.96.0.10:53", "10.96.0.11:53"}
 	id, raw := recordQuery(t, p, 0x1234, nil, upstreams)
 	entry := p.entries[id]
@@ -303,8 +316,13 @@ func TestPendingRequestsSweep(t *testing.T) {
 	// An expired attempt moves to the next upstream.
 	now := entry.expiry.Add(time.Nanosecond)
 	failovers, deliveries := p.sweep(now)
-	wantFailovers := []reqFailover{{upstreamID: id, upstreamIdx: 1, query: raw}}
-	if diff := cmp.Diff(wantFailovers, failovers, cmp.AllowUnexported(reqFailover{})); diff != "" {
+	wantFailovers := []reqFailover{{upstreamID: id, upstreamIdx: 1, query: raw, conn: entry.conn}}
+	if diff := cmp.Diff(
+		wantFailovers,
+		failovers,
+		cmp.AllowUnexported(reqFailover{}),
+		cmp.Comparer(func(a, b *fakePacketConn) bool { return a == b }),
+	); diff != "" {
 		t.Errorf("failovers mismatch (-want +got):\n%s", diff)
 	}
 	if len(deliveries) != 0 {
@@ -334,7 +352,7 @@ func TestPendingRequestsSweep(t *testing.T) {
 // gets the SERVFAIL held back from an earlier one.
 func TestPendingRequestsSweepDeliversDeferredAnswer(t *testing.T) {
 	lim := newLimiter()
-	p := newPendingRequests(lim)
+	p := newPendingRequests(lim, newFakeUDPConnPool())
 	client := &net.UDPAddr{IP: net.ParseIP("169.254.0.2"), Port: 54321}
 	upstreams := []string{"10.96.0.10:53", "10.96.0.11:53"}
 	id, raw := recordQuery(t, p, 0x1234, client, upstreams)

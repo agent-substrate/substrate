@@ -69,7 +69,6 @@ func newUDPHandler(
 	for i, u := range upstreams {
 		strs[i] = normalizeAddr(u)
 	}
-	pending.pool = pool
 	return &udpHandler{
 		actorSock:     actorSock,
 		pool:          pool,
@@ -164,9 +163,6 @@ func (h *udpHandler) processRequests(ctx context.Context) error {
 }
 
 func (h *udpHandler) sendToUpstream(ctx context.Context, conn net.PacketConn, upstreamID uint16, idx int, query []byte) {
-	if conn == nil {
-		return
-	}
 	for idx < len(h.upstreams) {
 		_, err := conn.WriteTo(query, h.upstreams[idx])
 		if err == nil {

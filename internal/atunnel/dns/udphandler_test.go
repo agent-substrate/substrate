@@ -43,11 +43,11 @@ func startTestUDPHandler(t *testing.T, upstreams []string, configure func(*udpHa
 	}
 
 	lim := newLimiter()
-	pending := newPendingRequests(lim)
-	dnsH := newDNSHandler(pending, lim, nil)
 	pool := newUDPConnPool(func(network, _ string) (net.PacketConn, error) {
 		return net.ListenPacket(network, "127.0.0.1:0")
 	})
+	pending := newPendingRequests(lim, pool)
+	dnsH := newDNSHandler(pending, lim, nil)
 	h := newUDPHandler(ingress, pool, udpAddrs, dnsH, pending)
 	if configure != nil {
 		configure(h, dnsH)

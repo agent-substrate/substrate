@@ -75,7 +75,7 @@ func TestDNSHandlerOnRequestDrop(t *testing.T) {
 		inFlight:    &limiterSlots{max: 1},
 		connections: &limiterSlots{max: 1},
 	}
-	pending := newPendingRequests(lim)
+	pending := newPendingRequests(lim, newFakeUDPConnPool())
 	h := newDNSHandler(pending, lim, nil)
 	upstreams := []string{"10.96.0.10:53"}
 
@@ -106,7 +106,7 @@ func TestDNSHandlerOnRequestDrop(t *testing.T) {
 
 func TestDNSHandlerOnRequestSynthesizedReplies(t *testing.T) {
 	lim := newLimiter()
-	pending := newPendingRequests(lim)
+	pending := newPendingRequests(lim, newFakeUDPConnPool())
 	allow := func(q dnsmessage.Question) bool {
 		return q.Name.String() != "blocked.example.com." && q.Type != dnsmessage.TypeTXT
 	}
@@ -245,7 +245,7 @@ func TestDNSHandlerOnRequestSynthesizedReplies(t *testing.T) {
 
 func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 	lim := newLimiter()
-	pending := newPendingRequests(lim)
+	pending := newPendingRequests(lim, newFakeUDPConnPool())
 	h := newDNSHandler(pending, lim, nil)
 
 	upstream1 := &net.UDPAddr{IP: net.ParseIP("10.96.0.10"), Port: 53}
@@ -274,13 +274,13 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 	}
 
 	// 1. Response with QR == 0 is dropped.
-	if res := h.onUDPResponse(rewritten, upstream1, nil); res.kind != actionDrop {
+	if res := h.onUDPResponse(rewritten, upstream1, act.conn); res.kind != actionDrop {
 		t.Errorf("QR=0 response kind = %v, want actionDrop", res.kind)
 	}
 
 	// 2. Response from unexpected upstream address is dropped without evicting pending request.
 	validResp := dnsAnswer(rewritten, 0)
-	if res := h.onUDPResponse(validResp, wrongUpstream, nil); res.kind != actionDrop {
+	if res := h.onUDPResponse(validResp, wrongUpstream, act.conn); res.kind != actionDrop {
 		t.Errorf("wrong upstream source kind = %v, want actionDrop", res.kind)
 	}
 
@@ -292,7 +292,7 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 	// 3. Response with wrong transaction ID is dropped.
 	wrongIDResp := bytes.Clone(validResp)
 	binary.BigEndian.PutUint16(wrongIDResp[0:2], upstreamID^0xffff)
-	if res := h.onUDPResponse(wrongIDResp, upstream1, nil); res.kind != actionDrop {
+	if res := h.onUDPResponse(wrongIDResp, upstream1, act.conn); res.kind != actionDrop {
 		t.Errorf("wrong ID response kind = %v, want actionDrop", res.kind)
 	}
 
@@ -305,7 +305,7 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 		Type:  dnsmessage.TypeA,
 		Class: dnsmessage.ClassINET,
 	}})
-	if res := h.onUDPResponse(wrongQNameResp, upstream1, nil); res.kind != actionDrop {
+	if res := h.onUDPResponse(wrongQNameResp, upstream1, act.conn); res.kind != actionDrop {
 		t.Errorf("wrong QNAME response kind = %v, want actionDrop", res.kind)
 	}
 
@@ -318,13 +318,13 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 		Type:  dnsmessage.TypeAAAA,
 		Class: dnsmessage.ClassINET,
 	}})
-	if res := h.onUDPResponse(wrongQTypeResp, upstream1, nil); res.kind != actionDrop {
+	if res := h.onUDPResponse(wrongQTypeResp, upstream1, act.conn); res.kind != actionDrop {
 		t.Errorf("wrong QTYPE response kind = %v, want actionDrop", res.kind)
 	}
 
 	// 6. SERVFAIL from upstream1 triggers ActionFailover to upstream2.
 	servFailResp := dnsAnswer(rewritten, byte(dnsmessage.RCodeServerFailure))
-	failoverAct := h.onUDPResponse(servFailResp, upstream1, nil)
+	failoverAct := h.onUDPResponse(servFailResp, upstream1, act.conn)
 	if failoverAct.kind != actionFailover {
 		t.Fatalf("SERVFAIL on first upstream kind = %v, want actionFailover", failoverAct.kind)
 	}
@@ -345,7 +345,7 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 		Type:  dnsmessage.TypeA,
 		Class: dnsmessage.ClassINET,
 	}})
-	deliverAct := h.onUDPResponse(lowerResp, upstream2, nil)
+	deliverAct := h.onUDPResponse(lowerResp, upstream2, act.conn)
 	if deliverAct.kind != actionDeliver {
 		t.Fatalf("valid response on second upstream kind = %v, want actionDeliver", deliverAct.kind)
 	}
@@ -362,7 +362,7 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 
 func TestDNSHandlerTCPForwardAndResponseValidation(t *testing.T) {
 	lim := newLimiter()
-	pending := newPendingRequests(lim)
+	pending := newPendingRequests(lim, newFakeUDPConnPool())
 	h := newDNSHandler(pending, lim, nil)
 
 	query := dnsQuery(0xbeef)
