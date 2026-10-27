@@ -45,18 +45,19 @@ var bootstrapCmd = &cobra.Command{
 			return err
 		}
 
-		slog.Info("Step 2/8: Creating GKE Cluster...")
+		slog.Info("Step 2/8: Ensuring GKE node service account...")
+		if err := ensureNodeServiceAccount(ctx, &cfg); err != nil {
+			return err
+		}
+		warnNodeImagePull(&cfg)
+
+		slog.Info("Step 3/8: Creating GKE Cluster...")
 		if err := createClusterIdempotent(ctx, &cfg); err != nil {
 			return err
 		}
 
-		slog.Info("Step 3/8: Creating GCS buckets for snapshots and micro-VM assets...")
+		slog.Info("Step 4/8: Creating GCS buckets for snapshots and micro-VM assets...")
 		if err := createBuckets(ctx, &cfg); err != nil {
-			return err
-		}
-
-		slog.Info("Step 4/8: Granting GKE Node permissions...")
-		if err := grantGkeNodePermissions(ctx, &cfg); err != nil {
 			return err
 		}
 
@@ -101,5 +102,6 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&cfg.BootDiskType, "boot-disk-type", getEnv("BOOT_DISK_TYPE", ""), "Boot disk type for the node pool; empty = GKE default [env: BOOT_DISK_TYPE]")
 	bootstrapCmd.Flags().StringVar(&cfg.BucketName, "bucket-name", getEnv("BUCKET_NAME", ""), "Name of the GCS bucket for snapshots [env: BUCKET_NAME]")
 	addTransferGSANameFlag(bootstrapCmd)
+	addNodeGSANameFlag(bootstrapCmd)
 	bootstrapCmd.Flags().StringVar(&cfg.DashboardDir, "dashboard-dir", getEnv("DASHBOARD_DIR", "tools/setup-gcp/dashboards"), "Directory containing dashboard JSON files [env: DASHBOARD_DIR]")
 }

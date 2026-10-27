@@ -44,6 +44,8 @@ type Config struct {
 	BootDiskSizeGB             int32
 	BootDiskType               string
 
+	NodeGSAName string
+
 	BucketName string
 
 	// TransferGSAName is the name of the snapshot transfer service account

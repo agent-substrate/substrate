@@ -108,3 +108,69 @@ func TestValidateIamFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestNodeGSAEmail(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *Config
+		want string
+	}{
+		{
+			name: "default service account name",
+			cfg:  &Config{ProjectID: "my-project"},
+			want: "substrate-gke-node@my-project.iam.gserviceaccount.com",
+		},
+		{
+			name: "custom service account name",
+			cfg:  &Config{ProjectID: "my-project", NodeGSAName: "custom-node-sa"},
+			want: "custom-node-sa@my-project.iam.gserviceaccount.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nodeGSAEmail(tt.cfg); got != tt.want {
+				t.Errorf("nodeGSAEmail() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseArtifactRegistryRepo(t *testing.T) {
+	tests := []struct {
+		repo     string
+		wantProj string
+		wantLoc  string
+		wantRepo string
+		wantOK   bool
+	}{
+		{"gcr.io/my-project", "my-project", "us", "gcr.io", true},
+		{"eu.gcr.io/my-project/image", "my-project", "europe", "eu.gcr.io", true},
+		{"us-central1-docker.pkg.dev/my-project/my-repo", "my-project", "us-central1", "my-repo", true},
+		{"us-central1-docker.pkg.dev/my-project", "", "", "", false},
+		{"ghcr.io/agent-substrate/substrate", "", "", "", false},
+		{"", "", "", "", false},
+		{"gcr.io", "", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.repo, func(t *testing.T) {
+			p, l, r, ok := parseArtifactRegistryRepo(tt.repo)
+			if ok != tt.wantOK || p != tt.wantProj || l != tt.wantLoc || r != tt.wantRepo {
+				t.Errorf("parseArtifactRegistryRepo(%q) = (%q, %q, %q, %v), want (%q, %q, %q, %v)",
+					tt.repo, p, l, r, ok, tt.wantProj, tt.wantLoc, tt.wantRepo, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestImagePullGrantCommand(t *testing.T) {
+	const sa = "node@p.iam.gserviceaccount.com"
+	for repo, want := range map[string]string{
+		"gcr.io/p/img": "gcloud artifacts repositories add-iam-policy-binding gcr.io --project=p --location=us --member=serviceAccount:" + sa + " --role=roles/artifactregistry.reader",
+		"":             "gcloud artifacts repositories add-iam-policy-binding <repo> --project=<project> --location=<location> --member=serviceAccount:" + sa + " --role=roles/artifactregistry.reader",
+	} {
+		if got := imagePullGrantCommand(repo, sa); got != want {
+			t.Errorf("imagePullGrantCommand(%q) = %q, want %q", repo, got, want)
+		}
+	}
+}

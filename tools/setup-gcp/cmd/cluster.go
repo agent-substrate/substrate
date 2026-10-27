@@ -39,6 +39,30 @@ var requiredBetaAPIs = []string{
 	"certificates.k8s.io/v1beta1/clustertrustbundles",
 }
 
+func nodeGSAName(cfg *Config) string {
+	if cfg.NodeGSAName != "" {
+		return cfg.NodeGSAName
+	}
+	return "substrate-gke-node"
+}
+
+func nodeGSAEmail(cfg *Config) string {
+	return fmt.Sprintf("%s@%s.iam.gserviceaccount.com", nodeGSAName(cfg), cfg.ProjectID)
+}
+
+func addNodeGSANameFlag(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&cfg.NodeGSAName, "node-service-account-name", getEnv("NODE_GSA_NAME", "substrate-gke-node"), "Name of the dedicated GKE node service account to create [env: NODE_GSA_NAME]")
+}
+
+func applyNodeHardening(cfg *Config, nc *containerpb.NodeConfig) {
+	nc.ShieldedInstanceConfig = &containerpb.ShieldedInstanceConfig{
+		EnableSecureBoot:          true,
+		EnableIntegrityMonitoring: true,
+	}
+	nc.ServiceAccount = nodeGSAEmail(cfg)
+	nc.OauthScopes = []string{"https://www.googleapis.com/auth/cloud-platform"}
+}
+
 var requiredNodeSysctls = map[string]string{
 	"net.ipv4.neigh.default.gc_thresh1": "4096",
 	"net.ipv4.neigh.default.gc_thresh2": "16384",
@@ -75,6 +99,7 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 			Sysctls: maps.Clone(requiredNodeSysctls),
 		},
 	}
+	applyNodeHardening(cfg, nodeConfig)
 	if cfg.EnableNestedVirtualization {
 		nodeConfig.AdvancedMachineFeatures = &containerpb.AdvancedMachineFeatures{
 			EnableNestedVirtualization: proto.Bool(true),
@@ -510,6 +535,10 @@ var clusterCmd = &cobra.Command{
 		if err := resolveProjectID(ctx, &cfg); err != nil {
 			return err
 		}
+		if err := ensureNodeServiceAccount(ctx, &cfg); err != nil {
+			return err
+		}
+		warnNodeImagePull(&cfg)
 		return createClusterIdempotent(ctx, &cfg)
 	},
 }
@@ -522,6 +551,7 @@ func init() {
 	clusterCmd.Flags().StringVar(&cfg.Network, "network", getEnv("NETWORK", "default"), "VPC network name [env: NETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.Subnetwork, "subnetwork", getEnv("SUBNETWORK", "default"), "VPC subnetwork name [env: SUBNETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.MachineType, "machine-type", resolveMachineTypeDefault(), "Machine type for the node pool [env: NODE_MACHINE_TYPE]")
+	addNodeGSANameFlag(clusterCmd)
 	clusterCmd.Flags().BoolVar(&cfg.EnableDataplaneV2, "enable-dataplane-v2", getEnv("ENABLE_DATAPLANE_V2", true), "Enable Dataplane V2 [env: ENABLE_DATAPLANE_V2]")
 	clusterCmd.Flags().BoolVar(&cfg.EnableNestedVirtualization, "enable-nested-virtualization", getEnv("ENABLE_NESTED_VIRTUALIZATION", true), "Create the node pool with nested virtualization, exposing /dev/kvm for micro-VM workers; needs a machine type that supports it. Turn off with --enable-nested-virtualization=false [env: ENABLE_NESTED_VIRTUALIZATION]")
 	clusterCmd.Flags().Int32Var(&cfg.BootDiskSizeGB, "boot-disk-size", getEnv("BOOT_DISK_SIZE_GB", int32(0)), "Boot disk size in GB for the node pool; 0 = GKE default (100 GB) [env: BOOT_DISK_SIZE_GB]")

@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -578,5 +579,44 @@ func TestDeleteNodePoolCommand(t *testing.T) {
 	want := "gcloud container node-pools delete substrate-node-pool --cluster=substrate-poc --project=my-project --location=us-west1-c"
 	if got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestBuildCreateClusterRequest_NodeHardening(t *testing.T) {
+	cfg := &Config{
+		ProjectID:                  "test-project",
+		ClusterName:                "test-cluster",
+		ClusterLocation:            "us-west1-c",
+		MachineType:                "c3-standard-4",
+		EnableNestedVirtualization: true,
+		NodeGSAName:                "custom-node-sa",
+	}
+	parent := "projects/test-project/locations/us-west1-c"
+
+	req := buildCreateClusterRequest(parent, cfg)
+	if req.Cluster == nil || len(req.Cluster.NodePools) != 1 {
+		t.Fatalf("expected 1 node pool, got %+v", req.Cluster)
+	}
+
+	pool := req.Cluster.NodePools[0]
+	c := pool.GetConfig()
+	if c == nil {
+		t.Fatal("expected non-nil node config")
+	}
+
+	wantSA := "custom-node-sa@test-project.iam.gserviceaccount.com"
+	wantScopes := []string{"https://www.googleapis.com/auth/cloud-platform"}
+
+	if !c.GetShieldedInstanceConfig().GetEnableSecureBoot() {
+		t.Errorf("expected Secure Boot enabled, got false")
+	}
+	if !c.GetShieldedInstanceConfig().GetEnableIntegrityMonitoring() {
+		t.Errorf("expected Integrity Monitoring enabled, got false")
+	}
+	if c.GetServiceAccount() != wantSA {
+		t.Errorf("ServiceAccount = %q, want %q", c.GetServiceAccount(), wantSA)
+	}
+	if !slices.Equal(c.GetOauthScopes(), wantScopes) {
+		t.Errorf("OauthScopes = %v, want %v", c.GetOauthScopes(), wantScopes)
 	}
 }

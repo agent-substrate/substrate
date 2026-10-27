@@ -66,7 +66,13 @@ go run ./tools/setup-gcp enable apis [flags]
 
 Creates a GKE cluster configured for Agent Substrate (with Workload Identity,
 required Kubernetes beta APIs, and Managed OpenTelemetry enabled, and the
-Filestore CSI driver disabled). An existing cluster keeps its Filestore
+Filestore CSI driver disabled). Nodes run with Secure Boot and integrity
+monitoring enabled, and use a dedicated service account (`substrate-gke-node`
+by default) instead of the Compute
+Engine default service account. setup-gcp prints the command that grants the
+node service account read access to your image repository, filled in from
+`KO_DOCKER_REPO` when it is set. An
+existing cluster keeps its Filestore
 add-on setting.
 
 > [!WARNING]
@@ -127,6 +133,7 @@ go run ./tools/setup-gcp create cluster [flags]
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--node-service-account-name` | Name of the dedicated GKE node service account. | `NODE_GSA_NAME` | `substrate-gke-node` |
 | `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for microVM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
@@ -237,6 +244,7 @@ go run ./tools/setup-gcp create iam [flags]
 | `--atelet` | Grant atelet project-level permissions. | - | `true` |
 | `--transfer-service-account` | Create the snapshot transfer service account and let ate-api-server create tokens for it. | - | `true` |
 | `--transfer-gsa-name` | Name of the snapshot transfer service account to create. ate-setup and `hack/teardown.sh` read the same variable. | `SNAPSHOT_TRANSFER_GSA_NAME` | `ate-snapshot-transfer` |
+| `--node-service-account-name` | Name of the dedicated GKE node service account. | `NODE_GSA_NAME` | `substrate-gke-node` |
 | `--bucket-bindings` | Grant ate-api-server and the snapshot transfer service account access to the snapshot bucket, and atelet read access to the asset bucket. | - | `true` |
 
 *\*Note: Required for bucket bindings unless the `BUCKET_NAME` environment variable is set.*
@@ -272,11 +280,14 @@ have it enabled too, or their GCS calls fail with `401`.
 | ate-api-server WI principal¹ | `roles/iam.serviceAccountTokenCreator` | snapshot transfer SA⁴ | The credential exchange impersonates it |
 | Cloud SQL GSA⁵ | `roles/iam.serviceAccountTokenCreator` | snapshot transfer SA⁴ | Granted by `create cloudsql`: with Cloud SQL, ate-api-server's pod runs as this account |
 | atelet WI principal¹ | `roles/storage.objectViewer` | asset bucket (`BUCKET_NAME-assets`) | Read microVM sandbox assets |
-| default compute SA³ | `roles/artifactregistry.reader` | project² | Nodes pull images from Artifact Registry, which also serves gcr.io |
+| dedicated node SA³ | `roles/container.defaultNodeServiceAccount` | project | GKE node operation |
+| dedicated node SA³ | `roles/artifactregistry.reader` | the image repository (granted by you; setup-gcp prints the command) | Pulling images from Artifact Registry |
 
 ¹ `principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/ate-system/sa/SERVICE_ACCOUNT` — note it is keyed to the **project number**, not the ID.
 ² Project-level today; scoping these down is tracked in the TODOs in `cmd/iam.go`.
-³ `PROJECT_NUMBER-compute@developer.gserviceaccount.com`. It gets no storage role, since root on a node can use it. Installs set up before this also granted it `roles/storage.objectViewer` on the project. Remove that with
+³ `NAME@PROJECT_ID.iam.gserviceaccount.com`, with `NAME` from `NODE_GSA_NAME` (`substrate-gke-node` by default). It replaces the Compute Engine default service account (`PROJECT_NUMBER-compute@developer.gserviceaccount.com`). Remove leftover grants from older installs with:
+`gcloud projects remove-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" --role=roles/artifactregistry.reader --condition=None`
+and
 `gcloud projects remove-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" --role=roles/storage.objectViewer --condition=None`.
 ⁴ `NAME@PROJECT_ID.iam.gserviceaccount.com`, with `NAME` from `SNAPSHOT_TRANSFER_GSA_NAME`. setup-gcp and `hack/teardown.sh` default it to `ate-snapshot-transfer`. ate-setup has no default and requires it on GKE.
 ⁵ `ate-api-server@PROJECT_ID.iam.gserviceaccount.com` by default, see [cloud-sql.md](cloud-sql.md).
@@ -381,6 +392,7 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--network` | VPC network name. | `NETWORK` | `default` |
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
+| `--node-service-account-name` | Name of the dedicated GKE node service account. | `NODE_GSA_NAME` | `substrate-gke-node` |
 | `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for microVM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
