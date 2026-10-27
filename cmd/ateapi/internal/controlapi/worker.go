@@ -164,6 +164,9 @@ func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapi.UpdateWorkerR
 	}
 
 	return s.mutateWorker(ctx, inWorker.GetMetadata().GetName(), store.PreconditionFrom(inWorker), func(toUpdate *ateapi.Worker) error {
+		if toUpdate.GetMetadata().GetDeleteTime() != nil {
+			return errWorkerDeleting
+		}
 		// Status and metadata are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
 		// Reset + merge from the input worker.
@@ -311,6 +314,9 @@ func (s *RPCService) MarkWorkerUnavailable(ctx context.Context, req *ateapi.Mark
 // is final.
 var errWorkerDraining = errors.New("worker is draining")
 
+// errWorkerDeleting refuses to update a Worker marked for deletion.
+var errWorkerDeleting = errors.New("worker is being deleted")
+
 // mutateNamedWorker runs mutate against the named Worker for a request that
 // carries no guards, so the ones the store requires come from a read here
 // rather than from the client. A write that lands in between is reported as a
@@ -342,6 +348,8 @@ func (s *RPCService) mutateWorker(ctx context.Context, name string, precondition
 	switch {
 	case errors.Is(err, errWorkerDraining):
 		return nil, apierror.FailedPrecondition("Worker %s is draining", name)
+	case errors.Is(err, errWorkerDeleting):
+		return nil, apierror.FailedPrecondition("Worker %s is being deleted", name)
 	case errors.Is(err, store.ErrNotFound):
 		return nil, apierror.NotFound("Worker %s not found", name)
 	case errors.Is(err, store.ErrUIDConflict):

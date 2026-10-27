@@ -343,6 +343,11 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 	} else if err != nil {
 		return fmt.Errorf("getting worker: %w", err)
 	}
+	// The API refuses updates to a Worker marked for deletion.
+	if w.GetMetadata().GetDeleteTime() != nil {
+		slog.InfoContext(ctx, "Syncer: leaving worker alone (marked for deletion)", key.logAttrs()...)
+		return nil
+	}
 
 	// Each write below returns the Worker at its new version, which the next
 	// one carries as its precondition. ABORTED requeues the key; the retry

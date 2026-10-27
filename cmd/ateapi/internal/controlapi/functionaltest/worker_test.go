@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -249,6 +250,25 @@ func TestUpdateWorker(t *testing.T) {
 	if diff := cmp.Diff(want, updated, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("UpdateWorker response mismatch (-want +got):\n%s", diff)
 	}
+}
+
+// TestUpdateWorker_Deleting refuses to update a Worker that a failed delete
+// left marked.
+func TestUpdateWorker_Deleting(t *testing.T) {
+	ns := namespaceForTest("ns-worker-update-deleting")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	registerWorker(t, tc, ns)
+	marked, err := tc.persistence.MarkWorkerForDeletion(ctx, testWorkerName, store.DeletePreconditions{}, nil)
+	if err != nil {
+		t.Fatalf("MarkWorkerForDeletion failed: %v", err)
+	}
+	marked.Labels = map[string]string{"tier": "batch"}
+
+	_, err = tc.client.UpdateWorker(ctx, &ateapi.UpdateWorkerRequest{Worker: marked})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Worker "+testWorkerName+" is being deleted")
 }
 
 // TestDrainWorker marks a Worker as terminating, and checks the state reaches
