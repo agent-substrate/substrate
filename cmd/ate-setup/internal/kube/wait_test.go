@@ -25,14 +25,18 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // shortPollInterval makes the retry path observable without a real sleep.
@@ -184,3 +188,74 @@ func TestWaitClusterTrustBundlesVersions(t *testing.T) {
 type bundleRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f bundleRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestWaitJobComplete(t *testing.T) {
+	shortPollInterval(t)
+	jobsResource := schema.GroupResource{Group: "batch", Resource: "jobs"}
+
+	t.Run("retries transient error and NotFound until JobComplete", func(t *testing.T) {
+		kc := kubefake.NewSimpleClientset()
+		calls := 0
+		kc.PrependReactor("get", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+			calls++
+			switch calls {
+			case 1:
+				return true, nil, apierrors.NewServiceUnavailable("apiserver is starting")
+			case 2:
+				return true, nil, apierrors.NewNotFound(jobsResource, "rustfs-bucket-init")
+			default:
+				return true, &batchv1.Job{
+					ObjectMeta: metav1.ObjectMeta{Namespace: "ate-system", Name: "rustfs-bucket-init"},
+					Status: batchv1.JobStatus{
+						Conditions: []batchv1.JobCondition{
+							{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+						},
+					},
+				}, nil
+			}
+		})
+		c := &Client{Typed: kc}
+		if err := c.WaitJobComplete(t.Context(), "ate-system", "rustfs-bucket-init", time.Minute); err != nil {
+			t.Fatalf("WaitJobComplete() = %v, want nil", err)
+		}
+		if calls != 3 {
+			t.Errorf("Get called %d times, want 3", calls)
+		}
+	})
+
+	t.Run("aborts immediately when JobFailed is True", func(t *testing.T) {
+		kc := kubefake.NewSimpleClientset(&batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "ate-system", Name: "rustfs-bucket-init"},
+			Status: batchv1.JobStatus{
+				Conditions: []batchv1.JobCondition{
+					{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Message: "BackoffLimitExceeded"},
+				},
+			},
+		})
+		c := &Client{Typed: kc}
+		err := c.WaitJobComplete(t.Context(), "ate-system", "rustfs-bucket-init", time.Minute)
+		if err == nil || !strings.Contains(err.Error(), "BackoffLimitExceeded") {
+			t.Fatalf("WaitJobComplete() = %v, want BackoffLimitExceeded error", err)
+		}
+		if got := len(kc.Actions()); got != 1 {
+			t.Errorf("got %d API actions, want 1", got)
+		}
+	})
+
+	t.Run("aborts immediately on permanent API error", func(t *testing.T) {
+		kc := kubefake.NewSimpleClientset()
+		calls := 0
+		kc.PrependReactor("get", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+			calls++
+			return true, nil, apierrors.NewForbidden(jobsResource, "rustfs-bucket-init", errors.New("nope"))
+		})
+		c := &Client{Typed: kc}
+		err := c.WaitJobComplete(t.Context(), "ate-system", "rustfs-bucket-init", time.Minute)
+		if !apierrors.IsForbidden(err) {
+			t.Fatalf("WaitJobComplete() = %v, want wrapped Forbidden error", err)
+		}
+		if calls != 1 {
+			t.Errorf("Get called %d times, want 1", calls)
+		}
+	})
+}

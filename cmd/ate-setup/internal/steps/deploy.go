@@ -87,6 +87,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if _, err := clusterSnapshotLocation(e.Cfg.SnapshotLocation, e.Cfg.PreviewGates); err != nil {
 		return err
 	}
+	if !opts.SkipMicroVMDeps {
+		if _, err := e.checkMicroVMDeps(); err != nil {
+			return err
+		}
+	}
 	if err := e.requireNoWorkerPods(ctx); err != nil {
 		return err
 	}
@@ -591,6 +596,12 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 // default gVisor and (unless skipMicroVMDeps is set) microVM SandboxConfigs.
 func (e *Env) DeploySandboxConfig(ctx context.Context, skipMicroVMDeps bool) error {
 	log.Step("deploy_sandboxconfig")
+
+	if !skipMicroVMDeps {
+		if _, err := e.checkMicroVMDeps(); err != nil {
+			return err
+		}
+	}
 
 	if err := e.EnsureCRDs(ctx); err != nil {
 		return err

@@ -28,11 +28,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/klauspost/compress/zstd"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -277,8 +274,12 @@ func serveFakeReleases(t *testing.T, archive []byte, chBody string, failCH bool)
 			_, _ = w.Write(archive)
 		case "/cloud-hypervisor/cloud-hypervisor/releases/download/v53.0/cloud-hypervisor-static":
 			if failCH {
-				http.Error(w, "boom", http.StatusInternalServerError)
-				return
+				w.Header().Set("Content-Length", "100")
+				_, _ = w.Write([]byte("partial"))
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				panic(http.ErrAbortHandler)
 			}
 			_, _ = w.Write([]byte(chBody))
 		default:
@@ -358,10 +359,13 @@ func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 	}
 
 	if err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.3.1", "v53.0"); err == nil {
-		t.Fatal("assembleMicroVMAssets() succeeded when cloud-hypervisor download returned 500")
+		t.Fatal("assembleMicroVMAssets() succeeded when cloud-hypervisor download aborted mid-stream")
 	}
 	if _, err := os.Stat(stampPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("stamp file after failed assemble: err = %v, want ErrNotExist", err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "cloud-hypervisor")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("partial cloud-hypervisor after aborted download: err = %v, want ErrNotExist", err)
 	}
 }
 
@@ -511,11 +515,40 @@ func TestStageMicroVMAssetsToGCS(t *testing.T) {
 func TestDeployMicroVMDepsRequiresBucketOnNonKind(t *testing.T) {
 	silenceStepLog(t)
 
-	env := &Env{Cfg: &config.Config{Root: t.TempDir(), Kind: false}}
+	cs := fake.NewClientset()
+	env := &Env{
+		Cfg:  &config.Config{Root: t.TempDir(), Kind: false},
+		Kube: kube.NewFromClients(nil, cs, nil, cs.Discovery()),
+	}
 	err := env.DeployMicroVMDeps(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "BUCKET_NAME") {
 		t.Fatalf("DeployMicroVMDeps() on non-Kind without BucketName = %v, want BUCKET_NAME error", err)
 	}
+	err = env.DeploySandboxConfig(t.Context(), false)
+	if err == nil || !strings.Contains(err.Error(), "BUCKET_NAME") {
+		t.Fatalf("DeploySandboxConfig() on non-Kind without BucketName = %v, want BUCKET_NAME error", err)
+	}
+	if got := len(cs.Actions()); got != 0 {
+		t.Errorf("DeploySandboxConfig() made %d API calls before preflight failed, want 0", got)
+	}
+}
+
+func TestCheckMicroVMDepsRequiresStageTool(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	t.Run("Kind requires docker", func(t *testing.T) {
+		env := &Env{Cfg: &config.Config{Kind: true}}
+		if _, err := env.checkMicroVMDeps(); err == nil || !strings.Contains(err.Error(), "docker") {
+			t.Fatalf("checkMicroVMDeps() on Kind without docker = %v, want docker error", err)
+		}
+	})
+
+	t.Run("Non-Kind requires gcloud", func(t *testing.T) {
+		env := &Env{Cfg: &config.Config{Kind: false, BucketName: "test-bucket"}}
+		if _, err := env.checkMicroVMDeps(); err == nil || !strings.Contains(err.Error(), "gcloud") {
+			t.Fatalf("checkMicroVMDeps() on non-Kind without gcloud = %v, want gcloud error", err)
+		}
+	})
 }
 
 func TestMicroVMBucket(t *testing.T) {
@@ -605,41 +638,6 @@ func TestDeleteMicroVMDeps(t *testing.T) {
 	if _, err := dc.Resource(gvr).Get(t.Context(), microvmSandboxConfigName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("Get(%s) after DeleteMicroVMDeps = %v, want NotFound", microvmSandboxConfigName, err)
 	}
-}
-
-func TestWaitJobComplete(t *testing.T) {
-	silenceStepLog(t)
-
-	t.Run("returns nil when JobComplete is True", func(t *testing.T) {
-		job := &batchv1.Job{
-			ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: "rustfs-bucket-init"},
-			Status: batchv1.JobStatus{
-				Conditions: []batchv1.JobCondition{
-					{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
-				},
-			},
-		}
-		e := &Env{Kube: fakeKube(t, job)}
-		if err := e.waitJobComplete(t.Context(), NamespaceAteSystem, "rustfs-bucket-init", time.Second); err != nil {
-			t.Errorf("waitJobComplete() = %v, want nil", err)
-		}
-	})
-
-	t.Run("returns error immediately when JobFailed is True", func(t *testing.T) {
-		job := &batchv1.Job{
-			ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: "rustfs-bucket-init"},
-			Status: batchv1.JobStatus{
-				Conditions: []batchv1.JobCondition{
-					{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Message: "BackoffLimitExceeded"},
-				},
-			},
-		}
-		e := &Env{Kube: fakeKube(t, job)}
-		err := e.waitJobComplete(t.Context(), NamespaceAteSystem, "rustfs-bucket-init", time.Second)
-		if err == nil || !strings.Contains(err.Error(), "BackoffLimitExceeded") {
-			t.Errorf("waitJobComplete() = %v, want BackoffLimitExceeded error", err)
-		}
-	})
 }
 
 func TestMicroVMDepsStepsAreSeparableFromContext(t *testing.T) {

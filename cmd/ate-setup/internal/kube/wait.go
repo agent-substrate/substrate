@@ -16,12 +16,14 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -179,6 +181,42 @@ func (c *Client) WaitNamespaceActive(ctx context.Context, name string, timeout t
 	})
 	if err != nil {
 		return fmt.Errorf("waiting for namespace %s to become Active: %w", name, err)
+	}
+	return nil
+}
+
+// WaitJobComplete blocks until the named Job reports Complete=True, replacing
+// `kubectl wait --for=condition=complete job/<name>`. It fails immediately if
+// the Job reports Failed=True.
+func (c *Client) WaitJobComplete(ctx context.Context, namespace, name string, timeout time.Duration) error {
+	defer log.Elapsed(time.Now(), fmt.Sprintf("wait for job/%s", name))
+	err := poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+		job, err := c.Typed.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		for _, cond := range job.Status.Conditions {
+			if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+				return true, nil
+			}
+			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+				detail := cond.Message
+				if detail == "" {
+					detail = cond.Reason
+				}
+				if detail != "" {
+					return false, fmt.Errorf("job failed: %s", detail)
+				}
+				return false, errors.New("job failed")
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return fmt.Errorf("waiting for job %s/%s to complete: %w", namespace, name, err)
 	}
 	return nil
 }

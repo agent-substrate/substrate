@@ -31,12 +31,9 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/util/wait"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
@@ -104,7 +101,7 @@ func (e *Env) DeployMicroVMDeps(ctx context.Context) error {
 	}
 	log.Step("deploy_microvm_deps")
 
-	bucket, err := e.microVMBucket()
+	bucket, err := e.checkMicroVMDeps()
 	if err != nil {
 		return err
 	}
@@ -181,6 +178,25 @@ func (e *Env) DeleteMicroVMDeps(ctx context.Context) error {
 		log.Infof("Done.")
 	}
 	return nil
+}
+
+// checkMicroVMDeps validates the asset bucket configuration and staging CLI
+// tool before cluster mutation or archive downloads begin.
+func (e *Env) checkMicroVMDeps() (string, error) {
+	bucket, err := e.microVMBucket()
+	if err != nil {
+		return "", err
+	}
+	if e.Cfg.Kind {
+		if _, err := exec.LookPath("docker"); err != nil {
+			return "", fmt.Errorf("'docker' is required to run the S3 client but was not found in PATH: %w", err)
+		}
+	} else {
+		if _, err := exec.LookPath("gcloud"); err != nil {
+			return "", fmt.Errorf("'gcloud' is required to upload microVM assets to GCS but was not found in PATH: %w", err)
+		}
+	}
+	return bucket, nil
 }
 
 // microVMBucket returns the bucket where microVM guest assets are staged: the
@@ -312,7 +328,11 @@ func assembleMicroVMAssets(ctx context.Context, outDir, arch, kataVer, chVer str
 
 	chURL := fmt.Sprintf("%s/cloud-hypervisor/cloud-hypervisor/releases/download/%s/%s", baseURL, chVer, chAsset)
 	log.Infof(">> Downloading cloud-hypervisor %s (%s)...", chVer, chAsset)
-	if err := downloadToFile(ctx, chURL, filepath.Join(outDir, "cloud-hypervisor"), 0o755); err != nil {
+	chTmp := filepath.Join(workDir, "cloud-hypervisor")
+	if err := downloadToFile(ctx, chURL, chTmp, 0o755); err != nil {
+		return err
+	}
+	if err := os.Rename(chTmp, filepath.Join(outDir, "cloud-hypervisor")); err != nil {
 		return err
 	}
 
@@ -491,17 +511,13 @@ func downloadToFile(ctx context.Context, url, dstPath string, mode fs.FileMode) 
 }
 
 func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, bucket string) error {
-	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("'docker' is required to run the S3 client but was not found in PATH: %w", err)
-	}
-
 	ns := e.Namespace()
 	timeout := e.Cfg.WaitTimeout(MicroVMStageTimeout)
 	log.Infof(">> Waiting for rustfs in namespace %s...", ns)
 	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, ns, "rustfs", timeout); err != nil {
 		return err
 	}
-	if err := e.waitJobComplete(ctx, ns, "rustfs-bucket-init", timeout); err != nil {
+	if err := e.Kube.WaitJobComplete(ctx, ns, "rustfs-bucket-init", timeout); err != nil {
 		return err
 	}
 
@@ -532,6 +548,15 @@ func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, bucket string) err
 		return e.runCmd(ctx, stdin, "docker", dockerArgs...)
 	}
 
+	// rustfs-bucket-init creates only defaultKindMicroVMBucket.
+	if bucket != defaultKindMicroVMBucket {
+		if err := awsCLI(nil, "s3api", "head-bucket", "--bucket", bucket); err != nil {
+			if err := awsCLI(nil, "s3api", "create-bucket", "--bucket", bucket); err != nil {
+				return fmt.Errorf("while creating bucket %s in rustfs: %w", bucket, err)
+			}
+		}
+	}
+
 	log.Infof(">> Uploading assets to s3://%s/%s/%s/ via %s (netns of %s)...", bucket, microvmAssetsPrefix, defaultMicroVMAssetVersion, endpoint, node)
 	for _, arch := range microvmArches {
 		outDir := e.Cfg.Path("bin", microvmAssetsPrefix, defaultMicroVMAssetVersion, arch)
@@ -552,28 +577,6 @@ func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, bucket string) err
 
 	log.Infof(">> Done. Verify:")
 	return awsCLI(nil, "s3", "ls", "--recursive", fmt.Sprintf("s3://%s/%s/", bucket, microvmAssetsPrefix))
-}
-
-func (e *Env) waitJobComplete(ctx context.Context, namespace, name string, timeout time.Duration) error {
-	defer log.Elapsed(time.Now(), fmt.Sprintf("wait for job/%s", name))
-	return wait.PollUntilContextTimeout(ctx, time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		job, err := e.Kube.Typed.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		for _, cond := range job.Status.Conditions {
-			if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
-				return true, nil
-			}
-			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-				return false, fmt.Errorf("job %s/%s failed: %s", namespace, name, cond.Message)
-			}
-		}
-		return false, nil
-	})
 }
 
 func (e *Env) stageMicroVMAssetsToGCS(ctx context.Context, bucket string) error {

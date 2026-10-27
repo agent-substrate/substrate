@@ -17,6 +17,8 @@ package cmd
 import (
 	"testing"
 
+	"github.com/spf13/pflag"
+
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 )
@@ -48,13 +50,21 @@ func TestComponentDeploySubcommands(t *testing.T) {
 	}
 }
 
-func TestDeploySkipMicroVMDepsFlag(t *testing.T) {
-	t.Run("deploy ate-system", func(t *testing.T) {
-		f := deployAteSystemCmd.Flags().Lookup("skip-microvm-deps")
-		t.Cleanup(func() {
-			_ = f.Value.Set("false")
+func resetCommandFlags(t *testing.T, flags *pflag.FlagSet) {
+	t.Helper()
+	reset := func() {
+		flags.VisitAll(func(f *pflag.Flag) {
+			_ = f.Value.Set(f.DefValue)
 			f.Changed = false
 		})
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+func TestDeploySkipMicroVMDepsFlag(t *testing.T) {
+	t.Run("deploy ate-system", func(t *testing.T) {
+		resetCommandFlags(t, deployAteSystemCmd.Flags())
 		if err := deployAteSystemCmd.ParseFlags([]string{"--skip-microvm-deps"}); err != nil {
 			t.Fatalf("ParseFlags(--skip-microvm-deps): %v", err)
 		}
@@ -79,14 +89,10 @@ func TestDeploySkipMicroVMDepsFlag(t *testing.T) {
 	})
 
 	t.Run("deploy sandboxconfig", func(t *testing.T) {
-		f := deploySandboxConfigCmd.Flags().Lookup("skip-microvm-deps")
-		if f == nil {
+		if deploySandboxConfigCmd.Flags().Lookup("skip-microvm-deps") == nil {
 			t.Fatal("deploy sandboxconfig is missing --skip-microvm-deps flag")
 		}
-		t.Cleanup(func() {
-			_ = f.Value.Set("false")
-			f.Changed = false
-		})
+		resetCommandFlags(t, deploySandboxConfigCmd.Flags())
 		if err := deploySandboxConfigCmd.ParseFlags([]string{"--skip-microvm-deps"}); err != nil {
 			t.Fatalf("ParseFlags(--skip-microvm-deps): %v", err)
 		}

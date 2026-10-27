@@ -179,9 +179,8 @@ jobs:
       # initial install and the control plane redeploy in run-microvm-demo-kind.sh.
       ATE_INSTALL_E2E_TUNING: "true"
       # The installer requires a credential provider selection, and deploys the
-      # bundled Kubernetes Secrets provider with the control plane. Job-wide
-      # because every ate-setup invocation reads it, including the control
-      # plane redeploy in run-microvm-demo-kind.sh.
+      # bundled Kubernetes Secrets provider with the control plane. Job-wide so
+      # every ate-setup invocation in this job sees the same selection.
       ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
       # Job-wide for the same reason. Empty is an explicit "no preview
       # features", not an unset value. The e2e steps pass it to the suites as
@@ -276,12 +275,14 @@ jobs:
     - name: Install CSI NFS driver
       run: go run ./cmd/ate-setup --kind setup csi nfs
     - name: Deploy micro-VM counter demo
-      # Stages the (cached) assets into the cluster's rustfs and deploys the
-      # counter-microvm demo onto the control plane installed above. The demo
-      # redeploys the control plane, so retain the selected dataplane.
       env:
-        ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
-      run: hack/run-microvm-demo-kind.sh
+        NO_DEV_ENV: "true"
+        KO_DOCKER_REPO: "localhost:5001"
+        ATE_INSTALL_KIND: "true"
+        BUCKET_NAME: "ate-snapshot"
+        KIND_CLUSTER_NAME: "kind"
+        KUBECTL_CONTEXT: "kind-kind"
+      run: go run ./cmd/ate-setup deploy demo counter-microvm
     - name: Deploy gVisor counter demo
       run: go run ./cmd/ate-setup --kind deploy demo counter
     - name: Deploy egress demos
