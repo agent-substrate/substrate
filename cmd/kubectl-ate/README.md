@@ -26,6 +26,24 @@ By default, `kubectl-ate` will automatically read your `~/.kube/config`, discove
 
 If you prefer to route traffic directly (e.g., through a LoadBalancer or when running natively inside a cluster pod), simply provide the `--endpoint` flag to bypass the tunnel.
 
+## Authentication
+`kubectl-ate` authenticates to ate-api with the first of these it is given:
+
+1. `--token-file`: a bearer token file, re-read on every RPC, or `-` for stdin.
+2. `--credential-plugin`: the command of a [kubectl credential plugin](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#client-go-credential-plugins), an executable's name or path. Pass each of its arguments with `--credential-plugin-arg`. The plugin receives `--kubeconfig` and `--context` as `$ATE_KUBECONFIG` and `$ATE_KUBE_CONTEXT`. `kubectl-ate` runs the plugin when it first needs a token, and again a minute before the token's `expirationTimestamp`.
+3. A token minted for the shared `ate-client` ServiceAccount.
+
+Passing both `--token-file` and `--credential-plugin` is an error.
+
+```bash
+# Authenticate as your own ServiceAccount (see docs/authentication.md)
+kubectl ate --credential-plugin=kubectl-ate --credential-plugin-arg=service-account-token \
+  --credential-plugin-arg=--service-account=ate-users/alice get actors -a alice-space
+
+# Print a raw bearer token, e.g. for grpcurl
+kubectl ate service-account-token --service-account=ate-users/alice -o token
+```
+
 ## Tracing
 The CLI supports on-demand tracing using the `--trace` flag. When enabled, the CLI will generate a trace ID and signal to the server that it wants the request to be traced.
 
@@ -67,6 +85,8 @@ These flags can be appended to any command:
 | `--context` | | Name of the kubeconfig context to use | current context |
 | `--endpoint` | | Manual gRPC endpoint override (e.g., `localhost:8080`) | |
 | `--token-file` | | Path to a bearer token for ate-api authentication, or `-` for stdin | Kubernetes ServiceAccount token |
+| `--credential-plugin` | | kubectl credential plugin that provides the ate-api credential: an executable's name or path | |
+| `--credential-plugin-arg` | | Argument to pass to the `--credential-plugin` command; repeat for each argument | |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
 | `--verbose` | `-v` | Increase output verbosity; may be repeated or stacked (e.g., `-v`, `-vv`, `-vvvvv`) | `0` |

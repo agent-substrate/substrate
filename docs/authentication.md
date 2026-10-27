@@ -27,6 +27,108 @@ What an authenticated caller may do is decided by authorization; see
 provider issued the token, so only configure providers you trust not to issue
 a token whose subject is another principal's ID.
 
+## Client credentials
+
+`kubectl-ate` gets its credential from the kubectl credential plugin that
+`--credential-plugin` names; see the
+[kubectl-ate README](../cmd/kubectl-ate/README.md#authentication).
+
+`ate-api` checks only a JWT's issuer, audience, signature, and expiry. A
+credential source is therefore safe only when its issuer limits who can get a
+token for the configured audience. Kubernetes ServiceAccount tokens qualify,
+because RBAC decides who may create them. Google ID tokens for the Cloud SDK's
+shared client ID do not, since any Google account can get one. Neither do
+Google service account ID tokens or GitHub Actions OIDC tokens: any service
+account or workflow can request one for any audience.
+
+`kubectl ate service-account-token` is the built-in plugin. It mints a token
+for the ServiceAccount that `--service-account` names, using your kubeconfig.
+The examples below run it as
+`--credential-plugin=kubectl-ate --credential-plugin-arg=service-account-token`,
+which runs the binary directly and doesn't need kubectl.
+
+### Per-user ServiceAccounts
+
+Without a credential, every user acts as the shared `ate-client`
+ServiceAccount. To give a user their own identity, let them create tokens for
+a ServiceAccount of their own:
+
+```sh
+kubectl create namespace ate-users
+kubectl -n ate-users create serviceaccount alice
+kubectl -n ate-users create role alice-token --verb=create --resource=serviceaccounts/token --resource-name=alice
+kubectl -n ate-users create rolebinding alice-token --role=alice-token --user=alice@example.com
+```
+
+Alice then authenticates as `system:serviceaccount:ate-users:alice`:
+
+```sh
+kubectl ate --credential-plugin=kubectl-ate --credential-plugin-arg=service-account-token \
+  --credential-plugin-arg=--service-account=ate-users/alice get actors -a alice-space
+```
+
+Access policies grant to that ID. The token carries the ServiceAccount's
+groups, not Alice's.
+
+A user who is not a cluster admin also needs to port-forward to `ate-api` and
+read its trust bundle. Create these roles once:
+
+```sh
+kubectl apply -f - <<'EOF'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ate-api-client
+  namespace: ate-system
+rules:
+- apiGroups: [""]
+  resources: [services]
+  resourceNames: [api]
+  verbs: [get]
+- apiGroups: [""]
+  resources: [pods]
+  verbs: [list]
+- apiGroups: [""]
+  resources: [pods/portforward]
+  verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ate-api-client
+rules:
+- apiGroups: [certificates.k8s.io]
+  resources: [clustertrustbundles]
+  verbs: [list]
+EOF
+```
+
+and bind them to each user:
+
+```sh
+kubectl -n ate-system create rolebinding alice-ate-api-client --role=ate-api-client --user=alice@example.com
+kubectl create clusterrolebinding alice-ate-api-client --clusterrole=ate-api-client --user=alice@example.com
+```
+
+`ate-api` verifies a token's signature and expiry without asking Kubernetes
+whether its ServiceAccount still exists. Deleting Alice's ServiceAccount stops
+her getting new tokens, but one she already holds keeps working until it
+expires, plus `ate-api`'s five-minute allowance for clock skew.
+`kubectl ate service-account-token` requests one-hour tokens; Alice can request longer
+ones herself, up to the cluster's maximum token lifetime. To cut off her access
+at once, remove the access policy grants to her ID. A ServiceAccount recreated
+with the same name gets the old one's grants.
+
+### In-cluster workloads
+
+A pod can act as its own ServiceAccount with
+`--endpoint=api.ate-system.svc:443` and a `--token-file` pointing at a
+projected ServiceAccount token with audience `api.ate-system.svc`. The client
+rereads the file on every RPC, so it picks up the kubelet's rotations. The
+pod's ServiceAccount must be able to list ClusterTrustBundles, which verify
+`ate-api`. The install's NetworkPolicy admits only pods in namespaces labeled
+`ate.dev/api-access=true`.
+
 ## Google Cloud CLI tokens
 
 The Google Cloud CLI currently issues user identity tokens with issuer

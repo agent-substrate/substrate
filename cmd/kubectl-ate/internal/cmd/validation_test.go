@@ -27,6 +27,11 @@ func resetFlagsRecursive(c *cobra.Command) {
 	resetFlagSet := func(fs *pflag.FlagSet) {
 		fs.VisitAll(func(f *pflag.Flag) {
 			f.Changed = false
+			// Set appends to a slice flag, so clear it instead.
+			if v, ok := f.Value.(pflag.SliceValue); ok {
+				_ = v.Replace(nil)
+				return
+			}
 			_ = f.Value.Set(f.DefValue)
 		})
 	}

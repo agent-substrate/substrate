@@ -43,4 +43,5 @@ func TestAuthz(t *testing.T) {
 
 	t.Run("BasicFlow", func(t *testing.T) { testBasicFlow(t, ctx, f) })
 	t.Run("SecurityRegression", func(t *testing.T) { testSecurityRegression(t, ctx, f) })
+	t.Run("CredentialPlugin", func(t *testing.T) { testCredentialPlugin(t, ctx, f) })
 }

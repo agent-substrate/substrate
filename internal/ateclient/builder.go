@@ -19,10 +19,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io"
 	"os"
-	"strings"
 	"sync"
+	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
@@ -36,7 +35,6 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -79,6 +77,12 @@ func clientServiceAccount() string {
 // relying on the fallback is this same principal.
 func FallbackPrincipal() string {
 	return fmt.Sprintf("system:serviceaccount:%s:%s", systemNamespace(), clientServiceAccount())
+}
+
+// DefaultAudience is the audience of tokens minted for ateapi: the in-cluster
+// DNS name of its Service.
+func DefaultAudience() string {
+	return apiServerName()
 }
 
 // systemNamespace is the namespace the client expects ateapi to be running in.
@@ -141,34 +145,59 @@ func (c *Client) WorkerService() ateapi.WorkerServiceClient {
 }
 
 // NewClient creates a new Ate API client. If endpoint is empty, it automatically
-// port-forwards to the ate-api-server pod in substrate's system namespace.
-// extraOpts are appended to the options used to dial the server.
+// port-forwards to the ate-api-server pod in substrate's system namespace. It
+// authenticates with tokenFile if set, and otherwise with a token minted for
+// the default ServiceAccount, refreshed before it expires. extraOpts are
+// appended to the options used to dial the server.
 func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool, extraOpts ...grpc.DialOption) (*Client, error) {
-	tp, err := initTracing(ctx, traceEnabled)
+	return Dial(ctx, DialOptions{
+		Kubeconfig:  kubeconfigPath,
+		KubeContext: k8sContext,
+		Endpoint:    endpoint,
+		TokenFile:   tokenFile,
+		Trace:       traceEnabled,
+		GRPCOptions: extraOpts,
+	})
+}
+
+// DialOptions configures Dial.
+type DialOptions struct {
+	// Kubeconfig and KubeContext select the cluster substrate runs in. Empty
+	// values use the default loading rules and the current context.
+	Kubeconfig  string
+	KubeContext string
+	// Endpoint is dialed directly instead of port-forwarding to the ateapi
+	// Service.
+	Endpoint string
+	// TokenFile is a bearer token file, re-read on every RPC, or "-" to read
+	// one token from stdin.
+	TokenFile string
+	// CredentialPlugin is used when TokenFile is empty. Without either, the
+	// client mints a token for the default ServiceAccount.
+	CredentialPlugin *CredentialPlugin
+	Trace            bool
+	GRPCOptions      []grpc.DialOption
+}
+
+// Dial creates a new Ate API client as opts describes.
+func Dial(ctx context.Context, opts DialOptions) (*Client, error) {
+	tp, err := initTracing(ctx, opts.Trace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize tracing: %w", err)
 	}
-
-	var cli *Client
-	if endpoint != "" {
-		cli, err = dialDirect(ctx, kubeconfigPath, k8sContext, endpoint, tokenFile, traceEnabled, extraOpts...)
-	} else {
-		cli, err = dialPortForward(ctx, kubeconfigPath, k8sContext, tokenFile, traceEnabled, extraOpts...)
-	}
-
+	cli, err := dial(ctx, opts)
 	if err != nil {
 		if tp != nil {
 			_ = tp.Shutdown(ctx)
 		}
 		return nil, err
 	}
-
 	cli.tracerProvider = tp
 	return cli, nil
 }
 
-func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool, extraOpts ...grpc.DialOption) (*Client, error) {
-	config, err := LoadKubeConfig(kubeconfigPath, k8sContext)
+func dial(ctx context.Context, opts DialOptions) (*Client, error) {
+	config, err := LoadKubeConfig(opts.Kubeconfig, opts.KubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
@@ -182,37 +211,59 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
-	// Verify the server before attaching the bearer token below: the token
-	// must never be sent over an unauthenticated channel.
+	// Verify the server before attaching the credential below: a token must
+	// never be sent over an unauthenticated channel.
 	tlsCfg, err := serverTLSConfig(ctx, clientset)
 	if err != nil {
 		return nil, err
 	}
-
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
-	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
-	opts = append(opts, grpc.WithDefaultServiceConfig(roundRobinServiceConfig))
-	tokenOpt, err := bearerTokenDialOption(ctx, clientset, tokenFile)
+	creds, err := clientCredentials(opts, clientset)
 	if err != nil {
 		return nil, err
 	}
-	opts = append(opts, tokenOpt)
 
-	if traceEnabled {
-		opts = append(opts, grpc.WithChainUnaryInterceptor(newTraceInterceptor()))
+	target, stopForward := opts.Endpoint, func() {}
+	if target == "" {
+		// TODO: Should we special-case a LoadBalancer "api" Service and dial its
+		// address directly instead of port-forwarding?
+		localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, systemNamespace(), apiServiceName(), 443)
+		if err != nil {
+			return nil, err
+		}
+		target, stopForward = fmt.Sprintf("127.0.0.1:%d", localPort), stop
 	}
-	opts = append(opts, extraOpts...)
-
-	conn, err := grpc.NewClient(endpoint, opts...)
+	conn, err := connect(target, tlsCfg, creds, opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial manual endpoint: %w", err)
+		stopForward()
+		return nil, err
 	}
 	return &Client{
 		ControlClient: ateapi.NewControlClient(conn),
 		conn:          conn,
-		cancel:        func() {},
+		cancel:        stopForward,
 	}, nil
+}
+
+// connect dials target, attaching creds to every RPC.
+func connect(target string, tlsCfg *tls.Config, creds credentials.PerRPCCredentials, opts DialOptions) (*grpc.ClientConn, error) {
+	dialOpts := []grpc.DialOption{
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithPerRPCCredentials(creds),
+	}
+	if opts.Endpoint != "" {
+		dialOpts = append(dialOpts, grpc.WithDefaultServiceConfig(roundRobinServiceConfig))
+	}
+	if opts.Trace {
+		dialOpts = append(dialOpts, grpc.WithChainUnaryInterceptor(newTraceInterceptor()))
+	}
+	dialOpts = append(dialOpts, opts.GRPCOptions...)
+
+	conn, err := grpc.NewClient(target, dialOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial ateapi at %s: %w", target, err)
+	}
+	return conn, nil
 }
 
 // LoadKubeConfig loads a Kubernetes client configuration from the specified kubeconfig path and context.
@@ -221,63 +272,6 @@ func LoadKubeConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
 	loadingRules.ExplicitPath = kubeconfigPath
 	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: k8sContext}
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
-}
-
-func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile string, traceEnabled bool, extraOpts ...grpc.DialOption) (*Client, error) {
-	config, err := LoadKubeConfig(kubeconfigPath, k8sContext)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
-	}
-
-	// Older clusters use the deprecated beta ClusterTrustBundle API.
-	// Suppress its warnings when falling back from v1.
-	config.WarningHandlerWithContext = &rest.NoWarnings{}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create k8s client: %w", err)
-	}
-
-	// TODO: Should we special-case a LoadBalancer "api" Service and dial its
-	// address directly instead of port-forwarding?
-	localPort, stopForward, err := portforward.ServicePortForward(ctx, config, clientset, systemNamespace(), apiServiceName(), 443)
-	if err != nil {
-		return nil, err
-	}
-	localEndpoint := fmt.Sprintf("127.0.0.1:%d", localPort)
-
-	tlsCfg, err := serverTLSConfig(ctx, clientset)
-	if err != nil {
-		stopForward()
-		return nil, err
-	}
-
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
-	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
-	tokenOpt, err := bearerTokenDialOption(ctx, clientset, tokenFile)
-	if err != nil {
-		stopForward()
-		return nil, err
-	}
-	opts = append(opts, tokenOpt)
-
-	if traceEnabled {
-		opts = append(opts, grpc.WithChainUnaryInterceptor(newTraceInterceptor()))
-	}
-	opts = append(opts, extraOpts...)
-
-	conn, err := grpc.NewClient(localEndpoint, opts...)
-	if err != nil {
-		stopForward()
-		return nil, fmt.Errorf("failed to dial gRPC over tunnel: %w", err)
-	}
-
-	return &Client{
-		ControlClient: ateapi.NewControlClient(conn),
-		conn:          conn,
-		cancel:        stopForward,
-	}, nil
 }
 
 func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.Config, error) {
@@ -314,78 +308,28 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 	}, nil
 }
 
-// bearerTokenDialOption attaches the configured token, or mints an ate-client
-// ServiceAccount token when tokenFile is empty.
+// clientCredentials returns the credential source opts selects.
 //
 // The minted token authenticates as FallbackPrincipal, not as whoever runs
 // the client: anyone Kubernetes RBAC lets create a token for that
 // ServiceAccount gets the same identity, and whatever it is granted.
-func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset, tokenFile string) (grpc.DialOption, error) {
-	if tokenFile == "-" {
+func clientCredentials(opts DialOptions, clientset kubernetes.Interface) (credentials.PerRPCCredentials, error) {
+	switch {
+	case opts.TokenFile == "-":
 		creds, err := readBearerToken(os.Stdin)
 		if err != nil {
 			return nil, fmt.Errorf("read bearer token from stdin: %w", err)
 		}
-		return grpc.WithPerRPCCredentials(creds), nil
+		return creds, nil
+	case opts.TokenFile != "":
+		return fileBearerTokenCreds(opts.TokenFile), nil
+	case opts.CredentialPlugin != nil:
+		return &pluginCreds{plugin: *opts.CredentialPlugin}, nil
 	}
-	if tokenFile != "" {
-		return grpc.WithPerRPCCredentials(fileBearerTokenCreds(tokenFile)), nil
-	}
-	expirationSeconds := int64(3600)
-	tokenRequest := &authv1.TokenRequest{
-		Spec: authv1.TokenRequestSpec{
-			Audiences:         []string{apiServerName()},
-			ExpirationSeconds: &expirationSeconds,
-		},
-	}
-	token, err := clientset.CoreV1().ServiceAccounts(systemNamespace()).CreateToken(ctx, clientServiceAccount(), tokenRequest, metav1.CreateOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to request ateapi bearer token: %w", err)
-	}
-	if token.Status.Token == "" {
-		return nil, fmt.Errorf("failed to request ateapi bearer token: token response was empty")
-	}
-	return grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token)), nil
+	return newMintedTokenCreds(func(ctx context.Context) (string, time.Time, error) {
+		return MintServiceAccountToken(ctx, clientset, systemNamespace(), clientServiceAccount(), DefaultAudience(), time.Hour)
+	}), nil
 }
-
-func readBearerToken(r io.Reader) (bearerTokenCreds, error) {
-	b, err := io.ReadAll(r)
-	if err != nil {
-		return "", err
-	}
-	token := strings.TrimSpace(string(b))
-	if token == "" {
-		return "", fmt.Errorf("bearer token is empty")
-	}
-	return bearerTokenCreds(token), nil
-}
-
-type bearerTokenCreds string
-
-func (c bearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
-	if c == "" {
-		return nil, fmt.Errorf("bearer token is empty")
-	}
-	return map[string]string{"authorization": "Bearer " + string(c)}, nil
-}
-
-func (c bearerTokenCreds) RequireTransportSecurity() bool { return true }
-
-type fileBearerTokenCreds string
-
-func (c fileBearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
-	b, err := os.ReadFile(string(c))
-	if err != nil {
-		return nil, fmt.Errorf("read bearer token file %q: %w", c, err)
-	}
-	token := strings.TrimSpace(string(b))
-	if token == "" {
-		return nil, fmt.Errorf("bearer token file %q is empty", c)
-	}
-	return map[string]string{"authorization": "Bearer " + token}, nil
-}
-
-func (c fileBearerTokenCreds) RequireTransportSecurity() bool { return true }
 
 // initTracing returns (nil, nil) when tracing is disabled: the OTel globals
 // stay noop so no traceparent is injected, the server roots the trace, and the

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -289,11 +290,11 @@ func TestTopWorkersRunner_VerboseSurfacesMetricsIssues(t *testing.T) {
 }
 
 func TestWarnSharedIdentity(t *testing.T) {
-	t.Run("warns without a token file", func(t *testing.T) {
+	t.Run("warns without a credential", func(t *testing.T) {
 		var buf bytes.Buffer
-		warnSharedIdentity(&buf, "")
+		warnSharedIdentity(&buf, "", nil)
 		got := buf.String()
-		for _, want := range []string{"Warning:", "ate-client", "shared identity", "--token-file"} {
+		for _, want := range []string{"Warning:", "ate-client", "shared identity", "--credential-plugin", "--token-file"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("warning %q does not mention %q", got, want)
 			}
@@ -301,7 +302,14 @@ func TestWarnSharedIdentity(t *testing.T) {
 	})
 	t.Run("silent with a token file", func(t *testing.T) {
 		var buf bytes.Buffer
-		warnSharedIdentity(&buf, "/path/to/token")
+		warnSharedIdentity(&buf, "/path/to/token", nil)
+		if got := buf.String(); got != "" {
+			t.Errorf("warning = %q, want none", got)
+		}
+	})
+	t.Run("silent with a credential plugin", func(t *testing.T) {
+		var buf bytes.Buffer
+		warnSharedIdentity(&buf, "", &ateclient.CredentialPlugin{Command: "plugin"})
 		if got := buf.String(); got != "" {
 			t.Errorf("warning = %q, want none", got)
 		}

@@ -75,11 +75,19 @@ func loadKubeConfig(errOut io.Writer, kubeconfigPath, contextName string) (*rest
 func newAPIClient(cmd *cobra.Command) (*ateclient.Client, error) {
 	ctx := cmd.Context()
 	errOut := cmd.ErrOrStderr()
-	warnSharedIdentity(errOut, tokenFile)
+	plugin, err := credentialPluginConfig()
+	if err != nil {
+		return nil, err
+	}
+	warnSharedIdentity(errOut, tokenFile, plugin)
 
 	if verbosity >= vFlow {
-		vlogf(errOut, vFlow, "Connecting to ate-api-server (endpoint=%q, kubeconfig=%q, context=%q, token-file=%q, trace=%t)",
-			endpoint, kubeconfig, k8sContext, tokenFile, traceEnabled)
+		pluginCommand := ""
+		if plugin != nil {
+			pluginCommand = plugin.Command
+		}
+		vlogf(errOut, vFlow, "Connecting to ate-api-server (endpoint=%q, kubeconfig=%q, context=%q, token-file=%q, credential-plugin=%q, trace=%t)",
+			endpoint, kubeconfig, k8sContext, tokenFile, pluginCommand, traceEnabled)
 	} else if endpoint != "" {
 		vlogf(errOut, vBasic, "Connecting to ate-api-server at %s", endpoint)
 	} else {
@@ -87,10 +95,15 @@ func newAPIClient(cmd *cobra.Command) (*ateclient.Client, error) {
 	}
 
 	start := time.Now()
-	cli, err := ateclient.NewClient(
-		ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled,
-		grpc.WithChainUnaryInterceptor(newLoggingUnaryInterceptor(errOut)),
-	)
+	cli, err := ateclient.Dial(ctx, ateclient.DialOptions{
+		Kubeconfig:       kubeconfig,
+		KubeContext:      k8sContext,
+		Endpoint:         endpoint,
+		TokenFile:        tokenFile,
+		CredentialPlugin: plugin,
+		Trace:            traceEnabled,
+		GRPCOptions:      []grpc.DialOption{grpc.WithChainUnaryInterceptor(newLoggingUnaryInterceptor(errOut))},
+	})
 	elapsed := time.Since(start).Round(time.Millisecond)
 	if err != nil {
 		vlogf(errOut, vBasic, "Connection to ate-api-server failed after %s: %v", elapsed, err)
@@ -109,12 +122,13 @@ func newAPIClient(cmd *cobra.Command) (*ateclient.Client, error) {
 // warnSharedIdentity warns on errOut when the command will act as the shared
 // fallback ServiceAccount rather than as the user. Everyone relying on the
 // fallback is the same principal, holding whatever that principal is granted:
-// global owner wherever the install names it a bootstrap owner.
-func warnSharedIdentity(errOut io.Writer, tokenFile string) {
-	if tokenFile != "" {
+// global owner wherever the install names it a bootstrap owner. A plugin's
+// identity is unknown here.
+func warnSharedIdentity(errOut io.Writer, tokenFile string, plugin *ateclient.CredentialPlugin) {
+	if tokenFile != "" || plugin != nil {
 		return
 	}
-	fmt.Fprintf(errOut, "Warning: no --token-file given; acting as the shared identity %s rather than as yourself. Pass --token-file to act as yourself.\n",
+	fmt.Fprintf(errOut, "Warning: no --credential-plugin or --token-file given; acting as the shared identity %s rather than as yourself. Pass either to act as yourself.\n",
 		ateclient.FallbackPrincipal())
 }
 
