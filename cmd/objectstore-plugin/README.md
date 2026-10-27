@@ -68,10 +68,11 @@ This binary's, GCS and S3:
 
 S3 has no issuer: its node plugin ignores the JWT and transfers with the
 pod's own credentials, and the exchange answers `UNIMPLEMENTED` there. A
-provider other than these two brings its own binary in this repository, with
-its own exchange handler and proto shaped for its credential, its own issuer
-and storage client, and imports the four reusable packages. A binary outside
-the repository cannot, since they are under `internal/`.
+provider other than these two brings its own binary, with its own exchange
+handler and proto shaped for its credential, its own issuer and storage
+client. In this repository it imports the four reusable packages. Outside it,
+it imports `pkg/objectstore/actorauthz`, which runs the same checks and returns
+the grants with each prefix as a URI ending in `/`.
 
 ## Upload memory
 

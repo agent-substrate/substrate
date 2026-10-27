@@ -30,8 +30,9 @@ ateapi_banned=(
   github.com/aws/aws-sdk-go-v2/service/s3
 )
 
-# Every provider's exchange imports actorauthz, so it may not depend on one
-# provider's wire format, credential or cloud SDK.
+# Every provider's exchange imports actorauthz, in-tree or through
+# pkg/objectstore/actorauthz, so neither may depend on one provider's wire
+# format, credential or cloud SDK.
 actorauthz_banned=(
   go.ate.dev/substrate/internal/proto/objectstoreexchangepb
   go.ate.dev/substrate/internal/objectstoreplugin/credential
@@ -76,5 +77,6 @@ check() {
 
 check ./cmd/ateapi "${ateapi_banned[@]}"
 check ./internal/objectstoreplugin/actorauthz "${actorauthz_banned[@]}"
+check ./pkg/objectstore/actorauthz "${actorauthz_banned[@]}"
 
 exit "${status}"
