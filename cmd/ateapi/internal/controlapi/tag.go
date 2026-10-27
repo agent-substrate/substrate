@@ -100,10 +100,14 @@ func (s *ServiceImpl) ListTags(ctx context.Context, atespace string, opts store.
 	return s.store.ListTags(ctx, atespace, opts)
 }
 
-// errTagPending is what the update's mutate closure returns when the stored
-// tag's create never finished, so the caller can tell it apart from a store
-// failure and answer FAILED_PRECONDITION.
-var errTagPending = errors.New("tag is still being created")
+// errTagPending and errTagDeleting are what the update's mutate closure
+// returns when the stored tag's create never finished or its delete has
+// started, so the caller can tell them apart from a store failure and answer
+// FAILED_PRECONDITION.
+var (
+	errTagPending  = errors.New("tag is still being created")
+	errTagDeleting = errors.New("tag is being deleted")
+)
 
 func (s *RPCService) UpdateTag(ctx context.Context, req *ateapi.UpdateTagRequest) (*ateapi.Tag, error) {
 	// First scrub any fields that users are not allowed to set.
@@ -120,6 +124,9 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapi.UpdateTagRequest
 	tagRef := resources.TagRefFromTag(in)
 
 	storedTag, err := s.impl.UpdateTag(ctx, tagRef, store.PreconditionFrom(in), func(toUpdate *ateapi.Tag) error {
+		if toUpdate.GetMetadata().GetDeleteTime() != nil {
+			return errTagDeleting
+		}
 		// A tag whose create never finished names a partial copy. Publishing it
 		// — or changing its scope at all — would hand out content that is still
 		// being written, or may never be.
@@ -145,6 +152,9 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapi.UpdateTagRequest
 	if err != nil {
 		if errors.Is(err, errTagPending) {
 			return nil, apierror.FailedPrecondition("Tag %s/%s is still being created", tagRef.Atespace, tagRef.Name)
+		}
+		if errors.Is(err, errTagDeleting) {
+			return nil, apierror.FailedPrecondition("Tag %s/%s is being deleted", tagRef.Atespace, tagRef.Name)
 		}
 		if errors.Is(err, store.ErrImmutableField) {
 			return nil, apierror.InvalidArgument("while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
