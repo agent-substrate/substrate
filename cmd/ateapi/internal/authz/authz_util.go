@@ -49,6 +49,7 @@ const (
 	RoleIngressRouter    = "ingress_router"
 	RoleAtelet           = "atelet"
 	RoleAPIServerSidecar = "api_server_sidecar"
+	RoleCredentialMinter = "credential_minter"
 
 	RelationCanCreateAtespace       = "can_create_atespace"
 	RelationCanListAtespaces        = "can_list_atespaces"
@@ -237,6 +238,9 @@ type SystemPrincipals struct {
 	IngressRouterSPIFFEID    string
 	AteletSPIFFEID           string
 	APIServerSidecarSPIFFEID string
+	// CredentialMinterSPIFFEID is optional: empty grants credential_minter to
+	// no one.
+	CredentialMinterSPIFFEID string
 }
 
 // New provisions the default OpenFGA store and authorization model via
@@ -292,15 +296,20 @@ func parseSystemPrincipals(system SystemPrincipals) (map[string][]string, error)
 	bindings := []struct {
 		role     string
 		spiffeID string
+		optional bool
 	}{
 		{role: RoleController, spiffeID: system.ControllerSPIFFEID},
 		{role: RoleEgressGateway, spiffeID: system.EgressGatewaySPIFFEID},
 		{role: RoleIngressRouter, spiffeID: system.IngressRouterSPIFFEID},
 		{role: RoleAtelet, spiffeID: system.AteletSPIFFEID},
 		{role: RoleAPIServerSidecar, spiffeID: system.APIServerSidecarSPIFFEID},
+		{role: RoleCredentialMinter, spiffeID: system.CredentialMinterSPIFFEID, optional: true},
 	}
 	out := make(map[string][]string, len(bindings))
 	for _, b := range bindings {
+		if b.optional && b.spiffeID == "" {
+			continue
+		}
 		if _, err := spiffeid.FromString(b.spiffeID); err != nil {
 			return nil, fmt.Errorf("invalid %s SPIFFE ID %q: %w", b.role, b.spiffeID, err)
 		}

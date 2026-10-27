@@ -97,6 +97,7 @@ var (
 	egressGatewaySPIFFEID    = pflag.String("egress-gateway-spiffe-id", installdefaults.EgressSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-egress. Holds the egress_gateway authz role, which reads and lists actors and reads their egress policies.")
 	ingressRouterSPIFFEID    = pflag.String("ingress-router-spiffe-id", installdefaults.RouterSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-router. Holds the ingress_router authz role, which resumes and lists actors.")
 	apiServerSidecarSPIFFEID = pflag.String("api-server-sidecar-spiffe-id", installdefaults.APIServerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of the ate-api-server pod, which its sidecars share. Holds the api_server_sidecar role, which reads actors so the objectstore control plugin can scope their storage credentials.")
+	credentialMinterSPIFFEID = pflag.String("credential-minter-spiffe-id", installdefaults.CredentialMinterSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of an out-of-tree credential plugin. Holds the credential_minter role, which mints actor JWTs and nothing else. Empty grants the role to no one.")
 
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Required.")
@@ -261,6 +262,7 @@ func main() {
 		IngressRouterSPIFFEID:    *ingressRouterSPIFFEID,
 		AteletSPIFFEID:           ateletSPIFFEID,
 		APIServerSidecarSPIFFEID: *apiServerSidecarSPIFFEID,
+		CredentialMinterSPIFFEID: *credentialMinterSPIFFEID,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)

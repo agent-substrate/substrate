@@ -30,6 +30,7 @@ func testSystemPrincipals() SystemPrincipals {
 		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
 		AteletSPIFFEID:           installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
 		APIServerSidecarSPIFFEID: installdefaults.APIServerSPIFFEID(installdefaults.SystemNamespace),
+		CredentialMinterSPIFFEID: installdefaults.CredentialMinterSPIFFEID(installdefaults.SystemNamespace),
 	}
 }
 
@@ -100,18 +101,38 @@ func TestParseSystemPrincipals(t *testing.T) {
 		IngressRouterSPIFFEID:    router,
 		AteletSPIFFEID:           "spiffe://cluster.local/ns/ate-system/sa/atelet",
 		APIServerSidecarSPIFFEID: "spiffe://cluster.local/ns/ate-system/sa/ate-api-server",
+		CredentialMinterSPIFFEID: "spiffe://cluster.local/ns/ate-system/sa/credential-minter",
 	})
 	if err != nil {
 		t.Fatalf("parseSystemPrincipals failed: %v", err)
 	}
 	want := map[string][]string{
-		"user:spiffe%3A//cluster.local/ns/ate-system/sa/ate-controller": {RoleController},
-		"user:spiffe%3A//cluster.local/ns/ate-system/sa/atenet-router":  {RoleEgressGateway, RoleIngressRouter},
-		"user:spiffe%3A//cluster.local/ns/ate-system/sa/atelet":         {RoleAtelet},
-		"user:spiffe%3A//cluster.local/ns/ate-system/sa/ate-api-server": {RoleAPIServerSidecar},
+		"user:spiffe%3A//cluster.local/ns/ate-system/sa/ate-controller":    {RoleController},
+		"user:spiffe%3A//cluster.local/ns/ate-system/sa/atenet-router":     {RoleEgressGateway, RoleIngressRouter},
+		"user:spiffe%3A//cluster.local/ns/ate-system/sa/atelet":            {RoleAtelet},
+		"user:spiffe%3A//cluster.local/ns/ate-system/sa/ate-api-server":    {RoleAPIServerSidecar},
+		"user:spiffe%3A//cluster.local/ns/ate-system/sa/credential-minter": {RoleCredentialMinter},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("parseSystemPrincipals (-want +got):\n%s", diff)
+	}
+}
+
+// The credential_minter role is optional: an empty SPIFFE ID grants it to no
+// one rather than failing startup.
+func TestParseSystemPrincipalsWithoutCredentialMinter(t *testing.T) {
+	p := testSystemPrincipals()
+	p.CredentialMinterSPIFFEID = ""
+	got, err := parseSystemPrincipals(p)
+	if err != nil {
+		t.Fatalf("parseSystemPrincipals failed: %v", err)
+	}
+	for user, roles := range got {
+		for _, role := range roles {
+			if role == RoleCredentialMinter {
+				t.Errorf("%s holds %s with an empty credential minter SPIFFE ID", user, RoleCredentialMinter)
+			}
+		}
 	}
 }
 
@@ -127,6 +148,7 @@ func TestNewRejectsInvalidSystemPrincipals(t *testing.T) {
 		{"empty ingress router SPIFFE ID", func(p *SystemPrincipals) { p.IngressRouterSPIFFEID = "" }, "invalid ingress_router SPIFFE ID"},
 		{"empty atelet SPIFFE ID", func(p *SystemPrincipals) { p.AteletSPIFFEID = "" }, "invalid atelet SPIFFE ID"},
 		{"empty api server sidecar SPIFFE ID", func(p *SystemPrincipals) { p.APIServerSidecarSPIFFEID = "" }, "invalid api_server_sidecar SPIFFE ID"},
+		{"bare credential minter ServiceAccount name", func(p *SystemPrincipals) { p.CredentialMinterSPIFFEID = "credential-minter" }, "invalid credential_minter SPIFFE ID"},
 		{"bare ServiceAccount name", func(p *SystemPrincipals) { p.ControllerSPIFFEID = "ate-controller" }, "invalid controller SPIFFE ID"},
 		{"non-spiffe URI", func(p *SystemPrincipals) {
 			p.EgressGatewaySPIFFEID = "https://cluster.local/ns/ate-system/sa/atenet-egress"
