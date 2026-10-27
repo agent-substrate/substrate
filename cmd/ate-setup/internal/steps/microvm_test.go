@@ -51,6 +51,11 @@ func silenceStepLog(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(os.Stdout) })
 }
 
+func upperDiskSum() []byte {
+	sum := sha256.Sum256(upperDiskImage)
+	return sum[:]
+}
+
 func sha256HexString(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
@@ -62,6 +67,7 @@ func testAssetDigests() map[string]string {
 		"virtiofsd":        sha256HexString("virtiofsd-bytes"),
 		"vmlinux":          sha256HexString("vmlinux-bytes"),
 		"rootfs.img":       sha256HexString("rootfs-bytes"),
+		upperDiskAsset:     sha256HexString("upper-disk-bytes"),
 	}
 }
 
@@ -72,6 +78,7 @@ func writeValidTestAssets(t *testing.T, dir string) {
 		"virtiofsd":        "virtiofsd-bytes",
 		"vmlinux":          "vmlinux-bytes",
 		"rootfs.img":       "rootfs-bytes",
+		upperDiskAsset:     "upper-disk-bytes",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -133,7 +140,7 @@ func TestVerifyMicroVMAssetDigests(t *testing.T) {
 
 func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 	stamp := microvmAssetStamp("amd64", defaultKataVersion, defaultCloudHypervisorVersion)
-	const wantStamp = "arch=amd64\nkata=4.3.1\ncloud-hypervisor=v53.0\n"
+	wantStamp := "arch=amd64\nkata=4.3.1\ncloud-hypervisor=v53.0\nupper-disk=" + hex.EncodeToString(upperDiskSum()) + "\n"
 	if stamp != wantStamp {
 		t.Fatalf("microvmAssetStamp() =\n%q\nwant\n%q", stamp, wantStamp)
 	}
@@ -331,6 +338,7 @@ func TestAssembleMicroVMAssets(t *testing.T) {
 		"virtiofsd":        sha256HexString(virtiofsdBody),
 		"vmlinux":          sha256HexString("fake-kernel-bytes"),
 		"rootfs.img":       sha256HexString("fake-rootfs-bytes"),
+		upperDiskAsset:     hex.EncodeToString(upperDiskSum()),
 	}
 
 	baseURL := serveFakeReleases(t, validKataArchive(t, virtiofsdBody), chBody, false)
@@ -476,6 +484,10 @@ func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 		}
 	}
 	for _, asset := range microvmAssets {
+		if asset == upperDiskAsset {
+			// The ext4 image is the same for every arch.
+			continue
+		}
 		if digests["amd64"][asset] == digests["arm64"][asset] {
 			t.Errorf("amd64 and arm64 share the same digest for %s: %s", asset, digests["amd64"][asset])
 		}
