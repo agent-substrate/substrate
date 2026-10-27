@@ -352,6 +352,10 @@ func withoutWakeupProbe(tmpl *ateapi.ActorTemplate) {
 	}
 }
 
+func withDeleteTime(tmpl *ateapi.ActorTemplate) {
+	tmpl.Metadata.DeleteTime = timestamppb.Now()
+}
+
 func withoutGoldenSnapshot(tmpl *ateapi.ActorTemplate) {
 	tmpl.SnapshotConfig.GoldenSnapshotConfig.Mode = ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED
 }
@@ -577,6 +581,12 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:    "deleted template is a noop",
 			control: &fakeGoldenControl{},
+		},
+		{
+			name:          "template marked for deletion is a noop",
+			template:      testTemplate(withDeleteTime),
+			control:       &fakeGoldenControl{},
+			wantUnchanged: true,
 		},
 		{
 			name:     "terminal golden snapshot is a noop",
