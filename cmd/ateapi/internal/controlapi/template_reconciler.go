@@ -73,7 +73,7 @@ type templateReconcilerStore interface {
 // reconciler drives golden actors through. *RPCService satisfies it.
 type goldenActorControl interface {
 	GetTag(ctx context.Context, req *ateapi.GetTagRequest) (*ateapi.Tag, error)
-	CreateTag(ctx context.Context, req *ateapi.CreateTagRequest) (*ateapi.Tag, error)
+	createTag(ctx context.Context, req *ateapi.CreateTagRequest, precondition *store.Precondition) (*ateapi.Tag, error)
 	DeleteTag(ctx context.Context, req *ateapi.DeleteTagRequest) (*ateapi.Tag, error)
 	DeleteActor(ctx context.Context, req *ateapi.DeleteActorRequest) (*ateapi.Actor, error)
 	CreateActor(ctx context.Context, req *ateapi.CreateActorRequest) (*ateapi.Actor, error)
@@ -81,7 +81,7 @@ type goldenActorControl interface {
 	CreateActorEgressPolicy(ctx context.Context, req *ateapi.CreateActorEgressPolicyRequest) (*ateapi.EgressPolicy, error)
 	GetActorEgressPolicy(ctx context.Context, req *ateapi.GetActorEgressPolicyRequest) (*ateapi.EgressPolicy, error)
 	ResumeActor(ctx context.Context, req *ateapi.ResumeActorRequest) (*ateapi.ResumeActorResponse, error)
-	SuspendActor(ctx context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error)
+	suspendActor(ctx context.Context, req *ateapi.SuspendActorRequest, precondition *store.Precondition) (*ateapi.SuspendActorResponse, error)
 }
 
 // ActorTemplateReconciler drives stored ActorTemplates through the golden
@@ -253,6 +253,9 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			}
 			return 0, err
 		}
+		if resources.ActorTemplateRefFromObjectRef(actor.GetActorTemplate()) != ref {
+			return 0, r.fail(ctx, tmpl, reasonUnexpectedState, "golden actor no longer uses this template")
+		}
 
 		switch state := actor.GetStatus().GetState(); state {
 		case ateapi.ActorState_ACTOR_STATE_CRASHED:
@@ -260,14 +263,22 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 
 		case ateapi.ActorState_ACTOR_STATE_RUNNING:
 			takeAt := goldenSnapshotStatus.GetSnapshotTime()
-			if takeAt == nil {
-				// Resumed, but the deadline write was lost (a replica died
-				// after ResumeActor). The elapsed warmup is unknowable, so
-				// restart the clock.
-				slog.WarnContext(ctx, "Golden actor running without a snapshot deadline; restarting warmup", slog.String("ActorTemplate", ref.String()))
+			if takeAt == nil ||
+				goldenSnapshotStatus.GetWarmupActorUid() != actor.GetMetadata().GetUid() ||
+				goldenSnapshotStatus.GetWarmupActorVersion() != actor.GetMetadata().GetVersion() {
+				// A new incarnation or lifecycle revision cannot inherit elapsed warmup.
+				if takeAt != nil || goldenSnapshotStatus.GetWarmupActorUid() != "" {
+					// Interference restarted the clock; without this line a build
+					// that never finishes leaves no trace of why.
+					slog.InfoContext(ctx, "Golden actor changed revision; restarting warmup",
+						slog.String("ActorTemplate", ref.String()),
+						slog.String("Actor", actor.GetMetadata().GetUid()))
+				}
 				deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
 				if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapi.GoldenSnapshotStatus) {
 					snapshotStatus.SnapshotTime = timestamppb.New(deadline)
+					snapshotStatus.WarmupActorUid = actor.GetMetadata().GetUid()
+					snapshotStatus.WarmupActorVersion = actor.GetMetadata().GetVersion()
 				}); err != nil {
 					return 0, err
 				}
@@ -278,29 +289,31 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				return rem, nil
 			}
 			// Warmup done: suspend the golden actor and record its snapshot.
-			err := r.suspendActor(ctx, goldenActorRef)
+			captured, err := r.suspendActor(ctx, goldenActorRef, actor)
 			if err != nil {
 				return 0, err
 			}
-			return 0, r.tagGoldenActor(ctx, tmpl, goldenActorRef)
+			return 0, r.tagGoldenActor(ctx, tmpl, goldenActorRef, captured)
 
 		case ateapi.ActorState_ACTOR_STATE_SUSPENDING:
-			// A previous pass died mid-suspend; retry suspend.
-			err := r.suspendActor(ctx, goldenActorRef)
+			// Finish an interrupted suspend, then resume for a fresh warmup.
+			// Approval to publish does not survive the reconcile pass.
+			_, err := r.suspendActor(ctx, goldenActorRef, actor)
 			if err != nil {
 				return 0, err
 			}
-			return 0, r.tagGoldenActor(ctx, tmpl, goldenActorRef)
+			continue
 
 		case ateapi.ActorState_ACTOR_STATE_RESUMING,
 			ateapi.ActorState_ACTOR_STATE_SUSPENDED:
-			// The golden actor was never resumed, or a previous resume didn't
-			// finish; ResumeActor is reentrant from both.
-			if findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) != nil {
-				// Golden actors never start from a source snapshot, so an
-				// existing snapshot means an earlier suspend completed
-				// without being recorded.
-				return 0, r.tagGoldenActor(ctx, tmpl, goldenActorRef)
+			// Forget the previous timer before resuming. Only a RUNNING observation
+			// can start a new one; guest state is retained when the Actor resumes.
+			if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapi.GoldenSnapshotStatus) {
+				snapshotStatus.SnapshotTime = nil
+				snapshotStatus.WarmupActorUid = ""
+				snapshotStatus.WarmupActorVersion = 0
+			}); err != nil {
+				return 0, err
 			}
 			if err := r.ensureGoldenEgressPolicy(ctx, tmpl, goldenActorRef); err != nil {
 				if errors.Is(err, errGoldenEgressPolicyConflict) {
@@ -311,12 +324,6 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			if _, err := r.control.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: goldenActorRef}); err != nil {
 				// A crash during resume is observed as CRASHED on the retry.
 				return 0, fmt.Errorf("while resuming golden actor: %w", err)
-			}
-			deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
-			if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapi.GoldenSnapshotStatus) {
-				snapshotStatus.SnapshotTime = timestamppb.New(deadline)
-			}); err != nil {
-				return 0, err
 			}
 		case ateapi.ActorState_ACTOR_STATE_DELETING, ateapi.ActorState_ACTOR_STATE_REVERTING:
 			// Nothing in the golden flow deletes or reverts the actor before
@@ -331,28 +338,30 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 
 // suspendActor waits for the golden actor to produce an external snapshot.
 // SuspendActor completes an in-flight suspend and is a no-op if already suspended.
-func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *ateapi.ObjectRef) error {
-	resp, err := r.control.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *ateapi.ObjectRef, observed *ateapi.Actor) (*ateapi.Actor, error) {
+	precondition := store.PreconditionFrom(observed)
+	resp, err := r.control.suspendActor(ctx, &ateapi.SuspendActorRequest{
 		Actor:   goldenRef,
 		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
-	})
+	}, &precondition)
 	if err != nil {
 		// A crash during suspend is observed as CRASHED on the retry.
-		return fmt.Errorf("while suspending golden actor: %w", err)
+		return nil, fmt.Errorf("while suspending golden actor: %w", err)
 	}
 	if findLatestDurableSnapshot(resp.GetActor().GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == nil {
-		return fmt.Errorf("suspending golden actor produced no external snapshot")
+		return nil, fmt.Errorf("suspending golden actor produced no external snapshot")
 	}
-	return nil
+	return resp.GetActor(), nil
 }
 
 // tagGoldenActor copies the snapshot into a tag before releasing the actor's copy.
-func (r *ActorTemplateReconciler) tagGoldenActor(ctx context.Context, tmpl *ateapi.ActorTemplate, ref *ateapi.ObjectRef) error {
-	_, err := r.control.CreateTag(ctx, &ateapi.CreateTagRequest{Tag: &ateapi.Tag{
+func (r *ActorTemplateReconciler) tagGoldenActor(ctx context.Context, tmpl *ateapi.ActorTemplate, ref *ateapi.ObjectRef, captured *ateapi.Actor) error {
+	precondition := store.PreconditionFrom(captured)
+	_, err := r.control.createTag(ctx, &ateapi.CreateTagRequest{Tag: &ateapi.Tag{
 		Metadata:    &ateapi.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
 		SourceActor: ref,
 		Scope:       ateapi.TagScope_TAG_SCOPE_PUBLISHED,
-	}})
+	}}, &precondition)
 	if err != nil {
 		return fmt.Errorf("while creating golden tag: %w", err)
 	}

@@ -267,7 +267,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 				tag = storetest.MustCreateTag(t, ctx, persistence, newPendingTestTag(t, goldenRef.Name, actor))
 			} else {
 				var err error
-				tag, err = workflow.TagActorSnapshot(ctx, tagToCreate(goldenRef, goldenRef.Name))
+				tag, err = workflow.TagActorSnapshot(ctx, tagToCreate(goldenRef, goldenRef.Name), nil)
 				if err != nil {
 					t.Fatal(err)
 				}

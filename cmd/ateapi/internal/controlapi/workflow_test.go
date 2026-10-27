@@ -78,7 +78,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 				},
 			},
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapi.Actor, _ *ateapi.ActorTemplate) {
-				if _, err := w.SuspendActor(context.Background(), ref, suspendAsync); err != nil {
+				if _, err := w.SuspendActor(context.Background(), ref, suspendAsync, nil); err != nil {
 					t.Fatalf("SuspendActor: %v", err)
 				}
 			},
@@ -187,7 +187,7 @@ func markOnly(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ate
 		t.Fatalf("UpdateActor: %v", err)
 	}
 	w.dialer = newDanglingDialer()
-	_, err := w.SuspendActor(ctx, ref, mode)
+	_, err := w.SuspendActor(ctx, ref, mode, nil)
 	assertStoppedAtDial(t, err)
 }
 
