@@ -1,7 +1,7 @@
-# Micro-VM runtime assets + counter demo (kind, fetch-not-bake)
+# MicroVM runtime assets + counter demo (kind, fetch-not-bake)
 
-The `microvm` runtime (`cmd/ateom-microvm`, kata + cloud-hypervisor) fetches its
-toolchain at runtime — nothing kata-specific is baked into the worker image. ateom drives
+The `microvm` runtime (`cmd/ateworker-microvm`, kata + cloud-hypervisor) fetches its
+toolchain at runtime — nothing kata-specific is baked into the worker image. ateworker drives
 the kata-agent directly (no kata shim, no containerd). Each actor container's rootfs is an
 overlay of a read-only lower (the OCI image, served into the guest over virtio-fs by
 `virtiofsd`) and a writable upper on a guest tmpfs, so `virtiofsd` is part of the asset
@@ -15,7 +15,7 @@ set. The asset set is four files:
 These helpers assemble the asset set for your node arch, stage it into the cluster's rustfs
 S3 bucket, and the demo manifest's `SandboxConfig` points at it. When `/dev/kvm` is
 available, `hack/create-kind-cluster.sh` mounts it into the node; atelet then advertises
-it as a device, which is what places micro-VM workers there.
+it as a device, which is what places microVM workers there.
 
 > [!TIP]
 > `hack/run-microvm-demo.sh` automates the full bring-up below (assets, control plane,
@@ -49,8 +49,9 @@ it as a device, which is what places micro-VM workers there.
    guest-memory snapshot round-tripped across pods.
 
 ## Notes
-- Assets may share the snapshot bucket, but must not be stored under a snapshot location
-  (an ActorTemplate's `snapshotConfig.location` followed by `/atespaces/`): the node's
-  object-store plugin refuses to serve anything there as an asset. The staging scripts use
-  `kata-assets/`, which is outside it.
+- Assets must not be stored under a snapshot location (an ActorTemplate's
+  `snapshotConfig.location` followed by `/atespaces/`): the node's object-store plugin
+  refuses to serve anything there as an asset. The staging scripts use `kata-assets/`,
+  which is outside it. On GKE they stage into the asset bucket, `BUCKET_NAME-assets`,
+  the only bucket setup-gcp lets nodes read. On kind they share the rustfs bucket.
 - `assets` is single-arch (unlike runsc's amd64/arm64): stage assets matching the node arch.

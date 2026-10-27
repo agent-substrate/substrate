@@ -16,8 +16,6 @@ package objectstorage
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -42,7 +40,7 @@ const partWriterChunk = 16 << 20
 // The parts are consecutive byte ranges of the same sparse-extent stream — part 0
 // carries the header, the last carries the end sentinel — so the composed object is
 // exactly what the single-stream writer would have produced.
-func (g *gcsClient) PutSparseFile(ctx context.Context, bucket, object string, f *os.File) (res writeContentResult, err error) {
+func (g *gcsClient) PutSparseFile(ctx context.Context, bucket, object string, f *os.File, maxParts int) (res writeContentResult, err error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return res, err
@@ -54,41 +52,33 @@ func (g *gcsClient) PutSparseFile(ctx context.Context, bucket, object string, f 
 	}
 	res = writeContentResult{logicalBytes: size, populatedBytes: populated, sparse: true}
 
-	n := sparsePartCount(populated)
+	n := min(sparsePartCount(populated), maxParts)
 	if n < 2 {
 		// Too small to be worth splitting; the plain streaming path handles it.
 		return res, errSparseTooSmall
 	}
 	groups := planSparseParts(exts, populated, n)
 
-	var idBytes [8]byte
-	if _, err := rand.Read(idBytes[:]); err != nil {
-		return res, fmt.Errorf("while naming upload parts: %w", err)
+	runID, err := newRunID()
+	if err != nil {
+		return res, err
 	}
-	runID := hex.EncodeToString(idBytes[:])
 
 	bkt := g.client.Bucket(bucket)
 	parts := make([]*storage.ObjectHandle, len(groups))
 	for i := range groups {
 		parts[i] = bkt.Object(fmt.Sprintf("%s.part-%s-%04d", object, runID, i))
 	}
-	defer func() {
-		for _, p := range parts {
-			if delErr := p.Delete(context.WithoutCancel(ctx)); delErr != nil &&
-				!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
-				err = fmt.Errorf("while removing upload part %q: %w", p.ObjectName(), delErr)
-			}
-		}
-	}()
+	defer removeScratch(ctx, parts)
 
 	grp, gctx := errgroup.WithContext(ctx)
 	for i, ranges := range groups {
 		grp.Go(func() error {
 			// Each part uploads over its own connection; see uploadClient.
-			obj := g.uploadClient(gctx, i).Bucket(bucket).Object(parts[i].ObjectName())
+			obj := g.uploadClient(i).Bucket(bucket).Object(parts[i].ObjectName())
 			w := obj.NewWriter(gctx)
 			w.ChunkSize = partWriterChunk
-			if err := writeSparsePart(w, f, size, ranges, i == 0, i == len(groups)-1); err != nil {
+			if err := writeSparsePart(contextWriter{ctx: gctx, dst: w}, f, size, ranges, i == 0, i == len(groups)-1); err != nil {
 				_ = w.Close()
 				return fmt.Errorf("while writing part %d of %q: %w", i, object, err)
 			}

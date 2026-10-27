@@ -34,14 +34,14 @@ gateway. Instead, the sandbox's DNS relay forwards a query to the worker pod's
 resolvers, which are the host cluster's configured DNS servers, only when the
 queried hostname matches a host or host wildcard in the actor's egress policy:
 queries from an actor without a policy, or for a hostname not matched by any
-rule, are answered `REFUSED`.
+rule, are answered `NXDOMAIN`.
 
 ## Configuring a workload to trust public and man-in-the-middle CAs
 
 Add a `systemInfo` volume with a `trustBundle` data source, and mount it:
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: ActorTemplate
 metadata:
   name: my-actor
@@ -123,7 +123,7 @@ Note: Do not bake the bundle into the image at build time. It will tie the image
 does exactly this. Deploy it:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-egress
+go run ./cmd/ate-setup deploy demo egress
 ```
 
 Then drive an actor's egress at an HTTPS URL an `https` rule allows and

@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -44,6 +45,10 @@ type Config struct {
 	BootDiskType               string
 
 	BucketName string
+
+	// TransferGSAName is the name of the snapshot transfer service account
+	// (SNAPSHOT_TRANSFER_GSA_NAME), the variable ate-setup also reads.
+	TransferGSAName string
 
 	CloudSQLInstance  string
 	CloudSQLTier      string
@@ -115,4 +120,16 @@ func getEnv[T getEnvType](key string, fallback T) T {
 	}
 
 	return ret.(T)
+}
+
+// assetBucketName is the bucket for micro-VM sandbox assets.
+// hack/install-microvm-deps.sh derives the same name.
+func (c *Config) assetBucketName() string {
+	return c.BucketName + "-assets"
+}
+
+// workloadIdentityPrincipal is the IAM member for the ate-system Kubernetes
+// service account ksa under GKE Workload Identity Federation.
+func workloadIdentityPrincipal(cfg *Config, ksa string) string {
+	return fmt.Sprintf("principal://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s.svc.id.goog/subject/ns/ate-system/sa/%s", cfg.ProjectNumber, cfg.ProjectID, ksa)
 }

@@ -1,0 +1,5 @@
+# Keep each run's results and report; the rest is large or regenerated.
+runs/*/*
+!runs/*/results.txt
+!runs/*/report.md
+runs/.work-*

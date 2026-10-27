@@ -31,13 +31,24 @@ fi
 
 MANIFEST_DIR="benchmarking/workloads/manifests"
 POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
+# Generated sweperf ActorTemplates; see manifests/sweperf/generate_sweperf_templates.py.
+SWEPERF_TEMPLATE_DIR="${MANIFEST_DIR}/sweperf/generated"
 # The benchmark ActorTemplates: <name>-template.yaml.tmpl each, created
-# through the ate API in the benchmark-workloads atespace. WORKLOAD_TEMPLATES
+# through the ate API in the benchmark-workloads atespace. sweperf-* names are
+# read from SWEPERF_TEMPLATE_DIR, the rest from MANIFEST_DIR. WORKLOAD_TEMPLATES
 # overrides the default set — the usermem and kernelmem templates (for the
 # matching locust tests) are not deployed by default. The glutton-storage
 # template is added when a StorageClass is set, because it needs a CSI driver
 # that not every cluster has.
-read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
+read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full ate-env}"
+
+# template_manifest prints the manifest path for ActorTemplate NAME.
+template_manifest() {
+  case "$1" in
+    sweperf-*) echo "${SWEPERF_TEMPLATE_DIR}/$1-template.yaml.tmpl" ;;
+    *)         echo "${MANIFEST_DIR}/$1-template.yaml.tmpl" ;;
+  esac
+}
 
 if [[ ! -f "${POOL_MANIFEST}" ]]; then
   echo "Error: ${POOL_MANIFEST} not found in $(pwd)" >&2
@@ -46,23 +57,29 @@ fi
 
 WORKER_COUNT=1
 SANDBOX_CLASS="gvisor"
-# Actor memory limit (ActorTemplate resources.limits.memory). The default
-# is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
-# so benchmark actors do not inherit the 2 GiB kata default and drag its page
-# cache into every memory snapshot. Raise it for RAM-consuming suites.
+# Actor memory limit (ActorTemplate resources.limits.memory). Small by
+# default, since a bigger guest drags more page cache into every memory
+# snapshot. Raise it for RAM-consuming suites.
 ACTOR_MEMORY="256Mi"
+# Actor CPU limit (ActorTemplate resources.limits.cpu). The scheduler books
+# it against the worker's CPU capacity, so it bounds how many actors a worker
+# hosts at once as much as the memory limit does.
+ACTOR_CPU="1"
 # Worker pod memory (WorkerPool spec.template.resources), set as both request
-# and limit. Empty leaves the pod unsized. The limit is also the memory the
-# worker reports as its actor capacity.
+# and limit. Empty leaves the pod unsized. The limit, less what the worker
+# keeps for itself, is the memory it reports as its actor capacity.
 WORKER_MEMORY=""
 # The StorageClass for the glutton-storage external volume. Empty means the
 # template is not deployed.
 STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-}"
+# The image for the ate-env benchmark ActorTemplate. Defaults to the pinned
+# release guest image; set ATE_ENV_IMAGE to override with a custom build.
+ATE_ENV_IMAGE="${ATE_ENV_IMAGE:-us-docker.pkg.dev/gke-substrate-release/benchmark/ate-env-guest@sha256:1d38934ef1dac71fcb1f1286de734e06ab2e19747279bccbd37bfe69e0d5bc72}"
 # The address to which an instrumented actor container sends its telemetry.
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
 OTLP_ENDPOINT=""
-# The timeout, in whole seconds, for waiting for the ateom worker pods to be
+# The timeout, in whole seconds, for waiting for the worker pods to be
 # ready.
 WAIT_TIMEOUT_SECS=300
 # fake-atelet's tuning on the fake data plane, as FAKE_ATELET_<FLAG>=VALUE
@@ -78,8 +95,8 @@ usage() {
   echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
   echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
-  echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
-  echo "                              the smallest size microvm admits)"
+  echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi)"
+  echo "  --actor-cpu CPU             CPU limit for the benchmark ActorTemplates (default: 1)"
   echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"
   echo "                              (default: unset, the pod is unsized)"
   echo "  --storage-class-name NAME   StorageClass for the glutton-storage external volume. Setting it"
@@ -87,7 +104,7 @@ usage() {
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
-  echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the ateom workers to be ready (default: 300)"
+  echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the workers to be ready (default: 300)"
   echo "  --fake-atelet-env NAME=VALUE"
   echo "                              On a substrate installed with --fake-data-plane, set a fake-atelet flag:"
   echo "                              FAKE_ATELET_DELAY=500ms sets --delay, FAKE_ATELET_DELAY_RESTORE=2s sets"
@@ -134,17 +151,43 @@ run_kubectl_ate() {
   "${KUBECTL_ATE_BIN}" "$@"
 }
 
+# cpu_millicores converts a Kubernetes cpu quantity like 250m or 1.5 to
+# millicores, which is what ActorTemplates take
+cpu_millicores() {
+  local q="$1"
+  if [[ "${q}" =~ ^([0-9]+)m$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "${q}" =~ ^([0-9]+)(\.([0-9]{1,3}))?$ ]]; then
+    local frac="${BASH_REMATCH[3]}000"
+    echo $((10#${BASH_REMATCH[1]} * 1000 + 10#${frac:0:3}))
+  else
+    echo "Error: --actor-cpu ${q} is not a cpu quantity like 250m or 1.5" >&2
+    return 1
+  fi
+}
+
+# memory_bytes converts a memory quantity like 256Mi or 1Gi to bytes, which is
+# what ActorTemplates take
+memory_bytes() {
+  local q="$1"
+  if [[ "${q}" =~ ^([0-9]+)(Ki|Mi|Gi|Ti)?$ ]]; then
+    local shift=0
+    case "${BASH_REMATCH[2]}" in
+      Ki) shift=10 ;;
+      Mi) shift=20 ;;
+      Gi) shift=30 ;;
+      Ti) shift=40 ;;
+    esac
+    echo $((10#${BASH_REMATCH[1]} << shift))
+  else
+    echo "Error: --actor-memory ${q} is not a memory quantity like 256Mi or 1Gi" >&2
+    return 1
+  fi
+}
+
 substitute() {
-  # SandboxConfig names are pinned per class in the ActorTemplates (rather
-  # than defaulted) so a stale config from a dirty teardown fails loudly
-  # instead of silently binding these workloads. gvisor-default is applied by
-  # hack/install-ate.sh; microvm is applied by hack/install-microvm-deps.sh.
   local manifest="$1"
-  local sandbox_config_name worker_resources=""
-  case "${SANDBOX_CLASS}" in
-    gvisor)  sandbox_config_name="gvisor-default" ;;
-    microvm) sandbox_config_name="microvm" ;;
-  esac
+  local worker_resources=""
   # One flow-style line, so an unset WORKER_MEMORY leaves only a blank line.
   if [[ -n "${WORKER_MEMORY}" ]]; then
     worker_resources="resources: {requests: {memory: \"${WORKER_MEMORY}\"}, limits: {memory: \"${WORKER_MEMORY}\"}}"
@@ -152,11 +195,12 @@ substitute() {
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
-      -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
+      -e "s|\${ACTOR_MEMORY_BYTES}|${ACTOR_MEMORY_BYTES}|g" \
+      -e "s|\${ACTOR_CPU_MILLICORES}|${ACTOR_CPU_MILLICORES}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
-      -e "s|\${SWEPERF_IMAGE}|${SWEPERF_IMAGE:-}|g" \
+      -e "s|\${ATE_ENV_IMAGE}|${ATE_ENV_IMAGE:-}|g" \
       -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
       "${manifest}"
 }
@@ -241,6 +285,21 @@ tune_fake_atelet() {
 }
 
 deploy() {
+  # Check every requested template has a manifest before anything on the
+  # cluster is deleted or created.
+  local template manifest
+  for template in "${TEMPLATES[@]}"; do
+    manifest="$(template_manifest "${template}")"
+    if [[ ! -f "${manifest}" ]]; then
+      echo "Error: no manifest for template ${template}: ${manifest} not found" >&2
+      if [[ "${template}" == sweperf-* ]]; then
+        echo "sweperf templates come from ${MANIFEST_DIR}/sweperf/sweperf-images.json; add the task" >&2
+        echo "there and run generate_sweperf_templates.py (see \"Sweperf Tasks\" in benchmarking/README.md)" >&2
+      fi
+      exit 1
+    fi
+  done
+
   resolve_otlp_endpoint
   # Before the pool, so its fake Workers are served by the tuned fake-atelet.
   if fake_data_plane; then
@@ -249,7 +308,9 @@ deploy() {
     echo "Error: --fake-atelet-env needs substrate installed with --fake-data-plane" >&2
     exit 1
   fi
-  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  ACTOR_CPU_MILLICORES="$(cpu_millicores "${ACTOR_CPU}")"
+  ACTOR_MEMORY_BYTES="$(memory_bytes "${ACTOR_MEMORY}")"
+  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   if fake_data_plane; then
@@ -257,13 +318,13 @@ deploy() {
     # ready once its capacity is reported, and writes that to the pool's
     # status.
     if ((WORKER_COUNT > 0)); then
-      kubectl wait --for=jsonpath='{.status.readyReplicas}'="${WORKER_COUNT}" workerpool/benchmark-ateom \
+      kubectl wait --for=jsonpath='{.status.readyReplicas}'="${WORKER_COUNT}" workerpool/benchmark-worker \
         --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
     fi
   else
-    kubectl wait --for=create deployment/benchmark-ateom \
+    kubectl wait --for=create deployment/benchmark-worker \
       --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
-    kubectl rollout status deployment/benchmark-ateom \
+    kubectl rollout status deployment/benchmark-worker \
       --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
   fi
 
@@ -276,13 +337,12 @@ deploy() {
   # the old template first. This removal is safe, because the benchmark
   # automation deletes the actors between the tests; it also removes the old
   # golden actor and snapshot server-side.
-  local template
   for template in "${TEMPLATES[@]}"; do
     run_kubectl_ate delete actor-template "${template}" -a benchmark-workloads \
       >/dev/null 2>&1 || true
     # ko resolve builds the ko:// image references and replaces them with
     # pushed digests before the manifest reaches kubectl-ate.
-    substitute "${MANIFEST_DIR}/${template}-template.yaml.tmpl" \
+    substitute "$(template_manifest "${template}")" \
       | hack/run-tool.sh ko resolve -f - \
       | run_kubectl_ate create actor-template -f -
   done
@@ -345,6 +405,13 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --actor-memory=*)
       ACTOR_MEMORY="${1#*=}"
+      ;;
+    --actor-cpu)
+      shift
+      ACTOR_CPU="$1"
+      ;;
+    --actor-cpu=*)
+      ACTOR_CPU="${1#*=}"
       ;;
     --worker-memory)
       shift
@@ -410,6 +477,11 @@ fi
 
 if [[ "${action}" == "deploy" && -z "${STORAGE_CLASS_NAME}" && " ${TEMPLATES[*]} " == *" glutton-storage "* ]]; then
   echo "Error: the glutton-storage template needs --storage-class-name" >&2
+  exit 1
+fi
+
+if [[ "${action}" == "deploy" && -z "${ATE_ENV_IMAGE:-}" && " ${TEMPLATES[*]} " == *" ate-env "* ]]; then
+  echo "Error: the ate-env template needs ATE_ENV_IMAGE" >&2
   exit 1
 fi
 

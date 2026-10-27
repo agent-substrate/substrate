@@ -29,7 +29,7 @@ Your output should be a list of violations conforming to the following JSON form
 
 ## Hints
 
-- All CRDs are defined in `pkg/api/v1alpha1`.
+- All CRDs are defined in `api/infra/k8s/ate/v1`.
 
 ## References
 - [Kubernetes API Conventions](references/api-conventions.md)

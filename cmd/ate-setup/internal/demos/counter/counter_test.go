@@ -19,9 +19,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/demotest"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos/demotest"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // TestExternalVolumeRenders covers the substitution branch of the counter
@@ -69,7 +69,8 @@ func TestExternalVolumeRenders(t *testing.T) {
 			for _, want := range []string{
 				"--validate-existing-file-path=/external-data/test.txt",
 				"mountPath: /external-data",
-				"externalVolumeTemplate:",
+				"external:",
+				"template:",
 				tc.wantSC,
 			} {
 				if !strings.Contains(string(manifest), want) {

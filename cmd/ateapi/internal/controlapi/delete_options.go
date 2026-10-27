@@ -15,10 +15,10 @@
 package controlapi
 
 import (
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 )
 
-func toDeletePreconditions(opts *ateapipb.DeleteOptions) store.DeletePreconditions {
+func toDeletePreconditions(opts *ateapi.DeleteOptions) store.DeletePreconditions {
 	return store.DeletePreconditions{UID: opts.GetUid(), Version: opts.GetVersion()}
 }

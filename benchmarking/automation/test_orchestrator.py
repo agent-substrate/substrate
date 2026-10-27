@@ -14,6 +14,7 @@
 
 """Unit tests for orchestrator.py: python3 benchmarking/automation/test_orchestrator.py"""
 
+import json
 import os
 import unittest
 from unittest import mock
@@ -59,6 +60,41 @@ class SubstrateArgsTest(unittest.TestCase):
         self.assertEqual(orchestrator.substrate_args({"isolate": None}), ["--fake-data-plane"])
 
 
+class DeploySubstrateTest(unittest.TestCase):
+    # The runner Job authenticates with its pod certificate, so ate-api-server
+    # denies it unless the install makes it an owner, and the Envoy ingress
+    # router refuses to deploy without an allowed SPIFFE ID.
+    @mock.patch("orchestrator.run")
+    def test_runner_and_client_are_bootstrap_owners(self, run):
+        orchestrator.deploy_substrate(["--credential-provider={}"])
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd, ["hack/install-ate.sh", "deploy", "ate-system", "--credential-provider={}"])
+        env = run.call_args.kwargs["env"]
+        owners = env["ATE_API_AUTHZ_BOOTSTRAP_OWNERS"].split(",")
+        self.assertEqual(
+            owners,
+            [
+                "system:serviceaccount:ate-system:ate-client",
+                "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner",
+            ],
+        )
+        self.assertEqual(
+            env["ATE_INGRESS_ALLOWED_SPIFFE_IDS"],
+            "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner",
+        )
+
+    @mock.patch("orchestrator.run")
+    def test_keeps_the_rest_of_the_environment(self, run):
+        with mock.patch.dict(os.environ, {"KO_DOCKER_REPO": "example"}):
+            orchestrator.deploy_substrate()
+        self.assertEqual(run.call_args.kwargs["env"]["KO_DOCKER_REPO"], "example")
+
+    @mock.patch("orchestrator.run_no_check")
+    def test_teardown_substrate(self, run_no_check):
+        orchestrator.teardown_substrate()
+        run_no_check.assert_called_once_with(["hack/install-ate.sh", "delete", "ate-system"])
+
+
 class DeployWorkloadsTest(unittest.TestCase):
     @mock.patch("orchestrator.run")
     def test_defaults_omit_optional_flags(self, run):
@@ -82,6 +118,13 @@ class DeployWorkloadsTest(unittest.TestCase):
         self.assertEqual(cmd[i + 1], "12Gi")
 
     @mock.patch("orchestrator.run")
+    def test_whole_core_actor_cpu_is_a_string(self, run):
+        orchestrator.deploy_workloads(actor_cpu=1)
+        cmd = run.call_args.args[0]
+        i = cmd.index("--actor-cpu")
+        self.assertEqual(cmd[i + 1], "1")
+
+    @mock.patch("orchestrator.run")
     def test_all_options(self, run):
         orchestrator.deploy_workloads(
             worker_count=3,
@@ -89,6 +132,7 @@ class DeployWorkloadsTest(unittest.TestCase):
             actor_memory="1536Mi",
             wait_timeout_secs=600,
             worker_memory="5Gi",
+            actor_cpu="250m",
         )
         run.assert_called_once_with(
             [
@@ -100,6 +144,8 @@ class DeployWorkloadsTest(unittest.TestCase):
                 "microvm",
                 "--actor-memory",
                 "1536Mi",
+                "--actor-cpu",
+                "250m",
                 "--worker-memory",
                 "5Gi",
                 "--wait-timeout",
@@ -197,6 +243,89 @@ class JobNameTest(unittest.TestCase):
             orchestrator.job_name(test, self.COMMIT),
             orchestrator.job_name(test, self.COMMIT),
         )
+
+
+CLUSTER_ENV = {"CLUSTER_NAME": "c", "CLUSTER_LOCATION": "l", "PROJECT_ID": "p"}
+
+
+class RunMetadataTest(unittest.TestCase):
+    def test_cluster_env(self):
+        with mock.patch.dict(os.environ, CLUSTER_ENV, clear=True):
+            self.assertEqual(
+                orchestrator.run_metadata(),
+                {"cluster_name": "c", "cluster_location": "l", "project_id": "p"},
+            )
+
+    def test_benchmark_metadata_is_merged(self):
+        env = {**CLUSTER_ENV, "BENCHMARK_METADATA": '{"build_id": "1"}'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(orchestrator.run_metadata()["build_id"], "1")
+
+    def test_bad_benchmark_metadata(self):
+        for bad in ("not json", "[1]", '"text"'):
+            env = {**CLUSTER_ENV, "BENCHMARK_METADATA": bad}
+            with self.subTest(bad=bad), mock.patch.dict(os.environ, env, clear=True), \
+                 self.assertRaisesRegex(ValueError, "BENCHMARK_METADATA"):
+                orchestrator.run_metadata()
+
+    def submitted_args(self, ttype, flags=("--x",)):
+        """The extra args run_test hands to render_template for a test type."""
+
+        class Rendered(Exception):
+            pass
+
+        fake = mock.Mock(job_tmpl=mock.Mock(return_value="t"), job_subs=mock.Mock(return_value={}))
+        test = {"name": "n", "type": ttype, "duration": "1m", "flags": list(flags)}
+        with mock.patch.dict(orchestrator.TYPES, {ttype: fake}), \
+             mock.patch.dict(os.environ, CLUSTER_ENV, clear=True), \
+             mock.patch.object(orchestrator, "render_template", side_effect=Rendered) as render, \
+             self.assertRaises(Rendered):
+            orchestrator.run_test(test, "img", "dest", "abcdef0123")
+        return render.call_args.args[2]
+
+    def test_locust_job_gets_metadata(self):
+        args = self.submitted_args("locust")
+        self.assertEqual(args[:2], ["--x", "--metadata"])
+        self.assertEqual(json.loads(args[2])["cluster_name"], "c")
+
+    def test_other_types_do_not(self):
+        self.assertEqual(self.submitted_args("nighthawk-ingress"), ["--x"])
+
+    def test_test_metadata_is_merged_not_overridden(self):
+        for own in (["--metadata", '{"cluster_name": "mine", "suite": "s"}'],
+                    ['--metadata={"cluster_name": "mine", "suite": "s"}']):
+            with self.subTest(own=own):
+                args = self.submitted_args("locust", ["--x", *own, "--y"])
+                # One merged --metadata, after the test's other flags.
+                self.assertEqual(args.count("--metadata"), 1)
+                self.assertFalse([a for a in args if a.startswith("--metadata=")])
+                self.assertEqual(args[:3], ["--x", "--y", "--metadata"])
+                md = json.loads(args[3])
+                # Test keys win; run keys the test does not set are kept.
+                self.assertEqual(md["cluster_name"], "mine")
+                self.assertEqual(md["suite"], "s")
+                self.assertEqual(md["project_id"], "p")
+
+    def test_bad_test_metadata_fails_clearly(self):
+        for own in (["--metadata", "not json"], ["--metadata=[1]"], ["--metadata"]):
+            with self.subTest(own=own), \
+                 self.assertRaisesRegex(ValueError, "test 'n': --metadata"):
+                orchestrator.split_metadata_flag({"name": "n", "flags": own})
+
+        # Caught by validation, before any cluster work.
+        test = {"name": "n", "type": "locust", "targetCluster": "t",
+                "file": "f", "duration": "1m", "users": 1,
+                "flags": ["--metadata", "{bad"]}
+        with self.assertRaisesRegex(ValueError, "not valid JSON"):
+            orchestrator.validate_and_normalize_tests([test])
+
+    def test_metadata_survives_yaml(self):
+        md = json.dumps({"cluster_name": "c: d", "q": "\"'"})
+        subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}
+        subs.update(locust.job_subs({"file": "f", "duration": "1m", "users": 1}))
+        text = orchestrator.render_template(RunnerSizingTest.TMPL, subs, ["--metadata", md])
+        job = next(d for d in yaml.safe_load_all(text) if d and d.get("kind") == "Job")
+        self.assertEqual(job["spec"]["template"]["spec"]["containers"][0]["args"][-1], md)
 
 
 if __name__ == "__main__":

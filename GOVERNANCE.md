@@ -20,16 +20,16 @@ decided among current Maintainers.
 
 **Default** — No formal designation. Anyone may open issues and PRs on the
 project, or review other people's PRs and issues. Must follow the Code of
-Conduct.  Opening a PR requires that the author sign the [Google Contributor
-License Agreement](https://cla.developers.google.com/about) (see
+Conduct.  Every commit in a PR must be signed off under the [Developer
+Certificate of Origin](https://developercertificate.org/) (see
 [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 **Contributor** — Someone who has made at least one non-trivial contribution
 and is known to or vouched for by a Maintainer, or has accumulated enough
 contributions over time. Granted `Read` access on the repository. Must follow
-the Code of Conduct and sign the [Google Contributor License
-Agreement](https://cla.developers.google.com/about) before their first
-contribution is merged (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+the Code of Conduct and sign off every commit under the [Developer Certificate
+of Origin](https://developercertificate.org/) (see
+[CONTRIBUTING.md](CONTRIBUTING.md)).
 
 **Reviewer** — A contributor who has made enough contributions and is vouched
 for by at least 2 Maintainers. Granted `Triage` access: can review, label, and

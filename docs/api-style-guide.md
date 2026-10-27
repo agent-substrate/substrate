@@ -10,7 +10,7 @@ This guide is derived from [Google's AIP (API Improvement Proposals)](https://go
 
 *Follows [AIP-121](https://google.aip.dev/121).*
 
-APIs are structured around **resources** (nouns) and a small set of standard **methods** (verbs). Standard methods are Get, List, Create, Update, and Delete. **Custom methods** handle operations that don't fit these patterns (e.g., Suspend, Resume, Pause for Actors).
+APIs are structured around **resources** (nouns) and a small set of standard **methods** (verbs). Standard methods are Get, List, Create, Update, and Delete. **Custom methods** handle operations that don't fit these patterns (e.g., Suspend, Resume, Revert for Actors).
 
 Rules:
 - Every primary noun the API exposes is a resource.
@@ -278,11 +278,11 @@ Clients update by read-modify-write: `Get` the resource, change the fields they 
 Rules:
 - RPC name **must** begin with `Update` followed by the singular resource name.
 - Response **must** be the resource itself — not an `UpdateActorResponse` wrapper.
-  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
+  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, `delete_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
   - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `source_snapshot_tag`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
 - The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
 - The request **must** have no other fields, apart from its parent's `ObjectRef` for a subresource (see section #2.4).
-- Unknown fields in the request are preserved, so a client built against a newer schema does not lose data by round-tripping through an older one.
+- A request carrying a field the server does not know, at any level of nesting, **must** return `INVALID_ARGUMENT` naming the field, as for every RPC. Fields only the client does not know are a different case: a client that modifies the resource it read sends them back unchanged, so an update from an older client does not clear fields a newer server set.
 - The resource's `atespace` and `name` identify the resource to update; they are not themselves updatable.
 - If the resource does not exist: return `NOT_FOUND`.
 - The `version` and `uid` fields in the embedded resource's `metadata` are **required** preconditions (see section #7). A request that leaves either unset is a blind write and **must** return `INVALID_ARGUMENT`. They are control fields the client echoes back as guards, not fields it edits.
@@ -333,7 +333,7 @@ allow external controllers and upstream systems / automations to react to resour
 
 *Follows [AIP-136](https://google.aip.dev/136).*
 
-Custom methods are for operations that don't map cleanly to CRUD: lifecycle transitions (Suspend, Resume, Pause), long-running actions, or commands with side effects that standard Update semantics would misrepresent.
+Custom methods are for operations that don't map cleanly to CRUD: lifecycle transitions (Suspend, Resume, Revert), long-running actions, or commands with side effects that standard Update semantics would misrepresent.
 
 ```proto
 rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
@@ -433,6 +433,9 @@ message ResourceMetadata {
 
   // update_time is the time the resource was last updated by a user action.
   google.protobuf.Timestamp update_time = 6;
+
+  // delete_time is the time the resource started its deletion.
+  google.protobuf.Timestamp delete_time = 7;
 }
 ```
 
@@ -478,6 +481,11 @@ on resource updates. Also establishes a total order on "snapshots" of a given re
 - Type: `google.protobuf.Timestamp`.
 - Records when the resource was last modified by a user action (Create, Update, or a custom mutating method).
 - Updated on every mutation. Internal state changes made by the system (e.g., a scheduler assigning a worker) **may** also update this field, but are not required to.
+
+### 6.7 `delete_time`
+
+- Type: `google.protobuf.Timestamp`.
+- Records when the resource started its deletion.
 
 ---
 
@@ -622,7 +630,7 @@ message Volume {
   // +k8s:format=k8s-short-name
   string name = 1;
 
-  // Exactly one of durable_dir / external_volume_template / image must be set.
+  // Exactly one of durable_dir / external / image must be set.
   //
   // +k8s:optional
   // +k8s:unionMember
@@ -630,7 +638,7 @@ message Volume {
 
   // +k8s:optional
   // +k8s:unionMember
-  ExternalVolumeTemplate external_volume_template = 3;
+  ExternalVolumeSource external = 7;
 
   // +k8s:optional
   // +k8s:unionMember
@@ -718,3 +726,27 @@ rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {
 Rules:
 - `resource` is the resource's message name, and that message **must** carry a `(resource)` option.
 - A subresource's method names the subresource, not its parent: `EgressPolicy` for `GetActorEgressPolicy`.
+
+---
+
+## 12. Sensitive Fields (`debug_redact`)
+
+*Substrate-specific. No AIP covers this.*
+
+A field that holds a secret **must** carry the standard protobuf `debug_redact` option. Components that log through Substrate's shared log handler mask labeled fields, so request and response bodies can be logged without leaking the secrets in them.
+
+```proto
+message EnvVar {
+  string name = 1;
+  string value = 2 [ debug_redact = true ];
+}
+```
+
+Rules:
+- Label a field whose value grants access to something, or is secret material provided by the user: bearer tokens and JWTs (`MintActorJwtResponse.actor_jwt`), keys, passwords, secret bytes, and user-supplied values that may hold secrets (`EnvVar.value`).
+- Do not label a reference to a secret, such as an `ate-secret://` URI (`CredentialHeader.credential_uri`). It names the secret and grants nothing by itself. Do not label identifiers, names, or list cursors (`page_token`).
+- Label a URL that grants access by itself, such as a signed URL, even when it points to a secret.
+- Prefer labeling the leaf field over the message that contains it, so the rest of the message stays readable in logs: a log line still shows which env var was set, but not its value. Label a message-typed field only when the whole message is secret.
+- Add the label in the same change that adds the field. A label added later does not help lines already logged.
+
+Which processes use the shared log handler, and what it does and does not cover, is described in [Logging Best Practices](dev/best-practices/logging.md#logging-protos-that-hold-secrets).

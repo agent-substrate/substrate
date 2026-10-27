@@ -31,8 +31,8 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/aws/smithy-go"
+	"go.ate.dev/substrate/internal/resources"
 	"golang.org/x/sync/errgroup"
 )
 

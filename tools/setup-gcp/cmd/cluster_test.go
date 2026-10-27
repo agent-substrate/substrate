@@ -15,6 +15,8 @@
 package cmd
 
 import (
+	"maps"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -105,6 +107,36 @@ func TestBuildCreateClusterRequest_NodeConfig(t *testing.T) {
 			}
 			if nodeConfig.DiskType != tt.wantDiskType {
 				t.Errorf("DiskType = %q, want %q", nodeConfig.DiskType, tt.wantDiskType)
+			}
+
+			sysctls := nodeConfig.GetLinuxNodeConfig().GetSysctls()
+			wantKeys := []string{
+				"net.ipv4.neigh.default.gc_thresh1",
+				"net.ipv4.neigh.default.gc_thresh2",
+				"net.ipv4.neigh.default.gc_thresh3",
+				"fs.inotify.max_user_instances",
+				"fs.inotify.max_user_watches",
+			}
+			parsed := make(map[string]int, len(wantKeys))
+			for _, k := range wantKeys {
+				raw, ok := sysctls[k]
+				if !ok {
+					t.Fatalf("missing required sysctl key %q", k)
+				}
+				v, err := strconv.Atoi(raw)
+				if err != nil || v <= 0 {
+					t.Fatalf("sysctl %q = %q, want positive integer: %v", k, raw, err)
+				}
+				parsed[k] = v
+			}
+			t1 := parsed["net.ipv4.neigh.default.gc_thresh1"]
+			t2 := parsed["net.ipv4.neigh.default.gc_thresh2"]
+			t3 := parsed["net.ipv4.neigh.default.gc_thresh3"]
+			if !(1024 < t1 && t1 < t2 && t2 < t3) {
+				t.Errorf("expected 1024 < gc_thresh1 (%d) < gc_thresh2 (%d) < gc_thresh3 (%d)", t1, t2, t3)
+			}
+			if watches := parsed["fs.inotify.max_user_watches"]; watches > 1048576 {
+				t.Errorf("fs.inotify.max_user_watches = %d, exceeds GKE cap of 1048576", watches)
 			}
 		})
 	}
@@ -232,7 +264,20 @@ func TestNestedVirtualizationEnabled(t *testing.T) {
 	}
 }
 
-func TestFilestoreCsiDriverEnabled(t *testing.T) {
+func TestNodeSysctlsConfigured(t *testing.T) {
+	poolWith := func(sysctls map[string]string) *containerpb.NodePool {
+		return &containerpb.NodePool{
+			Config: &containerpb.NodeConfig{
+				LinuxNodeConfig: &containerpb.LinuxNodeConfig{
+					Sysctls: sysctls,
+				},
+			},
+		}
+	}
+
+	partialSysctls := maps.Clone(requiredNodeSysctls)
+	delete(partialSysctls, "fs.inotify.max_user_watches")
+
 	tests := []struct {
 		name    string
 		cluster *containerpb.Cluster
@@ -244,35 +289,37 @@ func TestFilestoreCsiDriverEnabled(t *testing.T) {
 			want:    false,
 		},
 		{
-			name:    "nil addons config",
+			name:    "no node pools",
 			cluster: &containerpb.Cluster{},
 			want:    false,
 		},
 		{
-			name: "nil filestore config",
+			name: "pool without linux node config",
 			cluster: &containerpb.Cluster{
-				AddonsConfig: &containerpb.AddonsConfig{},
+				NodePools: []*containerpb.NodePool{{Config: &containerpb.NodeConfig{}}},
 			},
 			want: false,
 		},
 		{
-			name: "filestore disabled",
+			name: "pool missing required sysctl",
 			cluster: &containerpb.Cluster{
-				AddonsConfig: &containerpb.AddonsConfig{
-					GcpFilestoreCsiDriverConfig: &containerpb.GcpFilestoreCsiDriverConfig{
-						Enabled: false,
-					},
-				},
+				NodePools: []*containerpb.NodePool{poolWith(partialSysctls)},
 			},
 			want: false,
 		},
 		{
-			name: "filestore enabled",
+			name: "single pool with required sysctls",
 			cluster: &containerpb.Cluster{
-				AddonsConfig: &containerpb.AddonsConfig{
-					GcpFilestoreCsiDriverConfig: &containerpb.GcpFilestoreCsiDriverConfig{
-						Enabled: true,
-					},
+				NodePools: []*containerpb.NodePool{poolWith(maps.Clone(requiredNodeSysctls))},
+			},
+			want: true,
+		},
+		{
+			name: "second pool carries required sysctls",
+			cluster: &containerpb.Cluster{
+				NodePools: []*containerpb.NodePool{
+					poolWith(nil),
+					poolWith(maps.Clone(requiredNodeSysctls)),
 				},
 			},
 			want: true,
@@ -281,8 +328,8 @@ func TestFilestoreCsiDriverEnabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := filestoreCsiDriverEnabled(tt.cluster); got != tt.want {
-				t.Errorf("filestoreCsiDriverEnabled() = %v, want %v", got, tt.want)
+			if got := nodeSysctlsConfigured(tt.cluster); got != tt.want {
+				t.Errorf("nodeSysctlsConfigured() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -391,5 +438,145 @@ func TestValidateClusterLocation(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestNodePoolsWithoutPodCertificateProjection(t *testing.T) {
+	pool := func(name, version string) *containerpb.NodePool {
+		return &containerpb.NodePool{Name: name, Version: version}
+	}
+	tests := []struct {
+		name  string
+		pools []*containerpb.NodePool
+		want  []string
+	}{
+		{
+			name:  "1.36 pool needs its nodes recreated",
+			pools: []*containerpb.NodePool{pool("default-pool", "1.36.4-gke.1247000")},
+			want:  []string{"default-pool"},
+		},
+		{
+			name:  "1.37 pool is fine, projection is GA in its kubelet",
+			pools: []*containerpb.NodePool{pool("default-pool", "1.37.0-gke.3503000")},
+		},
+		{
+			// A 1.37 control plane does not help 1.36 kubelets, so only the
+			// old pool is reported.
+			name: "only the pools below 1.37 are reported",
+			pools: []*containerpb.NodePool{
+				pool("old", "1.36.4-gke.1247000"),
+				pool("new", "1.37.0-gke.3503000"),
+			},
+			want: []string{"old"},
+		},
+		{
+			name:  "an unreadable version is reported rather than assumed fine",
+			pools: []*containerpb.NodePool{pool("mystery", "")},
+			want:  []string{"mystery"},
+		},
+		{
+			name: "no pools, nothing to report",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			for _, p := range nodePoolsWithoutPodCertificateProjection(&containerpb.Cluster{NodePools: tt.pools}) {
+				got = append(got, p.GetName())
+			}
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestKubernetesMinor(t *testing.T) {
+	tests := []struct {
+		version string
+		want    int
+		wantOK  bool
+	}{
+		{version: "1.36.4-gke.1247000", want: 36, wantOK: true},
+		{version: "1.37", want: 37, wantOK: true},
+		{version: "1.100.0", want: 100, wantOK: true},
+		{version: ""},
+		{version: "latest"},
+		{version: "2.0.0"},
+		{version: "1.x.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			got, ok := kubernetesMinor(tt.version)
+			if ok != tt.wantOK || got != tt.want {
+				t.Errorf("kubernetesMinor(%q) = %d, %v; want %d, %v", tt.version, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestReplacementNodePoolCommand(t *testing.T) {
+	cfg := &Config{ProjectID: "my-project", ClusterName: "substrate-poc", ClusterLocation: "us-west1-c"}
+	tests := []struct {
+		name string
+		pool *containerpb.NodePool
+		want string
+	}{
+		{
+			name: "a pool this tool created carries its disk and nested virtualization over",
+			pool: &containerpb.NodePool{
+				Name:             "substrate-node-pool",
+				Version:          "1.36.4-gke.1247000",
+				InitialNodeCount: 2,
+				Config: &containerpb.NodeConfig{
+					MachineType:             "c3-standard-4",
+					DiskSizeGb:              500,
+					DiskType:                "pd-balanced",
+					AdvancedMachineFeatures: &containerpb.AdvancedMachineFeatures{EnableNestedVirtualization: proto.Bool(true)},
+				},
+			},
+			want: "gcloud container node-pools create substrate-node-pool-2 --cluster=substrate-poc --project=my-project --location=us-west1-c --node-version=1.36.4-gke.1247000 --machine-type=c3-standard-4 --num-nodes=2 --disk-size=500 --disk-type=pd-balanced --enable-nested-virtualization",
+		},
+		{
+			// Autoscaled pools can report zero; a pool with no nodes would
+			// leave nothing for the workloads to move to.
+			name: "defaults stay defaults, and the pool gets at least one node",
+			pool: &containerpb.NodePool{
+				Name:    "default-pool",
+				Version: "1.36.4-gke.1082000",
+				Config:  &containerpb.NodeConfig{MachineType: "e2-standard-4"},
+			},
+			want: "gcloud container node-pools create default-pool-2 --cluster=substrate-poc --project=my-project --location=us-west1-c --node-version=1.36.4-gke.1082000 --machine-type=e2-standard-4 --num-nodes=1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := replacementNodePoolCommand(cfg, tt.pool); got != tt.want {
+				t.Errorf("got  %q\nwant %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReplacementNodePoolNameFitsGKELimit(t *testing.T) {
+	long := strings.Repeat("a", 39) + "-b"
+	got := replacementNodePoolName(long)
+	if len(got) > 40 {
+		t.Errorf("replacementNodePoolName(%q) = %q, %d characters; GKE allows 40", long, got, len(got))
+	}
+	if got == long {
+		t.Errorf("replacement pool name %q collides with the original", got)
+	}
+}
+
+func TestDeleteNodePoolCommand(t *testing.T) {
+	cfg := &Config{ProjectID: "my-project", ClusterName: "substrate-poc", ClusterLocation: "us-west1-c"}
+	got := deleteNodePoolCommand(cfg, &containerpb.NodePool{Name: "substrate-node-pool"})
+	want := "gcloud container node-pools delete substrate-node-pool --cluster=substrate-poc --project=my-project --location=us-west1-c"
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }

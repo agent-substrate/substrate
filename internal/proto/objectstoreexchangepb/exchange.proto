@@ -1,0 +1,63 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package objectstoreexchange;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "go.ate.dev/substrate/internal/proto/objectstoreexchangepb";
+
+// CredentialExchange is served by the objectstore control plugin, next to
+// ate-api-server, and called by the node plugin before a snapshot transfer. It
+// turns a worker-for-actor JWT into a storage credential scoped to that
+// actor's snapshot prefixes. It is private to the objectstore plugin.
+service CredentialExchange {
+  // ExchangeActorJwt verifies actor_jwt and returns a credential limited to
+  // the actor's snapshot prefixes. Errors:
+  //   - INVALID_ARGUMENT: actor_jwt is empty.
+  //   - UNAUTHENTICATED: actor_jwt fails signature, audience or expiry, or
+  //     does not name an actor.
+  //   - PERMISSION_DENIED: actor_jwt is not a worker-for-actor token, the
+  //     actor has no snapshot location, the actor has left the node the token
+  //     was minted for, or the actor is in a state with no transfer.
+  //   - NOT_FOUND: the actor is gone or was recreated.
+  //   - FAILED_PRECONDITION: the exchange is not allowed to read actors.
+  //   - INTERNAL: the actor's grants cannot be derived or expressed as an
+  //     access boundary.
+  //   - UNAVAILABLE: ate-api-server or the credential issuer cannot be reached.
+  //   - CANCELLED, DEADLINE_EXCEEDED: the caller gave up first.
+  rpc ExchangeActorJwt(ExchangeActorJwtRequest) returns (ExchangeActorJwtResponse);
+}
+
+message ExchangeActorJwtRequest {
+  // A worker-for-actor JWT minted by ate-api-server for the audience the
+  // plugin requires. It names the node it was minted for, and is good only
+  // while the actor is on that node.
+  string actor_jwt = 1 [ debug_redact = true ];
+
+  // force skips the control plugin's token cache and mints a fresh credential
+  // from the actor's current state. The node plugin sets it after storage
+  // refused a credential it obtained earlier.
+  bool force = 2;
+}
+
+message ExchangeActorJwtResponse {
+  // The GCS OAuth access token.
+  string access_token = 1 [ debug_redact = true ];
+
+  // When the credential expires.
+  google.protobuf.Timestamp expire_time = 2;
+}

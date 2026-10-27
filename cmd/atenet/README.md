@@ -18,8 +18,8 @@ likely be split in the future for better scalability.)
   * Envoy
   * atenet router
 * Service will expose:
-  * Envoy port 80 and 443 for ordinary ingress traffic, plus a dedicated
-    CONNECT port (8081, or 8444 for TLS) for arbitrary-port ingress: a client
+  * Envoy port 443 for ordinary ingress traffic, plus a dedicated
+    CONNECT port (8444) for arbitrary-port ingress: a client
     reaches a port on the actor other than its default (80) with an HTTP
     `CONNECT` request naming the port in the authority. Only HTTP(S) traffic
     over the tunnel is supported today, not raw TCP.
@@ -29,7 +29,7 @@ likely be split in the future for better scalability.)
   than a header. `atunnel` can't read that metadata directly, though -- it's
   a separate process on the worker pod, not part of Envoy -- so the port to
   reach on the actor itself (its default port, or an arbitrary one for
-  CONNECT) still travels as a real header, `atunnel.TargetPortHeader`.
+  CONNECT) still travels as a real header, `TargetPortHeader` in `internal/atunnel/ingress`.
   `ate-target-actor: <atespace>/<actor>` identifies the Actor independently of
   `:authority`/`Host`.
 * Termination: the router drains gracefully on SIGTERM (readiness flip →

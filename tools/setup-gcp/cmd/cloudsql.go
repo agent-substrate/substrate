@@ -294,25 +294,15 @@ func createCloudSQLGSA(ctx context.Context, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("get service account iam policy: %w", err)
 	}
-	const wiRole = "roles/iam.workloadIdentityUser"
-	for _, b := range policy.Bindings {
-		if b.Role == wiRole {
-			for _, m := range b.Members {
-				if m == member {
-					slog.Info("Workload Identity binding exists. Skipping.")
-					return nil
-				}
-			}
-			b.Members = append(b.Members, member)
-			return setGSAPolicy(ctx, svc, resource, policy)
-		}
+	if !addServiceAccountBinding(policy, "roles/iam.workloadIdentityUser", member) {
+		slog.Info("Workload Identity binding exists. Skipping.")
+		return nil
 	}
-	policy.Bindings = append(policy.Bindings, &iam.Binding{Role: wiRole, Members: []string{member}})
+	slog.Info("Binding Workload Identity user to service account...")
 	return setGSAPolicy(ctx, svc, resource, policy)
 }
 
 func setGSAPolicy(ctx context.Context, svc *iam.Service, resource string, policy *iam.Policy) error {
-	slog.Info("Binding Workload Identity user to service account...")
 	_, err := svc.Projects.ServiceAccounts.SetIamPolicy(resource, &iam.SetIamPolicyRequest{Policy: policy}).Context(ctx).Do()
 	if err != nil {
 		return fmt.Errorf("set service account iam policy: %w", err)
@@ -440,6 +430,11 @@ var cloudsqlCmd = &cobra.Command{
 		if err := createCloudSQLGSA(ctx, &cfg); err != nil {
 			return err
 		}
+		// ate-api-server's pod runs as this account once Cloud SQL is on, so
+		// its credential exchange creates transfer account tokens with it.
+		if err := setupTransferServiceAccount(ctx, &cfg, "serviceAccount:"+cloudSQLGSAEmail(&cfg)); err != nil {
+			return err
+		}
 		if err := grantCloudSQLProjectRoles(ctx, &cfg); err != nil {
 			return err
 		}
@@ -458,5 +453,6 @@ func init() {
 	cloudsqlCmd.Flags().StringVar(&cfg.CloudSQLEdition, "edition", getEnv("CLOUDSQL_EDITION", "enterprise"), "Instance edition: enterprise | enterprise-plus (enables the local-SSD data cache) [env: CLOUDSQL_EDITION]")
 	cloudsqlCmd.Flags().Int64Var(&cfg.CloudSQLStorageGB, "storage-size", getEnv("CLOUDSQL_STORAGE_GB", int64(0)), "Data disk size in GB; 0 = Cloud SQL default (10 GB, auto-resizing). PD IOPS scale with size [env: CLOUDSQL_STORAGE_GB]")
 	cloudsqlCmd.Flags().StringVar(&cfg.CloudSQLGSAName, "gsa-name", getEnv("CLOUDSQL_GSA_NAME", "ate-api-server"), "Name of the Google service account to create for Workload Identity + IAM database auth [env: CLOUDSQL_GSA_NAME]")
+	addTransferGSANameFlag(cloudsqlCmd)
 	cloudsqlCmd.Flags().StringVar(&cfg.Network, "network", getEnv("NETWORK", "default"), "VPC network name (must match the cluster's) [env: NETWORK]")
 }

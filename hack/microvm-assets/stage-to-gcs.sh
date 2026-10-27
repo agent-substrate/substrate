@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Stage the assembled micro-VM asset set into the GCS snapshot bucket under
+# Stage the assembled micro-VM asset set into the GCS asset bucket under
 # kata-assets/, where atelet fetches it through the node's object-store plugin
 # (per manifests/microvm/sandboxconfig-microvm.yaml.tmpl). The plugin refuses
 # assets stored under a snapshot location (<snapshotConfig.location>/atespaces/),
@@ -22,15 +22,16 @@
 # assemble.sh has produced $OUT.
 #
 # Requires the `gcloud` CLI authenticated for the bucket's project. Env: OUT (asset
-# dir, default ./bin/microvm-assets/amd64), BUCKET (default ate-snapshots),
-# PROJECT_ID (optional; passed to gcloud as --project when set).
+# dir, default ./bin/microvm-assets/amd64), BUCKET (required, the asset bucket,
+# BUCKET_NAME-assets as install-microvm-deps.sh passes it), PROJECT_ID (optional;
+# passed to gcloud as --project when set).
 
 set -o errexit -o nounset -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 
 OUT="${OUT:-${ROOT}/bin/microvm-assets/amd64}"
-BUCKET="${BUCKET:-ate-snapshots}"
+BUCKET="${BUCKET:?set BUCKET to the asset bucket, BUCKET_NAME-assets}"
 
 # Pass --project only when PROJECT_ID is set (mirrors hack/teardown.sh); otherwise
 # gcloud uses its active config project. ${PROJECT_ID:+...} elides the flag entirely

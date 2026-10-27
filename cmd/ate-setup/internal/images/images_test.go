@@ -25,8 +25,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 )
 
 // installTrees are the directories the installer reads manifests from.
@@ -132,5 +132,13 @@ func TestImageNamesAreUnique(t *testing.T) {
 			continue
 		}
 		byName[name] = pkg
+	}
+}
+
+// A nested package publishes under its last path element, which is how a
+// build from source names it and how --image-repo has to find it.
+func TestImageNameOfANestedPackage(t *testing.T) {
+	if got := images.ImageName("demos/multi-template/fspersist"); got != "fspersist" {
+		t.Errorf("ImageName() = %q, want fspersist", got)
 	}
 }

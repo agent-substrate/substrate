@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Build context must be the monorepo root so the Go builder can pull in
-# cmd/, internal/, pkg/, and vendor/. build_and_push.sh sets this up.
+# api/, cmd/, internal/, pkg/, and vendor/. build_and_push.sh sets this up.
 
 # Stage 1: Python dependency builder
 FROM python:3.11-slim AS pydeps
@@ -28,18 +28,19 @@ WORKDIR /src
 COPY benchmarking/locust/codegen/requirements.txt benchmarking/locust/codegen/
 RUN pip install --no-cache-dir -r benchmarking/locust/codegen/requirements.txt
 COPY benchmarking/locust/codegen/generate.sh benchmarking/locust/codegen/
-COPY pkg/proto pkg/proto
+COPY api api
 COPY internal/proto internal/proto
 RUN PYTHON=python3 OUT_DIR=/out benchmarking/locust/codegen/generate.sh
 
 # Stage 3: Go build of the boomer-worker worker. Lives in the same image so
 # runner.py can spawn it as a subprocess during headless runs of glutton.
 # CGO_ENABLED=0 keeps us on boomer's pure-Go ZMQ (gomq), no libzmq needed.
-FROM golang:1.26-bookworm AS goboomer
+FROM golang:1.27.3-bookworm@sha256:5c3e9b43cfd3bb95c7937462e29d87ada57b481a96fa23ad0eb61778d7a00110 AS goboomer
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY vendor ./vendor
+COPY api ./api
 COPY cmd ./cmd
 COPY internal ./internal
 COPY pkg ./pkg
@@ -59,6 +60,7 @@ COPY benchmarking/locust/runner.py /app/runner.py
 COPY benchmarking/locust/cluster_facts.py /app/cluster_facts.py
 COPY benchmarking/locust/server_telemetry.py /app/server_telemetry.py
 COPY benchmarking/locust/phase_breakdown.py /app/phase_breakdown.py
+COPY benchmarking/locust/ladder_steps.py /app/ladder_steps.py
 COPY benchmarking/analysis/phase_report.py /app/phase_report.py
 
 ENV PYTHONPATH=/app:/app/deps

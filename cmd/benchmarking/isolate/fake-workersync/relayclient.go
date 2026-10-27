@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker"
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
+	"go.ate.dev/substrate/internal/credbundle"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -34,7 +34,7 @@ import (
 const reportTimeout = 10 * time.Second
 
 // grpcRelay sends capacity reports to the fake-atelet relay on a Worker's
-// node, as ateom sends them to the atelet on its own node. A rejected report
+// node, as worker sends them to the atelet on its own node. A rejected report
 // carries ate-api-server's status unchanged.
 type grpcRelay struct {
 	creds credentials.TransportCredentials
@@ -86,15 +86,38 @@ func newGRPCRelay(clientBundlePath, trustBundlePath, ateletID string) (*grpcRela
 	return &grpcRelay{creds: credentials.NewTLS(cfg), conns: map[string]*grpc.ClientConn{}}, nil
 }
 
-// Report sends req to the relay at addr (host:port).
-func (g *grpcRelay) Report(ctx context.Context, addr string, req *ateapipb.RegisterWorkerRequest) error {
+// Report registers report's Worker through the relay at addr (host:port), as a
+// worker process does at startup.
+func (g *grpcRelay) Report(ctx context.Context, addr string, report workerReport) error {
 	conn, err := g.conn(addr)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	_, err = ateapipb.NewWorkerServiceClient(conn).RegisterWorker(ctx, req)
+	client := ateapi.NewWorkerServiceClient(conn)
+	ref := &ateapi.ObjectRef{Name: report.Name}
+	epoch := report.Epoch
+	if epoch == 0 {
+		resp, err := client.AcquireWorkerEpoch(ctx, &ateapi.AcquireWorkerEpochRequest{Worker: ref})
+		if err != nil {
+			return err
+		}
+		epoch = resp.GetEpoch()
+	}
+	if _, err := client.RegisterWorker(ctx, &ateapi.RegisterWorkerRequest{
+		Worker:   ref,
+		Epoch:    epoch,
+		Ips:      report.IPs,
+		Capacity: report.Capacity,
+	}); err != nil {
+		return err
+	}
+	_, err = client.SetWorkerSandboxRuntimes(ctx, &ateapi.SetWorkerSandboxRuntimesRequest{
+		Worker:         ref,
+		Epoch:          epoch,
+		SandboxClasses: report.SandboxClasses,
+	})
 	return err
 }
 

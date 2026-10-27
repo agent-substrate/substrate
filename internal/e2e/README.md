@@ -27,7 +27,7 @@ what CI installs on the envoy lane; see `internal/e2e/suites/egresscredinject`.
 ## Sandbox classes
 
 The suites are runtime-agnostic: the same tests run against gVisor and against
-the micro-VM (kata + cloud-hypervisor) sandbox class. `E2E_SANDBOX_CLASS`
+the microVM (kata + cloud-hypervisor) sandbox class. `E2E_SANDBOX_CLASS`
 selects which, by repointing every fixture at its variant --- see
 `e2e.CounterFixture`, `e2e.EgressFixture` and `e2e.RenderFixtureManifest` in
 [sandbox.go](sandbox.go). Unset means gVisor.
@@ -36,11 +36,11 @@ selects which, by repointing every fixture at its variant --- see
 # gVisor (the default), against the demos install-ate-kind.sh deploys
 $ hack/run-e2e-kind.sh -v -args --no-color
 
-# micro-VM, against the counter-microvm and egress-microvm demos
+# microVM, against the counter-microvm and egress-microvm demos
 $ E2E_SANDBOX_CLASS=microvm hack/run-e2e-kind.sh -v -args --no-color
 ```
 
-The micro-VM lane needs its fixtures installed first, which also needs a node
+The microVM lane needs its fixtures installed first, which also needs a node
 with `/dev/kvm` (`hack/create-kind-cluster.sh` detects one and labels the node):
 
 ```shell
@@ -53,7 +53,7 @@ installs the fixtures elsewhere: `E2E_SUBSTRATE_TEMPLATE_ATESPACE` /
 `E2E_SUBSTRATE_TEMPLATE_NAME` / `E2E_SUBSTRATE_POOL_NAMESPACE` /
 `E2E_SUBSTRATE_POOL_NAME` point the counter fixture somewhere else, and
 `E2E_TEMPLATE_READY_TIMEOUT` replaces the golden-snapshot budget (90s on
-gVisor, 10m on micro-VM, where the golden is a cloud-hypervisor cold boot plus
+gVisor, 10m on microVM, where the golden is a cloud-hypervisor cold boot plus
 a checkpoint).
 
 ## Settings
@@ -70,11 +70,34 @@ it to `1` to measure single-CPU Envoy performance.
 |------------------------|-----------------------------|---------------------------|---------|------------|
 | `e2e.envoyConcurrency` | `E2E_ATE_ENVOY_CONCURRENCY` | `--e2e-envoy-concurrency` | `0`     | (global)   |
 
+## Preview features
+
+Tests of a preview feature start with `e2e.RequirePreview(t, preview.Gate...)`,
+which skips them unless the `--preview` flag names that gate. It takes the same
+syntax as `ATE_PREVIEW` and should match what the cluster was installed with:
+
+```shell
+$ hack/run-e2e-kind.sh -v -args --no-color --preview=ALL
+```
+
+Unset or empty means no gates. CI must pass it, even if only as empty, so a
+lane that forgets cannot silently skip every preview test; see
+[preview.go](preview.go).
+
+## GCS-only suites
+
+`internal/e2e/suites/snapshotcredentials` runs only against an install that
+stores snapshots in GCS, which it reads from the objectstore-plugin sidecar on
+ate-api-server, and skips on any other backend, such as the kind lane's
+S3-compatible service. A lane that is meant to be GCS sets
+`E2E_REQUIRE_GCS=true`, which turns that skip into a failure, so a lane
+misconfigured as S3 cannot pass by running nothing.
+
 ## After a failure
 
 A suite deletes the namespaces it created only when it passed. A failed run
 keeps them, because the failure is usually explained inside a worker pod (the
-ateom logs, and for a micro-VM worker the guest's console tail), and deleting
+worker logs, and for a microVM worker the guest's console tail), and deleting
 the namespace takes those pods with it:
 
 ```shell

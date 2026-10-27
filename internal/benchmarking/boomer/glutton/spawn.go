@@ -27,14 +27,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
+	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -75,6 +76,7 @@ func init() {
 		Name:       "spawn",
 		LocustFile: "spawn.py",
 		UserClass:  spawnUserClass,
+		Config:     spawnCodec,
 		Init:       initSpawn,
 	})
 }
@@ -161,17 +163,15 @@ func (r *spawnRuntime) runBatch(ctx context.Context) {
 	spawnConcurrency := r.cfg.SpawnConcurrency
 	deadline := r.cfg.ActorDeadline
 	// Values set in the web UI form (dynconfig) override the flags.
-	if r.cfg.Dyn != nil {
-		dyn := r.cfg.Dyn.Load()
-		if dyn.TotalActors > 0 {
-			totalActors = dyn.TotalActors
-		}
-		if dyn.SpawnConcurrency > 0 {
-			spawnConcurrency = dyn.SpawnConcurrency
-		}
-		if dyn.ActorDeadline > 0 {
-			deadline = dyn.ActorDeadline
-		}
+	knobs := dynconfig.Get[spawnKnobs](r.cfg.Dyn)
+	if knobs.TotalActors > 0 {
+		totalActors = knobs.TotalActors
+	}
+	if knobs.SpawnConcurrency > 0 {
+		spawnConcurrency = knobs.SpawnConcurrency
+	}
+	if knobs.ActorDeadline > 0 {
+		deadline = knobs.ActorDeadline.Duration()
 	}
 	spawnConcurrency = min(spawnConcurrency, totalActors)
 	if spawnConcurrency < 1 {
@@ -262,10 +262,10 @@ func (r *spawnRuntime) createActorWithRetry(ctx context.Context, actorName strin
 		}
 
 		err := r.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
-			_, callErr := r.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-				Actor: &ateapipb.Actor{
-					Metadata:      &ateapipb.ResourceMetadata{Atespace: r.cfg.Atespace, Name: actorName},
-					ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
+			_, callErr := r.cfg.APIStub.CreateActor(callCtx, &ateapi.CreateActorRequest{
+				Actor: &ateapi.Actor{
+					Metadata:      &ateapi.ResourceMetadata{Atespace: r.cfg.Atespace, Name: actorName},
+					ActorTemplate: &ateapi.ObjectRef{Atespace: templateAtespace, Name: templateName},
 				},
 			}, grpc.Trailer(tr))
 			return callErr
@@ -299,7 +299,7 @@ func (r *spawnRuntime) createActorWithRetry(ctx context.Context, actorName strin
 }
 
 func (r *spawnRuntime) resumeActorWithRetry(ctx context.Context, actorName string) error {
-	actorRef := &ateapipb.ObjectRef{Atespace: r.cfg.Atespace, Name: actorName}
+	actorRef := &ateapi.ObjectRef{Atespace: r.cfg.Atespace, Name: actorName}
 	delay := spawnInitialRetryBackoff
 
 	for {
@@ -309,7 +309,7 @@ func (r *spawnRuntime) resumeActorWithRetry(ctx context.Context, actorName strin
 
 		err := r.tracedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
 			return boomerutil.RetryOnConflict(callCtx, func() error {
-				_, err := r.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
+				_, err := r.cfg.APIStub.ResumeActor(callCtx, &ateapi.ResumeActorRequest{
 					Actor: actorRef,
 				}, grpc.Trailer(tr))
 				return err
@@ -413,9 +413,9 @@ func (r *spawnRuntime) doOnePing(ctx context.Context, actorName string, body []b
 
 func (r *spawnRuntime) ensureAtespace(ctx context.Context) error {
 	return r.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := r.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
-			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{
+		_, err := r.cfg.APIStub.CreateAtespace(callCtx, &ateapi.CreateAtespaceRequest{
+			Atespace: &ateapi.Atespace{
+				Metadata: &ateapi.ResourceMetadata{
 					Name: r.cfg.Atespace,
 				},
 			},
@@ -478,12 +478,11 @@ func (r *spawnRuntime) deleteAll(ctx context.Context) {
 
 func (r *spawnRuntime) deleteActor(ctx context.Context, name string) error {
 	return r.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := r.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{
+		_, err := r.cfg.APIStub.DeleteActor(callCtx, &ateapi.DeleteActorRequest{
+			Actor: &ateapi.ObjectRef{
 				Atespace: r.cfg.Atespace,
 				Name:     name,
 			},
-			AnyState: true,
 		}, grpc.Trailer(tr))
 		return err
 	})

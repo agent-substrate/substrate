@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The probe fixture's ActorTemplate: a protojson-shaped ateapipb.ActorTemplate
-# (NOT the ate.dev/v1alpha1 CRD), created through the ate API by
+# The probe fixture's ActorTemplate: a protojson-shaped ateapi.ActorTemplate
+# (NOT the ate.dev/v1 CRD), created through the ate API by
 # e2e.DeploySubstrateFixture after ko resolve pins the probe image. The
 # ate-e2e-probe${FIXTURE_SUFFIX} atespace doubles as the pool's k8s namespace
 # name in probe.yaml.tmpl.
@@ -26,7 +26,7 @@ workerSelector:
     workload: probe${FIXTURE_SUFFIX}
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   volumeMounts:
   # the probe reads actor metadata and trust bundles under /run/ate
@@ -34,8 +34,8 @@ containers:
     mountPath: /run/ate
   # The probe binary binds :80 immediately, so this gates actor start on a
   # readiness signal rather than a guess, and carries a non-default
-  # timeoutSeconds so e2e covers the value crossing ateapi -> atelet -> ateom
-  # instead of only the ateom's built-in default.
+  # timeoutSeconds so e2e covers the value crossing ateapi -> atelet -> ateworker
+  # instead of only the ateworker's built-in default.
   wakeupProbe:
     httpGet:
       path: /healthz
@@ -56,7 +56,9 @@ volumes:
     # Only for suites that pass WithTrustBundle: the bundle is a cluster
     # singleton, so a suite that merely needs a probe must not depend on it.
 ${TEMPLATE_TRUST_BUNDLE}
-${TEMPLATE_RESOURCES}
-${TEMPLATE_SANDBOX_CONFIG}
+resources:
+  limits:
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-probe${FIXTURE_SUFFIX}/

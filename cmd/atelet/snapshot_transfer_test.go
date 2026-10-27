@@ -27,35 +27,42 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
-	"github.com/agent-substrate/substrate/internal/pluginsocket"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/api/objectstore/v1"
+	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/objectstoreplugin"
+	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/pluginsocket"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/objectstorage"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
+	"k8s.io/utils/clock"
 )
 
-// newPluginHerder returns an AteomHerder whose snapshots go through the
+// newPluginHerder returns an Atelet whose snapshots go through the
 // object-store plugin backed by store.
-func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *AteomHerder {
+func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *Atelet {
 	t.Helper()
 	// Test directories come from t.TempDir, so admit any absolute path.
-	plugin, err := objectstoreplugin.NewNodePlugin(store, "/")
+	plugin, err := objectstoreplugin.NewNodePlugin(store, "/", objectstorage.DefaultUploadMemory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &AteomHerder{
+	return &Atelet{
 		objectStorePlugin:  objectstoreplugintest.NodeClient(plugin),
+		workerActorJWTs:    testWorkerActorJWTs(),
 		snapshotScratchDir: t.TempDir(),
+		snapshots:          snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+		sandboxAssetCache:  newTestAssetCache(t),
+		runtimes:           newRuntimeIndex(),
+		checkpointTimeout:  defaultCheckpointTimeout,
 	}
 }
 
@@ -99,14 +106,14 @@ func TestUploadSnapshotManifestLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	rec := sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"a", "b", "c"}}
+	rec := sandboxAssetsRecord{SandboxClass: "gvisor", SnapshotFiles: []string{"a", "b", "c"}}
 	for _, f := range rec.SnapshotFiles {
 		if err := os.WriteFile(dir+"/"+f, []byte(f), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if err := s.uploadSnapshot(context.Background(), uri, dir, &rec, "ate-demo", "counter"); err != nil {
+	if err := s.uploadSnapshot(context.Background(), testActor, uri, dir, &rec); err != nil {
 		t.Fatalf("uploadSnapshot: %v", err)
 	}
 	if len(store.puts) != 4 {
@@ -120,7 +127,7 @@ func TestUploadSnapshotManifestLast(t *testing.T) {
 	}
 
 	// The manifest round-trips, and scratch space is cleaned up.
-	got, err := s.fetchManifest(context.Background(), uri.String())
+	got, err := s.fetchManifest(context.Background(), testActor, uri.String())
 	if err != nil {
 		t.Fatalf("fetchManifest: %v", err)
 	}
@@ -139,10 +146,10 @@ func TestUploadSnapshotManifestLast(t *testing.T) {
 func TestSnapshotTransferSkipsEmptyFileLists(t *testing.T) {
 	store := &orderedObjectStorage{}
 	s := newPluginHerder(t, store)
-	if err := s.downloadExternalCheckpoint(context.Background(), pausedSnapshotURI, t.TempDir(), nil); err != nil {
+	if err := s.downloadExternalCheckpoint(context.Background(), testActor, pausedSnapshotURI, t.TempDir(), nil, cacheModeOff); err != nil {
 		t.Errorf("downloadExternalCheckpoint(no files) = %v, want nil", err)
 	}
-	if err := s.uploadSnapshotFiles(context.Background(), pausedSnapshotURI, t.TempDir(), nil); err != nil {
+	if err := s.uploadSnapshotFiles(context.Background(), testActor, pausedSnapshotURI, t.TempDir(), nil); err != nil {
 		t.Errorf("uploadSnapshotFiles(no files) = %v, want nil", err)
 	}
 	if len(store.puts) != 0 {
@@ -155,11 +162,11 @@ type failingNodePlugin struct {
 	err error
 }
 
-func (p failingNodePlugin) FetchSnapshot(context.Context, *objectstorev1.FetchSnapshotRequest, ...grpc.CallOption) (*objectstorev1.FetchSnapshotResponse, error) {
+func (p failingNodePlugin) FetchSnapshot(context.Context, *objectstore.FetchSnapshotRequest, ...grpc.CallOption) (*objectstore.FetchSnapshotResponse, error) {
 	return nil, p.err
 }
 
-func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstorev1.UploadSnapshotRequest, ...grpc.CallOption) (*objectstorev1.UploadSnapshotResponse, error) {
+func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstore.UploadSnapshotRequest, ...grpc.CallOption) (*objectstore.UploadSnapshotResponse, error) {
 	return nil, p.err
 }
 
@@ -175,25 +182,30 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 	}
 	rec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    testPauseImage,
 		SnapshotFiles: []string{"a"},
 		Fidelity:      ateattr.SnapshotFidelityMemory,
 	}
 	transfers := []struct {
 		name      string
 		retryable bool
-		run       func(ctx context.Context, s *AteomHerder) error
+		run       func(ctx context.Context, s *Atelet) error
 	}{
-		{"download", true, func(ctx context.Context, s *AteomHerder) error {
-			return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"})
+		{"download", true, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, testActor, pausedSnapshotURI, t.TempDir(), []string{"a"}, cacheModeOff)
 		}},
-		{"paused upload", true, func(ctx context.Context, s *AteomHerder) error {
+		{"cached download, link", true, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, testActor, pausedSnapshotURI, t.TempDir(), []string{"a"}, cacheModeLink)
+		}},
+		{"cached download, copy", true, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, testActor, pausedSnapshotURI, t.TempDir(), []string{"a"}, cacheModeCopy)
+		}},
+		{"paused upload", true, func(ctx context.Context, s *Atelet) error {
 			dir := t.TempDir()
 			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+			_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 			return err
 		}},
-		{"checkpoint upload", false, func(ctx context.Context, s *AteomHerder) error {
+		{"checkpoint upload", false, func(ctx context.Context, s *Atelet) error {
 			dir := t.TempDir()
 			if err := os.WriteFile(filepath.Join(dir, "a"), []byte("a"), 0o600); err != nil {
 				return err
@@ -208,11 +220,66 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 				if pluginCode == codes.Unavailable && tr.retryable {
 					want = codes.Unavailable
 				}
-				s := &AteomHerder{
+				s := &Atelet{
 					objectStorePlugin:  failingNodePlugin{err: status.Error(pluginCode, "plugin failed")},
+					workerActorJWTs:    testWorkerActorJWTs(),
 					snapshotScratchDir: t.TempDir(),
+					snapshotCache:      newTestAssetCache(t),
 				}
 				// atelet's server interceptor decides the code ate-api-server sees.
+				_, err := ateinterceptors.InternalServerUnaryInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
+					func(ctx context.Context, _ any) (any, error) { return nil, tr.run(ctx, s) })
+				if got := status.Code(err); got != want {
+					t.Errorf("code = %s (%v), want %s", got, err, want)
+				}
+			})
+		}
+	}
+}
+
+// A mint failure reaches ate-api-server the way a plugin failure does:
+// Unavailable where the transfer can be retried, Internal where it cannot,
+// and never NotFound, which callers read as a missing snapshot object.
+func TestMintErrorCodeThroughAtelet(t *testing.T) {
+	uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := sandboxAssetsRecord{SandboxClass: "gvisor", SnapshotFiles: []string{"a"}, Fidelity: ateattr.SnapshotFidelityMemory}
+	transfers := []struct {
+		name      string
+		retryable bool
+		run       func(ctx context.Context, s *Atelet) error
+	}{
+		{"download", true, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, testActor, pausedSnapshotURI, t.TempDir(), []string{"a"}, cacheModeOff)
+		}},
+		{"paused upload", true, func(ctx context.Context, s *Atelet) error {
+			dir := t.TempDir()
+			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
+			_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+			return err
+		}},
+		{"checkpoint upload", false, func(ctx context.Context, s *Atelet) error {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "a"), []byte("a"), 0o600); err != nil {
+				return err
+			}
+			return s.uploadExternalCheckpoint(ctx, validCheckpointRequest(), dir, &rec)
+		}},
+	}
+	for _, mint := range []codes.Code{codes.Unavailable, codes.NotFound, codes.Aborted, codes.Internal} {
+		for _, tr := range transfers {
+			t.Run(mint.String()+"/"+tr.name, func(t *testing.T) {
+				want := codes.Internal
+				if mint == codes.Unavailable && tr.retryable {
+					want = codes.Unavailable
+				}
+				s := &Atelet{
+					objectStorePlugin:  failingNodePlugin{err: status.Error(codes.Internal, "the plugin must not be reached")},
+					workerActorJWTs:    newWorkerActorJWTs(&fakeJWTMinter{err: status.Error(mint, "mint failed")}),
+					snapshotScratchDir: t.TempDir(),
+				}
 				_, err := ateinterceptors.InternalServerUnaryInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
 					func(ctx context.Context, _ any) (any, error) { return nil, tr.run(ctx, s) })
 				if got := status.Code(err); got != want {
@@ -237,26 +304,34 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"a"}, Fidelity: ateattr.SnapshotFidelityMemory}
+	rec := sandboxAssetsRecord{SandboxClass: "gvisor", SnapshotFiles: []string{"a"}, Fidelity: ateattr.SnapshotFidelityMemory}
 	transfers := []struct {
 		name string
 		uri  string // the URI the transfer names in its error, when it takes one
-		run  func(ctx context.Context, s *AteomHerder) error
+		run  func(ctx context.Context, s *Atelet) error
 	}{
-		{"download", signedURI, func(ctx context.Context, s *AteomHerder) error {
-			return s.downloadExternalCheckpoint(ctx, signedURI, t.TempDir(), []string{"a"})
+		{"download", signedURI, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, testActor, signedURI, t.TempDir(), []string{"a"}, cacheModeOff)
 		}},
-		{"upload", signedURI, func(ctx context.Context, s *AteomHerder) error {
-			return s.uploadSnapshotFiles(ctx, signedURI, t.TempDir(), []string{"a"})
+		// The cached modes also build a cache key from the URI, which the
+		// cache quotes in its errors and logs.
+		{"cached download, link", signedURI, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, testActor, signedURI, t.TempDir(), []string{"a"}, cacheModeLink)
 		}},
-		{"manifest fetch", signedURI, func(ctx context.Context, s *AteomHerder) error {
-			_, err := s.fetchManifest(ctx, signedURI)
+		{"cached download, copy", signedURI, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, testActor, signedURI, t.TempDir(), []string{"a"}, cacheModeCopy)
+		}},
+		{"upload", signedURI, func(ctx context.Context, s *Atelet) error {
+			return s.uploadSnapshotFiles(ctx, testActor, signedURI, t.TempDir(), []string{"a"})
+		}},
+		{"manifest fetch", signedURI, func(ctx context.Context, s *Atelet) error {
+			_, err := s.fetchManifest(ctx, testActor, signedURI)
 			return err
 		}},
-		{"paused upload", "", func(ctx context.Context, s *AteomHerder) error {
+		{"paused upload", "", func(ctx context.Context, s *Atelet) error {
 			dir := t.TempDir()
 			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+			_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 			return err
 		}},
 	}
@@ -264,9 +339,11 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 		for _, tr := range transfers {
 			t.Run(pluginCode.String()+"/"+tr.name, func(t *testing.T) {
 				logs := captureLogs(t)
-				s := &AteomHerder{
+				s := &Atelet{
 					objectStorePlugin:  failingNodePlugin{err: status.Error(pluginCode, "get "+signedURI+": AccountKey="+secret)},
+					workerActorJWTs:    testWorkerActorJWTs(),
 					snapshotScratchDir: t.TempDir(),
+					snapshotCache:      newTestAssetCache(t),
 				}
 				_, err := ateinterceptors.InternalServerUnaryInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
 					func(ctx context.Context, _ any) (any, error) { return nil, tr.run(ctx, s) })
@@ -317,7 +394,7 @@ type pluginSidecar struct {
 
 func newPluginSidecar(t *testing.T, store objectstorage.ObjectStorage) *pluginSidecar {
 	t.Helper()
-	plugin, err := objectstoreplugin.NewNodePlugin(store, "/")
+	plugin, err := objectstoreplugin.NewNodePlugin(store, "/", objectstorage.DefaultUploadMemory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +417,7 @@ func (s *pluginSidecar) start() {
 		return
 	}
 	srv := grpc.NewServer()
-	objectstorev1.RegisterNodeProviderServer(srv, s.plugin)
+	objectstore.RegisterNodeProviderServer(srv, s.plugin)
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 	go srv.Serve(lis)
 	s.mu.Lock()
@@ -361,7 +438,7 @@ func (s *pluginSidecar) stop() {
 }
 
 // The upload after CheckpointWorkload waits out a plugin outage longer than
-// the ready wait, since a retried Checkpoint cannot redo it. The paused
+// the ready wait, since a retried Checkpoint cannot redo it. The PromoteSnapshot
 // upload, which a retry can redo, still fails within the ready wait.
 func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 	const wait = 200 * time.Millisecond
@@ -378,13 +455,13 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 	if err := pluginsocket.WaitReady(ctx, conn); err != nil {
 		t.Fatalf("WaitReady = %v", err)
 	}
-	s := &AteomHerder{
-		objectStorePlugin:  objectstorev1.NewNodeProviderClient(conn),
+	s := &Atelet{
+		objectStorePlugin:  objectstore.NewNodeProviderClient(conn),
+		workerActorJWTs:    testWorkerActorJWTs(),
 		snapshotScratchDir: t.TempDir(),
 	}
 	rec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    testPauseImage,
 		SnapshotFiles: []string{"a"},
 		Fidelity:      ateattr.SnapshotFidelityMemory,
 	}
@@ -408,7 +485,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 		}
 	}
 
-	if _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), pausedDir, uri); apierror.Code(err) != codes.Unavailable {
+	if _, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), pausedDir, uri); apierror.Code(err) != codes.Unavailable {
 		t.Fatalf("paused upload during the outage = %v, want %s", err, codes.Unavailable)
 	}
 
@@ -436,14 +513,15 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 	}
 }
 
-// fetchManifest keeps the plugin's NotFound readable, which the paused
+// fetchManifest keeps the plugin's NotFound readable, which the local
 // snapshot upload uses to tell a missing snapshot from a failed probe.
 func TestFetchManifestKeepsNotFound(t *testing.T) {
-	s := &AteomHerder{
+	s := &Atelet{
 		objectStorePlugin:  failingNodePlugin{err: status.Error(codes.NotFound, "no manifest")},
+		workerActorJWTs:    testWorkerActorJWTs(),
 		snapshotScratchDir: t.TempDir(),
 	}
-	_, err := s.fetchManifest(context.Background(), pausedSnapshotURI)
+	_, err := s.fetchManifest(context.Background(), testActor, pausedSnapshotURI)
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("fetchManifest = %v, want %s", err, codes.NotFound)
 	}

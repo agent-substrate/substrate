@@ -24,7 +24,7 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"google.golang.org/grpc"
 
-	"github.com/agent-substrate/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/actorevent"
 )
 
 const logsExporterEnv = "OTEL_LOGS_EXPORTER"
@@ -48,7 +48,7 @@ type LoggingOptions struct {
 	// ResolveLogsExporter.
 	Exporter Exporters
 	// ExporterConn and RelayCapable are the logs counterpart of the same fields
-	// on TracingOptions: ateom passes its relay connection and marks itself
+	// on TracingOptions: worker passes its relay connection and marks itself
 	// relay-capable so the resource carries ate.otlp.relay.
 	ExporterConn *grpc.ClientConn
 	RelayCapable bool
@@ -58,9 +58,11 @@ type LoggingOptions struct {
 // through internal/actorevent, and sets whether those records also go to stdout
 // (console).
 //
-// It returns (nil, nil) when the exporter does not include otlp, and leaves the
-// OTel global alone: emitting then costs one Enabled check. Guard the shutdown
-// on a nil provider, unlike InitTracing which always returns one.
+// It returns (nil, nil) when the exporter does not include otlp, or when a
+// relay-capable component has neither a relay connection nor an OTLP endpoint
+// (see hasOTLPDestination), and leaves the OTel global alone: emitting then
+// costs one Enabled check. Guard the shutdown on a nil provider, unlike
+// InitTracing which always returns one.
 //
 // The processor batches. These records sit on the actor resume and suspend
 // path, and exporting inside the emit call would put a blocking gRPC round trip
@@ -76,8 +78,11 @@ func InitLogging(ctx context.Context, opts LoggingOptions) (*sdklog.LoggerProvid
 		return nil, fmt.Errorf("LoggingOptions.Exporter is required")
 	}
 	actorevent.SetConsole(opts.Exporter.Has(ExporterConsole))
-	if !opts.Exporter.Has(ExporterOTLP) {
-		slog.InfoContext(ctx, "OTLP logs export disabled", slog.String("exporter", opts.Exporter.String()))
+	if reason, level := otlpExportBlocked(opts.Exporter.Has(ExporterOTLP),
+		hasOTLPDestination(logsEndpointEnv, opts.RelayCapable, opts.ExporterConn)); reason != "" {
+		slog.Log(ctx, level, "OTLP logs export disabled",
+			slog.String("exporter", opts.Exporter.String()),
+			slog.String("reason", reason))
 		return nil, nil
 	}
 

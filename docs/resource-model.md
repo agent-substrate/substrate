@@ -2,10 +2,10 @@
 
 Substrate exposes resources through two APIs:
 
-- a **gRPC API** (`pkg/proto/ateapipb/ateapi.proto`), served by the
+- a **gRPC API** (`api/ateapi/v1/ateapi.proto`), served by the
   Substrate API server. Its resources follow the
   [API Style Guide](api-style-guide.md).
-- The **Kubernetes API**, through CRDs in `pkg/api/v1alpha1`, for
+- The **Kubernetes API**, through CRDs in `api/infra/k8s/ate/v1`, for
   managing compute infrastructure. Its resources follow the
   [Kubernetes API conventions](https://github.com/kubernetes/community/blob/main/contributors/devel/sig-architecture/api-conventions.md)
 
@@ -104,7 +104,7 @@ classDiagram
     Tag "*" --> "1" Actor : source_actor
     ActorAssignment "0..1" --> "1" Actor : actor
     ActorTemplate ..> WorkerPool : worker_selector
-    ActorTemplate ..> SandboxConfig : sandbox_config
+    WorkerPool ..> SandboxConfig : sandboxClasses
     WorkerPool "1" *-- "*" WorkerPod
     Worker "1" --> "1" WorkerPod
 ```

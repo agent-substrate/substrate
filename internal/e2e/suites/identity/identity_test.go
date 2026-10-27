@@ -17,15 +17,18 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"slices"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const probeTemplate = "probe"
@@ -79,7 +82,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// a bundle EXISTS), so the assertions below know the bundle's exact
 	// contents.
 	wantTrust := e2e.AddEgressCA(t, ctx, clients, "ate-e2e-probe-trust")
-	var tmpl *ateapipb.ActorTemplate
+	var tmpl *ateapi.ActorTemplate
 	probeNamespace, tmpl = e2e.DeployProbe(t, env["BUCKET_NAME"], "identity", e2e.WithTrustBundle())
 	// The golden actor's id, for the not-golden assertion below. Coupled to
 	// the reconciler's naming: the golden actor is named after the template's
@@ -93,7 +96,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 		createAndResumeActor(t, ctx, clients, id)
 	}
 
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}
@@ -138,7 +141,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 		// The projected UID must match the control plane's authoritative view
 		// of this actor, and be distinct per actor even though both actors
 		// were seeded from the same golden snapshot.
-		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}})
+		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: &ateapi.ObjectRef{Atespace: probeNamespace, Name: id}})
 		if err != nil {
 			t.Fatalf("GetActor %q: %v", id, err)
 		}
@@ -149,6 +152,14 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 			t.Errorf("actor %q and %q both report uid %q — actors are not distinct", id, other, got.UID)
 		}
 		seenUIDs[got.UID] = id
+
+		// Resolved from the /etc/hosts the runtime writes, not DNS: images
+		// commonly ship an empty one.
+		for host, want := range map[string]string{"localhost": "127.0.0.1", got.Hostname: "169.254.17.2"} {
+			if addrs, err := lookup(ctx, rc, id, host); err != nil || !slices.Contains(addrs, want) {
+				t.Errorf("actor %q: lookup %q = %v, %v; want %s", id, host, addrs, err, want)
+			}
+		}
 	}
 
 	// Live refresh: rotate the pool while both actors run and wait until each
@@ -169,15 +180,23 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// must see the rotated contents.
 	rotatedTrust := e2e.AddEgressCA(t, ctx, clients, "ate-e2e-probe-trust-rotated")
 	id := ids[0]
-	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
+	ref := &ateapi.ObjectRef{Atespace: probeNamespace, Name: id}
+	// The actor may edit its /etc files, as under Docker or kubelet, and the
+	// edits outlive the suspend like any other rootfs write.
+	etcFiles := []string{"/etc/hosts", "/etc/resolv.conf"}
+	for _, path := range etcFiles {
+		if out, err := probeFile(ctx, rc, id, "/writefile", path); err != nil || out["error"] != "" {
+			t.Fatalf("actor %q: editing %s: %v %v", id, path, err, out["error"])
+		}
+	}
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("SuspendActor %q: %v", id, err)
 	}
-	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+	waitForActorState(t, ctx, clients, id, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q (after suspend): %v", id, err)
 	}
-	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(t, ctx, clients, id, ateapi.ActorState_ACTOR_STATE_RUNNING)
 
 	got := whoami(t, ctx, rc, id)
 	if got.File != id {
@@ -191,6 +210,11 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	}
 	if wantUID := seenUIDFor(t, seenUIDs, id); got.UID != wantUID {
 		t.Errorf("after suspend/resume: /run/ate/actor-uid = %q, want %q (probe read error: %q)", got.UID, wantUID, got.Error)
+	}
+	for _, path := range etcFiles {
+		if out, err := probeFile(ctx, rc, id, "/readfile", path); err != nil || out["content"] != "written by probe" {
+			t.Errorf("after suspend/resume: %s = %q, %v %v; want the actor's edit", path, out["content"], err, out["error"])
+		}
 	}
 	waitForTrust(t, ctx, rc, id, rotatedTrust, 10*time.Second)
 
@@ -229,12 +253,12 @@ func seenUIDFor(t *testing.T, seenUIDs map[string]string, id string) string {
 	return ""
 }
 
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actorName string, want ateapipb.ActorState) {
+func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actorName string, want ateapi.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: actorName},
+		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: probeNamespace, Name: actorName},
 		})
 		if err == nil && resp.GetStatus().GetState() == want {
 			return
@@ -246,16 +270,16 @@ func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
-	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
+	ref := &ateapi.ObjectRef{Atespace: probeNamespace, Name: id}
 	// The actor record lives in the ateapi store and outlives the fixture
 	// namespace, so a failed prior run can leak it and wedge every rerun on
 	// AlreadyExists. Best-effort clear it before creating (DeleteActor
 	// requires SUSPENDED or CRASHED, hence the suspend first).
-	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
-	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
+	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
+	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref})
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: probeNamespace, Name: id},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
@@ -263,14 +287,14 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		// Suspend is best-effort: the actor may already be suspended, or may
 		// never have resumed. A failed delete is only logged — the pre-create
 		// clear above keeps the next run working regardless.
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
-		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
+		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref}); err != nil {
 			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
 		}
 	})
 
 	// Resume from the golden snapshot (the restore path).
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: probeNamespace, Name: id}}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }
@@ -282,6 +306,40 @@ func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) 
 		t.Fatal(err)
 	}
 	return out
+}
+
+// lookup asks the probe to resolve host from inside the actor.
+func lookup(ctx context.Context, rc *e2e.RouterClient, id, host string) ([]string, error) {
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: probeNamespace, Name: id}, "/lookup?host="+url.QueryEscape(host))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Addrs []string `json:"addrs"`
+		Error string   `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decoding /lookup: %w", err)
+	}
+	if out.Error != "" {
+		return nil, errors.New(out.Error)
+	}
+	return out.Addrs, nil
+}
+
+// probeFile runs the probe's /readfile or /writefile on path.
+func probeFile(ctx context.Context, rc *e2e.RouterClient, id, op, path string) (map[string]string, error) {
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: probeNamespace, Name: id}, op+"?path="+url.QueryEscape(path))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decoding %s: %w", op, err)
+	}
+	return out, nil
 }
 
 // tryWhoami is whoami returning the error instead of failing the test.
