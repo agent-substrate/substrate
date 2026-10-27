@@ -2049,8 +2049,9 @@ func (x *CredentialHeader) GetTokenExchange() *TokenExchangeSource {
 // returned access token becomes the header value.
 type TokenExchangeSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// HTTPS URL of the token endpoint, without userinfo, query, or fragment.
-	// An https rule in the same policy must allow its host and port.
+	// HTTPS URL of the token endpoint, with a DNS hostname and without userinfo,
+	// query, or fragment. An https rule in the same policy must allow its host
+	// and port.
 	//
 	// +k8s:required
 	// +k8s:maxLength=2048

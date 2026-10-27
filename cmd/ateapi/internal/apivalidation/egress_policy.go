@@ -136,6 +136,9 @@ func validateTokenURLsAllowed(p *field.Path, rules []*ateapi.EgressRule) field.E
 			member, effects = "https", rule.GetHttps().GetEffects()
 		}
 		for j, inj := range effects.GetReplaceHeaders() {
+			if inj.GetTokenExchange() == nil {
+				continue
+			}
 			raw := inj.GetTokenExchange().GetTokenUrl()
 			dest, ok := egresspolicy.TokenURLDestination(raw)
 			if !ok {
