@@ -35,6 +35,10 @@ type AtenetDataplane interface {
 	IsRetryableParkingBudgetExhaustion(status int, body string) bool
 	ParkingBudgetStatus() int
 	IsEgressPolicyDenied(status int, body string) bool
+	// InjectsExchangedTokens reports whether the dataplane injects the
+	// credentials of token_exchange entries. One that does not denies the
+	// request with 403.
+	InjectsExchangedTokens() bool
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
 	ScrapeMetrics(context.Context) (string, error)
@@ -84,6 +88,8 @@ func isEgressPolicyDenied(status int, body string) bool {
 	return (status == http.StatusForbidden && (strings.Contains(body, "egress denied") || strings.Contains(body, "actor egress policy denied"))) ||
 		(status == http.StatusBadGateway && strings.Contains(body, "request failed"))
 }
+
+func (envoyAtenetDataplane) InjectsExchangedTokens() bool { return true }
 
 func (envoyAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string { return prefixes }
 
@@ -148,6 +154,8 @@ func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.Statu
 func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 	return isEgressPolicyDenied(status, body)
 }
+
+func (agentGatewayAtenetDataplane) InjectsExchangedTokens() bool { return false }
 
 func (agentGatewayAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string {
 	filtered := make([]string, 0, len(prefixes))

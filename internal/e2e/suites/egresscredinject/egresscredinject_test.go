@@ -17,8 +17,9 @@
 // gateway's MITM leg resolve the credential through the
 // k8s-credential-provider and replace the actor's placeholder header with it
 // before re-originating upstream. The same rule also injects an actor JWT
-// minted by ateapi. See TestActorEgressCredentialInjection for the proof
-// structure and how to run this locally.
+// minted by ateapi, and another origin's rules inject a token the gateway
+// gets by RFC 8693 token exchange. See TestActorEgressCredentialInjection for
+// the proof structure and how to run this locally.
 package egresscredinject
 
 import (
@@ -54,6 +55,23 @@ var echoServer = e2e.ServiceDNSTLS(e2e.ServerPod{
 	ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 	Args:       []string{"http"},
 })
+
+// stsServer is a fake RFC 8693 token endpoint, testserver's POST /token, whose
+// /echoheaders also shows what the gateway injected. Its rules exchange actor
+// JWTs at its own /token, which its https rule allows.
+var stsServer = e2e.ServiceDNSTLS(e2e.ServerPod{
+	Name:       "sts",
+	ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
+	Args:       []string{"http"},
+})
+
+// The sts rules replace exchangedTokenHeader with a token exchanged for
+// tokenExchangeAudience and tokenExchangeScope.
+const (
+	exchangedTokenHeader  = "X-Exchanged-Token"
+	tokenExchangeAudience = "e2e-sts.ate.dev"
+	tokenExchangeScope    = "read"
+)
 
 // The hosts of the fail-closed cases.
 const (
@@ -100,10 +118,15 @@ var withPlaceholder = []string{
 //     secret and for a namespace outside the atespace's authorization
 //     (default-deny), 403 or 500 for a URI naming a provider this gateway
 //     does not serve — over HTTPS and plain HTTP alike.
+//   - token exchange: a fetch of the sts origin echoes the access token its
+//     /token issued for this actor's JWT, over HTTPS and plain HTTP. A
+//     dataplane without token exchange denies it with 403. ateapi rejects a
+//     policy whose token URL no https rule allows.
 //
-// The echo origin runs in the cluster, so its HTTPS side needs the gateway to
-// trust the service-DNS signer its certificate comes from, which
-// hack/setup-e2e-egress-tls-kind.sh adds after the install. The install must
+// The echo and sts origins run in the cluster, so the gateway has to trust
+// the service-DNS signer their certificates come from, for HTTPS and for
+// token exchange. hack/setup-e2e-egress-tls-kind.sh adds both after the
+// install. The install must
 // be made with the bundled provider, which deploys the k8s-credential-provider
 // and points the egress gateway at it. Locally:
 //
@@ -121,13 +144,14 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	echo := e2e.DeployServerPod(t, ctx, echoServer)
 	// The name the service-DNS signer certifies.
 	echoHost := echo.SvcName()
+	stsHost := e2e.DeployServerPod(t, ctx, stsServer).SvcName()
 
 	e2e.ConfigureCredentialProvider(t)
 
 	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egresscredinject", e2e.WithTrustBundle())
 
 	const id = "probe-credinject"
-	createAndResumeActor(t, ctx, clients, id, echoHost)
+	createAndResumeActor(t, ctx, clients, id, echoHost, stsHost)
 	waitForActorState(t, ctx, clients, id, ateapi.ActorState_ACTOR_STATE_RUNNING)
 	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
 		Actor: &ateapi.ObjectRef{Atespace: probeNamespace, Name: id},
@@ -174,6 +198,44 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 			}
 		})
 	}
+
+	for _, scheme := range []string{"https", "http"} {
+		t.Run("token exchange/"+scheme, func(t *testing.T) {
+			origin := scheme + "://" + stsHost + "/echoheaders"
+			withExchangePlaceholder := []string{"header=" + url.QueryEscape(exchangedTokenHeader+":"+placeholder)}
+			if !e2e.CurrentAtenetDataplane().InjectsExchangedTokens() {
+				if got := probeFetch(t, ctx, rc, id, origin, withExchangePlaceholder); got.Status != "403" {
+					t.Errorf("fetch of %s returned status %q (error %q), want 403 from a dataplane without token exchange", origin, got.Status, got.Error)
+				}
+				return
+			}
+			echoed := assertEchoedHeaders(t, "token exchange fetch", fetchEcho(t, ctx, rc, id, origin, withExchangePlaceholder))
+			want := "Bearer exchanged.actor/" + probeNamespace + "/" + id + "." + tokenExchangeScope
+			if got := echoed[exchangedTokenHeader]; got != want {
+				t.Errorf("upstream received %s %q, want %q", exchangedTokenHeader, got, want)
+			}
+		})
+	}
+
+	t.Run("token URL no https rule allows", func(t *testing.T) {
+		rule := e2e.EgressAllowHTTPS(stsHost)
+		rule.Https.Effects = &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{
+			tokenExchangeInjection("https://sts.egresscredinject.invalid/token"),
+		}}
+		// The actor does not exist, so a policy ateapi wrongly accepted
+		// would still not be stored.
+		ref := &ateapi.ObjectRef{Atespace: probeNamespace, Name: id + "-rejected"}
+		_, err := clients.SubstrateAPI.CreateActorEgressPolicy(ctx, &ateapi.CreateActorEgressPolicyRequest{
+			Actor: ref,
+			EgressPolicy: &ateapi.EgressPolicy{
+				Metadata: &ateapi.ResourceMetadata{Atespace: probeNamespace, Name: resources.SingletonName},
+				Rules:    []*ateapi.EgressRule{rule},
+			},
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("CreateActorEgressPolicy with a token URL no rule allows: %v, want InvalidArgument", err)
+		}
+	})
 
 	// Fail closed: each of these rules names a credential that cannot be
 	// injected, and the denial must be the mapped status, not a request that
@@ -358,8 +420,9 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 
 // createAndResumeActor first deletes any actor left by an earlier run, since
 // actor records outlive the fixture namespace. echoHost is the echo origin's
-// name, whose rules inject a credential the provider resolves.
-func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id, echoHost string) {
+// name, whose rules inject a credential the provider resolves, and stsHost is
+// the sts origin's, whose rules inject an exchanged token.
+func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id, echoHost, stsHost string) {
 	t.Helper()
 	ref := &ateapi.ObjectRef{Atespace: probeNamespace, Name: id}
 	// NotFound is the normal case on a fresh run. Other errors don't stop the
@@ -390,7 +453,10 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	echoHTTPSRule.Https.Effects.ReplaceHeaders = append(echoHTTPSRule.Https.Effects.ReplaceHeaders, actorJWTInjection())
 	echoHTTPRule := e2e.EgressInjectHeaderHTTP("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost, echoHost+".cluster.local")
 	echoHTTPRule.Http.Effects.ReplaceHeaders = append(echoHTTPRule.Http.Effects.ReplaceHeaders, actorJWTInjection())
-	rules := []*ateapi.EgressRule{echoHTTPSRule, echoHTTPRule}
+	exchange := &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{tokenExchangeInjection("https://" + stsHost + "/token")}}
+	stsHTTPSRule, stsHTTPRule := e2e.EgressAllowHTTPS(stsHost), e2e.EgressAllowHTTP(stsHost)
+	stsHTTPSRule.Https.Effects, stsHTTPRule.Http.Effects = exchange, exchange
+	rules := []*ateapi.EgressRule{echoHTTPSRule, echoHTTPRule, stsHTTPSRule, stsHTTPRule}
 	for _, credential := range []struct {
 		host string
 		uri  string
@@ -417,6 +483,18 @@ func actorJWTInjection() *ateapi.CredentialHeader {
 		ActorJwt: &ateapi.ActorJwtSource{
 			Audiences:         []string{actorJWTAudience},
 			ExpirationSeconds: actorJWTLifetime,
+		},
+	}
+}
+
+func tokenExchangeInjection(tokenURL string) *ateapi.CredentialHeader {
+	return &ateapi.CredentialHeader{
+		Header: exchangedTokenHeader,
+		Prefix: "Bearer ",
+		TokenExchange: &ateapi.TokenExchangeSource{
+			TokenUrl: tokenURL,
+			Audience: tokenExchangeAudience,
+			Scopes:   []string{tokenExchangeScope},
 		},
 	}
 }
