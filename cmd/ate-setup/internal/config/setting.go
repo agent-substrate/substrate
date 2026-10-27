@@ -169,6 +169,13 @@ var Registry = []Setting{
 		Usage: "Run an additional ext_proc authorization filter served by NS/SVC:PORT " +
 			"(requires --atenet-dataplane=envoy)",
 	},
+	{
+		Key: "atenet.egress.tokenExchangeCAConfigMap", Env: "ATE_TOKEN_EXCHANGE_CA_CONFIGMAP",
+		Flag: "token-exchange-ca-configmap", Kind: KindString,
+		Usage: "ConfigMap in the install namespace whose ca.crt key holds PEM certificates the egress " +
+			"gateway trusts for token exchange endpoints, besides the system roots. The installer does " +
+			"not create it (requires --atenet-dataplane=envoy)",
+	},
 
 	{
 		// No default: an unset level keeps the one an existing install has,

@@ -42,6 +42,7 @@ type Options struct {
 	FakeDataPlane                  bool
 	AdditionalEgressExtprocService string
 	CredentialProvider             string
+	TokenExchangeCAConfigMap       string
 	OtlpEndpoint                   string
 
 	// Image source selection.
@@ -90,6 +91,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"cluster-size", opts.ClusterSize},
 		{"experimental-additional-egress-extproc-service", opts.AdditionalEgressExtprocService},
 		{"credential-provider", opts.CredentialProvider},
+		{"token-exchange-ca-configmap", opts.TokenExchangeCAConfigMap},
 		{"otlp-endpoint", opts.OtlpEndpoint},
 		{"image-repo", opts.ImageRepo},
 		{"image-tag", opts.ImageTag},

@@ -23,6 +23,7 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/internal/actoridjwt"
@@ -278,6 +279,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
+		TokenExchangeCAConfigMap:       r.String("atenet.egress.tokenExchangeCAConfigMap"),
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
 		OtlpEndpoint:                   r.String("otlpEndpoint"),
 		APILogLevel:                    r.String("ateapi.logLevel"),
@@ -446,6 +448,16 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		if cfg.Router != RouterEnvoy {
 			return &ConflictError{A: extproc, B: dataplane,
 				Why: "an additional ext_proc filter requires dataplane " + RouterEnvoy}
+		}
+	}
+	if cfg.TokenExchangeCAConfigMap != "" {
+		ca, _ := r.Value("atenet.egress.tokenExchangeCAConfigMap")
+		if len(validation.IsDNS1123Subdomain(cfg.TokenExchangeCAConfigMap)) != 0 {
+			return &InvalidError{Value: ca, Want: "a ConfigMap name"}
+		}
+		if cfg.Router != RouterEnvoy {
+			return &ConflictError{A: ca, B: dataplane,
+				Why: "token exchange requires dataplane " + RouterEnvoy}
 		}
 	}
 	// A gate the components do not know makes each of them refuse to start, so
