@@ -287,18 +287,27 @@ func main() {
 	csiDriverConfigLister := ateFactory.Ate().V1().CSIDriverConfigs().Lister()
 
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
-	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
-	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
+	kubeInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
+	storageClassLister := kubeInformerFactory.Storage().V1().StorageClasses().Lister()
+	// The informer watches every ServiceAccount in the cluster, so it keeps
+	// only what the checker reads.
+	saInformer := kubeInformerFactory.Core().V1().ServiceAccounts()
+	if err := saInformer.Informer().SetTransform(apiauthn.TrimServiceAccount); err != nil {
+		serverboot.Fatal(ctx, "Failed to set ServiceAccount informer transform", err)
+	}
+	authCfg.ServiceAccounts = apiauthn.NewServiceAccountChecker(saInformer.Lister(), clientset.CoreV1())
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 	ateletPodInformerFactory.Start(stopCh)
 	ateFactory.Start(stopCh)
-	scInformerFactory.Start(stopCh)
+	kubeInformerFactory.Start(stopCh)
 
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
-	scInformerFactory.WaitForCacheSync(stopCh)
+	// Synced before serving, so ServiceAccount token checks read the cache
+	// rather than the API server.
+	kubeInformerFactory.WaitForCacheSync(stopCh)
 
 	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List); err != nil {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
@@ -676,12 +685,8 @@ func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) 
 		serverCfg.JWTProviders = append(serverCfg.JWTProviders, apiauthn.JWTProvider{
 			Name:   providerCfg.Name,
 			Issuer: providerCfg.Issuer,
-			Verify: func(ctx context.Context, bearer string) (string, error) {
-				claims, err := verifier.Verify(ctx, bearer, time.Now())
-				if err != nil {
-					return "", err
-				}
-				return claims.Subject, nil
+			Verify: func(ctx context.Context, bearer string) (*oidcjwt.Claims, error) {
+				return verifier.Verify(ctx, bearer, time.Now())
 			},
 		})
 		slog.InfoContext(ctx, "Configured JWT provider", slog.String("name", providerCfg.Name), slog.String("issuer", providerCfg.Issuer))

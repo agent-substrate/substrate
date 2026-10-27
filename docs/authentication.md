@@ -27,6 +27,21 @@ What an authenticated caller may do is decided by authorization; see
 provider issued the token, so only configure providers you trust not to issue
 a token whose subject is another principal's ID.
 
+## ServiceAccount tokens
+
+`ate-api` accepts a token whose `sub` is
+`system:serviceaccount:<namespace>:<name>` only while that ServiceAccount
+exists in its own cluster, is not being deleted, and has the UID in the token's
+`kubernetes.io` claim. This applies to every provider, so ServiceAccount tokens
+from another cluster are rejected. A ServiceAccount recreated with the same
+name gets new tokens that work, and access policies that name it still apply
+to it.
+
+`ate-api` watches ServiceAccounts, so a token keeps working until the deletion
+reaches its cache. When the cache does not have the ServiceAccount with the
+token's UID, `ate-api` reads it from the Kubernetes API server, at a limited
+rate. A call over that rate fails with `Unavailable` and can be retried.
+
 ## Google Cloud CLI tokens
 
 The Google Cloud CLI currently issues user identity tokens with issuer
