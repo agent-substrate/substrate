@@ -35,9 +35,6 @@ func podcertObjects(t *testing.T, clusterSize string) []*unstructured.Unstructur
 	t.Helper()
 	e := &Env{Cfg: &config.Config{Root: repoRoot(t), ClusterSize: clusterSize}}
 	path := e.Cfg.Manifest("pod-certificate-controller.yaml")
-	if e.Cfg.Size10() {
-		path = e.Cfg.Manifest("podcert-size10")
-	}
 	manifest, err := e.render(path)
 	if err != nil {
 		t.Fatalf("render(%s): %v", path, err)

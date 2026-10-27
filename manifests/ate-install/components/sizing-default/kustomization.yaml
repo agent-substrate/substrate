@@ -1,0 +1,73 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The default sizing of the control plane: replicas, container resources and
+# disruption budgets. The base manifests set none of these, so ate-setup
+# composes this component over every control plane apply. sizing-large
+# layers on top of it under --cluster-size=size10.
+#
+# Each patch targets one workload by name, and kustomize leaves a stream alone
+# when nothing in it matches, so the component fits every apply path.
+
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - path: ate-api-server.yaml
+    target:
+      kind: Deployment
+      name: ate-api-server
+  - path: ate-api-server-pdb.yaml
+    target:
+      kind: PodDisruptionBudget
+      name: ate-api-server
+  - path: ate-idp-server.yaml
+    target:
+      kind: Deployment
+      name: ate-idp-server
+  - path: ate-idp-server-pdb.yaml
+    target:
+      kind: PodDisruptionBudget
+      name: ate-idp-server
+  - path: ate-controller.yaml
+    target:
+      kind: Deployment
+      name: ate-controller
+  - path: atelet.yaml
+    target:
+      kind: DaemonSet
+      name: atelet
+  - path: atenet-router.yaml
+    target:
+      kind: Deployment
+      name: atenet-router
+  - path: atenet-egress.yaml
+    target:
+      kind: Deployment
+      name: atenet-egress
+  # The agentgateway egress has no sdsmint, and components/agentgateway-egress
+  # labels it so this patch does not add one back.
+  - path: atenet-egress-sdsmint.yaml
+    target:
+      kind: Deployment
+      name: atenet-egress
+      labelSelector: ate.dev/dataplane notin (agentgateway)
+  - path: podcertificate-controller.yaml
+    target:
+      kind: Deployment
+      name: podcertificate-controller
+  - path: postgres.yaml
+    target:
+      kind: StatefulSet
+      name: postgres

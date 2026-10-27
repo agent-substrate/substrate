@@ -204,27 +204,16 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 // the podcertificate controller, and waits until it is rolling and has
 // published its trust bundles.
 //
-// size10 clusters render the podcert-size10 overlay instead of the base file.
-// It appends --kube-api-qps=100 / --kube-api-burst=200 so the controller keeps
-// up with the request volume the size10 postgres profile enables. An overlay
-// rather than a post-apply patch, so that no later apply of the base file can
-// reconcile the flags away; the base kustomization leaves the file out for the
-// same reason.
-//
-// --podcert-workers-per-signer is set on the rendered objects for the same
-// reason: one apply means one rollout, and the rollout wait sees the pod that
-// will actually serve.
+// --podcert-workers-per-signer is set on the rendered objects rather than
+// patched after the apply: one apply means one rollout, and the rollout wait
+// sees the pod that will actually serve.
 func (e *Env) DeployPodCertificateController(ctx context.Context) error {
 	// The controller mounts every pool, so one that an older release did not
 	// create keeps the new pod in ContainerCreating.
 	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
 		return err
 	}
-	path := e.Cfg.Manifest("pod-certificate-controller.yaml")
-	if e.Cfg.Size10() {
-		path = e.Cfg.Manifest("podcert-size10")
-	}
-	manifest, err := e.renderResolve(ctx, path)
+	manifest, err := e.renderResolve(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml"))
 	if err != nil {
 		return err
 	}

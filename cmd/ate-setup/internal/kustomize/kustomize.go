@@ -17,14 +17,19 @@
 package kustomize
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"sigs.k8s.io/kustomize/api/konfig"
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/api/types"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
+	"sigs.k8s.io/yaml"
 )
 
 // Build renders an overlay directory to a multi-document YAML manifest.
@@ -47,6 +52,115 @@ func Build(dir string) ([]byte, error) {
 		return nil, fmt.Errorf("while serializing the kustomization at %s: %w", dir, err)
 	}
 	return out, nil
+}
+
+// ComponentDirs checks that each directory holds a kustomization file of kind
+// Component and returns the directories as absolute paths, in order.
+//
+// ate-setup composes each Component over every manifest it renders, and each
+// manifest carries only part of the install, so a Component may only change
+// objects that are already there. checkComponent rejects fields that add,
+// rename or move objects, change selectors, or fail on a manifest that lacks
+// the object they name. docs/operator-install.md lists them.
+//
+// TODO: let a Component add objects, so cloud providers can install their own
+// extensions. Every deploy path would apply them, and ate-setup delete must
+// remove them.
+func ComponentDirs(dirs []string) ([]string, error) {
+	out := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, fmt.Errorf("while resolving component %s: %w", dir, err)
+		}
+		if err := checkComponent(abs, nil); err != nil {
+			return nil, fmt.Errorf("component %s: %w", dir, err)
+		}
+		out = append(out, abs)
+	}
+	return out, nil
+}
+
+// checkComponent checks the Component in dir and the components it includes.
+// parents are the directories that include dir, to catch a cycle.
+func checkComponent(dir string, parents []string) error {
+	if slices.Contains(parents, dir) {
+		return fmt.Errorf("includes itself through %s", dir)
+	}
+	name, data, err := readKustomization(dir)
+	if err != nil {
+		return err
+	}
+	var k types.Kustomization
+	if err := yaml.Unmarshal(data, &k); err != nil {
+		return fmt.Errorf("while parsing %s: %w", name, err)
+	}
+	if k.Kind != types.ComponentKind {
+		return fmt.Errorf("%s has kind %q, want %s", name, k.Kind, types.ComponentKind)
+	}
+	if deprecated := *k.CheckDeprecatedFields(); len(deprecated) > 0 {
+		return fmt.Errorf("uses deprecated fields: %s", strings.Join(deprecated, "; "))
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"resources", len(k.Resources) > 0},
+		{"configMapGenerator", len(k.ConfigMapGenerator) > 0},
+		{"secretGenerator", len(k.SecretGenerator) > 0},
+		{"namePrefix", k.NamePrefix != ""},
+		{"nameSuffix", k.NameSuffix != ""},
+		{"namespace", k.Namespace != ""},
+		{"replacements", len(k.Replacements) > 0},
+		{"replicas", len(k.Replicas) > 0},
+	} {
+		if f.set {
+			return fmt.Errorf("%s is not supported in a --component", f.field)
+		}
+	}
+	for i, l := range k.Labels {
+		if l.IncludeSelectors {
+			return fmt.Errorf("labels %d sets includeSelectors, which is not supported in a --component", i)
+		}
+	}
+	for i, p := range k.Patches {
+		if p.Target == nil {
+			return fmt.Errorf("patch %d has no target", i)
+		}
+	}
+	for _, c := range k.Components {
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(dir, c)
+		}
+		if err := checkComponent(c, append(parents, dir)); err != nil {
+			return fmt.Errorf("nested component %s: %w", c, err)
+		}
+	}
+	return nil
+}
+
+// readKustomization reads the one kustomization file in dir, under any name
+// kustomize recognizes, and returns its name and contents.
+func readKustomization(dir string) (string, []byte, error) {
+	var name string
+	var data []byte
+	for _, n := range konfig.RecognizedKustomizationFileNames() {
+		d, err := os.ReadFile(filepath.Join(dir, n))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		if name != "" {
+			return "", nil, fmt.Errorf("has both %s and %s", name, n)
+		}
+		name, data = n, d
+	}
+	if name == "" {
+		return "", nil, fmt.Errorf("no kustomization file, want one of %s", strings.Join(konfig.RecognizedKustomizationFileNames(), ", "))
+	}
+	return name, data, nil
 }
 
 // Compose renders path, a manifest file or a kustomization directory, with the

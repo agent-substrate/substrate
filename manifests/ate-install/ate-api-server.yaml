@@ -62,7 +62,6 @@ metadata:
   name: ate-api-server
   namespace: ate-system
 spec:
-  replicas: 2
   strategy:
     # Update replicas one at a time, create a new one first, then delete the old one.
     rollingUpdate:
@@ -398,15 +397,12 @@ spec:
           secretName: "postgres-server-ca"
           optional: true
 ---
-# Allow voluntary disruptions (node drains, cluster upgrades) to take
-# at most one API server pod at a time, at any replica count.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: ate-api-server
   namespace: ate-system
 spec:
-  maxUnavailable: 1
   selector:
     matchLabels:
       app: ate-api-server

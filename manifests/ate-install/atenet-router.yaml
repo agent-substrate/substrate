@@ -179,7 +179,6 @@ metadata:
   labels:
     app: atenet-router
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app: atenet-router

@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 	"go.ate.dev/substrate/internal/version"
@@ -120,6 +121,15 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 		})
 		if err != nil {
 			return err
+		}
+		if cmd.Flags().Lookup(componentFlag) != nil {
+			dirs, err := cmd.Flags().GetStringArray(componentFlag)
+			if err != nil {
+				return err
+			}
+			if cfg.Components, err = kustomize.ComponentDirs(dirs); err != nil {
+				return err
+			}
 		}
 		resolved = cfg.Resolved()
 

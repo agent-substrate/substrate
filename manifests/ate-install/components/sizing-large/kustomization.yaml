@@ -12,21 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# size10 cluster overlay for podcertificate-controller: raises the client-go
-# rate limits above the built-in 5 QPS / 10 burst so signing keeps up with
-# the request volume the size10 postgres profile enables. Selected by
-# hack/install-ate.sh and cmd/ate-setup when --cluster-size=size10.
+# The large-cluster sizing, selected by --cluster-size=size10 and composed
+# after sizing-default. It assumes a dedicated node for PostgreSQL and raises
+# the database and the podcertificate controller's API rate limits to match.
+# ate-setup also pins the bundled read/write connection pool, which lives in
+# a Secret rather than a manifest.
 
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
 
-resources:
-  - ../pod-certificate-controller.yaml
-
-# JSON-patch style so we only append the two new flags rather than restate
-# the whole args list — keeps the overlay from drifting if the base flags
-# change.
 patches:
+  - path: postgres.yaml
+    target:
+      kind: StatefulSet
+      name: postgres
+  - path: postgres-config-patch.yaml
+    target:
+      kind: ConfigMap
+      name: postgres-config
+  # Raise the client-go rate limits above the built-in 5 QPS / 10 burst so
+  # signing keeps up with the request volume the large postgres enables.
   - target:
       kind: Deployment
       name: podcertificate-controller
