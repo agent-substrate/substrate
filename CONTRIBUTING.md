@@ -31,6 +31,10 @@ the commits already on your branch, then force-push:
 git rebase --signoff upstream/main
 ```
 
+The `needs-dco` label identifies PRs with missing or mismatched sign-offs,
+including older PRs that have no DCO check yet. The label updates on PR changes
+and hourly. The DCO app's check remains the authority on whether a PR passes.
+
 ### Review our Community Guidelines
 
 This project follows [Google's Open Source Community
