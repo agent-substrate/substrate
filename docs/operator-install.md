@@ -23,7 +23,7 @@ Pass it with `--config`, or name it in `ATE_CONFIG`:
 
 ```bash
 ate-setup deploy ate-system --config substrate-install.yaml
-ATE_CONFIG=substrate-install.yaml hack/install-ate.sh --deploy-ate-system
+ATE_CONFIG=substrate-install.yaml go run ./cmd/ate-setup deploy ate-system
 ```
 
 `ATE_CONFIG` is how the document reaches the shell installer, which forwards

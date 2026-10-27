@@ -184,7 +184,7 @@ the provider: it fails each fetch with `PermissionDenied`.
 **4. Point the egress gateway at the provider.** From the repository root:
 
 ```bash
-hack/install-ate.sh --deploy-atenet \
+go run ./cmd/ate-setup deploy atenet \
   --credential-provider='{"name":"secretmanager.googleapis.com","address":"gsm-credential-provider.ate-system.svc:50051"}'
 ```
 
@@ -236,8 +236,8 @@ provider while the gateway still points at it makes every credential fetch
 fail.
 
 ```bash
-hack/install-ate.sh --deploy-atenet --credential-provider='{"enabled":false}'   # from the repository root
-make undeploy                                                        # from this directory
+go run ./cmd/ate-setup deploy atenet --credential-provider='{"enabled":false}'   # from the repository root
+make undeploy                                                                   # from this directory
 ```
 
 `make undeploy` removes the provider's ServiceAccount, Deployment and Service,
