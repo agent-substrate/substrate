@@ -116,6 +116,9 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	actor = assigned
+	if err = recordExternalVolumeNode(leaseCtx, w.store, actor); err != nil {
+		return nil, false, err
+	}
 	volumePublishContexts, err := w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate)
 	if err != nil {
 		return nil, false, err
@@ -198,7 +201,8 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	pending := slices.ContainsFunc(actor.GetStatus().GetExternalVolumes().GetVolumes(), func(vol *ateapi.ExternalVolumeStatus) bool {
 		return vol.GetStorageVolumeId() == ""
 	})
-	if !pending {
+	borrows := len(borrowedVolumeRefs(actor)) > 0
+	if !pending && !borrows {
 		markSkipped(ctx, "no volumes awaiting creation")
 		return actor, nil
 	}
@@ -206,7 +210,14 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 		return nil, apierror.FailedPrecondition("cannot create volumes for Actor %s in state %s", actorRef, st)
 	}
 
-	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetExternalVolumes().GetVolumes())
+	volumes := actor.GetStatus().GetExternalVolumes().GetVolumes()
+	if borrows {
+		var err error
+		if volumes, err = claimExternalVolumes(ctx, w.store, actor); err != nil {
+			return nil, err
+		}
+	}
+	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, volumes)
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
 	updatePrecondition := store.PreconditionFrom(actor)

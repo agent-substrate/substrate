@@ -62,10 +62,10 @@ func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, req volume.MountVolu
 	return f.mountErr
 }
 
-func (f *fakeWorkerPlugin) UnmountVolume(ctx context.Context, volumeID string, targetPath string) error {
-	f.unmounted = append(f.unmounted, volumeID)
+func (f *fakeWorkerPlugin) UnmountVolume(ctx context.Context, req volume.UnmountVolumeRequest) error {
+	f.unmounted = append(f.unmounted, req.VolumeID)
 	if f.unmountErrs != nil {
-		if err, ok := f.unmountErrs[volumeID]; ok {
+		if err, ok := f.unmountErrs[req.VolumeID]; ok {
 			return err
 		}
 	}
@@ -539,5 +539,25 @@ func TestDirectCSIDriverConfigGetter(t *testing.T) {
 	_, err = getter.Get("missing.csi.k8s.io")
 	if err == nil {
 		t.Fatalf("expected error for missing driver, got nil")
+	}
+}
+
+func TestResetEmptyDirClearsPreviousContents(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "volumes", "shared")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stale"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := resetEmptyDir(dir); err != nil {
+		t.Fatalf("resetEmptyDir: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("dir still has %d entries after reset", len(entries))
 	}
 }

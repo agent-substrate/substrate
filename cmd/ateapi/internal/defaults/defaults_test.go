@@ -65,6 +65,14 @@ func TestApply(t *testing.T) {
 			GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		}},
 	}, {
+		name: "external volume without a delete trigger or access mode gets manual and read write once",
+		in:   &ateapi.ExternalVolume{},
+		want: &ateapi.ExternalVolume{DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL, AccessMode: ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE},
+	}, {
+		name: "external volume keeps its delete trigger and access mode",
+		in:   &ateapi.ExternalVolume{DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR, AccessMode: ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY},
+		want: &ateapi.ExternalVolume{DeleteTrigger: ateapi.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR, AccessMode: ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY},
+	}, {
 		name: "container without wakeup probe stays without one",
 		in:   &ateapi.ActorTemplate{Containers: []*ateapi.Container{{Name: "main"}}},
 		want: &ateapi.ActorTemplate{SnapshotConfig: defaultSnapshotConfig(), Containers: []*ateapi.Container{{Name: "main"}}},

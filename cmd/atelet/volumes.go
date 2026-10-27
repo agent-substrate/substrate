@@ -36,11 +36,17 @@ func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volu
 		// disabling the gate while in use would be an orphaned volume
 		// attachment, we are NOT checking the ExternalVolumes gate in the
 		// mount/unmount logic.
+		hostPath := ateletpath.ExternalVolumeHostPath(actorUID, vol.GetName())
+		if vol.GetEmptyDir() != nil {
+			if err := resetEmptyDir(hostPath); err != nil {
+				return err
+			}
+			continue
+		}
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
 		}
-		hostPath := ateletpath.ExternalVolumeHostPath(actorUID, vol.GetName())
 		if err := os.MkdirAll(hostPath, 0o750); err != nil {
 			return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
 		}
@@ -54,9 +60,20 @@ func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volu
 			TargetPath:     hostPath,
 			VolumeContext:  ext.GetVolumeContext(),
 			PublishContext: ext.GetPublishContext(),
+			Holder:         actorUID,
 		}); err != nil {
 			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
 		}
+	}
+	return nil
+}
+
+func resetEmptyDir(hostPath string) error {
+	if err := os.RemoveAll(hostPath); err != nil {
+		return fmt.Errorf("failed to clear empty dir %q: %w", hostPath, err)
+	}
+	if err := os.MkdirAll(hostPath, 0o750); err != nil {
+		return fmt.Errorf("failed to create empty dir %q: %w", hostPath, err)
 	}
 	return nil
 }
@@ -82,7 +99,7 @@ func (s *Atelet) unmountExternalVolumes(ctx context.Context, actorUID string, vo
 			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q (volume %q): %w", ext.GetVolumeType(), ext.GetStorageVolumeId(), err))
 			continue
 		}
-		if err := plugin.UnmountVolume(ctx, ext.GetStorageVolumeId(), hostPath); err != nil {
+		if err := plugin.UnmountVolume(ctx, volume.UnmountVolumeRequest{VolumeID: ext.GetStorageVolumeId(), TargetPath: hostPath, Holder: actorUID}); err != nil {
 			if status.Code(err) == codes.NotFound || errors.Is(err, os.ErrNotExist) {
 				slog.WarnContext(ctx, "Volume not found during unmount, assuming already unmounted", slog.String("volume_id", ext.GetStorageVolumeId()), slog.Any("error", err))
 			} else {

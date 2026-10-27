@@ -86,6 +86,10 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		errs = append(errs, fmt.Errorf("while deleting volumes: %w", err))
 	}
 
+	if err := w.ensureExternalVolumeRefsReleased(ctx, actor); err != nil {
+		errs = append(errs, fmt.Errorf("while releasing external volume references: %w", err))
+	}
+
 	if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
 		errs = append(errs, fmt.Errorf("while releasing external snapshots: %w", err))
 	}
@@ -226,7 +230,11 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	// disabling the gate while in use would be an orphaned volume
 	// attachment, we are NOT checking the ExternalVolumes gate in the
 	// delete/suspend path.
-	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
+	keepAttached, err := volumesHeldOnNode(ctx, w.store, actor)
+	if err != nil {
+		return err
+	}
+	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete", keepAttached)
 }
 
 // ensureWorkerReleased releases the worker assigned to the actor.
@@ -373,6 +381,15 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapi.
 		return apierror.Internal("while deleting actor volumes: %v", err)
 	}
 	return nil
+}
+
+// ensureExternalVolumeRefsReleased drops the actor's ExternalVolume references
+// and deletes any volume that reached its LAST_ACTOR trigger.
+func (w *ActorWorkflow) ensureExternalVolumeRefsReleased(ctx context.Context, actor *ateapi.Actor) (err error) {
+	ctx, done := stepSpan(ctx, "ReleaseExternalVolumeRefs")
+	defer func() { err = done(err) }()
+
+	return releaseExternalVolumes(ctx, w.store, w.externalVolumes, actor)
 }
 
 // ensureExternalSnapshotsReleased collects everything the actor wrote to

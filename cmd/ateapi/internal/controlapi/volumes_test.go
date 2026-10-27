@@ -470,6 +470,7 @@ func TestDetachActorVolumes(t *testing.T) {
 		plugin          *mockDetachVolumePlugin
 		pluginRegistry  *mockPluginRegistry
 		wantDetachCalls []detachCall
+		keepAttached    map[string]bool
 		wantErr         bool
 		wantErrContains string
 	}{
@@ -641,6 +642,24 @@ func TestDetachActorVolumes(t *testing.T) {
 			wantErrContains: "failed to get volume plugin for \"unknown-plugin\"",
 		},
 		{
+			name: "a volume another actor holds on the node stays attached",
+			actor: &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Name: "actor-1", Atespace: "default"},
+				Status: &ateapi.ActorStatus{
+					AssignedNode: "node-1",
+					ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock", ExternalVolumeName: "shared"},
+						{Name: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
+					}},
+				},
+			},
+			keepAttached: map[string]bool{"vol1": true},
+			wantDetachCalls: []detachCall{
+				{VolumeID: "storage-vol-2", Node: "node-1"},
+			},
+			wantErr: false,
+		},
+		{
 			name: "no assigned node skips detach",
 			actor: &ateapi.Actor{
 				Metadata: &ateapi.ResourceMetadata{Name: "actor-1", Atespace: "default"},
@@ -671,7 +690,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				}
 			}
 
-			err := detachActorVolumes(ctx, registry, tt.actor, tt.template, "test")
+			err := detachActorVolumes(ctx, registry, tt.actor, tt.template, "test", tt.keepAttached)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("detachActorVolumes() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -684,5 +703,44 @@ func TestDetachActorVolumes(t *testing.T) {
 				t.Errorf("detachCalls mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestBorrowedVolumesAreNotProvisionedOrDeleted(t *testing.T) {
+	ctx := context.Background()
+	template := &ateapi.ActorTemplate{
+		Volumes: []*ateapi.Volume{{Name: "shared-data", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "shared"}}}},
+	}
+	scLister := &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{}}
+
+	initial, err := initialExternalVolumes(ctx, scLister, template)
+	if err != nil {
+		t.Fatalf("initialExternalVolumes: %v", err)
+	}
+	if len(initial) != 0 {
+		t.Errorf("initialExternalVolumes() = %v, want no entry for a borrowed volume", initial)
+	}
+
+	borrowed := []*ateapi.ExternalVolumeStatus{{
+		Name:               "shared-data",
+		ExternalVolumeName: "shared",
+		StorageVolumeId:    "disk/shared",
+		VolumeType:         "mock",
+	}}
+	plugin := &trackingVolumePlugin{}
+	registry := &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}}
+
+	got, err := createActorVolumes(ctx, registry, scLister, "actor-uid-123", template, borrowed)
+	if err != nil {
+		t.Fatalf("createActorVolumes: %v", err)
+	}
+	if diff := cmp.Diff(borrowed, got, protocmp.Transform()); diff != "" {
+		t.Errorf("createActorVolumes() mismatch (-want +got):\n%s", diff)
+	}
+	if err := deleteActorVolumes(ctx, registry, "actor-uid-123", borrowed); err != nil {
+		t.Fatalf("deleteActorVolumes: %v", err)
+	}
+	if len(plugin.deletedIDs) != 0 {
+		t.Errorf("deleted %v, want the borrowed volume left alone", plugin.deletedIDs)
 	}
 }

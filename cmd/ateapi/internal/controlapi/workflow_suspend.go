@@ -293,10 +293,10 @@ func (w *ActorWorkflow) newInProgressSnapshotURI(actorTemplate *ateapi.ActorTemp
 	return uri, nil
 }
 
-// ensureVolumesDetached detaches the actor's mounted external volumes from
-// its worker node. Detachment is idempotent, so a re-entered workflow safely
-// runs it again. spanName distinguishes the suspend and revert steps in
-// traces; op labels the volume metrics.
+// ensureVolumesDetached detaches the actor's mounted external volumes from its
+// worker node and marks its ExternalVolume references inactive. Both steps are
+// idempotent; spanName distinguishes the suspend and revert steps in traces;
+// op labels the volume metrics.
 // TODO replace re-execution with a proper check on the volumes' attach state.
 func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, spanName, op string) (err error) {
 	ctx, done := stepSpan(ctx, spanName)
@@ -307,7 +307,14 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 	// disabling the gate while in use would be an orphaned volume
 	// attachment, we are NOT checking the ExternalVolumes gate in the
 	// delete/suspend path.
-	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, op)
+	keepAttached, err := volumesHeldOnNode(ctx, w.store, actor)
+	if err != nil {
+		return err
+	}
+	if err := detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, op, keepAttached); err != nil {
+		return err
+	}
+	return deactivateExternalVolumes(ctx, w.store, actor)
 }
 
 // ensureSuspendedFinalized releases the actor's worker (only when it is still

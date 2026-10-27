@@ -201,3 +201,61 @@ volumes:
       capacityBytes: 5368709120 # 5Gi
       storageClassName: csi-nfs-sc
 ```
+
+## 5. Shared Volumes
+
+An `ExternalVolume` is an atespace-scoped record of a CSI volume that already
+exists in the storage system. Its lifetime is independent of any actor, so
+several actors can mount the same storage in turn. Register one by the
+driver's volume ID:
+
+```bash
+kubectl ate create externalvolume imported -a demo --volume-id <csi-volume-id> --volume-type nfs.csi.k8s.io
+```
+
+Each volume records:
+
+- `deleteTrigger`: `MANUAL`, the default, removes the volume only on an
+  explicit delete; `LAST_ACTOR` removes it when the last actor referencing it
+  is deleted. Deleting the volume also deletes the storage.
+- `accessMode`: `READ_WRITE_ONCE`, the default, lets one resumed actor hold
+  the volume at a time; a resume that would take a held volume fails and
+  names the holder. `READ_WRITE_MANY` lets any number of resumed actors hold
+  it, on any node. The mode cannot change while a reference is active.
+  Updates replace the record, so an omitted `accessMode` or `deleteTrigger`
+  takes its default; `kubectl ate update externalvolume` reads the volume
+  first and keeps what it does not change.
+- `refs`: every actor referencing the volume, with `active` set and `node`
+  recorded while the actor is resumed. A referenced volume cannot be deleted.
+  A volume stays attached to a node while another resumed actor on that node
+  holds it, and the node stages it once and unstages it after the last actor
+  there unpublishes it.
+
+A template mounts an `ExternalVolume` with `external.ref`. Name the volume
+in the template, or leave the name empty and bind it per actor at creation:
+
+```yaml
+volumes:
+- name: shared
+  external: {ref: {}}
+```
+
+```bash
+kubectl ate create actor producer-42 -a demo --template producer --volume shared=ctx-42
+kubectl ate create actor consumer-42 -a demo --template consumer --volume shared=ctx-42
+```
+
+Bindings are validated and recorded when the actor is created and cannot change
+afterwards.
+
+The golden snapshot is not used for templates that reference an `ExternalVolume`. The
+first resume of such an actor is a cold boot from the image, and later resumes
+restore the actor's own snapshot, which was taken over the real volume. An
+explicit `sourceTag` is refused at actor creation. The reason is in gVisor:
+the golden actor warms up against a local empty directory at the mount path,
+but runsc derives the `disable_file_handle_sharing` mount option from the bind
+source's filesystem (NFS and FUSE get it, local disks do not) and refuses a
+restore whose mount options differ from the checkpoint's. Supporting golden
+restores here is follow-up work; the candidate approaches are a golden actor
+that warms up on a scratch volume from the same driver, or an upstream runsc
+change that excludes host-derived mount options from restore validation.

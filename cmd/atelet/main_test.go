@@ -729,6 +729,7 @@ func TestBuildWorkerWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 			{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 			{Name: "cache", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 			{Name: "scratch", External: &ateletpb.ExternalVolumeSource{}},
+			{Name: "empty", EmptyDir: &ateletpb.EmptyDirVolumeSource{}},
 			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolumeSource{}},
 		},
 		Containers: []*ateletpb.Container{
@@ -738,6 +739,7 @@ func TestBuildWorkerWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 					{Name: "data", MountPath: "/home/counter"},
 					{Name: "cache", MountPath: "/var/cache"},
 					{Name: "scratch", MountPath: "/scratch"},
+					{Name: "empty", MountPath: "/empty"},
 					{Name: "system-info", MountPath: "/run/ate"},
 				},
 			},
@@ -762,6 +764,7 @@ func TestBuildWorkerWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 				},
 				ExternalVolumeMounts: []*ateworkerpb.VolumeMount{
 					{Name: "scratch", MountPath: "/scratch"},
+					{Name: "empty", MountPath: "/empty"},
 				},
 				SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{
 					{Name: "system-info", MountPath: "/run/ate"},

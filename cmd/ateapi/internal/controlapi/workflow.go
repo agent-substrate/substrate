@@ -107,6 +107,7 @@ func logActorState(ctx context.Context, actor *ateapi.Actor, opName, state strin
 // already validated, and what the workflow writes is the system's own state.
 type ActorWorkflow struct {
 	store                   actorWorkflowStore
+	externalVolumes         externalVolumeDeleter
 	workerCache             *workercache.Cache
 	scheduler               scheduling.Scheduler
 	dialer                  *AteletDialer
@@ -132,9 +133,11 @@ func NewActorWorkflow(
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
 	objectStorePlugin objectstore.ControlProviderClient,
+	externalVolumes externalVolumeDeleter,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:                store,
+		externalVolumes:      externalVolumes,
 		workerCache:          workerCache,
 		scheduler:            scheduling.New(workerCache),
 		dialer:               dialer,
@@ -191,6 +194,7 @@ type actorWorkflowStore interface {
 	MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(toUpdate *ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error)
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapi.ActorTemplate, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
+	externalVolumeRefStore
 }
 
 // WorkerWorkflow handles the multi-step operations on a Worker. Like

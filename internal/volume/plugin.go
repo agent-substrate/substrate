@@ -65,6 +65,19 @@ type MountVolumeRequest struct {
 	// PublishContext is the metadata returned when the volume was attached to
 	// this node. It is empty for drivers that do not implement attachment.
 	PublishContext map[string]string
+	// Holder names the actor publishing the volume. The node stages a volume
+	// once and unstages it after its last holder unpublishes.
+	Holder string
+}
+
+// UnmountVolumeRequest describes a volume to unpublish from the node.
+type UnmountVolumeRequest struct {
+	// VolumeID is the ID assigned by the storage system at creation.
+	VolumeID string
+	// TargetPath is the host path the volume was mounted at.
+	TargetPath string
+	// Holder names the actor that published the volume; see MountVolumeRequest.
+	Holder string
 }
 
 // VolumePluginControlPlane abstracts storage operations performed on the control plane.
@@ -79,5 +92,5 @@ type VolumePluginControlPlane interface {
 // VolumePluginWorkerPlane abstracts storage operations performed on worker nodes.
 type VolumePluginWorkerPlane interface {
 	MountVolume(ctx context.Context, req MountVolumeRequest) error
-	UnmountVolume(ctx context.Context, volumeID string, targetPath string) error
+	UnmountVolume(ctx context.Context, req UnmountVolumeRequest) error
 }

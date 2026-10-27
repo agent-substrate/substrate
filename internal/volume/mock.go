@@ -117,12 +117,12 @@ func (p *MockVolumePlugin) MountVolume(ctx context.Context, req MountVolumeReque
 }
 
 // UnmountVolume simulates unmounting volume from the host.
-func (p *MockVolumePlugin) UnmountVolume(ctx context.Context, volumeID string, targetPath string) error {
-	slog.InfoContext(ctx, "MockVolumePlugin.UnmountVolume", slog.String("volumeID", volumeID), slog.String("targetPath", targetPath))
+func (p *MockVolumePlugin) UnmountVolume(ctx context.Context, req UnmountVolumeRequest) error {
+	slog.InfoContext(ctx, "MockVolumePlugin.UnmountVolume", slog.String("volumeID", req.VolumeID), slog.String("targetPath", req.TargetPath))
 
-	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
-		slog.ErrorContext(ctx, "MockVolumePlugin.UnmountVolume failed: remove error", slog.String("volumeID", volumeID), slog.String("targetPath", targetPath), slog.Any("error", err))
-		return fmt.Errorf("failed to remove target path %q: %w", targetPath, err)
+	if err := os.Remove(req.TargetPath); err != nil && !os.IsNotExist(err) {
+		slog.ErrorContext(ctx, "MockVolumePlugin.UnmountVolume failed: remove error", slog.String("volumeID", req.VolumeID), slog.String("targetPath", req.TargetPath), slog.Any("error", err))
+		return fmt.Errorf("failed to remove target path %q: %w", req.TargetPath, err)
 	}
 	return nil
 }
