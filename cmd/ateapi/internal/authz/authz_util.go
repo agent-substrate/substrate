@@ -83,6 +83,10 @@ const (
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
+
+	// maxTupleUserLength is OpenFGA's maximum byte length for a TupleKey.User
+	// string, enforced on the percent-encoded form produced by formatUser.
+	maxTupleUserLength = 512
 )
 
 type bypassKey struct{}
@@ -160,7 +164,9 @@ func formatUser(id string) string {
 
 // FormatMember validates a policy member string (such as "user:alice@example.com")
 // and returns the percent-encoded OpenFGA user string. Control characters are
-// rejected because OpenFGA does not accept them in tuple user IDs.
+// rejected because OpenFGA does not accept them in tuple user IDs, and members
+// whose encoded form exceeds OpenFGA's 512-byte TupleKey.User limit are
+// rejected because OpenFGA would refuse the tuple write.
 func FormatMember(member string) (string, error) {
 	id, ok := strings.CutPrefix(member, "user:")
 	if !ok || strings.TrimSpace(id) == "" {
@@ -172,7 +178,16 @@ func FormatMember(member string) (string, error) {
 	if strings.ContainsFunc(id, unicode.IsControl) {
 		return "", fmt.Errorf("member %q must not contain control characters", member)
 	}
-	return formatUser(id), nil
+	user := formatUser(id)
+	// The API's maxLength bound counts characters on the raw member, and
+	// percent-encoding expands each reserved character from 1 to 3 bytes, so
+	// a member within the API bound can still exceed maxTupleUserLength once
+	// encoded. Reject it here so API validation refuses the member up front
+	// instead of OpenFGA failing the tuple write.
+	if len(user) > maxTupleUserLength {
+		return "", fmt.Errorf("member %q encodes to %d bytes, exceeding the OpenFGA user limit of %d bytes", member, len(user), maxTupleUserLength)
+	}
+	return user, nil
 }
 
 //go:embed model.fga
