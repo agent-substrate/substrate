@@ -211,3 +211,31 @@ func TestSetNosuidNodev(t *testing.T) {
 		}
 	}
 }
+
+func TestUpperDiskMount(t *testing.T) {
+	d, err := UpperDiskMount(1, "c_db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Device != "/dev/vdb" || d.MountPoint != "/run/kata-containers/upper/c_db" || !slices.Contains(d.Options, "discard") {
+		t.Errorf("UpperDiskMount(1) = %+v", d)
+	}
+	opts := d.overlayOptions("c_db")
+	for _, want := range []string{
+		"lowerdir=" + GuestSharedRootfs("c_db") + "/.",
+		"upperdir=/run/kata-containers/upper/c_db/fs",
+		"workdir=/run/kata-containers/upper/c_db/work",
+		"metacopy=off", "index=off",
+	} {
+		if !slices.Contains(opts, want) {
+			t.Errorf("overlayOptions = %v, lacks %q", opts, want)
+		}
+	}
+	// A volatile mount leaves a workdir the next mount of the disk refuses.
+	if slices.Contains(opts, "volatile") {
+		t.Errorf("overlayOptions = %v, has volatile", opts)
+	}
+	if _, err := UpperDiskMount(MaxUpperDisks, "c_db"); err == nil {
+		t.Errorf("UpperDiskMount(%d) = nil error, want one", MaxUpperDisks)
+	}
+}
