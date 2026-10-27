@@ -9,7 +9,7 @@ Substrate ships with built-in sandboxing, actor identity, and ingress and egress
 
 ## Augment: add an ext_proc callout
 
-Substrate's gateways are Envoy, so you can add your own [`ext_proc`](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) service. Envoy calls it on every request.
+You can add your own [`ext_proc`](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) service. Substrate gateways call it on every request.
 
 - **Egress:** set `--experimental-additional-egress-extproc-service` (see [Operator install](operator-install.md#settings)). This may be converted to an API in the future. Your service runs after Substrate has authenticated the actor and applied its `EgressPolicy`. It currently receives the request headers and the actor's identity, and it can deny the request or add headers; this can be changed if necessary. Today it sees headers only, not bodies.
 - **Ingress:** planned.
