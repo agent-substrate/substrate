@@ -134,9 +134,9 @@ func (t *rootsTransport) use(roots *x509.CertPool) {
 	t.roots, t.transport = roots, transport
 }
 
-// issuerDiscoveryTransport injects a bearer token for requests within the
-// configured issuer and Kubernetes' standard JWKS path. Reads the token file
-// on every request so rotation is handled automatically.
+// issuerDiscoveryTransport sends the token in tokenFile as a bearer token on
+// requests under issuer and on the HTTPS jwks_uri from issuer's discovery
+// document. A rotated token is used from the next request.
 type issuerDiscoveryTransport struct {
 	base      http.RoundTripper
 	tokenFile string
@@ -144,7 +144,9 @@ type issuerDiscoveryTransport struct {
 }
 
 func (t *issuerDiscoveryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if issuerScopedURL(req.URL.String(), t.issuer) || isKubernetesJWKSURL(req.URL.String()) {
+	// A Kubernetes API server's jwks_uri uses its advertised address, which is
+	// usually not the issuer's host.
+	if issuerScopedURL(req.URL.String(), t.issuer) || isDiscoveredJWKSURL(req) {
 		token, err := os.ReadFile(t.tokenFile)
 		if err != nil {
 			return nil, fmt.Errorf("read discovery token file: %w", err)
@@ -182,10 +184,26 @@ func issuerScopedURL(rawURL, issuer string) bool {
 	return requestPath == issuerPath || strings.HasPrefix(requestPath, issuerPath+"/")
 }
 
-func isKubernetesJWKSURL(rawURL string) bool {
-	u, err := url.Parse(rawURL)
+type discoveredJWKSURLKey struct{}
+
+// withDiscoveredJWKSURL returns a copy of ctx in which issuerDiscoveryTransport
+// sends the discovery token to jwksURL, which must be the jwks_uri from the
+// issuer's discovery document.
+func withDiscoveredJWKSURL(ctx context.Context, jwksURL string) context.Context {
+	return context.WithValue(ctx, discoveredJWKSURLKey{}, jwksURL)
+}
+
+// isDiscoveredJWKSURL reports whether req is an HTTPS request for exactly the
+// URL that withDiscoveredJWKSURL set on its context.
+func isDiscoveredJWKSURL(req *http.Request) bool {
+	jwksURL, ok := req.Context().Value(discoveredJWKSURLKey{}).(string)
+	if !ok {
+		return false
+	}
+	u, err := url.Parse(jwksURL)
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(u.Scheme, "https") && u.EscapedPath() == "/openid/v1/jwks"
+	// A redirect keeps the context but changes the URL, so it does not match.
+	return strings.EqualFold(req.URL.Scheme, "https") && req.URL.String() == u.String()
 }
