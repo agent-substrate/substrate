@@ -194,7 +194,7 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	// TODO: Refuse a tag with delete_time set. DeleteTag may already have
 	// collected its snapshot.
 	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
-	if tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
+	if tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) == "" {
 		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")
 	}
 	// TODO: Permit compatible VOLUMES snapshots when runtimes can extract portable data.

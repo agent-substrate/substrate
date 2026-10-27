@@ -80,6 +80,25 @@ var released = []string{
 // ReleaseComponents returns the Components a release publishes.
 func ReleaseComponents() []string { return slices.Clone(released) }
 
+// DockerfileImage is an image built from a Dockerfile with docker buildx
+// rather than with ko.
+type DockerfileImage struct {
+	// Name is the image name under the repository.
+	Name string
+	// Context is the build context, relative to the repository root.
+	Context string
+}
+
+// EnvoyDataplane is the image the envoy router and egress gateways run.
+var EnvoyDataplane = DockerfileImage{Name: "envoy-dataplane", Context: "cmd/dataplane/envoy"}
+
+// releasedDockerfiles is the allowlist of DockerfileImages a release
+// publishes, the counterpart of released.
+var releasedDockerfiles = []DockerfileImage{EnvoyDataplane}
+
+// ReleaseDockerfileImages returns the DockerfileImages a release publishes.
+func ReleaseDockerfileImages() []DockerfileImage { return slices.Clone(releasedDockerfiles) }
+
 // IsReleased reports whether a release publishes pkg.
 func IsReleased(pkg string) bool { return slices.Contains(released, pkg) }
 

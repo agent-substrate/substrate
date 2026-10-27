@@ -12,16 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Keeps the control plane off the worker nodes. Selected by
-# hack/install-ate.sh and cmd/ate-setup under --cordon-control-plane; both
-# wrap every control plane apply in a kustomization that includes this
-# component.
+# Keeps the system infra components off the worker nodes. Selected by
+# cmd/ate-setup under --cordon-system-infra-components, which wraps every
+# system infra apply in a kustomization that includes this component.
 #
 # Assumes two node pools, each carrying its label as a matching NoSchedule
 # taint:
 #
-#   ate.dev/workloadType=ate-control-plane  A small pool shared by every
-#       control plane workload except postgres. Each workload's replicas are
+#   ate.dev/workloadType=ate-system-infra  A small pool shared by every
+#       system infra workload except postgres. Each workload's replicas are
 #       spread across its nodes on a best-effort basis, so the pool may be
 #       smaller than the pod count and rollout surges never wait on a free
 #       node.
@@ -52,14 +51,14 @@ patches:
         template:
           metadata:
             labels:
-              ate.dev/workloadType: ate-control-plane
+              ate.dev/workloadType: ate-system-infra
           spec:
             nodeSelector:
-              ate.dev/workloadType: ate-control-plane
+              ate.dev/workloadType: ate-system-infra
             tolerations:
             - key: ate.dev/workloadType
               operator: Equal
-              value: ate-control-plane
+              value: ate-system-infra
               effect: NoSchedule
             topologySpreadConstraints:
             # matchLabelKeys narrows the selector to pods sharing this pod's
@@ -69,7 +68,7 @@ patches:
               whenUnsatisfiable: ScheduleAnyway
               labelSelector:
                 matchLabels:
-                  ate.dev/workloadType: ate-control-plane
+                  ate.dev/workloadType: ate-system-infra
               matchLabelKeys:
               - app
   - target:

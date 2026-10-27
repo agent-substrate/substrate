@@ -15,10 +15,12 @@
 package ateworker
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
@@ -120,5 +122,40 @@ func TestReuseCheckpointDataSnapshotFilesByFidelity(t *testing.T) {
 	}
 	if got := ReuseCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES); got != nil {
 		t.Fatalf("ReuseCheckpoint(VOLUMES with non-data files) = %v, want nil", got)
+	}
+}
+
+// TestCheckpointContext checks that a checkpoint outlives its canceled caller
+// but keeps the caller's deadline.
+func TestCheckpointContext(t *testing.T) {
+	deadline := time.Now().Add(time.Hour)
+	for _, tc := range []struct {
+		name         string
+		caller       func(context.Context) (context.Context, context.CancelFunc)
+		wantDeadline time.Time
+	}{
+		{
+			name: "caller deadline",
+			caller: func(ctx context.Context) (context.Context, context.CancelFunc) {
+				return context.WithDeadline(ctx, deadline)
+			},
+			wantDeadline: deadline,
+		},
+		{name: "no deadline", caller: context.WithCancel},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caller, cancelCaller := tc.caller(t.Context())
+			ctx, cancel := CheckpointContext(caller)
+			defer cancel()
+
+			cancelCaller()
+			if err := ctx.Err(); err != nil {
+				t.Errorf("Err() after the caller canceled = %v, want nil", err)
+			}
+			got, ok := ctx.Deadline()
+			if wantOK := !tc.wantDeadline.IsZero(); ok != wantOK || !got.Equal(tc.wantDeadline) {
+				t.Errorf("Deadline() = %v, %t, want %v, %t", got, ok, tc.wantDeadline, wantOK)
+			}
+		})
 	}
 }

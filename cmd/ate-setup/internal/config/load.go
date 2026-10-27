@@ -273,7 +273,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		PodcertWorkersPerSigner:        podcertWorkers,
 		EnvoyConcurrency:               envoyConcurrency,
 		ClusterSize:                    r.String("clusterSize"),
-		CordonControlPlane:             r.Bool("cordonControlPlane"),
+		CordonSystemInfraComponents:    r.Bool("cordonSystemInfraComponents"),
 		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
 		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),

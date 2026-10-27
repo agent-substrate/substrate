@@ -86,7 +86,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		}
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := ateworker.CheckpointContext(ctx)
 	defer cancel()
 	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload, nil)()
 

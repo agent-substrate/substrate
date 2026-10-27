@@ -15,7 +15,7 @@
 # In-cluster Envoy Nighthawk test server used as the origin target for egress
 # benchmarks. Exposes plaintext HTTP on :80 and :8080 and TLS-terminated HTTPS
 # on :443 and :8443 using a serving certificate issued by the cluster's
-# servicedns pod-certificate signer (SAN: nighthawk-server.ate-system.svc).
+# servicedns pod-certificate signer (SAN: nighthawk-server.nighthawk.svc).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -297,8 +297,8 @@ spec:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
 ---
-# Selecting Service in ate-system required by servicedns.podcert.ate.dev/identity
-# to mint a serving certificate with SAN nighthawk-server.ate-system.svc.
+# Selecting Service in nighthawk required by servicedns.podcert.ate.dev/identity
+# to mint a serving certificate with SAN nighthawk-server.nighthawk.svc.
 apiVersion: v1
 kind: Service
 metadata:

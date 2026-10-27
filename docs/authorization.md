@@ -220,6 +220,7 @@ certificate.
 | `AcquireWorkerEpoch` | `atelet` on the worker's node |
 | `RegisterWorker` | `atelet` on the worker's node |
 | `SetWorkerSandboxRuntimes` | `atelet` on the worker's node |
+| `ReportActorCrashed` | `atelet` on the node of the worker hosting the actor |
 | `RequestActorSuspend` | `atelet` on the node of the worker hosting the actor |
 | `MintWorkerActorJwt` | `atelet` on the node hosting the actor |
 | `MintWorkerActorCertificate` | `atelet` on the node of the worker the actor is assigned to |

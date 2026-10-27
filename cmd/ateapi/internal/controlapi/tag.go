@@ -123,7 +123,7 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapi.UpdateTagRequest
 		// A tag whose create never finished names a partial copy. Publishing it
 		// — or changing its scope at all — would hand out content that is still
 		// being written, or may never be.
-		if tagDurableSnapshotURI(toUpdate, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
+		if tagDurableSnapshotURI(toUpdate, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) == "" {
 			return errTagPending
 		}
 		// Metadata and status are server-owned fields.

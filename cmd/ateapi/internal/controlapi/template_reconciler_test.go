@@ -188,7 +188,7 @@ func (c *fakeGoldenControl) goldenActorStatus() *ateapi.ActorStatus {
 	if c.goldenSnapshot != "" {
 		st.LastAssignedGeneration = 1
 		st.Snapshots = []*ateapi.Snapshot{
-			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 		}
 	}
 	return st
@@ -283,7 +283,7 @@ func (c *fakeGoldenControl) CreateTag(_ context.Context, req *ateapi.CreateTagRe
 	c.tag = proto.CloneOf(req.GetTag())
 	c.tag.Status = &ateapi.TagStatus{
 		ActorTemplateUid: testTemplateUID,
-		Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 	}
 	return proto.CloneOf(c.tag), nil
 }
@@ -1129,7 +1129,7 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 		Scope:       ateapi.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapi.TagStatus{
 			ActorTemplateUid: testTemplateUID,
-			Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "tag-snapshot", "gs://bucket/tag-snapshot", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "tag-snapshot", "gs://bucket/tag-snapshot", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 		},
 	}
 	incomplete := proto.CloneOf(completed)
@@ -1187,7 +1187,7 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 			if !proto.Equal(st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetGoldenTag(), ref) {
 				t.Fatal("golden tag not recorded")
 			}
-			if tagDurableSnapshotURI(control.tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
+			if tagDurableSnapshotURI(control.tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) == "" {
 				t.Fatal("golden tag has no snapshot")
 			}
 			if len(control.createReqs) != 0 || len(control.resumeReqs) != 0 || len(control.suspendReqs) != 0 {

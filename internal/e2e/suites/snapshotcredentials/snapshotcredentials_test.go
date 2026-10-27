@@ -199,7 +199,7 @@ func expectGCS(t *testing.T, ctx context.Context, what, token, method, uri, body
 func durableURI(t *testing.T, actor *ateapi.Actor, owner ateapi.SnapshotOwner) string {
 	t.Helper()
 	for _, snap := range actor.GetStatus().GetSnapshots() {
-		if snap.GetOwner() == owner && snap.GetDurableSnapshot().GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		if snap.GetOwner() == owner && snap.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
 			return snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 		}
 	}

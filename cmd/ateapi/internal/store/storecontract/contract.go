@@ -1050,7 +1050,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 					Owner:      ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
 					Fidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					DurableSnapshot: &ateapi.SnapshotStorage{
-						Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 						Object: &ateapi.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")},
 					},
 				}},
@@ -1067,7 +1067,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 					Owner:      ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
 					Fidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					DurableSnapshot: &ateapi.SnapshotStorage{
-						Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 						Object: &ateapi.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-2")},
 					},
 				}},
@@ -1360,7 +1360,7 @@ func newTestSuspendedActor(atespace, name string) *ateapi.Actor {
 				Owner:      ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
 				Fidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				DurableSnapshot: &ateapi.SnapshotStorage{
-					Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 					Object: &ateapi.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://private", atespace, name)},
 				},
 			}},
@@ -1383,7 +1383,7 @@ func newTestInProgressTag(name string, actor *ateapi.Actor) *ateapi.Tag {
 				Owner:      ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG,
 				Fidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				DurableSnapshot: &ateapi.SnapshotStorage{
-					Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+					State: ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
 					Object: &ateapi.ObjectSnapshot{
 						SnapshotUri: testTagSnapshotURI("gs://private", atespace, name),
 					},
@@ -1431,8 +1431,8 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		}
 		// A reserved tag has a PENDING snapshot storage entry and is not
 		// usable until the copy lands and finalize marks it COMPLETED.
-		if got := tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetStatus(); got != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
-			t.Errorf("reserved tag snapshot storage status = %v, want PENDING", got)
+		if got := tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetState(); got != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING {
+			t.Errorf("reserved tag snapshot storage state = %v, want PENDING", got)
 		}
 		if diff := cmp.Diff(inProgressTag, tag, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
 			t.Errorf("stored tag mismatch (-want +got):\n%s", diff)
@@ -1453,8 +1453,8 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		if gotURI != wantURI {
 			t.Errorf("finalized tag snapshot uri = %q, want %q", gotURI, wantURI)
 		}
-		if got := ready.GetStatus().GetSnapshot().GetDurableSnapshot().GetStatus(); got != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
-			t.Errorf("finalized tag snapshot storage status = %v, want COMPLETED", got)
+		if got := ready.GetStatus().GetSnapshot().GetDurableSnapshot().GetState(); got != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
+			t.Errorf("finalized tag snapshot storage state = %v, want COMPLETED", got)
 		}
 
 		updated, err := s.UpdateTag(ctx, resources.TagRef{Atespace: "team-a", Name: "production"}, store.PreconditionFrom(ready), func(toUpdate *ateapi.Tag) error {
@@ -1789,7 +1789,7 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 // finalizeTag mutates a reserved tag the way the tag workflow's second
 // transaction does: it marks the pending snapshot storage COMPLETED.
 func finalizeTag(toUpdate *ateapi.Tag) error {
-	toUpdate.Status.Snapshot.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	toUpdate.Status.Snapshot.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 	return nil
 }
 

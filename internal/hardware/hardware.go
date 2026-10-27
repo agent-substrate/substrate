@@ -189,37 +189,37 @@ func runtimeOf(class string, compat *ateapi.VersionedSandboxCompat) *ateapi.Acto
 	return &ateapi.ActorSandboxRuntime{SandboxClass: class, Version: compat}
 }
 
-// matchingCompat returns the version from status that can restore the
+// matchingRuntime returns the runtime from status that can restore the
 // snapshot: in the worker's entry for the snapshot's class, DefaultRuntime
 // first, then RestorableRuntimes in order. nil if the worker does not run
 // that class or nothing in its entry matches. Only for a requirement of
 // something.
-func (r Requirement) matchingCompat(status *ateapi.WorkerStatus) *ateapi.VersionedSandboxCompat {
+func (r Requirement) matchingRuntime(status *ateapi.WorkerStatus) *ateapi.WorkerSandboxRuntime {
 	c := classOf(status, r.snap.GetSandboxClass())
 	if c == nil {
 		return nil
 	}
-	if def := c.GetDefaultRuntime().GetVersion(); r.matchesCompat(def) {
+	if def := c.GetDefaultRuntime(); r.matchesCompat(def.GetVersion()) {
 		return def
 	}
 	for _, rt := range c.GetRestorableRuntimes() {
 		if r.matchesCompat(rt.GetVersion()) {
-			return rt.GetVersion()
+			return rt
 		}
 	}
 	return nil
 }
 
 // MatchingRuntime returns the runtime from status that can restore the
-// snapshot, as a stamp: the snapshot's class with the version matchingCompat
-// finds, or nil when it finds none. A requirement of nothing returns
-// ColdBootRuntime.
+// snapshot, as a stamp: the snapshot's class with the version of the runtime
+// matchingRuntime finds, or nil when it finds none. A requirement of nothing
+// returns ColdBootRuntime.
 func (r Requirement) MatchingRuntime(status *ateapi.WorkerStatus) *ateapi.ActorSandboxRuntime {
 	if r.snap == nil {
 		return ColdBootRuntime(status)
 	}
-	if compat := r.matchingCompat(status); compat != nil {
-		return runtimeOf(r.snap.GetSandboxClass(), compat)
+	if rt := r.matchingRuntime(status); rt != nil {
+		return runtimeOf(r.snap.GetSandboxClass(), rt.GetVersion())
 	}
 	return nil
 }
@@ -227,7 +227,22 @@ func (r Requirement) MatchingRuntime(status *ateapi.WorkerStatus) *ateapi.ActorS
 // WorkerMatches reports whether a worker with status can restore the
 // snapshot. A requirement of nothing is met by any worker.
 func (r Requirement) WorkerMatches(status *ateapi.WorkerStatus) bool {
-	return r.snap == nil || r.matchingCompat(status) != nil
+	return r.snap == nil || r.matchingRuntime(status) != nil
+}
+
+// WorkerRuntimeFor returns the worker's runtime that RuntimeFor stamps, as the
+// worker reported it, or nil before the worker has registered.
+func (r Requirement) WorkerRuntimeFor(status *ateapi.WorkerStatus) *ateapi.WorkerSandboxRuntime {
+	if r.snap != nil {
+		if rt := r.matchingRuntime(status); rt != nil {
+			return rt
+		}
+	}
+	classes := status.GetSandboxClasses()
+	if len(classes) == 0 {
+		return nil
+	}
+	return classes[0].GetDefaultRuntime()
 }
 
 // RuntimeFor returns the runtime a worker with status runs an actor under

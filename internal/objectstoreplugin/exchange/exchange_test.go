@@ -179,7 +179,7 @@ func actorWithTag() *ateapi.Actor {
 		Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, AssignedNode: "node-1", Snapshots: []*ateapi.Snapshot{{
 			Generation: 1, Owner: ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG,
 			DurableSnapshot: &ateapi.SnapshotStorage{
-				Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+				State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 				Object: &ateapi.ObjectSnapshot{SnapshotUri: tagURI},
 			},
 		}}},

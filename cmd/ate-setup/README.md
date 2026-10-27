@@ -21,13 +21,15 @@ tag they share:
 ```
 ate-setup deploy ate-system \
   --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=IDS \
   --image-repo registry.example.com/substrate \
   --image-tag vX.Y.Z
 ```
 
 The registry has to hold every image the install deploys. The images a release
-publishes to `ghcr.io/agent-substrate/substrate` are not enough on their own;
-see [`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images). An
+publishes to `ghcr.io/agent-substrate/substrate` leave out the demos and the
+benchmarking fakes; see
+[`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images). An
 install that needs an image the registry lacks fails naming it.
 
 Nothing is built and no registry is pushed to; the manifests still come from

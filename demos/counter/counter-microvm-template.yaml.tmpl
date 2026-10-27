@@ -50,9 +50,8 @@ containers:
   volumeMounts:
   - name: data
     mountPath: /home/counter
-# Sandbox size: vCPUs + guest RAM at (or below) the pool's per-worker
-# capacity, leaving VMM-reserve headroom under the worker memory limit
-# (see internal/sizing).
+# Sandbox size: vCPUs + guest RAM, which with the microVM overhead has to
+# fit the pool's per-worker capacity (see docs/api-guide.md).
 resources:
   limits:
     cpuMillicores: 1000

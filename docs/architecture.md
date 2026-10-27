@@ -371,17 +371,19 @@ Handles actor-aware routing and automatic re-animation.
 
   * **Latency**: The data plane is optimized for sub-100ms activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
 
-### Control Plane Isolation
+### System Infra Isolation
 
-Control plane components can be kept on nodes of their own,
-away from the workers, so a burst of worker or actor load cannot starve them.
-When configured via the installer, the control plane workloads select a
-node label and tolerate the matching `NoSchedule` taint:
+System infra components, such as ate-api-server, atenet-router, atenet-egress
+and postgres, can be kept on nodes of their own, away from the workers, so a
+burst of worker or actor load cannot starve them. Under
+`--cordon-system-infra-components`, these workloads select a node label and
+tolerate the matching `NoSchedule` taint:
 
-* `ate.dev/workloadType=ate-control-plane`: a small pool shared by every
-  control plane workload except postgres. Each workload's replicas are spread
+* `ate.dev/workloadType=ate-system-infra`: a small pool shared by every
+  system infra workload except postgres. Each workload's replicas are spread
   across its nodes on a best-effort basis.
-* `ate.dev/workloadType=ate-postgres`: a one-node pool for postgres alone.
+* `ate.dev/workloadType=ate-postgres`: a one-node pool for postgres alone,
+  in the zone of the postgres volume.
 
 ## Actor Lifecycle
 
@@ -561,8 +563,15 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     the actor its `ate-target-actor` header names, and only to recognized,
     registered actors. It accepts only mTLS clients whose SPIFFE ID is on a
     static allowlist; any listed client may reach any actor, as per-actor
-    ingress authorization is not yet supported. The agentgateway dataplane
-    does not authenticate clients yet.
+    ingress authorization is not yet supported.
+    The installer takes that allowlist from `--ingress-allowed-spiffe-ids`
+    (`ATE_INGRESS_ALLOWED_SPIFFE_IDS` or `ingressAllowedSPIFFEIDs` in its config).
+    Both dataplanes must verify the client certificate against the Pod Identity
+    CA during the TLS handshake on both HTTPS and TLS CONNECT listeners.
+    The SPIFFE URI SAN allowlist may be checked during or after TLS, but an
+    unlisted client must not reach actor routing. A CONNECT tunnel may be
+    accepted before that check, but traffic inside it must still be denied.
+    Neither dataplane serves plaintext ingress listeners.
 
   * **Network Policy**: Agent Substrate leverages standard Kubernetes
     NetworkPolicy for connectivity control. Policies can be applied at the
