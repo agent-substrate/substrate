@@ -66,8 +66,9 @@ go run ./tools/setup-gcp enable apis [flags]
 
 Creates a GKE cluster configured for Agent Substrate (with Workload Identity,
 required Kubernetes beta APIs, and Managed OpenTelemetry enabled, and the
-Filestore CSI driver disabled). An existing cluster keeps its Filestore
-add-on setting.
+Filestore CSI driver disabled). The control plane is reachable only via its
+IAM-gated DNS endpoint, and `gcloud container clusters get-credentials` picks
+it automatically. An existing cluster keeps its Filestore add-on setting.
 
 > [!WARNING]
 > Agent Substrate requires PodCertificateRequest and ClusterTrustBundle APIs.

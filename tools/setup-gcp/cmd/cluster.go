@@ -108,6 +108,15 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 			Subnetwork:                 cfg.Subnetwork,
 			NetworkConfig:              networkConfig,
 			ManagedOpentelemetryConfig: &containerpb.ManagedOpenTelemetryConfig{Scope: containerpb.ManagedOpenTelemetryConfig_COLLECTION_AND_INSTRUMENTATION_COMPONENTS.Enum()},
+			ControlPlaneEndpointsConfig: &containerpb.ControlPlaneEndpointsConfig{
+				DnsEndpointConfig: &containerpb.ControlPlaneEndpointsConfig_DNSEndpointConfig{
+					AllowExternalTraffic: proto.Bool(true),
+				},
+				// No IP endpoints at all; GKE rejects a private-only IP endpoint without authorized networks.
+				IpEndpointsConfig: &containerpb.ControlPlaneEndpointsConfig_IPEndpointsConfig{
+					Enabled: proto.Bool(false),
+				},
+			},
 			// Only new clusters; an existing cluster's add-on is left alone.
 			AddonsConfig: &containerpb.AddonsConfig{
 				GcpFilestoreCsiDriverConfig: &containerpb.GcpFilestoreCsiDriverConfig{
