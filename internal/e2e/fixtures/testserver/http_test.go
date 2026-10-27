@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -196,6 +197,56 @@ func TestHTTPHandlerFetch(t *testing.T) {
 			t.Errorf("GET /fetch status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
 		}
 	})
+}
+
+func TestHTTPHandlerExchangesTokens(t *testing.T) {
+	server := startOriginServer(t, newHTTPHandler(""), "", "")
+	client := &http.Client{Timeout: 2 * time.Second}
+	jwt := func(sub string, aud ...string) string {
+		payload, err := json.Marshal(map[string]any{"sub": sub, "aud": aud})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+	}
+	for _, tt := range []struct {
+		name       string
+		mutate     func(url.Values)
+		wantStatus int
+		wantBody   string
+	}{
+		{"issues a token naming the subject and scope", nil, http.StatusOK, `"access_token":"exchanged.actor/ns/a.read"`},
+		{"rejects another audience", func(v url.Values) { v.Set("audience", "other.example") }, http.StatusBadRequest, `"error":"invalid_grant"`},
+		{"rejects a JWT bound to more audiences", func(v url.Values) { v.Set("subject_token", jwt("actor/ns/a", "sts.example", "other.example")) }, http.StatusBadRequest, `"error":"invalid_grant"`},
+		{"rejects a subject_token that is not a JWT", func(v url.Values) { v.Set("subject_token", "opaque") }, http.StatusBadRequest, `"error":"invalid_grant"`},
+		{"rejects another grant type", func(v url.Values) { v.Set("grant_type", "client_credentials") }, http.StatusBadRequest, `"error":"invalid_request"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			form := url.Values{
+				"grant_type":           {grantTypeTokenExchange},
+				"subject_token":        {jwt("actor/ns/a", "sts.example")},
+				"subject_token_type":   {tokenTypeJWT},
+				"requested_token_type": {tokenTypeAccessToken},
+				"audience":             {"sts.example"},
+				"scope":                {"read"},
+			}
+			if tt.mutate != nil {
+				tt.mutate(form)
+			}
+			resp, err := client.PostForm(server.httpURL+"/token", form)
+			if err != nil {
+				t.Fatalf("POST /token: %v", err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != tt.wantStatus || !strings.Contains(string(body), tt.wantBody) {
+				t.Errorf("POST /token = %d %s, want %d with %s", resp.StatusCode, body, tt.wantStatus, tt.wantBody)
+			}
+		})
+	}
 }
 
 func TestHTTPServesCleartextBesideTLS(t *testing.T) {
