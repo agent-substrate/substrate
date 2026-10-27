@@ -93,8 +93,10 @@ kubectl ate --token-file me.token get atespaces
 
 ## `kubectl ate` and `ate-setup` identities
 
-`kubectl ate` sends the token from `--token-file` (`-` for stdin). Without
-one, it uses your kubeconfig to mint a token for `ate-client` (or
+`kubectl ate` sends the token from `--token-file` (`-` for stdin), else the
+credential from `--credential-plugin`; see
+[authentication.md](authentication.md#client-credentials). Without either, it
+uses your kubeconfig to mint a token for `ate-client` (or
 `ATE_CLIENT_SERVICE_ACCOUNT`) and warns that it is acting as a shared
 identity. It still needs Kubernetes rights to port-forward to `ate-api-server`
 unless you pass `--endpoint`.
@@ -315,8 +317,9 @@ For a shared cluster, beyond replacing the default bootstrap owner:
 
 ### Not yet supported
 
-- **Signing in.** `kubectl ate` has no login flow or credential plugin; people
-  obtain tokens themselves.
+- **Signing in.** `kubectl ate` has no login flow of its own; it runs the
+  kubectl credential plugin `--credential-plugin` names, or people obtain
+  tokens themselves.
 - **JWT providers at install time.** `ate-setup` configures only the cluster's
   ServiceAccount issuer; add others to the ConfigMap afterwards.
 - **Groups.** Policy members are individual principals.
