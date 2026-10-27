@@ -19,6 +19,15 @@ defaultPlatforms:
   - linux/arm64
 
 baseImageOverrides:
+  # The actor images built here write at the root of their filesystem and into
+  # volumes atelet creates as root. A container runs as its image's USER, so
+  # they stay on the root base.
+  go.ate.dev/substrate/demos/counter: gcr.io/distroless/static-debian13:latest@sha256:15f8637509792e05b97d83451b0b6ccfa4abd548f997e406ac1e72c87fe1fa78
+  go.ate.dev/substrate/demos/egress: gcr.io/distroless/static-debian13:latest@sha256:15f8637509792e05b97d83451b0b6ccfa4abd548f997e406ac1e72c87fe1fa78
+  go.ate.dev/substrate/demos/multi-template/fspersist: gcr.io/distroless/static-debian13:latest@sha256:15f8637509792e05b97d83451b0b6ccfa4abd548f997e406ac1e72c87fe1fa78
+  go.ate.dev/substrate/internal/e2e/fixtures/probe: gcr.io/distroless/static-debian13:latest@sha256:15f8637509792e05b97d83451b0b6ccfa4abd548f997e406ac1e72c87fe1fa78
+  go.ate.dev/substrate/internal/e2e/fixtures/testserver: gcr.io/distroless/static-debian13:latest@sha256:15f8637509792e05b97d83451b0b6ccfa4abd548f997e406ac1e72c87fe1fa78
+  go.ate.dev/substrate/cmd/benchmarking/glutton: gcr.io/distroless/static-debian13:latest@sha256:15f8637509792e05b97d83451b0b6ccfa4abd548f997e406ac1e72c87fe1fa78
   go.ate.dev/substrate/demos/sandbox: alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
   # atelet needs glibc to run the node's kubelet credential provider, which
   # some platforms ship dynamically linked (e.g. AKS, GKE Ubuntu).
